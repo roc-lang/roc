@@ -25,6 +25,7 @@ const InstBacking = solve.InstBacking;
 const InstDeclaredField = solve.InstDeclaredField;
 const InstVariable = solve.InstVariable;
 const GraphTypeFinals = solve.GraphTypeFinals;
+const InterfaceConstraints = solve.InterfaceConstraints;
 const EntryRoot = solve.EntryRoot;
 const FunctionNodes = solve.FunctionNodes;
 const ArgumentClassSnapshot = solve.InstGraph.ArgumentClassSnapshot;
@@ -4048,14 +4049,21 @@ const Builder = struct {
     }
 
     fn commitInterfaceSummaries(self: *Builder, entries: []const InterfaceSummaryEntry, committed_types: *CommittedGraphTypes) Allocator.Error!void {
+        const relocation = InterfaceSummaryRelocation{
+            .source_names = committed_types.source_names,
+            .destination_names = &self.program.names,
+            .committed = committed_types,
+        };
+        var scratch = std.heap.ArenaAllocator.init(self.allocator);
+        defer scratch.deinit();
         for (entries) |entry| {
-            const provisional_ty = try committed_types.commitType(entry.provisional_ty);
-            const summary_ty = try committed_types.commitType(entry.summary_ty);
-            try self.interface_summaries.insert(&self.program.types, &self.program.names, .{
+            _ = scratch.reset(.retain_capacity);
+            const summary = try entry.summary.copy(scratch.allocator(), relocation);
+            _ = try self.interface_summaries.insert(&self.program.types, &self.program.names, .{
                 .address = entry.address,
                 .evidence = entry.evidence,
-                .provisional_ty = provisional_ty,
-                .summary_ty = summary_ty,
+                .request = try entry.request.copy(scratch.allocator(), relocation),
+                .summary = summary,
             });
         }
     }
@@ -4065,16 +4073,6 @@ const Builder = struct {
         self.countBy("all_digest_node_misses", @intCast(stats.cache_misses));
         self.countBy("commit_digest_root_requests", @intCast(stats.commit_root_requests));
         self.countBy("commit_digest_node_misses", @intCast(stats.commit_node_misses));
-    }
-
-    fn interfaceReplayDigest(self: *Builder, types_: *Type.Store, name_store: *const names.NameStore, ty: Type.TypeId) names.TypeDigest {
-        if (self.counters == null) return types_.specializationDigestCached(name_store, ty, null);
-        var stats: Type.Store.DigestStats = .{};
-        const digest = types_.specializationDigestCached(name_store, ty, &stats);
-        self.countBy("interface_replay_digest_root_requests", @intCast(stats.root_requests));
-        self.countBy("interface_replay_digest_node_misses", @intCast(stats.cache_misses));
-        self.addDigestStats(stats);
-        return digest;
     }
 
     fn specializationTypeDigestIn(
@@ -15558,8 +15556,8 @@ const BodyDraftStore = struct {
     /// graph-owned store.
     program_type_relocation: ?Type.Store.TypeRelocation,
     /// Interface-replay memo shared by every template request lowered into
-    /// this draft's graph. Entries hold graph-owned provisional views, so the
-    /// memo is graph-qualified state and is discarded with the graph.
+    /// this draft's graph. Active entries own live input cells and completed
+    /// entries own immutable constraints; both are discarded with the graph.
     interface_replay: InterfaceReplayState,
 
     fn init(allocator: Allocator) BodyDraftStore {
@@ -17847,21 +17845,49 @@ const ActiveConstBindingScope = struct {
     entered: bool = false,
 };
 
-const InterfaceReplayStatus = enum { expanding, ready };
+const InterfaceReplayStatus = enum { expanding, expanded, ready };
 
 const InterfaceReplayAddress = struct {
     family: DraftTemplateFamilyAddress,
     evidence_digest: [32]u8,
-    provisional_digest: [32]u8,
+    input_digest: [32]u8,
 };
 
-/// Both type ids are interned immutable content in the cache owner's store.
-/// Evidence is checked content, with no graph nodes or body-local captures.
+/// Immutable input identity and parameterized output constraints. Only settled
+/// leaves refer to the owner's type store; all open cells use local indices.
 const InterfaceSummaryEntry = struct {
     address: InterfaceReplayAddress,
     evidence: StoredConstFnEvidence,
-    provisional_ty: Type.TypeId,
-    summary_ty: Type.TypeId,
+    request: InterfaceConstraints.Identity,
+    summary: InterfaceConstraints,
+};
+
+const InterfaceSummaryCopy = struct {
+    pub fn mapScalar(_: InterfaceSummaryCopy, comptime T: type, value: T) Allocator.Error!T {
+        return value;
+    }
+};
+
+/// Names and settled leaves cross the same explicit domain boundary as the
+/// owning worker's completed body, without sealing any unresolved cells.
+const InterfaceSummaryRelocation = struct {
+    source_names: *const names.NameStore,
+    destination_names: *names.NameStore,
+    committed: ?*CommittedGraphTypes = null,
+    importing: ?*BodyContext = null,
+
+    pub fn mapScalar(self: InterfaceSummaryRelocation, comptime T: type, value: T) Allocator.Error!T {
+        if (T == Type.TypeId) {
+            if (self.committed) |committed| return committed.commitType(value);
+            return self.importing.?.importProgramType(value);
+        }
+        if (self.source_names == self.destination_names) return value;
+        if (T == names.ModuleIdentityId) return self.destination_names.internModuleIdentity(self.source_names.moduleIdentityBytes(value));
+        if (T == names.TypeNameId) return self.destination_names.internTypeName(self.source_names.typeNameText(value));
+        if (T == names.RecordFieldNameId) return self.destination_names.internRecordFieldLabel(self.source_names.recordFieldLabelText(value));
+        if (T == names.TagNameId) return self.destination_names.internTagLabel(self.source_names.tagLabelText(value));
+        return value;
+    }
 };
 
 const InterfaceSummaryCache = struct {
@@ -17886,13 +17912,13 @@ const InterfaceSummaryCache = struct {
         self.evidence_arena.deinit();
     }
 
-    fn insert(self: *InterfaceSummaryCache, types_: *Type.Store, name_store: *const names.NameStore, entry: InterfaceSummaryEntry) Allocator.Error!void {
+    fn insert(self: *InterfaceSummaryCache, types_: *Type.Store, name_store: *const names.NameStore, entry: InterfaceSummaryEntry) Allocator.Error!InterfaceConstraints {
         const bucket = try self.buckets.getOrPut(entry.address);
         if (!bucket.found_existing) bucket.value_ptr.* = .empty;
         for (bucket.value_ptr.items) |index| {
             const existing = self.entries.items[index];
             if (storedConstFnEvidenceEql(existing.evidence, entry.evidence) and
-                try types_.typeEql(name_store, existing.provisional_ty, entry.provisional_ty)) return;
+                try existing.request.eql(entry.request, types_, name_store)) return existing.summary;
         }
         try bucket.value_ptr.ensureUnusedCapacity(self.allocator, 1);
         try self.entries.ensureUnusedCapacity(self.allocator, 1);
@@ -17903,26 +17929,31 @@ const InterfaceSummaryCache = struct {
             .frames = try arena.dupe(check.ConstStore.ConstFnEvidenceFrame, entry.evidence.frames),
             .head = entry.evidence.head,
         };
+        owned.request = try entry.request.copy(arena, InterfaceSummaryCopy{});
+        owned.summary = try entry.summary.copy(arena, InterfaceSummaryCopy{});
         bucket.value_ptr.appendAssumeCapacity(@intCast(self.entries.items.len));
         self.entries.appendAssumeCapacity(owned);
+        return owned.summary;
     }
 };
 
 const InterfaceReplayEntry = struct {
+    address: InterfaceReplayAddress,
     evidence: StoredConstFnEvidence,
-    provisional_ty: Type.TypeId,
-    representative: NodeId,
-    /// Immutable result of expanding the representative. Instantiating this
-    /// snapshot gives each independent request fresh variables while replaying
-    /// the complete transitive interface constraints.
-    summary_ty: ?Type.TypeId = null,
+    request: InterfaceConstraints.Identity,
+    roots: []const NodeId,
+    summary: ?InterfaceConstraints = null,
+    verify_summary: ?InterfaceConstraints = null,
     status: InterfaceReplayStatus = .expanding,
+    lowlink: usize,
 };
 
 const InterfaceReplayState = struct {
     use_finished_summaries: bool = true,
     entries: std.ArrayList(InterfaceReplayEntry),
     buckets: std.AutoHashMap(InterfaceReplayAddress, std.ArrayList(u32)),
+    stack: std.ArrayList(usize) = .empty,
+    current: ?usize = null,
 
     fn init(allocator: Allocator) InterfaceReplayState {
         return .{
@@ -17933,6 +17964,7 @@ const InterfaceReplayState = struct {
 
     fn deinit(self: *InterfaceReplayState, allocator: Allocator) void {
         self.entries.deinit(allocator);
+        self.stack.deinit(allocator);
         var buckets = self.buckets.valueIterator();
         while (buckets.next()) |bucket| bucket.deinit(allocator);
         self.buckets.deinit();
@@ -22441,7 +22473,6 @@ const BodyContext = struct {
             target: checked.ResolvedValueId,
             source_fn_ty: checked.CheckedTypeId,
             request_fn_node: NodeId,
-            provisional_ty: Type.TypeId,
         };
         var pending_dependencies = std.ArrayList(PendingDependency).empty;
         defer pending_dependencies.deinit(self.allocator);
@@ -22488,7 +22519,6 @@ const BodyContext = struct {
                             .target = target,
                             .source_fn_ty = source_fn_ty,
                             .request_fn_node = fn_node,
-                            .provisional_ty = undefined,
                         });
                     }
                 },
@@ -22562,15 +22592,11 @@ const BodyContext = struct {
             }
         }
 
-        for (pending_dependencies.items) |*pending| {
-            pending.provisional_ty = try self.graph.provisionalTypeViewForNode(pending.request_fn_node);
-        }
         for (pending_dependencies.items) |pending| {
             try self.applyDirectCalleeInterfaceRelations(
                 pending.target,
                 pending.source_fn_ty,
                 pending.request_fn_node,
-                pending.provisional_ty,
                 replay_state,
             );
         }
@@ -22596,28 +22622,17 @@ const BodyContext = struct {
         return &workspace.interface_summaries;
     }
 
-    fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, provisional_ty: Type.TypeId) Allocator.Error!?struct { ty: Type.TypeId, coordinator: bool } {
+    fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, request: InterfaceConstraints.Identity) Allocator.Error!?InterfaceConstraints {
         const local = self.interfaceSummaryCache();
         if (local.buckets.get(address)) |candidates| for (candidates.items) |index| {
             const entry = local.entries.items[index];
-            if (storedConstFnEvidenceEql(entry.evidence, evidence) and
-                try self.typeStore().typeEql(self.nameStore(), entry.provisional_ty, provisional_ty))
-                return .{ .ty = entry.summary_ty, .coordinator = false };
+            if (storedConstFnEvidenceEql(entry.evidence, evidence) and try entry.request.eql(request, self.typeStore(), self.nameStore())) return entry.summary;
         };
         if (self.builder.coordinator_interface_summaries) |published| {
             var candidates = published.get(address, self.builder.coordinator_interface_summary_end);
             while (candidates.next()) |entry| {
-                if (!storedConstFnEvidenceEql(entry.evidence, evidence)) continue;
-                const request = try self.importProgramType(entry.provisional_ty);
-                if (!try self.typeStore().typeEql(self.nameStore(), request, provisional_ty)) continue;
-                const summary = try self.importProgramType(entry.summary_ty);
-                try local.insert(self.typeStore(), self.nameStore(), .{
-                    .address = address,
-                    .evidence = evidence,
-                    .provisional_ty = request,
-                    .summary_ty = summary,
-                });
-                return .{ .ty = summary, .coordinator = true };
+                if (!storedConstFnEvidenceEql(entry.evidence, evidence) or !std.mem.eql(u8, entry.request.bytes, request.bytes)) continue;
+                if (try self.importInterfaceSummary(entry, request)) |summary| return summary;
             }
             return null;
         }
@@ -22625,19 +22640,30 @@ const BodyContext = struct {
         if (coordinator == local) return null;
         if (coordinator.buckets.get(address)) |candidates| for (candidates.items) |index| {
             const entry = coordinator.entries.items[index];
-            if (!storedConstFnEvidenceEql(entry.evidence, evidence)) continue;
-            const request = try self.importProgramType(entry.provisional_ty);
-            if (!try self.typeStore().typeEql(self.nameStore(), request, provisional_ty)) continue;
-            const summary = try self.importProgramType(entry.summary_ty);
-            try local.insert(self.typeStore(), self.nameStore(), .{
-                .address = address,
-                .evidence = evidence,
-                .provisional_ty = request,
-                .summary_ty = summary,
-            });
-            return .{ .ty = summary, .coordinator = true };
+            if (!storedConstFnEvidenceEql(entry.evidence, evidence) or !std.mem.eql(u8, entry.request.bytes, request.bytes)) continue;
+            if (try self.importInterfaceSummary(entry, request)) |summary| return summary;
         };
         return null;
+    }
+
+    fn importInterfaceSummary(self: *BodyContext, entry: InterfaceSummaryEntry, request: InterfaceConstraints.Identity) Allocator.Error!?InterfaceConstraints {
+        const relocation = InterfaceSummaryRelocation{
+            .source_names = &self.builder.program.names,
+            .destination_names = self.nameStoreMut(),
+            .importing = self,
+        };
+        var scratch = std.heap.ArenaAllocator.init(self.allocator);
+        defer scratch.deinit();
+        const imported_request = try entry.request.copy(scratch.allocator(), relocation);
+        if (!try imported_request.eql(request, self.typeStore(), self.nameStore())) return null;
+        const summary = try entry.summary.copy(scratch.allocator(), relocation);
+        return try self.interfaceSummaryCache().insert(self.typeStore(), self.nameStore(), .{ .address = entry.address, .evidence = entry.evidence, .request = imported_request, .summary = summary });
+    }
+
+    fn relateInterfaceRoots(self: *BodyContext, produced: []const NodeId, requested: []const NodeId) Allocator.Error!void {
+        std.debug.assert(produced.len == requested.len);
+        try relateFunctionRequestInterface(self.graph, produced[0], requested[0]);
+        for (produced[1..], requested[1..]) |left, right| try relateRequestComponent(self.graph, left, right);
     }
 
     fn applyDirectCalleeInterfaceRelations(
@@ -22645,7 +22671,6 @@ const BodyContext = struct {
         target: checked.ResolvedValueId,
         source_fn_ty: checked.CheckedTypeId,
         request_fn_node: NodeId,
-        provisional_ty: Type.TypeId,
         replay_state: *InterfaceReplayState,
     ) Allocator.Error!void {
         const record = self.view.resolved_refs.records[@intFromEnum(target)];
@@ -22697,75 +22722,85 @@ const BodyContext = struct {
             stored_evidence.frames,
             stored_evidence.head,
         );
-        const source_fn_key = self.view.types.rootKey(source_fn_ty);
-        const provisional_digest = self.builder.interfaceReplayDigest(self.typeStore(), self.nameStore(), provisional_ty);
+        var request_roots = std.ArrayList(NodeId).empty;
+        defer request_roots.deinit(self.allocator);
+        try request_roots.append(self.allocator, request_fn_node);
+        for (edge.subst) |slot| if (slot == .node) {
+            try request_roots.append(self.allocator, slot.node);
+        };
+        var input_arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer input_arena.deinit();
+        const input = try InterfaceConstraints.capture(self.graph, input_arena.allocator(), request_roots.items);
+        const shape = try input.identityInto(self.graph, input_arena.allocator());
+        const request_bytes = try input_arena.allocator().alloc(u8, shape.bytes.len + edge.subst.len);
+        @memcpy(request_bytes[0..shape.bytes.len], shape.bytes);
+        for (edge.subst, request_bytes[shape.bytes.len..]) |slot, *byte| byte.* = if (slot == .checked_error) 1 else 0;
+        const request: InterfaceConstraints.Identity = .{ .bytes = request_bytes, .leaves = shape.leaves };
         const address = InterfaceReplayAddress{
-            .family = DraftTemplateFamilyAddress.init(template_ref, self.method_scope.key, source_fn_key),
+            .family = DraftTemplateFamilyAddress.init(template_ref, self.method_scope.key, self.view.types.rootKey(source_fn_ty)),
             .evidence_digest = evidence_digest.bytes,
-            .provisional_digest = provisional_digest.bytes,
+            .input_digest = TypeDigestHasher.hash(request.bytes),
         };
 
+        var cached: ?InterfaceConstraints = null;
         if (replay_state.buckets.get(address)) |candidates| for (candidates.items) |raw_entry| {
-            const entry = &replay_state.entries.items[raw_entry];
-            if (!storedConstFnEvidenceEql(entry.evidence, stored_evidence) or
-                !try self.typeStore().typeEql(
-                    self.nameStore(),
-                    entry.provisional_ty,
-                    provisional_ty,
-                ))
-            {
-                continue;
-            }
+            const entry = replay_state.entries.items[raw_entry];
+            if (!storedConstFnEvidenceEql(entry.evidence, stored_evidence) or !try entry.request.eql(request, self.typeStore(), self.nameStore())) continue;
             switch (entry.status) {
-                .expanding => try relateFunctionRequestInterface(
-                    self.graph,
-                    entry.representative,
-                    request_fn_node,
-                ),
+                .expanding, .expanded => {
+                    if (replay_state.current) |current| {
+                        replay_state.entries.items[current].lowlink = @min(replay_state.entries.items[current].lowlink, raw_entry);
+                    }
+                    try self.relateInterfaceRoots(entry.roots, request_roots.items);
+                    return;
+                },
                 .ready => {
-                    // Never join an independent request to the completed live
-                    // graph. Its variables may subsequently be refined by its
-                    // caller. Instantiating the immutable summary preserves its
-                    // internal sharing while allocating fresh request variables.
-                    try relateFunctionRequestInterface(
-                        self.graph,
-                        try self.graph.instantiateProvisionalTypeView(entry.summary_ty orelse
-                            Common.invariant("ready interface replay had no summary")),
-                        request_fn_node,
-                    );
+                    if (!replay_state.use_finished_summaries) continue;
+                    cached = entry.summary.?;
+                    break;
                 },
             }
-            return;
         };
-
-        var verify_summary: ?Type.TypeId = null;
+        if (cached == null and replay_state.use_finished_summaries) cached = try self.findInterfaceSummary(address, stored_evidence, request);
+        var verify_summary: ?InterfaceConstraints = null;
         const saved_use_summaries = replay_state.use_finished_summaries;
         defer replay_state.use_finished_summaries = saved_use_summaries;
-        if (replay_state.use_finished_summaries) {
-            if (try self.findInterfaceSummary(address, stored_evidence, provisional_ty)) |hit| {
-                self.builder.count("interface_summary_hits");
-                // Detailed diagnostics in safety builds audit the first 16
-                // cross-lane hits by independently expanding checked relations.
-                if (std.debug.runtime_safety and self.builder.diagnostics != null and
-                    hit.coordinator and self.builder.interface_summary_checks < 16)
-                {
-                    self.builder.interface_summary_checks += 1;
-                    self.builder.count("interface_summary_verifications");
-                    verify_summary = hit.ty;
-                    replay_state.use_finished_summaries = false;
-                } else {
-                    try relateFunctionRequestInterface(self.graph, try self.graph.instantiateProvisionalTypeView(hit.ty), request_fn_node);
-                    return;
-                }
+        if (cached) |summary| {
+            self.builder.count("interface_summary_hits");
+            if (std.debug.runtime_safety and self.builder.diagnostics != null and self.builder.interface_summary_checks < 16) {
+                self.builder.interface_summary_checks += 1;
+                self.builder.count("interface_summary_verifications");
+                verify_summary = summary;
+                replay_state.use_finished_summaries = false;
+            } else {
+                try self.relateInterfaceRoots(try summary.instantiate(self.graph), request_roots.items);
+                return;
             }
         }
         self.builder.count("interface_summary_expansions");
+        // Expand on independent input cells. No unrelated caller refinement can
+        // become a cached callee constraint while its dependencies are replayed.
+        const roots = try input.instantiate(self.graph);
+        const detached_subst = try self.graph.arena().dupe(SubstSlot, edge.subst);
+        var slot_index: usize = 1;
+        for (detached_subst) |*slot| if (slot.* == .node) {
+            slot.* = .{ .node = roots[slot_index] };
+            slot_index += 1;
+        };
+        edge.subst = detached_subst;
         const replay_index = replay_state.entries.items.len;
         try replay_state.entries.append(self.allocator, .{
+            .address = address,
             .evidence = stored_evidence,
-            .provisional_ty = provisional_ty,
-            .representative = request_fn_node,
+            .request = try request.copy(self.graph.arena(), InterfaceSummaryCopy{}),
+            .roots = roots,
+            .lowlink = replay_index,
+            .verify_summary = verify_summary,
         });
+        try replay_state.stack.append(self.allocator, replay_index);
+        const parent = replay_state.current;
+        replay_state.current = replay_index;
+        defer replay_state.current = parent;
         const bucket = try replay_state.buckets.getOrPut(address);
         if (!bucket.found_existing) bucket.value_ptr.* = .empty;
         try bucket.value_ptr.append(self.allocator, @intCast(replay_index));
@@ -22792,19 +22827,19 @@ const BodyContext = struct {
                 self.graph,
                 try self.builder.hostedTryAdapterCapability(callee_view, template.hosted_try_adapter),
                 root_node,
-                request_fn_node,
+                roots[0],
             );
         } else if (!try relateClosedResultRowRequestInterface(
             self.graph,
             callee_view,
             template.checked_fn_root,
             root_node,
-            request_fn_node,
+            roots[0],
             // A `.local_proc` target returned above, so this request is always
             // served by a procedure template specialization.
             .adapter_reachable,
         )) {
-            try relateConstructionFunctionRequestInterface(self.graph, root_node, request_fn_node);
+            try relateConstructionFunctionRequestInterface(self.graph, root_node, roots[0]);
         }
         try callee_ctx.instantiateTemplateDispatchRelations(template, null);
 
@@ -22817,29 +22852,38 @@ const BodyContext = struct {
             &active_local_scopes,
             replay_state,
         );
-        const entry = &replay_state.entries.items[replay_index];
-        entry.summary_ty = try self.graph.provisionalTypeViewForNode(entry.representative);
-        entry.status = .ready;
-        const summary_ty = entry.summary_ty.?;
-        if (verify_summary) |cached| {
-            const instantiated = try self.graph.instantiateProvisionalTypeView(cached);
-            const instantiated_ty = try self.graph.provisionalTypeViewForNode(instantiated);
-            if (!try self.typeStore().typeEql(self.nameStore(), instantiated_ty, summary_ty)) {
-                Common.compilerBug("cached interface summary disagreed with fresh checked relation expansion");
-            }
+        try self.relateInterfaceRoots(roots, request_roots.items);
+        replay_state.entries.items[replay_index].status = .expanded;
+        const lowlink = replay_state.entries.items[replay_index].lowlink;
+        if (parent) |parent_index| {
+            replay_state.entries.items[parent_index].lowlink = @min(replay_state.entries.items[parent_index].lowlink, lowlink);
         }
-        if (saved_use_summaries) {
-            var sealer = GraphTypeFinals.initRetainedTypeView(self.graph);
-            defer sealer.deinit();
-            const durable_request = try sealer.sealType(provisional_ty);
-            const durable_summary = try sealer.sealType(summary_ty);
-            const cache = self.interfaceSummaryCache();
-            try cache.insert(self.typeStore(), self.nameStore(), .{
-                .address = address,
-                .evidence = stored_evidence,
-                .provisional_ty = durable_request,
-                .summary_ty = durable_summary,
-            });
+        if (lowlink == replay_index) {
+            // All members of this recursive component have contributed their
+            // constraints. Publish each interface only after this fixed point.
+            while (replay_state.stack.pop()) |index| {
+                const entry = &replay_state.entries.items[index];
+                var scratch = std.heap.ArenaAllocator.init(self.allocator);
+                defer scratch.deinit();
+                const summary = try InterfaceConstraints.capture(self.graph, scratch.allocator(), entry.roots);
+                entry.status = .ready;
+                if (entry.verify_summary) |expected| {
+                    const expected_identity = try expected.identityInto(self.graph, scratch.allocator());
+                    const actual_identity = try summary.identityInto(self.graph, scratch.allocator());
+                    if (!try expected_identity.eql(actual_identity, self.typeStore(), self.nameStore())) {
+                        Common.compilerBug("cached interface constraints disagreed with fresh checked relation expansion");
+                    }
+                }
+                // Completed replay entries borrow the durable cache's immutable
+                // storage; only uncached verification expansions remain graph-local.
+                entry.summary = if (saved_use_summaries) try self.interfaceSummaryCache().insert(self.typeStore(), self.nameStore(), .{
+                    .address = entry.address,
+                    .evidence = entry.evidence,
+                    .request = entry.request,
+                    .summary = summary,
+                }) else try summary.copy(self.graph.arena(), InterfaceSummaryCopy{});
+                if (index == replay_index) break;
+            }
         }
     }
 

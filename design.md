@@ -9013,7 +9013,7 @@ Cross-job interface summaries are shared through an append-only exact-key hash
 index with atomic links. Fully initialized entries become visible with release
 stores; workers acquire links and filter by their captured entry boundary,
 which matches the type/name snapshot. Patricia branches preserve all prior
-keys when splitting; full keys and existing exact evidence/type comparisons
+keys when splitting; full keys and exact evidence/constraint comparisons
 resolve collisions. Entries and their evidence remain alive until workers have
 joined. This keeps memo reuse concurrent without exposing mutable hash-table
 storage or making results depend on completion order. Global identities are still
@@ -9197,47 +9197,57 @@ available before any dependency identity is chosen. Transitive replay reaches
 a fixed point across arbitrary wrapper depth and recursive call graphs without
 making source syntax or body-lowering order part of type meaning.
 
-Repeated open dependency requests are memoized by the complete procedure
-family (template, method scope, and checked source-function key), exact evidence
-topology, and an immutable provisional Monotype view of the function request
-after the caller-owned relations have been applied. Digests select an expected
-O(1) bucket only; exact evidence equality and exact structural type equality are
-the collision authorities. The first request computes the transitive relation
-closure. Equivalent requests retain independent graph cells while relations
-are still being produced, then independently consume the representative's
-final interface after the whole closure is known. A representative interface
-whose checked field-presence cell is still undetermined retains that explicit
-state in the provisional view; each duplicate instantiates it into fresh
-field-kind, source-value, and runtime-slot graph cells rather than sharing the
-representative or committing a slot encoding. An active exact memo entry is
-a recursive edge and joins the active representative. Requests with different
-concrete interfaces, checked source identities, method scopes, or evidence can
-never share an entry. Work is therefore proportional to relation sites plus
-unique exact provisional requests, rather than to the number of duplicate call
-paths through the same interface problem.
+Repeated dependency requests are memoized by the complete procedure family
+(template, method scope, and checked source-function key), exact evidence
+topology, and the complete open input interface. Inputs include the function
+request and the scheme substitution cells, with their sharing and checked-error
+slots. An input identity is captured when its dependency is consumed, after the
+preceding explicit relations. Applying defaults is never part of cache identity.
+Digests select buckets; exact input constraints and evidence are the collision
+authorities.
 
-Completed interface summaries are retained across bodies by that same exact
-address. The coordinator owns interned request and summary types in the
-program store; each executor lane owns a private cumulative table in its
-workspace. Frozen task inputs borrow the coordinator table read-only. Shards
-carry newly retained entries with their immutable type/name epochs, and ordered
-commit relocates both type roots before retaining the entries. Evidence is
-owned checked content. Only completed summaries cross this boundary; active
-recursive entries remain graph-local. Every hit checks exact evidence and type
-equality and instantiates fresh graph cells. Safety builds with detailed timing
-diagnostics independently expand the first sixteen coordinator hits per builder
-and compare their summaries.
+Interface summaries are immutable constraints over explicit input roots. They
+preserve unresolved variables and their defaults, row tails, variable and
+field-presence sharing, recursive topology, and producer-owned representation
+authority. Private backing producers mark their representation witness roots;
+those identities stay request-local even when the backing is empty. Imported
+finished-type witnesses remain finished after replay, preserving the prohibition
+on rewriting a finalized representation. Settled
+structure without mutable field-presence or representation evidence is interned
+directly as Monotype content, without retaining intermediate active snapshots.
+This capture does not finalize the surrounding graph or apply variable defaults.
+Settled leaves retain only their interned identities; storage for open structure
+and producer evidence is proportional to the open portion of the interface.
+Open constraints use local indices, never graph identities
+or defaulted Monotype views. Expansion
+uses an independent instantiation of the inputs so incidental caller state
+cannot enter the summary. Replaying a summary instantiates its open cells once
+per request and relates all its input roots, preserving relationships through
+scheme variables that are not reachable from the function shape.
+
+Recursive dependency components publish summaries only after every member has
+contributed its relations. An active exact request joins its active interface;
+completed independent requests instantiate fresh cells. Returning from a child
+alone is not evidence that a recursive component's constraints are complete.
+
+Completed summaries are retained across bodies. The coordinator and each
+executor lane own cumulative tables. Frozen inputs borrow the coordinator table
+read-only; ordered commit relocates interned type leaves and canonical names.
+All open constraints and input identities are immutable owned content. Completed
+graph-local replay entries borrow their owning cache’s immutable summaries;
+temporary capture and replay mappings do not live as long as the graph. Active
+recursive entries remain graph-local. Replay must agree with fresh checked
+relation expansion, including unresolved state and relationships between roots.
 
 Digest discovery encodes each uncached node's scalar bytes once and retains
 ordered child offsets. Acyclic resolution and cyclic-group reduction replay
 those bytes with finalized child digests or group references. All scalar and
 child encodings remain byte-for-byte identical to the versioned digest format.
 
-Retaining a provisional view interns its immutable content, including explicit
-undetermined field kinds, without reading its former live graph cells. It does
-not freeze relations or replace a request's graph. Provisional and specialization
-views reuse active snapshots for resolved subtrees within the current relation
-production epoch; unresolved fringes remain independently materialized.
+Read-only provisional views remain available for finalization probes, but their
+application of defaults makes them unsuitable for interface cache keys or
+replay. Retaining interface constraints neither freezes the live graph nor
+changes its unresolved evidence.
 
 Those constraints are not a fallback mechanism and are not best-effort
 inference after checking. They are the Monotype-stage representation of checked
@@ -9452,11 +9462,12 @@ inspection clears it once before performing any lookup. Multiple mutations with
 no intervening inspection therefore do not repeatedly clear the same cache, and
 no inspection may consume an entry produced before the most recent mutation.
 
-Interface-replay memo lookup has one narrower inspection operation. It may
-materialize an unresolved request as an immutable provisional scratch view,
-applying defaults in that view only. The digest is only a bucket index; exact
-structural equality is collision authority, the scratch type is never emitted,
-and subsequent relations still act on the original graph node.
+Interface-replay memo lookup captures unresolved requests as immutable
+constraints, preserving every variable, default, and row tail. Applying defaults
+would conflate different inputs and make replay add constraints that checking
+never produced. Digests index candidates; exact constraint identity resolves
+collisions. A cached summary cannot become completed Monotype output until its
+fresh graph instantiation has completed relation production and final sealing.
 
 The only time an unresolved checked variable with an empty-tag-union row
 default may become durable `tag_union []` is final graph sealing, after every
