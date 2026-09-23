@@ -9053,7 +9053,11 @@ applies in `lowerCheckedTypeVariable`: its numeric default when it carries a
 numeric default phase, otherwise its row default (`{}` or `[]`), otherwise the
 empty tag union. Planning records that sealed representation as explicit
 `sealed_default` data on the flex representation, so lowering reads it rather
-than re-deriving a default from the checked type. A flex variable carrying
+than re-deriving a default from the checked type. A literal's numeric default
+applies only when nothing resolves the variable, so a numeric-literal variable
+that a scheme quantifies has no sealed default: every instantiation supplies its
+type through the descriptor the scheme's uses pass, exactly as for any other
+quantified variable. A flex variable carrying
 static-dispatch constraints that a quantifying scheme would have to own has no
 sealed default, because each of those needs a dictionary only a quantifying
 scheme can supply; reaching it without a bound descriptor, like reaching an
@@ -12205,7 +12209,12 @@ declaration whose body is shared by every edge that selects it, while the edge
 instantiation describes only one call's boundary.
 
 For an ordinary instantiated lookup, the checked call-site substitution names
-its callee scheme's exact type-variable instantiations. These bindings take
+its callee scheme's exact type-variable instantiations. A generalized
+expression-position function stored into a containing value (a record, tuple,
+list, tag, or nominal) is instantiated there as well: its site publishes the
+same substitution for the function's own scheme together with the checked type
+of the instance the containing value stores, and Boxy plans that use at the
+instance. These bindings take
 precedence over argument pairs obtained while traversing wrappers. A wrapper
 must not replace an explicit scheme binding with a distinct checked row from
 its own callable type. Nominal declaration bindings still shadow enclosing
@@ -12472,7 +12481,13 @@ binding or using the value. No consumer reconstructs capture descriptors from
 capture bytes, layouts, or the worker's contextual types.
 
 Every callable-value use edge records the exact hidden descriptor arguments for
-that use. Descriptors required only by the callable body are captured from
+that use. Planning determines the descriptors a body requires from the checked
+expression and pattern types it analyzes for that body: each unsealed type
+variable those types reach, and each one a callable the body creates or calls
+needs beyond its own scheme variables, unless the signature or checked evidence
+already supplies it. A variable a generalized local scope quantifies belongs to
+the outermost scope listing it and is required only by that scope and the
+bodies it encloses. Descriptors required only by the callable body are captured from
 those planned use-site arguments; descriptors represented structurally in the
 callable signature remain ordinary callable boundary descriptors. An
 uninstantiated declaration use may share a descriptor source only when the plan
