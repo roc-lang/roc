@@ -6326,7 +6326,9 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const worker = self.plan.workers.items[@intFromEnum(worker_id)];
         const captures = self.plan.erasedCaptureSlice(worker.erased_captures);
-        const all_capture_values = try self.generatedCodecCaptureValues(proc, captures, capture_values);
+        var descriptor_initializers = std.ArrayList(ProcBodyBuilder.DescriptorArgLocal).empty;
+        defer descriptor_initializers.deinit(self.allocator);
+        const all_capture_values = try self.generatedCodecCaptureValues(proc, captures, capture_values, &descriptor_initializers);
         defer self.allocator.free(all_capture_values);
         const function = proc.functionChildrenForRep(worker.rep) orelse
             boxyLowerInvariant("generated interpolation step worker was not callable");
@@ -6346,7 +6348,7 @@ const ProcedureBuilder = struct {
             boundary.next,
         );
         try self.finishGeneratedCallablePackBoundary(proc, boundary);
-        return entry;
+        return try proc.prependDescriptorArgMaterializations(descriptor_initializers.items, entry);
     }
 
     fn lowerGeneratedInterpolationStepInto(
@@ -7578,7 +7580,9 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const worker = self.plan.workers.items[@intFromEnum(worker_id)];
         const captures = self.plan.erasedCaptureSlice(worker.erased_captures);
-        const all_capture_values = try self.generatedCodecCaptureValues(proc, captures, capture_values);
+        var descriptor_initializers = std.ArrayList(ProcBodyBuilder.DescriptorArgLocal).empty;
+        defer descriptor_initializers.deinit(self.allocator);
+        const all_capture_values = try self.generatedCodecCaptureValues(proc, captures, capture_values, &descriptor_initializers);
         defer self.allocator.free(all_capture_values);
         const function = proc.functionChildrenForRep(worker.rep) orelse
             boxyLowerInvariant("generated codec callback worker was not callable");
@@ -7598,7 +7602,7 @@ const ProcedureBuilder = struct {
             boundary.next,
         );
         try self.finishGeneratedCallablePackBoundary(proc, boundary);
-        return entry;
+        return try proc.prependDescriptorArgMaterializations(descriptor_initializers.items, entry);
     }
 
     const GeneratedCallableAdapterBoundary = struct {
@@ -7666,6 +7670,7 @@ const ProcedureBuilder = struct {
         proc: *ProcBodyBuilder,
         captures: []const Plan.ErasedCapture,
         captured_values: []const LIR.LocalId,
+        descriptor_initializers: *std.ArrayList(ProcBodyBuilder.DescriptorArgLocal),
     ) Allocator.Error![]LIR.LocalId {
         const values = try self.allocator.alloc(LIR.LocalId, captures.len);
         errdefer self.allocator.free(values);
@@ -7686,8 +7691,19 @@ const ProcedureBuilder = struct {
                 .hidden_desc => {
                     const desc = capture.desc orelse
                         boxyLowerInvariant("generated codec callable descriptor capture had no requirement");
-                    value.* = proc.descriptorLocalForRequirementAndRepOrNull(desc, capture.rep) orelse
-                        boxyLowerInvariant("generated codec callable descriptor capture had no bound input");
+                    // A generated callback is instantiated at the enclosing
+                    // frame's types, so the frame describes each of its
+                    // descriptor captures.
+                    value.* = proc.descriptorLocalForRequirementAndRepOrNull(desc, capture.rep) orelse materialized: {
+                        const materialization = try proc.descriptorMaterializationForSourceRep(capture.rep);
+                        const local = try proc.addFrameLocal(.opaque_ptr);
+                        try descriptor_initializers.append(self.allocator, .{
+                            .local = local,
+                            .materialize = materialization.desc,
+                            .captures = materialization.captures,
+                        });
+                        break :materialized local;
+                    };
                 },
                 .hidden_dict => boxyLowerInvariant("generated codec callable unexpectedly required a dictionary capture"),
             }
@@ -11493,7 +11509,9 @@ const ProcedureBuilder = struct {
         if (field_capture_index != captured_values.len) {
             boxyLowerInvariant("generated parser capture plan did not fill runtime capture layout");
         }
-        const capture_fields = try self.generatedCodecCaptureValues(proc, captures, captured_values);
+        var descriptor_initializers = std.ArrayList(ProcBodyBuilder.DescriptorArgLocal).empty;
+        defer descriptor_initializers.deinit(self.allocator);
+        const capture_fields = try self.generatedCodecCaptureValues(proc, captures, captured_values, &descriptor_initializers);
         defer self.allocator.free(capture_fields);
 
         const boundary = try self.generatedCallablePackBoundary(
@@ -11552,7 +11570,7 @@ const ProcedureBuilder = struct {
         if (planned_capture_index != 1) {
             boxyLowerInvariant("generated parser capture emission did not consume all renamed fields");
         }
-        return continuation;
+        return try proc.prependDescriptorArgMaterializations(descriptor_initializers.items, continuation);
     }
 
     fn lowerHostedWorkerBodyInto(
