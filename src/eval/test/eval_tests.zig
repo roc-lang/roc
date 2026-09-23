@@ -1426,27 +1426,6 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .problem = {} },
     },
-    .{
-        .name = "problem: to_inspect must return Str",
-        .source_kind = .module,
-        .source =
-        \\BadColor := [Red, Green, Blue].{
-        \\    to_inspect : BadColor -> I64
-        \\    to_inspect = |color| match color {
-        \\        Red => 1
-        \\        Green => 2
-        \\        Blue => 3
-        \\    }
-        \\}
-        \\
-        \\main = {
-        \\    red : BadColor
-        \\    red = Red
-        \\    Str.inspect(red)
-        \\}
-        ,
-        .expected = .{ .problem = {} },
-    },
 
     .{
         .name = "allocation - Str.drop_prefix returns seamless slice without allocating copy",
@@ -2855,6 +2834,92 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "True" },
     },
     .{
+        .name = "inspect: to_inspect not returning Str renders the default form",
+        .source_kind = .module,
+        .source =
+        \\BadColor := [Red, Green, Blue].{
+        \\    to_inspect : BadColor -> I64
+        \\    to_inspect = |color| match color {
+        \\        Red => 1
+        \\        Green => 2
+        \\        Blue => 3
+        \\    }
+        \\}
+        \\
+        \\main = {
+        \\    red : BadColor
+        \\    red = Red
+        \\    (Str.inspect(red), Str.inspect({ color: red }))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(\"Red\", \"{ color: Red }\")" },
+    },
+    .{
+        .name = "inspect: to_inspect with extra arguments renders the default form",
+        .source_kind = .module,
+        .source =
+        \\Color := [Red, Green].{
+        \\    to_inspect : Color, I64 -> Str
+        \\    to_inspect = |_color, _n| "custom"
+        \\}
+        \\
+        \\main = {
+        \\    red : Color
+        \\    red = Red
+        \\    (Str.inspect(red), Str.inspect([red]))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(\"Red\", \"[Red]\")" },
+    },
+    // Regression for https://github.com/roc-lang/roc/issues/11388
+    .{
+        .name = "inspect: to_inspect with a where clause renders the default form",
+        .source_kind = .module,
+        .source =
+        \\Nullable(a) := [Null, NotNull(a)].{
+        \\    to_inspect : Nullable(a) -> Str where [a.to_inspect : a -> Str]
+        \\    to_inspect = |n| match n {
+        \\        Null => "Null"
+        \\        NotNull(v) => "NotNull(${v.to_inspect()})"
+        \\    }
+        \\}
+        \\
+        \\render = |value| Str.inspect({ value: value })
+        \\
+        \\main = {
+        \\    note : Nullable(Str)
+        \\    note = NotNull("x")
+        \\    row = { id: 7.I64, note }
+        \\    [Str.inspect(note), Str.inspect(row), Str.inspect([note]), Str.inspect(Ok(note)), render(note)]
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[\"NotNull(\\\"x\\\")\", \"{ id: 7, note: NotNull(\\\"x\\\") }\", \"[NotNull(\\\"x\\\")]\", \"Ok(NotNull(\\\"x\\\"))\", \"{ value: NotNull(\\\"x\\\") }\"]" },
+    },
+    .{
+        .name = "inspect: to_inspect whose argument is not the owner over distinct unconstrained variables renders the default form",
+        .source_kind = .module,
+        .source =
+        \\Fixed(a) := [F(a)].{
+        \\    to_inspect : Fixed(I64) -> Str
+        \\    to_inspect = |_fixed| "fixed"
+        \\}
+        \\
+        \\Pair(a, b) := [P(a, b)].{
+        \\    to_inspect : Pair(a, a) -> Str
+        \\    to_inspect = |_pair| "pair"
+        \\}
+        \\
+        \\main = {
+        \\    fixed : Fixed(I64)
+        \\    fixed = F(1)
+        \\    pair : Pair(I64, I64)
+        \\    pair = P(1, 2)
+        \\    (Str.inspect(fixed), Str.inspect(pair))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(\"F(1)\", \"P(1, 2)\")" },
+    },
+    .{
         .name = "inspect: function-value Str.inspect preserves nominal method",
         .source_kind = .module,
         .source =
@@ -2958,6 +3023,21 @@ const core_tests = [_]TestCase{
     .{ .name = "inspect: record field large string", .source = "{ foo: \"This is a very long string that definitely exceeds the small string optimization limit\" }.foo", .expected = .{ .inspect_str = "\"This is a very long string that definitely exceeds the small string optimization limit\"" } },
 
     // Equality and mutable record cases
+    .{
+        .name = "issue 11362: lazy instantiation preserves record alias constant equality",
+        .source_kind = .module,
+        .source =
+        \\module [main]
+        \\Pair(a) : { first : a, second : a }
+        \\Value : Pair(Str)
+        \\left : Value
+        \\left = { first: "a", second: "b" }
+        \\right : Value
+        \\right = { first: "a", second: "b" }
+        \\main = (left == right, left == { first: "a", second: "b" }, [left] == [right])
+        ,
+        .expected = .{ .inspect_str = "(True, True, True)" },
+    },
     .{ .name = "inspect: empty record equality", .source = "{} == {}", .expected = .{ .inspect_str = "True" } },
     .{
         .name = "inspect: mutable record equality",

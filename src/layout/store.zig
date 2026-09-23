@@ -1,6 +1,7 @@
 //! Stores Layout values by index.
 
 const std = @import("std");
+const TypeDigestHasher = @import("base").TypeDigestHasher;
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const tracy = @import("tracy");
@@ -115,9 +116,26 @@ pub const Store = struct {
         allocator: std.mem.Allocator,
         target_usize: target.TargetUsize,
     ) std.mem.Allocator.Error!Self {
-        var layouts = collections.SafeList(Layout){};
-        var tag_union_variants = try TagUnionVariant.SafeMultiList.initCapacity(allocator, 64);
-        var tag_union_data = try collections.SafeList(TagUnionData).initCapacity(allocator, 64);
+        var self = Self{
+            .allocator = allocator,
+            .layouts = .{},
+            .resolved_list_layouts = .empty,
+            .tuple_elems = .{},
+            .struct_fields = .{},
+            .struct_data = .{},
+            .tag_union_variants = .{},
+            .tag_union_data = .{},
+            .interned_layouts = std.StringHashMap(Idx).init(allocator),
+            .scratch_intern_key = .empty,
+            .interned_recursive_graphs = RecursiveGraphMap.init(allocator),
+            .target_usize = target_usize,
+        };
+        errdefer self.deinit();
+        self.tag_union_variants = try TagUnionVariant.SafeMultiList.initCapacity(allocator, 64);
+        self.tag_union_data = try collections.SafeList(TagUnionData).initCapacity(allocator, 64);
+        const layouts = &self.layouts;
+        const tag_union_variants = &self.tag_union_variants;
+        const tag_union_data = &self.tag_union_data;
 
         // Reserve canonical tag-union metadata index 0 for the shared two-nullary enum
         // representation. `layout.Idx.bool` is just a stable handle to this ordinary
@@ -244,20 +262,9 @@ pub const Store = struct {
 
         std.debug.assert(layouts.len() == num_primitives);
 
-        var self = Self{
-            .allocator = allocator,
-            .layouts = layouts,
-            .resolved_list_layouts = .empty,
-            .tuple_elems = try collections.SafeList(Idx).initCapacity(allocator, 512),
-            .struct_fields = try StructField.SafeMultiList.initCapacity(allocator, 512),
-            .struct_data = try collections.SafeList(StructData).initCapacity(allocator, 512),
-            .tag_union_variants = tag_union_variants,
-            .tag_union_data = tag_union_data,
-            .interned_layouts = std.StringHashMap(Idx).init(allocator),
-            .scratch_intern_key = .empty,
-            .interned_recursive_graphs = RecursiveGraphMap.init(allocator),
-            .target_usize = target_usize,
-        };
+        self.tuple_elems = try collections.SafeList(Idx).initCapacity(allocator, 512);
+        self.struct_fields = try StructField.SafeMultiList.initCapacity(allocator, 512);
+        self.struct_data = try collections.SafeList(StructData).initCapacity(allocator, 512);
 
         try self.buildExistingLayoutInternKey(Layout.boolType());
         try self.rememberScratchInternKey(.bool);
@@ -525,6 +532,31 @@ pub const Store = struct {
         return try self.insertLayout(layout);
     }
 
+    /// Look up a serially prepared pointer layout without touching shared scratch.
+    pub fn getPtr(self: *const Self, elem_idx: Idx) ?Idx {
+        var key: [1 + @sizeOf(u32)]u8 = undefined;
+        key[0] = @intCast(@intFromEnum(LayoutTag.ptr));
+        const raw_idx: u32 = @intCast(@intFromEnum(elem_idx));
+        @memcpy(key[1..], std.mem.asBytes(&raw_idx));
+        return self.interned_layouts.get(&key);
+    }
+
+    test "getPtr reads prepared layouts without changing intern scratch" {
+        var store = try Self.init(std.testing.allocator, target.TargetUsize.native);
+        defer store.deinit();
+        try std.testing.expect(store.getPtr(.u64) == null);
+        const ptr = try store.insertPtr(.u64);
+        _ = try store.insertBox(.u8);
+        const scratch = try std.testing.allocator.dupe(u8, store.scratch_intern_key.items);
+        defer std.testing.allocator.free(scratch);
+        const count = store.layoutCount();
+        const frozen: *const Self = &store;
+        try std.testing.expectEqual(ptr, frozen.getPtr(.u64).?);
+        try std.testing.expect(frozen.getPtr(.u8) == null);
+        try std.testing.expectEqual(count, store.layoutCount());
+        try std.testing.expectEqualSlices(u8, scratch, store.scratch_intern_key.items);
+    }
+
     /// Insert the canonical runtime layout for an erased callable behind a
     /// `Box(function)` boundary. The value is one pointer to a Roc refcounted
     /// allocation whose payload stores the callable header followed by inline
@@ -773,14 +805,14 @@ pub const Store = struct {
     /// own.
     const RecursiveGraphAnalysis = struct {
         allocator: Allocator,
-        /// Identity per node; null for acyclic and nominal nodes.
+        /// Identity per recursive node or its unrolled copy; null otherwise.
         keys: []?RecursiveKey,
 
         pub const RecursiveKey = [32]u8;
 
         const no_component = std.math.maxInt(u32);
         const unvisited = std.math.maxInt(u32);
-        const domain = "roc.layout.recursive-graph.v1";
+        const domain = "roc.layout.recursive-graph.v2";
 
         fn init(allocator: Allocator, graph: *const LayoutGraph) Allocator.Error!RecursiveGraphAnalysis {
             const node_count = graph.nodes.items.len;
@@ -866,7 +898,7 @@ pub const Store = struct {
             return .{ @truncate(value), @truncate(value >> 8), @truncate(value >> 16), @truncate(value >> 24) };
         }
 
-        fn hashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+        fn hashU32(hasher: *TypeDigestHasher, value: u32) void {
             const bytes = littleEndianBytes(value);
             hasher.update(&bytes);
         }
@@ -901,6 +933,8 @@ pub const Store = struct {
             edge_start: std.ArrayList(u32) = .empty,
             edge_len: std.ArrayList(u32) = .empty,
             render_buf: std.ArrayList(u8) = .empty,
+            /// Exact one-step encodings of settled recursive nodes.
+            unfoldings: std.AutoHashMapUnmanaged(RecursiveKey, RecursiveKey) = .empty,
 
             fn init(allocator: Allocator, graph: *const LayoutGraph, keys: []?RecursiveKey) Allocator.Error!Engine {
                 const node_count = graph.nodes.items.len;
@@ -933,6 +967,7 @@ pub const Store = struct {
             }
 
             fn deinit(self_engine: *Engine) void {
+                self_engine.unfoldings.deinit(self_engine.allocator);
                 self_engine.render_buf.deinit(self_engine.allocator);
                 self_engine.edge_len.deinit(self_engine.allocator);
                 self_engine.edge_start.deinit(self_engine.allocator);
@@ -997,7 +1032,7 @@ pub const Store = struct {
             /// inside it as a bare positional marker.
             const LabelSink = struct {
                 engine: *Engine,
-                hasher: *std.crypto.hash.sha2.Sha256,
+                hasher: *TypeDigestHasher,
                 component_id: u32,
 
                 fn writeByte(self_sink: LabelSink, value: u8) Allocator.Error!void {
@@ -1111,19 +1146,32 @@ pub const Store = struct {
                 }
 
                 if (members.len == 1 and self_engine.edges.items.len == 0) {
-                    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-                    hasher.update(domain);
-                    hasher.update("acyclic");
-                    try encodeNode(self_engine.graph, members[0], LabelSink{
-                        .engine = self_engine,
-                        .hasher = &hasher,
-                        .component_id = component_id,
-                    });
-                    self_engine.digests[members[0]] = hasher.finalResult();
+                    const member = members[0];
+                    const unfolding = try self_engine.unfoldingKey(member);
+                    if (self_engine.unfoldings.get(unfolding)) |key| {
+                        self_engine.digests[member] = key;
+                        self_engine.keys[member] = key;
+                    } else {
+                        self_engine.digests[member] = unfolding;
+                    }
                     return;
                 }
 
                 try self_engine.resolveCyclicComponent(component_id);
+            }
+
+            /// Encode one node using the settled digests of all its children,
+            /// including children in its own already-resolved component.
+            fn unfoldingKey(self_engine: *Engine, member: u32) Allocator.Error!RecursiveKey {
+                var hasher = TypeDigestHasher.init();
+                hasher.update(domain);
+                hasher.update("acyclic");
+                try encodeNode(self_engine.graph, member, LabelSink{
+                    .engine = self_engine,
+                    .hasher = &hasher,
+                    .component_id = no_component,
+                });
+                return hasher.finalResult();
             }
 
             fn resolveCyclicComponent(self_engine: *Engine, component_id: u32) Allocator.Error!void {
@@ -1146,7 +1194,7 @@ pub const Store = struct {
                 var distinct_labels = std.AutoHashMap(RecursiveKey, u32).init(allocator);
                 defer distinct_labels.deinit();
                 for (members, 0..) |member, pos| {
-                    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                    var hasher = TypeDigestHasher.init();
                     try encodeNode(self_engine.graph, member, LabelSink{
                         .engine = self_engine,
                         .hasher = &hasher,
@@ -1159,7 +1207,7 @@ pub const Store = struct {
                 while (true) {
                     distinct_labels.clearRetainingCapacity();
                     for (members, 0..) |_, pos| {
-                        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                        var hasher = TypeDigestHasher.init();
                         hasher.update(&labels[pos]);
                         const edges = self_engine.edges.items[self_engine.edge_start.items[pos]..][0..self_engine.edge_len.items[pos]];
                         for (edges) |child_index| {
@@ -1217,13 +1265,13 @@ pub const Store = struct {
                         .rank_of_member = rank_of_member,
                     });
                 }
-                var group_hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                var group_hasher = TypeDigestHasher.init();
                 group_hasher.update(self_engine.render_buf.items);
                 const group_digest = group_hasher.finalResult();
                 const block_digest = try allocator.alloc(RecursiveKey, block_count);
                 defer allocator.free(block_digest);
                 for (0..block_count) |rank| {
-                    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                    var hasher = TypeDigestHasher.init();
                     hasher.update("recursive-member");
                     hashU32(&hasher, @intCast(rank));
                     hasher.update(&group_digest);
@@ -1233,6 +1281,9 @@ pub const Store = struct {
                     const digest = block_digest[rank_of_member[pos]];
                     self_engine.digests[member] = digest;
                     self_engine.keys[member] = digest;
+                }
+                for (members) |member| {
+                    try self_engine.unfoldings.put(self_engine.allocator, try self_engine.unfoldingKey(member), self_engine.digests[member]);
                 }
             }
         };
@@ -3333,6 +3384,22 @@ test "commitGraph identifies recursive nodes by reduced position, not by unrolli
 
     try testing.expectEqual(tied_commit.root_idx, unrolled_commit.root_idx);
     try testing.expectEqual(tied_commit.root_idx, unrolled_commit.value_layouts[@intFromEnum(union_two)]);
+}
+
+test "commitGraph gives an unrolled recursive record the same boxed slots" {
+    const allocator = std.testing.allocator;
+    var store = try Store.init(allocator, .u64);
+    defer store.deinit();
+    var graph = LayoutGraph{};
+    defer graph.deinit(allocator);
+    const outer = try graph.reserveNode(allocator);
+    const inner = try graph.reserveNode(allocator);
+    const fields = try graph.appendFields(allocator, &.{.{ .index = 0, .child = .{ .local = inner } }});
+    graph.setNode(outer, .{ .struct_ = fields });
+    graph.setNode(inner, .{ .struct_ = fields });
+    var commit = try store.commitGraph(&graph, .{ .local = outer });
+    defer commit.deinit(allocator);
+    try std.testing.expectEqual(commit.value_layouts[@intFromEnum(inner)], commit.root_idx);
 }
 
 test "commitGraph keeps distinct-field recursive struct payloads apart" {

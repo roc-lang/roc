@@ -206,6 +206,57 @@ test "recursive boxed callable forwards reuse through Box, let, and alias bounda
     );
 }
 
+fn expectParallelRecursiveBoxedCallablesForwardReuse(
+    store: *const lir.LirStore,
+    _: *const layout.Store,
+) harness.LowerToLirHarnessError!void {
+    var specialized_count: usize = 0;
+    var matching_repack_count: usize = 0;
+
+    for (store.getProcSpecs(), 0..) |proc, index| {
+        if (proc.abi != .roc or proc.body == null or proc.erased_reuse_arg == null) continue;
+        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const name = store.procDebugName(proc_id) orelse continue;
+        if (!std.mem.eql(u8, name, "from_first_state") and
+            !std.mem.eql(u8, name, "from_second_state"))
+        {
+            continue;
+        }
+
+        specialized_count += 1;
+        const reuse_arg = proc.erased_reuse_arg.?;
+        var work = std.ArrayList(lir.LIR.CFStmtId).empty;
+        defer work.deinit(store.allocator);
+        var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(store.allocator);
+        defer visited.deinit();
+        try work.append(store.allocator, proc.body.?);
+        while (work.pop()) |stmt_id| {
+            const entry = try visited.getOrPut(stmt_id);
+            if (entry.found_existing) continue;
+            const stmt = store.getCFStmt(stmt_id);
+            if (stmt == .assign_packed_erased_fn and stmt.assign_packed_erased_fn.reuse == reuse_arg) {
+                matching_repack_count += 1;
+            }
+            try lir.BodyClone.appendSuccessors(@constCast(store), &work, stmt_id);
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), specialized_count);
+    try std.testing.expectEqual(@as(usize, 2), matching_repack_count);
+}
+
+test "recursive boxed callable return reuse lowers on workers" {
+    try harness.expectRuntimeWorkerParallelismDeterministicLir(
+        .{ .app_path = "test/postcheck/erased_callable_return_forwarding/parallel.roc" },
+        .{
+            .inline_mode = .wrappers,
+            .proc_debug_names = true,
+        },
+        &.{ .erased, .indirect_call, .match, .return_reuse },
+        expectParallelRecursiveBoxedCallablesForwardReuse,
+    );
+}
+
 test "alternative callable producers may share one runtime-selected reuse owner" {
     try harness.runAppPathLirInspection(
         "test/postcheck/erased_callable_return_forwarding/alternatives.roc",

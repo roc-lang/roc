@@ -9,7 +9,6 @@ pub const Monotype = struct {
     pub const Ast = @import("monotype/ast.zig");
     pub const Type = @import("monotype/type.zig");
     pub const Lower = @import("monotype/lower.zig");
-    pub const Serialize = @import("monotype/serialize.zig");
     pub const Solve = @import("monotype/solve.zig");
     pub const Specialize = @import("monotype/specialize.zig");
 };
@@ -39,6 +38,7 @@ pub const LambdaMono = struct {
 pub const MatchTree = @import("match_tree.zig");
 pub const SolvedInline = @import("solved_inline.zig");
 pub const SolvedLirLower = @import("solved_lir_lower.zig");
+pub const ComptimeScalarValues = @import("comptime_scalar_values.zig");
 /// Boxy checked-to-LIR planning and lowering components.
 pub const Boxy = @import("boxy/mod.zig");
 pub const StructuralTest = @import("structural_test.zig");
@@ -50,7 +50,7 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("monotype/ast.zig"));
     std.testing.refAllDecls(@import("monotype/type.zig"));
     std.testing.refAllDecls(@import("monotype/lower.zig"));
-    std.testing.refAllDecls(@import("monotype/serialize.zig"));
+    std.testing.refAllDecls(@import("monotype/worker_inputs.zig"));
     std.testing.refAllDecls(@import("monotype/solve.zig"));
     std.testing.refAllDecls(@import("monotype/specialize.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/ast.zig"));

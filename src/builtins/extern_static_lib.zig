@@ -5,8 +5,8 @@
 
 const static_lib = @import("static_lib.zig");
 
-/// Switches host_abi's helper methods to call the extern runtime symbols.
-pub const roc_host_call_mode = .extern_symbols;
+/// The host that links this archive defines the runtime symbols.
+pub const roc_host_role: @import("host_abi.zig").HostRole = .platform;
 
 pub const panic = static_lib.panic;
 pub const std_options_elf_debug_info_search_paths = static_lib.std_options_elf_debug_info_search_paths;

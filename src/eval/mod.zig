@@ -25,7 +25,7 @@ pub fn backendAvailable(backend_kind: EvalBackend) bool {
 /// Executable memory for running generated code (re-exported from backend module)
 pub const ExecutableMemory = backend.ExecutableMemory;
 /// Shared dynamic-library loader for LLVM-generated libraries.
-pub const DynLib = @import("dynlib.zig").DynLib;
+pub const object_image = @import("object_image.zig");
 /// Layout module (re-exported for result type information)
 pub const layout = @import("layout");
 /// Utilities for loading compiled builtin modules
@@ -40,6 +40,12 @@ pub const CompilerHost = @import("compiler_host.zig");
 pub const CompileTimeHost = @import("compile_time_host.zig");
 /// Stores compile-time interpreter results in ConstStore
 pub const ConstStoreWriter = @import("const_store_writer.zig");
+pub const NativeRootExport = @import("native_root_export.zig");
+pub const FrozenRootTranscode = @import("frozen_root_transcode.zig");
+/// Owned relocated immutable graph and callable registry for runtime interpretation.
+pub const InterpreterStaticData = @import("interpreter_static_data.zig").InterpreterStaticData;
+pub const buildStaticDataForWidth = @import("static_data").buildStaticDataForWidth;
+pub const deinitStaticData = @import("static_data").deinitStaticData;
 /// Builtin types for type checking
 pub const BuiltinTypes = @import("builtins.zig").BuiltinTypes;
 /// Crash context for host crash handling
@@ -71,7 +77,6 @@ pub const interpreter = if (builtin.target.os.tag == .freestanding) struct {
             _: *const @import("lir").LirStore,
             _: *const @import("layout").Store,
             _: *const @import("builtins").host_abi.RocOps,
-            _: @import("builtins").float_bits.NanMode,
         ) error{BackendUnavailable}!@This() {
             return error.BackendUnavailable;
         }
@@ -123,6 +128,7 @@ pub const rc_conformance = @import("rc_conformance.zig");
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(@import("vendor_relocatable_loader"));
     std.testing.refAllDecls(@import("BuiltinModules.zig"));
     std.testing.refAllDecls(@import("builtins.zig"));
     std.testing.refAllDecls(@import("crash_context.zig"));
@@ -133,6 +139,8 @@ test "eval tests" {
     std.testing.refAllDecls(@import("compiler_host.zig"));
     std.testing.refAllDecls(@import("compile_time_host.zig"));
     std.testing.refAllDecls(@import("const_store_writer.zig"));
+    std.testing.refAllDecls(@import("native_root_export.zig"));
+    std.testing.refAllDecls(@import("frozen_root_transcode.zig"));
     std.testing.refAllDecls(@import("inspected_run.zig"));
     std.testing.refAllDecls(@import("rc_conformance.zig"));
     std.testing.refAllDecls(@import("stack.zig"));

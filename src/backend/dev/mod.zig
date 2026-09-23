@@ -7,6 +7,9 @@
 //! - x86_64: Linux (System V ABI), macOS (System V ABI), Windows (Fastcall)
 //! - aarch64: Linux and macOS (AAPCS64)
 
+/// Exact procedure-local stack lifetime and slot planning.
+pub const StackPlan = @import("StackPlan.zig");
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
@@ -20,7 +23,6 @@ const builtins = @import("builtins");
 pub const x86_64 = @import("x86_64/mod.zig");
 pub const aarch64 = @import("aarch64/mod.zig");
 pub const object = @import("object/mod.zig");
-pub const object_reader = @import("object_reader.zig");
 const relocation_mod = @import("Relocation.zig");
 pub const Relocation = relocation_mod.Relocation;
 pub const applyRelocations = relocation_mod.applyRelocations;
@@ -50,6 +52,20 @@ pub const host_lir_codegen_available = LirCodeGenMod.host_lir_codegen_available;
 /// Supports cross-compilation to any RocTarget.
 /// Only available on non-freestanding targets (uses std.fs)
 pub const ObjectFileCompiler = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").ObjectFileCompiler;
+/// Per-region machine-code artifacts and their reassembly.
+pub const ProcArtifact = @import("ProcArtifact.zig");
+/// Shared native procedure task driver and same-program retained artifacts.
+pub const NativeProcCompiler = @import("NativeProcCompiler.zig");
+/// An artifact located in a loaded pack.
+pub const LocatedArtifact = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").LocatedArtifact;
+/// Where the object compiler splices object-cache procedures from.
+pub const SpliceSource = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").SpliceSource;
+/// Place object-cache entries into an open code generator.
+pub const spliceExternalProcs = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").spliceExternalProcs;
+/// Links object-cache entries spliced into the compile-time evaluator's image.
+pub const HostSplice = if (builtin.os.tag == .freestanding) void else @import("HostSplice.zig").HostSplice;
+/// On-disk form of one module's pack of artifacts.
+pub const PackFile = @import("PackFile.zig");
 pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").Entrypoint;
 pub const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;
 pub const StaticDataRelocation = @import("StaticDataExport.zig").StaticDataRelocation;

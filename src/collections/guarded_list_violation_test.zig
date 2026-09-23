@@ -328,7 +328,6 @@ fn emptyLiftedProgram(allocator: Allocator) Lifted.Ast.Program {
         allocator,
         check.CheckedNames.NameStore.init(allocator),
         Mono.Type.Store.init(allocator),
-        .empty, // imported_fns
         .empty, // exprs
         .empty, // pats
         .empty, // stmts
@@ -366,6 +365,7 @@ fn emptyLiftedProgram(allocator: Allocator) Lifted.Ast.Program {
 
 fn dummyProcSpec(raw: u64) LIR.LirProcSpec {
     return .{
+        .identity = LIR.ProcIdentity.forTest(@intCast(raw)),
         .name = LIR.Symbol.fromRaw(raw),
         .args = LIR.LocalSpan.empty(),
         .ret_layout = layout.Idx.u8,

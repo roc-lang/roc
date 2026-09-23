@@ -1134,19 +1134,6 @@ test "fx platform test_type_mismatch" {
     }
 }
 
-test "fx platform inspect_wrong_sig reports type mismatch" {
-    const allocator = testing.allocator;
-
-    const run_result = try util.runRoc(std.testing.io, allocator, &.{}, "test/fx/inspect_wrong_sig_test.roc");
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    // The file declares a BadColor type whose to_inspect returns I64 instead of Str,
-    // which is rejected by the type checker. We only need a TYPE MISMATCH report;
-    // exact exit semantics aren't asserted because the dev path may bail differently.
-    try testing.expect(std.mem.find(u8, run_result.stderr, "type mismatch") != null);
-}
-
 test "fx platform issue8433" {
     const allocator = testing.allocator;
 
@@ -1220,6 +1207,25 @@ test "run executes until it reaches a checked error in an explicit backend" {
     try testing.expect(std.mem.find(u8, run_result.stderr, "name not in scope") != null);
 
     try testing.expect(std.mem.find(u8, run_result.stdout, "Hello, World!") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "Roc crashed:") != null);
+}
+
+test "run crashes only when a branch with a checked type mismatch is taken" {
+    // A mismatched `if` branch becomes a runtime error on its own: the
+    // enclosing function keeps its annotated type, so the well-typed branch
+    // runs normally and only the mismatched branch crashes.
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRocCommand(std.testing.io, allocator, &.{
+        "--opt=dev",
+        "test/fx/erroneous_branch_not_taken.roc",
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try util.checkFailure(run_result);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "type mismatch") != null);
+    try testing.expectEqualStrings("checked: 2\n", run_result.stdout);
     try testing.expect(std.mem.find(u8, run_result.stderr, "Roc crashed:") != null);
 }
 

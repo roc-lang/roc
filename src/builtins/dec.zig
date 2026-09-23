@@ -715,6 +715,48 @@ pub const RocDec = extern struct {
         return RocDec.sub(RocDec.half_pi, RocDec.asin(self, roc_ops), roc_ops);
     }
 
+    /// Vectoring CORDIC on jointly normalized integer coordinates. No division,
+    /// floating conversion, or overflowing negation (including Dec.lowest).
+    pub fn atan2(y_arg: RocDec, x_arg: RocDec, _: *RocOps) RocDec {
+        if (y_arg.num == 0) return .{ .num = if (x_arg.num < 0) RocDec.pi.num else 0 };
+        if (x_arg.num == 0) return .{ .num = if (y_arg.num < 0) -RocDec.half_pi.num else RocDec.half_pi.num };
+        const ax: u128 = @abs(x_arg.num);
+        const ay: u128 = @abs(y_arg.num);
+        // Put the largest magnitude's leading bit at bit 120. This leaves
+        // ample CORDIC growth headroom and over 60 guard bits below Dec's
+        // angular precision, even for the smallest nonzero coordinates.
+        const leading = @clz(@max(ax, ay));
+        var x: i128 = undefined;
+        var y: i128 = undefined;
+        if (leading >= 7) {
+            const shift: u7 = @intCast(leading - 7);
+            x = @intCast(ax << shift);
+            y = @intCast(ay << shift);
+        } else {
+            const shift: u7 = @intCast(7 - leading);
+            x = @intCast(ax >> shift);
+            y = @intCast(ay >> shift);
+        }
+        var angle: i128 = 0;
+        for (dec_cordic_atan, 0..) |step, i| {
+            if (y == 0) break;
+            const shift: u7 = @intCast(i);
+            const dx = i128h.shr_i128(x, shift);
+            const dy = i128h.shr_i128(y, shift);
+            if (y > 0) {
+                x += dy;
+                y -= dx;
+                angle += step;
+            } else {
+                x -= dy;
+                y += dx;
+                angle -= step;
+            }
+        }
+        if (x_arg.num < 0) angle = RocDec.pi.num - angle;
+        return .{ .num = if (y_arg.num < 0) -angle else angle };
+    }
+
     pub fn atan(self: RocDec, roc_ops: *RocOps) RocDec {
         if (self.num > RocDec.one_point_zero.num) {
             const reciprocal = RocDec.div(RocDec.one_point_zero, self, roc_ops);
@@ -1613,6 +1655,11 @@ pub fn acosC(arg: RocDec, roc_ops: *RocOps) callconv(.c) i128 {
 /// failures crash through RocOps.
 pub fn atanC(arg: RocDec, roc_ops: *RocOps) callconv(.c) i128 {
     return @call(.always_inline, RocDec.atan, .{ arg, roc_ops }).num;
+}
+
+/// C ABI two-coordinate arctangent, in (y, x) order.
+pub fn atan2C(y: RocDec, x: RocDec, roc_ops: *RocOps) callconv(.c) i128 {
+    return RocDec.atan2(y, x, roc_ops).num;
 }
 
 /// C ABI addition wrapper that crashes through RocOps on overflow.
@@ -2873,4 +2920,27 @@ test "toIntWrap wraps instead of trapping when the whole part exceeds the destin
     const fifty_six = RocDec{ .num = 56000000000000000000 };
     try std.testing.expectEqual(@as(u8, 56), toIntWrap(u8, fifty_six));
     try std.testing.expectEqual(@as(i64, 56), toIntWrap(i64, fifty_six));
+}
+
+test "Dec atan2 f128 oracle within 64 attos across full coordinate range" {
+    var env = TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const Case = struct { x: i128, y: i128, expected: RocDec };
+    const cases = comptime blk: {
+        @setEvalBranchQuota(2_000_000);
+        const inputs = [_]i128{ std.math.minInt(i128), -1_000_000_000_000_000_000, -1, 0, 1, 200_000_000_000_000_000, 1_000_000_000_000_000_000, std.math.maxInt(i128) };
+        var result: [inputs.len * inputs.len]Case = undefined;
+        var index = 0;
+        for (inputs) |x| for (inputs) |y| {
+            var angle: f128 = if (x == 0) (if (y == 0) @as(f128, 0) else @as(f128, std.math.pi) / 2) else std.math.atan(@abs(@as(f128, @floatFromInt(y)) / @as(f128, @floatFromInt(x))));
+            if (x < 0) angle = std.math.pi - angle;
+            if (y < 0) angle = -angle;
+            result[index] = .{ .x = x, .y = y, .expected = comptimeDecFromF128Trunc(angle) };
+            index += 1;
+        };
+        break :blk result;
+    };
+    for (cases) |case| try expectDecWithin(case.expected, RocDec.atan2(.{ .num = case.y }, .{ .num = case.x }, env.getOps()), 64);
+    try std.testing.expectEqual(@as(i128, 0), RocDec.atan2(.{ .num = 0 }, .{ .num = 0 }, env.getOps()).num);
+    try std.testing.expectEqual(RocDec.pi.num, RocDec.atan2(.{ .num = 0 }, .{ .num = -1 }, env.getOps()).num);
 }

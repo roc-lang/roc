@@ -221,6 +221,36 @@ pub fn resolveLocalImportLogicalPath(
     return try std.mem.join(gpa, "/", segments.items);
 }
 
+/// Derive the package-root-relative logical module path of a source file that
+/// was named directly rather than reached through an import. `source_root` and
+/// `module_path` must both be absolute and lexically normalized, so this is a
+/// single pass over `module_path` with no filesystem access. Returning null
+/// means the file does not lie below the package's source root.
+pub fn sourceFileLogicalPath(
+    gpa: Allocator,
+    source_root: []const u8,
+    module_path: []const u8,
+) Allocator.Error!?[]u8 {
+    if (!std.mem.startsWith(u8, module_path, source_root)) return null;
+    var relative = module_path[source_root.len..];
+    if (source_root.len == 0 or !std.fs.path.isSep(source_root[source_root.len - 1])) {
+        if (relative.len == 0 or !std.fs.path.isSep(relative[0])) return null;
+        relative = relative[1..];
+    }
+
+    const file_name = std.fs.path.basename(relative);
+    const stem = @import("base").module_path.getModuleName(file_name);
+    if (stem.len == 0) return null;
+    const directory = relative[0 .. relative.len - file_name.len];
+
+    const logical = try gpa.alloc(u8, directory.len + stem.len);
+    for (directory, logical[0..directory.len]) |byte, *out| {
+        out.* = if (std.fs.path.isSep(byte)) '/' else byte;
+    }
+    @memcpy(logical[directory.len..], stem);
+    return logical;
+}
+
 /// Extract local module imports from parser-recorded import inventory.
 /// Each result retains the parsed base so the coordinator can normalize it
 /// against the importing module's logical path without inspecting source text.
@@ -649,6 +679,64 @@ test "local import normalization is package-root relative and rejects escape" {
     };
     for (cases) |case| {
         const actual = try resolveLocalImportLogicalPath(gpa, importer, case.parsed);
+        defer if (actual) |path| gpa.free(path);
+        if (case.expected) |expected| {
+            try std.testing.expectEqualStrings(expected, actual.?);
+        } else {
+            try std.testing.expect(actual == null);
+        }
+    }
+}
+
+test "a directly named source file's logical path is relative to its package source root" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct {
+        source_root: []const u8,
+        module_path: []const u8,
+        expected: ?[]const u8,
+    }{
+        .{ .source_root = "/pkg", .module_path = "/pkg/Widget.roc", .expected = "Widget" },
+        .{ .source_root = "/pkg", .module_path = "/pkg/Src/Widget.roc", .expected = "Src/Widget" },
+        .{ .source_root = "/pkg", .module_path = "/pkg/Src/Deep/Widget.roc", .expected = "Src/Deep/Widget" },
+        .{ .source_root = "/pkg", .module_path = "/pkg/Src/main.roc", .expected = "Src/main" },
+        .{ .source_root = "/pkg", .module_path = "/pkg/v1.2/Widget.roc", .expected = "v1.2/Widget" },
+        .{ .source_root = "/", .module_path = "/Src/Widget.roc", .expected = "Src/Widget" },
+        // Only whole path components of the source root match.
+        .{ .source_root = "/pkg", .module_path = "/pkg-other/Widget.roc", .expected = null },
+        .{ .source_root = "/pkg", .module_path = "/other/Widget.roc", .expected = null },
+        .{ .source_root = "/pkg/Src", .module_path = "/pkg/Widget.roc", .expected = null },
+        .{ .source_root = "/pkg", .module_path = "/pkg", .expected = null },
+    };
+    for (cases) |case| {
+        const actual = try sourceFileLogicalPath(gpa, case.source_root, case.module_path);
+        defer if (actual) |path| gpa.free(path);
+        if (case.expected) |expected| {
+            try std.testing.expectEqualStrings(expected, actual.?);
+        } else {
+            try std.testing.expect(actual == null);
+        }
+    }
+}
+
+test "a directly named source file's logical path uses slashes for native separators" {
+    const gpa = std.testing.allocator;
+    const Case = struct {
+        source_root: []const u8,
+        module_path: []const u8,
+        expected: ?[]const u8,
+    };
+    const cases: []const Case = if (@import("builtin").os.tag == .windows) &.{
+        .{ .source_root = "C:\\pkg", .module_path = "C:\\pkg\\Src\\Deep\\Widget.roc", .expected = "Src/Deep/Widget" },
+        .{ .source_root = "C:\\", .module_path = "C:\\Src\\Widget.roc", .expected = "Src/Widget" },
+        .{ .source_root = "C:\\pkg", .module_path = "C:\\pkg-other\\Widget.roc", .expected = null },
+        .{ .source_root = "C:\\pkg", .module_path = "D:\\pkg\\Widget.roc", .expected = null },
+    } else &.{
+        // `\` is an ordinary file-name byte here, not a separator.
+        .{ .source_root = "/pkg", .module_path = "/pkg/Src\\Widget.roc", .expected = "Src\\Widget" },
+        .{ .source_root = "/pkg", .module_path = "/pkg\\Widget.roc", .expected = null },
+    };
+    for (cases) |case| {
+        const actual = try sourceFileLogicalPath(gpa, case.source_root, case.module_path);
         defer if (actual) |path| gpa.free(path);
         if (case.expected) |expected| {
             try std.testing.expectEqualStrings(expected, actual.?);

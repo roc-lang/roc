@@ -303,6 +303,8 @@ pub const CanonicalNameStore = struct {
     method_names: NameInterner = .{},
     record_field_labels: NameInterner = .{},
     tag_labels: NameInterner = .{},
+    record_field_text_rank: ?*base.TextRankCache = null,
+    tag_text_rank: ?*base.TextRankCache = null,
     export_names: NameInterner = .{},
     external_symbol_names: NameInterner = .{},
     /// Serial id -> structured proc-base key. Relocatable (POD elements).
@@ -315,12 +317,15 @@ pub const CanonicalNameStore = struct {
     /// True for a store reconstructed from a serialized buffer: its interners
     /// and `proc_bases` point into buffer-owned memory and must not be freed.
     serialized: bool = false,
+    /// Query-only facade; its owner retains every allocation and must remain
+    /// alive and unmodified until all borrowed readers have finished.
+    borrowed_read_only: bool = false,
 
     /// Build-only dedup/scratch fields excluded from serialization: empty on a
     /// frozen store, so the mixin's `deserialize` resets them (`proc_base_by_key`
     /// via `init(allocator)`, `scratch_key` to its default). Declared so a *data*
     /// field accidentally omitted from `Serialized` is a compile error.
-    pub const serde_transient_fields = [_][]const u8{ "proc_base_by_key", "scratch_key" };
+    pub const serde_transient_fields = [_][]const u8{ "proc_base_by_key", "scratch_key", "record_field_text_rank", "tag_text_rank", "borrowed_read_only" };
 
     pub fn init(allocator: Allocator) CanonicalNameStore {
         return .{
@@ -330,7 +335,64 @@ pub const CanonicalNameStore = struct {
         };
     }
 
+    /// Copy all serial identities into an independently owned interning store.
+    pub fn clone(self: *const CanonicalNameStore, allocator: Allocator) Allocator.Error!CanonicalNameStore {
+        var result = CanonicalNameStore.init(allocator);
+        errdefer result.deinit();
+        inline for (.{ "module_names", "module_identities", "type_names", "method_names", "record_field_labels", "tag_labels", "export_names", "external_symbol_names" }) |field| {
+            const source = &@field(self, field);
+            const destination = &@field(result, field);
+            destination.* = try source.clone(allocator);
+        }
+        for (self.proc_bases.items.items, 0..) |key, index| {
+            const id = try result.internProcBase(key);
+            std.debug.assert(@intFromEnum(id) == index);
+        }
+        return result;
+    }
+
+    /// Publish the exact label-rank generation before concurrent query-only
+    /// borrows. Failed preparation leaves valid, owned cache state for retry.
+    pub fn prepareForReadSharing(self: *CanonicalNameStore) Allocator.Error!void {
+        self.assertMutable();
+        if (self.record_field_text_rank == null) self.record_field_text_rank = try base.TextRankCache.create(self.allocator);
+        if (self.tag_text_rank == null) self.tag_text_rank = try base.TextRankCache.create(self.allocator);
+        _ = try labelTextRanks(&self.record_field_labels, self.record_field_text_rank.?);
+        _ = try labelTextRanks(&self.tag_labels, self.tag_text_rank.?);
+    }
+
+    /// Allocation-free facade over immutable serial names and prepared ranks.
+    pub fn borrowReadOnly(self: *const CanonicalNameStore, allocator: Allocator) CanonicalNameStore {
+        _ = self.preparedRecordFieldRanks();
+        _ = self.preparedTagRanks();
+        var result = self.*;
+        result.allocator = allocator;
+        result.borrowed_read_only = true;
+        result.scratch_key = .empty;
+        return result;
+    }
+
+    fn assertMutable(self: *const CanonicalNameStore) void {
+        if (self.borrowed_read_only) @panic("borrowed canonical name store cannot be mutated");
+    }
+
+    fn preparedRecordFieldRanks(self: *const CanonicalNameStore) []const u32 {
+        const cache = self.record_field_text_rank orelse @panic("canonical record field ranks not prepared for sharing");
+        return cache.current(self.record_field_labels.count()) orelse @panic("borrowed canonical record field rank cache miss");
+    }
+
+    fn preparedTagRanks(self: *const CanonicalNameStore) []const u32 {
+        const cache = self.tag_text_rank orelse @panic("canonical tag ranks not prepared for sharing");
+        return cache.current(self.tag_labels.count()) orelse @panic("borrowed canonical tag rank cache miss");
+    }
+
     pub fn deinit(self: *CanonicalNameStore) void {
+        if (self.borrowed_read_only) {
+            self.* = CanonicalNameStore.init(self.allocator);
+            return;
+        }
+        if (self.record_field_text_rank) |cache| cache.destroy();
+        if (self.tag_text_rank) |cache| cache.destroy();
         if (!self.serialized) {
             // Interners no-op their own free when frozen, but `proc_bases` is a
             // plain SafeList with no frozen flag, so guard the whole owned set.
@@ -484,6 +546,7 @@ pub const CanonicalNameStore = struct {
             self: *const EpochDelta,
             destination: *CanonicalNameStore,
         ) Allocator.Error!void {
+            destination.assertMutable();
             std.debug.assert(std.meta.eql(destination.epochBoundary(), self.begin));
             try self.module_names.prepareAppend(&destination.module_names, destination.allocator);
             try self.module_identities.prepareAppend(&destination.module_identities, destination.allocator);
@@ -504,6 +567,7 @@ pub const CanonicalNameStore = struct {
             self: *const EpochDelta,
             destination: *CanonicalNameStore,
         ) void {
+            destination.assertMutable();
             std.debug.assert(std.meta.eql(destination.epochBoundary(), self.begin));
             self.module_names.appendPrepared(&destination.module_names, destination.allocator);
             self.module_identities.appendPrepared(&destination.module_identities, destination.allocator);
@@ -561,6 +625,7 @@ pub const CanonicalNameStore = struct {
     };
 
     pub fn internModuleName(self: *CanonicalNameStore, text: []const u8) Allocator.Error!ModuleNameId {
+        self.assertMutable();
         return @enumFromInt(try self.module_names.insert(self.allocator, text));
     }
 
@@ -570,6 +635,7 @@ pub const CanonicalNameStore = struct {
 
     /// Intern a 32-byte deep module content identity, returning its dense id.
     pub fn internModuleIdentity(self: *CanonicalNameStore, hash: *const [32]u8) Allocator.Error!ModuleIdentityId {
+        self.assertMutable();
         return @enumFromInt(try self.module_identities.insert(self.allocator, hash));
     }
 
@@ -593,6 +659,7 @@ pub const CanonicalNameStore = struct {
     }
 
     pub fn internTypeName(self: *CanonicalNameStore, text: []const u8) Allocator.Error!TypeNameId {
+        self.assertMutable();
         return @enumFromInt(try self.type_names.insert(self.allocator, text));
     }
 
@@ -601,6 +668,7 @@ pub const CanonicalNameStore = struct {
     }
 
     pub fn internMethodName(self: *CanonicalNameStore, text: []const u8) Allocator.Error!MethodNameId {
+        self.assertMutable();
         return @enumFromInt(try self.method_names.insert(self.allocator, text));
     }
 
@@ -609,6 +677,8 @@ pub const CanonicalNameStore = struct {
     }
 
     pub fn internRecordFieldLabel(self: *CanonicalNameStore, text: []const u8) Allocator.Error!RecordFieldLabelId {
+        self.assertMutable();
+        if (self.record_field_text_rank == null) self.record_field_text_rank = try base.TextRankCache.create(self.allocator);
         return @enumFromInt(try self.record_field_labels.insert(self.allocator, text));
     }
 
@@ -617,6 +687,8 @@ pub const CanonicalNameStore = struct {
     }
 
     pub fn internTagLabel(self: *CanonicalNameStore, text: []const u8) Allocator.Error!TagLabelId {
+        self.assertMutable();
+        if (self.tag_text_rank == null) self.tag_text_rank = try base.TextRankCache.create(self.allocator);
         return @enumFromInt(try self.tag_labels.insert(self.allocator, text));
     }
 
@@ -625,6 +697,7 @@ pub const CanonicalNameStore = struct {
     }
 
     pub fn internExportName(self: *CanonicalNameStore, text: []const u8) Allocator.Error!ExportNameId {
+        self.assertMutable();
         return @enumFromInt(try self.export_names.insert(self.allocator, text));
     }
 
@@ -633,6 +706,7 @@ pub const CanonicalNameStore = struct {
     }
 
     pub fn internExternalSymbolName(self: *CanonicalNameStore, text: []const u8) Allocator.Error!ExternalSymbolNameId {
+        self.assertMutable();
         return @enumFromInt(try self.external_symbol_names.insert(self.allocator, text));
     }
 
@@ -689,6 +763,7 @@ pub const CanonicalNameStore = struct {
     }
 
     pub fn internProcBase(self: *CanonicalNameStore, key: ProcBaseKey) Allocator.Error!ProcBaseKeyRef {
+        self.assertMutable();
         self.scratch_key.clearRetainingCapacity();
         try self.scratch_key.print(self.allocator, "proc:{d}:{s}:{d}:{d}:{d}|", .{
             @intFromEnum(key.module_name),
@@ -731,6 +806,16 @@ pub const CanonicalNameStore = struct {
         return self.method_names.getText(@intFromEnum(id));
     }
 
+    /// Prepare transient lexicographic ranks for this label generation.
+    pub fn recordFieldLabelTextRanks(self: *const CanonicalNameStore, scratch: *base.TextRankCache) Allocator.Error![]const u32 {
+        if (self.borrowed_read_only) return self.preparedRecordFieldRanks();
+        return labelTextRanks(&self.record_field_labels, self.record_field_text_rank orelse scratch);
+    }
+
+    pub fn recordFieldLabelTextRank(self: *const CanonicalNameStore, id: RecordFieldLabelId) u32 {
+        return self.record_field_text_rank.?.current(self.record_field_labels.count()).?[@intFromEnum(id)];
+    }
+
     pub fn recordFieldLabelText(self: *const CanonicalNameStore, id: RecordFieldLabelId) []const u8 {
         return self.record_field_labels.getText(@intFromEnum(id));
     }
@@ -748,12 +833,27 @@ pub const CanonicalNameStore = struct {
 
     /// Compare two record field label ids by their canonical text.
     pub fn recordFieldLabelTextEql(self: *const CanonicalNameStore, a: RecordFieldLabelId, b: RecordFieldLabelId) bool {
-        return Ident.textEql(self.recordFieldLabelText(a), self.recordFieldLabelText(b));
+        std.debug.assert(@intFromEnum(a) < self.record_field_labels.count());
+        std.debug.assert(@intFromEnum(b) < self.record_field_labels.count());
+        return a == b;
     }
 
     /// Order record field labels by their canonical text.
     pub fn recordFieldLabelTextLessThan(self: *const CanonicalNameStore, a: RecordFieldLabelId, b: RecordFieldLabelId) bool {
+        if (self.record_field_text_rank) |cache| {
+            if (cache.current(self.record_field_labels.count())) |ranks| return ranks[@intFromEnum(a)] < ranks[@intFromEnum(b)];
+        }
         return Ident.textLessThan(self.recordFieldLabelText(a), self.recordFieldLabelText(b));
+    }
+
+    /// Prepare transient lexicographic ranks for this label generation.
+    pub fn tagLabelTextRanks(self: *const CanonicalNameStore, scratch: *base.TextRankCache) Allocator.Error![]const u32 {
+        if (self.borrowed_read_only) return self.preparedTagRanks();
+        return labelTextRanks(&self.tag_labels, self.tag_text_rank orelse scratch);
+    }
+
+    pub fn tagLabelTextRank(self: *const CanonicalNameStore, id: TagLabelId) u32 {
+        return self.tag_text_rank.?.current(self.tag_labels.count()).?[@intFromEnum(id)];
     }
 
     pub fn tagLabelText(self: *const CanonicalNameStore, id: TagLabelId) []const u8 {
@@ -766,11 +866,16 @@ pub const CanonicalNameStore = struct {
 
     /// Compare two tag label ids by their canonical text.
     pub fn tagLabelTextEql(self: *const CanonicalNameStore, a: TagLabelId, b: TagLabelId) bool {
-        return Ident.textEql(self.tagLabelText(a), self.tagLabelText(b));
+        std.debug.assert(@intFromEnum(a) < self.tag_labels.count());
+        std.debug.assert(@intFromEnum(b) < self.tag_labels.count());
+        return a == b;
     }
 
     /// Order tag labels by their canonical text.
     pub fn tagLabelTextLessThan(self: *const CanonicalNameStore, a: TagLabelId, b: TagLabelId) bool {
+        if (self.tag_text_rank) |cache| {
+            if (cache.current(self.tag_labels.count())) |ranks| return ranks[@intFromEnum(a)] < ranks[@intFromEnum(b)];
+        }
         return Ident.textLessThan(self.tagLabelText(a), self.tagLabelText(b));
     }
 
@@ -948,6 +1053,19 @@ pub const NameRelocation = struct {
     }
 };
 
+fn labelTextRanks(interner: *const NameInterner, cache: *base.TextRankCache) Allocator.Error![]const u32 {
+    const Context = struct {
+        interner: *const NameInterner,
+        pub fn text(ctx: @This(), index: u32) []const u8 {
+            return ctx.interner.getText(index);
+        }
+        pub fn next(_: @This(), index: u32, _: []const u8) u32 {
+            return index + 1;
+        }
+    };
+    return cache.ensure(0, interner.count(), interner.count(), Context{ .interner = interner });
+}
+
 fn appendOptionalNestedProcSiteKey(
     scratch: *std.ArrayList(u8),
     maybe_key: ?NestedProcSiteKey,
@@ -1001,6 +1119,87 @@ fn appendProcedureTemplateRef(
 fn freeStringHashMapKeys(comptime V: type, map: *std.StringHashMap(V), allocator: Allocator) void {
     var keys = map.keyIterator();
     while (keys.next()) |key| allocator.free(key.*);
+}
+
+test "canonical names read sharing borrows names and prepared ranks without allocation" {
+    var names = CanonicalNameStore.init(std.testing.allocator);
+    defer names.deinit();
+    const module = try names.internModuleName("Module");
+    const identity = try names.internModuleIdentity(&([_]u8{23} ** 32));
+    const type_name = try names.internTypeName("Type");
+    const method = try names.internMethodName("method");
+    const export_name = try names.internExportName("main");
+    const symbol = try names.internExternalSymbolName("roc_main");
+    const field_z = try names.internRecordFieldLabel("z");
+    const field_a = try names.internRecordFieldLabel("a");
+    const tag_z = try names.internTagLabel("Z");
+    const tag_a = try names.internTagLabel("A");
+    const proc = try names.internProcBase(.{
+        .module_name = module,
+        .export_name = export_name,
+        .kind = .checked_source,
+        .ordinal = 7,
+    });
+    for (0..4096) |index| {
+        var buffer: [32]u8 = undefined;
+        _ = try names.internTypeName(try std.fmt.bufPrint(&buffer, "Unrelated{d}", .{index}));
+    }
+    try names.prepareForReadSharing();
+    const before = names.epochBoundary();
+    const field_ranks = names.preparedRecordFieldRanks();
+    const tag_ranks = names.preparedTagRanks();
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    var scratch = base.TextRankCache.init(failing.allocator());
+    defer scratch.deinit();
+    {
+        var borrowed = names.borrowReadOnly(failing.allocator());
+        defer borrowed.deinit();
+        try std.testing.expectEqual(names.typeNameText(type_name).ptr, borrowed.typeNameText(type_name).ptr);
+        try std.testing.expectEqualStrings("Module", borrowed.moduleNameText(module));
+        try std.testing.expectEqual(identity, borrowed.lookupModuleIdentity(&([_]u8{23} ** 32)).?);
+        try std.testing.expectEqualSlices(u8, &([_]u8{23} ** 32), borrowed.moduleIdentityBytes(identity));
+        try std.testing.expectEqualStrings("Type", borrowed.typeNameText(type_name));
+        try std.testing.expectEqualStrings("method", borrowed.methodNameText(method));
+        try std.testing.expectEqualStrings("main", borrowed.exportNameText(export_name));
+        try std.testing.expectEqualStrings("roc_main", borrowed.externalSymbolNameText(symbol));
+        try std.testing.expectEqualDeep(names.procBase(proc), borrowed.procBase(proc));
+        try std.testing.expectEqual(type_name, borrowed.lookupTypeName("Type").?);
+        try std.testing.expectEqual(field_ranks.ptr, (try borrowed.recordFieldLabelTextRanks(&scratch)).ptr);
+        try std.testing.expectEqual(tag_ranks.ptr, (try borrowed.tagLabelTextRanks(&scratch)).ptr);
+        try std.testing.expectEqual(@as(u32, 0), borrowed.recordFieldLabelTextRank(field_a));
+        try std.testing.expectEqual(@as(u32, 0), borrowed.tagLabelTextRank(tag_a));
+        try std.testing.expect(borrowed.recordFieldLabelTextLessThan(field_a, field_z));
+        try std.testing.expect(borrowed.tagLabelTextLessThan(tag_a, tag_z));
+        var owned = try borrowed.clone(std.testing.allocator);
+        defer owned.deinit();
+        try std.testing.expect(!owned.borrowed_read_only);
+        _ = try owned.internTypeName("OwnedOnly");
+        try std.testing.expect(names.lookupTypeName("OwnedOnly") == null);
+    }
+    try std.testing.expectEqual(@as(usize, 0), failing.allocations);
+    try std.testing.expectEqualDeep(before, names.epochBoundary());
+    try std.testing.expectEqualSlices(u32, &.{ 1, 0 }, names.preparedRecordFieldRanks());
+    try std.testing.expectEqualSlices(u32, &.{ 1, 0 }, names.preparedTagRanks());
+    try std.testing.expectEqualStrings("Type", names.typeNameText(type_name));
+    _ = try names.internRecordFieldLabel("b");
+    try names.prepareForReadSharing();
+    try std.testing.expectEqualSlices(u32, &.{ 2, 0, 1 }, names.preparedRecordFieldRanks());
+}
+
+test "canonical names read sharing preparation allocation failures clean owned state" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(allocator: Allocator) (Allocator.Error || error{TestExpectedEqual})!void {
+            var names = CanonicalNameStore.init(allocator);
+            defer names.deinit();
+            _ = try names.internRecordFieldLabel("field");
+            _ = try names.internTagLabel("Tag");
+            try names.prepareForReadSharing();
+            var borrowed = names.borrowReadOnly(allocator);
+            defer borrowed.deinit();
+            try std.testing.expectEqualSlices(u32, &.{0}, borrowed.preparedRecordFieldRanks());
+            try std.testing.expectEqualSlices(u32, &.{0}, borrowed.preparedTagRanks());
+        }
+    }.run, .{});
 }
 
 test "canonical names dedupe by text" {
@@ -1248,6 +1447,15 @@ test "CanonicalNameStore: serialize/deserialize round-trip preserves names, ids,
     const ser: *const CanonicalNameStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
     var loaded = ser.deserialize(@intFromPtr(buffer.ptr), gpa);
     defer loaded.deinit();
+    try std.testing.expect(!loaded.borrowed_read_only);
+    try loaded.prepareForReadSharing();
+    {
+        var borrowed = loaded.borrowReadOnly(gpa);
+        defer borrowed.deinit();
+        try std.testing.expect(borrowed.serialized);
+        try std.testing.expectEqualStrings("List", borrowed.typeNameText(t_list));
+        try std.testing.expectEqual(@as(u32, 0), borrowed.recordFieldLabelTextRank(field));
+    }
 
     // id -> text resolves against the relocated buffer
     try std.testing.expectEqualStrings("Builtin", loaded.moduleNameText(m));
@@ -1269,4 +1477,34 @@ test "CanonicalNameStore: serialize/deserialize round-trip preserves names, ids,
     try std.testing.expectEqual(m, loaded_pb.module_name);
     try std.testing.expectEqual(@as(?ExportNameId, exp), loaded_pb.export_name);
     try std.testing.expectEqual(@as(u32, 7), loaded_pb.ordinal);
+}
+
+test "checked label text ranks preserve byte order and refresh after insertion" {
+    var names = CanonicalNameStore.init(std.testing.allocator);
+    defer names.deinit();
+    var scratch = base.TextRankCache.init(std.testing.allocator);
+    defer scratch.deinit();
+    const texts = [_][]const u8{ "ab", "a", "é", "z", "あ", "_a", "a!", "\xff" };
+    var fields: [texts.len]RecordFieldLabelId = undefined;
+    var tags: [texts.len]TagLabelId = undefined;
+    for (texts, &fields) |text, *id| id.* = try names.internRecordFieldLabel(text);
+    // Deliberately give the two stores different insertion orders.
+    for (0..texts.len) |i| tags[texts.len - 1 - i] = try names.internTagLabel(texts[texts.len - 1 - i]);
+    _ = try names.recordFieldLabelTextRanks(&scratch);
+    _ = try names.tagLabelTextRanks(&scratch);
+    for (texts, 0..) |a, i| for (texts, 0..) |b, j| {
+        const expected = Ident.textLessThan(a, b);
+        try std.testing.expectEqual(expected, names.recordFieldLabelTextRank(fields[i]) < names.recordFieldLabelTextRank(fields[j]));
+        try std.testing.expectEqual(expected, names.tagLabelTextRank(tags[i]) < names.tagLabelTextRank(tags[j]));
+        try std.testing.expectEqual(expected, names.recordFieldLabelTextLessThan(fields[i], fields[j]));
+        try std.testing.expectEqual(expected, names.tagLabelTextLessThan(tags[i], tags[j]));
+    };
+    const field = try names.internRecordFieldLabel("A");
+    const tag = try names.internTagLabel("A");
+    try std.testing.expect(names.recordFieldLabelTextLessThan(field, fields[0]));
+    try std.testing.expect(names.tagLabelTextLessThan(tag, tags[0]));
+    _ = try names.recordFieldLabelTextRanks(&scratch);
+    _ = try names.tagLabelTextRanks(&scratch);
+    try std.testing.expect(names.recordFieldLabelTextRank(field) < names.recordFieldLabelTextRank(fields[0]));
+    try std.testing.expect(names.tagLabelTextRank(tag) < names.tagLabelTextRank(tags[0]));
 }

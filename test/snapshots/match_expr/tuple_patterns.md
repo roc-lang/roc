@@ -39,7 +39,7 @@ MISSING METHOD - tuple_patterns.md:2:21:2:29
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Zero, ..]")
+			(text "[Zero]")
 			(annotation-end))))
 ~~~
 # TOKENS
@@ -137,5 +137,5 @@ match coord {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[Zero, ..]"))
+(expr (type "[Zero]"))
 ~~~

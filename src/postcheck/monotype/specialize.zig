@@ -2,9 +2,16 @@
 //!
 //! `SpecBuilder` is the single index that answers every specialization reuse
 //! question in the Monotype pass. A specialization's identity—its callable,
-//! its checked source function type digest, and the closed monomorphic
-//! function type REQUESTED by the call site that reserved it—is written once
-//! at `reserve` and never rewritten. Refinements produced later (a deferred
+//! the method scope and codec context its body resolves dispatch in, its
+//! exact dispatch evidence, and the closed monomorphic function type
+//! REQUESTED by the call site that reserved it—is written once at `reserve`
+//! and never rewritten. The checked source function type a call site
+//! instantiated the callable from is NOT part of that identity: the callable
+//! says which body to lower and the source type is the requesting graph's
+//! instantiation context, so two call sites reaching the same callable at the
+//! same closed type reuse one record even when their checked source types
+//! differ (one annotated with a transparent alias of the other's type, for
+//! instance). Refinements produced later (a deferred
 //! request type sealed by its requester's graph, or the solved type produced
 //! by lowering the body) are data on the `SpecRecord` and become *alias*
 //! lookup entries pointing at the same record, never a rekey. A request whose
@@ -12,9 +19,11 @@
 //! record through the request-shaped alias; it never widens the record
 //! (`design.md`'s one-way snapshot rule).
 //!
+//! Request, solved-view, and codec-type digests use the same equivalence as
+//! `typeEql`; stored checked provenance never partitions these buckets.
 //! Lookup is a digest-keyed hash map with exact structural type equality as
 //! the collision authority, so reuse checks stay O(1) expected with zero
-//! SHA-256 recomputation on the lookup path.
+//! 128-bit content hash recomputation on the lookup path.
 //!
 //! Boundary notes: the generated structural-derivation helper defs in
 //! `lower.zig` (`inspect_defs`/`equality_defs`/`hash_defs`) are def memos keyed
@@ -33,6 +42,8 @@ const names = check.CheckedNames;
 
 /// Deterministic counters used by specialization-shape tests.
 pub const Counters = struct {
+    /// Closed specializations the object cache served at reservation.
+    spec_cache_hits: u64 = 0,
     template_requests: u64 = 0,
     template_hits: u64 = 0,
     template_misses: u64 = 0,
@@ -47,6 +58,17 @@ pub const Counters = struct {
     specialization_type_digest_cache_hits: u64 = 0,
     specialization_type_digest_cache_misses: u64 = 0,
     specialization_type_digest_nodes_visited: u64 = 0,
+    all_digest_root_requests: u64 = 0,
+    all_digest_node_misses: u64 = 0,
+    commit_digest_root_requests: u64 = 0,
+    commit_digest_node_misses: u64 = 0,
+    interface_replay_digest_root_requests: u64 = 0,
+    interface_replay_digest_node_misses: u64 = 0,
+    interface_summary_hits: u64 = 0,
+    interface_summary_expansions: u64 = 0,
+    interface_summary_verifications: u64 = 0,
+    interface_relation_requests: u64 = 0,
+    interface_replay_hits: u64 = 0,
     exact_type_checks: u64 = 0,
     /// Declaration-backed nominal backings served from the per-graph
     /// instantiation cache. Reuse compares argument cells by union-find root,
@@ -120,38 +142,21 @@ fn evidenceDigestMatches(identity: Ast.SpecIdentity, evidence: EvidenceView) boo
     return std.meta.eql(identity.evidence_digest, Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head));
 }
 
-/// Existing specialization found by a lookup: either a record lowered in this
-/// shard or a ready record loaded from another shard's specialization cache.
+/// Existing specialization found by a lookup.
 pub const LookupResult = union(enum(u8)) {
     local: LocalHit,
-    loaded: Ast.ImportedFnId,
 
     pub fn target(self: LookupResult) Ast.FnSlot {
         return switch (self) {
             .local => |hit| .{ .local = hit.fn_id },
-            .loaded => |imported| .{ .imported = imported },
         };
     }
 };
 
-const LoadedSpecId = enum(u32) { _ };
-
-const LoadedSpec = struct {
-    record: Ast.SpecRecord,
-    types: Type.DurableView,
-    imported: Ast.ImportedFnId,
-    evidence: OwnedEvidence,
-};
-
-const SpecEntryId = union(enum(u8)) {
-    local: Ast.SpecId,
-    loaded: LoadedSpecId,
-};
-
 /// Flat, hash-map-friendly image of one lookup key: the callable identity,
-/// the source function type digest, and one closed monomorphic function type
-/// digest (a record is reachable under its requested digest and, once ready
-/// with a different solved type, under its solved digest as an alias).
+/// its dispatch context, and one closed monomorphic function type digest (a
+/// record is reachable under its requested digest and, once ready with a
+/// different solved type, under its solved digest as an alias).
 pub const SpecLookupAddress = struct {
     callable_kind: u8,
     module_bytes: [32]u8,
@@ -165,7 +170,6 @@ pub const SpecLookupAddress = struct {
     /// fills `default_root_module`) from a template-owned one (zeros).
     default_root: bool,
     default_root_module: [32]u8,
-    source_digest: [32]u8,
     evidence_digest: [32]u8,
     codec_contract_digest: [32]u8,
     type_digest: [32]u8,
@@ -173,13 +177,12 @@ pub const SpecLookupAddress = struct {
     /// Share the durable identity bucket between reservation and draft commit.
     /// Exact type and evidence equality remain the caller's collision checks.
     pub fn fromIdentity(identity: Ast.SpecIdentity) SpecLookupAddress {
-        return from(identity.callable, identity.method_scope, identity.source_fn_ty_digest, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
+        return from(identity.callable, identity.method_scope, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
     }
 
     fn from(
         callable: Ast.CallableIdentity,
         method_scope: names.CheckedModuleDigest,
-        source_digest: names.TypeDigest,
         evidence_digest: Ast.EvidenceDigest,
         codec_contract_digest: names.TypeDigest,
         type_digest: names.TypeDigest,
@@ -194,7 +197,6 @@ pub const SpecLookupAddress = struct {
             .owner_fn_digest = @splat(0),
             .default_root = false,
             .default_root_module = @splat(0),
-            .source_digest = source_digest.bytes,
             .evidence_digest = evidence_digest.bytes,
             .codec_contract_digest = codec_contract_digest.bytes,
             .type_digest = type_digest.bytes,
@@ -227,12 +229,6 @@ pub const SpecLookupAddress = struct {
     }
 };
 
-/// Which lookup entries a search may return.
-const FindScope = enum {
-    local_only,
-    local_and_loaded,
-};
-
 /// Track creation-time identities and refinement history in debug builds so
 /// the validator can prove no record's identity was rewritten after `reserve`
 /// and that every lookup entry belongs to some record's identity history.
@@ -247,8 +243,8 @@ const RefinedDigestShadow = struct {
     digest: names.TypeDigest,
 };
 
-/// Direct specialization reservation table keyed by callable identity, source
-/// type digest, and closed requested (or solved-alias) type digest.
+/// Direct specialization reservation table keyed by callable identity, its
+/// dispatch context, and the closed requested (or solved-alias) type digest.
 pub const SpecBuilder = struct {
     const RecordList = Ast.ProgramList(Ast.SpecRecord, "specs");
     allocator: std.mem.Allocator,
@@ -256,8 +252,7 @@ pub const SpecBuilder = struct {
     types: *const Type.Store,
     records: *RecordList,
     local_evidence: std.ArrayList(OwnedEvidence),
-    loaded_records: std.ArrayList(LoadedSpec),
-    lookup: std.AutoHashMap(SpecLookupAddress, std.ArrayList(SpecEntryId)),
+    lookup: std.AutoHashMap(SpecLookupAddress, std.ArrayList(Ast.SpecId)),
     counters: ?*Counters,
     reserved_identities: if (identity_shadow_enabled) std.ArrayList(Ast.SpecIdentity) else void,
     refined_digest_shadow: if (identity_shadow_enabled) std.ArrayList(RefinedDigestShadow) else void,
@@ -274,8 +269,7 @@ pub const SpecBuilder = struct {
             .types = type_store,
             .records = records,
             .local_evidence = .empty,
-            .loaded_records = .empty,
-            .lookup = std.AutoHashMap(SpecLookupAddress, std.ArrayList(SpecEntryId)).init(allocator),
+            .lookup = std.AutoHashMap(SpecLookupAddress, std.ArrayList(Ast.SpecId)).init(allocator),
             .counters = null,
             .reserved_identities = if (identity_shadow_enabled) .empty else {},
             .refined_digest_shadow = if (identity_shadow_enabled) .empty else {},
@@ -292,48 +286,10 @@ pub const SpecBuilder = struct {
         self.lookup.deinit();
         for (self.local_evidence.items) |evidence| evidence.deinit(self.allocator);
         self.local_evidence.deinit(self.allocator);
-        for (self.loaded_records.items) |loaded| loaded.evidence.deinit(self.allocator);
-        self.loaded_records.deinit(self.allocator);
     }
 
-    /// Index a ready record loaded from another shard's specialization cache.
-    /// Loaded records are reachable only at their SOLVED shape: a loaded
-    /// record is a finished snapshot, and a requester that matches it embeds
-    /// the matched type directly. A request at the record's (less specific)
-    /// requested shape has no way to adopt the snapshot's solved evidence
-    /// into its graph, so it lowers a local specialization instead—the same
-    /// join the pre-immutability cache implemented by serializing identities
-    /// already rewritten to the solved type.
-    pub fn insertLoadedReady(
-        self: *SpecBuilder,
-        record: Ast.SpecRecord,
-        types: Type.DurableView,
-        imported: Ast.ImportedFnId,
-        evidence: EvidenceView,
-    ) std.mem.Allocator.Error!LoadedSpecId {
-        if (record.status != .ready) invariant("loaded Monotype specialization record was not ready");
-        if (!evidenceDigestMatches(record.identity, evidence)) invariant("loaded Monotype specialization evidence digest did not match its exact topology");
-
-        const loaded_id: LoadedSpecId = @enumFromInt(@as(u32, @intCast(self.loaded_records.items.len)));
-        const owned_evidence = try OwnedEvidence.init(self.allocator, evidence);
-        errdefer owned_evidence.deinit(self.allocator);
-        try self.loaded_records.append(self.allocator, .{
-            .record = record,
-            .types = types,
-            .imported = imported,
-            .evidence = owned_evidence,
-        });
-        errdefer _ = self.loaded_records.pop();
-
-        const address = SpecLookupAddress.from(record.identity.callable, record.identity.method_scope, record.identity.source_fn_ty_digest, record.identity.evidence_digest, record.identity.codec_contract_digest, record.solved_fn_ty_digest);
-        const gop = try self.lookup.getOrPut(address);
-        if (!gop.found_existing) gop.value_ptr.* = .empty;
-        try gop.value_ptr.append(self.allocator, .{ .loaded = loaded_id });
-        return loaded_id;
-    }
-
-    /// Reserve a fresh record for `identity`, or return the existing local or
-    /// loaded specialization it matches. A fresh record starts `.reserved`
+    /// Reserve a fresh record for `identity`, or return the existing
+    /// specialization it matches. A fresh record starts `.reserved`
     /// with both type views mirroring the requested type. The whole
     /// find-or-create runs against one lookup bucket, probed once.
     pub fn reserve(
@@ -343,16 +299,13 @@ pub const SpecBuilder = struct {
         fn_id: Ast.FnId,
     ) std.mem.Allocator.Error!ReserveResult {
         if (!evidenceDigestMatches(identity, evidence)) invariant("Monotype specialization evidence digest did not match its exact topology");
-        const address = SpecLookupAddress.from(identity.callable, identity.method_scope, identity.source_fn_ty_digest, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
+        const address = SpecLookupAddress.from(identity.callable, identity.method_scope, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
         const gop = try self.lookup.getOrPut(address);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
 
-        if (try self.matchInBucket(gop.value_ptr.items, identity, evidence, .local_and_loaded)) |hit| {
+        if (try self.matchInBucket(gop.value_ptr.items, identity, evidence)) |hit| {
             return .{
-                .spec = switch (hit) {
-                    .local => |local| local.spec,
-                    .loaded => null,
-                },
+                .spec = hit.local.spec,
                 .target = hit.target(),
                 .created = false,
             };
@@ -380,7 +333,7 @@ pub const SpecBuilder = struct {
         errdefer if (identity_shadow_enabled) {
             _ = self.reserved_identities.pop();
         };
-        try gop.value_ptr.append(self.allocator, .{ .local = spec_id });
+        try gop.value_ptr.append(self.allocator, spec_id);
         return .{
             .spec = spec_id,
             .target = .{ .local = fn_id },
@@ -388,93 +341,54 @@ pub const SpecBuilder = struct {
         };
     }
 
-    /// Find the specialization a request at `identity` should reuse. Local
-    /// records lowered in this shard win over records loaded from other
-    /// shards' caches; request-view matches win over solved-view aliases.
+    /// Find the specialization a request at `identity` should reuse.
     pub fn find(self: *SpecBuilder, identity: Ast.SpecIdentity, evidence: EvidenceView) std.mem.Allocator.Error!?LookupResult {
-        return try self.findInScope(identity, evidence, .local_and_loaded);
+        return try self.findInScope(identity, evidence);
     }
 
-    /// Find like `find`, but only consider records lowered in this shard.
-    /// Body-lowering paths that must produce a local definition use this.
+    /// Find like `find`, returning the local hit directly.
     pub fn findLocal(self: *SpecBuilder, identity: Ast.SpecIdentity, evidence: EvidenceView) std.mem.Allocator.Error!?LocalHit {
-        const hit = (try self.findInScope(identity, evidence, .local_only)) orelse return null;
-        return switch (hit) {
-            .local => |local| local,
-            .loaded => invariant("Monotype local specialization lookup returned a loaded record"),
-        };
+        const hit = (try self.findInScope(identity, evidence)) orelse return null;
+        return hit.local;
     }
 
     fn findInScope(
         self: *SpecBuilder,
         identity: Ast.SpecIdentity,
         evidence: EvidenceView,
-        scope: FindScope,
     ) std.mem.Allocator.Error!?LookupResult {
         if (!evidenceDigestMatches(identity, evidence)) invariant("Monotype specialization lookup evidence digest did not match its exact topology");
-        const address = SpecLookupAddress.from(identity.callable, identity.method_scope, identity.source_fn_ty_digest, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
+        const address = SpecLookupAddress.from(identity.callable, identity.method_scope, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
         const entries = self.lookup.get(address) orelse return null;
         self.countCandidatesBy(identity.callable, entries.items.len);
-        return try self.matchInBucket(entries.items, identity, evidence, scope);
+        return try self.matchInBucket(entries.items, identity, evidence);
     }
 
     /// Match `identity` against one lookup bucket. Request-view matches win
-    /// over solved-view aliases, and local records win over loaded ones, so
-    /// the bucket is scanned in that priority order (which also defers the
-    /// more expensive cross-store comparisons until no local record matched).
-    /// Every entry in the bucket already agrees on callable, source digest,
-    /// and type digest by address equality; only the view check and the exact
-    /// structural equality collision authority remain.
+    /// over solved-view aliases, so the bucket is scanned in that priority order.
+    /// Every entry in the bucket already agrees on callable, dispatch
+    /// context, and type digest by address equality; only the view check and
+    /// the exact structural equality collision authority remain.
     fn matchInBucket(
         self: *SpecBuilder,
-        entries: []const SpecEntryId,
+        entries: []const Ast.SpecId,
         identity: Ast.SpecIdentity,
         evidence: EvidenceView,
-        scope: FindScope,
     ) std.mem.Allocator.Error!?LookupResult {
-        for (entries) |entry_id| {
-            const local_spec = switch (entry_id) {
-                .local => |spec_id| spec_id,
-                .loaded => continue,
-            };
+        for (entries) |local_spec| {
             const record = self.recordPtr(local_spec);
             if (!evidenceEql(self.localEvidence(local_spec), evidence)) continue;
             if (!try self.localCodecContractMatches(record.identity, identity)) continue;
             if (!try self.localViewMatches(record.request_fn_ty, record.request_fn_ty_digest, identity)) continue;
             return localResult(local_spec, record, record.request_fn_ty);
         }
-        for (entries) |entry_id| {
-            const local_spec = switch (entry_id) {
-                .local => |spec_id| spec_id,
-                .loaded => continue,
-            };
+        for (entries) |local_spec| {
             const record = self.recordPtr(local_spec);
             if (record.status != .ready) continue;
             if (!evidenceEql(self.localEvidence(local_spec), evidence)) continue;
             if (!try self.localCodecContractMatches(record.identity, identity)) continue;
             if (!try self.localViewMatches(record.solved_fn_ty, record.solved_fn_ty_digest, identity)) continue;
             return localResult(local_spec, record, record.solved_fn_ty);
-        }
-        if (scope == .local_only) return null;
-        for (entries) |entry_id| {
-            const loaded_id = switch (entry_id) {
-                .local => continue,
-                .loaded => |loaded_id| loaded_id,
-            };
-            const loaded = &self.loaded_records.items[@intFromEnum(loaded_id)];
-            if (!evidenceEql(loaded.evidence.view(), evidence)) continue;
-            if (!try self.loadedCodecContractMatches(loaded, identity)) continue;
-            if (!digestEql(loaded.record.solved_fn_ty_digest, identity.request_fn_ty_digest)) continue;
-            self.countExactTypeCheck();
-            if (!try Type.typeEqlAcrossStores(
-                self.allocator,
-                self.names,
-                self.types.view(),
-                identity.request_fn_ty,
-                loaded.types,
-                loaded.record.solved_fn_ty,
-            )) continue;
-            return .{ .loaded = loaded.imported };
         }
         return null;
     }
@@ -500,37 +414,6 @@ pub const SpecBuilder = struct {
             self.names,
             left_contract.constructor_ty,
             right_contract.constructor_ty,
-        );
-    }
-
-    fn loadedCodecContractMatches(
-        self: *SpecBuilder,
-        loaded: *const LoadedSpec,
-        current: Ast.SpecIdentity,
-    ) std.mem.Allocator.Error!bool {
-        if (!codecContractHeaderEql(loaded.record.identity.codec_contract, current.codec_contract)) return false;
-        if (current.codec_contract == null) return true;
-        const loaded_contract = loaded.record.identity.codec_contract.?;
-        const current_contract = current.codec_contract.?;
-        if (!digestEql(loaded_contract.constructor_ty_digest, current_contract.constructor_ty_digest)) return false;
-        if (!digestEql(loaded_contract.shape_ty_digest, current_contract.shape_ty_digest)) return false;
-        self.countExactTypeCheck();
-        if (!try Type.typeEqlAcrossStores(
-            self.allocator,
-            self.names,
-            self.types.view(),
-            current_contract.shape_ty,
-            loaded.types,
-            loaded_contract.shape_ty,
-        )) return false;
-        self.countExactTypeCheck();
-        return try Type.typeEqlAcrossStores(
-            self.allocator,
-            self.names,
-            self.types.view(),
-            current_contract.constructor_ty,
-            loaded.types,
-            loaded_contract.constructor_ty,
         );
     }
 
@@ -579,7 +462,7 @@ pub const SpecBuilder = struct {
             if (identity_shadow_enabled) {
                 try self.refined_digest_shadow.append(self.allocator, .{ .spec = spec, .digest = request_fn_ty_digest });
             }
-            try self.appendAliasEntry(record.identity.callable, record.identity.method_scope, record.identity.source_fn_ty_digest, record.identity.evidence_digest, record.identity.codec_contract_digest, request_fn_ty_digest, spec);
+            try self.appendAliasEntry(record.identity.callable, record.identity.method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, request_fn_ty_digest, spec);
         }
     }
 
@@ -617,7 +500,7 @@ pub const SpecBuilder = struct {
         record.solved_fn_ty_digest = solved_fn_ty_digest;
         record.status = .ready;
         if (!digestEql(solved_fn_ty_digest, record.request_fn_ty_digest)) {
-            try self.appendAliasEntry(record.identity.callable, record.identity.method_scope, record.identity.source_fn_ty_digest, record.identity.evidence_digest, record.identity.codec_contract_digest, solved_fn_ty_digest, spec);
+            try self.appendAliasEntry(record.identity.callable, record.identity.method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, solved_fn_ty_digest, spec);
         }
     }
 
@@ -628,22 +511,16 @@ pub const SpecBuilder = struct {
         self: *SpecBuilder,
         callable: Ast.CallableIdentity,
         method_scope: names.CheckedModuleDigest,
-        source_digest: names.TypeDigest,
         evidence_digest: Ast.EvidenceDigest,
         codec_contract_digest: names.TypeDigest,
         type_digest: names.TypeDigest,
         spec: Ast.SpecId,
     ) std.mem.Allocator.Error!void {
-        const address = SpecLookupAddress.from(callable, method_scope, source_digest, evidence_digest, codec_contract_digest, type_digest);
+        const address = SpecLookupAddress.from(callable, method_scope, evidence_digest, codec_contract_digest, type_digest);
         const gop = try self.lookup.getOrPut(address);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
-        for (gop.value_ptr.items) |existing| {
-            switch (existing) {
-                .local => |existing_spec| if (existing_spec == spec) return,
-                .loaded => {},
-            }
-        }
-        try gop.value_ptr.append(self.allocator, .{ .local = spec });
+        for (gop.value_ptr.items) |existing| if (existing == spec) return;
+        try gop.value_ptr.append(self.allocator, spec);
     }
 
     fn recordPtr(self: *SpecBuilder, spec: Ast.SpecId) *Ast.SpecRecord {
@@ -742,48 +619,33 @@ pub const SpecBuilder = struct {
         // produced, and no address may list the same record twice.
         var iterator = self.lookup.iterator();
         while (iterator.next()) |entry| {
-            for (entry.value_ptr.items, 0..) |entry_id, entry_index| {
-                const spec_id = switch (entry_id) {
-                    .local => |spec_id| spec_id,
-                    .loaded => continue,
-                };
+            for (entry.value_ptr.items, 0..) |spec_id, entry_index| {
                 const record = self.records.get(@intFromEnum(spec_id));
                 if (!self.addressInRecordHistory(spec_id, record, entry.key_ptr.*)) {
                     return .record_reachable_from_foreign_key;
                 }
-                for (entry.value_ptr.items[entry_index + 1 ..]) |later| {
-                    switch (later) {
-                        .local => |later_spec| if (later_spec == spec_id) return .record_reachable_from_foreign_key,
-                        .loaded => {},
-                    }
-                }
+                for (entry.value_ptr.items[entry_index + 1 ..]) |later_spec| if (later_spec == spec_id) return .record_reachable_from_foreign_key;
             }
         }
         return null;
     }
 
     fn recordReachableAt(self: *const SpecBuilder, spec: Ast.SpecId, record: Ast.SpecRecord, digest: names.TypeDigest) bool {
-        const address = SpecLookupAddress.from(record.identity.callable, record.identity.method_scope, record.identity.source_fn_ty_digest, record.identity.evidence_digest, record.identity.codec_contract_digest, digest);
+        const address = SpecLookupAddress.from(record.identity.callable, record.identity.method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, digest);
         const entries = self.lookup.get(address) orelse return false;
-        for (entries.items) |entry_id| {
-            switch (entry_id) {
-                .local => |entry_spec| if (entry_spec == spec) return true,
-                .loaded => {},
-            }
-        }
+        for (entries.items) |entry_spec| if (entry_spec == spec) return true;
         return false;
     }
 
     fn addressInRecordHistory(self: *const SpecBuilder, spec: Ast.SpecId, record: Ast.SpecRecord, address: SpecLookupAddress) bool {
         const callable = record.identity.callable;
         const method_scope = record.identity.method_scope;
-        const source_digest = record.identity.source_fn_ty_digest;
-        if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, source_digest, record.identity.evidence_digest, record.identity.codec_contract_digest, record.identity.request_fn_ty_digest))) return true;
-        if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, source_digest, record.identity.evidence_digest, record.identity.codec_contract_digest, record.request_fn_ty_digest))) return true;
-        if (record.status == .ready and std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, source_digest, record.identity.evidence_digest, record.identity.codec_contract_digest, record.solved_fn_ty_digest))) return true;
+        if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, record.identity.request_fn_ty_digest))) return true;
+        if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, record.request_fn_ty_digest))) return true;
+        if (record.status == .ready and std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, record.solved_fn_ty_digest))) return true;
         for (self.refined_digest_shadow.items) |refined| {
             if (refined.spec != spec) continue;
-            if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, source_digest, record.identity.evidence_digest, record.identity.codec_contract_digest, refined.digest))) return true;
+            if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, refined.digest))) return true;
         }
         return false;
     }
@@ -802,7 +664,6 @@ fn localResult(spec: Ast.SpecId, record: *const Ast.SpecRecord, match_ty: Type.T
 fn identityEql(left: Ast.SpecIdentity, right: Ast.SpecIdentity) bool {
     return std.meta.eql(left.callable, right.callable) and
         std.meta.eql(left.method_scope, right.method_scope) and
-        digestEql(left.source_fn_ty_digest, right.source_fn_ty_digest) and
         std.meta.eql(left.evidence_digest, right.evidence_digest) and
         digestEql(left.codec_contract_digest, right.codec_contract_digest) and
         std.meta.eql(left.codec_contract, right.codec_contract) and
@@ -841,7 +702,7 @@ test "monotype spec builder reuses exact specialization identities" {
     defer type_store.deinit();
 
     const unit_ty = try type_store.add(.zst);
-    const identity = testSpecIdentity(unit_ty, digestWithFirstByte(1), digestWithFirstByte(2));
+    const identity = testSpecIdentity(unit_ty, digestWithFirstByte(2));
 
     var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
     defer records.deinit(std.testing.allocator);
@@ -875,6 +736,57 @@ test "monotype spec builder reuses exact specialization identities" {
     builder.validateLookupIntegrity();
 }
 
+test "monotype spec builder shares equal nominal requests while preserving checked provenance" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var types = Type.Store.init(std.testing.allocator);
+    defer types.deinit();
+    const module = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const name = try name_store.internTypeName("Value");
+    const first = try types.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module, .type_name = name, .source_decl = 7 },
+        .kind = .nominal,
+        .args = Type.Span.empty(),
+    } });
+    const second = try types.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
+        .def = .{ .module = module, .type_name = name, .source_decl = 7 },
+        .kind = .nominal,
+        .args = Type.Span.empty(),
+    } });
+    const distinct = try types.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(3) },
+        .def = .{ .module = module, .type_name = name, .source_decl = 8 },
+        .kind = .nominal,
+        .args = Type.Span.empty(),
+    } });
+    const first_stored = types.typeDigest(&name_store, first);
+    const second_stored = types.typeDigest(&name_store, second);
+    try std.testing.expect(!digestEql(first_stored, second_stored));
+
+    var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
+    defer records.deinit(std.testing.allocator);
+    var builder = SpecBuilder.init(std.testing.allocator, &name_store, &types, &records);
+    defer builder.deinit();
+    const first_identity = testSpecIdentity(first, types.equalityDigest(&name_store, first));
+    const second_identity = testSpecIdentity(second, types.equalityDigest(&name_store, second));
+    const distinct_identity = testSpecIdentity(distinct, types.equalityDigest(&name_store, distinct));
+    const reserved = try builder.reserve(first_identity, testEvidenceView(), @enumFromInt(1));
+    const reused = try builder.reserve(second_identity, testEvidenceView(), @enumFromInt(2));
+    const separate = try builder.reserve(distinct_identity, testEvidenceView(), @enumFromInt(3));
+    try std.testing.expect(!reused.created);
+    try std.testing.expectEqual(reserved.spec, reused.spec);
+    try std.testing.expect(separate.created);
+    try std.testing.expectEqual(@as(usize, 2), records.len());
+    // Sharing code never overwrites either checked-store re-entry reference.
+    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(types.get(first).named.named_type.ty));
+    try std.testing.expectEqual(@as(u32, 2), @intFromEnum(types.get(second).named.named_type.ty));
+    try std.testing.expectEqual(first_stored, types.typeDigest(&name_store, first));
+    try std.testing.expectEqual(second_stored, types.typeDigest(&name_store, second));
+    builder.validateLookupIntegrity();
+}
+
 test "monotype spec builder keeps identity immutable and aliases the solved type" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
@@ -884,10 +796,9 @@ test "monotype spec builder keeps identity immutable and aliases the solved type
 
     const request_ty = try type_store.add(.zst);
     const solved_ty = try type_store.add(.{ .primitive = .str });
-    const source_digest = digestWithFirstByte(1);
-    const request_identity = testSpecIdentity(request_ty, source_digest, digestWithFirstByte(2));
+    const request_identity = testSpecIdentity(request_ty, digestWithFirstByte(2));
     const solved_digest = digestWithFirstByte(3);
-    const solved_shaped_identity = testSpecIdentity(solved_ty, source_digest, solved_digest);
+    const solved_shaped_identity = testSpecIdentity(solved_ty, solved_digest);
 
     var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
     defer records.deinit(std.testing.allocator);
@@ -937,10 +848,9 @@ test "monotype spec builder refines a reserved request through an alias entry" {
 
     const request_ty = try type_store.add(.zst);
     const sealed_ty = try type_store.add(.{ .primitive = .str });
-    const source_digest = digestWithFirstByte(1);
-    const request_identity = testSpecIdentity(request_ty, source_digest, digestWithFirstByte(2));
+    const request_identity = testSpecIdentity(request_ty, digestWithFirstByte(2));
     const sealed_digest = digestWithFirstByte(3);
-    const sealed_identity = testSpecIdentity(sealed_ty, source_digest, sealed_digest);
+    const sealed_identity = testSpecIdentity(sealed_ty, sealed_digest);
 
     var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
     defer records.deinit(std.testing.allocator);
@@ -980,7 +890,6 @@ test "monotype spec builder keeps checked module boundary in callable identity" 
     defer type_store.deinit();
 
     const unit_ty = try type_store.add(.zst);
-    const source_digest = digestWithFirstByte(1);
     const request_digest = digestWithFirstByte(2);
 
     var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
@@ -989,8 +898,8 @@ test "monotype spec builder keeps checked module boundary in callable identity" 
     var builder = SpecBuilder.init(std.testing.allocator, &name_store, &type_store, &records);
     defer builder.deinit();
 
-    const first_module = testSpecIdentityWithModule(unit_ty, moduleDigestWithFirstByte(1), source_digest, request_digest);
-    const second_module = testSpecIdentityWithModule(unit_ty, moduleDigestWithFirstByte(2), source_digest, request_digest);
+    const first_module = testSpecIdentityWithModule(unit_ty, moduleDigestWithFirstByte(1), request_digest);
+    const second_module = testSpecIdentityWithModule(unit_ty, moduleDigestWithFirstByte(2), request_digest);
 
     const first = try builder.reserve(first_module, testEvidenceView(), @enumFromInt(1));
     const second = try builder.reserve(second_module, testEvidenceView(), @enumFromInt(2));
@@ -1014,7 +923,7 @@ test "monotype spec builder keeps method scope in specialization identity" {
     defer type_store.deinit();
 
     const unit_ty = try type_store.add(.zst);
-    var first_scope = testSpecIdentity(unit_ty, digestWithFirstByte(1), digestWithFirstByte(2));
+    var first_scope = testSpecIdentity(unit_ty, digestWithFirstByte(2));
     first_scope.method_scope = moduleDigestWithFirstByte(1);
     var second_scope = first_scope;
     second_scope.method_scope = moduleDigestWithFirstByte(2);
@@ -1033,6 +942,90 @@ test "monotype spec builder keeps method scope in specialization identity" {
     try std.testing.expect(second.created);
     try std.testing.expect(!repeated_first.created);
     try std.testing.expect(first.spec != second.spec);
+    try std.testing.expectEqual(first.spec, repeated_first.spec);
+    builder.validateLookupIntegrity();
+}
+
+test "monotype spec builder keeps dispatch evidence in specialization identity" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var type_store = Type.Store.init(std.testing.allocator);
+    defer type_store.deinit();
+
+    // Evidence is what decides which callables a body dispatches to, so two
+    // otherwise equal requests that carry different evidence are different
+    // procedures and must not share a record.
+    const unit_ty = try type_store.add(.zst);
+    const request_digest = digestWithFirstByte(2);
+    const first_evidence = schemeEvidenceView(0);
+    const second_evidence = schemeEvidenceView(1);
+    const first_identity = testSpecIdentityWithEvidence(unit_ty, request_digest, first_evidence);
+    const second_identity = testSpecIdentityWithEvidence(unit_ty, request_digest, second_evidence);
+
+    var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
+    defer records.deinit(std.testing.allocator);
+
+    var builder = SpecBuilder.init(std.testing.allocator, &name_store, &type_store, &records);
+    defer builder.deinit();
+
+    const first = try builder.reserve(first_identity, first_evidence, @enumFromInt(1));
+    const second = try builder.reserve(second_identity, second_evidence, @enumFromInt(2));
+    const repeated_first = try builder.reserve(first_identity, first_evidence, @enumFromInt(3));
+
+    try std.testing.expect(first.created);
+    try std.testing.expect(second.created);
+    try std.testing.expect(!repeated_first.created);
+    try std.testing.expect(first.spec != second.spec);
+    try std.testing.expectEqual(first.spec, repeated_first.spec);
+    try std.testing.expectEqual(@as(?LookupResult, null), try builder.find(
+        testSpecIdentityWithEvidence(unit_ty, request_digest, schemeEvidenceView(2)),
+        schemeEvidenceView(2),
+    ));
+    builder.validateLookupIntegrity();
+}
+
+test "monotype spec builder keeps nested site and owner context in callable identity" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var type_store = Type.Store.init(std.testing.allocator);
+    defer type_store.deinit();
+
+    // A nested callable is its site inside an owner instance: the site id and
+    // the owner digest (the owner's context key together with the capture ABI
+    // it closes over) both separate records at one closed request type.
+    const unit_ty = try type_store.add(.zst);
+    const request_digest = digestWithFirstByte(2);
+    var first_site = testSpecIdentity(unit_ty, request_digest);
+    first_site.callable = .{ .nested_site = .{
+        .module = moduleDigestWithFirstByte(1),
+        .owner_proc_base = 0,
+        .owner_template = 1,
+        .owner_fn_digest = digestWithFirstByte(4),
+        .site = 0,
+    } };
+    var second_site = first_site;
+    second_site.callable.nested_site.site = 1;
+    var other_owner = first_site;
+    other_owner.callable.nested_site.owner_fn_digest = digestWithFirstByte(5);
+
+    var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
+    defer records.deinit(std.testing.allocator);
+
+    var builder = SpecBuilder.init(std.testing.allocator, &name_store, &type_store, &records);
+    defer builder.deinit();
+
+    const first = try builder.reserve(first_site, testEvidenceView(), @enumFromInt(1));
+    const second = try builder.reserve(second_site, testEvidenceView(), @enumFromInt(2));
+    const third = try builder.reserve(other_owner, testEvidenceView(), @enumFromInt(3));
+    const repeated_first = try builder.reserve(first_site, testEvidenceView(), @enumFromInt(4));
+
+    try std.testing.expect(first.created);
+    try std.testing.expect(second.created);
+    try std.testing.expect(third.created);
+    try std.testing.expect(!repeated_first.created);
+    try std.testing.expectEqual(@as(usize, 3), builder.records.len());
     try std.testing.expectEqual(first.spec, repeated_first.spec);
     builder.validateLookupIntegrity();
 }
@@ -1070,8 +1063,8 @@ test "monotype spec builder uses exact type equality after digest match" {
     var builder = SpecBuilder.init(std.testing.allocator, &name_store, &type_store, &records);
     defer builder.deinit();
 
-    const first = try builder.reserve(testSpecIdentity(first_ty, digestWithFirstByte(1), forced_digest), testEvidenceView(), @enumFromInt(1));
-    const second = try builder.reserve(testSpecIdentity(second_ty, digestWithFirstByte(1), forced_digest), testEvidenceView(), @enumFromInt(2));
+    const first = try builder.reserve(testSpecIdentity(first_ty, forced_digest), testEvidenceView(), @enumFromInt(1));
+    const second = try builder.reserve(testSpecIdentity(second_ty, forced_digest), testEvidenceView(), @enumFromInt(2));
 
     try std.testing.expect(first.created);
     try std.testing.expect(second.created);
@@ -1093,7 +1086,7 @@ test "monotype spec builder uses exact codec contract equality after digest matc
     const forced_contract_digest = digestWithFirstByte(9);
     const forced_grounding_digest = digestWithFirstByte(10);
 
-    var first_identity = testSpecIdentity(request_ty, digestWithFirstByte(1), digestWithFirstByte(2));
+    var first_identity = testSpecIdentity(request_ty, digestWithFirstByte(2));
     first_identity.codec_contract_digest = forced_contract_digest;
     first_identity.codec_contract = .{
         .module = moduleDigestWithFirstByte(3),
@@ -1131,191 +1124,6 @@ test "monotype spec builder uses exact codec contract equality after digest matc
     builder.validateLookupIntegrity();
 }
 
-test "monotype spec builder reuses loaded records through exact cross-store type equality" {
-    const allocator = std.testing.allocator;
-
-    var name_store = names.NameStore.init(allocator);
-    defer name_store.deinit();
-
-    var current_types = Type.Store.init(allocator);
-    defer current_types.deinit();
-    var loaded_types = Type.Store.init(allocator);
-    defer loaded_types.deinit();
-
-    const current_unit = try current_types.add(.zst);
-    const current_str = try current_types.add(.{ .primitive = .str });
-    const loaded_str = try loaded_types.add(.{ .primitive = .str });
-    const loaded_unit = try loaded_types.add(.zst);
-
-    const loaded_view = loaded_types.view();
-    const loaded_digests = try allocator.alloc(names.TypeDigest, loaded_view.types.len);
-    defer allocator.free(loaded_digests);
-    for (loaded_digests, 0..) |*digest, index| {
-        digest.* = loaded_types.typeDigest(&name_store, @enumFromInt(@as(u32, @intCast(index))));
-    }
-    const loaded_durable = Type.DurableView{
-        .types = loaded_view.types,
-        .type_digests = loaded_digests,
-        .spans = loaded_view.spans,
-        .fields = loaded_view.fields,
-        .tags = loaded_view.tags,
-        .declared_fields = loaded_view.declared_fields,
-    };
-
-    const source_digest = digestWithFirstByte(1);
-    const request_digest = digestWithFirstByte(2);
-    const solved_digest = digestWithFirstByte(3);
-    // The loaded record was requested at the unit shape and solved to str.
-    var loaded_record = testSpecRecordReady(testSpecIdentity(loaded_unit, source_digest, request_digest), @enumFromInt(9));
-    loaded_record.solved_fn_ty = loaded_str;
-    loaded_record.solved_fn_ty_digest = solved_digest;
-
-    var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
-    defer records.deinit(allocator);
-
-    var builder = SpecBuilder.init(allocator, &name_store, &current_types, &records);
-    defer builder.deinit();
-
-    const imported: Ast.ImportedFnId = @enumFromInt(1);
-    _ = try builder.insertLoadedReady(loaded_record, loaded_durable, imported, testEvidenceView());
-
-    // A request shaped like the loaded record's SOLVED type reuses it: the
-    // requester's type already equals the imported body's type.
-    const solved_shaped = testSpecIdentity(current_str, source_digest, solved_digest);
-    const solved_hit = (try builder.find(solved_shaped, testEvidenceView())) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(Ast.FnSlot{ .imported = imported }, solved_hit.target());
-
-    // A request shaped like the loaded record's (less specific) REQUEST type
-    // must not reuse the snapshot—it has no way to adopt the solved
-    // evidence—and lowers a fresh local specialization instead.
-    const request_shaped = testSpecIdentity(current_unit, source_digest, request_digest);
-    try std.testing.expectEqual(@as(?LookupResult, null), try builder.find(request_shaped, testEvidenceView()));
-    const local_miss = try builder.reserve(request_shaped, testEvidenceView(), @enumFromInt(1));
-    try std.testing.expect(local_miss.created);
-    try std.testing.expectEqual(@as(usize, 1), builder.records.len());
-
-    const solved_hit_again = try builder.reserve(solved_shaped, testEvidenceView(), @enumFromInt(2));
-    try std.testing.expect(!solved_hit_again.created);
-    try std.testing.expectEqual(@as(?Ast.SpecId, null), solved_hit_again.spec);
-    try std.testing.expectEqual(Ast.FnSlot{ .imported = imported }, solved_hit_again.target);
-    builder.validateLookupIntegrity();
-}
-
-test "monotype spec builder rejects loaded records when exact cross-store type equality fails" {
-    const allocator = std.testing.allocator;
-
-    var name_store = names.NameStore.init(allocator);
-    defer name_store.deinit();
-
-    var current_types = Type.Store.init(allocator);
-    defer current_types.deinit();
-    var loaded_types = Type.Store.init(allocator);
-    defer loaded_types.deinit();
-
-    const current_unit = try current_types.add(.zst);
-    const loaded_str = try loaded_types.add(.{ .primitive = .str });
-
-    const loaded_view = loaded_types.view();
-    const loaded_digests = try allocator.alloc(names.TypeDigest, loaded_view.types.len);
-    defer allocator.free(loaded_digests);
-    for (loaded_digests, 0..) |*digest, index| {
-        digest.* = loaded_types.typeDigest(&name_store, @enumFromInt(@as(u32, @intCast(index))));
-    }
-    const loaded_durable = Type.DurableView{
-        .types = loaded_view.types,
-        .type_digests = loaded_digests,
-        .spans = loaded_view.spans,
-        .fields = loaded_view.fields,
-        .tags = loaded_view.tags,
-        .declared_fields = loaded_view.declared_fields,
-    };
-
-    const source_digest = digestWithFirstByte(1);
-    const forced_request_digest = digestWithFirstByte(2);
-    const current_identity = testSpecIdentity(current_unit, source_digest, forced_request_digest);
-    const loaded_identity = testSpecIdentity(loaded_str, source_digest, forced_request_digest);
-
-    var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
-    defer records.deinit(allocator);
-
-    var builder = SpecBuilder.init(allocator, &name_store, &current_types, &records);
-    defer builder.deinit();
-
-    _ = try builder.insertLoadedReady(testSpecRecordReady(loaded_identity, @enumFromInt(9)), loaded_durable, @enumFromInt(1), testEvidenceView());
-
-    try std.testing.expectEqual(@as(?LookupResult, null), try builder.find(current_identity, testEvidenceView()));
-
-    const miss = try builder.reserve(current_identity, testEvidenceView(), @enumFromInt(1));
-    try std.testing.expect(miss.created);
-    try std.testing.expect(miss.spec != null);
-    try std.testing.expectEqual(Ast.FnSlot{ .local = @as(Ast.FnId, @enumFromInt(1)) }, miss.target);
-    try std.testing.expectEqual(@as(usize, 1), builder.records.len());
-    builder.validateLookupIntegrity();
-}
-
-test "monotype spec builder prefers local records over loaded records" {
-    const allocator = std.testing.allocator;
-
-    var name_store = names.NameStore.init(allocator);
-    defer name_store.deinit();
-
-    var current_types = Type.Store.init(allocator);
-    defer current_types.deinit();
-    var loaded_types = Type.Store.init(allocator);
-    defer loaded_types.deinit();
-
-    const loaded_unit = try loaded_types.add(.zst);
-    const current_str = try current_types.add(.{ .primitive = .str });
-    const loaded_str = try loaded_types.add(.{ .primitive = .str });
-
-    const loaded_view = loaded_types.view();
-    const loaded_digests = try allocator.alloc(names.TypeDigest, loaded_view.types.len);
-    defer allocator.free(loaded_digests);
-    for (loaded_digests, 0..) |*digest, index| {
-        digest.* = loaded_types.typeDigest(&name_store, @enumFromInt(@as(u32, @intCast(index))));
-    }
-    const loaded_durable = Type.DurableView{
-        .types = loaded_view.types,
-        .type_digests = loaded_digests,
-        .spans = loaded_view.spans,
-        .fields = loaded_view.fields,
-        .tags = loaded_view.tags,
-        .declared_fields = loaded_view.declared_fields,
-    };
-
-    const source_digest = digestWithFirstByte(1);
-    const shared_solved_digest = digestWithFirstByte(9);
-
-    var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
-    defer records.deinit(allocator);
-
-    var builder = SpecBuilder.init(allocator, &name_store, &current_types, &records);
-    defer builder.deinit();
-
-    // A loaded ready record whose SOLVED shape occupies the shared key.
-    var loaded_record = testSpecRecordReady(testSpecIdentity(loaded_unit, source_digest, digestWithFirstByte(2)), @enumFromInt(9));
-    loaded_record.solved_fn_ty = loaded_str;
-    loaded_record.solved_fn_ty_digest = shared_solved_digest;
-    _ = try builder.insertLoadedReady(loaded_record, loaded_durable, @enumFromInt(1), testEvidenceView());
-
-    // A local record reserved at a different request shape that SOLVES to the
-    // same shared key, so both a local and a loaded entry answer that key.
-    const local_fn: Ast.FnId = @enumFromInt(2);
-    const local_reserved = try builder.reserve(testSpecIdentity(current_str, source_digest, digestWithFirstByte(3)), testEvidenceView(), local_fn);
-    try std.testing.expect(local_reserved.created);
-    const local_spec = local_reserved.spec orelse return error.TestUnexpectedResult;
-    builder.markLowering(local_spec);
-    try builder.markReady(local_spec, current_str, shared_solved_digest);
-
-    // A request at the shared solved shape must reuse the local record, not
-    // the loaded one.
-    const shared_shaped = testSpecIdentity(current_str, source_digest, shared_solved_digest);
-    const hit = (try builder.find(shared_shaped, testEvidenceView())) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(local_spec, hit.local.spec);
-    try std.testing.expectEqual(local_fn, hit.local.fn_id);
-    builder.validateLookupIntegrity();
-}
-
 test "monotype spec builder validator catches a hand-corrupted identity" {
     if (comptime !identity_shadow_enabled) return error.SkipZigTest;
 
@@ -1327,7 +1135,7 @@ test "monotype spec builder validator catches a hand-corrupted identity" {
 
     const unit_ty = try type_store.add(.zst);
     const str_ty = try type_store.add(.{ .primitive = .str });
-    const identity = testSpecIdentity(unit_ty, digestWithFirstByte(1), digestWithFirstByte(2));
+    const identity = testSpecIdentity(unit_ty, digestWithFirstByte(2));
 
     var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
     defer records.deinit(std.testing.allocator);
@@ -1373,19 +1181,33 @@ fn moduleDigestWithFirstByte(comptime byte: u8) names.CheckedModuleDigest {
 
 fn testSpecIdentity(
     request_fn_ty: Type.TypeId,
-    source_digest: names.TypeDigest,
     request_digest: names.TypeDigest,
 ) Ast.SpecIdentity {
-    return testSpecIdentityWithModule(request_fn_ty, .{}, source_digest, request_digest);
+    return testSpecIdentityWithModule(request_fn_ty, .{}, request_digest);
 }
 
 fn testSpecIdentityWithModule(
     request_fn_ty: Type.TypeId,
     module_digest: names.CheckedModuleDigest,
-    source_digest: names.TypeDigest,
     request_digest: names.TypeDigest,
 ) Ast.SpecIdentity {
-    const evidence = testEvidenceView();
+    return testSpecIdentityWithModuleAndEvidence(request_fn_ty, module_digest, request_digest, testEvidenceView());
+}
+
+fn testSpecIdentityWithEvidence(
+    request_fn_ty: Type.TypeId,
+    request_digest: names.TypeDigest,
+    evidence: EvidenceView,
+) Ast.SpecIdentity {
+    return testSpecIdentityWithModuleAndEvidence(request_fn_ty, .{}, request_digest, evidence);
+}
+
+fn testSpecIdentityWithModuleAndEvidence(
+    request_fn_ty: Type.TypeId,
+    module_digest: names.CheckedModuleDigest,
+    request_digest: names.TypeDigest,
+    evidence: EvidenceView,
+) Ast.SpecIdentity {
     return .{
         .callable = .{ .proc_template = .{
             .module = module_digest,
@@ -1393,7 +1215,6 @@ fn testSpecIdentityWithModule(
             .template = 1,
         } },
         .method_scope = .{},
-        .source_fn_ty_digest = source_digest,
         .evidence_digest = Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head),
         .codec_contract_digest = .{},
         .codec_contract = null,
@@ -1410,14 +1231,18 @@ fn testEvidenceView() EvidenceView {
     return .{ .nodes = &.{}, .frames = &test_evidence_frames, .head = 0 };
 }
 
-fn testSpecRecordReady(identity: Ast.SpecIdentity, fn_id: Ast.FnId) Ast.SpecRecord {
+/// Distinct one-node evidence topologies: scheme parameter `index` supplies
+/// the only dispatch requirement.
+const scheme_evidence_nodes = [_]check.ConstStore.ConstFnEvidence{
+    .{ .from_scheme = 0 },
+    .{ .from_scheme = 1 },
+    .{ .from_scheme = 2 },
+};
+
+fn schemeEvidenceView(comptime index: usize) EvidenceView {
     return .{
-        .identity = identity,
-        .request_fn_ty = identity.request_fn_ty,
-        .request_fn_ty_digest = identity.request_fn_ty_digest,
-        .solved_fn_ty = identity.request_fn_ty,
-        .solved_fn_ty_digest = identity.request_fn_ty_digest,
-        .fn_id = fn_id,
-        .status = .ready,
+        .nodes = scheme_evidence_nodes[index .. index + 1],
+        .frames = &test_evidence_frames,
+        .head = 0,
     };
 }

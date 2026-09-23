@@ -203,7 +203,6 @@ UNEXPECTED STATEMENT - fuzz_crash_028.md:40:9:40:10
 UNEXPECTED STATEMENT - fuzz_crash_028.md:41:1:41:2
 UNEXPECTED STATEMENT - fuzz_crash_028.md:48:1:48:5
 EXPECTED RECORD ACCESSOR - fuzz_crash_028.md:103:2:103:5
-MOD NOT FOUND - fuzz_crash_028.md:6:1:8:4
 UNDECLARED TYPE - fuzz_crash_028.md:29:2:29:5
 UNDECLARED TYPE - fuzz_crash_028.md:30:2:30:5
 UNDECLARED TYPE - fuzz_crash_028.md:32:19:32:21
@@ -233,7 +232,6 @@ UNRECOGNIZED SYNTAX - fuzz_crash_028.md:103:2:103:5
 NAME NOT IN SCOPE - fuzz_crash_028.md:107:1:107:3
 NAME NOT IN SCOPE - fuzz_crash_028.md:116:1:116:3
 NAME NOT IN SCOPE - fuzz_crash_028.md:119:11:119:15
-NAME NOT IN SCOPE - fuzz_crash_028.md:120:2:120:7
 NAME NOT IN SCOPE - fuzz_crash_028.md:120:22:120:24
 NAME NOT IN SCOPE - fuzz_crash_028.md:123:54:123:57
 NAME NOT IN SCOPE - fuzz_crash_028.md:124:42:124:44
@@ -241,7 +239,6 @@ INVALID ASSIGNMENT TO ITSELF - fuzz_crash_028.md:124:46:124:51
 NAME NOT IN SCOPE - fuzz_crash_028.md:127:11:127:14
 NAME NOT IN SCOPE - fuzz_crash_028.md:132:10:132:13
 NAME NOT IN SCOPE - fuzz_crash_028.md:133:6:133:10
-NAME NOT IN SCOPE - fuzz_crash_028.md:134:2:134:7
 NAME NOT IN SCOPE - fuzz_crash_028.md:136:4:136:5
 UNUSED VARIABLE - fuzz_crash_028.md:112:2:112:6
 UNUSED VARIABLE - fuzz_crash_028.md:113:2:113:3
@@ -255,9 +252,12 @@ NAME NOT IN SCOPE - fuzz_crash_028.md:148:1:148:2
 NAME NOT IN SCOPE - fuzz_crash_028.md:148:6:148:9
 UNUSED VARIABLE - fuzz_crash_028.md:147:2:147:3
 EXPOSED BUT NOT DEFINED - fuzz_crash_028.md:2:6:2:11
+MOD NOT FOUND - fuzz_crash_028.md:6:1:8:4
+DOES NOT EXIST - fuzz_crash_028.md:120:2:120:7
+DOES NOT EXIST - fuzz_crash_028.md:134:2:134:7
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:28:1:31:2
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:47:1:47:21
-TYPE MISMATCH - fuzz_crash_028.md:64:2:64:2
+NAME NOT BOUND IN EVERY ALTERNATIVE - fuzz_crash_028.md:64:17:64:20
 MISSING METHOD - fuzz_crash_028.md:68:3:68:8
 MISSING METHOD - fuzz_crash_028.md:70:3:70:8
 TYPE MISMATCH - fuzz_crash_028.md:64:2:64:2
@@ -1432,16 +1432,6 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(source-region (file "fuzz_crash_028.md") (start 103 2) (end 103 5) (annotation error) (line-text "\t..."))))
 	(report
 		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 6 1) (end 8 4))
-		(headline
-			(text "The mod ")
-			(annotated code "Stdot")
-			(reflow " was not found in this Roc project."))
-		(document
-			(source-region (file "fuzz_crash_028.md") (start 6 1) (end 8 4) (annotation error) (line-text "import Stdot\n\t\texposing [ #tem\n\t\t] # Cose"))))
-	(report
-		(severity runtime_error)
 		(title "Undeclared Type")
 		(region (start 29 2) (end 29 5))
 		(headline
@@ -1807,19 +1797,6 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 	(report
 		(severity runtime_error)
 		(title "Name Not In Scope")
-		(region (start 120 2) (end 120 7))
-		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "line!")
-			(reflow " in this scope."))
-		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
-			(source-region (file "fuzz_crash_028.md") (start 120 2) (end 120 7) (annotation error) (line-text "\tline!(\"Ag ${n} to ${er}\")"))))
-	(report
-		(severity runtime_error)
-		(title "Name Not In Scope")
 		(region (start 120 22) (end 120 24))
 		(headline
 			(reflow "Nothing is named ")
@@ -1908,19 +1885,6 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(line-break)
 			(line-break)
 			(source-region (file "fuzz_crash_028.md") (start 133 6) (end 133 10) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))))
-	(report
-		(severity runtime_error)
-		(title "Name Not In Scope")
-		(region (start 134 2) (end 134 7))
-		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "line!")
-			(reflow " in this scope."))
-		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
-			(source-region (file "fuzz_crash_028.md") (start 134 2) (end 134 7) (annotation error) (line-text "\tline!("))))
 	(report
 		(severity runtime_error)
 		(title "Name Not In Scope")
@@ -2096,6 +2060,34 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(annotated symbol-unqualified "main!")
 			(reflow " in this mod, or by removing it from the list of exposed values.")))
 	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 6 1) (end 8 4))
+		(headline
+			(text "The mod ")
+			(annotated code "Stdot")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "fuzz_crash_028.md") (start 6 1) (end 8 4) (annotation error) (line-text "import Stdot\n\t\texposing [ #tem\n\t\t] # Cose"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 120 2) (end 120 7))
+		(headline
+			(annotated symbol-unqualified "line!")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "fuzz_crash_028.md") (start 120 2) (end 120 7) (annotation error) (line-text "\tline!(\"Ag ${n} to ${er}\")"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 134 2) (end 134 7))
+		(headline
+			(annotated symbol-unqualified "line!")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "fuzz_crash_028.md") (start 134 2) (end 134 7) (annotation error) (line-text "\tline!("))))
+	(report
 		(severity warning)
 		(title "Declaration Has No Value")
 		(region (start 28 1) (end 31 2))
@@ -2119,18 +2111,14 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
 	(report
 		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 64 2) (end 90 3))
+		(title "Name Not Bound In Every Alternative")
+		(region (start 64 17) (end 64 20))
 		(headline
 			(reflow "The")
 			(reflow " ")
-			(annotated code "lue")
+			(reflow "first")
 			(reflow " ")
-			(reflow "binding in the")
-			(reflow " ")
-			(reflow "second")
-			(reflow " ")
-			(reflow "pattern of the")
+			(reflow "pattern in the")
 			(reflow " ")
 			(reflow "first")
 			(reflow " ")
@@ -2138,37 +2126,22 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(reflow " ")
 			(annotated code "match")
 			(reflow " ")
-			(reflow "does not match the same binding in the")
+			(reflow "gives a value the name")
 			(reflow " ")
-			(reflow "first")
+			(annotated code "lue")
+			(reflow ", but the")
 			(reflow " ")
-			(reflow "pattern."))
+			(reflow "second")
+			(reflow " ")
+			(reflow "pattern does not."))
 		(document
-			(source-underlines
-				(display (file "fuzz_crash_028.md") (start 64 2) (end 90 3) (annotation dim) (line-text "\tmatch a {lue | Red => {\n\t\t\tx x\n\t\t}\n\t\tBlue\t\t=> 1\n\t\t\"foo\" => # ent\n00\n\t\t\"foo\" | \"bar\" => 20[1, 2, 3, .. as rest] # t\n\t\t\t=> ment\n\t\t[1, 2 | 5, 3, .. as rest] => 123\n\t\t[\n\t\t] => 1\t3.14 => 314\n\t\t3.14 | 6.28 => 314\n\t\t(1, 2, 3) => 123\n\t\t(1, 2 | 5, 3) => 123\n\t\t{ foo: 1, bar: 2, ..rest } => 12->add(34)\n\t\t{ # Afpen\noo #\n\t\t\t\t: #ue\n\t1, #eld\nar: 2,\n\t\t\t..} => 12\n\t\t{ foo: 1, bar: 2 | 7 } => 12\n\t\t{\n\to: 1,\n\t\t\t} =>212\n\t\tOk(123) => 12\n\t}"))
-				(underline (start 64 17) (end 64 20) (annotation error)))
+			(source-region (file "fuzz_crash_028.md") (start 64 17) (end 64 20) (annotation error) (line-text "\tmatch a {lue | Red => {"))
 			(line-break)
-			(reflow "The type involved is:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "[Red, ..]")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "The difference is inside this type, but it is not visible in this display.")
-			(line-break)
-			(line-break)
-			(reflow "A name shared across")
+			(reflow "Every pattern separated by")
 			(reflow " ")
 			(annotated code "|")
 			(reflow " ")
-			(reflow "patterns in the same")
-			(reflow " ")
-			(annotated code "match")
-			(reflow " ")
-			(reflow "branch must have one compatible type.")))
+			(reflow "in a branch must give values the same names, so the branch can use those names no matter which pattern matched.")))
 	(report
 		(severity runtime_error)
 		(title "Missing Method")
@@ -2191,7 +2164,7 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, Red, ..]")
+			(text "[Blue, Red]")
 			(annotation-end)))
 	(report
 		(severity runtime_error)
@@ -2215,7 +2188,7 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, Red, ..]")
+			(text "[Blue, Red]")
 			(annotation-end)))
 	(report
 		(severity runtime_error)
@@ -2261,16 +2234,12 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "But the expression between the")
-			(reflow " ")
-			(annotated code "match")
-			(reflow " ")
-			(reflow "parenthesis has the type:")
+			(reflow "But the value being matched on has the type:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, Red, ..]")
+			(text "[Blue, Red]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -2364,7 +2333,7 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, ..]")
+			(text "[Blue]")
 			(annotation-end)
 			(line-break)
 			(line-break)

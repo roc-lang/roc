@@ -21,6 +21,9 @@ pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: 
     defer comparer.deinit();
     for (table.generated_codec_derivations, 0..) |*derivation, index| {
         const raw: u32 = @intCast(index);
+        // Bucket selector only: the derivation's own types and method names
+        // are package-controlled, but a Wyhash collision just adds a chain
+        // step, because a candidate is accepted solely by `comparer.equal`.
         var hash = std.hash.Wyhash.init(@intFromEnum(derivation.kind));
         inline for (type_roles) |role| hash.update(&types.rootKey(@field(derivation, role)).bytes);
         hash.update(std.mem.asBytes(&derivation.calls.len));

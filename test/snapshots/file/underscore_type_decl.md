@@ -12,9 +12,21 @@ Pair2(_, y) = Pair(0, 1)
 Pair3(_, _) = Pair(0, 1)
 ~~~
 # EXPECTED
-NIL
+MOD NOT FOUND - underscore_type_decl.md:1:1:1:27
 # PROBLEMS
-NIL
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 1 1) (end 1 27))
+		(headline
+			(text "The mod ")
+			(annotated code "Mod")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "underscore_type_decl.md") (start 1 1) (end 1 27) (annotation error) (line-text "import Mod exposing [Pair]")))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,
@@ -96,7 +108,7 @@ Pair3(_, _) = Pair(0, 1)
 (inferred-types
 	(defs)
 	(expressions
-		(expr (type "[Pair(Dec, Dec), Pair1([], []), ..]"))
-		(expr (type "[Pair(Dec, Dec), Pair2([], []), ..]"))
-		(expr (type "[Pair(Dec, Dec), Pair3([], []), ..]"))))
+		(expr (type "[Pair(Dec, Dec), Pair1([], [])]"))
+		(expr (type "[Pair(Dec, Dec), Pair2([], [])]"))
+		(expr (type "[Pair(Dec, Dec), Pair3([], [])]"))))
 ~~~

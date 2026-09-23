@@ -22,6 +22,20 @@ const roc_shim_hosted_fns: *const [*]const builtins.host_abi.HostedFn =
     @extern(*const [*]const builtins.host_abi.HostedFn, .{ .name = shim_symbols.roc_shim_hosted_fns });
 const roc_shim_hosted_count: *const usize =
     @extern(*const usize, .{ .name = shim_symbols.roc_shim_hosted_count });
+/// The hosted symbols' names, parallel to the dispatch table, null where the
+/// program references no hosted function at that index.
+const roc_shim_hosted_names: [*]const ?[*:0]const u8 =
+    @extern([*]const ?[*:0]const u8, .{ .name = shim_symbols.roc_shim_hosted_names });
+
+/// The hosted dispatch table, in hosted-section order.
+pub fn hostedFns() []const builtins.host_abi.HostedFn {
+    return roc_shim_hosted_fns.*[0..roc_shim_hosted_count.*];
+}
+
+/// The hosted symbol names, parallel to `hostedFns`.
+pub fn hostedNames() []const ?[*:0]const u8 {
+    return roc_shim_hosted_names[0..roc_shim_hosted_count.*];
+}
 
 fn shimAlloc(_: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     return extern_host.roc_alloc(length, alignment);
@@ -41,9 +55,16 @@ fn shimDbg(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
 
 var inline_expect_failed = false;
 
-fn shimExpectFailed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+/// Report a failed inline `expect` to the host and remember it for the
+/// default run's exit status. Compiled images reach `roc_expect_failed`
+/// through this forwarder so the shim observes every failure.
+pub fn recordExpectFailed(bytes: [*]const u8, len: usize) callconv(.c) void {
     inline_expect_failed = true;
     extern_host.roc_expect_failed(bytes, len);
+}
+
+fn shimExpectFailed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    recordExpectFailed(bytes, len);
 }
 
 fn shimCrashed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {

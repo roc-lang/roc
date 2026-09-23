@@ -77,6 +77,7 @@ pub const BuiltinFn = enum {
     str_escape_and_quote,
     crash_str,
     dbg_str,
+    debug_invalid_local,
     expect_err_str,
     roc_expect_failed,
     roc_crashed,
@@ -159,6 +160,7 @@ pub const BuiltinFn = enum {
     dec_div,
     dec_div_trunc,
     dec_pow,
+    dec_atan2,
     dec_sqrt,
     dec_sin,
     dec_cos,
@@ -187,7 +189,9 @@ pub const BuiltinFn = enum {
     float_rem_f32,
     float_rem,
     float_pow_f32,
+    float_atan2_f32,
     float_pow,
+    float_atan2,
     float_sin_f32,
     float_sin,
     float_cos_f32,
@@ -230,6 +234,12 @@ pub const BuiltinFn = enum {
         return symbol_names[@intFromEnum(self)];
     }
 
+    /// The builtin a linker symbol names, if any.
+    pub fn fromSymbolName(name: []const u8) ?BuiltinFn {
+        if (!std.mem.startsWith(u8, name, symbol_prefix)) return null;
+        return std.meta.stringToEnum(BuiltinFn, name[symbol_prefix.len..]);
+    }
+
     /// The wrapper function backing this builtin, typed per member.
     pub fn wrapper(comptime self: BuiltinFn) *const @TypeOf(@field(dev_wrappers, symbol_prefix ++ @tagName(self))) {
         return &@field(dev_wrappers, symbol_prefix ++ @tagName(self));
@@ -270,6 +280,7 @@ pub const BuiltinFn = enum {
             .box_unbox_owned,
             .crash_str,
             .dbg_str,
+            .debug_invalid_local,
             .decref_data_ptr,
             .decref_data_ptr_single_thread,
             .erased_callable_decref,

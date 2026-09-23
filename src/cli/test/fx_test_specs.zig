@@ -84,6 +84,16 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "0<simple test|2>simple test",
         .description = "Stdin to stderr",
     },
+    .{
+        .roc_file = "test/fx/spec_constr_single_pass_blocks.roc",
+        .io_spec = "0<left|1>outer|1>inner|1>after-inner|1>prefix|1>left|1>shared|1>result: 32|0<right|1>outer|1>inner|1>after-inner|1>prefix|1>right|1>shared|1>result: 80|0<stop|1>outer|1>inner|1>after-inner|1>prefix|1>early|1>result: 99",
+        .description = "SpecConstr single-pass blocks retain strict effects, recursive captures, shared branch continuations, and early returns",
+    },
+    .{
+        .roc_file = "test/fx/parallel_fusion.roc",
+        .io_spec = "0<|1>0|0<a|1>0|0<abcd|1>12",
+        .description = "Fused numeric iterator continuations execute empty, singleton, and repeated iterations",
+    },
 
     // Match expression tests
     .{
@@ -288,6 +298,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/inspect_no_method_test.roc",
         .io_spec = "1>Result: Red|1>(Default rendering)",
         .description = "Inspect without to_inspect method",
+    },
+    .{
+        .roc_file = "test/fx/inspect_wrong_sig_test.roc",
+        .io_spec = "1>Result: Red",
+        .description = "Inspect ignores a to_inspect that does not return Str",
     },
     .{
         .roc_file = "test/fx/inspect_record_test.roc",

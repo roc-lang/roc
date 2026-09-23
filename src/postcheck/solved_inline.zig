@@ -51,15 +51,20 @@ pub const OwnedPlan = struct {
 };
 
 /// Analyze a Lambda Solved program and produce explicit inline decisions.
+/// With `keep_keyed_specializations`, a function that is a keyed template
+/// specialization is never inlined away: a pack program offers those
+/// procedures from its manifest, so each must survive as a procedure even
+/// when its only caller is the export wrapper.
 pub fn analyze(
     allocator: std.mem.Allocator,
     mode: Mode,
     procedure_usage: SpecConstr.ProcedureUsage,
     solved: *const Solved.Program,
+    keep_keyed_specializations: bool,
 ) std.mem.Allocator.Error!OwnedPlan {
     return switch (mode) {
         .none => OwnedPlan.empty(allocator),
-        .wrappers => try InlineAnalyzer.run(allocator, procedure_usage, solved),
+        .wrappers => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations),
     };
 }
 
@@ -89,11 +94,13 @@ const InlineAnalyzer = struct {
     solved_types: SolvedType.Store.View,
     decisions: []Decision,
     stack: std.ArrayList(Lifted.FnId),
+    keep_keyed_specializations: bool,
 
     fn run(
         allocator: std.mem.Allocator,
         procedure_usage: SpecConstr.ProcedureUsage,
         solved: *const Solved.Program,
+        keep_keyed_specializations: bool,
     ) std.mem.Allocator.Error!OwnedPlan {
         if (procedure_usage.items.len != solved.lifted.fnCount()) {
             Common.invariant("optimized inline analysis requires exact use information for every lifted function");
@@ -109,6 +116,7 @@ const InlineAnalyzer = struct {
             .solved_types = solved.types.view(),
             .decisions = decisions,
             .stack = .empty,
+            .keep_keyed_specializations = keep_keyed_specializations,
         };
         defer analyzer.stack.deinit(allocator);
 
@@ -193,6 +201,11 @@ const InlineAnalyzer = struct {
     }
 
     fn inlineCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) ?Candidate {
+        if (self.keep_keyed_specializations) {
+            if (self.solved.lifted.getFn(fn_id).source) |template| {
+                if (template.spec_key != null) return null;
+            }
+        }
         if (self.wrapperCandidate(fn_id)) |body| return .{ .body = body, .kind = .wrapper };
         if (self.singleUseCandidate(fn_id)) |body| return .{ .body = body, .kind = .single_use };
         return null;
@@ -397,6 +410,8 @@ const InlineAnalyzer = struct {
             },
             .tag => |tag| self.exprSpanReadsOnlyArgs(tag.payloads, args),
             .static_data_candidate => |candidate| self.exprReadsOnlyArgs(candidate.runtime_expr, args),
+            .inline_expects_enabled => true,
+            .comptime_value => |candidate| self.exprReadsOnlyArgs(candidate.initializer, args),
             .typed_boundary => |boundary| self.exprReadsOnlyArgs(boundary.value, args),
             .nominal,
             .dbg,
@@ -473,23 +488,100 @@ const InlineAnalyzer = struct {
         return false;
     }
 
+    /// Whether a body is a checked wrapper: one operation, a constant, or a
+    /// single guard whose arms are each of those or a crash. Such a body does
+    /// less work than its call costs, and substituting it at every call site
+    /// exposes its guard and its constant arguments to LIR range analysis
+    /// before backend instruction selection. `List.get` and the byte reads
+    /// have this shape with a `Try` on each arm.
     fn isInlineableWrapperBody(self: *const InlineAnalyzer, expr_id: Lifted.ExprId) bool {
         const expr = self.solved.lifted.getExpr(expr_id);
         if (expr.data == .call_proc or expr.data == .low_level) return true;
-        // A checked wrapper has one call-through path and one literal-crash
-        // path. Substitution preserves the guard and exposes constant arguments
-        // to LIR range analysis before backend instruction selection.
+        if (expr.data == .tag) return self.exprSpanIsWrapperOperand(expr.data.tag.payloads);
+        if (expr.data == .nominal) return self.isInlineableWrapperBody(expr.data.nominal);
         if (expr.data == .if_) {
             const branches = self.solved.lifted.ifBranchSpan(expr.data.if_.branches);
             if (branches.len != 1) return false;
             const branch = GuardedList.at(branches, 0);
-            const other = expr.data.if_.final_else;
-            return (self.isLiteralCrash(branch.body) and self.isInlineableWrapperBody(other)) or
-                (self.isLiteralCrash(other) and self.isInlineableWrapperBody(branch.body));
+            return self.isWrapperArm(branch.body) and self.isWrapperArm(expr.data.if_.final_else);
         }
         if (expr.data != .block) return false;
         return self.solved.lifted.stmtSpan(expr.data.block.statements).len == 0 and
             self.isInlineableWrapperBody(expr.data.block.final_expr);
+    }
+
+    fn isWrapperArm(self: *const InlineAnalyzer, expr_id: Lifted.ExprId) bool {
+        return self.isLiteralCrash(expr_id) or self.isInlineableWrapperBody(expr_id);
+    }
+
+    /// A value a wrapper may build its result from: an argument, a literal,
+    /// or another wrapper body.
+    fn isWrapperOperand(self: *const InlineAnalyzer, expr_id: Lifted.ExprId) bool {
+        const expr = self.solved.lifted.getExpr(expr_id);
+        return switch (expr.data) {
+            .local,
+            .unit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bytes_lit,
+            => true,
+            .call_proc,
+            .low_level,
+            .tag,
+            .nominal,
+            .if_,
+            .block,
+            => self.isInlineableWrapperBody(expr_id),
+            .@"unreachable",
+            .crash,
+            .def_ref,
+            .fn_ref,
+            .list,
+            .tuple,
+            .record,
+            .record_update,
+            .static_data_candidate,
+            .inline_expects_enabled,
+            .comptime_value,
+            .typed_boundary,
+            .dbg,
+            .expect,
+            .return_,
+            .expect_err,
+            .comptime_branch_taken,
+            .call_value,
+            .field_access,
+            .tuple_access,
+            .structural_eq,
+            .structural_hash,
+            .lambda,
+            .fn_def,
+            .let_,
+            .match_,
+            .uninitialized,
+            .uninitialized_payload,
+            .if_initialized_payload,
+            .try_sequence,
+            .try_record_sequence,
+            .loop_,
+            .break_,
+            .continue_,
+            .join_point,
+            .jump,
+            .comptime_exhaustiveness_failed,
+            => false,
+        };
+    }
+
+    fn exprSpanIsWrapperOperand(self: *const InlineAnalyzer, span: Lifted.Span(Lifted.ExprId)) bool {
+        const exprs = self.solved.lifted.exprSpan(span);
+        for (0..exprs.len) |index| {
+            if (!self.isWrapperOperand(GuardedList.at(exprs, index))) return false;
+        }
+        return true;
     }
 
     fn isLiteralCrash(self: *const InlineAnalyzer, expr_id: Lifted.ExprId) bool {
@@ -524,6 +616,8 @@ const InlineAnalyzer = struct {
             .str_lit,
             .bytes_lit,
             .static_data_candidate,
+            .inline_expects_enabled,
+            .comptime_value,
             .typed_boundary,
             .list,
             .tuple,
@@ -578,6 +672,8 @@ const InlineAnalyzer = struct {
             .dec_lit,
             .bytes_lit,
             .static_data_candidate,
+            .inline_expects_enabled,
+            .comptime_value,
             .list,
             .tuple,
             .record,
@@ -661,6 +757,8 @@ const InlineAnalyzer = struct {
             .tag => |tag| try self.visitSpanCallees(tag.payloads, loop_depth),
             .typed_boundary => |boundary| try self.visitBodyCallees(boundary.value, loop_depth),
             .static_data_candidate => |candidate| try self.visitBodyCallees(candidate.runtime_expr, loop_depth),
+            .inline_expects_enabled => true,
+            .comptime_value => |candidate| try self.visitBodyCallees(candidate.initializer, loop_depth),
             .nominal,
             .dbg,
             .expect,

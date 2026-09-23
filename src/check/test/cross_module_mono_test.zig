@@ -96,7 +96,6 @@ const MonoTestEnv = struct {
                 .builtin_indices = builtin_indices,
             },
             .is_entry_module = true,
-            .imported_modules = &module_envs,
         });
         errdefer can_instance.deinit();
 
@@ -116,6 +115,8 @@ const MonoTestEnv = struct {
 
         module_env.imports.clearResolvedModules();
         try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
+        try can.resolveDeferredFileImports(module_env, .skip);
+        try can.resolveDeferredImports(module_env, .{ .imports = .{ .resolved_store = imported_envs_list.items } });
 
         var checker = try Check.init(
             gpa,
@@ -203,7 +204,6 @@ const MonoTestEnv = struct {
                 .builtin_indices = builtin_indices,
             },
             .is_entry_module = true,
-            .imported_modules = &module_envs,
         });
         errdefer can_instance.deinit();
 
@@ -231,6 +231,8 @@ const MonoTestEnv = struct {
 
         module_env.imports.clearResolvedModules();
         try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
+        try can.resolveDeferredFileImports(module_env, .skip);
+        try can.resolveDeferredImports(module_env, .{ .imports = .{ .resolved_store = imported_envs_list.items } });
 
         var checker = try Check.init(
             gpa,
@@ -322,7 +324,6 @@ const MonoTestEnv = struct {
                 .builtin_indices = builtin_indices,
             },
             .is_entry_module = true,
-            .imported_modules = &module_envs,
         });
         errdefer can_instance.deinit();
 
@@ -352,6 +353,8 @@ const MonoTestEnv = struct {
 
         module_env.imports.clearResolvedModules();
         try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
+        try can.resolveDeferredFileImports(module_env, .skip);
+        try can.resolveDeferredImports(module_env, .{ .imports = .{ .resolved_store = imported_envs_list.items } });
 
         var checker = try Check.init(
             gpa,
@@ -674,7 +677,6 @@ test "type checker catches polymorphic recursion (infinite type)" {
             .builtin_indices = builtin_indices,
         },
         .is_entry_module = true,
-        .imported_modules = &module_envs,
     });
     defer can_instance.deinit();
 
@@ -695,6 +697,8 @@ test "type checker catches polymorphic recursion (infinite type)" {
 
     module_env.imports.clearResolvedModules();
     try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
+    try can.resolveDeferredFileImports(module_env, .skip);
+    try can.resolveDeferredImports(module_env, .{ .imports = .{ .resolved_store = imported_envs_list.items } });
 
     var checker = try Check.init(
         gpa,

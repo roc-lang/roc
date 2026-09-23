@@ -179,6 +179,9 @@ fn isLikelyTypo(typo_len: usize, correct_len: usize, dist: u32) bool {
 }
 
 /// Find the best typo suggestion from a slice of identifier indices.
+///
+/// Used by the tag-union and record-field diffs below, so every typo hint a
+/// Type Mismatch renders agrees on what counts as a close match.
 fn findBestTypoSuggestion(
     typo: Ident.Idx,
     candidates: []const Ident.Idx,
@@ -397,7 +400,7 @@ fn compareStructures(
                 .fn_unbound => |act_func| {
                     compareFunctions(exp_func, act_func, hints);
                 },
-                .box, .tuple, .nominal_type, .record, .record_unbound, .empty_record, .tag_union, .empty_tag_union => {},
+                .box, .tuple, .nominal_type, .record, .empty_record, .tag_union, .empty_tag_union => {},
             }
         },
         .fn_effectful => |exp_func| {
@@ -413,7 +416,7 @@ fn compareStructures(
                 .fn_unbound => |act_func| {
                     compareFunctions(exp_func, act_func, hints);
                 },
-                .box, .tuple, .nominal_type, .record, .record_unbound, .empty_record, .tag_union, .empty_tag_union => {},
+                .box, .tuple, .nominal_type, .record, .empty_record, .tag_union, .empty_tag_union => {},
             }
         },
         .fn_unbound => |exp_func| {
@@ -421,20 +424,13 @@ fn compareStructures(
                 .fn_pure, .fn_effectful, .fn_unbound => |act_func| {
                     compareFunctions(exp_func, act_func, hints);
                 },
-                .box, .tuple, .nominal_type, .record, .record_unbound, .empty_record, .tag_union, .empty_tag_union => {},
+                .box, .tuple, .nominal_type, .record, .empty_record, .tag_union, .empty_tag_union => {},
             }
         },
         .record => |exp_record| {
             switch (actual) {
                 .record => |act_record| {
                     try compareRecords(snap_store, ident_store, exp_record, act_record, hints, gpa, fields);
-                },
-                .record_unbound => |act_fields_range| {
-                    // Gather expected fields (with extensions), actual is just immediate fields
-                    const exp_range = try gatherFieldsFromRecord(snap_store, exp_record, gpa, fields);
-                    const exp_fields = fields.sliceRange(exp_range);
-                    const act_fields = snap_store.sliceRecordFields(act_fields_range);
-                    try compareFields(ident_store, exp_fields, act_fields, hints, gpa, fields);
                 },
                 .empty_record => {
                     // Actual is empty but expected has fields - gather all missing
@@ -445,34 +441,12 @@ fn compareStructures(
                 .box, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => {},
             }
         },
-        .record_unbound => |exp_fields_range| {
-            switch (actual) {
-                .record => |act_record| {
-                    // Expected is just immediate fields, gather actual (with extensions)
-                    const act_range = try gatherFieldsFromRecord(snap_store, act_record, gpa, fields);
-                    const exp_fields = snap_store.sliceRecordFields(exp_fields_range);
-                    const act_fields = fields.sliceRange(act_range);
-                    try compareFields(ident_store, exp_fields, act_fields, hints, gpa, fields);
-                },
-                .record_unbound => |act_fields_range| {
-                    // Both are just immediate fields, no extensions
-                    const exp_fields = snap_store.sliceRecordFields(exp_fields_range);
-                    const act_fields = snap_store.sliceRecordFields(act_fields_range);
-                    try compareFields(ident_store, exp_fields, act_fields, hints, gpa, fields);
-                },
-                .empty_record => {
-                    const exp_fields = snap_store.sliceRecordFields(exp_fields_range);
-                    try addMissingFields(exp_fields, hints, gpa, fields);
-                },
-                .box, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => {},
-            }
-        },
         .tag_union => |exp_union| {
             switch (actual) {
                 .tag_union => |act_union| {
                     try compareTagUnions(snap_store, ident_store, exp_union, act_union, hints, gpa, tags);
                 },
-                .box, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .record, .record_unbound, .empty_record, .empty_tag_union => {},
+                .box, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .record, .empty_record, .empty_tag_union => {},
             }
         },
         .box, .tuple, .nominal_type, .empty_record, .empty_tag_union => {},
@@ -656,11 +630,14 @@ fn compareTagUnions(
     // Gather ALL tags from expected (including extensions)
     const exp_gathered = try gatherTagsFromUnion(snap_store, exp_union, gpa, tags);
     const exp_range = exp_gathered.fields;
-    const exp_tag_names = tags.sliceRange(exp_range).items(.name);
 
     // Gather ALL tags from actual (including extensions)
     const act_gathered = try gatherTagsFromUnion(snap_store, act_union, gpa, tags);
     const act_range = act_gathered.fields;
+
+    // Slice only after both gathers: appending to `tags` can reallocate it,
+    // which would invalidate any slice taken between the two gathers.
+    const exp_tag_names = tags.sliceRange(exp_range).items(.name);
     const act_tag_names = tags.sliceRange(act_range).items(.name);
 
     // Look for tags in actual that might be typos of expected tags
@@ -756,7 +733,7 @@ fn gatherTagsFromUnion(
                     ext = TagExt.closed;
                     break;
                 },
-                .box, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .record, .record_unbound, .empty_record => break,
+                .box, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .record, .empty_record => break,
             },
             .alias => |alias| {
                 ext_idx = alias.backing;

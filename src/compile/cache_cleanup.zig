@@ -34,6 +34,10 @@ pub const Config = struct {
 
     /// Maximum age for persistent cache files (30 days in nanoseconds)
     pub const PERSISTENT_MAX_AGE_NS: i96 = 30 * 24 * 60 * 60 * std.time.ns_per_s;
+
+    /// Maximum age for object-cache packs of modules reached by path
+    /// (`objects/<mode>/local/`), which every edit rewrites: one day.
+    pub const LOCAL_PACK_MAX_AGE_NS: i96 = 24 * 60 * 60 * std.time.ns_per_s;
 };
 
 /// Statistics from a cleanup operation
@@ -209,10 +213,11 @@ fn cleanupPersistentCache(std_io: Io, cache_base: []const u8, now_ns: i128, mayb
     };
     const subdirs = [_]PersistentSubdir{
         .{ .name = "mod", .nested_directory_depth = 1 },
+        .{ .name = "pair", .nested_directory_depth = 1 },
         .{ .name = "exe", .nested_directory_depth = 1 },
         .{ .name = "test", .nested_directory_depth = 1 },
         .{ .name = "wasm-host", .nested_directory_depth = 1 },
-        .{ .name = "glue-dylib", .nested_directory_depth = 2 },
+        .{ .name = "glue-plugin", .nested_directory_depth = 2 },
     };
 
     var version_it = base_dir.iterate();
@@ -232,6 +237,77 @@ fn cleanupPersistentCache(std_io: Io, cache_base: []const u8, now_ns: i128, mayb
 
     // NOTE: We intentionally do NOT delete empty version directories. Empty
     // directories are harmless and deleting them can cause race conditions.
+
+    cleanupObjectPacks(std_io, cache_base, now_ns, maybe_stats);
+}
+
+/// Clean up object-cache packs.
+///
+/// Layout: `<cache_base>/<version>/objects/<target-opt>/<local|pkg>/<module
+/// identity>/<artifact key>.rpk`. Packs under `pkg/` come from URL packages,
+/// are written once per package version, and keep the 30-day window; packs
+/// under `local/` are rewritten by every edit of the module and keep a
+/// one-day window, so superseded packs do not pile up. A pack ages from its
+/// last use, not its write: an in-use pack whose bytes never change must not
+/// be deleted and rebuilt once per window.
+fn cleanupObjectPacks(std_io: Io, cache_base: []const u8, now_ns: i128, maybe_stats: ?*CleanupStats) void {
+    var base_dir = Dir.cwd().openDir(std_io, cache_base, .{ .iterate = true }) catch return;
+    defer base_dir.close(std_io);
+
+    var version_it = base_dir.iterate();
+    while (true) {
+        const version_entry = (version_it.next(std_io) catch break) orelse break;
+        if (version_entry.kind != .directory) continue;
+        var version_dir = base_dir.openDir(std_io, version_entry.name, .{ .iterate = true }) catch continue;
+        defer version_dir.close(std_io);
+        var objects_dir = version_dir.openDir(std_io, "objects", .{ .iterate = true }) catch continue;
+        defer objects_dir.close(std_io);
+
+        var mode_it = objects_dir.iterate();
+        while (true) {
+            const mode_entry = (mode_it.next(std_io) catch break) orelse break;
+            if (mode_entry.kind != .directory) continue;
+            var mode_dir = objects_dir.openDir(std_io, mode_entry.name, .{ .iterate = true }) catch continue;
+            defer mode_dir.close(std_io);
+            const origins = [_]struct { name: []const u8, max_age_ns: i96 }{
+                .{ .name = "local", .max_age_ns = Config.LOCAL_PACK_MAX_AGE_NS },
+                .{ .name = "pkg", .max_age_ns = Config.PERSISTENT_MAX_AGE_NS },
+            };
+            for (origins) |origin| {
+                var origin_dir = mode_dir.openDir(std_io, origin.name, .{ .iterate = true }) catch continue;
+                defer origin_dir.close(std_io);
+                var identity_it = origin_dir.iterate();
+                while (true) {
+                    const identity_entry = (identity_it.next(std_io) catch break) orelse break;
+                    if (identity_entry.kind != .directory) continue;
+                    var identity_dir = origin_dir.openDir(std_io, identity_entry.name, .{ .iterate = true }) catch continue;
+                    defer identity_dir.close(std_io);
+                    var pack_it = identity_dir.iterate();
+                    while (true) {
+                        const pack_entry = (pack_it.next(std_io) catch break) orelse break;
+                        if (pack_entry.kind != .file) continue;
+                        const last_use = lastUseNs(identity_dir, std_io, pack_entry.name) orelse continue;
+                        if (now_ns - last_use <= origin.max_age_ns) continue;
+                        identity_dir.deleteFile(std_io, pack_entry.name) catch {
+                            if (maybe_stats) |stats| stats.errors += 1;
+                            continue;
+                        };
+                        if (maybe_stats) |stats| stats.cache_files_deleted += 1;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The later of a file's access and modification times, so a read keeps a
+/// file alive where the filesystem maintains access times, and a file ages
+/// from its write where it does not.
+fn lastUseNs(dir: Dir, std_io: Io, name: []const u8) ?i128 {
+    const info = dir.statFile(std_io, name, .{}) catch return null;
+    const mtime: i128 = @intCast(info.mtime.nanoseconds);
+    const atime: i128 = if (info.atime) |atime| @intCast(atime.nanoseconds) else mtime;
+    return @max(mtime, atime);
 }
 
 /// Clean up files in a cache subdirectory older than 30 days. The caller passes
@@ -492,24 +568,29 @@ test "cleanupPersistentCache deletes old cache files at each family depth" {
     const cache_base = std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "roc-cache" }) catch unreachable;
     defer allocator.free(cache_base);
 
-    const glue_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "glue-dylib", "x64mac", "dev" }) catch unreachable;
+    const glue_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "glue-plugin", "x64mac", "dev" }) catch unreachable;
     defer allocator.free(glue_dir);
 
     const mod_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "mod", "aa" }) catch unreachable;
     defer allocator.free(mod_dir);
+    const pair_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "pair", "cc" }) catch unreachable;
+    defer allocator.free(pair_dir);
     const wasm_host_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "wasm-host", "bb" }) catch unreachable;
     defer allocator.free(wasm_host_dir);
 
     Dir.cwd().createDirPath(std.testing.io, glue_dir) catch unreachable;
     Dir.cwd().createDirPath(std.testing.io, mod_dir) catch unreachable;
+    Dir.cwd().createDirPath(std.testing.io, pair_dir) catch unreachable;
     Dir.cwd().createDirPath(std.testing.io, wasm_host_dir) catch unreachable;
 
-    const glue_file = std.fs.path.join(allocator, &.{ glue_dir, "old.dylib" }) catch unreachable;
+    const glue_file = std.fs.path.join(allocator, &.{ glue_dir, "old.o" }) catch unreachable;
     defer allocator.free(glue_file);
-    const glue_tmp = std.fs.path.join(allocator, &.{ glue_dir, "old.dylib.1.0.tmp" }) catch unreachable;
+    const glue_tmp = std.fs.path.join(allocator, &.{ glue_dir, "old.o.1.0.tmp" }) catch unreachable;
     defer allocator.free(glue_tmp);
     const mod_file = std.fs.path.join(allocator, &.{ mod_dir, "old.rcache" }) catch unreachable;
     defer allocator.free(mod_file);
+    const pair_file = std.fs.path.join(allocator, &.{ pair_dir, "old-pairing" }) catch unreachable;
+    defer allocator.free(pair_file);
     const wasm_host_file = std.fs.path.join(allocator, &.{ wasm_host_dir, "old-host" }) catch unreachable;
     defer allocator.free(wasm_host_file);
     const wasm_host_lock = std.fs.path.join(allocator, &.{ wasm_host_dir, "old-host.lock" }) catch unreachable;
@@ -518,6 +599,7 @@ test "cleanupPersistentCache deletes old cache files at each family depth" {
     (Dir.cwd().createFile(std.testing.io, glue_file, .{}) catch unreachable).close(std.testing.io);
     (Dir.cwd().createFile(std.testing.io, glue_tmp, .{}) catch unreachable).close(std.testing.io);
     (Dir.cwd().createFile(std.testing.io, mod_file, .{}) catch unreachable).close(std.testing.io);
+    (Dir.cwd().createFile(std.testing.io, pair_file, .{}) catch unreachable).close(std.testing.io);
     (Dir.cwd().createFile(std.testing.io, wasm_host_file, .{}) catch unreachable).close(std.testing.io);
     (Dir.cwd().createFile(std.testing.io, wasm_host_lock, .{}) catch unreachable).close(std.testing.io);
 
@@ -526,7 +608,7 @@ test "cleanupPersistentCache deletes old cache files at each family depth" {
     var stats = CleanupStats{};
     cleanupPersistentCache(std.testing.io, cache_base, far_future_ns, &stats);
 
-    try std.testing.expectEqual(@as(u32, 4), stats.cache_files_deleted);
+    try std.testing.expectEqual(@as(u32, 5), stats.cache_files_deleted);
 
     Dir.cwd().access(std.testing.io, glue_file, .{}) catch |err| {
         try std.testing.expectEqual(error.FileNotFound, err);
@@ -540,5 +622,6 @@ test "cleanupPersistentCache deletes old cache files at each family depth" {
     Dir.cwd().access(std.testing.io, wasm_host_file, .{}) catch |err| {
         try std.testing.expectEqual(error.FileNotFound, err);
     };
+    try std.testing.expectError(error.FileNotFound, Dir.cwd().access(std.testing.io, pair_file, .{}));
     try Dir.cwd().access(std.testing.io, wasm_host_lock, .{});
 }

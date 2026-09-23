@@ -11,7 +11,6 @@ const can = @import("can");
 const check = @import("check");
 const parse = @import("parse");
 const reporting = @import("reporting");
-const eval = @import("eval");
 const post_check_executor = @import("base").post_check_task_executor;
 const watch_inputs = @import("watch_inputs.zig");
 
@@ -28,10 +27,26 @@ pub const ModuleId = u32;
 pub const DiscoveredLocalImport = struct {
     /// Exact source target used by canonicalization (e.g. "../Shared/Foo").
     import_name: []const u8,
-    /// Package-root-relative logical module path (e.g. "Shared/Foo").
-    module_name: []const u8,
-    /// The resolved filesystem path
-    path: []const u8,
+    /// The single outcome lexical resolution selected for this import.
+    target: Target,
+
+    /// Lexical import resolution produces exactly one of these per import, so
+    /// the coordinator never re-derives a rejected target from an absent entry.
+    pub const Target = union(enum) {
+        /// The import named a target inside this package's source root.
+        resolved: Resolved,
+        /// The import escaped the package source root. The parse worker already
+        /// owns the user-facing report; the coordinator records the import as a
+        /// rejected edge so canonicalization binds it as missing.
+        rejected,
+    };
+
+    pub const Resolved = struct {
+        /// Package-root-relative logical module path (e.g. "Shared/Foo").
+        module_name: []const u8,
+        /// The resolved filesystem path
+        path: []const u8,
+    };
 };
 
 /// Information about a discovered external import during canonicalization
@@ -40,15 +55,15 @@ pub const DiscoveredExternalImport = struct {
     import_name: []const u8,
 };
 
-/// Ready imported module data passed into canonicalization.
-pub const CanonicalizeImport = struct {
-    /// The direct import name for canonicalization lookup
-    import_name: []const u8,
-    /// The fully-ready semantic env for this import
-    module_env: *const ModuleEnv,
-    /// Exact type declaration selected by a package/platform public entry.
-    selected_type_decl: ?can.CIR.Statement.Idx = null,
-};
+/// The outcome import resolution selected for one import identity, passed into
+/// canonicalization. Canonicalization consumes this outcome directly instead of
+/// inferring a missing import from an absent entry: a package-qualified import
+/// is resolved by the coordinator, so only the coordinator can say whether it
+/// was accepted or rejected.
+/// One import of a module being canonicalized or drained, with the outcome
+/// import resolution selected for it. This is `can`'s own import-resolution
+/// input type: the coordinator builds these once and the drain consumes them.
+pub const CanonicalizeImport = can.ImportResolution.ResolvedImport;
 
 /// Information about detected import cycles
 pub const CycleInfo = struct {
@@ -80,6 +95,13 @@ pub const ParseTask = struct {
     module_role: ModuleEnv.ModuleRole,
     /// Dependency depth from root
     depth: u32,
+    /// Post-canonicalization validation this module receives. A
+    /// canonicalization input, so the parse task's cache probe keys on it.
+    validation: can.Can.Validation,
+    /// True only for the module the compiler was pointed at. A
+    /// canonicalization input, so the parse task's cache probe keys on it.
+    /// See `Can.ModuleInitContext.is_entry_module`.
+    is_entry_module: bool,
 };
 
 /// Task to canonicalize a parsed module
@@ -92,7 +114,8 @@ pub const CanonicalizeTask = struct {
     module_name: []const u8,
     /// Filesystem path (for diagnostics)
     path: []const u8,
-    /// Source-relative import base directory.
+    /// Source-relative base directory this module's `import "path" as name`
+    /// file imports resolve against.
     source_dir: []const u8,
     /// Dependency depth
     depth: u32,
@@ -100,8 +123,6 @@ pub const CanonicalizeTask = struct {
     module_env: *ModuleEnv,
     /// Cached AST from parsing (ownership transferred)
     cached_ast: *AST,
-    /// Real imported semantic envs available to canonicalization
-    imported_modules: []const CanonicalizeImport,
     /// Post-canonicalization validation this module receives.
     validation: can.Can.Validation,
     /// True only for the module the compiler was pointed at. Gates the
@@ -109,6 +130,10 @@ pub const CanonicalizeTask = struct {
     /// lambda, so a module inside a package cannot reach the host by defining
     /// `main!`. See `Can.ModuleInitContext.is_entry_module`.
     is_entry_module: bool,
+    /// The canonicalized-module cache key the parse task computed and missed
+    /// on. The entry this task stores is written under exactly that key, so a
+    /// store can never disagree with the probe that preceded it.
+    canonicalized_cache_key: [32]u8,
 };
 
 /// Task to type-check a canonicalized module
@@ -125,6 +150,9 @@ pub const TypeCheckTask = struct {
     module_env: *ModuleEnv,
     /// Imported module environments (read-only pointers to completed modules)
     imported_envs: []const *ModuleEnv,
+    /// Each import's resolution outcome, which `can`'s import-resolution drain
+    /// consumes to settle this module's deferred references before checking.
+    deferred_imports: []const CanonicalizeImport,
     /// Published checked artifact keys for direct imports, keyed by typed-CIR module index
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     /// Published checked artifacts currently available for exact-key lookup during checking finalization
@@ -139,10 +167,6 @@ pub const TypeCheckTask = struct {
     /// an app root's entrypoint contract with its platform is enforced, and
     /// participates in the checked-artifact cache identity.
     validation: can.Can.Validation = .checking,
-    /// True when this module is the platform root of an app build: its
-    /// check-time publication is skipped so finalization publishes the
-    /// relation-bearing platform root exactly once.
-    defer_publication: bool = false,
 };
 
 /// The platform root's requirement surface, borrowed from its completed
@@ -227,12 +251,47 @@ pub const ParsedResult = struct {
     discovered_local_imports: std.ArrayList(DiscoveredLocalImport),
     /// Discovered external imports (cross-package qualified imports)
     discovered_external_imports: std.ArrayList(DiscoveredExternalImport),
-    /// True when lexical import resolution rejected a target before any file access.
-    import_resolution_failed: bool,
     /// Any reports generated during parsing
     reports: std.ArrayList(Report),
     /// Timing: nanoseconds spent parsing
     parse_ns: u64,
+    /// The entry-module flag the parse task keyed its cache probe on. The
+    /// canonicalize task receives exactly this value, so the key an entry is
+    /// stored under and the flag canonicalization consumed always agree.
+    is_entry_module: bool,
+    /// The canonicalized-module cache key this module's source missed on.
+    canonicalized_cache_key: [32]u8,
+};
+
+/// Result of a canonicalized-module cache hit: the parse task loaded this
+/// module's canonicalization output instead of parsing and canonicalizing it.
+///
+/// It carries everything the coordinator would otherwise receive from a parse
+/// result followed by a canonicalized result, in that order, because the
+/// coordinator handles it as exactly those two steps back to back.
+pub const CanonicalizedCachedResult = struct {
+    /// Package this module belongs to
+    package_name: []const u8,
+    /// Module identifier
+    module_id: ModuleId,
+    /// Module name
+    module_name: []const u8,
+    /// Path to the module file
+    path: []const u8,
+    /// Raw source file state consumed before line-ending normalization, when requested.
+    source_file_state: ?watch_inputs.State,
+    /// The canonicalized module environment loaded from the cache (ownership returned)
+    module_env: *ModuleEnv,
+    /// Discovered local imports (within the same package)
+    discovered_local_imports: std.ArrayList(DiscoveredLocalImport),
+    /// Discovered external imports (cross-package qualified imports)
+    discovered_external_imports: std.ArrayList(DiscoveredExternalImport),
+    /// The reports the parse stage produced, rendered from the entry's
+    /// recorded tokenizer and parser diagnostics.
+    parse_reports: std.ArrayList(Report),
+    /// The reports canonicalization produced, rendered from the loaded
+    /// environment's own diagnostics.
+    canonicalize_reports: std.ArrayList(Report),
 };
 
 /// Result of successfully canonicalizing a module
@@ -260,26 +319,24 @@ pub const CanonicalizedResult = struct {
 };
 
 /// Worker-owned checked-module output transferred to the coordinator.
-pub const TypeCheckedPublication = union(enum) {
-    published: CheckedArtifact.CheckedModuleArtifact,
-    deferred: *DeferredPublicationState,
-};
+pub const TypeCheckedPublication = CheckedArtifact.CheckedModuleArtifact;
 
 /// Result of successfully type-checking a module.
-/// User diagnostics do not alter this outcome: publication is either complete
-/// or explicitly deferred until platform/app relation finalization.
+/// User diagnostics do not alter this outcome: import metadata is prepared
+/// now or retained until platform/app relation construction. Selected roots
+/// are evaluated when the coordinator finishes the checked program.
 pub const OwnedSemanticModuleData = struct {
     /// The coordinator retains this input until it accepts the publication.
     module_env: *ModuleEnv,
     publication: TypeCheckedPublication,
     publication_owned: bool = true,
+    pending_evaluation: ?*PendingEvaluationState = null,
 
     pub fn deinit(self: *OwnedSemanticModuleData) void {
+        if (self.pending_evaluation) |state| state.deinit();
+        self.pending_evaluation = null;
         if (!self.publication_owned) return;
-        switch (self.publication) {
-            .published => |*artifact| artifact.deinitRetainingModuleEnv(artifact.canonical_names.allocator),
-            .deferred => |state| state.deinit(),
-        }
+        self.publication.deinitRetainingModuleEnv(self.publication.canonical_names.allocator);
     }
 };
 
@@ -303,20 +360,17 @@ pub const TypeCheckedResult = struct {
     check_diagnostics_ns: u64,
 };
 
-/// Complete checker-owned continuation for a module whose checked artifact is
-/// intentionally published during executable finalization.
-pub const DeferredPublicationState = struct {
+/// Diagnostic ownership retained between checking and post-frontend evaluation.
+pub const PendingEvaluationState = struct {
     allocator: Allocator,
-    checker: check.Check,
-    /// Stable copy of the imported-env pointer slice needed to render any
-    /// diagnostics produced during deferred compile-time finalization.
+    problems: check.problem.Store,
+    import_mapping: @import("types").import_mapping.ImportMapping,
     imported_envs: []const *ModuleEnv,
-    ctfe_options: eval.CompileTimeFinalization.Options,
-    requirement_context: check.CheckedArtifact.PlatformRequirementContextKey,
     reported_problem_count: usize,
 
-    pub fn deinit(self: *DeferredPublicationState) void {
-        self.checker.deinit();
+    pub fn deinit(self: *PendingEvaluationState) void {
+        self.problems.deinit(self.allocator);
+        self.import_mapping.deinit();
         self.allocator.free(self.imported_envs);
         self.allocator.destroy(self);
     }
@@ -376,6 +430,8 @@ pub const WorkerResult = union(enum) {
     parsed: ParsedResult,
     /// Module was successfully canonicalized
     canonicalized: CanonicalizedResult,
+    /// Module's canonicalization output was loaded from the canonicalized cache
+    canonicalized_cached: CanonicalizedCachedResult,
     /// Module was successfully type-checked
     type_checked: TypeCheckedResult,
     /// A worker could not complete the compilation operation.
@@ -391,6 +447,7 @@ pub const WorkerResult = union(enum) {
         return switch (self) {
             .parsed => |r| r.package_name,
             .canonicalized => |r| r.package_name,
+            .canonicalized_cached => |r| r.package_name,
             .type_checked => |r| r.package_name,
             .operation_failed => |r| r.package_name,
             .cycle_detected => |r| r.package_name,
@@ -403,6 +460,7 @@ pub const WorkerResult = union(enum) {
         return switch (self) {
             .parsed => |r| r.module_id,
             .canonicalized => |r| r.module_id,
+            .canonicalized_cached => |r| r.module_id,
             .type_checked => |r| r.module_id,
             .operation_failed => |r| r.module_id,
             .cycle_detected => |r| r.module_id,
@@ -415,6 +473,7 @@ pub const WorkerResult = union(enum) {
         return switch (self) {
             .parsed => |r| r.module_name,
             .canonicalized => |r| r.module_name,
+            .canonicalized_cached => |r| r.module_name,
             .type_checked => |r| r.module_name,
             .operation_failed => |r| r.module_name,
             .cycle_detected => |r| r.module_name,
@@ -433,6 +492,10 @@ pub const WorkerResult = union(enum) {
                 var storage: CheckedArtifact.ModuleEnvStorage = .{ .checked_source = r.module_env };
                 storage.deinit();
             },
+            .canonicalized_cached => |r| {
+                var storage: CheckedArtifact.ModuleEnvStorage = .{ .checked_source = r.module_env };
+                storage.deinit();
+            },
             .canonicalized, .type_checked, .operation_failed, .cycle_detected, .worker_oom, .post_check => {},
         }
         self.deinit(gpa);
@@ -445,8 +508,13 @@ pub const WorkerResult = union(enum) {
             .parsed => |*r| {
                 for (r.discovered_local_imports.items) |imp| {
                     gpa.free(imp.import_name);
-                    gpa.free(imp.module_name);
-                    gpa.free(imp.path);
+                    switch (imp.target) {
+                        .resolved => |resolved| {
+                            gpa.free(resolved.module_name);
+                            gpa.free(resolved.path);
+                        },
+                        .rejected => {},
+                    }
                 }
                 r.discovered_local_imports.deinit(gpa);
                 for (r.discovered_external_imports.items) |imp| {
@@ -459,8 +527,13 @@ pub const WorkerResult = union(enum) {
             .canonicalized => |*r| {
                 for (r.discovered_local_imports.items) |imp| {
                     gpa.free(imp.import_name);
-                    gpa.free(imp.module_name);
-                    gpa.free(imp.path);
+                    switch (imp.target) {
+                        .resolved => |resolved| {
+                            gpa.free(resolved.module_name);
+                            gpa.free(resolved.path);
+                        },
+                        .rejected => {},
+                    }
                 }
                 r.discovered_local_imports.deinit(gpa);
                 for (r.discovered_external_imports.items) |imp| {
@@ -469,6 +542,27 @@ pub const WorkerResult = union(enum) {
                 r.discovered_external_imports.deinit(gpa);
                 for (r.reports.items) |*rep| rep.deinit();
                 r.reports.deinit(gpa);
+            },
+            .canonicalized_cached => |*r| {
+                for (r.discovered_local_imports.items) |imp| {
+                    gpa.free(imp.import_name);
+                    switch (imp.target) {
+                        .resolved => |resolved| {
+                            gpa.free(resolved.module_name);
+                            gpa.free(resolved.path);
+                        },
+                        .rejected => {},
+                    }
+                }
+                r.discovered_local_imports.deinit(gpa);
+                for (r.discovered_external_imports.items) |imp| {
+                    gpa.free(imp.import_name);
+                }
+                r.discovered_external_imports.deinit(gpa);
+                for (r.parse_reports.items) |*rep| rep.deinit();
+                r.parse_reports.deinit(gpa);
+                for (r.canonicalize_reports.items) |*rep| rep.deinit();
+                r.canonicalize_reports.deinit(gpa);
             },
             .type_checked => |*r| {
                 r.semantic.deinit();
@@ -519,6 +613,8 @@ test "WorkerTask accessors" {
             .package_root = "/path/to",
             .depth = 0,
             .module_role = .user,
+            .validation = .checking,
+            .is_entry_module = false,
         },
     };
 
@@ -541,9 +637,10 @@ test "WorkerResult accessors" {
             .cached_ast = undefined,
             .discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty,
             .discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty,
-            .import_resolution_failed = false,
             .reports = reports,
             .parse_ns = 1000,
+            .is_entry_module = false,
+            .canonicalized_cache_key = [_]u8{0} ** 32,
         },
     };
 

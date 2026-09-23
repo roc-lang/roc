@@ -51,7 +51,11 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v29: procedures and calls carry producer-authored self-tail proofs.
 /// v30: SIMD byte alignment carries a proven constant count, alongside v29's
 ///      self-tail proofs.
-pub const FORMAT_VERSION: u32 = 30;
+/// v31: frozen static values and explicit callable/data relocations.
+/// v32: procedure specs carry content identities.
+/// v34: procedure specs carry producer-local native code revisions.
+pub const FORMAT_VERSION: u32 = 34;
+const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{
@@ -84,10 +88,9 @@ pub const ArrayRef = extern struct {
 
 /// Header stored as the first user allocation after `SharedMemoryAllocator.Header`.
 ///
-/// The image is pointer-width independent: the layout store carries both widths'
-/// sizes and offsets and the LIR op stream makes no width-dependent decisions,
-/// so the recorded bytes do not encode a target. The consumer supplies the
-/// width it is resolving for when it views the image (see `viewMappedImage`).
+/// LIR/layout arrays are pointer-width independent. Frozen static bytes carry
+/// an explicit pointer width, which the consumer must match when present.
+/// Names, bytes, and relocation rows are image-relative offsets, never pointers.
 pub const Header = extern struct {
     magic: u32,
     format_version: u32,
@@ -99,6 +102,9 @@ pub const Header = extern struct {
     store: LirStoreImage,
     layouts: LayoutStoreImage,
     boxy_tables: BoxyTablesImage,
+    static_data: ArrayRef = .empty(),
+    static_data_value_count: u32 = 0,
+    static_data_pointer_bytes: u32 = 0,
 };
 
 /// A child-side view over mapped shared memory. Most storage remains mapped,
@@ -128,9 +134,12 @@ pub const ProgramView = struct {
     boxy_erased_arg_desc_params: []LIR.ErasedArgDescParam,
     target_usize: base.target.TargetUsize,
     scratch_allocator: std.mem.Allocator,
+    static_data: []Program.StaticDataExport,
+    static_data_value_count: u32,
 
     pub fn deinit(self: *ProgramView) void {
         deinitViewedLayouts(&self.layouts, self.scratch_allocator);
+        StaticDataImage.deinit(self.scratch_allocator, self.static_data);
         self.* = undefined;
     }
 };
@@ -165,6 +174,7 @@ pub const LirStoreImage = extern struct {
 
     fn fromStore(base_ptr: [*]align(1) const u8, image_size: usize, store: *const LirStore) ImageError!LirStoreImage {
         std.debug.assert(store.tail_call_builder == null);
+        std.debug.assert(store.proc_rewrite == null and store.body_coordinator == null);
         return .{
             .cf_stmts = try arrayRef(base_ptr, image_size, store.cf_stmts.unsafeRawItemsForView()),
             .cf_switch_branches = try arrayRef(base_ptr, image_size, store.cf_switch_branches.unsafeRawItemsForView()),
@@ -201,6 +211,7 @@ pub const LirStoreImage = extern struct {
         store: *const LirStore,
     ) CopyError!LirStoreImage {
         std.debug.assert(store.tail_call_builder == null);
+        std.debug.assert(store.proc_rewrite == null and store.body_coordinator == null);
         return .{
             .cf_stmts = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_stmts.unsafeRawItemsForView()),
             .cf_switch_branches = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_switch_branches.unsafeRawItemsForView()),
@@ -885,9 +896,10 @@ comptime {
     // the "LIR image round-trips every populated store field" test at the
     // bottom of this file, then update the expected field count below. A
     // same-build omission is otherwise silent, since `FORMAT_VERSION` only
-    // guards cross-version mismatches. `tail_call_builder` is a transient
-    // producer scope and deliberately defaults to null in an image view.
-    std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 36);
+    // guards cross-version mismatches. `tail_call_builder`, `proc_rewrite` and
+    // `facts` are transient worker state, not serialized, and default to
+    // null or empty in views.
+    std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 38);
     std.debug.assert(@typeInfo(layout_mod.Store).@"struct".fields.len == 12);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".fields.len == 1);
 }
@@ -908,6 +920,7 @@ pub fn fillHeaderInBuffer(
     lowered: *const Program.Result,
     platform_entrypoints: []const PlatformEntrypoint,
 ) ImageError!void {
+    if (lowered.static_data_values.items.len != 0) return error.InvalidLirImage;
     header.* = .{
         .magic = MAGIC,
         .format_version = FORMAT_VERSION,
@@ -930,6 +943,9 @@ pub const CopiedProgram = struct {
     store: LirStoreImage,
     layouts: LayoutStoreImage,
     boxy_tables: BoxyTablesImage,
+    static_data: ArrayRef = .empty(),
+    static_data_value_count: u32 = 0,
+    static_data_pointer_bytes: u32 = 0,
 
     pub fn fillHeader(self: CopiedProgram, header: *Header, image_size: usize) ImageError!void {
         if (image_size > self.image_capacity) return error.InvalidLirImage;
@@ -943,6 +959,9 @@ pub const CopiedProgram = struct {
             .store = self.store,
             .layouts = self.layouts,
             .boxy_tables = self.boxy_tables,
+            .static_data = self.static_data,
+            .static_data_value_count = self.static_data_value_count,
+            .static_data_pointer_bytes = self.static_data_pointer_bytes,
         };
     }
 };
@@ -960,8 +979,49 @@ pub fn copyProgramIntoBuffer(
     lowered: *const Program.Result,
     platform_entrypoints: []const PlatformEntrypoint,
 ) CopyError!CopiedProgram {
+    if (lowered.static_data_values.items.len != 0) return error.InvalidLirImage;
+    return copyProgramWithStaticDataIntoBuffer(allocator, base_ptr, image_capacity, lowered, platform_entrypoints, &.{});
+}
+
+/// Retain the offsets of a program already allocated in the image buffer,
+/// copying only its frozen graph. The caller supplies the final used size to
+/// `fillHeader` after these graph allocations complete.
+pub fn referenceProgramWithStaticDataInBuffer(
+    allocator: std.mem.Allocator,
+    base_ptr: [*]align(1) const u8,
+    image_capacity: usize,
+    lowered: *const Program.Result,
+    platform_entrypoints: []const PlatformEntrypoint,
+    static_data: []const Program.StaticDataExport,
+) CopyError!CopiedProgram {
     return .{
         .image_capacity = image_capacity,
+        .static_data = try StaticDataImage.copy(allocator, base_ptr, image_capacity, static_data),
+        .static_data_value_count = @intCast(lowered.static_data_values.items.len),
+        .static_data_pointer_bytes = @intCast(lowered.layouts.targetUsize().size()),
+        .root_procs = try arrayRef(base_ptr, image_capacity, lowered.root_procs.items),
+        .platform_entrypoints = try arrayRef(base_ptr, image_capacity, platform_entrypoints),
+        .boxy_worker_procs = try arrayRef(base_ptr, image_capacity, lowered.boxy_worker_procs.items),
+        .store = try LirStoreImage.fromStore(base_ptr, image_capacity, &lowered.store),
+        .layouts = try LayoutStoreImage.fromStore(base_ptr, image_capacity, &lowered.layouts),
+        .boxy_tables = try BoxyTablesImage.fromProgram(base_ptr, image_capacity, lowered),
+    };
+}
+
+/// Copy a lowered program and its explicit frozen graph into an image buffer.
+pub fn copyProgramWithStaticDataIntoBuffer(
+    allocator: std.mem.Allocator,
+    base_ptr: [*]align(1) const u8,
+    image_capacity: usize,
+    lowered: *const Program.Result,
+    platform_entrypoints: []const PlatformEntrypoint,
+    static_data: []const Program.StaticDataExport,
+) CopyError!CopiedProgram {
+    return .{
+        .image_capacity = image_capacity,
+        .static_data = try StaticDataImage.copy(allocator, base_ptr, image_capacity, static_data),
+        .static_data_value_count = @intCast(lowered.static_data_values.items.len),
+        .static_data_pointer_bytes = @intCast(lowered.layouts.targetUsize().size()),
         .root_procs = try copyArrayRef(allocator, base_ptr, image_capacity, lowered.root_procs.items),
         .platform_entrypoints = try copyArrayRef(allocator, base_ptr, image_capacity, platform_entrypoints),
         .boxy_worker_procs = try copyArrayRef(allocator, base_ptr, image_capacity, lowered.boxy_worker_procs.items),
@@ -1003,6 +1063,7 @@ pub fn viewMappedImageWithAllocator(
     if (header.magic != MAGIC) return error.InvalidLirImage;
     if (header.format_version != FORMAT_VERSION) return error.UnsupportedLirImageVersion;
     if (header.image_size > mapped_size) return error.InvalidLirImage;
+    if (header.static_data.len != 0 and header.static_data_pointer_bytes != target_usize.size()) return error.InvalidLirImage;
 
     // The view path constructs mutable container types (LirStore, Store)
     // whose slice fields are not const, even though the interpreter only
@@ -1012,7 +1073,11 @@ pub fn viewMappedImageWithAllocator(
 
     var layouts = try header.layouts.view(mutable_base, @intCast(header.image_size), target_usize, allocator);
     errdefer deinitViewedLayouts(&layouts, allocator);
+    const static_data = try StaticDataImage.view(allocator, mutable_base, @intCast(header.image_size), header.static_data, header.static_data_value_count, @intCast(header.store.proc_specs.len), layouts.layoutCount(), target_usize.size());
+    errdefer StaticDataImage.deinit(allocator, static_data);
     return .{
+        .static_data = static_data,
+        .static_data_value_count = header.static_data_value_count,
         .store = try header.store.view(mutable_base, @intCast(header.image_size), allocator),
         .layouts = layouts,
         .root_procs = try sliceFromRef(LIR.LirProcSpecId, mutable_base, @intCast(header.image_size), header.root_procs),
@@ -1046,7 +1111,8 @@ fn deinitViewedLayouts(layouts: *layout_mod.Store, allocator: std.mem.Allocator)
     layouts.interned_layouts.deinit();
 }
 
-fn arrayRef(base_ptr: [*]align(1) const u8, image_size: usize, slice: anytype) ImageError!ArrayRef {
+/// Encode a slice already inside the image as a checked relative reference.
+pub fn arrayRef(base_ptr: [*]align(1) const u8, image_size: usize, slice: anytype) ImageError!ArrayRef {
     if (slice.len == 0) return ArrayRef.empty();
 
     const base_addr = @intFromPtr(base_ptr);
@@ -1064,7 +1130,8 @@ fn arrayRef(base_ptr: [*]align(1) const u8, image_size: usize, slice: anytype) I
     };
 }
 
-fn copyArrayRef(
+/// Copy a slice with the image allocator and encode its relative reference.
+pub fn copyArrayRef(
     allocator: std.mem.Allocator,
     base_ptr: [*]align(1) const u8,
     image_capacity: usize,
@@ -1076,7 +1143,8 @@ fn copyArrayRef(
     return try arrayRef(base_ptr, image_capacity, copied);
 }
 
-fn sliceFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) ImageError![]T {
+/// Validate and resolve a typed slice reference within the mapped image.
+pub fn sliceFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) ImageError![]T {
     if (ref.len == 0) return &.{};
     const len = try checkSliceRef(T, image_size, ref);
     const ptr: [*]T = @ptrCast(@alignCast(base_ptr + try checkedOffset(ref)));
@@ -1264,6 +1332,8 @@ test "LIR image views empty and populated boxy tables" {
     const ret_stmt = try lowered.store.addCFStmt(.{ .ret = .{ .value = ret_value } });
     const proc_id = try lowered.store.addProcSpec(.{
         .name = lowered.store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(3),
+        .native_code_revision = 7,
         .args = try lowered.store.addLocalSpan(&.{ret_desc_local}),
         .body = ret_stmt,
         .ret_layout = .str,
@@ -1306,6 +1376,7 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expect(populated_view.layouts.struct_fields.fieldItem(.is_padding, struct_field_idx));
     try std.testing.expectEqual(layout_mod.Idx.u64, populated_view.layouts.tag_union_variants.fieldItem(.payload_layout, tag_variant_idx));
     try std.testing.expectEqual(LIR.BoxyDescRef{ .local = ret_desc_local }, populated_view.store.getProcSpec(proc_id).ret_desc.?);
+    try std.testing.expectEqual(@as(u64, 7), populated_view.store.getProcSpec(proc_id).native_code_revision);
 }
 
 // Regression for issue #11153: folded scalar lists share the literal store,
@@ -1393,6 +1464,93 @@ const serialized_guarded_fields = [_][]const u8{
     "proc_debug_names",
     "local_names",
 };
+
+test "LIR image round-trips ordered procedure rewrites with relocated suffixes" {
+    const gpa = std.testing.allocator;
+    var lowered = try Program.Result.init(gpa, .u64);
+    defer lowered.deinit();
+    const store = &lowered.store;
+    const pointer_layout = try lowered.layouts.insertPtr(.str);
+    const original = try store.addLocal(.{ .layout_idx = pointer_layout });
+    _ = try store.insertString("frozen prefix");
+    var roots: [2]LIR.CFStmtId = undefined;
+    var procs: [2]LIR.LirProcSpecId = undefined;
+    for (&roots, &procs) |*root, *proc| {
+        root.* = try store.addCFStmt(.{ .ret = .{ .value = original } });
+        proc.* = try store.addProcSpec(.{
+            .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
+            .name = store.freshSyntheticSymbol(),
+            .args = .empty(),
+            .body = root.*,
+            .ret_layout = pointer_layout,
+        });
+    }
+    const prefix = store.captureBodyPrefix();
+    var first = try store.cloneForProcRewrite(gpa, procs[0]);
+    defer first.deinit();
+    var second = try store.cloneForProcRewrite(gpa, procs[1]);
+    defer second.deinit();
+    // Both shards start with the same suffix identities. The second commit
+    // must relocate them before the image can forget all worker overlay state.
+    for ([_]*LirStore{ &first, &second }, roots, [_][]const u8{ "first", "second" }) |worker, root, name| {
+        const local = try worker.addLocal(.{ .layout_idx = pointer_layout });
+        try worker.setLocalName(local, name);
+        const string = try worker.insertString(name);
+        worker.current_loc = .{ .file = 1, .line = 2, .column = 3 };
+        worker.current_inline_scope = try worker.addInlineScope(.{
+            .source_symbol = store.getProcSpec(procs[0]).name,
+            .source_name = string,
+            .source_loc = worker.current_loc,
+            .call_site = .{ .file = 1, .line = 4, .column = 5 },
+            .parent = .none,
+        });
+        const ret = try worker.addCFStmt(.{ .ret = .{ .value = local } });
+        worker.getCFStmtPtr(root).* = .{ .assign_ref = .{
+            .target = local,
+            .op = .{ .local = original },
+            .next = ret,
+        } };
+    }
+    try store.commitProcRewrite(&first);
+    try store.commitProcRewrite(&second);
+    try std.testing.expectEqual(prefix.locals + 2, store.captureBodyPrefix().locals);
+    try std.testing.expectEqual(prefix.cf_stmts + 2, store.captureBodyPrefix().cf_stmts);
+    for (roots, 0..) |root, index| {
+        const assign = store.getCFStmt(root).assign_ref;
+        try std.testing.expectEqual(prefix.locals + index, @intFromEnum(assign.target));
+        try std.testing.expectEqual(prefix.cf_stmts + index, @intFromEnum(assign.next));
+        try std.testing.expectEqual(assign.target, store.getCFStmt(assign.next).ret.value);
+    }
+
+    const buffer = try gpa.alignedAlloc(u8, .@"16", 1 << 20);
+    defer gpa.free(buffer);
+    var fba = std.heap.FixedBufferAllocator.init(buffer);
+    const header = try fba.allocator().create(Header);
+    const copied = try copyProgramIntoBuffer(fba.allocator(), buffer.ptr, buffer.len, &lowered, &.{});
+    try copied.fillHeader(header, fba.end_index);
+    var view = try viewMappedImageWithAllocator(header, buffer.ptr, buffer.len, .u64, gpa);
+    defer view.deinit();
+    try std.testing.expect(view.store.proc_rewrite == null);
+    try std.testing.expect(view.store.body_coordinator == null);
+    try std.testing.expectEqual(std.mem.zeroes(LirStore.BodyPrefix), view.store.body_prefix);
+    inline for (serialized_guarded_fields) |field| {
+        const source = @field(store, field).unsafeRawItemsForView();
+        const mapped = @field(view.store, field).unsafeRawItemsForView();
+        try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(source), std.mem.sliceAsBytes(mapped));
+    }
+    try std.testing.expectEqualSlices(u8, store.strings.buffer.items.items, view.store.strings.buffer.items.items);
+    try std.testing.expectEqual(store.next_synthetic_symbol, view.store.next_synthetic_symbol);
+    try std.testing.expectEqual(lowered.layouts.layoutCount(), view.layouts.layoutCount());
+    try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(lowered.layouts.layouts.items.items), std.mem.sliceAsBytes(view.layouts.layouts.items.items));
+    for (roots, [_][]const u8{ "first", "second" }) |root, name| {
+        const assign = view.store.getCFStmt(root).assign_ref;
+        try std.testing.expectEqual(pointer_layout, view.store.getLocal(assign.target).layout_idx);
+        try std.testing.expectEqualDeep(lowered.layouts.getLayout(pointer_layout), view.layouts.getLayout(pointer_layout));
+        const scope = view.store.inlineScope(view.store.stmtInlineScope(assign.next));
+        try std.testing.expectEqualStrings(name, view.store.getString(scope.source_name));
+        try std.testing.expectEqual(first.current_loc, view.store.stmtLoc(assign.next));
+    }
+}
 
 test "LIR image copies and round-trips every populated store field" {
     const gpa = std.testing.allocator;
@@ -1554,6 +1712,7 @@ test "LIR image copies and round-trips every populated store field" {
     try std.testing.expectEqual(base.Region.zero(), view.store.current_region);
     try std.testing.expectEqual(LIR.InlineScopeId.none, view.store.current_inline_scope);
     try std.testing.expectEqual(@as(?*const LirStore, null), view.store.body_coordinator);
+    try std.testing.expect(view.store.proc_rewrite == null);
     try std.testing.expectEqual(std.mem.zeroes(LirStore.BodyPrefix), view.store.body_prefix);
     // A viewed image is read-only, so string insertion is disabled.
     try std.testing.expectEqual(false, view.store.strings_insertable);
@@ -1605,4 +1764,93 @@ test "LIR image copies and round-trips every populated store field" {
     try std.testing.expectEqual(@as(usize, 2), view.platform_entrypoints.len);
     try h.expectBytesEq(std.mem.sliceAsBytes(root_procs), std.mem.sliceAsBytes(view.root_procs));
     try h.expectBytesEq(std.mem.sliceAsBytes(entrypoints), std.mem.sliceAsBytes(view.platform_entrypoints));
+}
+
+test "mapped frozen graph preserves explicit data callable and helper relocations" {
+    const allocator = std.testing.allocator;
+    var program = try Program.Result.init(allocator, .u64);
+    defer program.deinit();
+    const value_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .u64 });
+    const worker = try program.store.addProcSpec(.{ .name = program.store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(2), .args = .empty(), .body = null, .ret_layout = .zst });
+    const memory = try allocator.alignedAlloc(u8, .@"16", 16384);
+    defer allocator.free(memory);
+    var fixed = std.heap.FixedBufferAllocator.init(memory);
+    var bytes = [_]u8{0} ** 32;
+    const graph = [_]Program.StaticDataExport{
+        .{ .symbol_name = "value", .value_id = value_slot, .bytes = &bytes, .alignment = 8, .relocations = &.{
+            .{ .offset = 0, .target_symbol_name = "backing", .target = .{ .data_symbol = @enumFromInt(1) }, .addend = 2 },
+            .{ .offset = 8, .target_symbol_name = "worker", .kind = .function_pointer, .procedure = worker, .callable_capture_offset = 24 },
+            .{ .offset = 16, .target_symbol_name = "drop", .kind = .function_pointer, .rc_helper = .{ .op = .decref, .layout_idx = .str } },
+        } },
+        .{ .symbol_name = "backing", .bytes = "frozen data", .alignment = 1 },
+    };
+    const copied = try StaticDataImage.copy(fixed.allocator(), memory.ptr, memory.len, &graph);
+    bytes[0] = 99;
+    const viewed = try StaticDataImage.view(allocator, memory.ptr, fixed.end_index, copied, @intCast(program.static_data_values.items.len), program.store.procSpecCount(), program.layouts.layoutCount(), 8);
+    defer StaticDataImage.deinit(allocator, viewed);
+    try std.testing.expectEqual(@as(u8, 0), viewed[0].bytes[0]);
+    try std.testing.expectEqualStrings("frozen data", viewed[1].bytes);
+    try std.testing.expectEqual(@as(Program.StaticDataSymbolId, @enumFromInt(1)), viewed[0].relocations[0].target.data_symbol);
+    try std.testing.expectEqual(@as(i64, 2), viewed[0].relocations[0].addend);
+    try std.testing.expectEqual(@as(?LIR.LirProcSpecId, worker), viewed[0].relocations[1].procedure);
+    try std.testing.expectEqual(@as(?u32, 24), viewed[0].relocations[1].callable_capture_offset);
+    try std.testing.expectEqual(layout_mod.RcOp.decref, viewed[0].relocations[2].rc_helper.?.op);
+    try std.testing.expectEqual(layout_mod.Idx.str, viewed[0].relocations[2].rc_helper.?.layout_idx);
+    const rows = try sliceFromRef(StaticDataImage.Export, memory.ptr, fixed.end_index, copied);
+    const relocations = try sliceFromRef(StaticDataImage.Relocation, memory.ptr, fixed.end_index, rows[0].relocations);
+    relocations[2].rc_layout = @intCast(program.layouts.layoutCount());
+    try std.testing.expectError(error.InvalidLirImage, StaticDataImage.view(allocator, memory.ptr, fixed.end_index, copied, @intCast(program.static_data_values.items.len), program.store.procSpecCount(), program.layouts.layoutCount(), 8));
+    relocations[2].rc_layout = @intFromEnum(layout_mod.Idx.str);
+    rows[0].value_id = 1;
+    try std.testing.expectError(error.InvalidLirImage, StaticDataImage.view(allocator, memory.ptr, fixed.end_index, copied, @intCast(program.static_data_values.items.len), program.store.procSpecCount(), program.layouts.layoutCount(), 8));
+}
+
+test "mapped frozen graph rejects a consumer pointer width mismatch" {
+    const allocator = std.testing.allocator;
+    var program = try Program.Result.init(allocator, .u64);
+    defer program.deinit();
+    const value_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .u8 });
+    const memory = try allocator.alignedAlloc(u8, .@"16", 65536);
+    defer allocator.free(memory);
+    var fixed = std.heap.FixedBufferAllocator.init(memory);
+    const header = try fixed.allocator().create(Header);
+    const copied = try copyProgramWithStaticDataIntoBuffer(fixed.allocator(), memory.ptr, memory.len, &program, &.{}, &.{.{ .symbol_name = "value", .value_id = value_slot, .bytes = &.{42}, .alignment = 1 }});
+    try copied.fillHeader(header, fixed.end_index);
+    try std.testing.expectError(error.InvalidLirImage, viewMappedImageWithAllocator(header, memory.ptr, fixed.end_index, .u32, allocator));
+    var view = try viewMappedImageWithAllocator(header, memory.ptr, fixed.end_index, .u64, allocator);
+    defer view.deinit();
+    try std.testing.expectEqual(@as(u8, 42), view.static_data[0].bytes[0]);
+    try std.testing.expectEqual(@as(u32, 1), view.static_data_value_count);
+}
+
+test "in-place frozen image retains existing LIR arrays" {
+    const allocator = std.testing.allocator;
+    const memory = try allocator.alignedAlloc(u8, .@"16", 65536);
+    defer allocator.free(memory);
+    var fixed = std.heap.FixedBufferAllocator.init(memory);
+    const image_allocator = fixed.allocator();
+    const header = try image_allocator.create(Header);
+    var program = try Program.Result.init(image_allocator, .native);
+    defer program.deinit();
+    const value_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    try program.static_data_values.append(image_allocator, .{ .initializer = null, .layout_idx = .u64 });
+    const local = try program.store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try program.store.addCFStmt(.{ .ret = .{ .value = local } });
+    const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = value_slot }, .next = ret } });
+    const proc = try program.store.addProcSpec(.{ .name = .fromRaw(1), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{local}), .body = body, .ret_layout = .u64 });
+    try program.root_procs.append(image_allocator, proc);
+    var value: [8]u8 = undefined;
+    std.mem.writeInt(u64, &value, 42, .little);
+    const prepared = try referenceProgramWithStaticDataInBuffer(image_allocator, memory.ptr, memory.len, &program, &.{}, &.{.{ .symbol_name = "value", .value_id = value_slot, .bytes = &value, .alignment = 8 }});
+    try prepared.fillHeader(header, fixed.end_index);
+    var view = try viewMappedImageWithAllocator(header, memory.ptr, fixed.end_index, .native, allocator);
+    defer view.deinit();
+    try std.testing.expectEqual(@as(u64, fixed.end_index), header.image_size);
+    try std.testing.expectEqual(@intFromPtr(program.store.getProcSpecs().ptr), @intFromPtr(view.store.getProcSpecs().ptr));
+    try std.testing.expectEqual(@as(u32, 1), view.static_data_value_count);
+    try std.testing.expectEqualSlices(u8, &value, view.static_data[0].bytes);
+    try std.testing.expect(@intFromPtr(view.static_data[0].bytes.ptr) >= @intFromPtr(memory.ptr));
+    try std.testing.expect(@intFromPtr(view.static_data[0].bytes.ptr) + value.len <= @intFromPtr(memory.ptr) + fixed.end_index);
 }

@@ -233,6 +233,9 @@ pub const CommonIdents = extern struct {
     // Error tag produced by optional field access (`r.?x`) when the field is
     // absent: the Err side of `Try(field_type, [MissingField])`.
     missing_field: Ident.Idx,
+    // Synthetic identifier for polarity-deferred tag union extensions in alias
+    // declaration bodies (see types.polarity_var_text)
+    polarity_var: Ident.Idx,
 
     /// Insert all well-known identifiers into a CommonEnv.
     /// Use this when creating a fresh ModuleEnv from scratch.
@@ -364,6 +367,8 @@ pub const CommonIdents = extern struct {
             .optional_presence = try common.insertIdent(gpa, Ident.for_text("#optional")),
             // Error tag for optional field access on an absent field
             .missing_field = try common.insertIdent(gpa, Ident.for_text("MissingField")),
+            // Synthetic identifier for polarity-deferred tag union extensions
+            .polarity_var = try common.insertIdent(gpa, Ident.for_text(types_mod.polarity_var_text)),
         };
     }
 
@@ -498,40 +503,57 @@ pub const CommonIdents = extern struct {
             .optional_presence = common.findIdent("#optional") orelse unreachable,
             // Error tag for optional field access on an absent field
             .missing_field = common.findIdent("MissingField") orelse unreachable,
+            // Synthetic identifier for polarity-deferred tag union extensions
+            .polarity_var = common.findIdent(types_mod.polarity_var_text) orelse unreachable,
         };
     }
 };
 
 /// Owner identity for static-dispatch method lookup.
+///
+/// The owning module is named by content identity, never by a module's name:
+/// `self_module` for a declaration in this environment, and an env-local
+/// `ModuleIdentity.Idx` for one in another. Cross-environment lookup joins on
+/// those identities rather than spelling a module's name into another
+/// environment's ident store.
 pub const MethodOwner = extern struct {
-    owner_module_ident_bits: u32,
+    owner_module: u32,
     owner: CIR.Statement.Idx,
 
-    pub fn init(owner_module_ident: Ident.Idx, owner: CIR.Statement.Idx) MethodOwner {
-        return .{
-            .owner_module_ident_bits = @bitCast(owner_module_ident),
-            .owner = owner,
-        };
+    /// The owning module is the environment that holds this table.
+    pub const self_module: u32 = std.math.maxInt(u32);
+
+    /// An owner declared in the environment that holds the method tables.
+    pub fn initSelf(owner: CIR.Statement.Idx) MethodOwner {
+        return .{ .owner_module = self_module, .owner = owner };
     }
 
-    pub fn moduleIdent(self: MethodOwner) Ident.Idx {
-        return @bitCast(self.owner_module_ident_bits);
+    /// An owner declared in another module, named by its content identity as
+    /// this environment interned it.
+    pub fn initImported(identity: base.ModuleIdentity.Idx, owner: CIR.Statement.Idx) MethodOwner {
+        return .{ .owner_module = @intFromEnum(identity), .owner = owner };
+    }
+
+    /// The owning module's content identity, or null when it is this one.
+    pub fn moduleIdentity(self: MethodOwner) ?base.ModuleIdentity.Idx {
+        if (self.owner_module == self_module) return null;
+        return @enumFromInt(self.owner_module);
     }
 
     pub fn eql(a: MethodOwner, b: MethodOwner) bool {
-        return a.owner_module_ident_bits == b.owner_module_ident_bits and a.owner == b.owner;
+        return a.owner_module == b.owner_module and a.owner == b.owner;
     }
 };
 
 /// Key for method lookup: (receiver owner declaration, method_ident) pair.
 pub const MethodKey = extern struct {
-    owner_module_ident_bits: u32,
+    owner_module: u32,
     owner: CIR.Statement.Idx,
     method_ident_bits: u32,
 
     pub fn init(owner: MethodOwner, method_ident: Ident.Idx) MethodKey {
         return .{
-            .owner_module_ident_bits = owner.owner_module_ident_bits,
+            .owner_module = owner.owner_module,
             .owner = owner.owner,
             .method_ident_bits = @bitCast(method_ident),
         };
@@ -539,13 +561,9 @@ pub const MethodKey = extern struct {
 
     pub fn ownerIdent(self: MethodKey) MethodOwner {
         return .{
-            .owner_module_ident_bits = self.owner_module_ident_bits,
+            .owner_module = self.owner_module,
             .owner = self.owner,
         };
-    }
-
-    pub fn ownerModuleIdent(self: MethodKey) Ident.Idx {
-        return @bitCast(self.owner_module_ident_bits);
     }
 
     pub fn methodIdent(self: MethodKey) Ident.Idx {
@@ -553,8 +571,8 @@ pub const MethodKey = extern struct {
     }
 
     pub fn order(a: MethodKey, b: MethodKey) std.math.Order {
-        const a_module = a.owner_module_ident_bits;
-        const b_module = b.owner_module_ident_bits;
+        const a_module = a.owner_module;
+        const b_module = b.owner_module;
         if (a_module != b_module) {
             return if (a_module < b_module) .lt else .gt;
         }
@@ -645,6 +663,11 @@ pub const NumeralLiteral = extern struct {
     after_len: u32,
     after_decimal_digit_count: u64,
     flags: u32,
+    /// The bytes the 8-byte alignment of `after_decimal_digit_count` adds after
+    /// `flags`. Declared rather than implicit so every byte this struct persists
+    /// has a defined value: the checked cache writes its representation verbatim,
+    /// and an implicit gap would write whatever happened to be in that memory.
+    _reserved: u32 = 0,
 
     pub const negative_flag: u32 = 1;
     pub const fractional_flag: u32 = 2;
@@ -667,25 +690,37 @@ pub const NumeralLiteral = extern struct {
     pub fn isMaterialized(self: NumeralLiteral) bool {
         return (self.flags & materialized_flag) != 0;
     }
+
+    comptime {
+        // Every byte this struct persists must belong to a declared field. The checked
+        // cache and the baked builtin artifact copy its representation verbatim, so an
+        // implicit gap here writes whatever that memory happened to hold. This is the
+        // same proof the serialization boundary runs; asserting it beside the
+        // declaration points at this file when a field is added or reordered.
+        collections.serde_validation.assertFullyDefined(@This(), "ModuleEnv.NumeralLiteral");
+    }
 };
 
 /// One constrained-scheme use recorded by checking for static-dispatch
 /// evidence. It names the source node, the scheme root used at that edge, and—
-/// for an instantiation—the fresh var each constrained scheme var was
-/// copied to. Shared monomorphic edges have no copy pairs. Publication resolves
-/// the recorded vars after checking settles to decide how each of the callee's
-/// dispatch constraints was satisfied at this site.
+/// for an instantiation—the source-to-fresh var relation needed by its slot.
+/// Ordinary evidence edges retain constrained vars; a where-method use retains
+/// the instantiator's complete structural map. Shared monomorphic edges have no
+/// copy pairs. Checked-artifact construction resolves the recorded vars after
+/// checking settles to decide how each callee dispatch requirement was
+/// satisfied at this site.
 pub const SchemeUseRecord = extern struct {
     node_idx: u32,
     /// `Slot`—distinguishes several schemes instantiated at one node (a value
-    /// use, an expression-position function stored as a value, or the target
-    /// of a dispatch constraint).
+    /// use, an expression-position function stored as a value, the target of
+    /// a dispatch constraint, or a per-use where-method signature copy).
     slot_kind: u32,
     /// For `dispatch_target` slots, the raw fn `Var` of the constraint whose
     /// discharge instantiated this scheme—unique per constraint
     /// instantiation, so nested evidence chains resolve without ambiguity.
-    /// 0 for value and nested-function use slots (keyed by `node_idx`
-    /// instead).
+    /// For `where_method_use`, the raw fn `Var` of the body dispatch whose
+    /// callable instantiated the where-method signature. 0 for value and
+    /// nested-function use slots (keyed by `node_idx` instead).
     slot_data: u32,
     /// The scheme root `Var` used at this edge. For imported schemes this is
     /// the pristine local copy; for shared uses it is the in-flight local root.
@@ -721,13 +756,20 @@ pub const SchemeUseRecord = extern struct {
         /// or substitution of its own; an accompanying value/shared use owns
         /// those facts when the referenced scheme has quantified variables.
         recursive_reference,
+        /// One body dispatch's per-use instantiation of its where-method
+        /// signature. `slot_data` is the body's constraint callable and
+        /// `scheme_root` is the pristine where-method signature callable.
+        /// The use has no child dispatch requirements; this record deliberately
+        /// relates the two callable identities for checked-plan construction.
+        where_method_use,
     };
 };
 
-/// One (constrained scheme var → fresh instantiated var) pair of a
-/// `SchemeUseRecord`.
+/// One (source scheme var → fresh instantiated var) pair of a
+/// `SchemeUseRecord`. Ordinary evidence records retain constrained vars;
+/// `where_method_use` retains the instantiator's complete structural map.
 pub const SchemeUsePair = extern struct {
-    /// Constrained var in the pristine scheme (`Var`).
+    /// Source var in the pristine scheme (`Var`).
     old_var: u32,
     /// The fresh copy created for this instantiation (`Var`).
     fresh_var: u32,
@@ -806,15 +848,20 @@ pub const NumericSuffixTarget = extern struct {
     data1: u32,
     data2: u32,
 
+    /// Stored suffix targets.
     pub const SafeList = collections.SafeList(@This());
 
+    /// Encoding of the selected suffix type.
     pub const Kind = enum(u32) {
         builtin,
         local,
         external,
+        external_identity,
+        pending,
         invalid,
     };
 
+    /// Selected type or an import awaiting resolution.
     pub const Target = union(enum) {
         builtin: CIR.NumKind,
         local: CIR.Statement.Idx,
@@ -822,9 +869,15 @@ pub const NumericSuffixTarget = extern struct {
             import_idx: CIR.Import.Idx,
             target_node_idx: u32,
         },
+        external_identity: struct {
+            module_identity: base.ModuleIdentity.Idx,
+            target_node_idx: u32,
+        },
+        pending: DeferredImportRef.Idx,
         invalid,
     };
 
+    /// Decode the stored suffix target.
     pub fn target(self: NumericSuffixTarget) Target {
         return switch (@as(Kind, @enumFromInt(self.kind))) {
             .builtin => .{ .builtin = @enumFromInt(self.data1) },
@@ -833,6 +886,11 @@ pub const NumericSuffixTarget = extern struct {
                 .import_idx = @enumFromInt(self.data1),
                 .target_node_idx = self.data2,
             } },
+            .external_identity => .{ .external_identity = .{
+                .module_identity = @enumFromInt(self.data1),
+                .target_node_idx = self.data2,
+            } },
+            .pending => .{ .pending = @enumFromInt(self.data1) },
             .invalid => .invalid,
         };
     }
@@ -942,6 +1000,16 @@ external_decls: CIR.ExternalDecl.SafeList,
 imports: CIR.Import.Store,
 /// Source-relative file imports read while canonicalizing this module.
 file_dependencies: FileDependency.SafeList,
+/// Deferred references into imported modules, in the order canonicalization
+/// recorded them. `can`'s import-resolution drain consumes this list once.
+deferred_import_refs: DeferredImportRef.SafeList,
+/// The content identity of the module each entry of `imports` resolved to,
+/// parallel to `imports.imports` by index. Written by the import-resolution
+/// drain and `NONE` for an import that resolution rejected. A module that
+/// follows an exposed alias out of an imported module reads this table on the
+/// alias's owning environment to reach the module the alias names, without
+/// spelling any module's name.
+import_identities: collections.SafeList(base.ModuleIdentity.Idx),
 /// The module's source-visible final path segment, such as `Foo` for the
 /// logical module path `Folder/Foo`.
 /// Used for type-module main types and associated-name construction; logical
@@ -952,7 +1020,9 @@ module_name: []const u8,
 display_module_name_idx: Ident.Idx,
 /// Package-qualified module display name (e.g., "pf.Color"). Display-only; identity
 /// comparisons use content-based module identities (see `module_identities`).
-/// Set by the coordinator after parse or cache hit.
+/// Which package a module belongs to is workspace information, so the
+/// coordinator records this once the module is canonicalized; a cache hit
+/// restores what was recorded then. Canonicalization never reads it.
 qualified_module_ident: Ident.Idx,
 /// Env-local module identity table: dense `base.ModuleIdentity.Idx` -> 32-byte
 /// deep content hash (see `base.module_identity`). Entry ids are the
@@ -1021,7 +1091,8 @@ numeric_suffix_targets: NumericSuffixTarget.SafeList,
 /// Constrained-scheme uses recorded by checking for static-dispatch evidence;
 /// consumed at checked-module publication.
 scheme_uses: SchemeUseRecord.SafeList,
-/// Flat pool of (scheme var → fresh var) pairs backing `scheme_uses`.
+/// Flat pool of (source scheme var → fresh var) pairs backing
+/// `scheme_uses`.
 scheme_use_pairs: SchemeUsePair.SafeList,
 /// Exact source bindings that checking generalized into rank-1 type schemes.
 /// Sorted by source node for allocation-free cross-module lookup.
@@ -1144,6 +1215,209 @@ pub const FileDependency = extern struct {
     }
 };
 
+/// What a deferred import reference denotes at its source position, and which
+/// node shape resolution patches it into.
+pub const DeferredRefKind = enum(u8) {
+    /// An expression naming a value in the imported module.
+    expr_value,
+    /// An expression applying an imported nominal type to a backing value.
+    expr_nominal,
+    /// A pattern matching an imported nominal type against a backing pattern.
+    pattern_nominal,
+    /// A type-annotation lookup (`ty_lookup`) naming an imported type.
+    type_anno_lookup,
+    /// A type-annotation application (`ty_apply`) naming an imported type.
+    type_anno_apply,
+    /// A literal suffix naming an imported type.
+    numeric_suffix,
+    /// A receiver-extension method registration whose receiver type is
+    /// imported. Its owner identity is settled once the receiver type's own
+    /// deferred reference resolves.
+    receiver_method_owner,
+    /// An `import` statement itself. Whether the name it spells denotes a
+    /// module at all is not a source-local question, so the statement waits
+    /// here for the answer.
+    import_statement,
+    /// One item of an `import ... exposing [...]` list. Whether the module
+    /// exposes it, and as what, is the import statement's own question.
+    exposed_item,
+    /// A platform `hosted` entry naming a function in an imported module.
+    /// `node_idx` is the entry's index in `hosted_entries`.
+    hosted_entry,
+    /// An `import "path" as name` file import. Reading the file is filesystem
+    /// input, so the expression waits here for its bytes.
+    file_import,
+};
+
+/// The diagnostic a deferred import reference produces when resolution cannot
+/// find what the source position named. Each member names the CIR diagnostic
+/// it constructs from the entry's recorded idents and the node's region.
+pub const DeferredRefFailure = enum(u8) {
+    /// `type_not_exposed { module_name, type_name }`
+    type_not_exposed,
+    /// `type_from_missing_module { module_name, type_name }`
+    type_from_missing_module,
+    /// `nested_type_not_found { parent_name, nested_name }`
+    nested_type_not_found,
+    /// `nested_value_not_found { parent_name, nested_name }`
+    nested_value_not_found,
+    /// `qualified_ident_does_not_exist { ident }`
+    qualified_ident_does_not_exist,
+    /// `value_not_exposed { module_name, value_name }`
+    value_not_exposed,
+    /// `module_not_imported { module_name }`
+    module_not_imported,
+    /// `undeclared_type { name }`
+    undeclared_type,
+    /// `type_alias_but_needed_nominal { name }`
+    type_alias_but_needed_nominal,
+    /// `record_builder_map2_not_found { type_name }`, naming the builder's
+    /// type through the entry's parent name.
+    record_builder_map2_not_found,
+};
+
+/// One deferred reference into an imported module.
+///
+/// Canonicalization never reads another user module's environment, so every
+/// reference through an import is emitted as a placeholder node plus one of
+/// these entries. `can`'s import-resolution drain walks this list once, after
+/// the module's imports have completed, and rewrites each named node in place
+/// into its resolved form or into a malformed node carrying the recorded
+/// diagnostic. The list is the only record of this work: nothing walks the
+/// CIR to rediscover it.
+pub const DeferredImportRef = extern struct {
+    /// The import this reference goes through, or `no_import` when the
+    /// reference goes through no module import.
+    import_idx: u32,
+    /// Raw node index of the node this entry resolves. For
+    /// `receiver_method_owner` this is the type-annotation node whose resolved
+    /// target names the owner declaration.
+    node_idx: u32,
+    /// Dotted path relative to the imported module root (e.g. `Files.Dir.Read`).
+    path_bits: u32,
+    /// The imported module's name as this module's source spells it.
+    module_name_bits: u32,
+    /// The leaf name this reference selects, for diagnostics.
+    item_name_bits: u32,
+    /// The parent name nested-path diagnostics report.
+    parent_name_bits: u32,
+    /// The whole qualified spelling, for diagnostics that name it.
+    qualified_name_bits: u32,
+    /// For `receiver_method_owner`, the method registration this entry
+    /// completes; unused otherwise.
+    method_ident_bits: u32,
+    kind: DeferredRefKind,
+    /// Diagnostic for an import that resolution rejected or that named no module.
+    missing_module_failure: DeferredRefFailure,
+    /// Diagnostic for an import that resolved to a module lacking this path.
+    not_found_failure: DeferredRefFailure,
+    /// See `Flags`.
+    flags: u8,
+    _padding: [4]u8 = .{ 0, 0, 0, 0 },
+    /// For `receiver_method_owner`, the node whose type variable holds the
+    /// method's checked type.
+    method_binding_type_node: u32,
+    /// For `receiver_method_owner`, the definition that owns the method's
+    /// implementation identity.
+    method_binding_def: u32,
+    /// For `file_import`, the `file_dependencies` entry this import records
+    /// its read state under.
+    file_dependency_idx: u32,
+    /// The region a diagnostic for this entry reports at, when the source
+    /// position names something narrower than the node itself -- the type name
+    /// inside a qualified reference, say. `Flags.has_diagnostic_region` says
+    /// whether these two hold one; otherwise the node's own region is used.
+    diagnostic_region_start: u32,
+    diagnostic_region_end: u32,
+
+    /// Bit flags recording source-local facts the drain needs.
+    pub const Flags = struct {
+        /// A resolved target that is a nominal declaration may also be reached
+        /// through the imported module's main type as a tag constructor.
+        pub const allows_nominal_tag: u8 = 1 << 0;
+        /// The import was written package-qualified (`pf.Stdout`), which only
+        /// the workspace resolver can judge, so a missing module is its
+        /// diagnostic to report rather than this module's.
+        pub const is_package_qualified: u8 = 1 << 1;
+        /// The reference names the import's own selected declaration -- a type
+        /// module's main type, or the declaration a package header makes
+        /// public -- rather than a path inside it.
+        pub const names_import_main_type: u8 = 1 << 2;
+        /// An exposed-item check expects a type declaration rather than a
+        /// value definition.
+        pub const selects_type: u8 = 1 << 3;
+        /// A file import binds the file's raw bytes rather than its text.
+        pub const file_import_is_bytes: u8 = 1 << 4;
+        /// The entry carries its own diagnostic region.
+        pub const has_diagnostic_region: u8 = 1 << 5;
+        /// The reference is written `Alias.Name(...)` in tag position with an
+        /// import's alias as the qualifier. Which declaration the qualifier
+        /// denotes depends on the import: when the import selects a public
+        /// declaration, that declaration owns the tag `Name`; when it selects
+        /// none, the qualifier names the module and `Name` names one of its
+        /// exposed types.
+        pub const tag_after_import_alias: u8 = 1 << 6;
+    };
+
+    pub fn has(self: @This(), flag: u8) bool {
+        return (self.flags & flag) != 0;
+    }
+
+    pub const SafeList = collections.SafeList(@This());
+
+    /// Index into a module's deferred import worklist.
+    pub const Idx = enum(u32) { _ };
+
+    pub fn path(self: @This()) Ident.Idx {
+        return @bitCast(self.path_bits);
+    }
+
+    pub fn moduleName(self: @This()) Ident.Idx {
+        return @bitCast(self.module_name_bits);
+    }
+
+    pub fn itemName(self: @This()) Ident.Idx {
+        return @bitCast(self.item_name_bits);
+    }
+
+    pub fn parentName(self: @This()) Ident.Idx {
+        return @bitCast(self.parent_name_bits);
+    }
+
+    pub fn qualifiedName(self: @This()) Ident.Idx {
+        return @bitCast(self.qualified_name_bits);
+    }
+
+    pub fn methodIdent(self: @This()) Ident.Idx {
+        return @bitCast(self.method_ident_bits);
+    }
+
+    /// `import_idx` value for a reference that goes through no module import.
+    /// A file import is such a reference: the file it names is the
+    /// `file_dependencies` entry at `file_dependency_idx`.
+    pub const no_import: u32 = std.math.maxInt(u32);
+
+    /// `method_binding_type_node` value for an entry that registers no method.
+    pub const no_method_binding: u32 = std.math.maxInt(u32);
+
+    /// The import this reference goes through, or null for a reference that
+    /// goes through no module import.
+    pub fn importIdx(self: @This()) ?CIR.Import.Idx {
+        if (self.import_idx == no_import) return null;
+        return @enumFromInt(self.import_idx);
+    }
+
+    /// The method registration this entry completes, or null when it
+    /// registers no method.
+    pub fn methodBinding(self: @This()) ?MethodBinding {
+        if (self.method_binding_type_node == no_method_binding) return null;
+        return .{
+            .type_node_idx = @enumFromInt(self.method_binding_type_node),
+            .def_idx = @enumFromInt(self.method_binding_def),
+        };
+    }
+};
+
 /// Relocate all pointers in the ModuleEnv by the given offset.
 /// This is used by serialized compiler artifacts whose internal pointers are
 /// stored relative to the artifact buffer.
@@ -1160,12 +1434,16 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.hosted_entries.relocate(offset);
     self.imports.relocate(offset);
     self.file_dependencies.relocate(offset);
+    self.deferred_import_refs.relocate(offset);
+    self.import_identities.relocate(offset);
     self.store.relocate(offset);
     self.top_level_demand_dependencies.relocate(offset);
     self.method_idents.relocate(offset);
     self.method_defs.relocate(offset);
     self.provided_low_level_defs.relocate(offset);
     self.for_loop_dispatch_plans.relocate(offset);
+    self.scheme_uses.relocate(offset);
+    self.scheme_use_pairs.relocate(offset);
     self.binding_schemes.relocate(offset);
     self.binding_scheme_codec_requirements.relocate(offset);
     self.rejected_static_dispatches.relocate(offset);
@@ -1245,6 +1523,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
         .imports = CIR.Import.Store.init(),
         .file_dependencies = .{},
+        .deferred_import_refs = .{},
+        .import_identities = .{},
         .module_name = "", // May be set later during canonicalization
         .display_module_name_idx = Ident.Idx.NONE, // Will be set later during canonicalization
         .qualified_module_ident = Ident.Idx.NONE, // Will be set by coordinator
@@ -1290,6 +1570,8 @@ pub fn deinit(self: *Self) void {
     self.hosted_entries.deinit(self.gpa);
     self.imports.deinit(self.gpa);
     self.file_dependencies.deinit(self.gpa);
+    self.deferred_import_refs.deinit(self.gpa);
+    self.import_identities.deinit(self.gpa);
     self.import_mapping.deinit();
     self.method_idents.deinit(self.gpa);
     self.method_defs.deinit(self.gpa);
@@ -1415,11 +1697,27 @@ pub fn deinitCachedModule(self: *Self) void {
     // that needs to be freed. The interner.deinit checks supports_inserts internally
     // and will only free if memory was actually allocated (not for pure cached data).
     self.common.idents.interner.deinit(self.gpa);
+    self.common.idents.deinitTextRanks();
 
     // Same pattern for the module identity table: frozen (buffer-aliased) data is
     // a no-op to deinit; runtime-grown data is freed.
     self.module_identities.deinit(self.gpa);
     self.module_identity_displays.deinit(self.gpa);
+}
+
+/// Whether every recorded file import has been read, which is what makes this
+/// module's source inputs complete. The canonicalize task reads them, before
+/// the module's source-input identity keys the checked-module cache.
+pub fn fileDependenciesSettled(self: *const Self) bool {
+    for (self.file_dependencies.items.items) |dep| {
+        if (dep.state == .pending) return false;
+    }
+    return true;
+}
+
+/// Whether one recorded file import has been read.
+pub fn fileDependencySettled(self: *const Self, idx: FileDependency.SafeList.Idx) bool {
+    return self.file_dependencies.items.items[@intFromEnum(idx)].state != .pending;
 }
 
 /// Record a relative file dependency before its final read state is known.
@@ -1511,6 +1809,26 @@ pub const castIdx = CIR.castIdx;
 // Module compilation functions
 
 /// Retrieve all diagnostics collected during canonicalization.
+pub fn diagnosticCount(self: *const Self) u32 {
+    return self.diagnostics.span.len;
+}
+
+/// The diagnostics recorded after the first `start` of them, which is how a
+/// later stage reports only what it added. Import resolution runs after
+/// canonicalization's diagnostics have already been reported, so its own
+/// diagnostics are exactly this tail.
+pub fn getDiagnosticsFrom(self: *Self, start: u32) std.mem.Allocator.Error![]CIR.Diagnostic {
+    const diagnostic_indices = self.store.sliceDiagnostics(self.diagnostics);
+    if (start >= diagnostic_indices.len) return &.{};
+    const tail = diagnostic_indices[start..];
+    const diagnostics = try self.gpa.alloc(CIR.Diagnostic, tail.len);
+    for (tail, 0..) |diagnostic_idx, i| {
+        diagnostics[i] = self.store.getDiagnostic(diagnostic_idx);
+    }
+    return diagnostics;
+}
+
+/// Retrieves all diagnostics recorded for this module.
 pub fn getDiagnostics(self: *Self) std.mem.Allocator.Error![]CIR.Diagnostic {
     const diagnostic_indices = self.store.sliceDiagnostics(self.diagnostics);
     const diagnostics = try self.gpa.alloc(CIR.Diagnostic, diagnostic_indices.len);
@@ -1523,9 +1841,23 @@ pub fn getDiagnostics(self: *Self) std.mem.Allocator.Error![]CIR.Diagnostic {
 /// Publish diagnostics that have been recorded since the current diagnostic
 /// span was last finalized.
 pub fn publishScratchDiagnostics(self: *Self) std.mem.Allocator.Error!void {
+    return self.publishScratchDiagnosticsFrom(0);
+}
+
+/// The number of diagnostics recorded but not yet published. A later stage
+/// takes this before it runs and publishes only what it added, leaving any
+/// diagnostic an earlier stage deliberately left unpublished where it is.
+pub fn unpublishedDiagnosticCount(self: *const Self) u32 {
+    const scratch = self.store.scratch orelse return 0;
+    return scratch.diagnostics.top();
+}
+
+/// Publish the diagnostics recorded after the first `start` unpublished ones.
+pub fn publishScratchDiagnosticsFrom(self: *Self, start: u32) std.mem.Allocator.Error!void {
     const scratch = self.store.scratch orelse return;
-    const new_top = scratch.diagnostics.top();
-    if (new_top == 0) return;
+    const scratch_top = scratch.diagnostics.top();
+    if (scratch_top <= start) return;
+    const new_top = scratch_top - start;
 
     const existing_span = self.diagnostics.span;
     const index_len = self.store.index_data.len();
@@ -1546,13 +1878,13 @@ pub fn publishScratchDiagnostics(self: *Self) std.mem.Allocator.Error!void {
         }
     }
 
-    var i: u32 = 0;
-    while (i < new_top) : (i += 1) {
+    var i: u32 = start;
+    while (i < scratch_top) : (i += 1) {
         const diagnostic_idx = scratch.diagnostics.items.items[@intCast(i)];
         _ = self.store.index_data.appendAssumeCapacity(@intFromEnum(diagnostic_idx));
     }
 
-    scratch.diagnostics.clearFrom(0);
+    scratch.diagnostics.clearFrom(start);
     self.diagnostics = .{
         .span = .{
             .start = index_start,
@@ -3933,11 +4265,22 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getLineStartsAll(),
             );
         },
+        .type_var_starting_with_dollar => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk try CIR.Diagnostic.buildTypeVarStartingWithDollarReport(
+                allocator,
+                self.getIdent(data.name),
+                self.getIdent(data.suggested_name),
+                region_info,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+        },
         .invalid_string_interpolation,
         .can_lambda_not_implemented,
         .unused_type_var_name,
         .type_var_marked_unused,
-        .type_var_starting_with_dollar,
         => std.debug.panic("Unhandled canonicalize diagnostic in diagnosticToReport: {s}", .{@tagName(diagnostic)}),
     };
 }
@@ -3990,6 +4333,8 @@ pub const Serialized = extern struct {
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
     imports: CIR.Import.Store.Serialized,
     file_dependencies: FileDependency.SafeList.Serialized,
+    deferred_import_refs: DeferredImportRef.SafeList.Serialized,
+    import_identities: collections.SafeList(base.ModuleIdentity.Idx).Serialized,
     module_name: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
     display_module_name_idx_reserved: u32, // Reserved space for display_module_name_idx field (interned during deserialization)
     qualified_module_ident_reserved: u32, // Reserved space for qualified_module_ident field
@@ -4086,6 +4431,8 @@ pub const Serialized = extern struct {
         try self.external_decls.serialize(&env.external_decls, allocator, writer);
         try self.imports.serialize(&env.imports, allocator, writer);
         try self.file_dependencies.serialize(&env.file_dependencies, allocator, writer);
+        try self.deferred_import_refs.serialize(&env.deferred_import_refs, allocator, writer);
+        try self.import_identities.serialize(&env.import_identities, allocator, writer);
 
         self.diagnostics = env.diagnostics;
 
@@ -4180,6 +4527,8 @@ pub const Serialized = extern struct {
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = try self.imports.deserializeInto(base_addr, gpa),
             .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
+            .deferred_import_refs = self.deferred_import_refs.deserializeInto(base_addr),
+            .import_identities = self.import_identities.deserializeInto(base_addr),
             .module_name = module_basename,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
             .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
@@ -4253,6 +4602,8 @@ pub const Serialized = extern struct {
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = CIR.Import.Store.init(),
             .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
+            .deferred_import_refs = self.deferred_import_refs.deserializeInto(base_addr),
+            .import_identities = self.import_identities.deserializeInto(base_addr),
             .module_name = module_basename,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
             .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
@@ -4327,6 +4678,8 @@ pub const Serialized = extern struct {
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = try self.imports.deserializeInto(base_addr, gpa),
             .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
+            .deferred_import_refs = self.deferred_import_refs.deserializeInto(base_addr),
+            .import_identities = self.import_identities.deserializeInto(base_addr),
             .module_name = module_basename,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
             .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
@@ -4345,6 +4698,96 @@ pub const Serialized = extern struct {
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
             .method_defs = self.method_defs.deserializeInto(base_addr),
+            .provided_low_level_defs = try self.provided_low_level_defs.deserializeWithCopy(base_addr, gpa),
+            .for_loop_dispatch_plans = try self.for_loop_dispatch_plans.deserializeWithCopy(base_addr, gpa),
+            .numeral_digit_bytes = try self.numeral_digit_bytes.deserializeWithCopy(base_addr, gpa),
+            .numeral_literals = try self.numeral_literals.deserializeWithCopy(base_addr, gpa),
+            .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
+            .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
+            .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
+            .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
+            .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
+            .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
+            .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
+            .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
+            .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
+        };
+
+        env.debugAssertModuleBasename();
+
+        return env;
+    }
+
+    /// Deserialize into a ModuleEnv that owns every byte it holds.
+    ///
+    /// This is what a canonicalized-cache hit loads: the module still has its
+    /// file imports to read, its deferred import worklist to drain, and its
+    /// types to solve, and each of those appends to the env. Every store is
+    /// therefore copied into growable memory owned by `gpa`, the identifier
+    /// interner and module-identity table are reopened for insertion, the
+    /// string-literal builder is rebuilt from the store's own entries, and the
+    /// node store gets its scratch buffers. The result is released with
+    /// `deinit`, exactly like a freshly canonicalized env.
+    pub fn deserializeOwned(
+        self: *const Serialized,
+        base_addr: usize,
+        gpa: std.mem.Allocator,
+        source: []const u8,
+        module_basename: []const u8,
+    ) std.mem.Allocator.Error!*Self {
+        const env = try gpa.create(Self);
+        errdefer gpa.destroy(env);
+
+        // The frozen store's lists alias the serialized buffer, so only the
+        // lookup map `deserializeInto` allocated is released here; `clone`
+        // copies those lists into memory this env owns.
+        var frozen_imports = try self.imports.deserializeInto(base_addr, gpa);
+        defer frozen_imports.deinitMapOnly(gpa);
+
+        var module_identities = self.module_identities.deserialize(base_addr);
+        try module_identities.enableRuntimeInserts(gpa);
+
+        env.* = Self{
+            .gpa = gpa,
+            .common = try self.common.deserializeOwned(base_addr, gpa, source),
+            .types = try self.types.deserializeWithCopy(base_addr, gpa),
+            .module_kind = self.module_kind.decode(),
+            .module_role = self.module_role,
+            .all_defs = self.all_defs,
+            .global_value_defs = self.global_value_defs,
+            .top_level_value_defs = self.top_level_value_defs,
+            .value_binding_defs = self.value_binding_defs,
+            .hosted_defs = self.hosted_defs,
+            .all_statements = self.all_statements,
+            .type_decls = self.type_decls,
+            .forward_type_decls = self.forward_type_decls,
+            .exports = self.exports,
+            .requires_types = try self.requires_types.deserializeWithCopy(base_addr, gpa),
+            .for_clause_aliases = try self.for_clause_aliases.deserializeWithCopy(base_addr, gpa),
+            .provides_entries = try self.provides_entries.deserializeWithCopy(base_addr, gpa),
+            .hosted_entries = try self.hosted_entries.deserializeWithCopy(base_addr, gpa),
+            .builtin_statements = self.builtin_statements,
+            .external_decls = try self.external_decls.deserializeWithCopy(base_addr, gpa),
+            .imports = try frozen_imports.clone(gpa),
+            .file_dependencies = try self.file_dependencies.deserializeWithCopy(base_addr, gpa),
+            .deferred_import_refs = try self.deferred_import_refs.deserializeWithCopy(base_addr, gpa),
+            .import_identities = try self.import_identities.deserializeWithCopy(base_addr, gpa),
+            .module_name = module_basename,
+            .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
+            .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
+            .module_identities = module_identities,
+            .module_identity_displays = try self.module_identity_displays.deserializeWithCopy(base_addr, gpa),
+            .self_module_identity = @enumFromInt(self.self_module_identity_reserved),
+            .diagnostics = self.diagnostics,
+            .store = try self.store.deserializeOwned(base_addr, gpa),
+            .evaluation_order = null,
+            .top_level_demand_dependencies = try self.top_level_demand_dependencies.deserializeWithCopy(base_addr, gpa),
+            .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
+            .runtime_prepared = self.runtime_prepared,
+            .idents = self.idents,
+            .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
+            .method_idents = try self.method_idents.deserializeWithCopy(base_addr, gpa),
+            .method_defs = try self.method_defs.deserializeWithCopy(base_addr, gpa),
             .provided_low_level_defs = try self.provided_low_level_defs.deserializeWithCopy(base_addr, gpa),
             .for_loop_dispatch_plans = try self.for_loop_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .numeral_digit_bytes = try self.numeral_digit_bytes.deserializeWithCopy(base_addr, gpa),
@@ -4702,7 +5145,8 @@ pub fn recordQuoteDispatchPlan(
 
 /// Record a constrained-scheme use for static-dispatch evidence.
 /// `slot_data` is the raw fn `Var` of the discharged constraint for
-/// `dispatch_target` slots and 0 for value and nested-function use slots.
+/// `dispatch_target` slots, the body constraint callable for
+/// `where_method_use`, and 0 for value and nested-function use slots.
 pub fn recordSchemeUse(
     self: *Self,
     node_idx: u32,
@@ -4833,6 +5277,21 @@ pub fn recordNumericSuffixTarget(
             .kind = @intFromEnum(NumericSuffixTarget.Kind.external),
             .data1 = @intFromEnum(external.import_idx),
             .data2 = external.target_node_idx,
+        },
+        .external_identity => |external| NumericSuffixTarget{
+            .node_idx = raw_node,
+            .kind = @intFromEnum(NumericSuffixTarget.Kind.external_identity),
+            .data1 = @intFromEnum(external.module_identity),
+            .data2 = external.target_node_idx,
+        },
+        .pending => |ref| blk: {
+            self.deferred_import_refs.items.items[@intFromEnum(ref)].node_idx = raw_node;
+            break :blk NumericSuffixTarget{
+                .node_idx = raw_node,
+                .kind = @intFromEnum(NumericSuffixTarget.Kind.pending),
+                .data1 = @intFromEnum(ref),
+                .data2 = 0,
+            };
         },
         .invalid => NumericSuffixTarget{
             .node_idx = raw_node,
@@ -5577,6 +6036,32 @@ pub fn internModuleIdentity(
     return @enumFromInt(id);
 }
 
+/// The content identity of the module an import resolved to, or null when the
+/// drain has not recorded one (a rejected import, or an env whose imports were
+/// never drained).
+pub fn importIdentity(self: *const Self, import_idx: CIR.Import.Idx) ?base.ModuleIdentity.Idx {
+    const idx: usize = @intFromEnum(import_idx);
+    if (idx >= self.import_identities.len()) return null;
+    const identity = self.import_identities.items.items[idx];
+    if (identity.isNone()) return null;
+    return identity;
+}
+
+/// Record the content identity of the module an import resolved to. The table
+/// is parallel to the import store by index, so it grows to cover every import
+/// the drain has reached.
+pub fn setImportIdentity(
+    self: *Self,
+    import_idx: CIR.Import.Idx,
+    identity: base.ModuleIdentity.Idx,
+) std.mem.Allocator.Error!void {
+    const idx: usize = @intFromEnum(import_idx);
+    while (self.import_identities.len() <= idx) {
+        _ = try self.import_identities.append(self.gpa, base.ModuleIdentity.Idx.NONE);
+    }
+    self.import_identities.items.items[idx] = identity;
+}
+
 /// Look up a module content identity in this env's table without inserting.
 pub fn lookupModuleIdentity(self: *const Self, hash: *const base.ModuleIdentity.Hash) ?base.ModuleIdentity.Idx {
     const id = self.module_identities.lookup(hash) orelse return null;
@@ -5685,7 +6170,7 @@ pub fn ensureContentIdentity(
 
 /// Registers a method identifier mapping for an explicit owner declaration.
 pub fn registerMethodIdentForOwner(self: *Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx, qualified_ident: Ident.Idx) Allocator.Error!void {
-    try self.registerMethodIdentForMethodOwner(MethodOwner.init(self.qualified_module_ident, owner), method_ident, qualified_ident);
+    try self.registerMethodIdentForMethodOwner(MethodOwner.initSelf(owner), method_ident, qualified_ident);
 }
 
 /// Registers a method identifier mapping for an explicit receiver owner declaration.
@@ -5696,7 +6181,7 @@ pub fn registerMethodIdentForMethodOwner(self: *Self, owner: MethodOwner, method
 
 /// Registers a method definition mapping for an explicit owner declaration.
 pub fn registerMethodDefForOwner(self: *Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx, binding: MethodBinding) Allocator.Error!void {
-    try self.registerMethodDefForMethodOwner(MethodOwner.init(self.qualified_module_ident, owner), method_ident, binding);
+    try self.registerMethodDefForMethodOwner(MethodOwner.initSelf(owner), method_ident, binding);
 }
 
 /// Registers a method definition mapping for an explicit receiver owner declaration.
@@ -5743,13 +6228,13 @@ pub fn replaceMethodAt(
 
 /// Looks up a qualified method ident for an explicit owner declaration.
 pub fn lookupMethodIdentForOwner(self: *Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx) ?Ident.Idx {
-    const key = MethodKey.init(MethodOwner.init(self.qualified_module_ident, owner), method_ident);
+    const key = MethodKey.init(MethodOwner.initSelf(owner), method_ident);
     return self.method_idents.get(self.gpa, key);
 }
 
 /// Looks up a qualified method ident in finalized tables for an explicit owner declaration.
 pub fn lookupMethodIdentForOwnerConst(self: *const Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx) ?Ident.Idx {
-    return self.lookupMethodIdentForMethodOwnerConst(MethodOwner.init(self.qualified_module_ident, owner), method_ident);
+    return self.lookupMethodIdentForMethodOwnerConst(MethodOwner.initSelf(owner), method_ident);
 }
 
 /// Looks up a qualified method ident in finalized tables for an explicit receiver owner declaration.
@@ -5760,7 +6245,7 @@ pub fn lookupMethodIdentForMethodOwnerConst(self: *const Self, owner: MethodOwne
 
 /// Looks up method type/check metadata in finalized tables for an explicit owner declaration.
 pub fn lookupMethodBindingForOwnerConst(self: *const Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx) ?MethodBinding {
-    return self.lookupMethodBindingForMethodOwnerConst(MethodOwner.init(self.qualified_module_ident, owner), method_ident);
+    return self.lookupMethodBindingForMethodOwnerConst(MethodOwner.initSelf(owner), method_ident);
 }
 
 /// Looks up method type/check metadata in finalized tables for an explicit receiver owner declaration.
@@ -5802,17 +6287,97 @@ pub fn lookupMethodBindingFromOwnerAndMethodEnvsConst(
     method_ident: Ident.Idx,
 ) ?MethodBinding {
     const method_name = method_source_env.getIdent(method_ident);
-    const owner_module_name = owner_source_env.getIdent(owner_source_env.qualified_module_ident);
-
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
-    const local_owner_module_ident = self.common.findIdent(owner_module_name) orelse return null;
     const owner: CIR.Statement.Idx = @enumFromInt(source_decl orelse return null);
 
-    return self.lookupMethodBindingForMethodOwnerConst(MethodOwner.init(local_owner_module_ident, owner), local_method_ident);
+    // The owner is this environment's own declaration when the two
+    // environments are the same one, and otherwise the content identity this
+    // environment interned for the owner's module.
+    const method_owner = if (owner_source_env == self)
+        MethodOwner.initSelf(owner)
+    else blk: {
+        const owner_hash = owner_source_env.contentIdentityHash() orelse return null;
+        const identity = self.lookupModuleIdentity(owner_hash) orelse return null;
+        break :blk MethodOwner.initImported(identity, owner);
+    };
+
+    return self.lookupMethodBindingForMethodOwnerConst(method_owner, local_method_ident);
 }
 
 /// Returns the line start positions for source code position mapping.
 /// Each element represents the byte offset where a new line begins.
 pub fn getLineStarts(self: *const Self) []const u32 {
     return self.common.getLineStartsAll();
+}
+
+test "NumeralLiteral: serialized bytes are a function of the recorded literals" {
+    // The numeral pool is copied verbatim into `Builtin.bin` and into every checked
+    // module cache entry, so its bytes must depend on the literals alone. Before this
+    // struct declared the bytes its 8-byte alignment adds after `flags`, those four
+    // bytes carried whatever the pool's storage last held, and two runs of the same
+    // compilation disagreed there.
+    const gpa = std.testing.allocator;
+
+    const Build = struct {
+        fn pool(allocator: std.mem.Allocator, poison: u8) std.mem.Allocator.Error!NumeralLiteral.SafeList {
+            var list = try NumeralLiteral.SafeList.initCapacity(allocator, 8);
+            errdefer list.deinit(allocator);
+            for (0..5) |_| _ = try list.append(allocator, std.mem.zeroes(NumeralLiteral));
+            // Poison each row, then write its fields one at a time. A whole-struct store
+            // may overwrite an undeclared gap with the temporary's own bytes, so putting
+            // the stale bytes in deliberately is what makes this test able to fail.
+            for (list.items.items, 0..) |*slot, i| {
+                @memset(std.mem.asBytes(slot), poison);
+                slot.node_idx = @intCast(i);
+                slot.digits_start = @intCast(i * 4);
+                slot.before_len = @intCast(i);
+                slot.after_len = @intCast(i + 1);
+                slot.after_decimal_digit_count = i;
+                slot.flags = NumeralLiteral.materialized_flag;
+                slot._reserved = 0;
+            }
+            return list;
+        }
+
+        fn serialize(
+            allocator: std.mem.Allocator,
+            list: *const NumeralLiteral.SafeList,
+        ) (std.mem.Allocator.Error || error{BufferTooSmall})![]align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 {
+            var writer = CompactWriter.init();
+            defer writer.deinit(allocator);
+            const serialized = try writer.appendAlloc(allocator, NumeralLiteral.SafeList.Serialized);
+            try serialized.serialize(list, allocator, &writer);
+            const buffer = try allocator.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+            errdefer allocator.free(buffer);
+            _ = try writer.writeToBuffer(buffer);
+            return buffer;
+        }
+    };
+
+    var over_ones = try Build.pool(gpa, 0xAA);
+    defer over_ones.deinit(gpa);
+    var over_fives = try Build.pool(gpa, 0x55);
+    defer over_fives.deinit(gpa);
+
+    const ones_bytes = try Build.serialize(gpa, &over_ones);
+    defer gpa.free(ones_bytes);
+    const fives_bytes = try Build.serialize(gpa, &over_fives);
+    defer gpa.free(fives_bytes);
+
+    try std.testing.expectEqualSlices(u8, ones_bytes, fives_bytes);
+
+    // No poison survives anywhere in the output, including the bytes after `flags`.
+    try std.testing.expect(std.mem.findScalar(u8, ones_bytes, 0xAA) == null);
+    try std.testing.expect(std.mem.findScalar(u8, ones_bytes, 0x55) == null);
+
+    // And the literals themselves round-trip.
+    const serialized: *const NumeralLiteral.SafeList.Serialized = @ptrCast(@alignCast(ones_bytes.ptr));
+    const loaded = serialized.deserializeInto(@intFromPtr(ones_bytes.ptr));
+    try std.testing.expectEqual(@as(u64, 5), loaded.len());
+    for (0..5) |i| {
+        const literal = loaded.get(@enumFromInt(@as(u32, @intCast(i)))).*;
+        try std.testing.expectEqual(@as(u32, @intCast(i)), literal.node_idx);
+        try std.testing.expectEqual(@as(u64, i), literal.after_decimal_digit_count);
+        try std.testing.expect(literal.isMaterialized());
+    }
 }

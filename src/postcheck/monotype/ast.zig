@@ -3,6 +3,7 @@
 //! This is closed, monomorphic, and source-level dispatch-free.
 
 const std = @import("std");
+const TypeDigestHasher = @import("base").TypeDigestHasher;
 const base = @import("base");
 const check = @import("check");
 const can = @import("can");
@@ -27,14 +28,8 @@ pub fn ProgramSpanBorrow(comptime T: type, comptime field_name: []const u8) type
     return GuardedList.BorrowSpan(T, "monotype.Program." ++ field_name);
 }
 
-/// Monotype ids are local to the `ProgramView` or mapped shard that owns the
-/// corresponding side array. In particular, expression, pattern, statement,
-/// local, definition, function, string-literal, compile-time-site, and type ids
-/// must not be interpreted against another shard's arrays. Cross-shard function
-/// references are represented only by `FnSlot.imported`, whose `ImportedFnId`
-/// indexes an import table entry containing the target `ShardId` and local
-/// `FnId` inside that shard. Specialization records store local `FnId`s because
-/// a record belongs to exactly one shard.
+/// Monotype ids are local to the `ProgramView` that owns the corresponding side
+/// array and must not be interpreted against another program's arrays.
 /// Identifier for an expression in Monotype IR.
 pub const ExprId = enum(u32) { _ };
 /// Identifier for a pattern in Monotype IR.
@@ -47,10 +42,6 @@ pub const NestedDefId = enum(u32) { _ };
 pub const FnId = enum(u32) { _ };
 /// Identifier for a specialization record in a Monotype program.
 pub const SpecId = enum(u32) { _ };
-/// Identifier for a loaded specialization shard. Shard 0 is the current build.
-pub const ShardId = enum(u32) { local = 0, _ };
-/// Identifier for an imported function entry in a Monotype program view.
-pub const ImportedFnId = enum(u32) { _ };
 /// Identifier for a local binding in Monotype IR.
 pub const LocalId = enum(u32) { _ };
 /// Identifier for a lexically scoped Monotype Lifted join point.
@@ -66,22 +57,73 @@ pub const StringLiteralId = enum(u32) { _ };
 /// Identifier for a compile-time-observed control-flow site.
 pub const ComptimeSiteId = enum(u32) { _ };
 
+/// Checked-blob identity borrowed only while a body draft is being built.
+pub const ConstBlobView = struct {
+    module_bytes: [32]u8,
+    data: check.ConstStore.ConstBlobDataId,
+    bytes: []const u8,
+};
+
+/// Shared immutable storage for restored blobs. IR copies retain ownership;
+/// they never copy the payload or retain a pointer into a checked module.
+pub const SharedLiteralBacking = struct {
+    allocator: std.mem.Allocator,
+    bytes: []const u8,
+    refs: std.atomic.Value(usize) = .init(1),
+
+    fn init(allocator: std.mem.Allocator, bytes: []const u8) std.mem.Allocator.Error!*SharedLiteralBacking {
+        const owned = try allocator.dupe(u8, bytes);
+        errdefer allocator.free(owned);
+        const self = try allocator.create(SharedLiteralBacking);
+        self.* = .{ .allocator = allocator, .bytes = owned };
+        return self;
+    }
+    /// Retain the immutable backing when another IR takes ownership.
+    pub fn retain(self: *SharedLiteralBacking) void {
+        _ = self.refs.fetchAdd(1, .monotonic);
+    }
+    /// Release ownership, freeing the backing after its final user.
+    pub fn release(self: *SharedLiteralBacking) void {
+        if (self.refs.fetchSub(1, .acq_rel) == 1) {
+            const allocator = self.allocator;
+            allocator.free(self.bytes);
+            allocator.destroy(self);
+        }
+    }
+};
+
+const ConstBlobKey = struct { module_bytes: [32]u8, data: check.ConstStore.ConstBlobDataId };
+
 /// Owned string bytes plus the exact slice used by this literal.
 pub const StringLiteral = struct {
     backing: []const u8,
+    shared: ?*SharedLiteralBacking = null,
     offset: u32,
     len: u32,
+
+    /// Release this literal's owned or shared backing.
+    pub fn deinit(self: StringLiteral, allocator: std.mem.Allocator) void {
+        if (self.shared) |owner| owner.release() else allocator.free(self.backing);
+    }
+
+    /// Copy literal metadata and retain shared constant payloads.
+    pub fn clone(self: StringLiteral, allocator: std.mem.Allocator) std.mem.Allocator.Error!StringLiteral {
+        var result = self;
+        if (self.shared) |owner| owner.retain() else result.backing = try allocator.dupe(u8, self.backing);
+        return result;
+    }
 
     pub fn text(self: StringLiteral) []const u8 {
         return self.backing[self.offset..][0..self.len];
     }
 };
 
-/// Readonly packed scalar-list data carried without one expression per item.
+/// Readonly packed list data carried without one expression per item.
 pub const PackedListLiteral = struct {
     literal: StringLiteralId,
     len: u32,
-    element: check.ConstStore.ConstPackedScalar,
+    element: ?check.ConstStore.ConstPackedScalar,
+    product_width: u32 = 0,
 };
 
 /// Slice descriptor over one of the program side arrays.
@@ -162,11 +204,26 @@ pub const CodecContractIdentity = struct {
 
 /// Function template plus source and monomorphic type identities.
 pub const FnTemplate = struct {
+    /// Identity in the common frozen Monotype owner, stamped by lifting.
+    /// Consumer-specific symbols and layout specializations never replace it.
+    frozen_fn: ?FnId = null,
+    /// Exact callable worker specialization key, emitted by SpecConstr:
+    /// SHA-256 template, callable-ABI, and capture-ABI digests in that order.
+    frozen_worker: ?[96]u8 = null,
     fn_def: FnDef,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     mono_fn_ty: Type.TypeId,
     evidence_digest: EvidenceDigest = .{},
+    /// `specIdentityKey` of the specialization this template was reserved
+    /// for: the key an object-cache lookup can compute at reservation time,
+    /// before the body exists. Null for functions that are not template
+    /// specializations.
+    spec_key: ?names.TypeDigest = null,
+    /// Set when the object cache served this specialization: the body is
+    /// never lowered, and Direct LIR emits an external procedure that the
+    /// object writer fills from the cache entry.
+    cached: ?Common.SpecCacheHit = null,
     /// Explicit dispatch selections captured when this specialization was
     /// created, retained for compile-time function values.
     const_evidence: Span(check.ConstStore.ConstFnEvidence) = Span(check.ConstStore.ConstFnEvidence).empty(),
@@ -186,16 +243,9 @@ pub const Fn = struct {
     signature_relation: SignatureRelation = .independent_roots,
 };
 
-/// Function imported from another specialization shard.
-pub const ImportedFn = extern struct {
-    shard: ShardId,
-    fn_id: FnId,
-};
-
-/// Direct function slot in a Monotype program shard.
+/// Direct function slot in a Monotype program.
 pub const FnSlot = union(enum(u8)) {
     local: FnId,
-    imported: ImportedFnId,
 };
 
 /// Identifier for a hosted callable in durable specialization identities.
@@ -225,8 +275,20 @@ pub const CallableIdentity = union(enum(u8)) {
     generated: GeneratedId,
 };
 
-/// Full specialization identity: callable plus source function type and the
-/// closed monomorphic function type the reserving call site REQUESTED.
+/// Full specialization identity: the checked callable, the scope and context
+/// its body resolves dispatch in, and the closed monomorphic function type
+/// the reserving call site REQUESTED.
+///
+/// The checked source function type a call site instantiated the callable
+/// from is deliberately absent. The callable says which checked body to
+/// lower; that type is the requesting graph's instantiation context, which
+/// the graph may memoize by. Two call sites reaching the same callable at the
+/// same closed Monotype type, evidence, codec context, and method scope name
+/// ONE specialization even when their checked source types differ—as they do
+/// when one is annotated with a transparent alias of the other's type
+/// (`design.md`). No identity derived from the record may reintroduce that
+/// provenance either: the record keeps whichever requester reserved it, so a
+/// derived identity that read it would disagree between programs.
 ///
 /// The identity is immutable: it is written once when the record is reserved
 /// and never rewritten. Body evidence that refines the requested type is data
@@ -235,16 +297,66 @@ pub const CallableIdentity = union(enum(u8)) {
 pub const SpecIdentity = struct {
     callable: CallableIdentity,
     method_scope: names.CheckedModuleDigest,
-    source_fn_ty_digest: names.TypeDigest,
     evidence_digest: EvidenceDigest,
     /// Exact lowering-only context required by generated codec method bodies.
     /// Zero for ordinary specializations.
     codec_contract_digest: names.TypeDigest,
     /// Exact collision authority for `codec_contract_digest`.
     codec_contract: ?CodecContractIdentity,
+    /// Cached typeEql digest; checked provenance stays on request_fn_ty.
     request_fn_ty_digest: names.TypeDigest,
     request_fn_ty: Type.TypeId,
 };
+
+/// Content key of a specialization identity: the callable rendered by tag
+/// and content plus every digest field except the requesting method scope.
+/// The scope only decides how
+/// dispatch evidence was derived, and the evidence digest already names the
+/// result, so two modules requesting the same specialization get one key.
+/// The request type uses the same cached equality digest as local reservation,
+/// so checked type ids and alias provenance do not change the key. Identical
+/// for the same request in every program, and computable at reservation.
+/// Because the identity carries no caller provenance, neither does this key:
+/// a call site that reaches this specialization through a transparent alias
+/// computes the same key as one that names the backing type.
+pub fn specIdentityKey(identity: SpecIdentity) names.TypeDigest {
+    var hasher = TypeDigestHasher.init();
+    hasher.update("roc.monotype.spec-key.v3");
+    switch (identity.callable) {
+        .proc_template => |template| {
+            hasher.update("proc_template");
+            hasher.update(&template.module.bytes);
+            writeU32(&hasher, template.proc_base);
+            writeU32(&hasher, template.template);
+        },
+        .nested_site => |site| {
+            hasher.update("nested_site");
+            hasher.update(&site.module.bytes);
+            writeU32(&hasher, site.owner_proc_base);
+            writeU32(&hasher, site.owner_template);
+            hasher.update(&site.owner_fn_digest.bytes);
+            writeU32(&hasher, site.site);
+            if (site.default_root_module) |module| {
+                hasher.update("default_root");
+                hasher.update(&module.bytes);
+            } else {
+                hasher.update("no_default_root");
+            }
+        },
+        .hosted => |hosted| {
+            hasher.update("hosted");
+            writeU32(&hasher, @intFromEnum(hosted));
+        },
+        .generated => |generated| {
+            hasher.update("generated");
+            writeU32(&hasher, @intFromEnum(generated));
+        },
+    }
+    hasher.update(&identity.evidence_digest.bytes);
+    hasher.update(&identity.codec_contract_digest.bytes);
+    hasher.update(&identity.request_fn_ty_digest.bytes);
+    return .{ .bytes = hasher.finalResult() };
+}
 
 /// Lifecycle state for a specialization record.
 pub const SpecStatus = enum(u8) {
@@ -271,20 +383,67 @@ pub const SpecRecord = struct {
     status: SpecStatus,
 };
 
-/// Compare the fields that make two function templates identical for Monotype.
+/// The body key `source_fn_key` holds for a compiler-generated callable, or
+/// null when `fn_def` already names the body.
+///
+/// The slot has two readings, decided by callable kind (`design.md`). For a
+/// checked template, nested function, or hosted procedure it is the checked
+/// type the REQUESTER instantiated the callable from: caller provenance, which
+/// identity must drop, since a record keeps whichever requester reserved it.
+/// For a generated body—an interpolation or field-names step, a parser or
+/// encoder runtime, a generated encoder callback—the producer has no checked
+/// declaration to name and writes the body's own identity there instead;
+/// several such bodies share one `fn_def`, evidence, and Monotype type, so
+/// identity must keep it.
+///
+/// `checked_generated` also covers an unavailable-hosted crash stub and a
+/// result-row widening adapter, whose slot is provenance. Keying that kind
+/// here keeps those two conservatively distinct per requester: it costs reuse
+/// and cannot lose a distinction, and neither is an object-cache entry, so no
+/// key can disagree with their identity.
+pub fn generatedBodyKey(template: FnTemplate) ?names.TypeDigest {
+    return switch (template.fn_def) {
+        .checked_generated,
+        .parser_runtime,
+        .encoder_for_runtime,
+        => template.source_fn_key,
+        .local_template,
+        .imported_template,
+        .nested,
+        .local_hosted,
+        .imported_hosted,
+        => null,
+    };
+}
+
+/// Compare the fields that make two function templates identical for Monotype:
+/// the checked callable, the generated-body key when the callable has one, its
+/// dispatch evidence, and the Monotype type it was requested at. Caller
+/// provenance is deliberately absent (see `generatedBodyKey`).
 pub fn fnTemplateIdentityEql(lhs: FnTemplate, rhs: FnTemplate) bool {
-    return std.meta.eql(lhs.fn_def, rhs.fn_def) and
-        std.mem.eql(u8, lhs.source_fn_key.bytes[0..], rhs.source_fn_key.bytes[0..]) and
-        std.mem.eql(u8, lhs.evidence_digest.bytes[0..], rhs.evidence_digest.bytes[0..]) and
+    if (!std.meta.eql(lhs.fn_def, rhs.fn_def)) return false;
+    const lhs_body = generatedBodyKey(lhs);
+    const rhs_body = generatedBodyKey(rhs);
+    if ((lhs_body == null) != (rhs_body == null)) return false;
+    if (lhs_body) |lhs_key| {
+        if (!std.mem.eql(u8, lhs_key.bytes[0..], rhs_body.?.bytes[0..])) return false;
+    }
+    return std.mem.eql(u8, lhs.evidence_digest.bytes[0..], rhs.evidence_digest.bytes[0..]) and
         lhs.mono_fn_ty == rhs.mono_fn_ty;
 }
 
-/// Compute a digest for a Monotype function template. Takes the type store
-/// mutable because type digests are computed through the store's cache.
+/// Compute a digest for a Monotype function template, over exactly the fields
+/// `fnTemplateIdentityEql` compares. Takes the type store mutable because type
+/// digests are computed through the store's cache.
 pub fn fnTemplateDigest(template: FnTemplate, types: *Type.Store, name_store: *const names.NameStore) names.TypeDigest {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    writeFnDef(&hasher, template.fn_def);
-    writeBytes(&hasher, &template.source_fn_key.bytes);
+    var hasher = TypeDigestHasher.init();
+    writeFnDef(&hasher, name_store, template.fn_def);
+    if (generatedBodyKey(template)) |body_key| {
+        writeBytes(&hasher, "generated_body");
+        writeBytes(&hasher, &body_key.bytes);
+    } else {
+        writeBytes(&hasher, "no_generated_body");
+    }
     writeBytes(&hasher, &template.evidence_digest.bytes);
     const mono_digest = types.specializationDigest(name_store, template.mono_fn_ty);
     writeBytes(&hasher, &mono_digest.bytes);
@@ -298,8 +457,8 @@ pub fn fnEvidenceDigest(
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
 ) EvidenceDigest {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    writeBytes(&hasher, "roc.monotype.fn_evidence.v3");
+    var hasher = TypeDigestHasher.init();
+    writeBytes(&hasher, "roc.monotype.fn_evidence.v5");
     writeU32(&hasher, @intCast(evidence.len));
     for (evidence) |entry| {
         writeU8(&hasher, @intFromEnum(entry));
@@ -338,7 +497,6 @@ pub fn fnEvidenceDigest(
                 } else writeU8(&hasher, 0);
             },
             .from_callable => |use| {
-                writeU32(&hasher, use.index);
                 writeU8(&hasher, @intFromBool(use.independent_callable));
             },
             .from_scheme => |index| writeU32(&hasher, index),
@@ -422,7 +580,7 @@ fn methodTargetIdentityEql(
 }
 
 fn writeMethodTarget(
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *TypeDigestHasher,
     target: static_dispatch.MethodTarget,
     callable_key: names.CanonicalTypeKey,
 ) void {
@@ -448,7 +606,7 @@ fn writeMethodTarget(
     writeBytes(hasher, &callable_key.bytes);
 }
 
-fn writeStructuralDerivation(hasher: *std.crypto.hash.sha2.Sha256, derivation: static_dispatch.StructuralDerivation) void {
+fn writeStructuralDerivation(hasher: *TypeDigestHasher, derivation: static_dispatch.StructuralDerivation) void {
     writeU8(hasher, @intFromEnum(derivation));
     switch (derivation) {
         .map, .map_effectful => |plan| {
@@ -459,7 +617,7 @@ fn writeStructuralDerivation(hasher: *std.crypto.hash.sha2.Sha256, derivation: s
     }
 }
 
-fn writeOptionalU32(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
+fn writeOptionalU32(hasher: *TypeDigestHasher, value: ?u32) void {
     if (value) |actual| {
         writeU8(hasher, 1);
         writeU32(hasher, actual);
@@ -507,29 +665,42 @@ test "function evidence identity uses checked callable type keys" {
     try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
 
     const symbolic_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
-        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 2),
     };
-    const symbolic_left = [_]check.ConstStore.ConstFnEvidence{.{
-        .from_callable = .{ .index = 0, .independent_callable = false },
-    }};
-    const symbolic_right = [_]check.ConstStore.ConstFnEvidence{.{
-        .from_callable = .{ .index = 1, .independent_callable = false },
-    }};
+    const symbolic_left = [_]check.ConstStore.ConstFnEvidence{
+        .{ .from_callable = .{ .independent_callable = false } },
+        .unreachable_value,
+    };
+    const symbolic_right = [_]check.ConstStore.ConstFnEvidence{
+        .unreachable_value,
+        .{ .from_callable = .{ .independent_callable = false } },
+    };
+    // The vector position owns the symbolic requirement's identity.
     try std.testing.expect(!fnEvidenceEql(&symbolic_left, &symbolic_frames, 0, &symbolic_right, &symbolic_frames, 0));
     try std.testing.expect(!std.meta.eql(
         fnEvidenceDigest(&symbolic_left, &symbolic_frames, 0),
         fnEvidenceDigest(&symbolic_right, &symbolic_frames, 0),
     ));
+    var independent = symbolic_left;
+    independent[0].from_callable.independent_callable = true;
+    try std.testing.expect(!fnEvidenceEql(&symbolic_left, &symbolic_frames, 0, &independent, &symbolic_frames, 0));
+    try std.testing.expect(!std.meta.eql(
+        fnEvidenceDigest(&symbolic_left, &symbolic_frames, 0),
+        fnEvidenceDigest(&independent, &symbolic_frames, 0),
+    ));
 }
 
-fn writeFnDef(hasher: *std.crypto.hash.sha2.Sha256, fn_def: FnDef) void {
+fn writeFnDef(hasher: *TypeDigestHasher, name_store: *const names.NameStore, fn_def: FnDef) void {
+    // Whether a template was requested from its own module or from an
+    // importer changes nothing about the code it lowers to, so both spellings
+    // digest alike.
     switch (fn_def) {
         .local_template => |template| {
-            writeBytes(hasher, "local_template");
+            writeBytes(hasher, "template");
             writeProcTemplate(hasher, template);
         },
         .imported_template => |template| {
-            writeBytes(hasher, "imported_template");
+            writeBytes(hasher, "template");
             writeProcTemplate(hasher, template);
         },
         .nested => |nested| {
@@ -551,12 +722,12 @@ fn writeFnDef(hasher: *std.crypto.hash.sha2.Sha256, fn_def: FnDef) void {
             }
         },
         .local_hosted => |hosted| {
-            writeBytes(hasher, "local_hosted");
-            writeHostedFn(hasher, hosted);
+            writeBytes(hasher, "hosted");
+            writeHostedFn(hasher, name_store, hosted);
         },
         .imported_hosted => |hosted| {
-            writeBytes(hasher, "imported_hosted");
-            writeHostedFn(hasher, hosted);
+            writeBytes(hasher, "hosted");
+            writeHostedFn(hasher, name_store, hosted);
         },
         .checked_generated => |template| {
             writeBytes(hasher, "checked_generated");
@@ -575,29 +746,30 @@ fn writeFnDef(hasher: *std.crypto.hash.sha2.Sha256, fn_def: FnDef) void {
     }
 }
 
-fn writeHostedFn(hasher: *std.crypto.hash.sha2.Sha256, hosted: HostedFn) void {
+fn writeHostedFn(hasher: *TypeDigestHasher, name_store: *const names.NameStore, hosted: HostedFn) void {
+    // The dispatch slot is assigned per program and is not part of the code
+    // the hosted function names.
     writeProcTemplate(hasher, hosted.template);
-    writeU32(hasher, @intFromEnum(hosted.external_symbol_name));
-    writeU32(hasher, hosted.dispatch_index);
+    writeBytes(hasher, name_store.externalSymbolNameText(hosted.external_symbol_name));
 }
 
-fn writeProcTemplate(hasher: *std.crypto.hash.sha2.Sha256, template: names.ProcTemplate) void {
+fn writeProcTemplate(hasher: *TypeDigestHasher, template: names.ProcTemplate) void {
     const module_digest = names.procTemplateModuleDigest(template);
     hasher.update(&module_digest.bytes);
     writeU32(hasher, @intFromEnum(template.proc_base));
     writeU32(hasher, @intFromEnum(template.template));
 }
 
-fn writeBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+fn writeBytes(hasher: *TypeDigestHasher, bytes: []const u8) void {
     writeU32(hasher, @intCast(bytes.len));
     hasher.update(bytes);
 }
 
-fn writeU8(hasher: *std.crypto.hash.sha2.Sha256, value: u8) void {
+fn writeU8(hasher: *TypeDigestHasher, value: u8) void {
     hasher.update(&.{value});
 }
 
-fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+fn writeU32(hasher: *TypeDigestHasher, value: u32) void {
     const little = std.mem.nativeToLittle(u32, value);
     hasher.update(std.mem.asBytes(&little));
 }
@@ -613,9 +785,9 @@ pub const Local = struct {
     /// replaces every non-null value with the final local's program-global
     /// post-check identity.
     capture_id: ?checked.CaptureId = null,
-    /// Checked-stage identity used only when a compile-time result stores this
-    /// capture back into `ConstStore`. This provenance is never a runtime
-    /// capture join key.
+    /// Checked capture provenance for pre-lift target-key normalization and
+    /// `ConstStore` publication. Alternative binders use their arm's
+    /// representative key; durable runtime capture identity remains separate.
     checked_capture_id: ?checked.CaptureId = null,
 };
 
@@ -663,7 +835,7 @@ pub const CallValue = struct {
 /// One explicit capture operand supplied at a lifted function reference /
 /// direct call site. `id` is the `CaptureId` of the target function's capture
 /// slot this operand fills; `value` is the expression that supplies it. Operand
-/// spans are stored sorted by `id`, parallel to the target's canonically-sorted
+/// spans after lifting are sorted by `id`, parallel to the target's canonically-sorted
 /// capture slots, so every operand↔slot join is an exact keyed lookup with no
 /// load-bearing order. At the lift boundary, the id's namespace explicitly
 /// distinguishes a provisional checked key from an already-lifted key.
@@ -680,16 +852,10 @@ pub const LiftedFunctionValue = struct {
     captures: Span(CaptureOperand) = Span(CaptureOperand).empty(),
 };
 
-/// Explicit operand for one checked closure capture before lifting. The `local`
-/// identifies the checked capture in the closure creation context; `value` is
-/// the expression that supplies it there. At the lift boundary, both this local
-/// and the target slot use their checked capture identity when present and their
-/// generated capture identity otherwise. Lifting joins only on that explicit
-/// provisional key, then records the operand with the target's lifted key.
-pub const FnDefCapture = struct {
-    local: LocalId,
-    value: ExprId,
-};
+/// Explicit operand for one closure capture before lifting. The producer records
+/// the target slot's provisional key independently of the supplying expression.
+/// Lifting normalizes this key through the target slot's identity exactly once.
+pub const FnDefCapture = CaptureOperand;
 
 /// Reference to a Monotype function value before lifting. `captures` contains
 /// keyed explicit values recorded at the checked closure creation site.
@@ -712,11 +878,6 @@ pub fn localProcCallee(fn_id: FnId) ProcCallee {
 /// Construct a direct call target from an already-resolved function slot.
 pub fn procCalleeForSlot(slot: FnSlot) ProcCallee {
     return .{ .func = slot };
-}
-
-/// Construct a direct call target for a function imported from a loaded shard.
-pub fn importedProcCallee(imported: ImportedFnId) ProcCallee {
-    return .{ .func = .{ .imported = imported } };
 }
 
 /// Direct call to a known function.
@@ -860,6 +1021,11 @@ pub const ComptimeSiteKind = enum(u8) {
 /// Metadata for one compile-time-observed control-flow site.
 pub const ComptimeSite = struct {
     kind: ComptimeSiteKind,
+    /// Checked module whose exhaustiveness-site ids and source regions this
+    /// site names. A specialization may lower an imported body, so the site's
+    /// owner is not the program's root module and cannot be recovered from
+    /// the procedure the site ends up in.
+    owner: Common.LoweringModuleId,
     region: base.Region,
     checked_site: ?checked.CheckedExhaustivenessSiteId = null,
     branch_regions: []const base.Region = &.{},
@@ -878,9 +1044,17 @@ pub const Expr = struct {
     data: ExprData,
 };
 
+/// An immutable root-slot read. The initializer supplies representation and
+/// lambda-set evidence; it is never evaluated by the read itself.
+pub const ComptimeValue = struct {
+    root: Common.ComptimeValueRootId,
+    initializer: ExprId,
+};
+
 /// A restored compile-time value that may lower to static data once the final
 /// LIR const plan and target layout are known.
 pub const StaticDataCandidate = struct {
+    storage: Common.StaticDataStorage,
     static_data: Common.StaticDataId,
     runtime_expr: ExprId,
 };
@@ -914,6 +1088,9 @@ pub const ExprData = union(enum(u8)) {
     str_lit: StringLiteralId,
     bytes_lit: PackedListLiteral,
     static_data_candidate: StaticDataCandidate,
+    /// Explicit consumer input: opaque until target LIR selects run/omit.
+    inline_expects_enabled: void,
+    comptime_value: ComptimeValue,
     typed_boundary: TypedBoundary,
     list: Span(ExprId),
     tuple: Span(ExprId),
@@ -1105,6 +1282,10 @@ pub const Def = struct {
     symbol: Common.Symbol,
     fn_def: ?FnTemplate = null,
     fn_id: ?FnId = null,
+    /// Content identity of a definition that has no function template: a
+    /// static-data request thunk or a procedure-binding root, identified by
+    /// the checked request that produced it. Null when `fn_def` is present.
+    root_identity: ?names.TypeDigest = null,
     args: Span(TypedLocal),
     body: FnBody,
     ret: Type.TypeId,
@@ -1182,6 +1363,10 @@ fn procDebugNameInSlice(entries: []const ProcDebugName, symbol: Common.Symbol) ?
 pub const Root = struct {
     def: DefId,
     request: checked.RootRequest,
+    /// Checked module that owns this request's compile-time root id and
+    /// checked types. A lowering unions several modules' root requests, so
+    /// concatenation position is not an owner.
+    owner: Common.LoweringModuleId,
 };
 
 /// Runtime layout requested for a checked data value.
@@ -1208,8 +1393,6 @@ pub const CallTargetVerifyError = enum {
     local_fn_type_not_function,
     local_fn_definition_arity_mismatch,
     local_call_arity_mismatch,
-    imported_fn_out_of_bounds,
-    imported_local_fn_out_of_bounds,
     lifted_fn_before_lifting,
 };
 
@@ -1230,13 +1413,11 @@ pub const CompletedTypeIdVerifyError = enum {
 
 /// Read-only Monotype program view.
 ///
-/// Today this view borrows the builder-owned arrays in `Program`. The durable
-/// specialization-cache form should expose the same shape from mapped sections.
+/// This view borrows the builder-owned arrays in `Program`.
 pub const ProgramView = struct {
     names: *const names.NameStore,
     types: Type.Store.View,
     specs: []const SpecRecord,
-    imported_fns: []const ImportedFn,
     fns: []const Fn,
     const_fn_evidence: []const check.ConstStore.ConstFnEvidence,
     const_fn_evidence_frames: []const check.ConstStore.ConstFnEvidenceFrame,
@@ -1262,9 +1443,16 @@ pub const ProgramView = struct {
     proc_debug_names: []const ProcDebugName,
     roots: []const Root,
     layout_requests: []const LayoutRequest,
+    /// Evaluated roots this program reads a completed value of, recorded once
+    /// each. Whoever materializes those values consumes this instead of
+    /// rediscovering the reads.
+    comptime_value_reads: []const Common.ComptimeValueRoot,
     runtime_schema_requests: []const RuntimeSchemaRequest,
     static_data_values: []const StaticDataValue,
+    comptime_value_roots: []const Common.ComptimeValueRoot,
     comptime_sites: []const ComptimeSite,
+    /// See `ProgramBuilder.lowering_modules`.
+    lowering_modules: []const checked.ModuleId,
     source_files: []const base.SourceFileEntry,
     expr_locs: []const base.SourceLoc,
     expr_regions: []const base.Region,
@@ -1272,6 +1460,10 @@ pub const ProgramView = struct {
     stmt_regions: []const base.Region,
     local_names: []const []const u8,
     next_symbol: u32,
+
+    pub fn getComptimeValueRoot(self: ProgramView, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
+        return self.comptime_value_roots[@intFromEnum(id)];
+    }
 
     pub fn fnSource(self: ProgramView, id: FnId) FnTemplate {
         const raw = @intFromEnum(id);
@@ -1357,12 +1549,6 @@ pub const ProgramView = struct {
     }
 
     pub fn verifyCallTargets(self: ProgramView) ?CallTargetVerifyError {
-        for (self.imported_fns) |imported| {
-            if (imported.shard == .local and @intFromEnum(imported.fn_id) >= self.fns.len) {
-                return .imported_local_fn_out_of_bounds;
-            }
-        }
-
         for (self.defs) |def| {
             if (def.fn_id) |fn_id| {
                 if (self.verifyFnDefinition(fn_id, def.args)) |err| return err;
@@ -1385,9 +1571,6 @@ pub const ProgramView = struct {
                         const fn_ty = self.types.get(self.fns[raw_fn].source.mono_fn_ty);
                         if (std.meta.activeTag(fn_ty) != .func) return .local_fn_type_not_function;
                         if (fn_ty.func.args.len != call.args.len) return .local_call_arity_mismatch;
-                    },
-                    .imported => |imported| {
-                        if (@intFromEnum(imported) >= self.imported_fns.len) return .imported_fn_out_of_bounds;
                     },
                 },
                 .lifted => return .lifted_fn_before_lifting,
@@ -1419,7 +1602,6 @@ pub const ProgramBuilder = struct {
     next_symbol: u32,
     types: Type.Store,
     specs: ProgramList(SpecRecord, "specs"),
-    imported_fns: ProgramList(ImportedFn, "imported_fns"),
     fns: ProgramList(Fn, "fns"),
     const_fn_evidence: ProgramList(check.ConstStore.ConstFnEvidence, "const_fn_evidence"),
     const_fn_evidence_frames: ProgramList(check.ConstStore.ConstFnEvidenceFrame, "const_fn_evidence_frames"),
@@ -1445,12 +1627,22 @@ pub const ProgramBuilder = struct {
     branches: ProgramList(Branch, "branches"),
     if_branches: ProgramList(IfBranch, "if_branches"),
     string_literals: ProgramList(StringLiteral, "string_literals"),
+    const_blob_backings: std.AutoHashMapUnmanaged(ConstBlobKey, *SharedLiteralBacking) = .empty,
     proc_debug_names: ProcDebugNameMap,
     roots: ProgramList(Root, "roots"),
     layout_requests: ProgramList(LayoutRequest, "layout_requests"),
+    /// See `ProgramView.comptime_value_reads`.
+    comptime_value_reads: ProgramList(Common.ComptimeValueRoot, "comptime_value_reads"),
     runtime_schema_requests: ProgramList(RuntimeSchemaRequest, "runtime_schema_requests"),
     static_data_values: ProgramList(StaticDataValue, "static_data_values"),
+    /// Immutable descriptors live outside hot expression rows.
+    comptime_value_roots: ProgramList(Common.ComptimeValueRoot, "comptime_value_roots") = .empty,
     comptime_sites: ProgramList(ComptimeSite, "comptime_sites"),
+    /// Every checked module of this lowering's input, in one canonical order,
+    /// addressed by `Common.LoweringModuleId`. Seeded once before any body is
+    /// lowered and never appended to afterwards, so the rows that carry a
+    /// module-local checked id name their owner explicitly.
+    lowering_modules: ProgramList(checked.ModuleId, "lowering_modules") = .empty,
     /// Source file table for `SourceLoc.file` indices (module display and
     /// package-qualified names, owned by this program).
     source_files: ProgramList(base.SourceFileEntry, "source_files"),
@@ -1479,7 +1671,6 @@ pub const ProgramBuilder = struct {
             .next_symbol = 0,
             .types = Type.Store.init(allocator),
             .specs = .empty,
-            .imported_fns = .empty,
             .fns = .empty,
             .const_fn_evidence = .empty,
             .const_fn_evidence_frames = .empty,
@@ -1505,9 +1696,11 @@ pub const ProgramBuilder = struct {
             .proc_debug_names = ProcDebugNameMap.init(allocator),
             .roots = .empty,
             .layout_requests = .empty,
+            .comptime_value_reads = .empty,
             .runtime_schema_requests = .empty,
             .static_data_values = .empty,
             .comptime_sites = .empty,
+            .lowering_modules = .empty,
             .source_files = .empty,
             .expr_locs = .empty,
             .expr_regions = .empty,
@@ -1517,6 +1710,61 @@ pub const ProgramBuilder = struct {
             .current_loc = base.SourceLoc.none,
             .current_region = base.Region.zero(),
         };
+    }
+
+    /// Fork the immutable specialization output while preserving every id.
+    /// The fork owns its arrays and diagnostic/literal bytes independently.
+    pub fn cloneFrozen(self: *const ProgramBuilder, allocator: std.mem.Allocator) std.mem.Allocator.Error!ProgramBuilder {
+        if (!self.types.isFrozen()) Common.invariant("Monotype cloning requires a frozen program");
+        var result = ProgramBuilder.init(allocator);
+        errdefer result.deinit();
+        result.names = try self.names.clone(allocator);
+        result.types = try self.types.cloneFrozen(allocator);
+        try result.comptime_value_roots.appendSlice(allocator, self.comptime_value_roots.unsafeRawItemsForView());
+        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "layout_requests", "comptime_value_reads", "runtime_schema_requests", "static_data_values", "lowering_modules", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
+            try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
+        }
+        try result.proc_debug_names.items.appendSlice(allocator, self.proc_debug_names.view());
+        for (self.string_literals.unsafeRawItemsForView()) |literal| {
+            var copied = literal;
+            copied.backing = try allocator.dupe(u8, literal.backing);
+            result.string_literals.append(allocator, copied) catch |err| {
+                allocator.free(copied.backing);
+                return err;
+            };
+        }
+        for (self.source_files.unsafeRawItemsForView()) |file| {
+            var copied = file;
+            copied.name = try allocator.dupe(u8, file.name);
+            copied.qualified_name = allocator.dupe(u8, file.qualified_name) catch |err| {
+                allocator.free(copied.name);
+                return err;
+            };
+            result.source_files.append(allocator, copied) catch |err| {
+                allocator.free(copied.name);
+                allocator.free(copied.qualified_name);
+                return err;
+            };
+        }
+        for (self.comptime_sites.unsafeRawItemsForView()) |site| {
+            var copied = site;
+            copied.branch_regions = try allocator.dupe(base.Region, site.branch_regions);
+            result.comptime_sites.append(allocator, copied) catch |err| {
+                allocator.free(copied.branch_regions);
+                return err;
+            };
+        }
+        for (self.local_names.unsafeRawItemsForView()) |name| {
+            const copied = try allocator.dupe(u8, name);
+            result.local_names.append(allocator, copied) catch |err| {
+                allocator.free(copied);
+                return err;
+            };
+        }
+        result.next_symbol = self.next_symbol;
+        result.current_loc = self.current_loc;
+        result.current_region = self.current_region;
+        return result;
     }
 
     pub fn deinit(self: *ProgramBuilder) void {
@@ -1537,12 +1785,18 @@ pub const ProgramBuilder = struct {
             self.allocator.free(site.branch_regions);
         }
         self.comptime_sites.deinit(self.allocator);
+        self.lowering_modules.deinit(self.allocator);
+        self.comptime_value_roots.deinit(self.allocator);
         self.static_data_values.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
+        self.comptime_value_reads.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.proc_debug_names.deinit();
-        for (self.string_literals.unsafeRawItemsForView()) |literal| self.allocator.free(literal.backing);
+        for (self.string_literals.unsafeRawItemsForView()) |literal| literal.deinit(self.allocator);
+        var backings = self.const_blob_backings.valueIterator();
+        while (backings.next()) |owner| owner.*.release();
+        self.const_blob_backings.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
         self.branches.deinit(self.allocator);
@@ -1565,7 +1819,6 @@ pub const ProgramBuilder = struct {
         self.fns.deinit(self.allocator);
         self.const_fn_evidence.deinit(self.allocator);
         self.const_fn_evidence_frames.deinit(self.allocator);
-        self.imported_fns.deinit(self.allocator);
         self.specs.deinit(self.allocator);
         self.types.deinit();
         self.names.deinit();
@@ -1615,16 +1868,6 @@ pub const ProgramBuilder = struct {
 
     pub fn fnsView(self: *const ProgramBuilder) []const Fn {
         return self.fns.unsafeRawItemsForView();
-    }
-
-    pub fn addImportedFn(self: *ProgramBuilder, imported: ImportedFn) std.mem.Allocator.Error!ImportedFnId {
-        const id: ImportedFnId = @enumFromInt(@as(u32, @intCast(self.imported_fns.len())));
-        try self.imported_fns.append(self.allocator, imported);
-        return id;
-    }
-
-    pub fn importedFnsView(self: *const ProgramBuilder) []const ImportedFn {
-        return self.imported_fns.unsafeRawItemsForView();
     }
 
     pub fn addDef(self: *ProgramBuilder, def: Def) std.mem.Allocator.Error!DefId {
@@ -1706,7 +1949,6 @@ pub const ProgramBuilder = struct {
             .names = &self.names,
             .types = self.types.view(),
             .specs = self.specs.unsafeRawItemsForView(),
-            .imported_fns = self.imported_fns.unsafeRawItemsForView(),
             .fns = self.fns.unsafeRawItemsForView(),
             .const_fn_evidence = self.const_fn_evidence.unsafeRawItemsForView(),
             .const_fn_evidence_frames = self.const_fn_evidence_frames.unsafeRawItemsForView(),
@@ -1732,9 +1974,12 @@ pub const ProgramBuilder = struct {
             .proc_debug_names = self.proc_debug_names.view(),
             .roots = self.roots.unsafeRawItemsForView(),
             .layout_requests = self.layout_requests.unsafeRawItemsForView(),
+            .comptime_value_reads = self.comptime_value_reads.unsafeRawItemsForView(),
             .runtime_schema_requests = self.runtime_schema_requests.unsafeRawItemsForView(),
             .static_data_values = self.static_data_values.unsafeRawItemsForView(),
+            .comptime_value_roots = self.comptime_value_roots.unsafeRawItemsForView(),
             .comptime_sites = self.comptime_sites.unsafeRawItemsForView(),
+            .lowering_modules = self.lowering_modules.unsafeRawItemsForView(),
             .source_files = self.source_files.unsafeRawItemsForView(),
             .expr_locs = self.expr_locs.unsafeRawItemsForView(),
             .expr_regions = self.expr_regions.unsafeRawItemsForView(),
@@ -1743,6 +1988,16 @@ pub const ProgramBuilder = struct {
             .local_names = self.local_names.unsafeRawItemsForView(),
             .next_symbol = self.next_symbol,
         };
+    }
+
+    pub fn getComptimeValueRoot(self: *const ProgramBuilder, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
+        return self.comptime_value_roots.get(@intFromEnum(id));
+    }
+
+    pub fn addComptimeValueRoot(self: *ProgramBuilder, root: Common.ComptimeValueRoot) std.mem.Allocator.Error!Common.ComptimeValueRootId {
+        const id: Common.ComptimeValueRootId = @enumFromInt(@as(u32, @intCast(self.comptime_value_roots.len())));
+        try self.comptime_value_roots.append(self.allocator, root);
+        return id;
     }
 
     pub fn addExpr(self: *ProgramBuilder, expr: Expr) std.mem.Allocator.Error!ExprId {
@@ -1829,6 +2084,14 @@ pub const ProgramBuilder = struct {
         return id;
     }
 
+    /// Publish one checked module of this lowering's input and return its
+    /// dense id. Seeding deduplicates; this always appends.
+    pub fn addLoweringModule(self: *ProgramBuilder, key: checked.ModuleId) std.mem.Allocator.Error!Common.LoweringModuleId {
+        const id: Common.LoweringModuleId = @enumFromInt(@as(u32, @intCast(self.lowering_modules.len())));
+        try self.lowering_modules.append(self.allocator, key);
+        return id;
+    }
+
     /// Source location of an expression.
     pub fn exprLoc(self: *const ProgramBuilder, id: ExprId) base.SourceLoc {
         return self.expr_locs.unsafeRawItemsForView()[@intFromEnum(id)];
@@ -1866,6 +2129,7 @@ pub const ProgramBuilder = struct {
     pub fn addComptimeSite(
         self: *ProgramBuilder,
         kind: ComptimeSiteKind,
+        owner: Common.LoweringModuleId,
         region: base.Region,
         checked_site: ?checked.CheckedExhaustivenessSiteId,
         branch_regions: []const base.Region,
@@ -1875,6 +2139,7 @@ pub const ProgramBuilder = struct {
         const id: ComptimeSiteId = @enumFromInt(@as(u32, @intCast(self.comptime_sites.len())));
         try self.comptime_sites.append(self.allocator, .{
             .kind = kind,
+            .owner = owner,
             .region = region,
             .checked_site = checked_site,
             .branch_regions = owned_branch_regions,
@@ -1888,6 +2153,24 @@ pub const ProgramBuilder = struct {
 
     pub fn addStringLiteral(self: *ProgramBuilder, text: []const u8) std.mem.Allocator.Error!StringLiteralId {
         return try self.addStringView(text, 0, @intCast(text.len));
+    }
+
+    /// Restore a view, copying each owner-relative checked blob at most once.
+    pub fn addConstBlobView(self: *ProgramBuilder, module_bytes: [32]u8, data: check.ConstStore.ConstBlobDataId, bytes: []const u8, offset: u32, len: u32) std.mem.Allocator.Error!StringLiteralId {
+        const key = ConstBlobKey{ .module_bytes = module_bytes, .data = data };
+        const owner = self.const_blob_backings.get(key) orelse blk: {
+            const created = try SharedLiteralBacking.init(self.allocator, bytes);
+            self.const_blob_backings.put(self.allocator, key, created) catch |err| {
+                created.release();
+                return err;
+            };
+            break :blk created;
+        };
+        if (@as(u64, offset) + len > owner.bytes.len) Common.invariant("constant blob view exceeded its backing");
+        const id: StringLiteralId = @enumFromInt(@as(u32, @intCast(self.string_literals.len())));
+        try self.string_literals.append(self.allocator, .{ .backing = owner.bytes, .shared = owner, .offset = offset, .len = len });
+        owner.retain();
+        return id;
     }
 
     pub fn addStringView(self: *ProgramBuilder, backing: []const u8, offset: u32, len: u32) std.mem.Allocator.Error!StringLiteralId {
@@ -2008,6 +2291,17 @@ pub const ProgramBuilder = struct {
 
     pub fn addLayoutRequest(self: *ProgramBuilder, request: LayoutRequest) std.mem.Allocator.Error!void {
         try self.layout_requests.append(self.allocator, request);
+    }
+
+    pub fn comptimeValueReadsView(self: *const ProgramBuilder) []const Common.ComptimeValueRoot {
+        return self.comptime_value_reads.unsafeRawItemsForView();
+    }
+
+    /// Record that this program reads one evaluated root's completed value.
+    /// One root is recorded once however many reads it has, which the caller
+    /// owns deciding.
+    pub fn addComptimeValueRead(self: *ProgramBuilder, root: Common.ComptimeValueRoot) std.mem.Allocator.Error!void {
+        try self.comptime_value_reads.append(self.allocator, root);
     }
 
     pub fn runtimeSchemaRequestCount(self: *const ProgramBuilder) usize {
@@ -2268,6 +2562,27 @@ test "monotype ast declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
+test "restored constant blob views share storage across IR ownership transfers" {
+    const gpa = std.testing.allocator;
+    var const_store = check.ConstStore.ConstStore.init(gpa);
+    defer const_store.deinit();
+    const data = try const_store.addBlobData("abcdefgh");
+
+    var program = ProgramBuilder.init(gpa);
+    var program_alive = true;
+    defer if (program_alive) program.deinit();
+    const a = try program.addConstBlobView(@splat(0), data, "abcdefgh", 0, 4);
+    const b = try program.addConstBlobView(@splat(0), data, "abcdefgh", 2, 6);
+    const first = program.string_literals.get(@intFromEnum(a));
+    const second = program.string_literals.get(@intFromEnum(b));
+    try std.testing.expectEqual(first.backing.ptr, second.backing.ptr);
+    const cloned = try second.clone(gpa);
+    defer cloned.deinit(gpa);
+    program.deinit();
+    program_alive = false;
+    try std.testing.expectEqualStrings("cdefgh", cloned.text());
+}
+
 test "final Monotype capture identities preserve direct aliases" {
     var program = Program.init(std.testing.allocator);
     defer program.deinit();
@@ -2301,7 +2616,6 @@ test "monotype program view exposes read-only side arrays" {
         .identity = .{
             .callable = .{ .proc_template = .{ .module = .{}, .proc_base = 0, .template = 0 } },
             .method_scope = .{},
-            .source_fn_ty_digest = .{},
             .evidence_digest = fnEvidenceDigest(&.{}, &.{}, null),
             .codec_contract_digest = .{},
             .codec_contract = null,
@@ -2360,7 +2674,7 @@ test "completed monotype type id verifier requires frozen in-bounds type ids" {
     );
 }
 
-test "monotype call target verifier checks local and imported slots" {
+test "monotype call target verifier checks local slots" {
     {
         var program = Program.init(std.testing.allocator);
         defer program.deinit();
@@ -2373,22 +2687,6 @@ test "monotype call target verifier checks local and imported slots" {
         const fn_id = try program.addFn(testFnSource(fn_ty));
         _ = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
             .callee = localProcCallee(fn_id),
-            .args = Span(ExprId).empty(),
-        } } });
-        try std.testing.expectEqual(@as(?CallTargetVerifyError, null), program.verifyCallTargets());
-    }
-
-    {
-        var program = Program.init(std.testing.allocator);
-        defer program.deinit();
-
-        const unit_ty = try program.types.add(.zst);
-        const imported = try program.addImportedFn(.{
-            .shard = @enumFromInt(1),
-            .fn_id = undefined, // external-shard function id is not inspected by this verifier test
-        });
-        _ = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
-            .callee = importedProcCallee(imported),
             .args = Span(ExprId).empty(),
         } } });
         try std.testing.expectEqual(@as(?CallTargetVerifyError, null), program.verifyCallTargets());
@@ -2455,21 +2753,9 @@ test "monotype call target verifier checks local and imported slots" {
         } } });
         try std.testing.expectEqual(CallTargetVerifyError.local_call_arity_mismatch, program.verifyCallTargets().?);
     }
-
-    {
-        var program = Program.init(std.testing.allocator);
-        defer program.deinit();
-
-        const unit_ty = try program.types.add(.zst);
-        _ = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
-            .callee = importedProcCallee(@enumFromInt(99)),
-            .args = Span(ExprId).empty(),
-        } } });
-        try std.testing.expectEqual(CallTargetVerifyError.imported_fn_out_of_bounds, program.verifyCallTargets().?);
-    }
 }
 
-test "fresh single-shard view preserves builder local call graph" {
+test "fresh program view preserves builder local call graph" {
     var program = Program.init(std.testing.allocator);
     defer program.deinit();
 
@@ -2557,7 +2843,6 @@ fn collectSingleShardLocalCallTargets(
         switch (expr.data.call_proc.callee) {
             .func => |slot| switch (slot) {
                 .local => |fn_id| try out.append(allocator, fn_id),
-                .imported => return error.TestUnexpectedResult,
             },
             .lifted => return error.TestUnexpectedResult,
         }
@@ -2571,6 +2856,116 @@ fn testFnSource(mono_fn_ty: Type.TypeId) FnTemplate {
         .source_fn_key = .{},
         .mono_fn_ty = mono_fn_ty,
     };
+}
+
+fn testProcTemplate(name_store: *names.NameStore, template_id: u32) std.mem.Allocator.Error!names.ProcTemplate {
+    return .{
+        .artifact = .{},
+        .proc_base = try name_store.internProcBase(.{
+            .module_name = try name_store.internModuleName("SourceDigest"),
+            .export_name = null,
+            .kind = .checked_source,
+            .ordinal = 0,
+        }),
+        .template = @enumFromInt(template_id),
+    };
+}
+
+fn testTemplateDigestKey(comptime byte: u8) names.TypeDigest {
+    var digest: names.TypeDigest = .{};
+    digest.bytes[0] = byte;
+    return digest;
+}
+
+test "function template identity ignores the requester's checked source type" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var types = Type.Store.init(std.testing.allocator);
+    defer types.deinit();
+
+    // Two call sites reserved the same checked template at the same closed
+    // type with the same evidence; only the checked type each instantiated it
+    // from differs, which is caller provenance and not identity.
+    const mono_fn_ty = try types.add(.zst);
+    const first: FnTemplate = .{
+        .fn_def = .{ .local_template = try testProcTemplate(&name_store, 1) },
+        .source_fn_ty = @enumFromInt(7),
+        .source_fn_key = testTemplateDigestKey(1),
+        .mono_fn_ty = mono_fn_ty,
+    };
+    var second = first;
+    second.source_fn_ty = @enumFromInt(9);
+    second.source_fn_key = testTemplateDigestKey(2);
+
+    try std.testing.expect(fnTemplateIdentityEql(first, second));
+    try std.testing.expectEqual(
+        fnTemplateDigest(first, &types, &name_store),
+        fnTemplateDigest(second, &types, &name_store),
+    );
+
+    // The identity still separates a different callable and a different type.
+    var other_callable = first;
+    other_callable.fn_def = .{ .local_template = try testProcTemplate(&name_store, 2) };
+    try std.testing.expect(!fnTemplateIdentityEql(first, other_callable));
+    var other_type = first;
+    other_type.mono_fn_ty = try types.add(.{ .primitive = .str });
+    try std.testing.expect(!fnTemplateIdentityEql(first, other_type));
+    var other_evidence = first;
+    other_evidence.evidence_digest = .{ .bytes = testTemplateDigestKey(5).bytes };
+    try std.testing.expect(!fnTemplateIdentityEql(first, other_evidence));
+}
+
+test "function template identity keeps generated bodies of one owner apart" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var types = Type.Store.init(std.testing.allocator);
+    defer types.deinit();
+
+    // Every interpolation step of one expression, and every callback of one
+    // generated encoder, shares its owner, its (empty) evidence, and its
+    // Monotype type. The producer's generated-body key is the only thing that
+    // says they are different code, so identity must carry it.
+    const mono_fn_ty = try types.add(.zst);
+    const first_step: FnTemplate = .{
+        .fn_def = .{ .checked_generated = try testProcTemplate(&name_store, 1) },
+        .source_fn_ty = @enumFromInt(7),
+        .source_fn_key = testTemplateDigestKey(1),
+        .mono_fn_ty = mono_fn_ty,
+    };
+    var second_step = first_step;
+    second_step.source_fn_key = testTemplateDigestKey(2);
+
+    try std.testing.expect(!fnTemplateIdentityEql(first_step, second_step));
+    try std.testing.expect(!std.meta.eql(
+        fnTemplateDigest(first_step, &types, &name_store),
+        fnTemplateDigest(second_step, &types, &name_store),
+    ));
+
+    // The same generated body reached twice is one callable.
+    const repeated_step = first_step;
+    try std.testing.expect(fnTemplateIdentityEql(first_step, repeated_step));
+    try std.testing.expectEqual(
+        fnTemplateDigest(first_step, &types, &name_store),
+        fnTemplateDigest(repeated_step, &types, &name_store),
+    );
+
+    // Generated runtime callables carry the key the same way.
+    const first_callback: FnTemplate = .{
+        .fn_def = .{ .encoder_for_runtime = .{
+            .owner = try testProcTemplate(&name_store, 1),
+            .expr = @enumFromInt(3),
+        } },
+        .source_fn_ty = @enumFromInt(7),
+        .source_fn_key = testTemplateDigestKey(1),
+        .mono_fn_ty = mono_fn_ty,
+    };
+    var second_callback = first_callback;
+    second_callback.source_fn_key = testTemplateDigestKey(2);
+    try std.testing.expect(!fnTemplateIdentityEql(first_callback, second_callback));
+    try std.testing.expect(!std.meta.eql(
+        fnTemplateDigest(first_callback, &types, &name_store),
+        fnTemplateDigest(second_callback, &types, &name_store),
+    ));
 }
 
 test "codec function evidence identity excludes per-use replay addresses" {
@@ -2634,4 +3029,74 @@ test "codec function evidence identity excludes per-use replay addresses" {
     right[0].structural.checked.?.generated_codec_identity = derivations[2].identity;
     try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
     try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
+}
+
+fn cloneFrozenForAllocationTest(allocator: std.mem.Allocator, source: *const Program) std.mem.Allocator.Error!void {
+    var copy = try source.cloneFrozen(allocator);
+    defer copy.deinit();
+}
+
+test "compile-time descriptors stay outside compact expression rows" {
+    comptime {
+        std.debug.assert(@sizeOf(Expr) <= 64);
+        std.debug.assert(@sizeOf(ExprData) <= 64);
+    }
+}
+
+test "frozen Monotype forks retain identities and own literal and diagnostic storage" {
+    const allocator = std.testing.allocator;
+    var source = Program.init(allocator);
+    var source_owned = true;
+    defer if (source_owned) source.deinit();
+    const ty = try source.types.add(.{ .primitive = .str });
+    const literal = try source.addStringView("prefix-value-suffix", 7, 5);
+    const expr = try source.addExpr(.{ .ty = ty, .data = .{ .str_lit = literal } });
+    const local = try source.addLocal(@enumFromInt(1), ty);
+    try source.setLocalName(local, "value");
+    const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc" });
+    var owner_key = std.mem.zeroes(check.CheckedModule.ModuleId);
+    owner_key.bytes[0] = 9;
+    const owner = try source.addLoweringModule(owner_key);
+    const site = try source.addComptimeSite(.if_, owner, .zero(), null, &.{.zero()});
+    const name = try source.names.internExportName("entry");
+    try source.proc_debug_names.put(@enumFromInt(1), name);
+    const root_a: Common.ComptimeValueRoot = .{
+        .module = std.mem.zeroes(check.CheckedModule.ModuleId),
+        .root = @enumFromInt(7),
+        .const_locator = null,
+    };
+    var root_b = root_a;
+    root_b.module.bytes[0] = 1;
+    root_b.const_locator = .{
+        .artifact = root_b.module,
+        .owner = .{ .hoisted_expr = .{ .module_idx = 1, .expr = @enumFromInt(2) } },
+        .template = @enumFromInt(3),
+        .source_scheme = std.mem.zeroes(@FieldType(check.CheckedModule.ConstLocator, "source_scheme")),
+    };
+    const root_a_id = try source.addComptimeValueRoot(root_a);
+    const root_b_id = try source.addComptimeValueRoot(root_b);
+    try std.testing.expect(root_a_id != root_b_id);
+    try std.testing.expectEqualDeep(root_a, source.view().getComptimeValueRoot(root_a_id));
+    try std.testing.expectEqualDeep(root_b, source.getComptimeValueRoot(root_b_id));
+    source.freeze();
+    try std.testing.checkAllAllocationFailures(allocator, cloneFrozenForAllocationTest, .{&source});
+    var copy = try source.cloneFrozen(allocator);
+    defer copy.deinit();
+    try std.testing.expect(source.view().comptime_value_roots.ptr != copy.view().comptime_value_roots.ptr);
+    try std.testing.expect(source.stringLiteral(literal).backing.ptr != copy.stringLiteral(literal).backing.ptr);
+    source.deinit();
+    source_owned = false;
+    try std.testing.expectEqualDeep(root_a, copy.getComptimeValueRoot(root_a_id));
+    try std.testing.expectEqualDeep(root_b, copy.view().getComptimeValueRoot(root_b_id));
+    try std.testing.expectEqual(ty, copy.getExpr(expr).ty);
+    try std.testing.expectEqual(literal, copy.getExpr(expr).data.str_lit);
+    try std.testing.expectEqualStrings("value", copy.stringLiteralText(literal));
+    try std.testing.expectEqualStrings("value", copy.localName(local));
+    try std.testing.expectEqualStrings("app/App.roc", copy.view().source_files[file].qualified_name);
+    try std.testing.expectEqual(@as(usize, 1), copy.comptimeSite(site).branch_regions.len);
+    try std.testing.expectEqual(owner, copy.comptimeSite(site).owner);
+    try std.testing.expectEqualDeep(owner_key, copy.view().lowering_modules[@intFromEnum(owner)]);
+    try std.testing.expectEqual(name, copy.proc_debug_names.get(@enumFromInt(1)).?);
+    try std.testing.expectEqual(name, try copy.names.internExportName("entry"));
+    try std.testing.expect(copy.types.isFrozen());
 }

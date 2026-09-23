@@ -18,6 +18,8 @@ pub const Hosted = core.Hosted;
 pub const Program = core.Program;
 /// Public checked-module-to-LIR lowering entrypoint.
 pub const CheckedPipeline = @import("checked_pipeline.zig");
+/// One module's closed exports lowered as a program of their own.
+pub const PackProgram = @import("pack_program.zig");
 /// Direct boxed update wrapper rewrite before ARC.
 pub const BoxReuse = @import("box_reuse.zig");
 /// Internal aggregate return-slot variants before ARC.
@@ -37,6 +39,7 @@ pub const RangeProve = @import("range_prove.zig");
 /// Switch branch pruning from explicit possible-tag analysis.
 pub const TagReachability = @import("tag_reachability.zig");
 /// Demand-driven proc compaction before ARC and backend emission.
+pub const LiteralBackings = @import("literal_backings.zig");
 pub const ReachableProcs = @import("reachable_procs.zig");
 /// ARC borrow inference and RC statement insertion over explicit LIR.
 pub const Arc = @import("arc.zig");
@@ -67,9 +70,14 @@ test "LIR image tests" {
 }
 
 pub const ImmortalLocals = @import("immortal_locals.zig");
+/// Final immutable failure-image guards and explicit completion.
+pub const ComptimeValueGuards = @import("comptime_value_guards.zig");
+pub const ComptimeRootAccessors = @import("comptime_root_accessors.zig");
 
 /// Symbol identifiers used throughout statement-only LIR.
 pub const Symbol = LIR.Symbol;
+/// Content identity carried by every procedure spec; names the procedure symbol.
+pub const ProcIdentity = LIR.ProcIdentity;
 /// Explicit local metadata used throughout statement-only LIR.
 pub const Local = LIR.Local;
 /// Identifier of one LIR local.
@@ -149,6 +157,8 @@ pub fn hasherU64Width(op: LowLevel) u8 {
 }
 
 test "lir tests" {
+    _ = @import("proc_passes_test.zig");
+    _ = @import("arc_parallel_test.zig");
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(LIR);
     std.testing.refAllDecls(LirStore);
@@ -162,6 +172,8 @@ test "lir tests" {
     std.testing.refAllDecls(StrAppend);
     std.testing.refAllDecls(BodyClone);
     std.testing.refAllDecls(ScalarizeJoins);
+    std.testing.refAllDecls(ComptimeValueGuards);
+    std.testing.refAllDecls(ComptimeRootAccessors);
     std.testing.refAllDecls(RangeProve);
     std.testing.refAllDecls(TagReachability);
     std.testing.refAllDecls(CheckedArithmetic);
@@ -173,3 +185,6 @@ test "lir tests" {
     std.testing.refAllDecls(ArcDismantle);
     std.testing.refAllDecls(LirImage);
 }
+
+/// Canonical packed product data and committed-layout copy plans.
+pub const PackedData = core.PackedData;

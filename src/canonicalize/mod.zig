@@ -13,6 +13,12 @@ pub const CIR = @import("CIR.zig");
 pub const ModuleEnv = @import("ModuleEnv.zig");
 /// Scope management for canonicalization
 pub const Scope = @import("Scope.zig");
+/// Resolution of a module's deferred references into its imported modules
+pub const ImportResolution = @import("ImportResolution.zig");
+/// Read the module's `import "path" as name` file imports. See `ImportResolution`.
+pub const resolveDeferredFileImports = ImportResolution.resolveDeferredFileImports;
+/// Drain a module's deferred import worklist. See `ImportResolution`.
+pub const resolveDeferredImports = ImportResolution.resolveDeferredImports;
 /// Dependency graph and SCC (Strongly Connected Components) analysis
 pub const DependencyGraph = @import("DependencyGraph.zig");
 /// Hosted function compiler - replaces annotation-only with hosted lambdas
@@ -92,6 +98,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("Can.zig"));
     std.testing.refAllDecls(@import("CIR.zig"));
     std.testing.refAllDecls(@import("DependencyGraph.zig"));
+    std.testing.refAllDecls(@import("ImportResolution.zig"));
     std.testing.refAllDecls(@import("Diagnostic.zig"));
     std.testing.refAllDecls(@import("Expression.zig"));
     std.testing.refAllDecls(@import("ExternalDecl.zig"));
@@ -106,6 +113,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/bool_test.zig"));
     std.testing.refAllDecls(@import("test/diagnostic_publication_test.zig"));
     std.testing.refAllDecls(@import("test/frac_test.zig"));
+    std.testing.refAllDecls(@import("test/forward_referenced_binder_region_test.zig"));
     std.testing.refAllDecls(@import("test/if_statement_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10151_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10338_test.zig"));

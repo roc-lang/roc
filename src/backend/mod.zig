@@ -10,7 +10,6 @@ const roc_target = @import("roc_target");
 
 pub const dev = @import("dev/mod.zig");
 pub const wasm = @import("wasm/mod.zig");
-pub const in_process_abi = @import("in_process_abi.zig");
 
 // Re-export dev backend types at top level.
 pub const x86_64 = dev.x86_64;
@@ -27,6 +26,7 @@ pub const ExecutableMemory = dev.ExecutableMemory;
 pub const HostLirCodeGen = dev.HostLirCodeGen;
 pub const host_lir_codegen_available = dev.host_lir_codegen_available;
 pub const LirCodeGenMod = dev.LirCodeGenMod;
+pub const NativeProcCompiler = dev.NativeProcCompiler;
 pub const DevBackend = dev.DevBackend;
 pub const Storage = dev.Storage;
 pub const X86_64LinuxBackend = dev.X86_64LinuxBackend;
@@ -54,8 +54,12 @@ test "backend tests" {
     const std = @import("std");
     std.testing.refAllDecls(StructuralTest);
     std.testing.refAllDecls(dev);
-    std.testing.refAllDecls(in_process_abi);
+    std.testing.refAllDecls(NativeProcCompiler);
     std.testing.refAllDecls(wasm);
+}
+
+test "native driver tests" {
+    @import("std").testing.refAllDecls(NativeProcCompiler);
 }
 
 test "issue 10295: dev backend preserves deep structural equality under register pressure" {
@@ -125,12 +129,13 @@ test "issue 10295: dev backend preserves deep structural equality under register
 
     const root = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(5),
         .args = lir.LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = .bool,
     });
 
-    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, .preserve, roc_target.host_cpu.level());
+    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, roc_target.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
     const generated = try codegen.generateCode(root, .bool);
@@ -144,9 +149,8 @@ test "issue 10295: dev backend preserves deep structural equality under register
     defer executable.deinit();
 
     var actual: u8 = 0;
-    var dummy_roc_ops: u8 = 0;
-    const entry: *const fn (*anyopaque, *anyopaque) callconv(.c) void = @ptrCast(@alignCast(executable.entryPtr()));
-    entry(@ptrCast(&actual), @ptrCast(&dummy_roc_ops));
+    const entry: *const fn (*anyopaque) callconv(.c) void = @ptrCast(@alignCast(executable.entryPtr()));
+    entry(@ptrCast(&actual));
     try std.testing.expectEqual(@as(u8, 1), actual);
 }
 
@@ -196,12 +200,13 @@ test "issue 10295: nested list equality has bounded register pressure" {
     } });
     const root = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(4),
         .args = lir.LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = .bool,
     });
 
-    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, .preserve, roc_target.host_cpu.level());
+    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, roc_target.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
     const generated = try codegen.generateCode(root, .bool);
@@ -215,9 +220,8 @@ test "issue 10295: nested list equality has bounded register pressure" {
     defer executable.deinit();
 
     var actual: u8 = 0;
-    var dummy_roc_ops: u8 = 0;
-    const entry: *const fn (*anyopaque, *anyopaque) callconv(.c) void = @ptrCast(@alignCast(executable.entryPtr()));
-    entry(@ptrCast(&actual), @ptrCast(&dummy_roc_ops));
+    const entry: *const fn (*anyopaque) callconv(.c) void = @ptrCast(@alignCast(executable.entryPtr()));
+    entry(@ptrCast(&actual));
     try std.testing.expectEqual(@as(u8, 1), actual);
 }
 
@@ -262,6 +266,7 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
             const arg_plan = try s.internErasedCallArgsPlan(ls, &.{});
             return s.addProcSpec(.{
                 .name = s.freshSyntheticSymbol(),
+                .identity = lir.LIR.ProcIdentity.forTest(3),
                 .args = args,
                 .body = body,
                 .ret_layout = ret_layout,
@@ -352,7 +357,7 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
     const u32x3_body = try helpers.addStructBody(&store, u32x3_layout, .u32, &.{ 0x01020304, 0x05060708, 0x090A0B0C });
     const u32x3_proc = try helpers.addErasedProc(&store, &layout_store, u32x3_body, u32x3_layout);
 
-    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, .preserve, roc_target.host_cpu.level());
+    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, roc_target.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
 
@@ -398,6 +403,8 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
         // only ret_buf[8 .. 8 + expected.len].
         var ret_buf align(16) = [_]u8{0xAA} ** 32;
         var out_desc: ?*const anyopaque = null;
+        const saved_host = builtins.in_process_host.enter(&roc_ops, null);
+        defer builtins.in_process_host.leave(saved_host);
         callable(&roc_ops, ret_buf[8..].ptr, null, null, null, &out_desc);
 
         try std.testing.expectEqualSlices(u8, case.expected, ret_buf[8 .. 8 + case.expected.len]);
@@ -425,19 +432,21 @@ test "x86_64 Windows hosted U128 return stores all 16 bytes from XMM0" {
     const symbol = try store.insertString("hosted_u128_identity");
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(2),
         .args = lir.LIR.LocalSpan.empty(),
         .ret_layout = .u128,
         .hosted = .{ .symbol = symbol, .dispatch_index = 0 },
     });
 
     const WinCodeGen = dev.LirCodeGenMod.LirCodeGen(.x64win);
-    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, .preserve, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, .default);
     defer codegen.deinit();
     codegen.generation_mode = .object_file;
 
     try codegen.compileAllProcSpecs(store.getProcSpecs());
 
     // MOVDQU m128, XMM0 is the unaligned full-width store into the result slot.
+    try codegen.finishImage();
     const code = codegen.getGeneratedCode();
     var return_code: ?[]const u8 = null;
     for (codegen.getRelocations()) |relocation| {
@@ -472,18 +481,20 @@ test "x86_64 Windows U128 entrypoint return loads all 16 bytes into XMM0" {
     } });
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(1),
         .args = lir.LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = .u128,
     });
 
     const WinCodeGen = dev.LirCodeGenMod.LirCodeGen(.x64win);
-    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, .preserve, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, .default);
     defer codegen.deinit();
     codegen.generation_mode = .object_file;
 
     try codegen.compileAllProcSpecs(store.getProcSpecs());
     const entrypoint = try codegen.generateEntrypointWrapper("roc_u128_identity", proc, &.{}, .u128);
+    try codegen.finishImage();
     const code = codegen.getGeneratedCode();
     const entrypoint_code = code[entrypoint.offset..][0..entrypoint.size];
 

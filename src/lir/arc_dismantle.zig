@@ -83,6 +83,45 @@ fn projectionPayload(projection: u64) u16 {
     return @intCast(projection & 0xffff);
 }
 
+/// Cycle-safe check for whether a layout may hold descriptor-driven dynamic
+/// (`erased_box`) content. Recursive tag unions reference themselves through
+/// their layout indices, so the walk tracks visited indices; `visited` and
+/// `stack` are caller-owned scratch reused across queries.
+pub fn layoutMayContainBoxyDynamic(
+    allocator: Allocator,
+    layouts: *const layout_mod.Store,
+    layout_idx: layout_mod.Idx,
+    visited: *std.AutoHashMap(layout_mod.Idx, void),
+    stack: *std.ArrayList(layout_mod.Idx),
+) Error!bool {
+    visited.clearRetainingCapacity();
+    stack.clearRetainingCapacity();
+    try stack.append(allocator, layout_idx);
+    while (stack.pop()) |idx| {
+        if ((try visited.getOrPut(idx)).found_existing) continue;
+        const layout_val = layouts.getLayout(idx);
+        switch (layout_val.tag) {
+            .erased_box => return true,
+            .box, .list => try stack.append(allocator, layout_val.getIdx()),
+            .list_of_zst, .box_of_zst, .zst, .scalar, .erased_callable, .ptr => {},
+            .struct_ => {
+                const info = layouts.getStructInfo(layout_val);
+                for (0..info.fields.len) |index| {
+                    try stack.append(allocator, info.fields.get(@intCast(index)).layout);
+                }
+            },
+            .tag_union => {
+                const info = layouts.getTagUnionInfo(layout_val);
+                for (0..info.variants.len) |index| {
+                    try stack.append(allocator, info.variants.get(@intCast(index)).payload_layout);
+                }
+            },
+            .closure => try stack.append(allocator, layout_val.getClosure().captures_layout_idx),
+        }
+    }
+    return false;
+}
+
 fn structFieldBySemanticIndex(layouts: *const layout_mod.Store, struct_layout: layout_mod.Layout, field_idx: u16) ?layout_mod.StructField {
     const info = layouts.getStructInfo(struct_layout);
     for (0..info.fields.len) |index| {
@@ -443,6 +482,11 @@ const Analysis = struct {
     /// so the take dataflow rejects takes such a mention could follow.
     mention_heads: []u32,
     mention_edges: std.ArrayList(MentionEdge) = .empty,
+    /// Per-layout answers of `layoutMayContainBoxyDynamic` for field layouts
+    /// the gate has asked about, and the scratch that answers them.
+    boxy_dynamic_layouts: collections.DenseMap(layout_mod.Idx, bool),
+    layout_visited: std.AutoHashMap(layout_mod.Idx, void),
+    layout_stack: std.ArrayList(layout_mod.Idx) = .empty,
 
     fn deinit(self: *Analysis) void {
         var it = self.candidates.valueIterator();
@@ -461,6 +505,9 @@ const Analysis = struct {
         self.gpa.free(self.state);
         self.gpa.free(self.owned_demand);
         self.demand_aliases.deinit(self.gpa);
+        self.boxy_dynamic_layouts.deinit();
+        self.layout_visited.deinit();
+        self.layout_stack.deinit(self.gpa);
     }
 
     fn demandOwned(self: *Analysis, local: LIR.LocalId) void {
@@ -486,9 +533,9 @@ const Analysis = struct {
     }
 
     /// Whether the local's layout and binding shape could ever benefit from
-    /// dismantling. Cheap, no allocation; the full per-candidate work only
-    /// happens for locals that pass.
-    fn passesGate(self: *Analysis, local: LIR.LocalId) bool {
+    /// dismantling. Cheap: layout answers are memoized per field layout, and the
+    /// full per-candidate work only happens for locals that pass.
+    fn passesGate(self: *Analysis, local: LIR.LocalId) Error!bool {
         const local_index = @intFromEnum(local);
         if (local_index >= self.rc_local.len) dismantleInvariant("ARC dismantle resource table did not cover local");
         if (!self.rc_local[local_index]) return false;
@@ -505,9 +552,20 @@ const Analysis = struct {
             if (field.index >= 64) return false;
             if (self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) {
                 any_rc = true;
+                // A residual field is released through its layout's RC
+                // helper. Descriptor-driven (`erased_box`) content has no
+                // layout helper; its container is released whole instead.
+                if (try self.fieldLayoutIsBoxyDynamic(field.layout)) return false;
             }
         }
         return any_rc;
+    }
+
+    fn fieldLayoutIsBoxyDynamic(self: *Analysis, layout_idx: layout_mod.Idx) Error!bool {
+        if (self.boxy_dynamic_layouts.get(layout_idx)) |known| return known;
+        const answer = try layoutMayContainBoxyDynamic(self.gpa, self.layouts, layout_idx, &self.layout_visited, &self.layout_stack);
+        try self.boxy_dynamic_layouts.put(layout_idx, answer);
+        return answer;
     }
 
     fn entryOf(self: *Analysis, local: LIR.LocalId) Error!?*Candidate {
@@ -516,7 +574,7 @@ const Analysis = struct {
             .ineligible, .transparent_alias => return null,
             .candidate => return self.candidates.getPtr(index).?,
             .unknown => {
-                if (!self.passesGate(local)) {
+                if (!try self.passesGate(local)) {
                     self.state[index] = .ineligible;
                     return null;
                 }
@@ -754,6 +812,183 @@ const Analysis = struct {
     }
 };
 
+/// Candidate-local backward may-observation solution. Reversing the CFG lets
+/// all reads share one traversal; each field bit crosses each edge at most once.
+/// Edge masks end precisely the old field lifetimes restored on that edge.
+const FutureFields = struct {
+    const Node = struct {
+        stmt: LIR.CFStmtId,
+        observed: u64 = 0,
+        pending: u64 = 0,
+        predecessor: u32 = no_index,
+    };
+    const Edge = struct { source: u32, next: u32, preserved: u64 };
+
+    indices: collections.DenseMap(LIR.CFStmtId, u32),
+    nodes: std.ArrayList(Node) = .empty,
+    edges: std.ArrayList(Edge) = .empty,
+    work: std.ArrayList(u32) = .empty,
+
+    fn init(gpa: Allocator) FutureFields {
+        return .{ .indices = collections.DenseMap(LIR.CFStmtId, u32).init(gpa) };
+    }
+
+    fn deinit(self: *FutureFields, gpa: Allocator) void {
+        self.indices.deinit();
+        self.nodes.deinit(gpa);
+        self.edges.deinit(gpa);
+        self.work.deinit(gpa);
+    }
+
+    fn clear(self: *FutureFields) void {
+        self.indices.clearRetainingCapacity();
+        self.nodes.clearRetainingCapacity();
+        self.edges.clearRetainingCapacity();
+        self.work.clearRetainingCapacity();
+    }
+
+    fn node(self: *FutureFields, gpa: Allocator, stmt: LIR.CFStmtId) Error!u32 {
+        if (self.indices.get(stmt)) |index| return index;
+        const index: u32 = @intCast(self.nodes.items.len);
+        try self.nodes.ensureUnusedCapacity(gpa, 1);
+        try self.indices.put(stmt, index);
+        self.nodes.appendAssumeCapacity(.{ .stmt = stmt });
+        return index;
+    }
+
+    fn edge(self: *FutureFields, gpa: Allocator, source: u32, target: LIR.CFStmtId, preserved: u64) Error!void {
+        if (preserved == 0) return;
+        const target_index = try self.node(gpa, target);
+        const target_node = &self.nodes.items[target_index];
+        try self.edges.append(gpa, .{ .source = source, .next = target_node.predecessor, .preserved = preserved });
+        target_node.predecessor = @intCast(self.edges.items.len - 1);
+    }
+
+    fn observe(self: *FutureFields, gpa: Allocator, index: u32, bits: u64) Error!void {
+        const target = &self.nodes.items[index];
+        const added = bits & ~target.observed;
+        if (added == 0) return;
+        if (target.pending == 0) try self.work.append(gpa, index);
+        target.observed |= added;
+        target.pending |= added;
+    }
+
+    fn solve(self: *FutureFields, gpa: Allocator) Error!void {
+        while (self.work.pop()) |index| {
+            const bits = self.nodes.items[index].pending;
+            self.nodes.items[index].pending = 0;
+            var predecessor = self.nodes.items[index].predecessor;
+            while (predecessor != no_index) {
+                const incoming = self.edges.items[predecessor];
+                try self.observe(gpa, incoming.source, bits & incoming.preserved);
+                predecessor = incoming.next;
+            }
+        }
+    }
+
+    fn observed(self: *const FutureFields, stmt: LIR.CFStmtId) u64 {
+        return self.nodes.items[self.indices.get(stmt).?].observed;
+    }
+
+    fn compute(
+        self: *FutureFields,
+        gpa: Allocator,
+        store: *const LirStore,
+        solution: *const arc_solve.Solution,
+        local: LIR.LocalId,
+        reads: *const std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind),
+        joins: *const std.AutoHashMapUnmanaged(u32, LIR.CFStmtId),
+        receipts: []const FieldRestitution,
+        redefinition: ?LIR.CFStmtId,
+    ) Error!void {
+        self.clear();
+        var read_it = reads.iterator();
+        while (read_it.next()) |read| {
+            if (read.value_ptr.consuming) {
+                _ = try self.node(gpa, store.getCFStmt(read.key_ptr.*).assign_ref.next);
+            }
+        }
+        var successors = std.ArrayList(LIR.CFStmtId).empty;
+        defer successors.deinit(gpa);
+        // Node insertion is the finite discovery worklist. No statement is
+        // decoded again when another consuming read reaches the same region.
+        var index: u32 = 0;
+        while (index < self.nodes.items.len) : (index += 1) {
+            const cursor = self.nodes.items[index].stmt;
+            // Past the container's own single definition, reached through a
+            // loop back edge, every read observes the next iteration's value.
+            if (redefinition) |def_stmt| if (cursor == def_stmt) continue;
+            if (reads.get(cursor)) |read| try self.observe(gpa, index, read.bit);
+            switch (store.getCFStmt(cursor)) {
+                .set_local => |stmt| {
+                    if (stmt.target != local) try self.edge(gpa, index, stmt.next, ~@as(u64, 0));
+                },
+                .join => |stmt| try self.edge(gpa, index, stmt.remainder, ~@as(u64, 0)),
+                .jump => |stmt| {
+                    if (joins.get(@intFromEnum(stmt.target))) |body| try self.edge(gpa, index, body, ~@as(u64, 0));
+                },
+                .switch_stmt => |stmt| {
+                    const branches = store.getCFSwitchBranches(stmt.branches);
+                    for (0..GuardedList.borrowLen(branches)) |branch_index| {
+                        const branch = GuardedList.at(branches, branch_index);
+                        try self.edge(gpa, index, branch.body, ~restoredFieldMaskForBranch(solution, receipts, cursor, branch.value));
+                    }
+                    try self.edge(gpa, index, stmt.default_branch, ~restoredFieldMaskForDefault(solution, store, receipts, cursor));
+                },
+                .loop_continue, .loop_break => {
+                    if (solution.isJoinParam(local)) try self.observe(gpa, index, ~@as(u64, 0));
+                },
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .debug,
+                .expect,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .boxy_tag_match,
+                .ret,
+                .crash,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                => {
+                    successors.clearRetainingCapacity();
+                    try body_clone.appendSuccessors(@constCast(store), &successors, cursor);
+                    for (successors.items) |next| try self.edge(gpa, index, next, ~@as(u64, 0));
+                },
+            }
+        }
+        try self.solve(gpa);
+    }
+};
+
+/// Independent test oracle: the original per-read traversal.
 /// Proves whether a stored field is observed again in this definition. Every
 /// reachable statement is visited once; explicit reinitialization and outcome
 /// restitution end the old field lifetime on their respective edges.
@@ -767,6 +1002,8 @@ fn fieldObservedAfter(
     reads: *const std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind),
     joins: *const std.AutoHashMapUnmanaged(u32, LIR.CFStmtId),
     receipts: []const FieldRestitution,
+    redefinition: ?LIR.CFStmtId,
+    visits: *usize,
 ) Error!bool {
     var seen = collections.DenseMap(LIR.CFStmtId, void).init(gpa);
     defer seen.deinit();
@@ -775,6 +1012,10 @@ fn fieldObservedAfter(
     try work.append(gpa, start);
     while (work.pop()) |cursor| {
         if ((try seen.getOrPut(cursor)).found_existing) continue;
+        visits.* += 1;
+        // Past the container's own single definition, reached through a
+        // loop back edge, every read observes the next iteration's value.
+        if (redefinition) |def_stmt| if (cursor == def_stmt) continue;
         if (reads.get(cursor)) |read| {
             if (read.bit & bit != 0) return true;
         }
@@ -842,6 +1083,245 @@ fn fieldObservedAfter(
         }
     }
     return false;
+}
+
+/// Index one procedure's structural CFG. Jump targets use procedure-local
+/// identities, so a field-use walk must never resolve them through another
+/// procedure's join declaration.
+fn collectProcJoinBodies(
+    gpa: Allocator,
+    store: *const LirStore,
+    root: LIR.CFStmtId,
+    joins: *std.AutoHashMapUnmanaged(u32, LIR.CFStmtId),
+    epochs: []u32,
+    epoch: u32,
+    stack: *std.ArrayList(LIR.CFStmtId),
+) Error!void {
+    try stack.append(gpa, root);
+    while (stack.pop()) |stmt_id| {
+        const stmt_index = @intFromEnum(stmt_id);
+        if (epochs[stmt_index] == epoch) continue;
+        epochs[stmt_index] = epoch;
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt == .join) {
+            const entry = try joins.getOrPut(gpa, @intFromEnum(stmt.join.id));
+            if (entry.found_existing) {
+                if (entry.value_ptr.* != stmt.join.body) dismantleInvariant("procedure contains two bodies for one join identity");
+            } else {
+                entry.value_ptr.* = stmt.join.body;
+            }
+        }
+        try body_clone.appendSuccessorsWithAllocator(store, stack, stmt_id, gpa);
+    }
+}
+
+test "future field uses resolve joins in their procedure" {
+    const gpa = std.testing.allocator;
+    var store = LirStore.init(gpa);
+    defer store.deinit();
+    const container = try store.addLocal(.{ .layout_idx = .str });
+    const field = try store.addLocal(.{ .layout_idx = .str });
+    var join_ids = body_clone.JoinParamIndex.init(gpa);
+    defer join_ids.deinit();
+    const join_id = join_ids.freshJoinPoint();
+    const exit = try store.addCFStmt(.{ .ret = .{ .value = field } });
+    const back_edge = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const read = try store.addCFStmt(.{ .assign_ref = .{
+        .target = field,
+        .op = .{ .field = .{ .source = container, .field_idx = 0 } },
+        .next = back_edge,
+    } });
+    const loop_proc = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = .empty(),
+        .body = read,
+        .remainder = back_edge,
+    } });
+    const other_proc = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = .empty(),
+        .body = exit,
+        .remainder = back_edge,
+    } });
+    var loop_joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
+    defer loop_joins.deinit(gpa);
+    var other_joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
+    defer other_joins.deinit(gpa);
+    const epochs = try gpa.alloc(u32, store.cfStmtCount());
+    defer gpa.free(epochs);
+    @memset(epochs, 0);
+    var stack = std.ArrayList(LIR.CFStmtId).empty;
+    defer stack.deinit(gpa);
+    try collectProcJoinBodies(gpa, &store, loop_proc, &loop_joins, epochs, 1, &stack);
+    try collectProcJoinBodies(gpa, &store, other_proc, &other_joins, epochs, 2, &stack);
+    try std.testing.expectEqual(read, loop_joins.get(0).?);
+    try std.testing.expectEqual(exit, other_joins.get(0).?);
+
+    var reads = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
+    defer reads.deinit(gpa);
+    try reads.put(gpa, read, .{ .bit = 1, .consuming = true });
+    const solution: arc_solve.Solution = undefined;
+    var future = FutureFields.init(gpa);
+    defer future.deinit(gpa);
+    try future.compute(gpa, &store, &solution, container, &reads, &loop_joins, &.{}, null);
+    try std.testing.expect(future.observed(back_edge) & 1 != 0);
+    try future.compute(gpa, &store, &solution, container, &reads, &other_joins, &.{}, null);
+    try std.testing.expect(future.observed(back_edge) & 1 == 0);
+}
+
+test "future field observations agree with per-read traversal across joins rebinds loops and outcomes" {
+    const gpa = std.testing.allocator;
+    var store = LirStore.init(gpa);
+    defer store.deinit();
+    const local = try store.addLocal(.{ .layout_idx = .str });
+    const other = try store.addLocal(.{ .layout_idx = .str });
+    const exit = try store.addCFStmt(.{ .ret = .{ .value = other } });
+    const boundary = try store.addCFStmt(.loop_continue);
+    // Reserve the two procedure-local join identities before building their
+    // bodies, which contain forward references to the enclosing joins.
+    var join_ids: [2]LIR.JoinPointId = undefined;
+    for (&join_ids, 0..) |*id, index| id.* = @enumFromInt(index);
+    const outer_id = join_ids[0];
+    const nested_id = join_ids[1];
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = outer_id } });
+    const rebind = try store.addCFStmt(.{ .set_local = .{
+        .target = local,
+        .value = other,
+        .mode = .initialize_join_param,
+        .next = jump,
+    } });
+    const read = try store.addCFStmt(.{ .assign_ref = .{
+        .target = other,
+        .op = .{ .field = .{ .source = local, .field_idx = 0 } },
+        .next = rebind,
+    } });
+    const branch = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = other,
+        .branches = try store.addCFSwitchBranches(&.{
+            .{ .value = 0, .body = read },
+            .{ .value = 1, .body = boundary },
+        }),
+        .default_branch = read,
+    } });
+    const nested_jump = try store.addCFStmt(.{ .jump = .{ .target = nested_id } });
+    const nested = try store.addCFStmt(.{ .join = .{
+        .id = nested_id,
+        .params = .empty(),
+        .body = branch,
+        .remainder = nested_jump,
+    } });
+    const outer = try store.addCFStmt(.{ .join = .{
+        .id = outer_id,
+        .params = .empty(),
+        .body = nested,
+        .remainder = jump,
+    } });
+    var joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
+    defer joins.deinit(gpa);
+    try joins.put(gpa, @intFromEnum(outer_id), nested);
+    try joins.put(gpa, @intFromEnum(nested_id), branch);
+    var reads = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
+    defer reads.deinit(gpa);
+    try reads.put(gpa, read, .{ .bit = 1, .consuming = false });
+    // Models the already-expanded borrowed descendant/whole-value mentions.
+    try reads.put(gpa, rebind, .{ .bit = 2, .consuming = false });
+    const starts = [_]LIR.CFStmtId{ exit, boundary, jump, rebind, read, branch, nested_jump, nested, outer };
+    for (starts) |start| {
+        const probe = try store.addCFStmt(.{ .assign_ref = .{
+            .target = other,
+            .op = .{ .field = .{ .source = local, .field_idx = 2 } },
+            .next = start,
+        } });
+        try reads.put(gpa, probe, .{ .bit = 4, .consuming = true });
+    }
+    // These queries consume only join membership and the outcome signature
+    // table; keep unrelated solver state undefined so accidental access fails.
+    var solution: arc_solve.Solution = undefined;
+    solution.sigs = &.{};
+    var leaders = [_]u32{ 0, 1 };
+    solution.leader = &leaders;
+    solution.join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(gpa, 2);
+    defer solution.join_param.deinit(gpa);
+    var outcomes = [_]arc_sig.Outcome{
+        .{ .discriminant = 0, .restituted_params = 0 },
+        .{ .discriminant = 1, .restituted_params = 0 },
+        .{ .discriminant = 2, .restituted_params = 0 },
+        .{ .discriminant = 3, .restituted_params = 0 },
+    };
+    solution.outcomes = &outcomes;
+    const receipts = [_]FieldRestitution{.{
+        .call_arg = .{ .stmt = read, .position = 0 },
+        .projection = read,
+        .switch_stmt = branch,
+        .field_mask = 1,
+        .outcomes = .{ .start = 0, .len = 4 },
+    }};
+    var future = FutureFields.init(gpa);
+    defer future.deinit(gpa);
+    for (0..128) |configuration| {
+        for (&outcomes, 0..) |*outcome, index| outcome.restituted_params = @intCast((configuration >> @intCast(index)) & 1);
+        if (configuration & 16 != 0) solution.join_param.set(0) else solution.join_param.unset(0);
+        store.getCFStmtPtr(boundary).* = if (configuration & 1 != 0) .loop_break else .loop_continue;
+        store.getCFStmtPtr(rebind).set_local.target = if (configuration & 32 != 0) local else other;
+        try joins.put(gpa, 0, if (configuration & 64 != 0) nested else exit);
+        try future.compute(gpa, &store, &solution, local, &reads, &joins, &receipts, null);
+        try std.testing.expectEqual(if (configuration & 16 != 0) ~@as(u64, 0) else @as(u64, 0), future.observed(boundary));
+        for (starts) |start| {
+            for ([_]u64{ 1, 2, 4 }) |bit| {
+                var visits: usize = 0;
+                const expected = try fieldObservedAfter(gpa, &store, &solution, local, bit, start, &reads, &joins, &receipts, null, &visits);
+                try std.testing.expectEqual(expected, future.observed(start) & bit != 0);
+            }
+        }
+    }
+}
+
+test "future field observations share CFG discovery across many consuming reads" {
+    const gpa = std.testing.allocator;
+    var store = LirStore.init(gpa);
+    defer store.deinit();
+    const local = try store.addLocal(.{ .layout_idx = .str });
+    var start = try store.addCFStmt(.{ .ret = .{ .value = local } });
+    const exit = start;
+    // Mutually exclusive consuming reads share a long continuation observing
+    // another field: the old DFS cannot exit early for any of their queries.
+    for (0..255) |_| {
+        start = try store.addCFStmt(.{ .assign_ref = .{
+            .target = local,
+            .op = .{ .local = local },
+            .next = start,
+        } });
+    }
+    var reads = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
+    defer reads.deinit(gpa);
+    try reads.put(gpa, exit, .{ .bit = 2, .consuming = false });
+    const joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
+    var solution: arc_solve.Solution = undefined;
+    solution.leader = &.{};
+    solution.join_param = .{};
+    solution.sigs = &.{};
+    solution.outcomes = &.{};
+    var future = FutureFields.init(gpa);
+    defer future.deinit(gpa);
+    for ([_]usize{ 1, 16, 256 }) |count| {
+        while (reads.count() <= count) {
+            const probe = try store.addCFStmt(.{ .assign_ref = .{
+                .target = local,
+                .op = .{ .field = .{ .source = local, .field_idx = 0 } },
+                .next = start,
+            } });
+            try reads.put(gpa, probe, .{ .bit = 1, .consuming = true });
+        }
+        var old_visits: usize = 0;
+        for (0..count) |_| {
+            try std.testing.expect(!try fieldObservedAfter(gpa, &store, &solution, local, 1, start, &reads, &joins, &.{}, null, &old_visits));
+        }
+        try future.compute(gpa, &store, &solution, local, &reads, &joins, &.{}, null);
+        try std.testing.expectEqual(@as(usize, 256) * count, old_visits);
+        try std.testing.expectEqual(@as(usize, 256), future.nodes.items.len);
+        try std.testing.expectEqual(@as(usize, 255), future.edges.items.len);
+        try std.testing.expectEqual(@as(u64, 2), future.observed(start));
+    }
 }
 
 /// Per-field take dataflow state at one point in a candidate's region. The
@@ -1378,6 +1858,8 @@ pub fn compute(
         .explicit_init_join = explicit_init_join,
         .owned_demand = try gpa.alloc(bool, store.localCount()),
         .mention_heads = try gpa.alloc(u32, store.localCount()),
+        .boxy_dynamic_layouts = collections.DenseMap(layout_mod.Idx, bool).init(gpa),
+        .layout_visited = std.AutoHashMap(layout_mod.Idx, void).init(gpa),
     };
     defer analysis.deinit();
     @memset(analysis.state, .unknown);
@@ -1744,8 +2226,48 @@ pub fn compute(
 
     var read_kinds = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
     defer read_kinds.deinit(gpa);
-    var join_bodies = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
-    defer join_bodies.deinit(gpa);
+    const proc_joins = try gpa.alloc(std.AutoHashMapUnmanaged(u32, LIR.CFStmtId), store.procSpecCount());
+    defer {
+        for (proc_joins) |*joins| joins.deinit(gpa);
+        gpa.free(proc_joins);
+    }
+    @memset(proc_joins, .empty);
+    const joins_ready = try gpa.alloc(bool, store.procSpecCount());
+    defer gpa.free(joins_ready);
+    @memset(joins_ready, false);
+    const join_scan_epochs = try gpa.alloc(u32, store.cfStmtCount());
+    defer gpa.free(join_scan_epochs);
+    @memset(join_scan_epochs, 0);
+    var join_scan_stack = std.ArrayList(LIR.CFStmtId).empty;
+    defer join_scan_stack.deinit(gpa);
+    var join_scan_epoch: u32 = 0;
+    // Join identities belong to a procedure. The candidate's defining CFG
+    // statement identifies that procedure explicitly, including dismantle
+    // temporaries that are deliberately absent from a specialization frame.
+    const stmt_proc = try gpa.alloc(u32, store.cfStmtCount());
+    defer gpa.free(stmt_proc);
+    @memset(stmt_proc, no_index);
+    const ambiguous_proc = no_index - 1;
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+        if (proc.body == null) continue;
+        join_scan_epoch += 1;
+        try join_scan_stack.append(gpa, proc.body.?);
+        while (join_scan_stack.pop()) |stmt_id| {
+            const stmt_index = @intFromEnum(stmt_id);
+            if (join_scan_epochs[stmt_index] == join_scan_epoch) continue;
+            join_scan_epochs[stmt_index] = join_scan_epoch;
+            const owner = &stmt_proc[stmt_index];
+            if (owner.* == no_index) {
+                owner.* = @intCast(proc_index);
+            } else if (owner.* != @as(u32, @intCast(proc_index))) {
+                owner.* = ambiguous_proc;
+            }
+            try body_clone.appendSuccessorsWithAllocator(store, &join_scan_stack, stmt_id, gpa);
+        }
+    }
+    var future_fields = FutureFields.init(gpa);
+    defer future_fields.deinit(gpa);
     var body_states = std.AutoHashMapUnmanaged(LIR.CFStmtId, FlowState).empty;
     defer body_states.deinit(gpa);
     const FlowFrame = struct { cursor: LIR.CFStmtId, state: FlowState };
@@ -1896,6 +2418,11 @@ pub fn compute(
             if (read.field_idx >= 64) continue :candidates;
         }
 
+        // A container released through its Boxy descriptor has fields whose
+        // release needs that descriptor too, so they cannot be released one
+        // at a time from their layouts.
+        if (store.getLocal(local).boxy_desc != null) continue :candidates;
+
         // Only refcounted fields carry stored units worth taking; a
         // container with no refcounted take keeps its ordinary whole
         // release.
@@ -2019,18 +2546,25 @@ pub fn compute(
         candidate_mask &= rc_mask;
         if (candidate_mask == 0) continue;
 
-        var poison: u64 = 0;
-        join_bodies.clearRetainingCapacity();
-        for (0..store.cfStmtCount()) |stmt_index| {
-            if (!visited.isSet(stmt_index)) continue;
-            const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-            if (stmt == .join) try join_bodies.put(gpa, @intFromEnum(stmt.join.id), stmt.join.body);
+        if (candidate.reads.items.len == 0) dismantleInvariant("field-take candidate had no field projection");
+        const owner = stmt_proc[@intFromEnum(candidate.reads.items[0].stmt)];
+        if (owner == no_index or owner == ambiguous_proc) continue;
+        if (!joins_ready[owner]) {
+            joins_ready[owner] = true;
+            join_scan_epoch += 1;
+            const proc = store.getProcSpec(@enumFromInt(owner));
+            try collectProcJoinBodies(gpa, store, proc.body.?, &proc_joins[owner], join_scan_epochs, join_scan_epoch, &join_scan_stack);
         }
+        const join_bodies = &proc_joins[owner];
+
+        var poison: u64 = 0;
+        const redefinition: ?LIR.CFStmtId = if (candidate.join_starts.items.len == 0) candidate.def_stmt else null;
+        try future_fields.compute(gpa, store, solution, local, &read_kinds, join_bodies, field_restitutions.items, redefinition);
         for (candidate.reads.items) |read| {
             const kind = read_kinds.getPtr(read.stmt) orelse continue;
             if (!kind.consuming) continue;
             const definition = store.getCFStmt(read.stmt).assign_ref;
-            if (try fieldObservedAfter(gpa, store, solution, local, kind.bit, definition.next, &read_kinds, &join_bodies, field_restitutions.items)) {
+            if (future_fields.observed(definition.next) & kind.bit != 0) {
                 kind.consuming = false;
             }
         }
@@ -2060,6 +2594,12 @@ pub fn compute(
                     poison = ~@as(u64, 0);
                     break :flow;
                 }
+                // Reaching the container's single value-producing definition
+                // again, through a loop back edge, starts the next
+                // iteration's fresh value with every field intact; the
+                // previous value is dead past its redefinition exactly as it
+                // is past an explicit join-cell write.
+                if (cursor == candidate.def_stmt and candidate.join_starts.items.len == 0) state = .{ .may = 0, .must = 0 };
                 if (read_kinds.getPtr(cursor)) |kind| {
                     kind.visited = true;
                     if (kind.consuming) {
@@ -2084,7 +2624,6 @@ pub fn compute(
                         cursor = stmt.next;
                     },
                     .join => |stmt| {
-                        try join_bodies.put(gpa, @intFromEnum(stmt.id), stmt.body);
                         cursor = stmt.remainder;
                     },
                     .switch_stmt => |stmt| {

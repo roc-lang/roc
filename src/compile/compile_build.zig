@@ -17,8 +17,22 @@ const build_options = @import("build_options");
 const reporting = @import("reporting");
 const eval = @import("eval");
 const check = @import("check");
+const lir = @import("lir");
 const unbundle = if (is_freestanding) struct {} else @import("unbundle");
 const CoreCtx = @import("ctx").CoreCtx;
+
+/// Runtime demand fixed before post-check finalization. Explicit plans may be
+/// declared from prepared checked modules after the frontend completes.
+pub const RuntimeLoweringConfig = struct {
+    explicit_roots: ?lir.CheckedPipeline.RootRequestSet = null,
+    root_module: ?*const check.CheckedArtifact.CheckedModuleArtifact = null,
+    target: lir.CheckedPipeline.TargetConfig,
+    /// The object cache's artifacts, for the compile-time evaluator to
+    /// splice the entries `target.spec_cache` serves into its image.
+    splice_source: ?eval.CompileTimeFinalization.SpliceSource = null,
+    include_provided_data_exports: bool = false,
+    include_internal_static_data: bool = false,
+};
 
 /// The underlying system I/O type, derived from CoreCtx to avoid
 /// referencing the raw Zig I/O type directly (which is banned in core modules).
@@ -162,7 +176,7 @@ const PathUtils = struct {
 
 /// Controls which post-check publication work runs after ordinary checking has completed.
 pub const PostCheckPublicationMode = enum {
-    /// No post-check work (diagnostics only).
+    /// Evaluate checked roots without preparing executable platform relations.
     none,
     /// Publish the relation-bearing platform root once at finalization,
     /// including when checked source contains explicit runtime-error nodes.
@@ -200,6 +214,9 @@ pub const BuildEnv = struct {
 
     // Actor model coordinator (owns all mutable compilation state)
     coordinator: ?*Coordinator = null,
+    runtime_lowering: ?RuntimeLoweringConfig = null,
+    /// Let a caller declare a test plan from prepared artifacts before CTFE.
+    defer_post_check: bool = false,
     // Cache manager for compiled modules
     cache_manager: ?*CacheManager = null,
     // I/O abstraction for all OS operations (filesystem, stdio, env vars, etc.)
@@ -220,8 +237,8 @@ pub const BuildEnv = struct {
     /// so `roc check` and `roc build` both finalize the relation-bearing platform
     /// root once (`.executable_artifacts`): finalization builds the platform/app
     /// relation and publishes the platform root, which also resolves the platform
-    /// target config constants both flows depend on. `.none` runs no post-check
-    /// work, for diagnostic-only embeddings that never link an executable.
+    /// target config constants both flows depend on. `.none` still evaluates compile-time roots
+    /// for diagnostic-only embeddings, but does not prepare executable relations.
     post_check_publication_mode: PostCheckPublicationMode = .executable_artifacts,
 
     /// Whether executable artifacts were published for this build. User
@@ -289,6 +306,9 @@ pub const BuildEnv = struct {
     discovered_root_dir: ?[]const u8 = null,
     discovered_pkg_name: ?[]const u8 = null,
     entry_module_abs: ?[]const u8 = null,
+    /// Package-root-relative logical path of `entry_module_abs`: its module
+    /// identity, derived once when the entry is set.
+    entry_module_logical_path: ?[]const u8 = null,
 
     pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget, cwd: []const u8, std_io: std.Io) InitError!BuildEnv {
         // Allocate builtin modules on heap to prevent moves that would invalidate internal pointers
@@ -395,6 +415,7 @@ pub const BuildEnv = struct {
         if (self.discovered_root_abs) |ra| self.gpa.free(ra);
         if (self.discovered_root_dir) |rd| self.gpa.free(rd);
         if (self.entry_module_abs) |entry| self.gpa.free(@constCast(entry));
+        if (self.entry_module_logical_path) |logical| self.gpa.free(@constCast(logical));
         // discovered_pkg_name is borrowed from the packages map key.
 
         if (comptime trace_build) {
@@ -474,12 +495,10 @@ pub const BuildEnv = struct {
 
     pub fn setFinalizeExecutableArtifacts(self: *BuildEnv, enabled: bool) void {
         self.post_check_publication_mode = if (enabled) .executable_artifacts else .none;
-        if (self.coordinator) |coord| coord.setExecutableFinalizationEnabled(enabled);
     }
 
     pub fn setPostCheckPublicationMode(self: *BuildEnv, mode: PostCheckPublicationMode) void {
         self.post_check_publication_mode = mode;
-        if (self.coordinator) |coord| coord.setExecutableFinalizationEnabled(mode != .none);
     }
 
     pub fn setRootModuleRole(self: *BuildEnv, role: ModuleEnv.ModuleRole) void {
@@ -715,11 +734,59 @@ pub const BuildEnv = struct {
     }
 
     fn setDiscoveredEntryModule(self: *BuildEnv, root_file: []const u8) BuildError!void {
-        _ = self.discovered_pkg_name orelse return error.Internal;
+        const pkg_name = self.discovered_pkg_name orelse return error.Internal;
+        const root_pkg = self.packages.get(pkg_name) orelse return error.Internal;
         const root_abs = try self.makeAbsolute(root_file);
         errdefer self.gpa.free(root_abs);
+
+        // The entry's identity must be the same logical path an import of it
+        // resolves to, so it is taken relative to the source root that the
+        // coordinator resolves this package's imports against.
+        const source_root_override = if (self.root_source_dir_override) |source_dir|
+            try self.makeAbsolute(source_dir)
+        else
+            null;
+        defer if (source_root_override) |source_root| self.gpa.free(source_root);
+        const source_root = source_root_override orelse root_pkg.root_dir;
+
+        const logical_path = (try module_discovery.sourceFileLogicalPath(self.gpa, source_root, root_abs)) orelse {
+            try self.emitEntryOutsidePackageReport(root_abs, root_pkg.root_file, source_root);
+            try self.makeWorkspaceReportsDrainable();
+            return error.PathOutsideWorkspace;
+        };
+
         if (self.entry_module_abs) |old| self.gpa.free(@constCast(old));
+        if (self.entry_module_logical_path) |old| self.gpa.free(@constCast(old));
         self.entry_module_abs = root_abs;
+        self.entry_module_logical_path = logical_path;
+    }
+
+    fn emitEntryOutsidePackageReport(
+        self: *BuildEnv,
+        entry_abs: []const u8,
+        package_root_file: []const u8,
+        source_root: []const u8,
+    ) Allocator.Error!void {
+        var report = try Report.init(
+            self.gpa,
+            "Module Outside Package",
+            "This module is not inside the source directory of the package that supplies its dependencies.",
+            .runtime_error,
+        );
+        errdefer report.deinit();
+        try report.document.addText("Module: ");
+        try report.document.addAnnotated(entry_abs, .path);
+        try report.document.addLineBreak();
+        try report.document.addText("Package: ");
+        try report.document.addAnnotated(package_root_file, .path);
+        try report.document.addLineBreak();
+        try report.document.addText("Source directory: ");
+        try report.document.addAnnotated(source_root, .path);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addText("The checked module must be inside the selected package's source directory.");
+
+        try self.sink.emitReport("workspace", "root", report);
     }
 
     /// Initialize the actor model coordinator.
@@ -745,8 +812,24 @@ pub const BuildEnv = struct {
         // This is required for roc build so that hosted functions can be called at runtime
         coord.enable_hosted_transform = true;
         coord.setWatchInputTracking(self.track_watch_inputs);
-        coord.setExecutableFinalizationEnabled(self.post_check_publication_mode != .none);
+        coord.runtime_lowering = self.runtime_lowering;
         self.coordinator = coord;
+    }
+
+    pub fn setRuntimeLowering(self: *BuildEnv, config: RuntimeLoweringConfig) void {
+        if (self.coordinator) |coordinator| {
+            std.debug.assert(coordinator.program_session == null);
+            coordinator.runtime_lowering = config;
+        }
+        self.runtime_lowering = config;
+    }
+
+    /// A configured runtime consumer must consume the checked program's exact
+    /// retained lowering session rather than begin another specialization pass.
+    pub fn runtimeProgramSession(self: *BuildEnv) ?*eval.CompileTimeFinalization.ProgramSession {
+        if (self.runtime_lowering == null) return null;
+        const coordinator = self.coordinator orelse unreachable;
+        return if (coordinator.program_session) |*session| session else unreachable;
     }
 
     /// Reuse compilation workers for post-check lowering after checking finishes.
@@ -837,6 +920,35 @@ pub const BuildEnv = struct {
         if (header_info.kind == .app or header_info.kind == .default_app or header_info.kind == .package or header_info.kind == .platform) {
             try self.resolveAndMaterialize(key_pkg, header_info.resolver_root);
         }
+    }
+
+    /// Resolve the dependency graph rooted at `root_file` (downloading any
+    /// uncached bundles so their headers can be read) without compiling,
+    /// materializing packages, or touching any source file. Resolution
+    /// diagnostics are emitted as workspace reports and surface as
+    /// `error.InvalidDependency`, exactly as a build would report them.
+    pub fn resolveDependencyGraph(self: *BuildEnv, root_file: []const u8) BuildError!package_resolution.Resolved {
+        const root_abs = try self.makeAbsolute(root_file);
+        self.discovered_root_abs = root_abs;
+        const root_dir = if (std.fs.path.dirname(root_abs)) |d| try std.fs.path.resolve(self.gpa, &.{d}) else try self.gpa.dupe(u8, ".");
+        self.discovered_root_dir = root_dir;
+
+        var header_info = try self.parseHeaderDeps(root_abs);
+        defer header_info.deinit(self.gpa);
+
+        try self.ensurePackageCacheDir();
+        var ctx_fetcher = self.resolutionFetcher();
+        var resolver = package_resolution.Resolver.init(self.gpa, ctx_fetcher.fetcher(), self.resolution_config);
+        defer resolver.deinit();
+        if (self.root_url) |*root_url| resolver.setRootUrl(root_url.url);
+
+        return resolver.resolveScannedRoot(header_info.resolver_root) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.ResolutionFailed => {
+                try self.emitResolutionFailure(&resolver);
+                return error.InvalidDependency;
+            },
+        };
     }
 
     /// Phase 2: Initialize the Coordinator, create coordinator packages from the
@@ -961,7 +1073,7 @@ pub const BuildEnv = struct {
 
         if (self.entry_module_abs) |entry_file| {
             if (!std.mem.eql(u8, entry_file, pkg_root_file)) {
-                const entry_module_name = base.module_path.getModuleName(entry_file);
+                const entry_module_name = self.entry_module_logical_path orelse return error.Internal;
                 const entry_id = try coord_pkg.ensureModule(self.gpa, entry_module_name, entry_file);
                 const entry_module = &coord_pkg.modules.items[entry_id];
                 entry_module.validation = .explicit_roots;
@@ -1014,19 +1126,17 @@ pub const BuildEnv = struct {
             self.emitAccumulatedReportsForError();
             return err;
         };
-        var finalized_executable = false;
-        switch (self.post_check_publication_mode) {
-            .none => {},
-            .executable_artifacts => {
-                coord.finalizeExecutableArtifacts() catch |err| {
-                    self.emitAccumulatedReportsForError();
-                    return err;
-                };
-                finalized_executable = true;
-            },
-        }
+        if (self.defer_post_check) return;
+        try self.finishCheckedProgram();
+    }
 
-        self.executable_artifacts_finalized = finalized_executable;
+    pub fn finishCheckedProgram(self: *BuildEnv) CompileDiscoveredError!void {
+        const coord = self.coordinator orelse unreachable;
+        coord.finishCheckedProgram(self.post_check_publication_mode) catch |err| {
+            self.emitAccumulatedReportsForError();
+            return err;
+        };
+        self.executable_artifacts_finalized = self.post_check_publication_mode == .executable_artifacts;
 
         try self.resolvePlatformTargetConfigConstants();
 
@@ -1536,13 +1646,9 @@ pub const BuildEnv = struct {
     /// package (named by its unique identity - full URL or absolute path),
     /// wire every package's shorthand aliases to the packages its specs
     /// resolved to, and transfer platform metadata.
-    fn resolveAndMaterialize(
-        self: *BuildEnv,
-        root_pkg_name: []const u8,
-        scanned_root: package_resolution.FetchedPackage,
-    ) BuildError!void {
-        // Without a cache directory, resolution still works for graphs with
-        // no URL dependencies; URL specs report a download failure.
+    /// Without a cache directory, resolution still works for graphs with
+    /// no URL dependencies; URL specs report a download failure.
+    fn ensurePackageCacheDir(self: *BuildEnv) Allocator.Error!void {
         if (self.package_cache_dir == null) {
             self.package_cache_dir = self.getRocCacheDir(self.gpa) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
@@ -1574,13 +1680,34 @@ pub const BuildEnv = struct {
                 => null,
             };
         }
+    }
 
-        var ctx_fetcher = package_resolution.CtxFetcher{
+    fn resolutionFetcher(self: *BuildEnv) package_resolution.CtxFetcher {
+        return .{
             .fs = self.filesystem,
             .gpa = self.gpa,
             .cache_packages_dir = self.package_cache_dir,
             .compiler_owned_source_dir = self.compiler_owned_source_dir,
         };
+    }
+
+    fn emitResolutionFailure(self: *BuildEnv, resolver: *const package_resolution.Resolver) Allocator.Error!void {
+        for (resolver.diagnostics.items) |diagnostic| {
+            try self.emitWorkspaceReport(diagnostic.title, diagnostic.message);
+        }
+        // Build the sink order so the reports above are drainable:
+        // the build aborts here, so nothing else will order them.
+        try self.sink.buildOrder(&[_][]const u8{"workspace"}, &[_][]const u8{"root"}, &[_]u32{0});
+        self.sink.tryEmit();
+    }
+
+    fn resolveAndMaterialize(
+        self: *BuildEnv,
+        root_pkg_name: []const u8,
+        scanned_root: package_resolution.FetchedPackage,
+    ) BuildError!void {
+        try self.ensurePackageCacheDir();
+        var ctx_fetcher = self.resolutionFetcher();
         var resolver = package_resolution.Resolver.init(self.gpa, ctx_fetcher.fetcher(), self.resolution_config);
         defer resolver.deinit();
         if (self.root_url) |*root_url| resolver.setRootUrl(root_url.url);
@@ -1588,13 +1715,7 @@ pub const BuildEnv = struct {
         var resolved = resolver.resolveScannedRoot(scanned_root) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.ResolutionFailed => {
-                for (resolver.diagnostics.items) |diagnostic| {
-                    try self.emitWorkspaceReport(diagnostic.title, diagnostic.message);
-                }
-                // Build the sink order so the reports above are drainable:
-                // the build aborts here, so nothing else will order them.
-                try self.sink.buildOrder(&[_][]const u8{"workspace"}, &[_][]const u8{"root"}, &[_]u32{0});
-                self.sink.tryEmit();
+                try self.emitResolutionFailure(&resolver);
                 return error.InvalidDependency;
             },
         };
@@ -2160,6 +2281,14 @@ pub const BuildEnv = struct {
         cache_hits: u32 = 0,
         /// Modules that needed compilation (cache misses)
         cache_misses: u32 = 0,
+
+        /// Modules whose canonicalization output was loaded from the
+        /// canonicalized-module cache instead of being parsed and canonicalized.
+        canonicalized_cache_hits: u32 = 0,
+        /// Modules this build parsed and canonicalized.
+        canonicalized_cache_misses: u32 = 0,
+        /// Canonicalized-module cache entries this build wrote.
+        canonicalized_cache_stores: u32 = 0,
 
         /// Number of modules that were compiled (not cached)
         modules_compiled: u32 = 0,
@@ -3048,6 +3177,71 @@ pub const BuildEnv = struct {
         };
     }
 
+    /// How the object cache files a module's pack: `pkg` for a module of a
+    /// package or platform that arrived as a URL bundle, written once per
+    /// package version and only ever read; `local` for a module reached by
+    /// path, rewritten on every edit.
+    pub const PackOrigin = enum { local, pkg };
+
+    /// Where the object cache files a module's packs and how.
+    pub const PackPlacement = struct {
+        origin: PackOrigin,
+        /// Digest of what stays the same across edits of the module: for a
+        /// URL package its URL, otherwise the package's root directory, plus
+        /// the module's path within it. Every version of the module's pack
+        /// files under this one directory, so an edit still finds the
+        /// previous version's entries.
+        identity: [32]u8,
+    };
+
+    /// The pack placement of the module `key` names, or null when the build
+    /// does not know the module.
+    pub fn packPlacementForArtifactKey(
+        self: *const BuildEnv,
+        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+    ) ?PackPlacement {
+        const coord = self.coordinator orelse return null;
+        const location = coord.checked_artifact_index.get(key.bytes) orelse return null;
+        const pkg = self.packages.get(location.pkg_name) orelse return null;
+        const coord_pkg = coord.packages.get(location.pkg_name) orelse return null;
+        const module = coord_pkg.getModule(location.module_id) orelse return null;
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        if (pkg.url) |url| {
+            hasher.update("pkg\x00");
+            hasher.update(url.url);
+        } else {
+            hasher.update("local\x00");
+            hasher.update(pkg.root_dir);
+        }
+        hasher.update("\x00");
+        hasher.update(module.path);
+        return .{
+            .origin = if (pkg.url != null) .pkg else .local,
+            .identity = hasher.finalResult(),
+        };
+    }
+
+    /// Every checked artifact `root_artifact` can lower against, other than
+    /// itself and the builtin module: its lowering-visible modules in order.
+    /// Builtins get no pack of their own; their instantiations belong to the
+    /// pack of the module that requests them.
+    pub fn collectVisibleArtifacts(
+        self: *const BuildEnv,
+        allocator: Allocator,
+        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) Allocator.Error![]const *const check.CheckedArtifact.CheckedModuleArtifact {
+        var artifacts = std.ArrayList(*const check.CheckedArtifact.CheckedModuleArtifact).empty;
+        errdefer artifacts.deinit(allocator);
+        const builtin_artifact = &self.builtin_modules.checked_artifact;
+        for (root_artifact.lowering_visibility.module_ids) |key| {
+            if (checkedArtifactKeysEqual(key, root_artifact.key)) continue;
+            if (checkedArtifactKeysEqual(key, builtin_artifact.key)) continue;
+            const artifact = self.artifactByKey(key) orelse continue;
+            try artifacts.append(allocator, artifact);
+        }
+        return artifacts.toOwnedSlice(allocator);
+    }
+
     pub fn collectImportedArtifactViews(
         self: *BuildEnv,
         allocator: Allocator,
@@ -3478,6 +3672,7 @@ pub const BuildEnv = struct {
             .e_break,
             .e_hosted_lambda,
             => {},
+            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
     }
 
@@ -3720,6 +3915,8 @@ pub const OrderedSink = struct {
     };
 
     const ModuleKeyContext = struct {
+        // Bucket selector only; `eql` compares both names, so a collision on
+        // these package-controlled names costs a probe.
         pub fn hash(_: @This(), key: ModuleKey) u64 {
             var h = std.hash.Wyhash.init(0);
             h.update(key.pkg);

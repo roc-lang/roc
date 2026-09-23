@@ -16,6 +16,7 @@ const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 const posix = std.posix;
 const eval = @import("eval");
+const builtins = @import("builtins");
 const base = @import("base");
 const harness = @import("test_harness");
 
@@ -67,7 +68,7 @@ const DEV_BACKEND_IMPLEMENTED = eval.backendAvailable(.dev);
 
 const BackendEvalError = helpers.TestHelperError || Interpreter.Error || Allocator.Error || error{DevBackendUnavailable};
 const StatsJsonError = Allocator.Error || std.Io.Dir.AccessError || std.Io.Dir.CreateDirPathError || std.Io.File.OpenError || std.Io.File.Writer.Error;
-const RunnerMainError = StatsJsonError || std.process.Args.ToSliceError || Allocator.Error;
+const RunnerMainError = std.fmt.ParseIntError || StatsJsonError || std.process.Args.ToSliceError || Allocator.Error;
 
 const BackendStatus = enum(u8) {
     pass,
@@ -326,13 +327,15 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
+    var static_strings = try Interpreter.buildStaticStrings(allocator, &lowered.view.store);
+    defer static_strings.deinit();
     var interp = try Interpreter.initWithBoxyTables(
         allocator,
         &lowered.view.store,
         &lowered.view.layouts,
         Interpreter.BoxyTables.fromImageView(&lowered.view),
+        static_strings.view(),
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interp.deinit();
 
@@ -389,7 +392,6 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
             lowered.view.boxy_erased_arg_desc_offsets,
             lowered.view.boxy_erased_arg_desc_params,
             lowered.view.boxy_worker_procs,
-            .preserve,
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
@@ -406,6 +408,7 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
             arg_layouts,
             proc.ret_layout,
         );
+        try codegen.finishImage();
         var exec_mem = try ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
             codegen.getGeneratedCode(),
             entrypoint.offset,
@@ -440,10 +443,11 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
 
         var crash_boundary = runtime_env.enterCrashBoundary();
         defer crash_boundary.deinit();
+        const entered = builtins.in_process_host.enter(runtime_env.get_ops(), null);
+        defer builtins.in_process_host.leave(entered);
         const sj = crash_boundary.set();
         if (sj == 0) {
             exec_mem.callRocABI(
-                @ptrCast(runtime_env.get_ops()),
                 @ptrCast(ret_buf.ptr),
                 if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
             );
@@ -1154,7 +1158,7 @@ pub fn main(init: std.process.Init) RunnerMainError!void {
     // worker_argv_template is null—this runner doesn't (yet) support
     // Windows Child-based parallelism; on Windows it falls through to
     // runSequential as before.
-    Pool.runWithSpans(io, tests, results, spans, max_children, hang_timeout_ms, gpa, null);
+    Pool.runWithSpans(io, tests, results, spans, max_children, hang_timeout_ms, gpa, null, cli.child_debug);
 
     const wall_elapsed = wall_timer.read();
     var passed: usize = 0;

@@ -31,6 +31,7 @@
 //! the matched chain is that local's only use.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -57,7 +58,13 @@ pub fn run(store: *LirStore) ResourceError!void {
     const proc_count = store.procSpecCount();
     var proc_index: usize = 0;
     while (proc_index < proc_count) : (proc_index += 1) {
-        try pass.transformProc(@enumFromInt(proc_index));
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(proc_index);
+        // Only a body with the shape's flag can carry the caller shape; Debug
+        // builds run the excluded procedures too and verify nothing rewrites.
+        const admitted = store.getProcSpec(proc_id).shapes.str_call;
+        if (!admitted and builtin.mode != .Debug) continue;
+        const rewrote = try pass.transformProc(proc_id);
+        if (rewrote and !admitted) @panic("string-append pass rewrote a procedure whose shapes excluded it");
     }
 }
 
@@ -69,14 +76,16 @@ const StrAppendPass = struct {
     store: *LirStore,
     variants: std.AutoHashMap(VariantKey, LIR.LirProcSpecId),
 
-    fn transformProc(self: *StrAppendPass, proc_id: LIR.LirProcSpecId) ResourceError!void {
-        const body = body_clone.rewritableProcBody(self.store, proc_id) orelse return;
+    fn transformProc(self: *StrAppendPass, proc_id: LIR.LirProcSpecId) ResourceError!bool {
+        const body = body_clone.rewritableProcBody(self.store, proc_id) orelse return false;
 
         var stmts = try body_clone.ReachableStmts.init(self.store, body);
         defer stmts.deinit();
+        var rewrote = false;
         while (try stmts.next()) |stmt_id| {
-            _ = try self.rewriteAt(body, stmt_id);
+            if (try self.rewriteAt(body, stmt_id)) rewrote = true;
         }
+        return rewrote;
     }
 
     fn rewriteAt(self: *StrAppendPass, proc_body: CFStmtId, call_stmt_id: CFStmtId) ResourceError!bool {
@@ -207,6 +216,7 @@ fn testStrCallee(store: *LirStore) ResourceError!LIR.LirProcSpecId {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = arg } });
     return try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{arg}),
         .frame_locals = try store.addLocalSpan(&.{arg}),
         .body = ret,
@@ -246,6 +256,7 @@ test "str append fuses a single-use call result into a direct append call" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{ acc, x }),
         .frame_locals = try store.addLocalSpan(&.{ acc, x, result, out }),
         .body = call,
@@ -298,6 +309,7 @@ test "str append fuses through a single-use alias of the call result" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(3),
         .args = try store.addLocalSpan(&.{ acc, x }),
         .frame_locals = try store.addLocalSpan(&.{ acc, x, result, result_alias, out }),
         .body = call,
@@ -343,6 +355,7 @@ test "str append does not fuse across an alias of an unrelated local" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(4),
         .args = try store.addLocalSpan(&.{ acc, x, unrelated }),
         .frame_locals = try store.addLocalSpan(&.{ acc, x, unrelated, unrelated_alias, result, out, extra }),
         .body = call,
@@ -383,6 +396,7 @@ test "str append does not fuse a multi-use call result" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(5),
         .args = try store.addLocalSpan(&.{ acc, x, other }),
         .frame_locals = try store.addLocalSpan(&.{ acc, x, other, result, out, extra }),
         .body = call,

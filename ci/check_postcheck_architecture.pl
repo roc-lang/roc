@@ -294,7 +294,10 @@ sub check_body_context_output_access {
         lowerTypeFromView
         primitiveType
     );
+    # interfaceSummaryCache compares store ownership only; it never reads
+    # coordinator type content through a graph-local id.
     my %allowed_global_type_access = map { $_ => 1 } qw(
+        interfaceSummaryCache
         importProgramType
         commitGraphType
         programFnSourceTypeNode
@@ -303,6 +306,7 @@ sub check_body_context_output_access {
         importProgramType
         commitGraphType
         lookupMethodTargetByName
+        lookupInspectOverride
     );
     my %allowed_graph_type_egress = map { $_ => 1 } qw(
         completeDeferredIteratorResult

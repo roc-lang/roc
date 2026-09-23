@@ -20,123 +20,128 @@ pub fn run(
     var owned = mono;
     errdefer owned.deinit();
 
-    var name_store = owned.names;
-    owned.names = @import("check").CheckedNames.NameStore.init(allocator);
-    var types = owned.types;
-    owned.types = @import("../monotype/type.zig").Store.init(allocator);
-    var imported_fns = owned.imported_fns.takeArrayList();
-    var const_fn_evidence = owned.const_fn_evidence.takeArrayList();
-    var const_fn_evidence_frames = owned.const_fn_evidence_frames.takeArrayList();
-    var exprs = owned.exprs.takeArrayList();
-    var pats = owned.pats.takeArrayList();
-    var stmts = owned.stmts.takeArrayList();
-    var locals = owned.locals.takeArrayList();
-    var expr_ids = owned.expr_ids.takeArrayList();
-    var pat_ids = owned.pat_ids.takeArrayList();
-    var typed_locals = owned.typed_locals.takeArrayList();
-    var stmt_ids = owned.stmt_ids.takeArrayList();
-    var field_exprs = owned.field_exprs.takeArrayList();
-    var field_access_segments = owned.field_access_segments.takeArrayList();
-    var fn_def_captures = owned.fn_def_captures.takeArrayList();
-    var capture_operands = owned.capture_operands.takeArrayList();
-    var record_destructs = owned.record_destructs.takeArrayList();
-    var str_pattern_steps = owned.str_pattern_steps.takeArrayList();
-    var branches = owned.branches.takeArrayList();
-    var if_branches = owned.if_branches.takeArrayList();
-    var string_literals = owned.string_literals.takeArrayList();
-    var proc_debug_names = owned.proc_debug_names;
-    owned.proc_debug_names = Mono.ProcDebugNameMap.init(allocator);
-    var runtime_schema_requests = owned.runtime_schema_requests.takeArrayList();
-    var comptime_sites = owned.comptime_sites.takeArrayList();
-    var source_files = owned.source_files.takeArrayList();
-    var expr_locs = owned.expr_locs.takeArrayList();
-    var expr_regions = owned.expr_regions.takeArrayList();
-    var stmt_locs = owned.stmt_locs.takeArrayList();
-    var stmt_regions = owned.stmt_regions.takeArrayList();
-    var inline_scopes = std.ArrayList(Ast.InlineScope).empty;
-    var expr_inline_scopes = std.ArrayList(Ast.InlineScopeId).empty;
-    try expr_inline_scopes.appendNTimes(allocator, Ast.InlineScopeId.none, exprs.items.len);
-    errdefer expr_inline_scopes.deinit(allocator);
-    var stmt_inline_scopes = std.ArrayList(Ast.InlineScopeId).empty;
-    try stmt_inline_scopes.appendNTimes(allocator, Ast.InlineScopeId.none, stmts.items.len);
-    errdefer stmt_inline_scopes.deinit(allocator);
-    var local_names = owned.local_names.takeArrayList();
-    var static_data_values = owned.static_data_values.takeArrayList();
+    // Finish fallible preparation before taking any source tables. These
+    // cleanup scopes end at the infallible handoff to the output program.
+    var program = transfer: {
+        var expr_inline_scopes = std.ArrayList(Ast.InlineScopeId).empty;
+        errdefer expr_inline_scopes.deinit(allocator);
+        try expr_inline_scopes.appendNTimes(allocator, Ast.InlineScopeId.none, owned.exprs.len());
+        var stmt_inline_scopes = std.ArrayList(Ast.InlineScopeId).empty;
+        errdefer stmt_inline_scopes.deinit(allocator);
+        try stmt_inline_scopes.appendNTimes(allocator, Ast.InlineScopeId.none, owned.stmts.len());
 
-    var program = Ast.Program.init(
-        allocator,
-        name_store,
-        types,
-        imported_fns,
-        const_fn_evidence,
-        const_fn_evidence_frames,
-        exprs,
-        pats,
-        stmts,
-        locals,
-        expr_ids,
-        pat_ids,
-        typed_locals,
-        stmt_ids,
-        field_exprs,
-        field_access_segments,
-        fn_def_captures,
-        capture_operands,
-        record_destructs,
-        str_pattern_steps,
-        branches,
-        if_branches,
-        string_literals,
-        proc_debug_names,
-        source_files,
-        expr_locs,
-        expr_regions,
-        stmt_locs,
-        stmt_regions,
-        inline_scopes,
-        expr_inline_scopes,
-        stmt_inline_scopes,
-        local_names,
-        static_data_values,
-        comptime_sites,
-        owned.next_symbol,
-    );
-    name_store = undefined;
-    types = undefined;
-    imported_fns = undefined;
-    const_fn_evidence = undefined;
-    const_fn_evidence_frames = undefined;
-    exprs = undefined;
-    pats = undefined;
-    stmts = undefined;
-    locals = undefined;
-    expr_ids = undefined;
-    pat_ids = undefined;
-    typed_locals = undefined;
-    stmt_ids = undefined;
-    field_exprs = undefined;
-    field_access_segments = undefined;
-    fn_def_captures = undefined;
-    capture_operands = undefined;
-    record_destructs = undefined;
-    str_pattern_steps = undefined;
-    branches = undefined;
-    if_branches = undefined;
-    string_literals = undefined;
-    proc_debug_names = undefined;
-    source_files = undefined;
-    expr_locs = undefined;
-    expr_regions = undefined;
-    stmt_locs = undefined;
-    stmt_regions = undefined;
-    inline_scopes = undefined;
-    expr_inline_scopes = undefined;
-    stmt_inline_scopes = undefined;
-    local_names = undefined;
-    static_data_values = undefined;
-    comptime_sites = undefined;
-    program.runtime_schema_requests = Ast.ProgramList(Ast.RuntimeSchemaRequest, "runtime_schema_requests").fromArrayList(runtime_schema_requests);
-    runtime_schema_requests = undefined;
+        var name_store = owned.names;
+        owned.names = @import("check").CheckedNames.NameStore.init(allocator);
+        var types = owned.types;
+        owned.types = @import("../monotype/type.zig").Store.init(allocator);
+        var const_fn_evidence = owned.const_fn_evidence.takeArrayList();
+        var const_fn_evidence_frames = owned.const_fn_evidence_frames.takeArrayList();
+        var exprs = owned.exprs.takeArrayList();
+        var pats = owned.pats.takeArrayList();
+        var stmts = owned.stmts.takeArrayList();
+        var locals = owned.locals.takeArrayList();
+        var expr_ids = owned.expr_ids.takeArrayList();
+        var pat_ids = owned.pat_ids.takeArrayList();
+        var typed_locals = owned.typed_locals.takeArrayList();
+        var stmt_ids = owned.stmt_ids.takeArrayList();
+        var field_exprs = owned.field_exprs.takeArrayList();
+        var field_access_segments = owned.field_access_segments.takeArrayList();
+        var fn_def_captures = owned.fn_def_captures.takeArrayList();
+        var capture_operands = owned.capture_operands.takeArrayList();
+        var record_destructs = owned.record_destructs.takeArrayList();
+        var str_pattern_steps = owned.str_pattern_steps.takeArrayList();
+        var branches = owned.branches.takeArrayList();
+        var if_branches = owned.if_branches.takeArrayList();
+        var string_literals = owned.string_literals.takeArrayList();
+        var proc_debug_names = owned.proc_debug_names;
+        owned.proc_debug_names = Mono.ProcDebugNameMap.init(allocator);
+        var runtime_schema_requests = owned.runtime_schema_requests.takeArrayList();
+        var comptime_sites = owned.comptime_sites.takeArrayList();
+        var source_files = owned.source_files.takeArrayList();
+        var expr_locs = owned.expr_locs.takeArrayList();
+        var expr_regions = owned.expr_regions.takeArrayList();
+        var stmt_locs = owned.stmt_locs.takeArrayList();
+        var stmt_regions = owned.stmt_regions.takeArrayList();
+        var inline_scopes = std.ArrayList(Ast.InlineScope).empty;
+        var local_names = owned.local_names.takeArrayList();
+        var static_data_values = owned.static_data_values.takeArrayList();
+
+        var output = Ast.Program.init(
+            allocator,
+            name_store,
+            types,
+            const_fn_evidence,
+            const_fn_evidence_frames,
+            exprs,
+            pats,
+            stmts,
+            locals,
+            expr_ids,
+            pat_ids,
+            typed_locals,
+            stmt_ids,
+            field_exprs,
+            field_access_segments,
+            fn_def_captures,
+            capture_operands,
+            record_destructs,
+            str_pattern_steps,
+            branches,
+            if_branches,
+            string_literals,
+            proc_debug_names,
+            source_files,
+            expr_locs,
+            expr_regions,
+            stmt_locs,
+            stmt_regions,
+            inline_scopes,
+            expr_inline_scopes,
+            stmt_inline_scopes,
+            local_names,
+            static_data_values,
+            comptime_sites,
+            owned.next_symbol,
+        );
+        output.comptime_value_roots = Ast.ProgramList(Common.ComptimeValueRoot, "comptime_value_roots").fromArrayList(owned.comptime_value_roots.takeArrayList());
+        output.lowering_modules = Ast.ProgramList(checked.ModuleId, "lowering_modules").fromArrayList(owned.lowering_modules.takeArrayList());
+        name_store = undefined;
+        types = undefined;
+        const_fn_evidence = undefined;
+        const_fn_evidence_frames = undefined;
+        exprs = undefined;
+        pats = undefined;
+        stmts = undefined;
+        locals = undefined;
+        expr_ids = undefined;
+        pat_ids = undefined;
+        typed_locals = undefined;
+        stmt_ids = undefined;
+        field_exprs = undefined;
+        field_access_segments = undefined;
+        fn_def_captures = undefined;
+        capture_operands = undefined;
+        record_destructs = undefined;
+        str_pattern_steps = undefined;
+        branches = undefined;
+        if_branches = undefined;
+        string_literals = undefined;
+        proc_debug_names = undefined;
+        source_files = undefined;
+        expr_locs = undefined;
+        expr_regions = undefined;
+        stmt_locs = undefined;
+        stmt_regions = undefined;
+        inline_scopes = undefined;
+        expr_inline_scopes = undefined;
+        stmt_inline_scopes = undefined;
+        local_names = undefined;
+        static_data_values = undefined;
+        comptime_sites = undefined;
+        output.runtime_schema_requests = Ast.ProgramList(Ast.RuntimeSchemaRequest, "runtime_schema_requests").fromArrayList(runtime_schema_requests);
+        runtime_schema_requests = undefined;
+        break :transfer output;
+    };
     errdefer program.deinit();
 
     const source_view = movedMonoView(&owned, &program);
@@ -162,7 +167,6 @@ fn movedMonoView(source: *const Mono.Program, moved: *const Ast.Program) Mono.Pr
         .names = &moved.names,
         .types = moved.types.view(),
         .specs = source_view.specs,
-        .imported_fns = source_view.imported_fns,
         .fns = source_view.fns,
         .const_fn_evidence = moved_view.const_fn_evidence,
         .const_fn_evidence_frames = moved_view.const_fn_evidence_frames,
@@ -188,9 +192,12 @@ fn movedMonoView(source: *const Mono.Program, moved: *const Ast.Program) Mono.Pr
         .proc_debug_names = moved.proc_debug_names.view(),
         .roots = source_view.roots,
         .layout_requests = source_view.layout_requests,
+        .comptime_value_reads = source_view.comptime_value_reads,
         .runtime_schema_requests = moved_view.runtime_schema_requests,
         .static_data_values = moved_view.static_data_values,
+        .comptime_value_roots = moved_view.comptime_value_roots,
         .comptime_sites = moved_view.comptime_sites,
+        .lowering_modules = moved_view.lowering_modules,
         .source_files = moved_view.source_files,
         .expr_locs = moved_view.expr_locs,
         .expr_regions = moved_view.expr_regions,
@@ -473,6 +480,7 @@ const Lifter = struct {
             try self.output.addRoot(.{
                 .fn_id = fn_id,
                 .request = root.request,
+                .owner = root.owner,
             });
         }
 
@@ -490,6 +498,12 @@ const Lifter = struct {
                 .const_locator = request.const_locator,
             });
         }
+
+        // Lifting moves bodies between functions but reads no new evaluated
+        // root, so Monotype's record of that demand carries unchanged.
+        for (self.source.comptime_value_reads) |root| {
+            try self.output.addComptimeValueRead(root);
+        }
     }
 
     fn completeFunctionReferenceCaptures(self: *Lifter) Allocator.Error!void {
@@ -501,17 +515,22 @@ const Lifter = struct {
             Common.invariant("top-level Monotype definition has free locals after checked closure collection");
         }
 
+        var shapes: Ast.FnShapes = .{};
         const body: Ast.FnBody = switch (def.body) {
             .roc => |body| blk: {
+                const outer_shapes = self.output.beginFnShapes(fn_id);
                 try self.rewriteExpr(body);
+                shapes = self.output.finishFnShapes(outer_shapes);
                 break :blk .{ .roc = body };
             },
             .hosted => .hosted,
         };
-        const source = if (def.fn_id) |source_fn_id| self.defSource(source_fn_id, def.fn_def) else null;
+        var source = if (def.fn_id) |source_fn_id| self.defSource(source_fn_id, def.fn_def) else null;
+        if (source) |*template| template.frozen_fn = def.fn_id;
         self.output.setFn(fn_id, .{
             .symbol = def.symbol,
             .source = source,
+            .root_identity = def.root_identity,
             .signature = if (def.fn_id) |source_fn_id| switch (self.source.fnSignatureRelation(source_fn_id)) {
                 .independent_roots => null,
                 .exact_graph => source.?.mono_fn_ty,
@@ -520,14 +539,18 @@ const Lifter = struct {
             .captures = .empty(),
             .body = body,
             .ret = def.ret,
+            .shapes = shapes,
         });
         try self.initialized_fns.put(fn_id, {});
     }
 
     fn lowerNestedDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.NestedDef) Allocator.Error!void {
+        const outer_shapes = self.output.beginFnShapes(fn_id);
         try self.rewriteExpr(def.body);
+        const shapes = self.output.finishFnShapes(outer_shapes);
         const capture_span = try self.output.addTypedLocalSpan(self.fn_captures[@intFromEnum(fn_id)].items);
-        const source = self.nestedSource(def.fn_id, def.fn_def);
+        var source = self.nestedSource(def.fn_id, def.fn_def);
+        source.frozen_fn = def.fn_id;
         self.output.setFn(fn_id, .{
             .symbol = def.symbol,
             .source = source,
@@ -539,6 +562,7 @@ const Lifter = struct {
             .captures = capture_span,
             .body = .{ .roc = def.body },
             .ret = def.ret,
+            .shapes = shapes,
         });
         try self.initialized_fns.put(fn_id, {});
     }
@@ -548,7 +572,9 @@ const Lifter = struct {
         if (self.stmt_done[index]) return;
         self.stmt_done[index] = true;
 
-        switch (self.output.getStmt(stmt_id)) {
+        const stmt = self.output.getStmt(stmt_id);
+        self.output.noteStmtShapes(stmt);
+        switch (stmt) {
             .uninitialized => {},
             .let_ => |let_| try self.rewriteExpr(let_.value),
             .expr,
@@ -610,6 +636,7 @@ const Lifter = struct {
         self.expr_done[index] = true;
 
         const expr = self.output.getExpr(expr_id);
+        self.output.noteExprShapes(expr);
         switch (expr.data) {
             .@"unreachable",
             .local,
@@ -642,6 +669,8 @@ const Lifter = struct {
             },
             .tag => |tag| try self.rewriteExprSpan(tag.payloads),
             .static_data_candidate => |candidate| try self.rewriteExpr(candidate.runtime_expr),
+            .inline_expects_enabled => {},
+            .comptime_value => |candidate| try self.rewriteExpr(candidate.initializer),
             .typed_boundary => |boundary| try self.rewriteExpr(boundary.value),
             .nominal,
             .dbg,
@@ -697,10 +726,6 @@ const Lifter = struct {
                                 else
                                     call.captures,
                             };
-                        },
-                        .imported => |imported| .{
-                            .callee = .{ .func = .{ .imported = imported } },
-                            .captures = call.captures,
                         },
                     },
                     .lifted => |fn_id| .{
@@ -804,9 +829,12 @@ const Lifter = struct {
             .captures = capture_exprs,
         } });
 
+        const outer_shapes = self.output.beginFnShapes(fn_id);
         try self.rewriteExpr(lambda.body);
+        const shapes = self.output.finishFnShapes(outer_shapes);
         const capture_span = try self.output.addTypedLocalSpan(captures.items.items);
-        const source = self.source.fnSource(lambda.fn_id);
+        var source = self.source.fnSource(lambda.fn_id);
+        source.frozen_fn = lambda.fn_id;
         self.output.setFn(fn_id, .{
             .symbol = self.symbols.fresh(),
             .source = source,
@@ -818,6 +846,7 @@ const Lifter = struct {
             .captures = capture_span,
             .body = .{ .roc = lambda.body },
             .ret = functionRet(&self.output.types, ty),
+            .shapes = shapes,
         });
         try self.initialized_fns.put(fn_id, {});
     }
@@ -1083,20 +1112,7 @@ fn sortCaptureSlots(program: *const Ast.Program, items: []Ast.TypedLocal) void {
 /// Find the operand value supplied for `slot` among explicit pre-lift capture
 /// operands. Both sides use the lift boundary's single provisional-key rule.
 fn explicitCaptureValueForSlot(program: *const Ast.Program, explicit: anytype, slot: Ast.TypedLocal) ?Ast.ExprId {
-    const slot_local = program.getLocal(slot.local);
-    const slot_id = slot_local.checked_capture_id orelse slotCaptureId(program, slot);
-    var value: ?Ast.ExprId = null;
-    for (0..explicit.len) |index| {
-        const capture = GuardedList.at(explicit, index);
-        const local = program.getLocal(capture.local);
-        const capture_id = local.checked_capture_id orelse local.capture_id orelse
-            Common.invariant("pre-lift capture operand local had no capture identity");
-        if (capture_id == slot_id) {
-            if (value != null) Common.invariant("pre-lift function captures declared one provisional key more than once");
-            value = capture.value;
-        }
-    }
-    return value;
+    return operandValueForSlot(program, explicit, slot);
 }
 
 /// Whether an explicit pre-lift capture operand supplies the target slot.
@@ -1339,6 +1355,8 @@ const CaptureSet = struct {
                 for (0..payloads.len) |payload_index| try self.collectExpr(GuardedList.at(payloads, payload_index), bound);
             },
             .static_data_candidate => |candidate| try self.collectExpr(candidate.runtime_expr, bound),
+            .inline_expects_enabled => {},
+            .comptime_value => |candidate| try self.collectExpr(candidate.initializer, bound),
             .typed_boundary => |boundary| try self.collectExpr(boundary.value, bound),
             .nominal,
             .dbg,
@@ -1374,7 +1392,6 @@ const CaptureSet = struct {
                             const lifter = self.lifter orelse Common.invariant("post-lift capture recomputation saw a pre-lift function call");
                             try self.collectFnCaptures(lifter.liftedFn(mono_fn_id), bound);
                         },
-                        .imported => {},
                     },
                     .lifted => |fn_id| try self.collectFnCaptures(fn_id, bound),
                 }
@@ -2100,13 +2117,9 @@ const CaptureGraphBuilder = struct {
         const captures = self.graph.program.fnDefCaptureSpan(span);
         for (0..captures.len) |index| {
             const capture = GuardedList.at(captures, index);
-            const capture_local = self.graph.program.getLocal(capture.local);
-            const runtime_id = capture_local.capture_id orelse
-                Common.invariant("pre-lift explicit capture local had no CaptureId");
-            const declared_id = capture_local.checked_capture_id orelse runtime_id;
             const child = try self.graph.addNode(self.graph.nodes.items[@intFromEnum(parent)].owner);
             try self.collectExpr(capture.value, child);
-            try supplies.append(self.graph.allocator, .{ .id = declared_id, .value = capture.value, .node = child });
+            try supplies.append(self.graph.allocator, .{ .id = capture.id, .value = capture.value, .node = child });
         }
         try self.finishEdge(parent, target, .pre_lift, &supplies);
     }
@@ -2187,6 +2200,8 @@ const CaptureGraphBuilder = struct {
             },
             .tag => |tag| try self.collectExprSpan(tag.payloads, node),
             .static_data_candidate => |candidate| try self.collectExpr(candidate.runtime_expr, node),
+            .inline_expects_enabled => {},
+            .comptime_value => |candidate| try self.collectExpr(candidate.initializer, node),
             .typed_boundary => |boundary| try self.collectExpr(boundary.value, node),
             .nominal,
             .dbg,
@@ -2222,7 +2237,6 @@ const CaptureGraphBuilder = struct {
                             const lifter = self.graph.lifter orelse Common.invariant("post-lift capture graph saw a pre-lift direct call");
                             break :blk lifter.liftedFn(mono_fn_id);
                         },
-                        .imported => null,
                     },
                     .lifted => |fn_id| fn_id,
                 };
@@ -2351,12 +2365,90 @@ fn shapeContent(types: *const MonoType.Store, ty: MonoType.TypeId) MonoType.Cont
     }
 }
 
+fn liftForAllocationTest(allocator: Allocator, source: *const Mono.Program) Allocator.Error!void {
+    // cloneFrozen cleans partial clones; run consumes a complete clone on
+    // both success and failure, including failures before table transfer.
+    const copy = try source.cloneFrozen(allocator);
+    var lifted = try run(allocator, copy);
+    defer lifted.deinit();
+}
+
+test "lift owns transferred tables across every allocation failure" {
+    const allocator = std.testing.allocator;
+    var source = Mono.Program.init(allocator);
+    var source_owned = true;
+    defer if (source_owned) source.deinit();
+    const ty = try source.types.add(.{ .primitive = .str });
+    const literal = try source.addStringView("prefix-value-suffix", 7, 5);
+    const initializer = try source.addExpr(.{ .ty = ty, .data = .{ .str_lit = literal } });
+    const descriptor: Common.ComptimeValueRoot = .{
+        .module = std.mem.zeroes(checked.ModuleId),
+        .root = @enumFromInt(3),
+        .const_locator = null,
+    };
+    const root = try source.addComptimeValueRoot(descriptor);
+    const value = try source.addExpr(.{ .ty = ty, .data = .{ .comptime_value = .{
+        .root = root,
+        .initializer = initializer,
+    } } });
+    const stmt = try source.addStmt(.{ .expr = value });
+    const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc" });
+    const name = try source.names.internExportName("entry");
+    try source.proc_debug_names.put(@enumFromInt(1), name);
+    source.freeze();
+
+    try std.testing.checkAllAllocationFailures(allocator, liftForAllocationTest, .{&source});
+    const copy = try source.cloneFrozen(allocator);
+    const rows = copy.view().comptime_value_roots.ptr;
+    var lifted = try run(allocator, copy);
+    defer lifted.deinit();
+    source.deinit();
+    source_owned = false;
+
+    try std.testing.expectEqual(rows, lifted.view().comptime_value_roots.ptr);
+    try std.testing.expectEqualDeep(descriptor, lifted.getComptimeValueRoot(root));
+    try std.testing.expectEqual(root, lifted.getExpr(value).data.comptime_value.root);
+    try std.testing.expectEqual(value, lifted.getStmt(stmt).expr);
+    try std.testing.expectEqualStrings("value", lifted.stringLiteralsView()[@intFromEnum(literal)].text());
+    try std.testing.expectEqualStrings("app/App.roc", lifted.view().source_files[file].qualified_name);
+    try std.testing.expectEqual(name, lifted.proc_debug_names.get(@enumFromInt(1)).?);
+    try std.testing.expectEqual(name, try lifted.names.internExportName("entry"));
+    for (lifted.view().expr_inline_scopes) |scope| try std.testing.expectEqual(Ast.InlineScopeId.none, scope);
+    for (lifted.view().stmt_inline_scopes) |scope| try std.testing.expectEqual(Ast.InlineScopeId.none, scope);
+}
+
+test "lift transfers compile-time descriptors without changing their domain" {
+    const allocator = std.testing.allocator;
+    var mono = Mono.Program.init(allocator);
+    var mono_owned = true;
+    defer if (mono_owned) mono.deinit();
+    const ty = try mono.types.add(.zst);
+    const initializer = try mono.addExpr(.{ .ty = ty, .data = .unit });
+    const descriptor: Common.ComptimeValueRoot = .{
+        .module = std.mem.zeroes(checked.ModuleId),
+        .root = @enumFromInt(3),
+        .const_locator = null,
+    };
+    const root = try mono.addComptimeValueRoot(descriptor);
+    const value = try mono.addExpr(.{ .ty = ty, .data = .{ .comptime_value = .{
+        .root = root,
+        .initializer = initializer,
+    } } });
+    const rows = mono.view().comptime_value_roots.ptr;
+    mono.freeze();
+    mono_owned = false; // run consumes the program on success and failure.
+    var lifted = try run(allocator, mono);
+    defer lifted.deinit();
+    try std.testing.expectEqual(rows, lifted.view().comptime_value_roots.ptr);
+    try std.testing.expectEqual(root, lifted.getExpr(value).data.comptime_value.root);
+    try std.testing.expectEqualDeep(descriptor, lifted.getComptimeValueRoot(root));
+}
+
 fn initCaptureTestProgram(allocator: Allocator) Ast.Program {
     return Ast.Program.init(
         allocator,
         @import("check").CheckedNames.NameStore.init(allocator),
         MonoType.Store.init(allocator),
-        .empty, // imported_fns
         .empty, // const_fn_evidence
         .empty, // const_fn_evidence_frames
         .empty, // exprs
@@ -2392,50 +2484,12 @@ fn initCaptureTestProgram(allocator: Allocator) Ast.Program {
     );
 }
 
-test "monotype lifting preserves imported direct call slots" {
-    const allocator = std.testing.allocator;
-    var mono = Mono.Program.init(allocator);
-    errdefer mono.deinit();
-
-    const unit_ty = try mono.types.add(.zst);
-    const imported = try mono.addImportedFn(.{
-        .shard = @enumFromInt(1),
-        .fn_id = @enumFromInt(1),
-    });
-    const body = try mono.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
-        .callee = Mono.importedProcCallee(imported),
-        .args = Mono.Span(Mono.ExprId).empty(),
-    } } });
-    _ = try mono.addDef(.{
-        .symbol = @enumFromInt(1),
-        .args = Mono.Span(Mono.TypedLocal).empty(),
-        .body = .{ .roc = body },
-        .ret = unit_ty,
-    });
-
-    var lifted = try run(allocator, mono);
-    defer lifted.deinit();
-
-    try std.testing.expectEqual(@as(usize, 1), lifted.importedFnCount());
-    const call_data = lifted.getExpr(body).data;
-    if (call_data != .call_proc) return error.TestUnexpectedResult;
-    const call = call_data.call_proc;
-    switch (call.callee) {
-        .func => |slot| switch (slot) {
-            .imported => |actual| try std.testing.expectEqual(imported, actual),
-            .local => return error.TestUnexpectedResult,
-        },
-        .lifted => return error.TestUnexpectedResult,
-    }
-}
-
 test "checkCaptureInvariants accepts a well-formed capture and catches a corrupted operand" {
     const allocator = std.testing.allocator;
     var program = Ast.Program.init(
         allocator,
         @import("check").CheckedNames.NameStore.init(allocator),
         MonoType.Store.init(allocator),
-        .empty, // imported_fns
         .empty, // const_fn_evidence
         .empty, // const_fn_evidence_frames
         .empty, // exprs
@@ -2512,7 +2566,6 @@ test "capture finalization supplies the caller's active binder local" {
         allocator,
         @import("check").CheckedNames.NameStore.init(allocator),
         MonoType.Store.init(allocator),
-        .empty, // imported_fns
         .empty, // const_fn_evidence
         .empty, // const_fn_evidence_frames
         .empty, // exprs
@@ -2648,6 +2701,27 @@ test "capture finalization preserves explicitly keyed capture permutation" {
     try std.testing.expectEqual(checked.CaptureId.fromBinder(second_binder), GuardedList.at(finalized, 1).id);
     try std.testing.expectEqual(second_arg_ref, GuardedList.at(finalized, 0).value);
     try std.testing.expectEqual(first_arg_ref, GuardedList.at(finalized, 1).value);
+}
+
+test "pre-lift closure operands name target slots independently of supplied locals" {
+    const allocator = std.testing.allocator;
+    var program = initCaptureTestProgram(allocator);
+    defer program.deinit();
+
+    const ty = try program.types.add(.zst);
+    const first_key = checked.CaptureId.fromBinder(@enumFromInt(1));
+    const second_key = checked.CaptureId.fromBinder(@enumFromInt(2));
+    const first = try program.addLocalWithCaptureIdentity(@enumFromInt(1), ty, @enumFromInt(1), program.nextLiftCaptureId(), first_key);
+    const second = try program.addLocalWithCaptureIdentity(@enumFromInt(2), ty, @enumFromInt(2), program.nextLiftCaptureId(), second_key);
+    const first_value = try program.addExpr(.{ .ty = ty, .data = .{ .local = first } });
+    const second_value = try program.addExpr(.{ .ty = ty, .data = .{ .local = second } });
+    const supplied = try program.addFnDefCaptureSpan(&.{
+        .{ .id = second_key, .value = first_value },
+        .{ .id = first_key, .value = second_value },
+    });
+    const operands = program.fnDefCaptureSpan(supplied);
+    try std.testing.expectEqual(second_value, explicitCaptureValueForSlot(&program, operands, .{ .local = first, .ty = ty }).?);
+    try std.testing.expectEqual(first_value, explicitCaptureValueForSlot(&program, operands, .{ .local = second, .ty = ty }).?);
 }
 
 test "lift boundary normalizes checked capture identity" {

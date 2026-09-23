@@ -968,7 +968,6 @@ pub fn inspectExpressionType(
                     break function.ret;
                 },
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal_type,
                 .empty_record,
@@ -1254,6 +1253,7 @@ fn bindingPatternOfName(env: *ModuleEnv, pattern_idx: can.CIR.Pattern.Idx, name:
         .underscore,
         .runtime_error,
         => {},
+        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     }
     return null;
 }
@@ -2948,6 +2948,21 @@ test "Repl - lambda with defaulted literal renders as <function>" {
 
 test "Repl - unconstrained lambda function value renders as <function>" {
     try expectAllNative("|x, y| x + y", "<function>");
+}
+
+test "Repl - local field receivers remain local across stored definitions" {
+    // `exposes` is reserved in record literals, so exercise these paths while
+    // type-checking an open-record function stored by the production REPL.
+    const steps = &[_][2][]const u8{
+        .{
+            "getter = |pkg| (pkg.exposes, pkg.other.exposes)",
+            "assigned `getter`",
+        },
+        .{ "getter_alias = getter", "assigned `getter_alias`" },
+        .{ "getter_alias", "<function>" },
+    };
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
 }
 
 test "Repl - recursive function preserves an unconstrained empty list" {

@@ -310,12 +310,20 @@ Secret :: {
 
 # Define a nominal type with a custom is_eq method
 Animal := [Dog(Str), Cat(Str)].{
+	# Usually you should let the compiler derive the implementation using just the line below.
+	# is_eq : _
+
 	is_eq = |a, b| match (a, b) {
 		(Dog(name1), Dog(name2)) => name1 == name2
 		(Cat(name1), Cat(name2)) => name1 == name2
 		_ => Bool.False
 	}
 }
+
+# Use `...` for something that is not yet implemented.
+# This gets translated under the hood to `crash "not implemented"`.
+make_animal_noise : Animal -> Str
+make_animal_noise = |_animal| ...
 
 early_return = |arg| {
 	first =

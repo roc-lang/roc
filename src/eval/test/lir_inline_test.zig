@@ -3,6 +3,7 @@
 const std = @import("std");
 const collections = @import("collections");
 const base = @import("base");
+const can = @import("can");
 const check = @import("check");
 const eval = @import("eval");
 const lir = @import("lir");
@@ -16,7 +17,6 @@ const layout_mod = @import("layout");
 const LayoutIdx = layout_mod.Idx;
 const MonoAst = postcheck.Monotype.Ast;
 const MonoLower = postcheck.Monotype.Lower;
-const MonoType = postcheck.Monotype.Type;
 
 const TestError = helpers.TestHelperError || eval.BuiltinModules.InitError || lir.CheckedPipeline.LowerResourceError || error{
     TestExpectedEqual,
@@ -235,10 +235,9 @@ fn lowerMonotypeModule(
 }
 
 const LowerMonotypeOptions = struct {
-    specialization_cache: MonoLower.SpecializationCacheControl = .{},
-    loaded_specialization_shards: []const MonoLower.LoadedSpecializationShard = &.{},
     specialization_counters: ?*MonoLower.SpecializationCounters = null,
     diagnostics: ?*MonoLower.Diagnostics = null,
+    post_check_executor: ?base.post_check_task_executor.Executor = null,
     root_selection: enum { all, test_expects } = .all,
 };
 
@@ -286,10 +285,9 @@ fn lowerMonotypeModuleWithOptions(
             .requests = root_requests,
         },
         .{
-            .specialization_cache = options.specialization_cache,
-            .loaded_specialization_shards = options.loaded_specialization_shards,
             .specialization_counters = options.specialization_counters,
             .diagnostics = options.diagnostics,
+            .post_check_executor = options.post_check_executor,
         },
     );
     errdefer mono.deinit();
@@ -548,150 +546,6 @@ fn structuralJsonLirPeakBytes(field_count: usize) TestError!usize {
     return peak_allocator.peak_bytes;
 }
 
-fn expectEquivalentMonotypeProgramViews(lhs: postcheck.Monotype.Ast.ProgramView, rhs: postcheck.Monotype.Ast.ProgramView) error{TestExpectedEqual}!void {
-    try std.testing.expectEqual(lhs.next_symbol, rhs.next_symbol);
-
-    try std.testing.expectEqualSlices(postcheck.Monotype.Type.Content, lhs.types.types, rhs.types.types);
-    try std.testing.expectEqualSlices(?check.CheckedNames.TypeDigest, lhs.types.type_digests, rhs.types.type_digests);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Type.TypeId, lhs.types.spans, rhs.types.spans);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Type.Field, lhs.types.fields, rhs.types.fields);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Type.Tag, lhs.types.tags, rhs.types.tags);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Type.DeclaredField, lhs.types.declared_fields, rhs.types.declared_fields);
-
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.SpecRecord, lhs.specs, rhs.specs);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.ImportedFn, lhs.imported_fns, rhs.imported_fns);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Fn, lhs.fns, rhs.fns);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Def, lhs.defs, rhs.defs);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.NestedDef, lhs.nested_defs, rhs.nested_defs);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Expr, lhs.exprs, rhs.exprs);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Pat, lhs.pats, rhs.pats);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Stmt, lhs.stmts, rhs.stmts);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Local, lhs.locals, rhs.locals);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.ExprId, lhs.expr_ids, rhs.expr_ids);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.PatId, lhs.pat_ids, rhs.pat_ids);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.TypedLocal, lhs.typed_locals, rhs.typed_locals);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.StmtId, lhs.stmt_ids, rhs.stmt_ids);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.FieldExpr, lhs.field_exprs, rhs.field_exprs);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.RecordDestruct, lhs.record_destructs, rhs.record_destructs);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.StrPatternStep, lhs.str_pattern_steps, rhs.str_pattern_steps);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Branch, lhs.branches, rhs.branches);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.IfBranch, lhs.if_branches, rhs.if_branches);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Root, lhs.roots, rhs.roots);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.LayoutRequest, lhs.layout_requests, rhs.layout_requests);
-    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.RuntimeSchemaRequest, lhs.runtime_schema_requests, rhs.runtime_schema_requests);
-    try std.testing.expectEqualSlices(base.SourceLoc, lhs.expr_locs, rhs.expr_locs);
-    try std.testing.expectEqualSlices(base.Region, lhs.expr_regions, rhs.expr_regions);
-    try std.testing.expectEqualSlices(base.SourceLoc, lhs.stmt_locs, rhs.stmt_locs);
-    try std.testing.expectEqualSlices(base.Region, lhs.stmt_regions, rhs.stmt_regions);
-}
-
-const DurableTypeSnapshot = struct {
-    view: MonoType.DurableView,
-    type_digests: []check.CheckedNames.TypeDigest,
-
-    fn deinit(self: DurableTypeSnapshot, allocator: Allocator) void {
-        allocator.free(self.type_digests);
-    }
-};
-
-fn durableTypeSnapshot(allocator: Allocator, program: *MonoAst.Program) Allocator.Error!DurableTypeSnapshot {
-    const store_view = program.types.view();
-    const type_digests = try allocator.alloc(check.CheckedNames.TypeDigest, store_view.types.len);
-    errdefer allocator.free(type_digests);
-
-    for (type_digests, 0..) |*digest, index| {
-        digest.* = store_view.type_digests[index] orelse
-            program.types.typeDigest(&program.names, @enumFromInt(@as(u32, @intCast(index))));
-    }
-
-    return .{
-        .view = .{
-            .types = store_view.types,
-            .type_digests = type_digests,
-            .spans = store_view.spans,
-            .fields = store_view.fields,
-            .tags = store_view.tags,
-            .declared_fields = store_view.declared_fields,
-        },
-        .type_digests = type_digests,
-    };
-}
-
-fn digestBytesEqual(lhs: check.CheckedNames.TypeDigest, rhs: check.CheckedNames.TypeDigest) bool {
-    return std.mem.eql(u8, lhs.bytes[0..], rhs.bytes[0..]);
-}
-
-fn specRecordMatches(
-    allocator: Allocator,
-    name_store: *const check.CheckedNames.NameStore,
-    candidate_types: anytype,
-    candidate: MonoAst.SpecRecord,
-    expected_types: anytype,
-    expected: MonoAst.SpecRecord,
-) Allocator.Error!bool {
-    if (!std.meta.eql(candidate.identity.callable, expected.identity.callable)) return false;
-    if (!digestBytesEqual(candidate.identity.source_fn_ty_digest, expected.identity.source_fn_ty_digest)) return false;
-    if (!digestBytesEqual(candidate.identity.request_fn_ty_digest, expected.identity.request_fn_ty_digest)) return false;
-    if (!digestBytesEqual(candidate.solved_fn_ty_digest, expected.solved_fn_ty_digest)) return false;
-    return try MonoType.typeEqlAcrossStores(
-        allocator,
-        name_store,
-        candidate_types,
-        candidate.solved_fn_ty,
-        expected_types,
-        expected.solved_fn_ty,
-    );
-}
-
-fn specCoveredByLocalOrLoaded(
-    allocator: Allocator,
-    cached: MonoAst.ProgramView,
-    loaded: MonoLower.LoadedSpecializationShard,
-    expected_types: anytype,
-    expected: MonoAst.SpecRecord,
-) Allocator.Error!bool {
-    for (cached.specs) |candidate| {
-        if (try specRecordMatches(allocator, cached.names, cached.types, candidate, expected_types, expected)) return true;
-    }
-
-    for (loaded.specs) |candidate| {
-        if (try specRecordMatches(allocator, cached.names, loaded.types, candidate, expected_types, expected)) return true;
-    }
-
-    return false;
-}
-
-fn expectSpecsCoveredByCachedOrLoaded(
-    allocator: Allocator,
-    no_cache: MonoAst.ProgramView,
-    cached: MonoAst.ProgramView,
-    loaded: MonoLower.LoadedSpecializationShard,
-) TestError!void {
-    for (no_cache.specs) |expected| {
-        if (!try specCoveredByLocalOrLoaded(allocator, cached, loaded, no_cache.types, expected)) {
-            return error.MissingProcSpec;
-        }
-    }
-}
-
-fn isUnaryPrimitiveFnSpec(view: MonoAst.ProgramView, record: MonoAst.SpecRecord, primitive: MonoType.Primitive) bool {
-    const func = switch (view.types.get(record.solved_fn_ty)) {
-        .func => |func| func,
-        .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst => return false,
-    };
-    const args = view.types.span(func.args);
-    if (args.len != 1) return false;
-    const arg_matches = switch (view.types.get(args[0])) {
-        .primitive => |arg| arg == primitive,
-        .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => false,
-    };
-    const ret_matches = switch (view.types.get(func.ret)) {
-        .primitive => |ret| ret == primitive,
-        .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => false,
-    };
-    return arg_matches and ret_matches;
-}
-
 fn lowerModuleWithInlineExpects(
     allocator: Allocator,
     source: []const u8,
@@ -734,12 +588,14 @@ fn runLoweredWithHostEvents(
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &lowered.lir_result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.Interpreter.init(
         allocator,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
+        static_strings.view(),
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
 
@@ -1270,7 +1126,7 @@ fn expectInlinePlanDecision(
     lifted = undefined;
     defer solved.deinit();
 
-    var inline_plan = try postcheck.SolvedInline.analyze(allocator, .wrappers, procedure_usage.view(), &solved);
+    var inline_plan = try postcheck.SolvedInline.analyze(allocator, .wrappers, procedure_usage.view(), &solved, false);
     defer inline_plan.deinit();
     const plan = inline_plan.view();
 
@@ -2387,6 +2243,109 @@ test "specialization scheduling is deterministic across repeat runs" {
     }
 }
 
+test "interface summaries relocate across bodies and executor lanes" {
+    const allocator = std.testing.allocator;
+    const TaskExecutor = base.post_check_task_executor;
+    const Executor = struct {
+        allocator: Allocator,
+        next_lane: usize,
+        pending: [2]TaskExecutor.Completion = undefined,
+        pending_len: usize = 0,
+        lane_states: [2]TaskExecutor.LaneState = .{
+            TaskExecutor.LaneState.init(std.testing.allocator),
+            TaskExecutor.LaneState.init(std.testing.allocator),
+        },
+
+        fn deinit(self: *@This()) void {
+            for (&self.lane_states) |*state| state.deinit();
+        }
+
+        fn begin(context: *anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            std.debug.assert(self.pending_len == 0);
+        }
+
+        fn submit(context: *anyopaque, task: TaskExecutor.Task) Allocator.Error!void {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            const lane = self.next_lane;
+            self.next_lane = (lane + 1) % 2;
+            self.pending[self.pending_len] = .{
+                .id = task.id,
+                .worker_id = lane,
+                .value = task.run(task.context, .{
+                    .id = lane,
+                    .allocator = self.allocator,
+                    .scratch = self.allocator,
+                    .lane_state = &self.lane_states[lane],
+                }),
+            };
+            self.pending_len += 1;
+        }
+
+        fn receive(context: *anyopaque) TaskExecutor.Completion {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            self.pending_len -= 1;
+            return self.pending[self.pending_len];
+        }
+
+        fn end(context: *anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            std.debug.assert(self.pending_len == 0);
+        }
+
+        fn executor(self: *@This()) TaskExecutor.Executor {
+            return .{
+                .context = self,
+                .worker_count = 2,
+                .beginFn = begin,
+                .submitFn = submit,
+                .receiveFn = receive,
+                .endFn = end,
+            };
+        }
+    };
+    const source =
+        \\leaf : Str -> Str
+        \\leaf = |s| Str.concat(s, "!")
+        \\left : Str -> Str
+        \\left = |s| leaf(s)
+        \\right : Str -> Str
+        \\right = |s| leaf(s)
+        \\main : Str -> (Str, Str)
+        \\main = |s| (left(s), right(s))
+    ;
+    var first_executor = Executor{ .allocator = allocator, .next_lane = 0 };
+    defer first_executor.deinit();
+    var second_executor = Executor{ .allocator = allocator, .next_lane = 1 };
+    defer second_executor.deinit();
+    var first_diagnostics: MonoLower.Diagnostics = .{};
+    var second_diagnostics: MonoLower.Diagnostics = .{};
+    var first = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .diagnostics = &first_diagnostics,
+        .post_check_executor = first_executor.executor(),
+    });
+    defer first.deinit(allocator);
+    var second = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .diagnostics = &second_diagnostics,
+        .post_check_executor = second_executor.executor(),
+    });
+    defer second.deinit(allocator);
+    try std.testing.expect(first_diagnostics.specialization.interface_summary_hits > 0);
+    try std.testing.expect(first_diagnostics.specialization.interface_summary_expansions > 0);
+    try std.testing.expect(first_diagnostics.specialization.interface_summary_verifications > 0);
+    try std.testing.expect(second_diagnostics.specialization.interface_summary_verifications > 0);
+    try std.testing.expect(first.mono.types.digest_stats == null);
+    const first_specs = first.mono.specsView();
+    const second_specs = second.mono.specsView();
+    try std.testing.expectEqual(first_specs.len, second_specs.len);
+    for (first_specs, second_specs) |lhs, rhs| {
+        try std.testing.expectEqual(lhs.fn_id, rhs.fn_id);
+        try std.testing.expectEqual(lhs.status, rhs.status);
+        try std.testing.expectEqual(lhs.identity.request_fn_ty_digest, rhs.identity.request_fn_ty_digest);
+        try std.testing.expectEqual(lhs.solved_fn_ty_digest, rhs.solved_fn_ty_digest);
+    }
+}
+
 test "issue 10529 ten-level open Try chain with inline callback stays bounded" {
     const allocator = std.testing.allocator;
     const source =
@@ -2883,80 +2842,6 @@ test "alias-heavy generic specialization count does not exceed backing types" {
     defer alias.deinit(allocator);
 
     try std.testing.expect(alias.mono.view().specs.len <= backing.mono.view().specs.len);
-}
-
-test "disabling monotype specialization cache does not change monotype output" {
-    const allocator = std.testing.allocator;
-    const source =
-        \\identity : a -> a
-        \\identity = |value| value
-        \\
-        \\main : { n : U64, flag : Bool }
-        \\main = {
-        \\    { n: identity(1), flag: identity(Bool.True) }
-        \\}
-    ;
-
-    var default = try lowerMonotypeModule(allocator, source);
-    defer default.deinit(allocator);
-
-    var disabled = try lowerMonotypeModuleWithOptions(allocator, source, .{
-        .specialization_cache = .disabled,
-    });
-    defer disabled.deinit(allocator);
-
-    try expectEquivalentMonotypeProgramViews(default.mono.view(), disabled.mono.view());
-}
-
-test "monotype specialization cache read reuses loaded hits and lowers fresh misses" {
-    const allocator = std.testing.allocator;
-    const mixed_source =
-        \\identity : a -> a
-        \\identity = |value| value
-        \\
-        \\main : { n : U64, flag : Bool }
-        \\main = {
-        \\    { n: identity(1), flag: identity(Bool.True) }
-        \\}
-    ;
-
-    var loaded_program = try lowerMonotypeModule(allocator, mixed_source);
-    defer loaded_program.deinit(allocator);
-    const loaded_program_view = loaded_program.mono.view();
-
-    const selected_loaded_spec = for (loaded_program_view.specs) |record| {
-        if (isUnaryPrimitiveFnSpec(loaded_program_view, record, .u64)) break record;
-    } else return error.MissingProcSpec;
-    const loaded_specs = [_]MonoAst.SpecRecord{selected_loaded_spec};
-
-    const loaded_types = try durableTypeSnapshot(allocator, &loaded_program.mono);
-    defer loaded_types.deinit(allocator);
-    const loaded_shards = [_]MonoLower.LoadedSpecializationShard{.{
-        .shard_id = @enumFromInt(1),
-        .types = loaded_types.view,
-        .specs = &loaded_specs,
-        .fns = loaded_program_view.fns,
-        .const_fn_evidence = loaded_program_view.const_fn_evidence,
-        .const_fn_evidence_frames = loaded_program_view.const_fn_evidence_frames,
-    }};
-
-    var no_cache = try lowerMonotypeModuleWithOptions(allocator, mixed_source, .{
-        .specialization_cache = .disabled,
-    });
-    defer no_cache.deinit(allocator);
-
-    var counters: MonoLower.SpecializationCounters = .{};
-    var cached = try lowerMonotypeModuleWithOptions(allocator, mixed_source, .{
-        .specialization_cache = .{},
-        .loaded_specialization_shards = &loaded_shards,
-        .specialization_counters = &counters,
-    });
-    defer cached.deinit(allocator);
-
-    try std.testing.expect(cached.mono.view().imported_fns.len > 0);
-    try std.testing.expect(cached.mono.view().specs.len < no_cache.mono.view().specs.len);
-    try std.testing.expect(counters.template_misses > 0);
-    try expectSpecsCoveredByCachedOrLoaded(allocator, no_cache.mono.view(), cached.mono.view(), loaded_shards[0]);
 }
 
 test "nested function specializations keep equal types at different sites distinct" {
@@ -3541,12 +3426,14 @@ test "interpreter captures the virtual source frame of an inlined crash" {
     const store = &lowered_source.lowered.lir_result.store;
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, store);
+    defer static_strings.deinit();
     var interpreter = try eval.Interpreter.init(
         allocator,
         store,
         &lowered_source.lowered.lir_result.layouts,
+        static_strings.view(),
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
 
@@ -3591,13 +3478,15 @@ test "boxy lowering preserves a runtime-built crash message" {
 
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.Interpreter.initWithBoxyTables(
         allocator,
         &result.store,
         &result.layouts,
         eval.boxy_runtime.BoxyTables.fromResult(result),
+        static_strings.view(),
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
 
@@ -4332,6 +4221,45 @@ test "LIR locals carry source-level names" {
     }
     try std.testing.expect(found_first);
     try std.testing.expect(found_second);
+}
+
+test "issue 11317 or-pattern captures reuse one closure with and without specialization" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\get : [A(U64), B(U64)] -> U64
+        \\get = |v| match v {
+        \\    A(n) | B(n) => (|| n)()
+        \\}
+        \\main : U64 -> U64
+        \\main = |n| get(A(n)) + get(B(n + 1))
+    ;
+    {
+        var lowered = try lowerMonotypeModule(allocator, source);
+        defer lowered.deinit(allocator);
+        // Alternative values share the closure body, without extra materializations.
+        try std.testing.expectEqual(@as(usize, 1), lowered.mono.view().nested_defs.len);
+    }
+    for ([_]lir.CheckedPipeline.InlineMode{ .none, .wrappers }) |inline_mode| {
+        var lowered = try lowerModule(allocator, source, inline_mode);
+        defer lowered.deinit(allocator);
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        {
+            const result = &lowered.lowered.lir_result;
+            var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+            defer static_strings.deinit();
+            var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
+            defer interpreter.deinit();
+            var n: u64 = 5;
+            const evaluated = try interpreter.eval(.{
+                .proc_id = try rootProc(&lowered.lowered),
+                .arg_layouts = &.{.u64},
+                .arg_ptr = @ptrCast(&n),
+            });
+            try std.testing.expectEqual(@as(u64, 11), evaluated.value.read(u64));
+        }
+        try runtime_env.checkForLeaks();
+    }
 }
 
 test "shared callees are lifted once and never gain spurious captures" {
@@ -5500,6 +5428,229 @@ test "nested iterator results retain the callee-authored representation" {
             return error.TestUnexpectedResult;
         }
         try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
+    }
+}
+
+/// Whether every dispatch plan for `method` in the lowered module (at least
+/// one) is `direct_parametric` (true) or every one is `direct_closed`
+/// (false); mixed or non-direct plans fail the test.
+fn directDispatchPlanIsParametric(
+    resources: *const helpers.ParsedResources,
+    method: []const u8,
+) TestError!bool {
+    var found: ?bool = null;
+    for (resources.checked_artifact.static_dispatch_plans.plans) |plan| {
+        if (!std.mem.eql(u8, resources.checked_artifact.canonical_names.methodNameText(plan.method), method)) continue;
+        const parametric = switch (plan.resolution) {
+            .direct_parametric => true,
+            .direct_closed => false,
+            .direct_pending,
+            .evidence_dependent,
+            .structural,
+            .checked_error,
+            .@"unreachable",
+            => {
+                std.debug.print("dispatch plan for {s} is not direct: {s}\n", .{ method, @tagName(plan.resolution) });
+                return error.TestUnexpectedResult;
+            },
+        };
+        if (found) |previous| {
+            if (previous != parametric) {
+                std.debug.print("dispatch plans for {s} classify differently\n", .{method});
+                return error.TestUnexpectedResult;
+            }
+        }
+        found = parametric;
+    }
+    return found orelse error.TestUnexpectedResult;
+}
+
+test "polarity: a method row tail is a closed direct plan only when no enclosing scheme quantifies it" {
+    // `wrapped`'s annotated error row is implicitly
+    // open, so every call instantiates it with a defaultable flex tail. The
+    // dispatch in `wrap` shares that tail with `wrap`'s own return row: it is
+    // an identity variable of the enclosing template, so the plan stays
+    // `direct_parametric` whether or not a caller widens it (the first two
+    // cases) and a named extension is a rigid (the third). A tail the body
+    // matches away is quantified by nothing and is `direct_closed`, sealed to
+    // its row default exactly as it was before polarity. A direct dispatch
+    // inside a generalized local (its receiver is concrete; a dispatch on the
+    // local's own parameter would be evidence-dependent) is quantified by the
+    // local's scheme (scope-chain arm), and a recursive method's
+    // self-dispatch shares its tail with the enclosing template's return row:
+    // the surviving plan-side clone of that tail maps back to the template
+    // root through the store's identity origins (which clone survives is
+    // pinned by the checked_artifact.zig unit test "direct dispatch
+    // classification follows instantiation clones to the scheme that
+    // quantifies them").
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { name: []const u8, source: []const u8, parametric: bool }{
+        .{ .name = "widened caller", .parametric = true, .source =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\wrap : Rows -> Try(Str, [Unavailable])
+        \\wrap = |rows| rows.wrapped()
+        \\
+        \\use : Rows -> Try(Str, [Unavailable, Other])
+        \\use = |rows| {
+        \\    s = wrap(rows)?
+        \\    Ok(s)
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    s = match use(Rows.{}) {
+        \\        Ok(v) => v
+        \\        Err(_) => "err"
+        \\    }
+        \\    dbg s
+        \\    s
+        \\}
+        },
+        .{ .name = "own-row caller", .parametric = true, .source =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\wrap : Rows -> Try(Str, [Unavailable])
+        \\wrap = |rows| rows.wrapped()
+        \\
+        \\use : Rows -> Try(Str, [Unavailable])
+        \\use = |rows| {
+        \\    s = wrap(rows)?
+        \\    Ok(s)
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    s = match use(Rows.{}) {
+        \\        Ok(v) => v
+        \\        Err(_) => "err"
+        \\    }
+        \\    dbg s
+        \\    s
+        \\}
+        },
+        .{ .name = "named extension", .parametric = true, .source =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable, Missing, ..others])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\wrap : Rows -> Try(Str, [Unavailable, Missing, ..others])
+        \\wrap = |rows| rows.wrapped()
+        \\
+        \\use : Rows -> Try(Str, [Unavailable, Missing, Other])
+        \\use = |rows| {
+        \\    s = wrap(rows)?
+        \\    Ok(s)
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    s = match use(Rows.{}) {
+        \\        Ok(v) => v
+        \\        Err(_) => "err"
+        \\    }
+        \\    dbg s
+        \\    s
+        \\}
+        },
+        .{ .name = "body-local tail", .parametric = false, .source =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\describe : Rows -> Str
+        \\describe = |rows| {
+        \\    wrapped = rows.wrapped()
+        \\    match wrapped {
+        \\        Ok(s) => s
+        \\        Err(_) => "err"
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    s = describe(Rows.{})
+        \\    dbg s
+        \\    s
+        \\}
+        },
+        .{ .name = "nested generalized local", .parametric = true, .source =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\use : Rows -> Try(Str, [Unavailable, Other])
+        \\use = |rows| {
+        \\    helper = |r| {
+        \\        rows2 : Rows
+        \\        rows2 = r
+        \\        rows2.wrapped()
+        \\    }
+        \\    s = helper(rows)?
+        \\    Ok(s)
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    s = match use(Rows.{}) {
+        \\        Ok(v) => v
+        \\        Err(_) => "err"
+        \\    }
+        \\    dbg s
+        \\    s
+        \\}
+        },
+        .{ .name = "recursive method", .parametric = true, .source =
+        \\Rows := { n : U64 }.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |rows| if rows.n == 0 Ok("x") else Rows.{ n: rows.n - 1 }.wrapped()
+        \\}
+        \\
+        \\use : Rows -> Try(Str, [Unavailable, Other])
+        \\use = |rows| {
+        \\    s = rows.wrapped()?
+        \\    Ok(s)
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    s = match use(Rows.{ n: 2 }) {
+        \\        Ok(v) => v
+        \\        Err(_) => "err"
+        \\    }
+        \\    dbg s
+        \\    s
+        \\}
+        },
+    };
+
+    for (cases) |case| {
+        var optimized = try lowerModule(allocator, case.source, .wrappers);
+        defer optimized.deinit(allocator);
+
+        const parametric = try directDispatchPlanIsParametric(&optimized.resources, "wrapped");
+        if (parametric != case.parametric) {
+            std.debug.print("direct plan classification differed for {s}: expected parametric={}\n", .{ case.name, case.parametric });
+            return error.TestUnexpectedResult;
+        }
+
+        var run = try runLoweredWithHostEvents(allocator, &optimized.lowered);
+        defer run.deinit(allocator);
+        try std.testing.expectEqual(eval.RuntimeHostEnv.Termination.returned, run.termination);
+        try std.testing.expectEqual(@as(usize, 1), run.events.len);
+        switch (run.events[0]) {
+            .dbg => |msg| try std.testing.expectEqualStrings("\"x\"", msg),
+            .expect_failed, .crashed, .effect => return error.TestUnexpectedResult,
+        }
     }
 }
 
@@ -8016,15 +8167,11 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
         .mono_fn_ty = worker_fn_ty,
     });
 
-    const opaque_scalar = try mono.addImportedFn(.{ .shard = @enumFromInt(1), .fn_id = @enumFromInt(1) });
-
     const pair_local = try mono.addLocalWithBinder(@enumFromInt(1), pair_ty, shared_binder);
     const scalar_local = try mono.addLocalWithBinder(@enumFromInt(2), u32_ty, shared_binder);
 
-    const scalar_value = try mono.addExpr(.{ .ty = u32_ty, .data = .{ .call_proc = .{
-        .callee = MonoAst.importedProcCallee(opaque_scalar),
-        .args = MonoAst.Span(MonoAst.ExprId).empty(),
-    } } });
+    const scalar_literal = try mono.addExpr(.{ .ty = u32_ty, .data = .{ .int_lit = .{ .bytes = @splat(0), .kind = .u128 } } });
+    const scalar_value = try mono.addExpr(.{ .ty = u32_ty, .data = .{ .dbg = scalar_literal } });
     const scalar_pat = try mono.addPat(.{ .ty = u32_ty, .data = .{ .bind = scalar_local } });
 
     const pair_ref = try mono.addExpr(.{ .ty = pair_ty, .data = .{ .local = pair_local } });
@@ -8530,6 +8677,653 @@ test "compiler-generated dispatch classes lower via checked evidence" {
     try std.testing.expectEqualStrings("True", output);
 }
 
+test "W6a open where-method widening and nested evidence lower through explicit per-use provenance" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\describe_wide : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\describe_wide = |x| x.status()
+        \\
+        \\Job := [Pending, Failed].{
+        \\    status : Job -> [Ok(Str), Err(Str)]
+        \\    status = |job| match job { Pending => Ok("p"), Failed => Err("f") }
+        \\}
+        \\
+        \\load : a -> Try(Str, [NotFound, Other]) where [a.fetch : a -> Try(Str, [NotFound])]
+        \\load = |x| {
+        \\    value = x.fetch()?
+        \\    Ok(value)
+        \\}
+        \\
+        \\Src := [S].{
+        \\    fetch : Src -> Try(Str, [NotFound])
+        \\    fetch = |_| Ok("hit")
+        \\}
+        \\
+        \\both : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\both = |x| {
+        \\    first = match x.status() { Ok(s) => s, Err(e) => e }
+        \\    if Str.is_empty(first) Extra else x.status()
+        \\}
+        \\
+        \\Named := [N].{
+        \\    name : Named -> Str
+        \\    name = |_| "named"
+        \\}
+        \\
+        \\Nested(a) := [Wrap(a)].{
+        \\    status : Nested(a) -> [Ok(Str), Err(Str)] where [a.name : a -> Str]
+        \\    status = |Nested.Wrap(inner)| Ok(inner.name())
+        \\}
+        \\
+        \\nested_wide : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\nested_wide = |x| x.status()
+        \\
+        \\nested_closed : a -> Str where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\nested_closed = |x| match x.status() { Ok(s) => s, Err(e) => e }
+        \\
+        \\Subset := [Only].{
+        \\    status : Subset -> [Ok(Str)]
+        \\    status = |_| Ok("subset")
+        \\}
+        \\
+        \\subset_closed : a -> Str where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\subset_closed = |x| match x.status() { Ok(s) => s, Err(e) => e }
+        \\
+        \\Mid := [M].{
+        \\    name : Mid -> Str
+        \\    name = |_| "mid"
+        \\}
+        \\
+        \\Source := [SourceValue].{
+        \\    step : Source -> Mid
+        \\    step = |_| Mid.M
+        \\}
+        \\
+        \\RequiresRecord(a) := [R(a)].{
+        \\    plus : RequiresRecord(a), RequiresRecord(a) -> RequiresRecord(a)
+        \\        where [a.step : a -> b, b.name : b -> Str]
+        \\    plus = |left, _| match left {
+        \\        R(inner) => {
+        \\            stepped = inner.step()
+        \\            _ = stepped.name()
+        \\            left
+        \\        }
+        \\    }
+        \\}
+        \\
+        \\repeat_plus : a, U64 -> a where [a.plus : a, a -> a]
+        \\repeat_plus = |x, n|
+        \\    if n == 0 { x.plus(x) } else { repeat_plus(x, n - 1) }
+        \\
+        \\main : Bool
+        \\main = {
+        \\    pending_ok = match describe_wide(Job.Pending) { Ok(s) => s == "p", Err(_) => False, Extra => False }
+        \\    failed_ok = match describe_wide(Job.Failed) { Ok(_) => False, Err(s) => s == "f", Extra => False }
+        \\    question_ok = match load(Src.S) { Ok(s) => s == "hit", Err(_) => False }
+        \\    both_ok = match both(Job.Pending) { Ok(s) => s == "p", Err(_) => False, Extra => False }
+        \\    nested = Nested.Wrap(Named.N)
+        \\    nested_wide_ok = match nested_wide(nested) { Ok(s) => s == "named", Err(_) => False, Extra => False }
+        \\    nested_closed_ok = nested_closed(nested) == "named"
+        \\    subset_ok = subset_closed(Subset.Only) == "subset"
+        \\    required = repeat_plus(RequiresRecord.R(Source.SourceValue), 1)
+        \\    required_ok = match required { RequiresRecord.R(Source.SourceValue) => True }
+        \\    pending_ok and failed_ok and question_ok and both_ok and nested_wide_ok and nested_closed_ok and subset_ok and required_ok
+        \\}
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+
+    // `RequiresRecord.plus` has constraint-callable-only nested evidence,
+    // so its target cannot be rebuilt from the independent callable. The raw
+    // where-use complete map must preserve the enclosing slot's resolved
+    // nested vector through checked-artifact construction and Monotype lowering.
+    var found_requires_record_reuse = false;
+    for (compiled.resources.checked_artifact.static_dispatch_plans.plans) |plan| {
+        if (!std.mem.eql(
+            u8,
+            compiled.resources.checked_artifact.canonical_names.methodNameText(plan.method),
+            "plus",
+        )) continue;
+        switch (plan.resolution) {
+            .evidence_dependent => |dependent| {
+                if (dependent.independent_callable and dependent.reuse_slot_nested_evidence) {
+                    found_requires_record_reuse = true;
+                }
+            },
+            .direct_pending,
+            .direct_closed,
+            .direct_parametric,
+            .structural,
+            .checked_error,
+            .@"unreachable",
+            => {},
+        }
+    }
+    try std.testing.expect(found_requires_record_reuse);
+
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
+}
+
+/// Monotype functions defined as generated adapters. The result-row widening
+/// adapter is the only producer of `.checked_generated` in a plain Roc module,
+/// so this count is the mechanism witness: a program that compiles the impl at
+/// the caller's wide row instead reports zero while still running correctly.
+fn checkedGeneratedFnCount(program: *const MonoAst.Program) usize {
+    var count: usize = 0;
+    for (program.view().fns) |function| {
+        switch (function.source.fn_def) {
+            .checked_generated => count += 1,
+            .local_template,
+            .imported_template,
+            .nested,
+            .local_hosted,
+            .imported_hosted,
+            .parser_runtime,
+            .encoder_for_runtime,
+            => {},
+        }
+    }
+    return count;
+}
+
+test "W6b widened closed where-method impl is reached through a generated adapter" {
+    const allocator = std.testing.allocator;
+    // `status` is published at the closed row `[Ok(Str), Err(Str)]` while
+    // `describe` requests `[Ok(Str), Err(Str), Extra]`. The impl must stay
+    // specialized at its declared row and be reached through a generated
+    // adapter that re-tags into the requested row (design.md "Result-Row
+    // Widening Adapter"). Running the program proves neither: it produces the
+    // same answer whether the impl was adapted or simply specialized wide, so
+    // the adapter count is the only witness.
+    const widened =
+        \\describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\describe = |x| x.status()
+        \\
+        \\closed_value : [Ok(Str), Err(Str)]
+        \\closed_value = Ok("cv")
+        \\
+        \\Job := [Pending].{
+        \\    status : Job -> [Ok(Str), Err(Str)]
+        \\    status = |_| closed_value
+        \\}
+        \\
+        \\show : [Ok(Str), Err(Str), Extra] -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra" }
+        \\
+        \\expect show(describe(Job.Pending)) == "Ok(cv)"
+        \\
+        \\main = 0
+    ;
+    var widened_lowered = try lowerMonotypeModuleWithOptions(allocator, widened, .{
+        .root_selection = .test_expects,
+    });
+    defer widened_lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&widened_lowered.mono));
+
+    // The control: the same dispatch requested at the impl's own row. Nothing
+    // is widened, so no adapter may be minted.
+    const exact =
+        \\describe : a -> [Ok(Str), Err(Str)] where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\describe = |x| x.status()
+        \\
+        \\closed_value : [Ok(Str), Err(Str)]
+        \\closed_value = Ok("cv")
+        \\
+        \\Job := [Pending].{
+        \\    status : Job -> [Ok(Str), Err(Str)]
+        \\    status = |_| closed_value
+        \\}
+        \\
+        \\show : [Ok(Str), Err(Str)] -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})" }
+        \\
+        \\expect show(describe(Job.Pending)) == "Ok(cv)"
+        \\
+        \\main = 0
+    ;
+    var exact_lowered = try lowerMonotypeModuleWithOptions(allocator, exact, .{
+        .root_selection = .test_expects,
+    });
+    defer exact_lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&exact_lowered.mono));
+}
+
+test "W6b question-widened closed Try impl is reached through a generated adapter" {
+    const allocator = std.testing.allocator;
+    // The `Try` instance of the same mechanism: `fetch` publishes the closed
+    // error row `[NotFound]` and `?` requests `[NotFound, Other]`, so the
+    // adapter unwraps the declared-row `Try` and re-wraps its error into the
+    // wider row.
+    const source =
+        \\load : a -> Try(Str, [NotFound, Other]) where [a.fetch : a -> Try(Str, [NotFound])]
+        \\load = |x| {
+        \\    s = x.fetch()?
+        \\    Ok(s)
+        \\}
+        \\
+        \\closed_try : Try(Str, [NotFound])
+        \\closed_try = Ok("hit")
+        \\
+        \\Src := [S].{
+        \\    fetch : Src -> Try(Str, [NotFound])
+        \\    fetch = |_| closed_try
+        \\}
+        \\
+        \\expect match load(Src.S) { Ok(s) => s == "hit", Err(_) => False }
+        \\
+        \\main = 0
+    ;
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .root_selection = .test_expects,
+    });
+    defer lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
+}
+
+test "W6b closed impl reached through nested evidence is adapted" {
+    const allocator = std.testing.allocator;
+    // `Wrap.status` carries its OWN where-clause, so the obligation that
+    // reaches it drags a second requirement along, and its published result
+    // row is still closed by `closed_ok` / `closed_err`. `describe` uses the
+    // method twice in one body—exhaustively at the declared row and widened—so
+    // the adapter is minted beside an ordinary declared-row
+    // specialization of the same template. `test/cli`'s
+    // `WidenNestedEvidenceClosedImpl.roc` runs this program on both backends
+    // and only proves it computes the right answer; the adapter count is what
+    // proves the mechanism.
+    const source =
+        \\closed_ok : [Ok(Str), Err(Str)]
+        \\closed_ok = Ok("ok")
+        \\
+        \\closed_err : [Ok(Str), Err(Str)]
+        \\closed_err = Err("err")
+        \\
+        \\Wrap(a) := [W(a)].{
+        \\    status : Wrap(a) -> [Ok(Str), Err(Str)] where [a.name : a -> Str]
+        \\    status = |w| match w { W(inner) => if inner.name() == "thing" closed_ok else closed_err }
+        \\}
+        \\
+        \\Thing := [T].{
+        \\    name : Thing -> Str
+        \\    name = |_| "thing"
+        \\}
+        \\
+        \\Other := [O].{
+        \\    name : Other -> Str
+        \\    name = |_| "other"
+        \\}
+        \\
+        \\describe : x -> [Ok(Str), Err(Str), Extra] where [x.status : x -> [Ok(Str), Err(Str)]]
+        \\describe = |x| {
+        \\    first = match x.status() {
+        \\        Ok(s) => s
+        \\        Err(e) => e
+        \\    }
+        \\    if first == "" Extra else x.status()
+        \\}
+        \\
+        \\show : [Ok(Str), Err(Str), Extra] -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra" }
+        \\
+        \\expect show(describe(Wrap.W(Thing.T))) == "Ok(ok)"
+        \\expect show(describe(Wrap.W(Other.O))) == "Err(err)"
+        \\
+        \\main = 0
+    ;
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .root_selection = .test_expects,
+    });
+    defer lowered.deinit(allocator);
+    // One adapter per (template specialization, requested type): `Wrap(Thing)`
+    // and `Wrap(Other)` are distinct specializations of `status`, so each
+    // widened request gets its own.
+    try std.testing.expectEqual(@as(usize, 2), checkedGeneratedFnCount(&lowered.mono));
+}
+
+test "W6b closed impl with rigid payloads is adapted at the requested payloads" {
+    const allocator = std.testing.allocator;
+    // `Relay(a).route` publishes the closed row `[Ok(a), Err(a)]`—closed
+    // because it returns its own input-position parameter—with RIGID
+    // payloads. `lowerCheckedTypeVariable` seals a rigid to the empty tag
+    // union, so the adapter's narrowed source type must take its payloads
+    // from the REQUEST rather than from `lowerType` of the checked root
+    // (`resultRowWideningAdapterOrNull`'s doc comment). Both constructors go
+    // through the adapter, so a payload taken from the declared type would
+    // be a zero-sized representation rather than a `Str`.
+    const source =
+        \\Relay(a) := [R(a)].{
+        \\    route : Relay(a), [Ok(a), Err(a)] -> [Ok(a), Err(a)]
+        \\    route = |_, v| v
+        \\}
+        \\
+        \\describe : r, [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str), Extra] where [r.route : r, [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]]
+        \\describe = |x, v| x.route(v)
+        \\
+        \\show : [Ok(Str), Err(Str), Extra] -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra" }
+        \\
+        \\expect show(describe(Relay.R("seed"), Ok("arg"))) == "Ok(arg)"
+        \\expect show(describe(Relay.R("seed"), Err("bad"))) == "Err(bad)"
+        \\
+        \\main = 0
+    ;
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .root_selection = .test_expects,
+    });
+    defer lowered.deinit(allocator);
+    // Both expects request `Relay(Str).route` at the same widened type, so
+    // the adapter is keyed once.
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
+}
+
+test "W6b direct-result widening adapter re-tags into the requested row at run time" {
+    const allocator = std.testing.allocator;
+    // The executing half of "W6b widened closed where-method impl ...", which
+    // only lowers. `Extra` is chosen because it SORTS BETWEEN the declared
+    // labels: tags are ordered by name, so the declared row numbers
+    // `Err` 0, `Ok` 1 while the requested row numbers `Err` 0, `Extra` 1,
+    // `Ok` 2. An adapter that forwarded the callee's result unchanged, or that
+    // mapped the labels in the wrong order, would therefore read the `Ok`
+    // payload out of a payload-less `Extra`—which only running the program
+    // can catch. (`Err` maps 0 to 0 and proves nothing on its own; it is here
+    // so both constructors travel through the adapter.)
+    const source =
+        \\closed_ok : [Ok(Str), Err(Str)]
+        \\closed_ok = Ok("ok")
+        \\
+        \\closed_err : [Ok(Str), Err(Str)]
+        \\closed_err = Err("bad")
+        \\
+        \\Job := [Pending, Failed].{
+        \\    status : Job -> [Ok(Str), Err(Str)]
+        \\    status = |job| match job { Pending => closed_ok, Failed => closed_err }
+        \\}
+        \\
+        \\describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\describe = |x| x.status()
+        \\
+        \\show : [Ok(Str), Err(Str), Extra] -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra" }
+        \\
+        \\main : Bool
+        \\main = {
+        \\    pending_ok = show(describe(Job.Pending)) == "Ok(ok)"
+        \\    failed_ok = show(describe(Job.Failed)) == "Err(bad)"
+        \\    pending_ok and failed_ok
+        \\}
+    ;
+
+    // The mechanism witness: the value below is the same either way, so pin
+    // that an adapter really is what produced it.
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
+}
+
+test "W6b Try error-row widening adapter re-tags into the requested row at run time" {
+    const allocator = std.testing.allocator;
+    // The `Try` instance, executed. The extra label is `Gone` rather than the
+    // `Other` the lowering-only test uses, because `Other` sorts AFTER
+    // `NotFound` and leaves it at discriminant 0 in both rows—an adapter that
+    // injected nothing at all would still produce the right answer. `Gone`
+    // sorts first, so the declared row numbers `NotFound` 0 while the requested
+    // row numbers `Gone` 0 and `NotFound` 1, and a missing or misordered
+    // injection reports `Gone` where the callee returned `NotFound`.
+    const source =
+        \\closed_hit : Try(Str, [NotFound])
+        \\closed_hit = Ok("hit")
+        \\
+        \\closed_miss : Try(Str, [NotFound])
+        \\closed_miss = Err(NotFound)
+        \\
+        \\Src := [Found, Missing].{
+        \\    fetch : Src -> Try(Str, [NotFound])
+        \\    fetch = |src| match src { Found => closed_hit, Missing => closed_miss }
+        \\}
+        \\
+        \\load : a -> Try(Str, [Gone, NotFound]) where [a.fetch : a -> Try(Str, [NotFound])]
+        \\load = |x| {
+        \\    s = x.fetch()?
+        \\    Ok(s)
+        \\}
+        \\
+        \\show : Try(Str, [Gone, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(NotFound) => "NotFound" }
+        \\
+        \\main : Bool
+        \\main = {
+        \\    found_ok = show(load(Src.Found)) == "Ok(hit)"
+        \\    missing_ok = show(load(Src.Missing)) == "NotFound"
+        \\    found_ok and missing_ok
+        \\}
+    ;
+
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
+}
+
+test "W6b alias-wrapped closed Try error row is adapted and re-tagged at run time" {
+    const allocator = std.testing.allocator;
+    // The declared `Try` reached through a transparent alias. The checked side
+    // crosses alias layers when it publishes the `Try` capability and records
+    // the widening, so the mono side has to cross them too: reading
+    // `IoResult(Str)` as-is finds an `.alias` named node whose def is not
+    // `Try`'s, which declined the adapter after the relation had already
+    // committed to it. `test/cli/WidenAliasTryClosedImpl.roc` runs the same
+    // shape end to end on both backends; the count below is what proves an
+    // adapter—not a specialization at the wide row—serves the request.
+    //
+    // `Gone` sorts before `NotFound`, so the declared row numbers `NotFound` 0
+    // while the requested row numbers `Gone` 0 and `NotFound` 1: a missing or
+    // misordered injection reports `Gone` where the callee returned
+    // `NotFound`.
+    const source =
+        \\IoResult(a) : Try(a, [NotFound])
+        \\
+        \\closed_hit : IoResult(Str)
+        \\closed_hit = Ok("hit")
+        \\
+        \\closed_miss : IoResult(Str)
+        \\closed_miss = Err(NotFound)
+        \\
+        \\Src := [Found, Missing].{
+        \\    fetch : Src -> IoResult(Str)
+        \\    fetch = |src| match src { Found => closed_hit, Missing => closed_miss }
+        \\}
+        \\
+        \\load : a -> Try(Str, [Gone, NotFound]) where [a.fetch : a -> IoResult(Str)]
+        \\load = |x| {
+        \\    s = x.fetch()?
+        \\    Ok(s)
+        \\}
+        \\
+        \\show : Try(Str, [Gone, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(NotFound) => "NotFound" }
+        \\
+        \\main : Bool
+        \\main = {
+        \\    found_ok = show(load(Src.Found)) == "Ok(hit)"
+        \\    missing_ok = show(load(Src.Missing)) == "NotFound"
+        \\    found_ok and missing_ok
+        \\}
+    ;
+
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
+}
+
+test "polarity W3 open-method widening adapter counts" {
+    const allocator = std.testing.allocator;
+    // `test/cli/OpenMethodWidenedCaller.roc` and `OpenMethodOwnRowCaller.roc`
+    // are mechanism-blind: they assert exit status, the pass line and the
+    // absence of panic needles, so they pass whether the program compiles to
+    // one wide specialization or to an adapter plus a narrow one. These
+    // counts are what makes a change to their specialization strategy visible.
+    const widened =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\wrap : Rows -> Try(Str, [Unavailable])
+        \\wrap = |rows| rows.wrapped()
+        \\
+        \\use : Rows -> Try(Str, [Unavailable, Other])
+        \\use = |rows| {
+        \\    s = wrap(rows)?
+        \\    Ok(s)
+        \\}
+        \\
+        \\expect use(Rows.{}) == Ok("x")
+        \\
+        \\main = 0
+    ;
+    var widened_lowered = try lowerMonotypeModuleWithOptions(allocator, widened, .{
+        .root_selection = .test_expects,
+    });
+    defer widened_lowered.deinit(allocator);
+
+    // `OpenMethodOwnRowCaller.roc`: the same program with nothing widened.
+    const own_row =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\wrap : Rows -> Try(Str, [Unavailable])
+        \\wrap = |rows| rows.wrapped()
+        \\
+        \\use : Rows -> Try(Str, [Unavailable])
+        \\use = |rows| {
+        \\    s = wrap(rows)?
+        \\    Ok(s)
+        \\}
+        \\
+        \\expect use(Rows.{}) == Ok("x")
+        \\
+        \\main = 0
+    ;
+    var own_row_lowered = try lowerMonotypeModuleWithOptions(allocator, own_row, .{
+        .root_selection = .test_expects,
+    });
+    defer own_row_lowered.deinit(allocator);
+
+    // The widened program without the intermediate `wrap`: `?` widens the
+    // method's own published row directly.
+    const direct =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\use : Rows -> Try(Str, [Unavailable, Other])
+        \\use = |rows| {
+        \\    s = rows.wrapped()?
+        \\    Ok(s)
+        \\}
+        \\
+        \\expect use(Rows.{}) == Ok("x")
+        \\
+        \\main = 0
+    ;
+    var direct_lowered = try lowerMonotypeModuleWithOptions(allocator, direct, .{
+        .root_selection = .test_expects,
+    });
+    defer direct_lowered.deinit(allocator);
+
+    // No adapters in any of the three. Every row `?` widens here belongs to an
+    // ORDINARY ANNOTATED signature—`wrap`'s in the first program, the method
+    // `wrapped`'s own in the third—and an ordinary annotated result row is
+    // implicitly open: its extension is an unresolved flex the request relation
+    // unifies with the wider row like any other. Nothing declined to unify, so
+    // nothing is owed an adapter; each specialization simply lowers at the row
+    // it was requested at. The `W6b ...` tests above hold the positive witness,
+    // where the implementation's published row really is closed.
+    //
+    // The first and third counted 1 before template completion consumed the
+    // relation's own answer. Completion used to re-derive "is this row closed"
+    // from the checked root, where `variableSealsToRowDefault` reports a flex
+    // tail defaulting to the empty tag union as closed—the right answer for a
+    // where-method's per-use marker, the wrong one for an ordinary annotated
+    // row. Each spurious adapter also added a second, narrow specialization of
+    // the same template and pulled it off the parallel body shards onto the
+    // coordinator (`specJobCompletesOnCoordinator`).
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&widened_lowered.mono));
+    // Nothing is requested wider than it was published, so no adapter exists.
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&own_row_lowered.mono));
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&direct_lowered.mono));
+}
+
 // Repro for https://github.com/roc-lang/roc/issues/10301: a list produced by an
 // opaque effectful expression and iterated by `for` must scalarize into a raw
 // indexed loop in the root proc, leaving no per-element iterator-step calls in
@@ -8611,12 +9405,14 @@ test "issue 10340 fold over effect-produced list scalarizes in root" {
 
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &optimized.lowered.lir_result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.Interpreter.init(
         allocator,
         &optimized.lowered.lir_result.store,
         &optimized.lowered.lir_result.layouts,
+        static_strings.view(),
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
     const result = try interpreter.eval(.{ .proc_id = try rootProc(&optimized.lowered) });
@@ -9259,12 +10055,14 @@ test "owned variants take a helper parameter's fields at the call" {
 
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &optimized.lowered.lir_result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.Interpreter.init(
         allocator,
         &optimized.lowered.lir_result.store,
         &optimized.lowered.lir_result.layouts,
+        static_strings.view(),
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
 
@@ -9374,12 +10172,14 @@ test "issue 10435 SpecConstr preserves frozen types for partially used while sta
 
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &optimized.lowered.lir_result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.Interpreter.init(
         allocator,
         &optimized.lowered.lir_result.store,
         &optimized.lowered.lir_result.layouts,
+        static_strings.view(),
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
 
@@ -9472,12 +10272,14 @@ test "issue 10461 ScalarizeJoins keeps neighboring join parameter initialization
 
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &optimized.lowered.lir_result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.Interpreter.init(
         allocator,
         &optimized.lowered.lir_result.store,
         &optimized.lowered.lir_result.layouts,
+        static_strings.view(),
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
 
@@ -9527,12 +10329,14 @@ test "issue 10461 SpecConstr keeps outer loop back edge out of inner loop body" 
 
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &optimized.lowered.lir_result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.Interpreter.init(
         allocator,
         &optimized.lowered.lir_result.store,
         &optimized.lowered.lir_result.layouts,
+        static_strings.view(),
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
 
@@ -9790,12 +10594,14 @@ test "issue 10797 SpecConstr keeps the threaded var parameter bound in a special
 
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &optimized.lowered.lir_result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.Interpreter.init(
         allocator,
         &optimized.lowered.lir_result.store,
         &optimized.lowered.lir_result.layouts,
+        static_strings.view(),
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
 
@@ -10081,12 +10887,14 @@ test "tail calls behind an inlined loop still become jumps" {
         const result = &lowered_source.lowered.lir_result;
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
+        var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+        defer static_strings.deinit();
         var interpreter = try eval.Interpreter.init(
             allocator,
             &result.store,
             &result.layouts,
+            static_strings.view(),
             runtime_env.get_ops(),
-            .preserve,
         );
         defer interpreter.deinit();
         const evaluated = try interpreter.eval(.{ .proc_id = try rootProc(&lowered_source.lowered) });
@@ -10127,13 +10935,15 @@ test "tail-call lowering handles a source loop in both inline modes" {
         const result = &lowered.lowered.lir_result;
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
+        var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+        defer static_strings.deinit();
         var interpreter = try eval.Interpreter.initWithBoxyTables(
             allocator,
             &result.store,
             &result.layouts,
             eval.boxy_runtime.BoxyTables.fromResult(result),
+            static_strings.view(),
             runtime_env.get_ops(),
-            .preserve,
         );
         defer interpreter.deinit();
         const evaluated = try interpreter.eval(.{ .proc_id = try rootProc(&lowered.lowered) });
@@ -10170,9 +10980,193 @@ test "tail-call lowering preserves a failure after a recursive call" {
         const result = &lowered.lowered.lir_result;
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
-        var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, runtime_env.get_ops(), .preserve);
+        var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+        defer static_strings.deinit();
+        var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
         defer interpreter.deinit();
         try std.testing.expectError(error.Crash, interpreter.eval(.{ .proc_id = try rootProc(&lowered.lowered) }));
+    }
+}
+
+test "issue 11290: keyed containers preserve runtime contents and shared ownership" {
+    const source =
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    key = Str.repeat("x", n)
+        \\    original = Dict.single(key, [key])
+        \\    updated = Dict.insert(original, "other", [key])
+        \\    set = Set.single(key)
+        \\    more = Set.insert(set, "other")
+        \\    if Dict.contains(original, "other") { crash "mutated shared dictionary" }
+        \\    if Set.contains(set, "other") { crash "mutated shared set" }
+        \\    if !Set.contains(more, key) { crash "lost set item" }
+        \\    values = match Dict.get(updated, key) {
+        \\        Ok(found) => found
+        \\        Err(_) => crash "lost dictionary entry"
+        \\    }
+        \\    if values != [key] { crash "changed dictionary value" }
+        \\    Dict.len(updated) + Set.len(more) + List.len(values)
+        \\}
+    ;
+    try expectKeyedContainersEvaluate(source, 5);
+}
+
+test "issue 11290: builtin container membership executes in both strategies" {
+    try expectKeyedContainersEvaluate(
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    key = Str.repeat("x", n)
+        \\    set = Set.single(key)
+        \\    dict = Dict.single(key, n)
+        \\    if Set.contains(set, key) and Dict.contains(dict, key) { 1 } else { 0 }
+        \\}
+    , 1);
+}
+
+test "issue 11290: empty and nested containers retain distinct type arguments" {
+    try expectKeyedContainersEvaluate(
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    key = Str.repeat("x", n)
+        \\    strings = Set.single(key)
+        \\    numbers = Set.single(n)
+        \\    dictionary = Dict.single(n, strings)
+        \\    empty_dict : Dict(U64, Set(Str))
+        \\    empty_dict = Dict.empty()
+        \\    empty_set : Set(U64)
+        \\    empty_set = Set.empty()
+        \\    if Dict.len(empty_dict) != 0 or Set.len(empty_set) != 0 { crash "nonempty container" }
+        \\    nested = match Dict.get(dictionary, n) {
+        \\        Ok(found) => found
+        \\        Err(_) => crash "lost nested container"
+        \\    }
+        \\    if Set.contains(nested, key) and Set.contains(numbers, n) { 1 } else { 0 }
+        \\}
+    , 1);
+}
+
+test "issue 11358: a Set nested in a Dict keeps each level's type arguments" {
+    try expectKeyedContainersEvaluate(
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    key = Str.repeat("x", n)
+        \\    empty : Dict(U64, Set(Str))
+        \\    empty = Dict.empty()
+        \\    dictionary = empty.insert(n, Set.empty().insert(key).insert("other"))
+        \\    nested = match dictionary.get(n) {
+        \\        Ok(found) => found
+        \\        Err(_) => crash "lost nested set"
+        \\    }
+        \\    if !nested.contains(key) or !nested.contains("other") { crash "lost set item" }
+        \\    dictionary.len() + nested.len()
+        \\}
+    , 3);
+}
+
+test "issue 11358: a Dict nested in a Dict keeps each level's type arguments" {
+    try expectKeyedContainersEvaluate(
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    key = Str.repeat("x", n)
+        \\    inner = Dict.empty().insert(key, n).insert("other", 2)
+        \\    outer : Dict(Str, Dict(Str, U64))
+        \\    outer = Dict.empty().insert("first", inner).insert(key, Dict.single("z", 7))
+        \\    found_inner = match outer.get("first") {
+        \\        Ok(found) => found
+        \\        Err(_) => crash "lost inner dictionary"
+        \\    }
+        \\    value = match found_inner.get(key) {
+        \\        Ok(found) => found
+        \\        Err(_) => crash "lost inner entry"
+        \\    }
+        \\    other = match outer.get(key).map_ok(|d| d.get("z")) {
+        \\        Ok(Ok(found)) => found
+        \\        _ => crash "lost second inner entry"
+        \\    }
+        \\    value + other + outer.len()
+        \\}
+    , 49);
+}
+
+test "issue 11358: a generic function reads a Dict nested in a Dict" {
+    try expectKeyedContainersEvaluate(
+        \\total : Dict(k, Dict(k2, v)), k -> U64 where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+        \\total = |outer, key| match outer.get(key) {
+        \\    Ok(inner) => inner.len()
+        \\    Err(_) => 0
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    key = Str.repeat("x", n)
+        \\    outer = Dict.empty().insert(key, Dict.empty().insert(n, "a").insert(n + 1, "b")).insert("other", Dict.single(0.U64, "c"))
+        \\    total(outer, key) + total(outer, "other") + total(outer, "missing")
+        \\}
+    , 3);
+}
+
+test "issue 11358: a nominal nested in itself crosses generic workers" {
+    try expectKeyedContainersEvaluate(
+        \\Box2(a) := { item : a, count : U64 }
+        \\Wrap(a) := [W(a)]
+        \\
+        \\nest : a -> Box2(Box2(a))
+        \\nest = |x| { item: { item: x, count: 1 }, count: 2 }
+        \\
+        \\inner_item : Box2(Box2(a)) -> a
+        \\inner_item = |b| b.item.item
+        \\
+        \\double : a -> Wrap(Wrap(a))
+        \\double = |x| W(W(x))
+        \\
+        \\unwrap2 : Wrap(Wrap(a)) -> a
+        \\unwrap2 = |W(W(y))| y
+        \\
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    key = Str.repeat("x", n)
+        \\    concrete : Box2(Box2(Str))
+        \\    concrete = { item: { item: key, count: 1 }, count: 2 }
+        \\    from_generic = inner_item(nest(key))
+        \\    from_concrete = inner_item(concrete)
+        \\    unwrapped = unwrap2(double(key))
+        \\    list = unwrap2(W(W([n])))
+        \\    Str.count_utf8_bytes(from_generic) + Str.count_utf8_bytes(from_concrete) + Str.count_utf8_bytes(unwrapped) + List.len(list) + inner_item(nest(n))
+        \\}
+    , 161);
+}
+
+fn expectKeyedContainersEvaluate(source: []const u8, expected: u64) (TestError || eval.Interpreter.Error || eval.RuntimeHostEnv.LeakError)!void {
+    const allocator = std.testing.allocator;
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var lowered = try lowerModuleWithOptions(allocator, source, .none, .{
+            .specialization_strategy = strategy,
+        });
+        defer lowered.deinit(allocator);
+        const result = &lowered.lowered.lir_result;
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        {
+            var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+            defer static_strings.deinit();
+            var interpreter = try eval.Interpreter.initWithBoxyTables(
+                allocator,
+                &result.store,
+                &result.layouts,
+                eval.boxy_runtime.BoxyTables.fromResult(result),
+                static_strings.view(),
+                runtime_env.get_ops(),
+            );
+            defer interpreter.deinit();
+            var count: u64 = 40;
+            const evaluated = try interpreter.eval(.{
+                .proc_id = try rootProc(&lowered.lowered),
+                .arg_layouts = &.{.u64},
+                .arg_ptr = @ptrCast(&count),
+            });
+            try std.testing.expectEqual(expected, evaluated.value.read(u64));
+        }
+        try runtime_env.checkForLeaks();
     }
 }
 
@@ -10192,13 +11186,15 @@ test "tail-call lowering preserves boxy return adaptations" {
     const result = &lowered.lowered.lir_result;
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.Interpreter.initWithBoxyTables(
         allocator,
         &result.store,
         &result.layouts,
         eval.boxy_runtime.BoxyTables.fromResult(result),
+        static_strings.view(),
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
     const evaluated = try interpreter.eval(.{ .proc_id = try rootProc(&lowered.lowered) });
@@ -10229,7 +11225,9 @@ test "tail-call lowering preserves owning argument permutations" {
         defer runtime_env.deinit();
         {
             const result = &lowered.lowered.lir_result;
-            var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, runtime_env.get_ops(), .preserve);
+            var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+            defer static_strings.deinit();
+            var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
             defer interpreter.deinit();
             var count: u64 = 5;
             const evaluated = try interpreter.eval(.{
@@ -10286,7 +11284,9 @@ test "tail-call transfers preserve owning cycles and duplicated sources" {
             defer runtime_env.deinit();
             {
                 const result = &lowered.lowered.lir_result;
-                var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, runtime_env.get_ops(), .preserve);
+                var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+                defer static_strings.deinit();
+                var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
                 defer interpreter.deinit();
                 var count: u64 = 5;
                 const evaluated = try interpreter.eval(.{
@@ -10298,5 +11298,359 @@ test "tail-call transfers preserve owning cycles and duplicated sources" {
             }
             try runtime_env.checkForLeaks();
         }
+    }
+}
+
+test "issue 11291 boxy imported nominal forwarding executes with exact backing descriptors" {
+    const allocator = std.testing.allocator;
+    const container_module =
+        \\Container(a) := { items: List(a) }.{
+        \\    to_list : Container(a) -> List(a)
+        \\    to_list = |value| to_list_help(value)
+        \\}
+        \\to_list_help : Container(a) -> List(a)
+        \\to_list_help = |{ items }| items
+    ;
+    const source =
+        \\import Container exposing [Container]
+        \\value : Container(U8)
+        \\value = { items: Str.to_utf8("xyz") }
+        \\main = Container.to_list(value)
+    ;
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{.{ .name = "Container", .source = container_module }},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("[120, 121, 122]", output);
+}
+
+test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Pair := { a: U8, z: U64 }
+        \\xs = List.repeat(Pair.{ a: 3, z: 42 }, 2)
+        \\identity : a -> a
+        \\identity = |x| x
+        \\main : U64 -> U64
+        \\main = |i| {
+        \\    ys = identity(xs).set(i, Pair.{ a: 9, z: 77 }) ?? []
+        \\    x = xs.get(i) ?? Pair.{ a: 0, z: 0 }
+        \\    y = ys.get(i) ?? Pair.{ a: 0, z: 0 }
+        \\    x.a.to_u64() + x.z + y.a.to_u64() + y.z
+        \\}
+    ;
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .specialization_strategy = strategy });
+        defer lowered.deinit(allocator);
+        const result = &lowered.lowered.lir_result;
+        var found_packed = false;
+        for (result.store.getCFStmts()) |stmt| {
+            if (stmt == .assign_literal and stmt.assign_literal.value == .bytes_literal) {
+                if (stmt.assign_literal.value.bytes_literal.len == 2) found_packed = true;
+            }
+        }
+        try std.testing.expect(found_packed);
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        {
+            var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+            defer static_strings.deinit();
+            var interpreter = try eval.Interpreter.initWithBoxyTables(
+                allocator,
+                &result.store,
+                &result.layouts,
+                eval.boxy_runtime.BoxyTables.fromResult(result),
+                static_strings.view(),
+                runtime_env.get_ops(),
+            );
+            defer interpreter.deinit();
+            var index: u64 = 1;
+            const evaluated = try interpreter.eval(.{
+                .proc_id = try rootProc(&lowered.lowered),
+                .arg_layouts = &.{.u64},
+                .arg_ptr = @ptrCast(&index),
+            });
+            try std.testing.expectEqual(@as(u64, 131), evaluated.value.read(u64));
+        }
+        try runtime_env.checkForLeaks();
+    }
+}
+
+/// A stored parser constant (`parse_stored = { Shape.parser_for(...) }`),
+/// mirroring test/cli/ParserTopLevelStoredParser.roc without its module
+/// header. This body is emitted in Phase B, behind the graph freeze; no
+/// snapshot anywhere carries lowered output, so the Monotype footprint below
+/// is the gate that the deferred body is the same body the eager restore used
+/// to emit.
+const stored_parser_gate_source =
+    \\Format := [Default].{
+    \\    rename_field : Format, Str -> Str
+    \\    rename_field = |_, name| name
+    \\
+    \\    parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError])
+    \\    parse_str = |_, state|
+    \\        match state {
+    \\            Present(value) => Ok({ value, rest: Done })
+    \\            Done => Err(FormatError)
+    \\        }
+    \\
+    \\    parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError])
+    \\    parse_record_start = |_, state| Ok(Uncounted(state))
+    \\
+    \\    parse_record_field : Format,
+    \\    Encoding.FieldName.FieldNames(_shape),
+    \\    State -> Try(
+    \\        [
+    \\            Field({ field : Encoding.FieldName(_shape), rest : State }),
+    \\            TryField({ name : Str, rest : State }),
+    \\            TryFieldCaseless({ name : Str, rest : State }),
+    \\            Continue(State),
+    \\            Done(State),
+    \\        ],
+    \\        [FormatError],
+    \\    )
+    \\    parse_record_field = |_, _, state|
+    \\        match state {
+    \\            Present(_) => Ok(TryField({ name: "foo", rest: state }))
+    \\            Done => Ok(Done(state))
+    \\        }
+    \\
+    \\    parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError])
+    \\    parse_record_after_field = |_, state| Ok(Continue(state))
+    \\
+    \\    skip_record_field : Format, State -> Try(State, [FormatError])
+    \\    skip_record_field = |_, _| Ok(Done)
+    \\}
+    \\
+    \\State := [Present(Str), Done]
+    \\
+    \\parse_stored : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\parse_stored = {
+    \\    Shape : { foo : Str }
+    \\    Shape.parser_for(Format.Default)
+    \\}
+    \\
+    \\main : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\main = |state| parse_stored(state)
+;
+
+test "stored codec restore emits the same Monotype shape from Phase B" {
+    // This body's generation sits behind the graph freeze, in Phase B. No
+    // snapshot anywhere carries lowered output, so these are the numbers that
+    // stand in for "the sealed body is the body the eager restore used to
+    // emit". Measured on the compiler that still restored eagerly:
+    //   fns=10 defs=11 exprs=535 locals=108 template_misses=14 nested_misses=0
+    // and re-measured after the 2026-09-15 rebase onto upstream's codec
+    // contract machinery, which the eager restore no longer exists to be
+    // compared against, so the reference is this compiler itself:
+    //   fns=10 defs=11 exprs=597 locals=121 template_misses=14 nested_misses=0
+    // Every count is exact, including expressions and locals. The reserve-
+    // and-copy that Phase-B emission ends in is the same reserve-and-copy the
+    // eager restore already performed (it too filled a reservation with a
+    // lowered expression), so deferring orphans no expression the eager path
+    // kept and the predicted delta is zero. A window here would hide exactly
+    // the drift this gate exists to catch. Specialization misses may only
+    // fall: the eager restore keyed the callee spec as an open request, and
+    // Phase-B emission removes that cause.
+    const allocator = std.testing.allocator;
+    const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_gate_source);
+    try std.testing.expectEqual(@as(usize, 10), stats.functions);
+    try std.testing.expectEqual(@as(usize, 11), stats.definitions);
+    try std.testing.expectEqual(@as(usize, 597), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 121), stats.locals);
+    try std.testing.expect(stats.template_misses <= 14);
+    try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
+}
+
+/// `stored_parser_gate_source` over a shape whose field KIND is decided at the
+/// freeze (`bar ?: Str`). This program panicked while the restore was still
+/// eager ("resolved Monotype view requested for an unresolved instantiation
+/// node"), so it has no earlier baseline: its numbers are Phase-B emission's
+/// own, pinned as a regression gate rather than as an equivalence gate. It is
+/// the case the two-phase restore exists for.
+const stored_parser_optional_gate_source =
+    \\Format := [Default].{
+    \\    rename_field : Format, Str -> Str
+    \\    rename_field = |_, name| name
+    \\
+    \\    parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError])
+    \\    parse_str = |_, state|
+    \\        match state {
+    \\            Present(value) => Ok({ value, rest: Done })
+    \\            Done => Err(FormatError)
+    \\        }
+    \\
+    \\    parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError])
+    \\    parse_record_start = |_, state| Ok(Uncounted(state))
+    \\
+    \\    parse_record_field : Format,
+    \\    Encoding.FieldName.FieldNames(_shape),
+    \\    State -> Try(
+    \\        [
+    \\            Field({ field : Encoding.FieldName(_shape), rest : State }),
+    \\            TryField({ name : Str, rest : State }),
+    \\            TryFieldCaseless({ name : Str, rest : State }),
+    \\            Continue(State),
+    \\            Done(State),
+    \\        ],
+    \\        [FormatError],
+    \\    )
+    \\    parse_record_field = |_, _, state|
+    \\        match state {
+    \\            Present(_) => Ok(TryField({ name: "foo", rest: state }))
+    \\            Done => Ok(Done(state))
+    \\        }
+    \\
+    \\    parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError])
+    \\    parse_record_after_field = |_, state| Ok(Continue(state))
+    \\
+    \\    skip_record_field : Format, State -> Try(State, [FormatError])
+    \\    skip_record_field = |_, _| Ok(Done)
+    \\}
+    \\
+    \\State := [Present(Str), Done]
+    \\
+    \\parse_stored : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\parse_stored = {
+    \\    Shape : { foo : Str, bar ?: Str }
+    \\    Shape.parser_for(Format.Default)
+    \\}
+    \\
+    \\main : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\main = |state| parse_stored(state)
+;
+
+/// A stored `encoder_for` constant over a shape with an optional field, the
+/// encoder twin of `stored_parser_optional_gate_source`. Mirrors
+/// test/cli/EncoderForTopLevelStoredOptionalField.roc without its module
+/// header. `emitStoredEncoderForRuntimeBody` has no other counter gate.
+const stored_encoder_optional_gate_source =
+    \\Format := [Default].{
+    \\    rename_field : Format, Str -> Str
+    \\    rename_field = |_, name|
+    \\        if Str.is_eq(name, "foo_bar") {
+    \\            "foo-bar"
+    \\        } else {
+    \\            name
+    \\        }
+    \\
+    \\    encode_record : List(Str), U64, (List(Str), (List(Str), Str, (List(Str) -> Try(List(Str), [])) -> Try(List(Str), [])) -> Try(List(Str), [])) -> Try(List(Str), [])
+    \\    encode_record = |state, _, write_fields| {
+    \\        started = List.append(state, "record")
+    \\        finished = write_fields(
+    \\            started,
+    \\            |field_state, name, write_value| write_value(List.append(field_state, name)),
+    \\        )?
+    \\        Ok(List.append(finished, "end"))
+    \\    }
+    \\
+    \\    encode_str : Str, List(Str) -> Try(List(Str), [])
+    \\    encode_str = |value, state| Ok(List.append(state, value))
+    \\
+    \\    encode_u64 : U64, List(Str) -> Try(List(Str), [])
+    \\    encode_u64 = |value, state| Ok(List.append(state, value.to_str()))
+    \\}
+    \\
+    \\Value : { count : U64, foo_bar : Str, note ?: Str }
+    \\
+    \\value : Value
+    \\value = { count: 7, foo_bar: "abc" }
+    \\
+    \\encoder_for_value : value -> (value, List(Str) -> Try(List(Str), []))
+    \\    where [
+    \\        value.encoder_for : Format -> (value, List(Str) -> Try(List(Str), [])),
+    \\    ]
+    \\encoder_for_value = |_| {
+    \\    Shape : value
+    \\    Shape.encoder_for(Format.Default)
+    \\}
+    \\
+    \\encode_stored : Value, List(Str) -> Try(List(Str), [])
+    \\encode_stored = encoder_for_value(value)
+    \\
+    \\main : List(Str) -> Try(List(Str), [])
+    \\main = |state| encode_stored(value, state)
+;
+
+test "stored parser restore lowers a shape with an optional field" {
+    // Not an equivalence gate: this program panicked before W2b
+    // ("resolved Monotype view requested for an unresolved instantiation
+    // node"), so there is no pre-W2b number to compare against. These are
+    // W2b's own, measured 2026-09-15, and they exist so a later change that
+    // silently drops or duplicates part of the generated optional-field
+    // parser is caught. That it lowers at all is the primary assertion.
+    // Re-measured after the 2026-09-15 rebase onto upstream's codec contract
+    // machinery (exprs 669 -> 731, locals 127 -> 140).
+    const allocator = std.testing.allocator;
+    const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_optional_gate_source);
+    try std.testing.expectEqual(@as(usize, 10), stats.functions);
+    try std.testing.expectEqual(@as(usize, 11), stats.definitions);
+    try std.testing.expectEqual(@as(usize, 731), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 140), stats.locals);
+    try std.testing.expectEqual(@as(u64, 14), stats.template_misses);
+    try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
+}
+
+test "stored encoder_for restore lowers a shape with an optional field" {
+    // Stored encoder restoration retains each generated writer's codec plan.
+    // The container and scalar format methods must share their List.append,
+    // List.reserve, list_append_unsafe, and list_reserve specializations;
+    // an enclosing codec contract must not split those ordinary helpers.
+    const allocator = std.testing.allocator;
+    const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_encoder_optional_gate_source);
+    try std.testing.expectEqual(@as(usize, 24), stats.functions);
+    try std.testing.expectEqual(@as(usize, 17), stats.definitions);
+    try std.testing.expectEqual(@as(usize, 213), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 73), stats.locals);
+    try std.testing.expectEqual(@as(u64, 19), stats.template_misses);
+    try std.testing.expectEqual(@as(u64, 1), stats.nested_misses);
+}
+
+test "issue 11470: tagged shared error composition executes in both strategies" {
+    const allocator = std.testing.allocator;
+    // The helper selects a procedure root, so give it a lambda rather than a value alias.
+    const source = @import("issue_11470_source.zig").source ++ "\nmain = |mode| run(mode)\n";
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var lowered = try lowerModuleWithOptions(allocator, source, .none, .{
+            .specialization_strategy = strategy,
+        });
+        defer lowered.deinit(allocator);
+        const result = &lowered.lowered.lir_result;
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+        defer static_strings.deinit();
+        {
+            var interpreter = try eval.Interpreter.initWithBoxyTables(
+                allocator,
+                &result.store,
+                &result.layouts,
+                eval.boxy_runtime.BoxyTables.fromResult(result),
+                static_strings.view(),
+                runtime_env.get_ops(),
+            );
+            defer interpreter.deinit();
+            for ([_]u64{ 40, 1, 2, 3, 4 }, 0..) |expected, mode| {
+                var argument: u64 = @intCast(mode);
+                const evaluated = try interpreter.eval(.{
+                    .proc_id = try rootProc(&lowered.lowered),
+                    .arg_layouts = &.{.u64},
+                    .arg_ptr = @ptrCast(&argument),
+                });
+                try std.testing.expectEqual(expected, evaluated.value.read(u64));
+            }
+        }
+        try runtime_env.checkForLeaks();
     }
 }

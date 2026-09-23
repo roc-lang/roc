@@ -11,6 +11,7 @@ const std = @import("std");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 const body_clone = @import("body_clone.zig");
+const collections = @import("collections");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -25,7 +26,7 @@ const Candidate = struct {
     outer_param: LIR.LocalId,
     inner_stmt: LIR.CFStmtId,
     inner_param: LIR.LocalId,
-    fresh_definitions: []bool,
+    fresh_definitions: body_clone.ReadCounts,
 };
 
 const RetRewriter = struct {
@@ -38,28 +39,50 @@ const RetRewriter = struct {
 pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!void {
     var join_params = body_clone.JoinParamIndex.init(store.allocator);
     defer join_params.deinit();
+    join_params.next_join_point = body_clone.firstFreshJoinPoint(store);
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
-        if (!store.getProcSpec(proc_id).iterator_fusion_scope) continue;
-        var indexed = false;
-        while (try findCandidate(store, layouts, proc_id)) |candidate| {
-            if (!indexed) {
-                try join_params.indexReachable(store, store.getProcSpec(proc_id).body.?);
-                indexed = true;
-            }
-            defer store.allocator.free(candidate.fresh_definitions);
-            try applyCandidate(store, layouts, &join_params, proc_id, candidate);
-        }
+        try runProc(store, layouts, proc_id, store.allocator, &join_params);
     }
 }
 
-fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId) ResourceError!?Candidate {
+/// The same explicit eligibility contract is used by serial and worker drivers.
+pub fn rewritableProcBody(store: *const LirStore, proc: LIR.LirProcSpecId) ?LIR.CFStmtId {
+    const spec = store.getProcSpec(proc);
+    return if (spec.iterator_fusion_scope) spec.body else null;
+}
+
+/// Rewrite one procedure to a fixed point. The caller reserves the fresh join
+/// identity domain before starting workers; all analysis belongs to scratch.
+/// Layouts are frozen: cloning preserves layout identities and stack-probe
+/// classification only queries existing layouts.
+pub fn runProc(
+    store: *LirStore,
+    layouts: *const layout_mod.Store,
+    proc: LIR.LirProcSpecId,
+    scratch_allocator: Allocator,
+    join_params: *body_clone.JoinParamIndex,
+) ResourceError!void {
+    const body = rewritableProcBody(store, proc) orelse return;
+    var indexed = false;
+    while (try findCandidate(store, layouts, proc, scratch_allocator)) |found| {
+        var candidate = found;
+        defer candidate.fresh_definitions.deinit();
+        if (!indexed) {
+            try join_params.indexReachable(store, body);
+            indexed = true;
+        }
+        try applyCandidate(store, layouts, join_params, proc, candidate, scratch_allocator);
+    }
+}
+
+fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, allocator: Allocator) ResourceError!?Candidate {
     const proc = store.getProcSpec(proc_id);
     const proc_body = proc.body orelse return null;
-    const incoming_edges = try reachableIncomingEdgeCounts(store, proc_body);
-    defer store.allocator.free(incoming_edges);
+    var incoming_edges = try reachableIncomingEdgeCounts(store, proc_body, allocator);
+    defer incoming_edges.deinit();
 
-    var walk = try body_clone.ReachableStmts.init(store, proc_body);
+    var walk = try body_clone.ReachableStmts.initWithAllocator(store, proc_body, allocator);
     defer walk.deinit();
     while (try walk.next()) |outer_stmt| {
         const outer_node = store.getCFStmt(outer_stmt);
@@ -82,11 +105,11 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
         // the declaration that edge targets. Recursive joins are loop
         // headers, not one-shot continuations, even when their initial entry
         // happens to pass through a single forwarding join.
-        if (try subtreeJumpsTo(store, outer.body, outer.id)) continue;
+        if (try subtreeJumpsTo(store, outer.body, outer.id, allocator)) continue;
 
         var incoming_count: usize = 0;
         var selected: ?Candidate = null;
-        var remainder_walk = try body_clone.ReachableStmts.init(store, outer.remainder);
+        var remainder_walk = try body_clone.ReachableStmts.initWithAllocator(store, outer.remainder, allocator);
         defer remainder_walk.deinit();
         while (try remainder_walk.next()) |inner_stmt| {
             const inner_node = store.getCFStmt(inner_stmt);
@@ -111,8 +134,8 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
             // chain unreachable. LIR permits shared statement tails, so a
             // statement-occurrence count is insufficient: require both nodes
             // to have exactly the one structural predecessor visible here.
-            const first_incoming = incoming_edges[@intFromEnum(inner.body)];
-            const terminal_incoming = incoming_edges[@intFromEnum(terminal)];
+            const first_incoming = incoming_edges.get(inner.body) orelse 0;
+            const terminal_incoming = incoming_edges.get(terminal) orelse 0;
             if (first_incoming != 1 or terminal_incoming != 1) {
                 continue;
             }
@@ -131,7 +154,7 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
         // or bypass that source.
         if (incoming_count == 1) {
             if (selected) |*candidate| {
-                candidate.fresh_definitions = try collectFreshDefinitions(store, outer.body, incoming_edges);
+                candidate.fresh_definitions = try collectFreshDefinitions(store, outer.body, &incoming_edges, allocator);
                 return candidate.*;
             }
         }
@@ -139,28 +162,29 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
     return null;
 }
 
-fn reachableIncomingEdgeCounts(store: *LirStore, body: LIR.CFStmtId) ResourceError![]u32 {
-    const counts = try store.allocator.alloc(u32, store.cfStmtCount());
-    errdefer store.allocator.free(counts);
-    @memset(counts, 0);
+const IncomingEdges = collections.DenseMap(LIR.CFStmtId, u32);
+
+fn reachableIncomingEdgeCounts(store: *LirStore, body: LIR.CFStmtId, allocator: Allocator) ResourceError!IncomingEdges {
+    var counts = IncomingEdges.init(allocator);
+    errdefer counts.deinit();
     var successors = std.ArrayList(LIR.CFStmtId).empty;
-    defer successors.deinit(store.allocator);
-    var walk = try body_clone.ReachableStmts.init(store, body);
+    defer successors.deinit(allocator);
+    var walk = try body_clone.ReachableStmts.initWithAllocator(store, body, allocator);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         successors.clearRetainingCapacity();
-        try body_clone.appendSuccessors(store, &successors, stmt_id);
+        try body_clone.appendSuccessorsWithAllocator(store, &successors, stmt_id, allocator);
         for (successors.items) |successor| {
-            const count = &counts[@intFromEnum(successor)];
-            if (count.* == std.math.maxInt(u32)) @panic("LIR statement incoming-edge count overflowed");
-            count.* += 1;
+            const count = counts.get(successor) orelse 0;
+            if (count == std.math.maxInt(u32)) @panic("LIR statement incoming-edge count overflowed");
+            try counts.put(successor, count + 1);
         }
     }
     return counts;
 }
 
-fn subtreeJumpsTo(store: *LirStore, body: LIR.CFStmtId, target: LIR.JoinPointId) ResourceError!bool {
-    var walk = try body_clone.ReachableStmts.init(store, body);
+fn subtreeJumpsTo(store: *LirStore, body: LIR.CFStmtId, target: LIR.JoinPointId, allocator: Allocator) ResourceError!bool {
+    var walk = try body_clone.ReachableStmts.initWithAllocator(store, body, allocator);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
@@ -172,60 +196,57 @@ fn subtreeJumpsTo(store: *LirStore, body: LIR.CFStmtId, target: LIR.JoinPointId)
 fn collectFreshDefinitions(
     store: *LirStore,
     root: LIR.CFStmtId,
-    proc_incoming_edges: []const u32,
-) ResourceError![]bool {
-    const internal_incoming = try store.allocator.alloc(u32, store.cfStmtCount());
-    defer store.allocator.free(internal_incoming);
-    @memset(internal_incoming, 0);
+    proc_incoming_edges: *const IncomingEdges,
+    allocator: Allocator,
+) ResourceError!body_clone.ReadCounts {
+    var internal_incoming = IncomingEdges.init(allocator);
+    defer internal_incoming.deinit();
 
     var nodes = std.ArrayList(LIR.CFStmtId).empty;
-    defer nodes.deinit(store.allocator);
+    defer nodes.deinit(allocator);
     var successors = std.ArrayList(LIR.CFStmtId).empty;
-    defer successors.deinit(store.allocator);
-    var walk = try body_clone.ReachableStmts.init(store, root);
+    defer successors.deinit(allocator);
+    var walk = try body_clone.ReachableStmts.initWithAllocator(store, root, allocator);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
-        try nodes.append(store.allocator, stmt_id);
+        try nodes.append(allocator, stmt_id);
         successors.clearRetainingCapacity();
-        try body_clone.appendSuccessors(store, &successors, stmt_id);
+        try body_clone.appendSuccessorsWithAllocator(store, &successors, stmt_id, allocator);
         for (successors.items) |successor| {
-            const count = &internal_incoming[@intFromEnum(successor)];
-            if (count.* == std.math.maxInt(u32)) @panic("LIR subtree incoming-edge count overflowed");
-            count.* += 1;
+            const count = internal_incoming.get(successor) orelse 0;
+            if (count == std.math.maxInt(u32)) @panic("LIR subtree incoming-edge count overflowed");
+            try internal_incoming.put(successor, count + 1);
         }
     }
 
-    const shared_stmts = try store.allocator.alloc(bool, store.cfStmtCount());
-    defer store.allocator.free(shared_stmts);
-    @memset(shared_stmts, false);
+    var shared_stmts = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
+    defer shared_stmts.deinit();
     var shared_work = std.ArrayList(LIR.CFStmtId).empty;
-    defer shared_work.deinit(store.allocator);
+    defer shared_work.deinit(allocator);
     for (nodes.items) |stmt_id| {
-        const index = @intFromEnum(stmt_id);
-        const expected = internal_incoming[index] + @intFromBool(stmt_id == root);
-        if (proc_incoming_edges[index] < expected) @panic("LIR subtree has more internal edges than its procedure graph");
-        if (proc_incoming_edges[index] > expected) try shared_work.append(store.allocator, stmt_id);
+        const expected = (internal_incoming.get(stmt_id) orelse 0) + @intFromBool(stmt_id == root);
+        const incoming = proc_incoming_edges.get(stmt_id) orelse 0;
+        if (incoming < expected) @panic("LIR subtree has more internal edges than its procedure graph");
+        if (incoming > expected) try shared_work.append(allocator, stmt_id);
     }
     while (shared_work.pop()) |stmt_id| {
-        const index = @intFromEnum(stmt_id);
-        if (shared_stmts[index]) continue;
-        shared_stmts[index] = true;
+        if (shared_stmts.contains(stmt_id)) continue;
+        try shared_stmts.put(stmt_id, {});
         successors.clearRetainingCapacity();
-        try body_clone.appendSuccessors(store, &successors, stmt_id);
-        try shared_work.appendSlice(store.allocator, successors.items);
+        try body_clone.appendSuccessorsWithAllocator(store, &successors, stmt_id, allocator);
+        try shared_work.appendSlice(allocator, successors.items);
     }
 
-    const shared_definitions = try store.allocator.alloc(bool, store.localCount());
-    errdefer store.allocator.free(shared_definitions);
-    @memset(shared_definitions, false);
+    var shared_definitions: body_clone.ReadCounts = .{ .counts = collections.DenseMap(LIR.LocalId, u32).init(allocator) };
+    errdefer shared_definitions.deinit();
     for (nodes.items) |stmt_id| {
         // A cloned join declaration receives a fresh join-point identity, so
         // its parameter binders must be alpha-renamed with it. Unlike ordinary
         // statement targets, jump initialization is not represented by a
         // structural successor edge to the declaration; retaining a parameter
         // identity can therefore merge two distinct control-flow binders.
-        if (store.getCFStmt(stmt_id) == .join or shared_stmts[@intFromEnum(stmt_id)]) {
-            body_clone.markStmtDefinitions(store, shared_definitions, stmt_id);
+        if (store.getCFStmt(stmt_id) == .join or shared_stmts.contains(stmt_id)) {
+            try body_clone.markStmtDefinitionsSparse(store, &shared_definitions, stmt_id);
         }
     }
     return shared_definitions;
@@ -260,10 +281,11 @@ fn applyCandidate(
     join_params: *body_clone.JoinParamIndex,
     proc_id: LIR.LirProcSpecId,
     candidate: Candidate,
+    allocator: Allocator,
 ) ResourceError!void {
     const outer = store.getCFStmt(candidate.outer_stmt).join;
 
-    var cloner = try body_clone.BodyCloner(RetRewriter).initWithFreshDeclaredJoins(store, .{}, outer.body, join_params);
+    var cloner = try body_clone.BodyCloner(RetRewriter).initWithFreshDeclaredJoinsAndAllocator(store, .{}, outer.body, join_params, allocator);
     defer cloner.deinit();
 
     // Ordinary definitions in the exclusive prefix are moved, so they keep
@@ -274,19 +296,19 @@ fn applyCandidate(
     const frame = store.getLocalSpan(store.getProcSpec(proc_id).frame_locals);
     for (0..frame.len) |index| {
         const local = GuardedList.at(frame, index);
-        if (!candidate.fresh_definitions[@intFromEnum(local)]) {
-            cloner.local_map[@intFromEnum(local)] = local;
+        if (candidate.fresh_definitions.get(local) == 0) {
+            try cloner.local_map.put(local, local);
         }
     }
-    cloner.local_map[@intFromEnum(candidate.outer_param)] = candidate.inner_param;
+    try cloner.local_map.put(candidate.outer_param, candidate.inner_param);
 
     const moved_body = try cloner.cloneStmt(outer.body);
     store.getCFStmtPtr(candidate.inner_stmt).join.body = moved_body;
 
     const proc = store.getProcSpecPtr(proc_id);
     const old_frame = store.getLocalSpan(proc.frame_locals);
-    var merged = try std.ArrayList(LIR.LocalId).initCapacity(store.allocator, old_frame.len + cloner.new_locals.items.len);
-    defer merged.deinit(store.allocator);
+    var merged = try std.ArrayList(LIR.LocalId).initCapacity(allocator, old_frame.len + cloner.new_locals.items.len);
+    defer merged.deinit(allocator);
     for (0..old_frame.len) |index| merged.appendAssumeCapacity(GuardedList.at(old_frame, index));
     merged.appendSliceAssumeCapacity(cloner.new_locals.items);
     std.mem.sort(LIR.LocalId, merged.items, {}, body_clone.localIdLessThan);
@@ -303,6 +325,29 @@ test "forwarding join inline declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
+test "forwarding join inline eligibility is scope and body, not ABI" {
+    var store = LirStore.init(std.testing.allocator);
+    defer store.deinit();
+    const value = try store.addLocal(.{ .layout_idx = .u64 });
+    const body = try store.addCFStmt(.{ .ret = .{ .value = value } });
+    const proc = try store.addProcSpec(.{
+        .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(1),
+        .args = try store.addLocalSpan(&.{value}),
+        .frame_locals = try store.addLocalSpan(&.{value}),
+        .body = body,
+        .ret_layout = .u64,
+        .abi = .erased_callable,
+        .iterator_fusion_scope = true,
+    });
+    try std.testing.expectEqual(body, rewritableProcBody(&store, proc).?);
+    store.getProcSpecPtr(proc).iterator_fusion_scope = false;
+    try std.testing.expectEqual(null, rewritableProcBody(&store, proc));
+    store.getProcSpecPtr(proc).iterator_fusion_scope = true;
+    store.getProcSpecPtr(proc).body = null;
+    try std.testing.expectEqual(null, rewritableProcBody(&store, proc));
+}
+
 fn testFreshJoinPointId(next_join_point: *u32) LIR.JoinPointId {
     const id: LIR.JoinPointId = @enumFromInt(next_join_point.*);
     next_join_point.* += 1;
@@ -310,12 +355,50 @@ fn testFreshJoinPointId(next_join_point: *u32) LIR.JoinPointId {
 }
 
 test "forwarding join inline sinks the sole consumer without duplicating it" {
+    try testSoleConsumer(std.testing.allocator, .standalone, 0);
+}
+
+test "forwarding join inline procedure matches standalone after scratch destruction" {
+    try testSoleConsumer(std.testing.allocator, .procedure, 0);
+}
+
+test "forwarding join inline procedure scratch is independent of unrelated high IDs" {
+    // The old whole-store incoming-edge arrays alone exceeded this budget.
+    var memory: [128 * 1024]u8 = undefined;
+    var scratch = std.heap.FixedBufferAllocator.init(&memory);
+    try testSoleConsumer(scratch.allocator(), .procedure, 65536);
+}
+
+test "forwarding join inline cleans candidate on scratch allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testSoleConsumer, .{ .direct_scratch, 0 });
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testSharedTail, .{.direct_scratch});
+}
+
+const TestMode = enum { standalone, procedure, direct_scratch };
+const TestError = ResourceError || error{ TestExpectedEqual, TestUnexpectedResult };
+
+fn testRun(store: *LirStore, layouts: *const layout_mod.Store, proc: LIR.LirProcSpecId, scratch_allocator: Allocator, mode: TestMode) ResourceError!void {
+    if (mode == .standalone) return run(store, layouts);
+    var scratch = std.heap.ArenaAllocator.init(scratch_allocator);
+    defer scratch.deinit();
+    const allocator = if (mode == .direct_scratch) scratch_allocator else scratch.allocator();
+    var join_params = body_clone.JoinParamIndex.init(allocator);
+    defer join_params.deinit();
+    join_params.next_join_point = body_clone.firstFreshJoinPoint(store);
+    try runProc(store, layouts, proc, allocator, &join_params);
+}
+
+fn testSoleConsumer(scratch_allocator: Allocator, mode: TestMode, unrelated_count: usize) TestError!void {
     const testing = std.testing;
     var store = LirStore.init(testing.allocator);
     defer store.deinit();
     var layouts = try layout_mod.Store.init(testing.allocator, .u64);
     defer layouts.deinit();
 
+    for (0..unrelated_count) |_| {
+        const unrelated = try store.addLocal(.{ .layout_idx = .u64 });
+        _ = try store.addCFStmt(.{ .ret = .{ .value = unrelated } });
+    }
     const outer_param = try store.addLocal(.{ .layout_idx = .u64 });
     const inner_param = try store.addLocal(.{ .layout_idx = .u64 });
     const one = try store.addLocal(.{ .layout_idx = .u64 });
@@ -363,6 +446,7 @@ test "forwarding join inline sinks the sole consumer without duplicating it" {
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(4),
         .args = LIR.LocalSpan.empty(),
         .iterator_fusion_scope = true,
         .body = outer_stmt,
@@ -370,7 +454,7 @@ test "forwarding join inline sinks the sole consumer without duplicating it" {
         .ret_layout = .u64,
     });
 
-    try run(&store, &layouts);
+    try testRun(&store, &layouts, proc, scratch_allocator, mode);
 
     const rewritten_outer = store.getCFStmt(store.getProcSpec(proc).body.?);
     try testing.expect(rewritten_outer == .join);
@@ -387,6 +471,11 @@ test "forwarding join inline sinks the sole consumer without duplicating it" {
 }
 
 test "forwarding join inline freshens definitions only in a shared tail" {
+    try testSharedTail(std.testing.allocator, .standalone);
+    try testSharedTail(std.testing.allocator, .procedure);
+}
+
+fn testSharedTail(scratch_allocator: Allocator, mode: TestMode) TestError!void {
     const testing = std.testing;
     var store = LirStore.init(testing.allocator);
     defer store.deinit();
@@ -453,6 +542,7 @@ test "forwarding join inline freshens definitions only in a shared tail" {
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(3),
         .args = LIR.LocalSpan.empty(),
         .iterator_fusion_scope = true,
         .body = outer_stmt,
@@ -460,7 +550,7 @@ test "forwarding join inline freshens definitions only in a shared tail" {
         .ret_layout = .u64,
     });
 
-    try run(&store, &layouts);
+    try testRun(&store, &layouts, proc, scratch_allocator, mode);
 
     const rewritten = store.getCFStmt(store.getProcSpec(proc).body.?);
     try testing.expect(rewritten == .join);
@@ -531,6 +621,7 @@ test "forwarding join inline preserves recursive outer join declarations" {
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(2),
         .args = LIR.LocalSpan.empty(),
         .iterator_fusion_scope = true,
         .body = outer_stmt,
@@ -589,6 +680,7 @@ test "forwarding join inline preserves owning continuation parameters" {
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{source}),
         .iterator_fusion_scope = true,
         .body = outer_stmt,

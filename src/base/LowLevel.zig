@@ -169,6 +169,7 @@ pub const LowLevel = enum(u16) {
     num_negate_checked,
     num_abs_checked,
     num_pow,
+    num_atan2,
     num_sqrt,
     num_sin,
     num_cos,
@@ -906,13 +907,17 @@ pub const LowLevel = enum(u16) {
 
             // Moves the list's ownership unit into a new local before the
             // reuse query, forcing ARC to preserve every later use first.
-            // List.map and List.update both use this ownership transfer.
+            // List.map, List.update, and loop promotion use this transfer.
             .list_map_prepare_reuse => RcEffect.consumesArgsReturningConsumedArgs(argMask(&.{0})),
 
             // Reads the prepared list's refcount (and slice bit) without
             // changing it. List.map additionally gates this result on item
             // representation compatibility during lowering.
             .list_map_can_reuse => RcEffect.none(),
+            // The owned flag reads the list's count and nothing else; it is
+            // the check a versioned loop dispatches on, so a list proven
+            // unique makes it a constant.
+            .list_owned_unique => .{ .may_runtime_uniqueness_check_args = argMask(&.{0}) },
 
             // Retypes a unique non-slice list to the output element type,
             // keeping the same allocation. Only reachable behind a true
@@ -1026,7 +1031,6 @@ pub const LowLevel = enum(u16) {
             .list_len,
             .list_capacity,
             .list_slack_unique,
-            .list_owned_unique,
             .bool_not,
             .dict_pseudo_seed,
             .hasher_finish,
@@ -1084,6 +1088,7 @@ pub const LowLevel = enum(u16) {
             .num_mod_by,
             .num_mod_by_checked,
             .num_pow,
+            .num_atan2,
             .num_sqrt,
             .num_sin,
             .num_cos,

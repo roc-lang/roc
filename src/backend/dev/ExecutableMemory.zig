@@ -316,16 +316,18 @@ pub const ExecutableMemory = struct {
         return func();
     }
 
-    /// Call using the RocCall ABI: fn(roc_ops, ret_ptr, args_ptr) callconv(.c) void
-    pub fn callRocABI(self: *const Self, roc_ops: *anyopaque, ret_ptr: *anyopaque, args_ptr: ?*anyopaque) void {
-        self.callRocABIAt(self.entry_offset, roc_ops, ret_ptr, args_ptr);
+    /// Call using the internal entrypoint convention:
+    /// fn(ret_ptr, args_ptr) callconv(.c) void. The host the calling thread
+    /// entered through `builtins.in_process_host` serves the code's host calls.
+    pub fn callRocABI(self: *const Self, ret_ptr: *anyopaque, args_ptr: ?*anyopaque) void {
+        self.callRocABIAt(self.entry_offset, ret_ptr, args_ptr);
     }
 
-    /// Call using the RocCall ABI at a specific code offset.
-    pub fn callRocABIAt(self: *const Self, entry_offset: usize, roc_ops: *anyopaque, ret_ptr: *anyopaque, args_ptr: ?*anyopaque) void {
-        const func: *const fn (*anyopaque, *anyopaque, ?*anyopaque) callconv(.c) void =
+    /// Call using the internal entrypoint convention at a specific code offset.
+    pub fn callRocABIAt(self: *const Self, entry_offset: usize, ret_ptr: *anyopaque, args_ptr: ?*anyopaque) void {
+        const func: *const fn (*anyopaque, ?*anyopaque) callconv(.c) void =
             @ptrCast(@alignCast(self.memory.ptr + entry_offset));
-        func(roc_ops, ret_ptr, args_ptr);
+        func(ret_ptr, args_ptr);
     }
 };
 
@@ -476,23 +478,22 @@ test "execute aarch64 code" {
 test "execute x86_64 with result ptr" {
     if (builtin.cpu.arch != .x86_64) return error.SkipZigTest;
 
-    // Roc ABI: fn(roc_ops, result_ptr, args_ptr)
-    // Windows x64: RCX = roc_ops (ignored), RDX = result_ptr
-    // System V: RDI = roc_ops (ignored), RSI = result_ptr
-    // mov qword [arg1], 42; ret
+    // Entry convention: fn(result_ptr, args_ptr)
+    // Windows x64: RCX = result_ptr
+    // System V: RDI = result_ptr
+    // mov qword [arg0], 42; ret
     const code = if (builtin.os.tag == .windows)
-        // Windows: mov qword ptr [rdx], 42; ret
-        [_]u8{ 0x48, 0xC7, 0x02, 0x2A, 0x00, 0x00, 0x00, 0xC3 }
+        // Windows: mov qword ptr [rcx], 42; ret
+        [_]u8{ 0x48, 0xC7, 0x01, 0x2A, 0x00, 0x00, 0x00, 0xC3 }
     else
-        // System V: mov qword ptr [rsi], 42; ret
-        [_]u8{ 0x48, 0xC7, 0x06, 0x2A, 0x00, 0x00, 0x00, 0xC3 };
+        // System V: mov qword ptr [rdi], 42; ret
+        [_]u8{ 0x48, 0xC7, 0x07, 0x2A, 0x00, 0x00, 0x00, 0xC3 };
 
     var mem = try ExecutableMemory.init(&code);
     defer mem.deinit();
 
     var result: i64 = 0;
-    var dummy_roc_ops: u64 = 0xDEADBEEF;
-    mem.callRocABI(@ptrCast(&dummy_roc_ops), @ptrCast(&result), null);
+    mem.callRocABI(@ptrCast(&result), null);
     try std.testing.expectEqual(@as(i64, 42), result);
 }
 
@@ -501,13 +502,13 @@ test "execute x86_64 with full prologue/epilogue" {
 
     // This mimics the generated code structure:
     // - Prologue: push rbp; mov rbp,rsp; push rbx; push r12; sub rsp,1024
-    // - Save args: mov rbx, rdx/rsi (result ptr); mov r12, rcx/rdi (roc_ops - ignored)
+    // - Save args: mov rbx, rcx/rdi (result ptr)
     // - Compute: mov rax, 42
     // - Store result: mov [rbx], rax
     // - Epilogue: add rsp,1024; pop r12; pop rbx; pop rbp; ret
 
     const code = if (builtin.os.tag == .windows) blk: {
-        // Windows x64: RCX = roc_ops, RDX = result_ptr
+        // Windows x64: RCX = result_ptr
         break :blk [_]u8{
             // Prologue
             0x55, // push rbp
@@ -516,8 +517,7 @@ test "execute x86_64 with full prologue/epilogue" {
             0x41, 0x54, // push r12
             0x48, 0x81, 0xEC, 0x00, 0x04, 0x00, 0x00, // sub rsp, 1024
             // Save args
-            0x48, 0x89, 0xD3, // mov rbx, rdx (result ptr)
-            0x49, 0x89, 0xCC, // mov r12, rcx (roc_ops)
+            0x48, 0x89, 0xCB, // mov rbx, rcx (result ptr)
             // Compute result
             0x48, 0xC7, 0xC0, 0x2A, 0x00, 0x00, 0x00, // mov rax, 42
             // Store to result ptr
@@ -530,7 +530,7 @@ test "execute x86_64 with full prologue/epilogue" {
             0xC3, // ret
         };
     } else blk: {
-        // System V: RDI = roc_ops, RSI = result_ptr
+        // System V: RDI = result_ptr
         break :blk [_]u8{
             // Prologue
             0x55, // push rbp
@@ -539,8 +539,7 @@ test "execute x86_64 with full prologue/epilogue" {
             0x41, 0x54, // push r12
             0x48, 0x81, 0xEC, 0x00, 0x04, 0x00, 0x00, // sub rsp, 1024
             // Save args
-            0x48, 0x89, 0xF3, // mov rbx, rsi (result ptr)
-            0x49, 0x89, 0xFC, // mov r12, rdi (roc_ops)
+            0x48, 0x89, 0xFB, // mov rbx, rdi (result ptr)
             // Compute result
             0x48, 0xC7, 0xC0, 0x2A, 0x00, 0x00, 0x00, // mov rax, 42
             // Store to result ptr
@@ -558,7 +557,6 @@ test "execute x86_64 with full prologue/epilogue" {
     defer mem.deinit();
 
     var result: i64 = 0;
-    var dummy_roc_ops: u64 = 0xDEADBEEF;
-    mem.callRocABI(@ptrCast(&dummy_roc_ops), @ptrCast(&result), null);
+    mem.callRocABI(@ptrCast(&result), null);
     try std.testing.expectEqual(@as(i64, 42), result);
 }

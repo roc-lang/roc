@@ -85,6 +85,15 @@ import_mapping: ?*const import_mapping_mod.ImportMapping,
 /// Optional resolver for rendering a defaulted field's source expression.
 mb_default_source: ?DefaultSourceFn = null,
 default_source_ctx: *const anyopaque = undefined,
+/// The polarity of the position currently being written: `.pos` at the root,
+/// negated through function argument positions. Tag unions in output
+/// positions are implicitly open, so an anonymous extension there (the rigid
+/// `..` produces, or its instantiated flex) is not displayed (openness is
+/// meaningful—and shown—in input positions and for shared, constrained,
+/// or named extensions). Maintained by the func frame: each `FuncFrame` saves
+/// the surrounding polarity and re-asserts the stage-appropriate value before
+/// every child it requests.
+polarity: types_mod.Polarity,
 /// The allocator used to create owned fields
 gpa: std.mem.Allocator,
 
@@ -146,7 +155,6 @@ const RecordExt = union(enum) {
     flex: struct { var_: Var, payload: types_mod.Flex },
     rigid: types_mod.Rigid,
     empty_record,
-    unbound: Var,
     invalid,
 };
 
@@ -172,7 +180,6 @@ const Frame = union(enum) {
     args: ArgsFrame,
     func: FuncFrame,
     record: RecordFrame,
-    record_unbound: RecordUnboundFrame,
     tag_union: TagUnionFrame,
     tag: TagFrame,
 };
@@ -194,6 +201,10 @@ const FuncFrame = struct {
     ret: Var,
     arrow: []const u8,
     wrap_in_parens: bool,
+    /// The polarity surrounding this function. Argument positions negate it;
+    /// the return position restores it. Re-asserted before every child
+    /// request so suspension and resumption cannot leave a stale value.
+    saved_polarity: types_mod.Polarity,
     idx: u32 = 0,
     stage: enum { args, ret, done } = .args,
 };
@@ -212,17 +223,6 @@ const RecordFrame = struct {
     /// its constraints are recorded against.
     ext_var: Var,
     flex_ext_occurrences: usize,
-    unbound_ext_occurrences: usize,
-    idx: u32 = 0,
-    stage: enum { fields, after_field, ext } = .fields,
-};
-
-/// An unbound record: its own fields, then the `..` tail, which names the
-/// record itself when it appears more than once in the type being rendered.
-const RecordUnboundFrame = struct {
-    fields: RecordField.SafeMultiList.Range,
-    record_unbound_var: Var,
-    unbound_ext_occurrences: usize,
     idx: u32 = 0,
     stage: enum { fields, after_field, ext } = .fields,
 };
@@ -288,6 +288,7 @@ pub fn initFromParts(
         .import_mapping = import_mapping,
         .mb_default_source = null,
         .default_source_ctx = undefined,
+        .polarity = .pos,
         .gpa = gpa,
     };
 }
@@ -322,6 +323,7 @@ pub fn setImportMapping(self: *TypeWriter, import_mapping: ?*const import_mappin
 
 /// Reset type writer state
 pub fn reset(self: *TypeWriter) void {
+    self.polarity = .pos;
     self.buf.clearRetainingCapacity();
     self.seen.clearRetainingCapacity();
     self.frames.clearRetainingCapacity();
@@ -414,7 +416,15 @@ pub fn write(self: *TypeWriter, var_: Var, format: Format) error{ OutOfMemory, W
 /// This APPENDS to the provided buffer
 /// Internal TypeWriter state will be reset before processing
 pub fn writeInto(self: *TypeWriter, into: *std.array_list.Managed(u8), var_: Var, format: Format) error{ OutOfMemory, WriteFailed }!void {
+    return self.writeIntoAtPolarity(into, var_, format, .pos);
+}
+
+/// `writeInto`, starting the polarity walk at `polarity` instead of `.pos`.
+/// Used when the caller knows the polarity of the position `var_` occupies
+/// (eg error snapshots of types nested inside a larger type).
+pub fn writeIntoAtPolarity(self: *TypeWriter, into: *std.array_list.Managed(u8), var_: Var, format: Format, polarity: types_mod.Polarity) error{ OutOfMemory, WriteFailed }!void {
     self.reset();
+    self.polarity = polarity;
 
     var aw = collections_mod.managedWriter(into);
 
@@ -491,7 +501,13 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
             try tmp_writer.writeAll(self.idents.getText(item.constraint.fn_name));
             try tmp_writer.writeAll(" : ");
 
+            // A where-method signature is a function the constrained code
+            // receives (a callback), so it is written at negative polarity:
+            // its arguments open, its return stays closed.
+            const saved_polarity = self.polarity;
+            self.polarity = .neg;
             try self.writeVar(tmp_writer, item.constraint.fn_var, root_var);
+            self.polarity = saved_polarity;
 
             const constraint_len = tmp_aw.writer.end - start;
             total_constraint_len += constraint_len;
@@ -599,7 +615,6 @@ fn driveFrames(self: *TypeWriter, writer: *ByteWrite, frames_base: usize, root_v
             .args => |*frame| try self.stepArgs(writer, frame, root_var),
             .func => |*frame| try self.stepFunc(writer, frame, root_var),
             .record => |*frame| try self.stepRecord(writer, frame, root_var),
-            .record_unbound => |*frame| try self.stepRecordUnbound(writer, frame, root_var),
             .tag_union => |*frame| try self.stepTagUnion(writer, frame, root_var),
             .tag => |*frame| try self.stepTag(writer, frame, root_var),
         };
@@ -746,7 +761,6 @@ fn startFlatType(
         .fn_effectful => |func| return try self.startFunc(writer, func, " => ", wrap_in_parens),
         .fn_unbound => |func| return try self.startFunc(writer, func, " -> ", wrap_in_parens),
         .record => |record| return try self.startRecord(writer, record, flat_type_var, root_var),
-        .record_unbound => |fields| return try self.startRecordUnbound(writer, fields, flat_type_var, root_var),
         .empty_record => {
             try writer.writeAll("{}");
             return false;
@@ -794,6 +808,7 @@ fn startFunc(
         .ret = func.ret,
         .arrow = arrow,
         .wrap_in_parens = wrap_in_parens,
+        .saved_polarity = self.polarity,
     } });
     return true;
 }
@@ -816,24 +831,20 @@ fn startRecord(
 
     std.mem.sort(types_mod.RecordField, gathered_fields, self.idents, comptime types_mod.RecordField.sortByNameAsc);
 
-    var flex_ext_occurrences: usize = 0;
-    var unbound_ext_occurrences: usize = 0;
+    // A nameless flex tail is named exactly when the row it stands for is
+    // shared with another position of the rendered type.
+    const flex_ext_occurrences: usize = switch (ext) {
+        .flex => |flex| if (flex.payload.name == null)
+            try self.countVarOccurrences(flex.var_, root_var)
+        else
+            0,
+        .rigid, .invalid, .empty_record => 0,
+    };
 
     if (num_fields == 0) {
         const has_ext = switch (ext) {
-            .flex => |flex| blk: {
-                if (flex.payload.name) |_| {
-                    break :blk true;
-                } else {
-                    flex_ext_occurrences = try self.countVarOccurrences(record.ext, root_var);
-                    break :blk flex_ext_occurrences > 1;
-                }
-            },
+            .flex => |flex| flex.payload.name != null or flex_ext_occurrences > 1,
             .rigid => true,
-            .unbound => |unbound_var| blk: {
-                unbound_ext_occurrences = try self.countVarOccurrences(unbound_var, root_var);
-                break :blk unbound_ext_occurrences > 1;
-            },
             .invalid, .empty_record => false,
         };
         if (!has_ext) {
@@ -850,34 +861,6 @@ fn startRecord(
         .ext = ext,
         .ext_var = record.ext,
         .flex_ext_occurrences = flex_ext_occurrences,
-        .unbound_ext_occurrences = unbound_ext_occurrences,
-    } });
-    return true;
-}
-
-/// Write an unbound record's opening bytes and push its frame.
-///
-/// Note that an unbound record is semantically the same as a record with a
-/// `flex` extension var. Because of this, we have to count the occurrences of
-/// this unbound  record appearing in this type, to properly display the ext
-/// type.
-fn startRecordUnbound(
-    self: *TypeWriter,
-    writer: *ByteWrite,
-    fields: RecordField.SafeMultiList.Range,
-    record_unbound_var: Var,
-    root_var: Var,
-) error{ OutOfMemory, WriteFailed }!bool {
-    var unbound_ext_occurrences: usize = 0;
-    if (record_unbound_var != root_var) {
-        unbound_ext_occurrences = try self.countVarOccurrences(record_unbound_var, root_var);
-    }
-
-    try writer.writeAll("{ ");
-    try self.frames.append(.{ .record_unbound = .{
-        .fields = fields,
-        .record_unbound_var = record_unbound_var,
-        .unbound_ext_occurrences = unbound_ext_occurrences,
     } });
     return true;
 }
@@ -950,15 +933,20 @@ fn stepFunc(self: *TypeWriter, writer: *ByteWrite, frame: *FuncFrame, root_var: 
                     if (frame.idx > 0) try writer.writeAll(", ");
                     const arg = self.varAt(frame.args, frame.idx);
                     frame.idx += 1;
+                    // Argument positions negate the surrounding polarity.
+                    self.polarity = frame.saved_polarity.flip();
                     if (!try self.requestVar(writer, arg, .FunctionArgument, root_var)) return false;
                     continue;
                 }
                 try writer.writeAll(frame.arrow);
+                self.polarity = frame.saved_polarity;
                 frame.stage = .ret;
             },
             .ret => {
                 const ret = frame.ret;
                 frame.stage = .done;
+                // The return position preserves the surrounding polarity.
+                self.polarity = frame.saved_polarity;
                 if (!try self.requestVar(writer, ret, .FunctionReturn, root_var)) return false;
             },
             .done => {
@@ -1070,55 +1058,9 @@ fn stepRecord(self: *TypeWriter, writer: *ByteWrite, frame: *RecordFrame, root_v
                             try self.appendStaticDispatchConstraint(frame.ext_var, constraint);
                         }
                     },
-                    .unbound => |unbound_var| {
-                        if (frame.fields_count > 0) try writer.writeAll(", ");
-                        try writer.writeAll("..");
-
-                        if (frame.unbound_ext_occurrences > 1) {
-                            try self.writeFlexVarName(writer, unbound_var, .RecordExtension, root_var);
-                        }
-                    },
                     .invalid, .empty_record => {},
                 }
 
-                try writer.writeAll(" }");
-                self.popSeen();
-                return true;
-            },
-        }
-    }
-}
-
-fn stepRecordUnbound(self: *TypeWriter, writer: *ByteWrite, frame: *RecordUnboundFrame, root_var: Var) error{ OutOfMemory, WriteFailed }!bool {
-    const fields_slice = self.types.getRecordFieldsSlice(frame.fields);
-    const num_fields = fields_slice.len;
-    while (true) {
-        switch (frame.stage) {
-            .fields => {
-                if (frame.idx < num_fields) {
-                    if (frame.idx > 0) try writer.writeAll(", ");
-                    const name = fields_slice.items(.name)[frame.idx];
-                    const presence = fields_slice.items(.presence)[frame.idx];
-                    try writer.writeAll(self.getIdent(name));
-                    try self.writeRecordFieldSeparator(writer, presence);
-                    frame.stage = .after_field;
-                    if (!try self.requestVar(writer, presence.typeVar(), .RecordFieldContent, root_var)) return false;
-                    continue;
-                }
-                frame.stage = .ext;
-            },
-            .after_field => {
-                const presence = fields_slice.items(.presence)[frame.idx];
-                try self.writeFieldDefaultSuffix(writer, presence);
-                frame.idx += 1;
-                frame.stage = .fields;
-            },
-            .ext => {
-                if (num_fields > 0) try writer.writeAll(", ");
-                try writer.writeAll("..");
-                if (frame.unbound_ext_occurrences > 1) {
-                    try self.writeFlexVarName(writer, frame.record_unbound_var, .RecordExtension, root_var);
-                }
                 try writer.writeAll(" }");
                 self.popSeen();
                 return true;
@@ -1149,20 +1091,36 @@ fn stepTagUnion(self: *TypeWriter, writer: *ByteWrite, frame: *TagUnionFrame, ro
                 frame.stage = .done;
                 switch (frame.ext) {
                     .flex => |flex| {
-                        if (frame.tags_count > 0) try writer.writeAll(", ");
-                        try writer.writeAll("..");
-
-                        if (flex.payload.name) |ident_idx| {
-                            const name = self.getIdent(ident_idx);
-                            // Suppress internal names (e.g. #open_ext_0 from anonymous `..`)
-                            if (name.len > 0 and name[0] != '#') {
-                                try writer.writeAll(name);
+                        // An anonymous, unshared, unconstrained flex ext in an
+                        // output position is that position's implicit openness
+                        // (an instantiated `..`)—hide it. Openness is still
+                        // shown in input positions, for named extensions, and
+                        // when the ext var is shared or constrained elsewhere in
+                        // the type (where it carries real information).
+                        const display: enum { hidden, anonymous, source_name, generated_name } = blk: {
+                            const implicit_openness = self.polarity == .pos and flex.payload.constraints.len() == 0;
+                            if (flex.payload.name) |ident_idx| {
+                                const name = self.getIdent(ident_idx);
+                                if (name.len > 0 and name[0] != '#') break :blk .source_name;
+                                // A compiler-internal name (#others from `..`)
+                                // is suppressed; the `..` itself is kept in
+                                // input positions.
+                                if (implicit_openness and (try self.countVarOccurrences(flex.var_, root_var)) <= 1) break :blk .hidden;
+                                break :blk .anonymous;
                             }
-                        } else if (true) {
-                            // TODO: ^ here, we should consider polarity
                             const occurrences = try self.countVarOccurrences(flex.var_, root_var);
-                            if (occurrences > 1) {
-                                try self.writeFlexVarName(writer, flex.var_, .TagUnionExtension, root_var);
+                            if (occurrences > 1) break :blk .generated_name;
+                            if (implicit_openness) break :blk .hidden;
+                            break :blk .anonymous;
+                        };
+
+                        if (display != .hidden) {
+                            if (frame.tags_count > 0) try writer.writeAll(", ");
+                            try writer.writeAll("..");
+                            switch (display) {
+                                .hidden, .anonymous => {},
+                                .source_name => try writer.writeAll(self.getIdent(flex.payload.name.?)),
+                                .generated_name => try self.writeFlexVarName(writer, flex.var_, .TagUnionExtension, root_var),
                             }
                         }
 
@@ -1171,16 +1129,21 @@ fn stepTagUnion(self: *TypeWriter, writer: *ByteWrite, frame: *TagUnionFrame, ro
                         }
                     },
                     .rigid => |rigid| {
-                        if (frame.tags_count > 0) try writer.writeAll(", ");
-                        try writer.writeAll("..");
                         const name = self.getIdent(rigid.name);
-                        // Suppress internal names (e.g. #open_ext_0 from anonymous `..`)
-                        if (name.len == 0 or name[0] != '#') {
-                            try writer.writeAll(name);
-                        }
+                        // A polarity marker (an alias declaration body's
+                        // deferred extension) is written closed, so it displays
+                        // closed. Every other rigid ext is real openness the
+                        // author wrote (`..` in an input position, or a named
+                        // extension) and is shown; its internal name (#others
+                        // from an anonymous `..`) is suppressed.
+                        if (!std.mem.eql(u8, name, types_mod.polarity_var_text)) {
+                            if (frame.tags_count > 0) try writer.writeAll(", ");
+                            try writer.writeAll("..");
+                            if (name.len > 0 and name[0] != '#') try writer.writeAll(name);
 
-                        for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                            try self.appendStaticDispatchConstraint(frame.ext_var, constraint);
+                            for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                                try self.appendStaticDispatchConstraint(frame.ext_var, constraint);
+                            }
                         }
                     },
                     .empty_tag_union, .err, .invalid => {},
@@ -1260,14 +1223,6 @@ fn gatherRecordFields(
                         }
                         ext = ext_record.ext;
                     },
-                    .record_unbound => |ext_fields| {
-                        const ext_slice = self.types.getRecordFieldsSlice(ext_fields);
-                        try self.scratch_record_fields.ensureUnusedCapacity(ext_fields.len());
-                        for (ext_slice.items(.name), ext_slice.items(.presence)) |name, presence| {
-                            self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .presence = presence });
-                        }
-                        return .{ .unbound = resolved.var_ };
-                    },
                     .empty_record => return .empty_record,
                     .tuple,
                     .nominal_type,
@@ -1333,7 +1288,6 @@ fn gatherTags(
                     },
                     .empty_tag_union => return .empty_tag_union,
                     .record,
-                    .record_unbound,
                     .tuple,
                     .nominal_type,
                     .fn_pure,
@@ -1586,13 +1540,6 @@ fn collectCountChildrenInFlatType(self: *TypeWriter, flat_type: FlatType) std.me
             }
             try self.count_pending.append(record.ext);
         },
-        .record_unbound => |fields| {
-            const fields_slice = self.types.getRecordFieldsSlice(fields);
-            for (fields_slice.items(.presence)) |presence| {
-                try self.count_pending.append(presence.typeVar());
-                if (presence.presenceVar()) |presence_var| try self.count_pending.append(presence_var);
-            }
-        },
         .tag_union => |tag_union| {
             // Bounds check the tags range before iterating
             const tags_start_idx = @intFromEnum(tag_union.tags.start);
@@ -1832,7 +1779,7 @@ test "TypeWriter renders required and optional fields in closed records" {
     );
 }
 
-test "TypeWriter renders required and optional fields in unbound records" {
+test "TypeWriter renders required and optional fields in records with a flex extension" {
     const gpa = std.testing.allocator;
     var store = try TypesStore.initCapacity(gpa, 8, 4);
     defer store.deinit();
@@ -1840,7 +1787,10 @@ test "TypeWriter renders required and optional fields in unbound records" {
     defer idents.deinit(gpa);
 
     const fields = try testRecordFields(gpa, &store, &idents);
-    const record_var = try store.freshFromContent(.{ .structure = .{ .record_unbound = fields } });
+    const record_var = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = fields,
+        .ext = try store.fresh(),
+    } } });
 
     var type_writer = try TypeWriter.initFromParts(gpa, &store, &idents, null);
     defer type_writer.deinit();
@@ -1884,9 +1834,8 @@ test "TypeWriter renders every shape the walk descends through" {
     const open = try env.record(&.{.{ .name = a_field, .presence = .required(empty_record) }}, rigid_ext);
     try env.expectRender(open, "{ a: {}, ..row }");
 
-    const unbound_fields = try env.types.appendRecordFields(&.{.{ .name = a_field, .presence = .required(empty_record) }});
-    const unbound = try env.types.freshFromContent(.{ .structure = .{ .record_unbound = unbound_fields } });
-    try env.expectRender(unbound, "{ a: {}, .. }");
+    const flex_open = try env.record(&.{.{ .name = a_field, .presence = .required(empty_record) }}, try env.types.fresh());
+    try env.expectRender(flex_open, "{ a: {}, .. }");
 
     // Tag unions sort their tags and parenthesise payloads.
     const tag_z = try env.ident("Z");

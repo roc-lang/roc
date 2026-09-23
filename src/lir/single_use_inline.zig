@@ -224,6 +224,7 @@ fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite) Resour
         store,
         .{ .target = call.target, .next = call.next },
         inline_scope,
+        store.getProcSpec(site.caller).body.?,
     );
     defer cloner.deinit();
 
@@ -254,7 +255,7 @@ fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite) Resour
     while (arg_index > 0) {
         arg_index -= 1;
         cloned_body = try store.addCFStmt(.{ .assign_ref = .{
-            .target = cloner.local_map[@intFromEnum(source_args[arg_index])].?,
+            .target = cloner.local_map.get(source_args[arg_index]).?,
             .op = .{ .local = call_args[arg_index] },
             .next = cloned_body,
         } });
@@ -299,6 +300,7 @@ test "single-use inline keeps writable callee arguments distinct from caller ope
     } });
     const callee = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{callee_arg}),
         .body = callee_body,
         .frame_locals = try store.addLocalSpan(&.{ callee_arg, two }),
@@ -316,6 +318,7 @@ test "single-use inline keeps writable callee arguments distinct from caller ope
     } });
     const caller = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(2),
+        .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{caller_arg}),
         .iterator_fusion_scope = true,
         .body = caller_body,
@@ -354,6 +357,7 @@ test "single-use inline preserves calls with refcounted callee frames" {
     const callee_body = try store.addCFStmt(.{ .ret = .{ .value = callee_arg } });
     const callee = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{callee_arg}),
         .body = callee_body,
         .frame_locals = try store.addLocalSpan(&.{callee_arg}),
@@ -371,6 +375,7 @@ test "single-use inline preserves calls with refcounted callee frames" {
     } });
     const caller = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(2),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{caller_arg}),
         .iterator_fusion_scope = true,
         .body = caller_body,

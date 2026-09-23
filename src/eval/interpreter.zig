@@ -339,7 +339,7 @@ pub const Interpreter = struct {
     store: *const LirStore,
     layout_store: *const layout_mod.Store,
     helper: LayoutHelper,
-    float_nan_mode: builtins.float_bits.NanMode,
+    dict_seed_mode: builtins.utils.DictSeedMode = .runtime,
     /// Arena for runtime-created descriptors whose identities can escape in a
     /// retained callable or host result and must survive later evaluations.
     descriptor_arena: base.SingleThreadArena,
@@ -350,13 +350,23 @@ pub const Interpreter = struct {
     roc_ops: RocOps,
     hosted_call_handler: ?HostedCallHandler,
     expect_observer: ?ExpectObserver = null,
-    static_strings: backend.StaticStringData.Table,
+    /// Borrowed literal backings. Values the interpreter returns point into
+    /// these bytes, so their owner must outlive every such value, just as a
+    /// native program's readonly data outlives its calls.
+    static_strings: backend.StaticStringData.View,
     /// Resolved immutable values indexed directly by compact `StaticDataId`.
     static_data: []const usize,
+    /// Explicit compile-time slot readiness callback; ordinary runtime images
+    /// are already complete and leave this unset.
+    static_data_demand: ?StaticDataDemand = null,
+
     /// Static erased callables use the ordinary target payload ABI. This table
     /// supplies the interpreter-only proc identity without rewriting that data.
     static_erased_callables: []const StaticErasedCallable,
-    frame_plans: []FramePlan,
+    /// Reusable frame slot arrays, indexed by slot count. Every frame with
+    /// the same number of locals can reuse the same array, whichever proc it
+    /// belongs to, so this grows only with the frames this interpreter runs.
+    free_frame_slots: std.ArrayListUnmanaged(std.ArrayListUnmanaged([]LocalSlot)) = .empty,
     boxy_tables: BoxyTables,
     runtime_boxy_type_descs: std.ArrayList(*const LirProgram.BoxyTypeDesc) = .empty,
     runtime_boxy_desc_ids: std.AutoHashMapUnmanaged(usize, u32) = .empty,
@@ -368,10 +378,6 @@ pub const Interpreter = struct {
     /// Descriptor-guided boxy value machinery, bound to this interpreter's live
     /// descriptor tables by `bindBoxyRuntime` before each evaluation.
     boxy_runtime: BoxyRuntime,
-    rc_presence: []RcPresence,
-    rc_plans: std.AutoHashMapUnmanaged(u64, layout_mod.RcHelperPlan) = .{},
-    struct_field_plans: std.AutoHashMapUnmanaged(u64, ?layout_mod.RcFieldPlan) = .{},
-    tag_variant_plans: std.AutoHashMapUnmanaged(u64, ?layout_mod.RcHelperKey) = .{},
     /// Debug-only validation state for `box_alloc_zeroed` cells while their
     /// payload is intentionally zero-filled during recursive value construction.
     inflight_zeroed_box_payloads: std.AutoHashMapUnmanaged(usize, void) = .{},
@@ -392,6 +398,7 @@ pub const Interpreter = struct {
     /// interpreted. This is independent of the physical proc call stack.
     active_stmt_inline_scope: InlineScopeId = InlineScopeId.none,
     /// Source location captured when the current evaluation first failed.
+    failure_origins: []const ?LIR.ComptimeFailureOrigin = &.{},
     failed_stmt_loc: base.SourceLoc = base.SourceLoc.none,
     /// Checked source region captured when the current evaluation first failed.
     failed_stmt_region: base.Region = base.Region.zero(),
@@ -403,14 +410,12 @@ pub const Interpreter = struct {
     /// callables can outlive the evaluation that created them.
     retained_owner: ?*Retained = null,
 
-    const RcPresence = enum(u2) {
-        unknown,
-        active,
-        no,
-        yes,
-    };
-
     pub const Error = boxy_runtime.Error;
+
+    pub const StaticDataDemand = struct {
+        context: *anyopaque,
+        ensure: *const fn (*anyopaque, LIR.StaticDataId) Error!void,
+    };
 
     /// Explicit hosted-call data produced by LIR and the interpreter's ABI
     /// packing. Integrations consume this without reconstructing hosted
@@ -480,30 +485,16 @@ pub const Interpreter = struct {
         desc: ?*const LirProgram.BoxyTypeDesc = null,
     };
 
-    const FramePlan = struct {
+    const Frame = struct {
+        proc_id: LirProcSpecId,
+        ret_layout: layout_mod.Idx,
+        /// The proc's frame locals, sorted by id; `slots` is parallel to it.
         locals: LirStore.StoreSpanBorrow(LocalId, "local_ids"),
+        /// The proc's join points, sorted by id.
         join_points: LirStore.StoreSpanBorrow(LIR.JoinPoint, "join_points"),
-        free_slots: std.ArrayListUnmanaged([]LocalSlot) = .empty,
+        slots: []LocalSlot,
 
-        fn deinit(self: *FramePlan, allocator: Allocator) void {
-            while (self.free_slots.pop()) |slots| {
-                allocator.free(slots);
-            }
-            self.free_slots.deinit(allocator);
-        }
-
-        fn acquireSlots(self: *FramePlan, allocator: Allocator) Allocator.Error![]LocalSlot {
-            if (self.free_slots.pop()) |slots| return slots;
-            return try allocator.alloc(LocalSlot, self.locals.len);
-        }
-
-        fn releaseSlots(self: *FramePlan, allocator: Allocator, slots: []LocalSlot) void {
-            self.free_slots.append(allocator, slots) catch {
-                allocator.free(slots);
-            };
-        }
-
-        fn slotIndex(self: *const FramePlan, local_id: LocalId) ?usize {
+        fn findSlotIndex(self: *const Frame, local_id: LocalId) ?usize {
             var low: usize = 0;
             var high: usize = self.locals.len;
             const target = @intFromEnum(local_id);
@@ -520,7 +511,7 @@ pub const Interpreter = struct {
             return null;
         }
 
-        fn joinPoint(self: *const FramePlan, join_point_id: LIR.JoinPointId) ?LIR.JoinPoint {
+        fn joinPoint(self: *const Frame, join_point_id: LIR.JoinPointId) ?LIR.JoinPoint {
             var low: usize = 0;
             var high: usize = self.join_points.len;
             const target = @intFromEnum(join_point_id);
@@ -537,23 +528,12 @@ pub const Interpreter = struct {
             }
             return null;
         }
-    };
-
-    const Frame = struct {
-        proc_id: LirProcSpecId,
-        ret_layout: layout_mod.Idx,
-        plan: *FramePlan,
-        slots: []LocalSlot,
-
-        fn deinit(self: *Frame, allocator: Allocator) void {
-            self.plan.releaseSlots(allocator, self.slots);
-        }
 
         fn slotIndex(self: *const Frame, local_id: LocalId) usize {
-            if (self.plan.slotIndex(local_id)) |index| return index;
+            if (self.findSlotIndex(local_id)) |index| return index;
             if (builtin.mode == .Debug) {
                 debugPrint(
-                    "LIR/interpreter invariant violated: proc {d} frame plan does not contain local {d}\n",
+                    "LIR/interpreter invariant violated: proc {d} frame does not contain local {d}\n",
                     .{ @intFromEnum(self.proc_id), @intFromEnum(local_id) },
                 );
             }
@@ -625,6 +605,8 @@ pub const Interpreter = struct {
     };
 
     pub const BoxyTables = boxy_runtime.BoxyTables;
+    /// Literal backing table a caller owns and lends to interpreters.
+    pub const StaticStrings = backend.StaticStringData;
 
     /// Heap-pinned interpreter lifetime for host-facing execution. The root
     /// call owns the initial reference and every interpreter-created erased
@@ -645,8 +627,8 @@ pub const Interpreter = struct {
             store: *const LirStore,
             layout_store: *const layout_mod.Store,
             boxy_tables: BoxyTables,
+            static_strings: backend.StaticStringData.View,
             caller_roc_ops: *RocOps,
-            float_nan_mode: builtins.float_bits.NanMode,
             synchronization_io: std.Io,
         ) Allocator.Error!*Retained {
             const self = try allocator.create(Retained);
@@ -661,8 +643,8 @@ pub const Interpreter = struct {
                     store,
                     layout_store,
                     boxy_tables,
+                    static_strings,
                     caller_roc_ops,
-                    float_nan_mode,
                 ),
             };
             self.interpreter.retained_owner = self;
@@ -740,20 +722,27 @@ pub const Interpreter = struct {
         }
     };
 
+    /// Build the literal backings for `store` in the native layout the
+    /// interpreter evaluates with. The caller owns the table and must keep it
+    /// alive for as long as any value the interpreter produces may be read.
+    pub fn buildStaticStrings(allocator: Allocator, store: *const LirStore) Allocator.Error!backend.StaticStringData.Table {
+        return backend.StaticStringData.build(allocator, store, RocTarget.detectNative());
+    }
+
     pub fn init(
         allocator: Allocator,
         store: *const LirStore,
         layout_store: *const layout_mod.Store,
+        static_strings: backend.StaticStringData.View,
         caller_roc_ops: *RocOps,
-        float_nan_mode: builtins.float_bits.NanMode,
     ) Allocator.Error!LirInterpreter {
         return initWithBoxyTablesAndHostedCallHandler(
             allocator,
             store,
             layout_store,
             .{},
+            static_strings,
             caller_roc_ops,
-            float_nan_mode,
             null,
         );
     }
@@ -763,16 +752,16 @@ pub const Interpreter = struct {
         store: *const LirStore,
         layout_store: *const layout_mod.Store,
         boxy_tables: BoxyTables,
+        static_strings: backend.StaticStringData.View,
         caller_roc_ops: *RocOps,
-        float_nan_mode: builtins.float_bits.NanMode,
     ) Allocator.Error!LirInterpreter {
         return initWithBoxyTablesAndHostedCallHandler(
             allocator,
             store,
             layout_store,
             boxy_tables,
+            static_strings,
             caller_roc_ops,
-            float_nan_mode,
             null,
         );
     }
@@ -784,8 +773,8 @@ pub const Interpreter = struct {
         allocator: Allocator,
         store: *const LirStore,
         layout_store: *const layout_mod.Store,
+        static_strings: backend.StaticStringData.View,
         caller_roc_ops: *RocOps,
-        float_nan_mode: builtins.float_bits.NanMode,
         hosted_call_handler: ?HostedCallHandler,
     ) Allocator.Error!LirInterpreter {
         return initWithBoxyTablesAndHostedCallHandler(
@@ -793,8 +782,8 @@ pub const Interpreter = struct {
             store,
             layout_store,
             .{},
+            static_strings,
             caller_roc_ops,
-            float_nan_mode,
             hosted_call_handler,
         );
     }
@@ -806,25 +795,10 @@ pub const Interpreter = struct {
         store: *const LirStore,
         layout_store: *const layout_mod.Store,
         boxy_tables: BoxyTables,
+        static_strings: backend.StaticStringData.View,
         caller_roc_ops: *RocOps,
-        float_nan_mode: builtins.float_bits.NanMode,
         hosted_call_handler: ?HostedCallHandler,
     ) Allocator.Error!LirInterpreter {
-        const frame_plans = try buildFramePlans(allocator, store);
-        errdefer deinitFramePlans(allocator, frame_plans);
-
-        const rc_presence = try allocator.alloc(RcPresence, layout_store.layoutCount());
-        errdefer allocator.free(rc_presence);
-        @memset(rc_presence, .unknown);
-
-        var rc_plans: std.AutoHashMapUnmanaged(u64, layout_mod.RcHelperPlan) = .{};
-        errdefer rc_plans.deinit(allocator);
-        var struct_field_plans: std.AutoHashMapUnmanaged(u64, ?layout_mod.RcFieldPlan) = .{};
-        errdefer struct_field_plans.deinit(allocator);
-        var tag_variant_plans: std.AutoHashMapUnmanaged(u64, ?layout_mod.RcHelperKey) = .{};
-        errdefer tag_variant_plans.deinit(allocator);
-        try reserveRcCaches(allocator, layout_store, &rc_plans, &struct_field_plans, &tag_variant_plans);
-
         const roc_env = try allocator.create(InterpreterRocEnv);
         roc_env.* = InterpreterRocEnv.init(allocator, caller_roc_ops);
         errdefer {
@@ -832,15 +806,11 @@ pub const Interpreter = struct {
             allocator.destroy(roc_env);
         }
 
-        var static_strings = try backend.StaticStringData.build(allocator, store, RocTarget.detectNative());
-        errdefer static_strings.deinit();
-
         return .{
             .allocator = allocator,
             .store = store,
             .layout_store = layout_store,
             .helper = LayoutHelper.init(layout_store),
-            .float_nan_mode = float_nan_mode,
             .descriptor_arena = base.SingleThreadArena.init(allocator),
             .arena = base.SingleThreadArena.init(allocator),
             .roc_env = roc_env,
@@ -859,7 +829,6 @@ pub const Interpreter = struct {
             .static_strings = static_strings,
             .static_data = &.{},
             .static_erased_callables = &.{},
-            .frame_plans = frame_plans,
             .boxy_tables = boxy_tables,
             .runtime_boxy_type_descs = .empty,
             .runtime_boxy_desc_ids = .empty,
@@ -885,10 +854,6 @@ pub const Interpreter = struct {
                 .descriptor_arena = undefined,
                 .eval_arena = undefined,
             },
-            .rc_presence = rc_presence,
-            .rc_plans = rc_plans,
-            .struct_field_plans = struct_field_plans,
-            .tag_variant_plans = tag_variant_plans,
             .call_stack = .empty,
             .failed_call_stack = .empty,
             .comptime_branch_hits = .empty,
@@ -908,15 +873,14 @@ pub const Interpreter = struct {
         self.adapter_desc_specializations.deinit(self.allocator);
         self.roc_env.deinit();
         self.allocator.destroy(self.roc_env);
-        self.static_strings.deinit();
         self.descriptor_arena.deinit();
         self.arena.deinit();
-        self.tag_variant_plans.deinit(self.allocator);
-        self.struct_field_plans.deinit(self.allocator);
-        self.rc_plans.deinit(self.allocator);
         self.inflight_zeroed_box_payloads.deinit(self.allocator);
-        self.allocator.free(self.rc_presence);
-        deinitFramePlans(self.allocator, self.frame_plans);
+        for (self.free_frame_slots.items) |*pool| {
+            for (pool.items) |slots| self.allocator.free(slots);
+            pool.deinit(self.allocator);
+        }
+        self.free_frame_slots.deinit(self.allocator);
     }
 
     /// Install the explicit immutable data image that backs LIR static-data
@@ -938,7 +902,7 @@ pub const Interpreter = struct {
     /// Function address stored in static erased-callable payloads interpreted
     /// in-process. Proc identity is resolved by `static_erased_callables`.
     pub fn staticErasedCallableTrampolineAddress() usize {
-        return @intFromPtr(&interpreterErasedCallableTrampoline);
+        return @intFromPtr(&staticErasedCallableTrampoline);
     }
 
     /// Function address stored in static erased-callable `on_drop` slots while
@@ -950,83 +914,6 @@ pub const Interpreter = struct {
     }
 
     fn staticErasedCallableOnDrop(_: ?[*]u8, _: *RocOps) callconv(.c) void {}
-
-    fn deinitFramePlans(allocator: Allocator, frame_plans: []FramePlan) void {
-        for (frame_plans) |*plan| {
-            plan.deinit(allocator);
-        }
-        allocator.free(frame_plans);
-    }
-
-    fn buildFramePlans(allocator: Allocator, store: *const LirStore) Allocator.Error![]FramePlan {
-        const proc_specs = store.getProcSpecs();
-        const frame_plans = try allocator.alloc(FramePlan, proc_specs.len);
-        var initialized: usize = 0;
-        errdefer {
-            for (frame_plans[0..initialized]) |*plan| {
-                plan.deinit(allocator);
-            }
-            allocator.free(frame_plans);
-        }
-
-        for (proc_specs, 0..) |proc_spec, i| {
-            frame_plans[i] = buildFramePlan(store, proc_spec);
-            initialized += 1;
-        }
-
-        return frame_plans;
-    }
-
-    fn buildFramePlan(store: *const LirStore, proc_spec: LirProcSpec) FramePlan {
-        return .{
-            .locals = store.getLocalSpan(proc_spec.frame_locals),
-            .join_points = store.getJoinPointSpan(proc_spec.join_points),
-        };
-    }
-
-    fn reserveRcCaches(
-        allocator: Allocator,
-        layout_store: *const layout_mod.Store,
-        rc_plans: *std.AutoHashMapUnmanaged(u64, layout_mod.RcHelperPlan),
-        struct_field_plans: *std.AutoHashMapUnmanaged(u64, ?layout_mod.RcFieldPlan),
-        tag_variant_plans: *std.AutoHashMapUnmanaged(u64, ?layout_mod.RcHelperKey),
-    ) Allocator.Error!void {
-        const layout_count = layout_store.layoutCount();
-        try rc_plans.ensureTotalCapacity(allocator, try cacheCapacity(layout_count));
-
-        var struct_field_count: usize = 0;
-        var tag_variant_count: usize = 0;
-        for (0..layout_count) |raw| {
-            const layout_idx: layout_mod.Idx = @enumFromInt(raw);
-            const layout_val = layout_store.getLayout(layout_idx);
-            switch (layout_val.tag) {
-                .struct_ => struct_field_count += layout_store.getStructData(layout_val.getStruct().idx).fields.count,
-                .tag_union => {
-                    const data = layout_store.getTagUnionData(layout_val.getTagUnion().idx);
-                    tag_variant_count += layout_store.getTagUnionVariants(data).len;
-                },
-                .scalar,
-                .box,
-                .box_of_zst,
-                .erased_box,
-                .list,
-                .list_of_zst,
-                .closure,
-                .erased_callable,
-                .zst,
-                .ptr,
-                => {},
-            }
-        }
-
-        try struct_field_plans.ensureTotalCapacity(allocator, try cacheCapacity(struct_field_count));
-        try tag_variant_plans.ensureTotalCapacity(allocator, try cacheCapacity(tag_variant_count));
-    }
-
-    fn cacheCapacity(count: usize) Allocator.Error!u32 {
-        const capacity = std.math.mul(usize, count, 3) catch return error.OutOfMemory;
-        return std.math.cast(u32, capacity) orelse error.OutOfMemory;
-    }
 
     fn evalAllocator(self: *LirInterpreter) Allocator {
         return self.arena.allocator();
@@ -1163,7 +1050,7 @@ pub const Interpreter = struct {
         self.performInterpreterApiRc(.decref, val, layout_idx, 0);
     }
 
-    fn runtimeError(self: *LirInterpreter, message: []const u8) Error {
+    fn runtimeError(self: *LirInterpreter, message: []const u8) error{RuntimeError} {
         self.recordActiveFailureLocIfUnset();
         self.roc_env.runtime_error_message = message;
         return error.RuntimeError;
@@ -1198,6 +1085,7 @@ pub const Interpreter = struct {
     /// interpreter is pinned, so a single binding at each evaluation entry keeps
     /// the runtime valid for every boxy operation reached from it.
     fn bindBoxyRuntime(self: *LirInterpreter) void {
+        self.roc_env.active_interpreter = self;
         self.boxy_runtime.runtime_boxy_type_descs = &self.runtime_boxy_type_descs;
         self.boxy_runtime.runtime_boxy_desc_ids = &self.runtime_boxy_desc_ids;
         self.boxy_runtime.adapter_desc_specializations = &self.adapter_desc_specializations;
@@ -1646,7 +1534,6 @@ pub const Interpreter = struct {
         root_list_validation: DebugListValidation,
     ) Error!void {
         const layout_idx = self.store.getLocal(local_id).layout_idx;
-        const normalized_value = try self.normalizeFloatNanValue(value, layout_idx);
 
         if (builtin.mode == .Debug) {
             var visited = std.ArrayList(DebugVisitedValue).empty;
@@ -1655,7 +1542,7 @@ pub const Interpreter = struct {
                 frame.proc_id,
                 stmt_id,
                 local_id,
-                normalized_value,
+                value,
                 layout_idx,
                 &visited,
                 allow_zeroed_box_payload_holes,
@@ -1664,31 +1551,7 @@ pub const Interpreter = struct {
             );
         }
 
-        frame.setLocal(local_id, normalized_value);
-    }
-
-    fn normalizeFloatNanValue(self: *LirInterpreter, value: Value, layout_idx: layout_mod.Idx) Error!Value {
-        if (self.float_nan_mode == .preserve) return value;
-
-        if (layout_idx == .f32) {
-            const bits = value.read(u32);
-            const normalized = builtins.float_bits.normalizeF32NanBits(bits);
-            if (bits == normalized) return value;
-            const result = try self.alloc(layout_idx);
-            result.write(u32, normalized);
-            return result;
-        }
-
-        if (layout_idx == .f64) {
-            const bits = value.read(u64);
-            const normalized = builtins.float_bits.normalizeF64NanBits(bits);
-            if (bits == normalized) return value;
-            const result = try self.alloc(layout_idx);
-            result.write(u64, normalized);
-            return result;
-        }
-
-        return value;
+        frame.setLocal(local_id, value);
     }
 
     fn getLocalChecked(self: *LirInterpreter, frame: *const Frame, local_id: LocalId) Error!Value {
@@ -2479,7 +2342,7 @@ pub const Interpreter = struct {
         defer self.call_depth -= 1;
 
         var frame = try self.initFrame(proc_id, proc_spec);
-        defer frame.deinit(self.allocator);
+        defer self.releaseFrameSlots(frame.slots);
 
         const params = self.store.getLocalSpan(proc_spec.args);
         if (params.len != args.len) {
@@ -2651,12 +2514,12 @@ pub const Interpreter = struct {
     }
 
     fn initFrame(self: *LirInterpreter, proc_id: LirProcSpecId, proc_spec: LirProcSpec) Error!Frame {
-        const plan = &self.frame_plans[@intFromEnum(proc_id)];
-        const slots = try plan.acquireSlots(self.allocator);
+        const locals = self.store.getLocalSpan(proc_spec.frame_locals);
+        const slots = try self.acquireFrameSlots(locals.len);
         @memset(slots, .{ .assigned = false, .val = Value.zst, .desc = null });
-        for (0..plan.locals.len) |i| {
+        for (0..locals.len) |i| {
             const slot = &slots[i];
-            const local_id = GuardedList.at(plan.locals, i);
+            const local_id = GuardedList.at(locals, i);
             const layout_idx = self.store.getLocal(local_id).layout_idx;
             if (self.layout_store.getLayout(layout_idx).tag == .zst) {
                 slot.assigned = true;
@@ -2666,8 +2529,29 @@ pub const Interpreter = struct {
         return .{
             .proc_id = proc_id,
             .ret_layout = proc_spec.ret_layout,
-            .plan = plan,
+            .locals = locals,
+            .join_points = self.store.getJoinPointSpan(proc_spec.join_points),
             .slots = slots,
+        };
+    }
+
+    fn acquireFrameSlots(self: *LirInterpreter, len: usize) Allocator.Error![]LocalSlot {
+        if (len < self.free_frame_slots.items.len) {
+            if (self.free_frame_slots.items[len].pop()) |slots| return slots;
+        }
+        return try self.allocator.alloc(LocalSlot, len);
+    }
+
+    fn releaseFrameSlots(self: *LirInterpreter, slots: []LocalSlot) void {
+        const pools = &self.free_frame_slots;
+        if (slots.len >= pools.items.len) {
+            pools.appendNTimes(self.allocator, .empty, slots.len + 1 - pools.items.len) catch {
+                self.allocator.free(slots);
+                return;
+            };
+        }
+        pools.items[slots.len].append(self.allocator, slots) catch {
+            self.allocator.free(slots);
         };
     }
 
@@ -3539,23 +3423,31 @@ pub const Interpreter = struct {
                     current = join_stmt.remainder;
                 },
                 .jump => |jump_stmt| {
-                    const join_point = frame.plan.joinPoint(jump_stmt.target) orelse self.invariantFailed(
+                    const join_point = frame.joinPoint(jump_stmt.target) orelse self.invariantFailed(
                         "LIR/interpreter invariant violated: missing join point {d} in proc {d}",
                         .{ @intFromEnum(jump_stmt.target), @intFromEnum(frame.proc_id) },
                     );
                     current = join_point.body;
                 },
                 .ret => |ret_stmt| return .{ .returned = ret_stmt.value },
-                .crash => |crash_stmt| switch (crash_stmt.msg) {
-                    .literal => |literal| return self.triggerCrash(self.store.getString(literal)),
-                    .local => |message_local| {
-                        const message_value = try self.getLocalChecked(frame, message_local);
-                        const message = self.readRocStr(message_value);
-                        self.recordActiveFailureLocIfUnset();
-                        self.roc_env.reportCrash(message);
-                        self.dropValue(message_value, self.store.getLocal(message_local).layout_idx);
-                        return error.Crash;
-                    },
+                .crash => |crash_stmt| {
+                    if (@intFromEnum(current) < self.failure_origins.len) {
+                        if (self.failure_origins[@intFromEnum(current)]) |origin| {
+                            self.failed_stmt_loc = origin.loc orelse base.SourceLoc.none;
+                            self.failed_stmt_region = origin.region orelse base.Region.zero();
+                        }
+                    }
+                    switch (crash_stmt.msg) {
+                        .literal => |literal| return self.triggerCrash(self.store.getString(literal)),
+                        .local => |message_local| {
+                            const message_value = try self.getLocalChecked(frame, message_local);
+                            const message = self.readRocStr(message_value);
+                            self.recordActiveFailureLocIfUnset();
+                            self.roc_env.reportCrash(message);
+                            self.dropValue(message_value, self.store.getLocal(message_local).layout_idx);
+                            return error.Crash;
+                        },
+                    }
                 },
                 .expect_err => |expect_err_stmt| {
                     const message_value = try self.getLocalChecked(frame, expect_err_stmt.message);
@@ -4296,6 +4188,14 @@ pub const Interpreter = struct {
         return val;
     }
 
+    pub fn failStaticDataDemand(self: *LirInterpreter, message: []const u8) Error {
+        const owned = self.allocator.dupe(u8, message) catch return error.OutOfMemory;
+        if (self.roc_env.crash_message) |old| self.allocator.free(old);
+        self.roc_env.crash_message = owned;
+        self.roc_env.crashed = true;
+        return error.Crash;
+    }
+
     fn evalStaticDataLiteral(self: *LirInterpreter, id: LIR.StaticDataId, target_layout: layout_mod.Idx) Error!Value {
         const index: usize = @intFromEnum(id);
         if (index >= self.static_data.len) {
@@ -4304,6 +4204,7 @@ pub const Interpreter = struct {
                 .{index},
             );
         }
+        if (self.static_data_demand) |demand| try demand.ensure(demand.context, id);
         const result = try self.alloc(target_layout);
         const size = self.helper.sizeOf(target_layout);
         if (size != 0) {
@@ -4311,6 +4212,46 @@ pub const Interpreter = struct {
             @memcpy(result.ptr[0..size], source[0..size]);
         }
         return result;
+    }
+
+    pub const InterpretedCallable = struct {
+        proc: LIR.LirProcSpecId,
+        capture_ptr: [*]u8,
+        result_desc: ?*const LirProgram.BoxyTypeDesc = null,
+    };
+
+    /// Decode only the explicit static-registry or interpreter-context ABI.
+    pub fn interpretedCallable(self: *LirInterpreter, data_ptr: [*]u8) error{RuntimeError}!?InterpretedCallable {
+        const payload = builtins.erased_callable.payloadPtr(data_ptr);
+        const code = @intFromPtr(payload.callable_fn_ptr);
+        if (code == staticErasedCallableTrampolineAddress()) {
+            const capture = builtins.erased_callable.capturePtr(data_ptr);
+            for (self.static_erased_callables) |entry| {
+                if (entry.capture_ptr == capture) return .{ .proc = entry.proc_id, .capture_ptr = capture };
+            }
+            return self.runtimeError("LIR/interpreter invariant violated: static interpreted callable omitted its producer registry entry");
+        }
+        if (code != @intFromPtr(&interpreterErasedCallableTrampoline)) return null;
+        const context = erasedCallableInterpreterContextFromPayload(data_ptr);
+        return .{ .proc = @enumFromInt(context.proc_id), .capture_ptr = erasedCallableInterpreterCaptureValuePtr(data_ptr), .result_desc = context.result_desc };
+    }
+
+    fn staticErasedCallableTrampoline(ops: *RocOps, ret: ?[*]u8, args: ?[*]const u8, capture: ?[*]u8, reuse: ?[*]u8, out_desc: *?*const anyopaque) callconv(.c) void {
+        const env: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
+        const self: *LirInterpreter = @ptrCast(@alignCast(env.active_interpreter orelse {
+            ops.crash("static interpreted callable has no active interpreter");
+            return;
+        }));
+        const capture_ptr = capture orelse {
+            ops.crash("static interpreted callable omitted its capture address");
+            return;
+        };
+        for (self.static_erased_callables) |entry| {
+            if (entry.capture_ptr != capture_ptr) continue;
+            self.callInterpreterErasedCallable(.{ .proc = entry.proc_id, .capture_ptr = capture_ptr }, ops, ret, args, reuse, out_desc) catch |err| reportInterpreterErasedCallableError(ops, err);
+            return;
+        }
+        ops.crash("static interpreted callable omitted its producer registry entry");
     }
 
     pub fn erasedCallableInterpreterContextFromCapture(capture_ptr: ?[*]u8) *ErasedCallableInterpreterContext {
@@ -4345,7 +4286,7 @@ pub const Interpreter = struct {
             retained.retain();
             retained.enter();
         }
-        context.interpreter.callInterpreterErasedCallable(context, ops, ret, args, reuse, out_desc) catch |err| {
+        context.interpreter.callInterpreterErasedCallable(.{ .proc = @enumFromInt(context.proc_id), .capture_ptr = (capture orelse unreachable) + context.capture_value_offset, .result_desc = context.result_desc }, ops, ret, args, reuse, out_desc) catch |err| {
             leaveAndReleaseErasedCallableOwner(owner);
             reportInterpreterErasedCallableError(ops, err);
             return;
@@ -4451,7 +4392,7 @@ pub const Interpreter = struct {
 
     fn callInterpreterErasedCallable(
         self: *LirInterpreter,
-        context: *ErasedCallableInterpreterContext,
+        callable: InterpretedCallable,
         ops: *RocOps,
         ret: ?[*]u8,
         args: ?[*]const u8,
@@ -4472,7 +4413,7 @@ pub const Interpreter = struct {
             }
         }
 
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(context.proc_id);
+        const proc_id = callable.proc;
         const proc_spec = self.store.getProcSpec(proc_id);
         const proc_arg_locals = self.store.getLocalSpan(proc_spec.args);
         if (proc_arg_locals.len < 2) {
@@ -4517,7 +4458,7 @@ pub const Interpreter = struct {
             }
         }
 
-        const capture_value_ptr: [*]u8 = @ptrCast(@as([*]u8, @ptrCast(context)) + context.capture_value_offset);
+        const capture_value_ptr = callable.capture_ptr;
         proc_args[explicit_arg_count] = try self.allocPointerIntValue(@intFromPtr(capture_value_ptr));
         proc_arg_layouts[explicit_arg_count] = .opaque_ptr;
         const reuse_index = explicit_arg_count + 1;
@@ -4531,7 +4472,7 @@ pub const Interpreter = struct {
         // context's result descriptor before the call so the post-call fixup,
         // which uses it when the proc returns no descriptor of its own, never
         // dereferences freed memory.
-        const context_result_desc = context.result_desc;
+        const context_result_desc = callable.result_desc;
         const result = try self.evalProcByIdWithDescriptors(proc_id, proc_args, proc_arg_layouts, descriptor_bindings);
         out_desc.* = @ptrCast(result.desc orelse context_result_desc);
         const ret_size = self.helper.sizeOf(proc_spec.ret_layout);
@@ -4634,9 +4575,8 @@ pub const Interpreter = struct {
         };
 
         const payload = builtins.erased_callable.payloadPtr(closure_ptr);
-        if (@intFromPtr(payload.callable_fn_ptr) == @intFromPtr(&interpreterErasedCallableTrampoline)) {
-            const proc_id = erasedCallableInterpreterProcId(closure_ptr);
-            const context = erasedCallableInterpreterContextFromPayload(closure_ptr);
+        if (try self.interpretedCallable(closure_ptr)) |callable| {
+            const proc_id = callable.proc;
             const proc_spec = self.store.getProcSpec(proc_id);
             const proc_params = self.store.getLocalSpan(proc_spec.args);
             if (proc_params.len == 0) {
@@ -4774,7 +4714,7 @@ pub const Interpreter = struct {
                     .{},
                 );
             }
-            proc_args[explicit_arg_count] = try self.allocPointerIntValue(@intFromPtr(erasedCallableInterpreterCaptureValuePtr(closure_ptr)));
+            proc_args[explicit_arg_count] = try self.allocPointerIntValue(@intFromPtr(callable.capture_ptr));
             proc_arg_layouts[explicit_arg_count] = .opaque_ptr;
 
             const reuse_index = explicit_arg_count + 1;
@@ -4795,7 +4735,7 @@ pub const Interpreter = struct {
             return .{
                 .value = proc_result.value,
                 .layout = proc_spec.ret_layout,
-                .desc = proc_result.desc orelse context.result_desc,
+                .desc = proc_result.desc orelse callable.result_desc,
             };
         }
 
@@ -5407,7 +5347,7 @@ pub const Interpreter = struct {
         }
 
         if (byte_len_usize == 0) {
-            return self.rocListToValue(RocList.empty(), target_layout);
+            return self.rocListToValue(.{ .bytes = null, .length = elem_len, .capacity_or_alloc_ptr = RocList.encodeCapacity(elem_len) }, target_layout);
         }
 
         if (builtin.mode == .Debug) {
@@ -5636,6 +5576,12 @@ pub const Interpreter = struct {
             .free => {
                 try self.performBoxyLayoutDrop(frame, val, value_layout, desc, .free, count, atomicity);
             },
+            // `host_drop` names a generated adapter's signature, not an
+            // operation the interpreter performs, so no RC statement carries it.
+            .host_drop => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: RC statement carried a host-shaped drop adapter",
+                .{},
+            ),
         }
     }
 
@@ -5725,44 +5671,6 @@ pub const Interpreter = struct {
         self.boxy_runtime.performRcPlan(self.boxyFrameHooks(null), plan, val, count, atomicity);
     }
 
-    fn cachedRcPlan(self: *LirInterpreter, helper: layout_mod.RcHelperKey) layout_mod.RcHelperPlan {
-        const id = helper.encode();
-        if (self.rc_plans.get(id)) |plan| return plan;
-        const plan = self.layout_store.rcHelperPlan(helper);
-        self.rc_plans.putAssumeCapacity(id, plan);
-        return plan;
-    }
-
-    fn cachedStructFieldPlan(
-        self: *LirInterpreter,
-        struct_plan: layout_mod.RcStructPlan,
-        field_index: u32,
-    ) ?layout_mod.RcFieldPlan {
-        const id = helperChildPlanId(@intCast(struct_plan.struct_idx.int_idx), struct_plan.child_op, field_index);
-        if (self.struct_field_plans.get(id)) |plan| return plan;
-        const plan = self.layout_store.rcHelperStructFieldPlan(struct_plan, field_index);
-        self.struct_field_plans.putAssumeCapacity(id, plan);
-        return plan;
-    }
-
-    fn cachedTagVariantPlan(
-        self: *LirInterpreter,
-        tag_plan: layout_mod.RcTagUnionPlan,
-        variant_index: u32,
-    ) ?layout_mod.RcHelperKey {
-        const id = helperChildPlanId(@intCast(tag_plan.tag_union_idx.int_idx), tag_plan.child_op, variant_index);
-        if (self.tag_variant_plans.get(id)) |plan| return plan;
-        const plan = self.layout_store.rcHelperTagUnionVariantPlan(tag_plan, variant_index);
-        self.tag_variant_plans.putAssumeCapacity(id, plan);
-        return plan;
-    }
-
-    fn helperChildPlanId(parent_idx: u32, child_op: layout_mod.RcOp, child_index: u32) u64 {
-        return (@as(u64, parent_idx) << 34) |
-            (@as(u64, @intFromEnum(child_op)) << 32) |
-            @as(u64, child_index);
-    }
-
     // ── RcEffect conformance observation (debug builds only) ──
     //
     // These read the same layout-driven RC plans the retain/release handlers
@@ -5806,7 +5714,7 @@ pub const Interpreter = struct {
     }
 
     fn conformanceRcPlan(self: *LirInterpreter, layout_idx: layout_mod.Idx) layout_mod.RcHelperPlan {
-        return self.cachedRcPlan(.{ .op = .decref, .layout_idx = layout_idx });
+        return self.layout_store.rcHelperPlan(.{ .op = .decref, .layout_idx = layout_idx });
     }
 
     /// Collect every refcounted allocation reachable from a value.
@@ -5841,7 +5749,7 @@ pub const Interpreter = struct {
                 if (rc_conformance.allocationAt(rl.getAllocationDataPtr(&self.roc_ops))) |found| sink.add(found.rc_addr);
                 const child_key = list_plan.child orelse return;
                 const bytes = rl.bytes orelse return;
-                const child_plan = self.cachedRcPlan(child_key);
+                const child_plan = self.layout_store.rcHelperPlan(child_key);
                 for (0..rl.len()) |index| {
                     const elem = Value{ .ptr = bytes + index * list_plan.elem_width };
                     self.conformanceCollectPlan(child_plan, elem, sink, depth + 1);
@@ -5852,7 +5760,7 @@ pub const Interpreter = struct {
                 if (rc_conformance.allocationAt(alloc_ptr)) |found| sink.add(found.rc_addr);
                 const child_key = box_plan.child orelse return;
                 const data_ptr = self.readBoxedDataPointer(val) orelse return;
-                self.conformanceCollectPlan(self.cachedRcPlan(child_key), .{ .ptr = data_ptr }, sink, depth + 1);
+                self.conformanceCollectPlan(self.layout_store.rcHelperPlan(child_key), .{ .ptr = data_ptr }, sink, depth + 1);
             },
             .erased_callable_decref => {
                 if (rc_conformance.allocationAt(val.read(?[*]u8))) |found| sink.add(found.rc_addr);
@@ -5861,9 +5769,9 @@ pub const Interpreter = struct {
                 const field_count = self.layout_store.rcHelperStructFieldCount(struct_plan);
                 var index: u32 = 0;
                 while (index < field_count) : (index += 1) {
-                    const field_plan = self.cachedStructFieldPlan(struct_plan, index) orelse continue;
+                    const field_plan = self.layout_store.rcHelperStructFieldPlan(struct_plan, index) orelse continue;
                     const field_val = Value{ .ptr = val.ptr + field_plan.offset };
-                    self.conformanceCollectPlan(self.cachedRcPlan(field_plan.child), field_val, sink, depth + 1);
+                    self.conformanceCollectPlan(self.layout_store.rcHelperPlan(field_plan.child), field_val, sink, depth + 1);
                 }
             },
             .tag_union => |tag_plan| {
@@ -5878,11 +5786,11 @@ pub const Interpreter = struct {
                     else => return,
                 };
                 if (disc >= variant_count) return;
-                const child_key = self.cachedTagVariantPlan(tag_plan, disc) orelse return;
-                self.conformanceCollectPlan(self.cachedRcPlan(child_key), val, sink, depth + 1);
+                const child_key = self.layout_store.rcHelperTagUnionVariantPlan(tag_plan, disc) orelse return;
+                self.conformanceCollectPlan(self.layout_store.rcHelperPlan(child_key), val, sink, depth + 1);
             },
             .closure => |child_key| {
-                self.conformanceCollectPlan(self.cachedRcPlan(child_key), val, sink, depth + 1);
+                self.conformanceCollectPlan(self.layout_store.rcHelperPlan(child_key), val, sink, depth + 1);
             },
         }
     }
@@ -6555,12 +6463,13 @@ pub const Interpreter = struct {
                 if (sj != 0) return error.Crash;
                 var result: RocStr = undefined;
                 const roc_str = valueToRocStr(args[0]);
+                const entered = builtins.in_process_host.enter(&self.roc_ops, null);
+                defer builtins.in_process_host.leave(entered);
                 dev_wrappers.roc_builtins_str_escape_and_quote(
                     &result,
                     roc_str.bytes,
                     roc_str.length,
                     roc_str.capacity_or_alloc_ptr,
-                    &self.roc_ops,
                 );
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
@@ -7256,6 +7165,7 @@ pub const Interpreter = struct {
             .num_abs_checked => self.numUnaryOp(args[0], ll.ret_layout, arg_layout, .abs, .num_abs_checked),
             .num_abs_diff => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .abs_diff, null),
             .num_pow => self.evalNumPow(args[0], args[1], ll.ret_layout, arg_layout),
+            .num_atan2 => self.evalNumAtan2(args[0], args[1], ll.ret_layout, arg_layout),
             .num_sqrt => self.evalNumSqrt(args[0], ll.ret_layout, arg_layout),
             .num_sin => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .sin),
             .num_cos => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .cos),
@@ -7358,7 +7268,10 @@ pub const Interpreter = struct {
             },
 
             // ── Hasher ──
-            .dict_pseudo_seed => self.writeHasherValue(ll.ret_layout, builtins.utils.dictPseudoSeed()),
+            .dict_pseudo_seed => self.writeHasherValue(ll.ret_layout, switch (self.dict_seed_mode) {
+                .runtime => builtins.utils.dictPseudoSeed(),
+                .comptime_zero => 0,
+            }),
             .hasher_finish => self.writeHasherValue(ll.ret_layout, builtins.hash.hasher_finish(args[0].read(u64))),
             .hasher_write_bool => blk: {
                 const seed = args[0].read(u64);
@@ -8380,6 +8293,25 @@ pub const Interpreter = struct {
             },
             .signed_int, .unsigned_int => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: integer num_pow survived lowering for layout {d}",
+                .{@intFromEnum(arg_layout)},
+            ),
+        }
+        return val;
+    }
+
+    fn evalNumAtan2(self: *LirInterpreter, a: Value, b: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
+        const val = try self.alloc(ret_layout);
+        switch (try self.numericOperandKind(arg_layout)) {
+            .dec => {
+                val.write(i128, builtins.dec.atan2C(RocDec{ .num = a.read(i128) }, RocDec{ .num = b.read(i128) }, &self.roc_ops));
+            },
+            .float => |bits| switch (bits) {
+                32 => val.write(f32, builtins.float_math_f32.atan2(a.read(f32), b.read(f32))),
+                64 => val.write(f64, builtins.float_math_f64.atan2(a.read(f64), b.read(f64))),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float atan2 width {d}", .{bits}),
+            },
+            .signed_int, .unsigned_int => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: integer num_atan2 survived lowering for layout {d}",
                 .{@intFromEnum(arg_layout)},
             ),
         }
@@ -10101,6 +10033,7 @@ test "interpreter float NaN mode preserves runtime payloads and normalizes compi
     } });
     const f32_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(2),
         .args = LIR.LocalSpan.empty(),
         .body = f32_body,
         .ret_layout = .f32,
@@ -10116,29 +10049,22 @@ test "interpreter float NaN mode preserves runtime payloads and normalizes compi
     } });
     const f64_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
         .body = f64_body,
         .ret_layout = .f64,
         .frame_locals = try store.addLocalSpan(&.{f64_local}),
     });
 
-    const cases = [_]struct {
-        mode: builtins.float_bits.NanMode,
-        expected_f32: u32,
-        expected_f64: u64,
-    }{
-        .{ .mode = .preserve, .expected_f32 = 0xffc1_2345, .expected_f64 = 0xfff9_2345_6789_abcd },
-        .{ .mode = .normalize, .expected_f32 = builtins.float_bits.normalized_f32_nan_bits, .expected_f64 = builtins.float_bits.normalized_f64_nan_bits },
-    };
-    for (cases) |case| {
-        var interpreter = try Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), case.mode);
-        defer interpreter.deinit();
+    var static_strings = try Interpreter.buildStaticStrings(allocator, &store);
+    defer static_strings.deinit();
+    var interpreter = try Interpreter.init(allocator, &store, &layouts, static_strings.view(), runtime_env.get_ops());
+    defer interpreter.deinit();
 
-        const f32_result = try interpreter.eval(.{ .proc_id = f32_proc, .ret_layout = .f32 });
-        try std.testing.expectEqual(case.expected_f32, f32_result.value.read(u32));
-        const f64_result = try interpreter.eval(.{ .proc_id = f64_proc, .ret_layout = .f64 });
-        try std.testing.expectEqual(case.expected_f64, f64_result.value.read(u64));
-    }
+    const f32_result = try interpreter.eval(.{ .proc_id = f32_proc, .ret_layout = .f32 });
+    try std.testing.expectEqual(@as(u32, 0xffc1_2345), f32_result.value.read(u32));
+    const f64_result = try interpreter.eval(.{ .proc_id = f64_proc, .ret_layout = .f64 });
+    try std.testing.expectEqual(@as(u64, 0xfff9_2345_6789_abcd), f64_result.value.read(u64));
 }
 
 test "interpreter evaluates explicit static data by compact id" {
@@ -10168,13 +10094,16 @@ test "interpreter evaluates explicit static data by compact id" {
     const frame_locals = try store.addLocalSpan(&.{result_local});
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = .u64,
         .frame_locals = frame_locals,
     });
 
-    var interpreter = try Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), .preserve);
+    var static_strings = try Interpreter.buildStaticStrings(allocator, &store);
+    defer static_strings.deinit();
+    var interpreter = try Interpreter.init(allocator, &store, &layouts, static_strings.view(), runtime_env.get_ops());
     defer interpreter.deinit();
     interpreter.setStaticData(static_addresses.items, &.{});
 

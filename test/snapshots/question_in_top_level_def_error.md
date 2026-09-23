@@ -132,7 +132,7 @@ result = f(3)?
 		(e-match
 			(match
 				(cond
-					(e-call (constraint-fn-var 310)
+					(e-call (constraint-fn-var 309)
 						(e-lookup-local
 							(p-assign (ident "f")))
 						(e-num (value "3"))))

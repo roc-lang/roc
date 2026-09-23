@@ -101,6 +101,10 @@ cd "$repo_root"
 # the count without any code changing and could equally hide a change that did.
 # No code changed with it. arm64musl has always been measured by symbol size
 # and so never included it.
+# List.repeat allocation setup calls the runtime allocator symbol directly, so
+# no adapter address is materialized and no allocator callback is loaded. The
+# compare, byte-tail, and fill loops keep their load, load, compare, advance
+# shape. Combined with the padding change above, the counts stay 97 and 100.
 expectations=(
     "x64musl:97"
     "arm64musl:100"

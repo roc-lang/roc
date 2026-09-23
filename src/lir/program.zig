@@ -16,6 +16,96 @@ const checked = check.CheckedModule;
 const const_store = check.ConstStore;
 const dispatch = check.StaticDispatchRegistry;
 
+/// Dense index in the export slice returned by one static-data materialization.
+pub const StaticDataSymbolId = enum(u32) { _ };
+
+/// Immutable data symbol materialized in the target's readonly representation.
+pub const StaticDataExport = struct {
+    /// Linker-visible symbol name, for example `roc__answer`.
+    symbol_name: []const u8,
+    /// LIR static root represented by this export, when it is an internal value.
+    value_id: ?LIR.StaticDataId = null,
+    /// Fully materialized Roc ABI bytes for the constant.
+    bytes: []const u8,
+    /// Offset inside `bytes` where `symbol_name` points.
+    symbol_offset: u32 = 0,
+    /// Required target alignment of the symbol.
+    alignment: u32,
+    /// Whether an object-file symbol has global linker binding.
+    is_global: bool = true,
+    /// Whether this symbol is part of the host-visible ABI.
+    is_exported: bool = true,
+    /// Pointer relocations from this symbol's bytes to other symbols.
+    relocations: []const StaticDataRelocation = &.{},
+    /// The capacities the empty lists inside this value were evaluated
+    /// with, by byte offset of each list's descriptor in `bytes`. A frozen
+    /// list's capacity word is its length, so the requests would otherwise
+    /// be lost; a runtime consumer rebuilding the value uses them.
+    empty_list_capacities: []const EmptyListCapacity = &.{},
+};
+
+/// The evaluated capacity of one empty list inside a frozen value.
+pub const EmptyListCapacity = struct {
+    offset: u64,
+    capacity: u64,
+};
+
+/// One explicit pointer relocation inside a readonly static-data symbol.
+pub const StaticDataRelocation = struct {
+    /// Runtime meaning of a relocation target.
+    pub const Kind = enum {
+        address,
+        function_pointer,
+    };
+
+    /// Byte offset inside `StaticDataExport.bytes` where the pointer is stored.
+    offset: u64,
+    /// Symbol whose address should be written at `offset`.
+    target_symbol_name: []const u8,
+    /// Address identity: an explicit linker declaration or a row in the owning export slice.
+    target: union(enum) { named, data_symbol: StaticDataSymbolId } = .named,
+    /// Addend applied to the target symbol address.
+    addend: i64 = 0,
+    /// Runtime meaning of the stored pointer.
+    kind: Kind = .address,
+    /// For an erased-callable function pointer, the byte distance from this
+    /// pointer field to the callable's capture bytes.
+    callable_capture_offset: ?u32 = null,
+    /// Exact LIR procedure named by an erased-callable function relocation.
+    ///
+    /// In-process consumers use this identity directly; object backends use
+    /// `target_symbol_name` as its linker representation.
+    procedure: ?LIR.LirProcSpecId = null,
+    /// Exact generated RC helper required by this function-pointer relocation.
+    ///
+    /// Static erased-callable `on_drop` slots are always atomic: their
+    /// construction site makes no thread-confinement claim. Backends consume
+    /// this identity directly instead of recovering it from a symbol or layout.
+    rc_helper: ?layout.RcHelperKey = null,
+    /// Whether `target_symbol_name` is owned by this relocation.
+    owns_target_symbol_name: bool = false,
+};
+
+/// Owned frozen bytes retained with a lowered compilation.
+pub const FrozenStaticData = struct {
+    allocator: Allocator,
+    exports: []StaticDataExport,
+
+    pub fn deinit(self: *FrozenStaticData) void {
+        for (self.exports) |item| {
+            self.allocator.free(item.symbol_name);
+            self.allocator.free(item.bytes);
+            for (item.relocations) |relocation| {
+                if (relocation.owns_target_symbol_name) self.allocator.free(relocation.target_symbol_name);
+            }
+            self.allocator.free(item.relocations);
+            self.allocator.free(item.empty_list_capacities);
+        }
+        self.allocator.free(self.exports);
+        self.* = undefined;
+    }
+};
+
 /// Layout requested for a checked value type digest.
 pub const RequestedLayout = struct {
     ty: names.TypeDigest,
@@ -41,8 +131,27 @@ pub const FnResult = union(enum) {
     erased: ErasedFnsId,
 };
 
+/// Exact member context in the common target-independent Lambda Solved graph.
+/// Own captures belong to `source`; solved captures name their producer span.
+pub const FrozenCallableContext = struct {
+    abi: enum { finite, erased },
+    source: u32,
+    fn_type: u32,
+    captures: union(enum) {
+        own: u32,
+        solved: struct { start: u32, len: u32 },
+    },
+};
+
 /// Checked function template and source type used to emit callable code.
 pub const FnTemplate = struct {
+    /// Original function slot in the shared frozen Monotype owner.
+    frozen_fn: ?u32 = null,
+    /// Exact callable worker specialization key, emitted by SpecConstr:
+    /// SHA-256 template, callable-ABI, and capture-ABI digests in that order.
+    frozen_worker: ?[96]u8 = null,
+    /// Exact member specialization within the shared frozen Solved owner.
+    frozen_context: ?FrozenCallableContext = null,
     fn_def: const_store.FnDef,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
@@ -86,6 +195,7 @@ pub const FnSet = struct {
 
 /// One erased callable entry and its capture layout plan.
 pub const ErasedFn = struct {
+    on_drop: LIR.ErasedCallableOnDrop = .none,
     entry: LIR.LirProcSpecId,
     capture_layout: layout.Idx = .zst,
     template: FnTemplate,
@@ -295,6 +405,10 @@ pub const ConstPlan = union(enum) {
 /// Constant root metadata needed after LIR interpretation finishes.
 pub const ConstRootPlan = struct {
     root_order: u32,
+    /// Checked module that owns this root's compile-time root id, checked
+    /// types and diagnostics. One lowered program unions several modules'
+    /// root requests, so position in the root plan is not an owner.
+    owner: LIR.LoweringModuleId,
     request: check.CheckedModule.RootRequest,
     proc: LIR.LirProcSpecId,
     ret_layout: layout.Idx,
@@ -303,11 +417,51 @@ pub const ConstRootPlan = struct {
     /// representation evidence from the public checked type.
     ret_type: const_store.ConstTypeId,
     plan: ConstPlanId,
+    /// The slot the evaluation publishes this root's completed value into,
+    /// when a consumer asked for the value to be materialized. Null when no
+    /// consumer of this program reads the value.
+    value_slot: ?LIR.StaticDataId = null,
 };
 
 /// One exact LIR value construction that is frozen as readonly target data.
 pub const StaticDataValue = struct {
-    initializer: LIR.LirProcSpecId,
+    /// Null when completed frozen data supplies this slot directly.
+    initializer: ?LIR.LirProcSpecId,
+    layout_idx: layout.Idx,
+    /// The procedure every read of a compile-time root goes through in a
+    /// program lowered before its roots were evaluated. Its body is the slot
+    /// read until the root completes; a root that completed as a
+    /// construction then rebuilds it there, without touching the callers.
+    accessor: ?LIR.LirProcSpecId = null,
+    /// Successful construction replacement is performed only once per accessor.
+    accessor_rebuilt: bool = false,
+    /// An evaluated root owns this slot. Its initializer is representation
+    /// evidence; materialization must consume the completed root value.
+    compile_time_root: ?struct {
+        module: checked.ModuleId,
+        root: checked.ComptimeRootId,
+        const_locator: ?checked.ConstLocator,
+        role: union(enum) {
+            value: struct { failure_slot: LIR.StaticDataId, plan: ConstPlanId },
+            failure_message: struct {
+                failed_field: u32,
+                message_field: u32,
+                failed_offset: u32,
+                message_offset: u32,
+            },
+        },
+    } = null,
+};
+
+/// Exact post-ARC guard identity consumed by successful-root completion.
+pub const ComptimeValueGuard = struct {
+    /// Shared statements have one record per owning procedure.
+    owner: LIR.LirProcSpecId,
+    completed: bool = false,
+    crash: LIR.CFStmtId,
+    entry: LIR.CFStmtId,
+    success: LIR.CFStmtId,
+    value_slot: LIR.StaticDataId,
 };
 
 /// Deterministic symbol name for an internal static-data value.
@@ -316,10 +470,23 @@ pub fn staticDataSymbolName(allocator: Allocator, id: LIR.StaticDataId) Allocato
 }
 
 /// Complete LIR program and side data consumed by ARC, backends, and eval.
+/// A template specialization's content key and the procedure lowered for it.
+pub const SpecProc = struct {
+    key: [32]u8,
+    proc: LIR.LirProcSpecId,
+};
+
+/// Everything one lowering produced: the procedure store, its layouts, the
+/// root and specialization tables, and the static data the program carries.
 pub const Result = struct {
     store: LirStore,
     layouts: layout.Store,
     root_procs: std.ArrayList(LIR.LirProcSpecId),
+    /// The procedure lowered for each template specialization, by the
+    /// specialization's content key (`Monotype.Ast.specIdentityKey`). Only
+    /// the specialization's own procedure is listed, never SpecConstr clones
+    /// or capture-bearing variants of it.
+    spec_procs: std.ArrayList(SpecProc),
     root_metadata: std.ArrayList(root.RootMetadata),
     requested_layouts: std.ArrayList(RequestedLayout),
     const_types: const_store.ConstTypeStore,
@@ -350,7 +517,13 @@ pub const Result = struct {
     const_plans: std.ArrayList(ConstPlan),
     const_roots: std.ArrayList(ConstRootPlan),
     static_data_values: std.ArrayList(StaticDataValue),
+    comptime_value_guards: std.ArrayList(ComptimeValueGuard),
     comptime_sites: std.ArrayList(LIR.ComptimeSite),
+    /// Checked modules of the lowering this program came from, addressed by
+    /// `LIR.LoweringModuleId`. Rows that retain a module-local checked id
+    /// name their owner through this table; nothing resolves an owner from
+    /// row order or from the procedure a row ended up in.
+    lowering_modules: std.ArrayList(checked.ModuleId),
     expect_sites: std.ArrayList(LIR.ExpectSite),
     expect_site_ids: std.AutoHashMapUnmanaged(ExpectSiteKey, LIR.ExpectSiteId),
 
@@ -359,6 +532,7 @@ pub const Result = struct {
             .store = LirStore.init(allocator),
             .layouts = try layout.Store.init(allocator, target_usize),
             .root_procs = .empty,
+            .spec_procs = .empty,
             .root_metadata = .empty,
             .requested_layouts = .empty,
             .const_types = const_store.ConstTypeStore.init(allocator),
@@ -386,7 +560,9 @@ pub const Result = struct {
             .const_plans = .empty,
             .const_roots = .empty,
             .static_data_values = .empty,
+            .comptime_value_guards = .empty,
             .comptime_sites = .empty,
+            .lowering_modules = .empty,
             .expect_sites = .empty,
             .expect_site_ids = .empty,
         };
@@ -398,9 +574,11 @@ pub const Result = struct {
             allocator.free(site.branch_regions);
         }
         self.comptime_sites.deinit(allocator);
+        self.lowering_modules.deinit(allocator);
         self.expect_site_ids.deinit(allocator);
         self.expect_sites.deinit(allocator);
         self.static_data_values.deinit(allocator);
+        self.comptime_value_guards.deinit(allocator);
         deinitConstPlans(allocator, self.const_plans.items);
         self.const_roots.deinit(allocator);
         self.const_plans.deinit(allocator);
@@ -431,6 +609,7 @@ pub const Result = struct {
         self.requested_layouts.deinit(allocator);
         self.root_metadata.deinit(allocator);
         self.root_procs.deinit(allocator);
+        self.spec_procs.deinit(allocator);
         self.layouts.deinit();
         self.store.deinit();
     }
@@ -445,6 +624,7 @@ pub const Result = struct {
     pub fn addComptimeSite(
         self: *Result,
         kind: LIR.ComptimeSiteKind,
+        owner: LIR.LoweringModuleId,
         region: base.Region,
         checked_site: ?LIR.CheckedExhaustivenessSiteId,
         proc: LIR.LirProcSpecId,
@@ -455,12 +635,38 @@ pub const Result = struct {
         const id: LIR.ComptimeSiteId = @enumFromInt(@as(u32, @intCast(self.comptime_sites.items.len)));
         try self.comptime_sites.append(self.store.allocator, .{
             .kind = kind,
+            .owner = owner,
             .region = region,
             .checked_site = checked_site,
             .proc = proc,
             .branch_regions = owned_branch_regions,
         });
         return id;
+    }
+
+    /// Publish the lowering's checked module table. The producer writes it
+    /// once, before any consumer resolves an owner out of it.
+    pub fn setLoweringModules(self: *Result, modules: []const checked.ModuleId) Allocator.Error!void {
+        self.lowering_modules.clearRetainingCapacity();
+        try self.lowering_modules.appendSlice(self.store.allocator, modules);
+    }
+
+    /// The checked module a `LIR.LoweringModuleId` names.
+    pub fn loweringModuleKey(self: *const Result, id: LIR.LoweringModuleId) checked.ModuleId {
+        const raw = @intFromEnum(id);
+        if (raw >= self.lowering_modules.items.len) {
+            @panic("LIR program invariant violated: lowering module id has no published checked module");
+        }
+        return self.lowering_modules.items[raw];
+    }
+
+    /// The dense id this program gave a checked module, when the module was
+    /// part of its lowering input.
+    pub fn loweringModuleId(self: *const Result, key: checked.ModuleId) ?LIR.LoweringModuleId {
+        for (self.lowering_modules.items, 0..) |candidate, index| {
+            if (std.mem.eql(u8, &candidate.bytes, &key.bytes)) return @enumFromInt(@as(u32, @intCast(index)));
+        }
+        return null;
     }
 
     /// Intern one source `expect` so generated code can use a dense counter.
@@ -543,6 +749,36 @@ pub fn deinitErasedFns(allocator: Allocator, erased_fns: []const ErasedFns) void
 /// Convert an intentional fixture-table position while preserving enum inference.
 fn fixtureTableIndex(comptime index: u32) u32 {
     return index;
+}
+
+test "lowering module table resolves checked module provenance both ways" {
+    const allocator = std.testing.allocator;
+    var result = try Result.init(allocator, .u64);
+    defer result.deinit();
+
+    var keys: [3]checked.ModuleId = .{ .{}, .{}, .{} };
+    keys[0].bytes[0] = 7;
+    keys[1].bytes[0] = 8;
+    keys[2].bytes[0] = 9;
+    try result.setLoweringModules(&keys);
+
+    for (keys, 0..) |key, index| {
+        const id: LIR.LoweringModuleId = @enumFromInt(@as(u32, @intCast(index)));
+        try std.testing.expectEqualSlices(u8, &key.bytes, &result.loweringModuleKey(id).bytes);
+        try std.testing.expectEqual(id, result.loweringModuleId(key).?);
+    }
+
+    var absent: checked.ModuleId = .{};
+    absent.bytes[0] = 10;
+    try std.testing.expectEqual(@as(?LIR.LoweringModuleId, null), result.loweringModuleId(absent));
+
+    // A site keeps the owner its producer recorded, not the procedure's owner.
+    const owner: LIR.LoweringModuleId = @enumFromInt(2);
+    const site = try result.addComptimeSite(.destructure, owner, base.Region.zero(), @enumFromInt(41), .first, &.{});
+    const stored = result.comptime_sites.items[@intFromEnum(site)];
+    try std.testing.expectEqual(owner, stored.owner);
+    try std.testing.expectEqual(@as(?LIR.CheckedExhaustivenessSiteId, @enumFromInt(41)), stored.checked_site);
+    try std.testing.expectEqualSlices(u8, &keys[2].bytes, &result.loweringModuleKey(stored.owner).bytes);
 }
 
 test "boxy side tables initialize empty and use flat pools" {

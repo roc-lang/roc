@@ -22,7 +22,7 @@ const wrapper_name = "lsp integration tests";
 
 const BuildSpecsError = Allocator.Error;
 const StatsJsonError = Allocator.Error || std.Io.Dir.AccessError || std.Io.Dir.CreateDirPathError || std.Io.File.OpenError || std.Io.File.Writer.Error;
-const RunnerMainError = BuildSpecsError || StatsJsonError || harness.WorkerArgvError || std.process.Args.ToSliceError;
+const RunnerMainError = BuildSpecsError || StatsJsonError || harness.WorkerArgvError || std.process.Args.ToSliceError || std.fmt.ParseIntError;
 
 const TestStatus = enum(u8) {
     pass,
@@ -482,7 +482,7 @@ pub fn main(init: std.process.Init) RunnerMainError!void {
     const worker_argv_template = try harness.buildWorkerArgvTemplate(init.io, arena, init.minimal.args);
 
     var wall_timer = harness.Timer.start() catch @panic("no clock");
-    Pool.runWithSpans(init.io, specs, results, spans, max_children, args.timeout_ms, gpa, worker_argv_template);
+    Pool.runWithSpans(init.io, specs, results, spans, max_children, args.timeout_ms, gpa, worker_argv_template, args.child_debug);
     const wall_ns = wall_timer.read();
 
     printResults(specs, results, args.verbose, gpa, wall_ns, max_children);

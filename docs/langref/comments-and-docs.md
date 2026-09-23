@@ -57,18 +57,62 @@ negate_if_odd = |num| if num.is_odd() {
 }
 ````
 
-TODO
+The text of a doc comment is Markdown. Headings, lists, tables, blockquotes, `inline code`,
+_emphasis_, and links all work the way they do in other Markdown documents.
 
-<!-- notes:
-explain code blocks in here.
-explain [autolink] syntax inside doc comments.
--->
+### Code Blocks in Doc Comments
+
+A fenced code block (a line of three backticks, then some lines of code, then another line of
+three backticks) is rendered as a code block in the generated documentation. The example above
+uses one to show how `negate_if_odd` behaves.
+
+Code blocks in doc comments are for readers only. The compiler does not type-check them or run
+them, so an `expect` inside a doc comment's code block will not be run by [`roc test`](statements#expect).
+If you want an example to be checked, write it as a top-level `expect` next to the function too.
+
+### Autolinks
+
+Writing a name inside square brackets, such as `[Str]` or `[Str.concat]`, creates an _autolink_
+to that item's documentation. For example:
+
+```roc
+## Converts a [Greeting] to a [Str].
+##
+## To go the other direction, use [Greeting.from_str].
+to_str : Greeting -> Str
+```
+
+In the generated documentation, `[Greeting]`, `[Str]`, and `[Greeting.from_str]` all become links
+pointing to the documentation for those items. Autolinks can refer to items in the current
+module, to other modules in the same package, and to builtin types and their associated items.
+
+An autolink is only created when the brackets contain nothing but a name (optionally with
+dot-separated parts). Ordinary Markdown links, like `[the Roc website](https://roc-lang.org)`,
+continue to work as normal links.
 
 ## Generating Docs with `roc docs`
 
-TODO
+The `roc docs` command generates HTML documentation for a package or platform, using the
+doc comments and type annotations in its modules:
 
-<!-- notes:
-explain `roc docs`
-explain `roc docs --serve`
--->
+```sh
+roc docs main.roc
+```
+
+This writes a static website to a directory named `generated-docs` (use `--output=some/other/dir`
+to write it somewhere else). The site has a page for each module the package exposes, and each
+page lists that module's exposed items along with their types and doc comments. It also includes
+a search box for finding items by name.
+
+Since the result is a static website, you can publish it anywhere that can host static files.
+
+### Viewing Docs Locally with `--serve`
+
+To preview the documentation while you are writing it, pass `--serve`:
+
+```sh
+roc docs --serve main.roc
+```
+
+This generates the documentation as usual and then starts a local HTTP server
+(at `http://localhost:8080`) that serves the generated files until you stop it with Ctrl+C.

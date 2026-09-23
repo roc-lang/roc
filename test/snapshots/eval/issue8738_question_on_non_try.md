@@ -54,7 +54,7 @@ TYPE MISMATCH - issue8738_question_on_non_try.md:9:7:9:30
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Exit(a), ..] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")
+			(text "[Exit(a)] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -180,7 +180,7 @@ NO CHANGE
 						(e-empty_record))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 358)
+		(e-call (constraint-fn-var 360)
 			(e-lookup-local
 				(p-assign (ident "do_something"))))))
 ~~~

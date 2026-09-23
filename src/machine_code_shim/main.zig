@@ -18,6 +18,24 @@ const ipc = @import("ipc");
 const shim_host_abi = @import("shim_host_abi");
 const shim_io = @import("shim_io");
 
+/// This archive runs inside user programs; compiler profiling must not add
+/// Tracy client dependencies to its sealed symbol contract.
+pub const roc_disable_tracy = true;
+/// The platform host this shim is linked into defines the runtime symbols.
+pub const roc_host_role: builtins.host_abi.HostRole = .platform;
+
+/// Freestanding Linux has no TLS startup, including the TLS used by Zig's
+/// default panic handler. Its fatal errors use the existing host crash ABI.
+pub const panic = std.debug.FullPanic(if (builtin.os.tag == .linux and !builtin.link_libc)
+    panicThroughHost
+else
+    std.debug.defaultPanic);
+
+fn panicThroughHost(message: []const u8, _: ?usize) noreturn {
+    builtins.host_abi.extern_host.roc_crashed(message.ptr, message.len);
+    unreachable;
+}
+
 /// Route std.debug.print / std.debug.panic through the minimal shim_io vtable so
 /// the shim archive does not pull in `std.Io.Threaded`.
 pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
@@ -201,8 +219,15 @@ fn ensureRuntimeState(ops: *RocOps) ShimError!*RuntimeState {
 
     if (runtime_state_initialized.load(.acquire)) return &runtime_state;
 
-    runtime_state = openRuntimeState(allocator(), ops) catch {
-        ops.crash("Machine-code shim could not map the compiled Roc image");
+    runtime_state = openRuntimeState(allocator(), ops) catch |err| {
+        var message_buffer: [256]u8 = undefined;
+        const message = switch (err) {
+            error.UnresolvedSymbol => std.fmt.bufPrint(&message_buffer, "Machine-code shim could not map the compiled Roc image: unresolved symbol {s}", .{last_unresolved_symbol orelse "?"}) catch
+                "Machine-code shim could not map the compiled Roc image",
+            else => std.fmt.bufPrint(&message_buffer, "Machine-code shim could not map the compiled Roc image: {s}", .{@errorName(err)}) catch
+                "Machine-code shim could not map the compiled Roc image",
+        };
+        ops.crash(message);
         return error.ImageUnavailable;
     };
     runtime_state_initialized.store(true, .release);
@@ -280,7 +305,7 @@ fn loadDevProgram(
         const shim_function_addr = resolveShimFunction(name);
         switch (try record.relocationKind()) {
             .linked_function => {
-                const target_addr = shim_function_addr orelse return error.UnresolvedSymbol;
+                const target_addr = shim_function_addr orelse return unresolvedSymbol(name);
                 try ensureFunctionStub(gpa, &function_stubs, name, target_addr);
                 relocation.* = .{ .linked_function = .{
                     .offset = record.code_offset,
@@ -371,6 +396,19 @@ fn loadDevProgram(
     };
 }
 
+/// The name of the last symbol the image needed and this shim could not
+/// resolve, copied out of the image for the crash message, since the image
+/// is unmapped before the message is written.
+var last_unresolved_symbol_buffer: [128]u8 = undefined;
+var last_unresolved_symbol: ?[]const u8 = null;
+
+fn unresolvedSymbol(name: []const u8) error{UnresolvedSymbol} {
+    const len = @min(name.len, last_unresolved_symbol_buffer.len);
+    @memcpy(last_unresolved_symbol_buffer[0..len], name[0..len]);
+    last_unresolved_symbol = last_unresolved_symbol_buffer[0..len];
+    return error.UnresolvedSymbol;
+}
+
 fn createDevProgram(
     gpa: Allocator,
     ops: *RocOps,
@@ -397,7 +435,7 @@ fn applyDataRelocations(
         const target_addr = switch (try record.targetKind()) {
             .address => relocation_context.resolveDataSymbol(name),
             .function_pointer => relocation_context.resolveCodeSymbol(name),
-        } orelse return error.UnresolvedSymbol;
+        } orelse return unresolvedSymbol(name);
         const value = try relocatedDataAddress(target_addr, record.addend);
         if (record.data_offset > std.math.maxInt(usize)) return error.InvalidDevRunImage;
         const offset: usize = @intCast(record.data_offset);
@@ -554,7 +592,33 @@ fn resolveShimFunction(name: []const u8) ?usize {
             return builtin_fn.wrapperAddress();
         }
     }
+    if (resolveRuntimeSymbol(name)) |address| return address;
+    if (resolveHostedSymbol(name)) |address| return address;
     return resolveBoxyShimFunction(name);
+}
+
+/// The host's runtime symbols, which this shim links against directly.
+fn resolveRuntimeSymbol(name: []const u8) ?usize {
+    const extern_host = builtins.host_abi.extern_host;
+    // Expect failures pass through the shim so the default run can fold
+    // them into its exit status.
+    if (std.mem.eql(u8, name, shim_symbols.roc_expect_failed)) return @intFromPtr(&shim_host_abi.recordExpectFailed);
+    inline for (shim_symbols.runtime_set) |runtime_name| {
+        if (std.mem.eql(u8, name, runtime_name)) return @intFromPtr(@field(extern_host, runtime_name));
+    }
+    return null;
+}
+
+/// A hosted function of the platform this shim is linked into, by the name
+/// the generated platform shim recorded next to its dispatch table.
+fn resolveHostedSymbol(name: []const u8) ?usize {
+    const names = shim_host_abi.hostedNames();
+    const fns = shim_host_abi.hostedFns();
+    for (names, fns) |hosted_name, hosted_fn| {
+        const candidate = hosted_name orelse continue;
+        if (std.mem.eql(u8, std.mem.span(candidate), name)) return @intFromPtr(hosted_fn);
+    }
+    return null;
 }
 
 /// Resolve a Boxy runtime wrapper to the linked in-process implementation.
@@ -675,12 +739,14 @@ fn executeDevEntrypoint(
         ops.crash("Machine-code shim received no result buffer for dev execution");
         return error.InvalidEntrypoint;
     };
-    const func: *const fn (*anyopaque, *anyopaque, ?*anyopaque) callconv(.c) void =
+    // The image's entry takes the (ret_ptr, args_ptr) convention; it reaches
+    // the host through this shim's runtime symbols.
+    const func: *const fn (*anyopaque, ?*anyopaque) callconv(.c) void =
         @ptrCast(@alignCast(program.code.ptr + entry_offset));
     const runtime = if (program.boxy) |boxy| boxy.runtime else null;
     const previous_runtime = eval.boxy_abi.swapActiveRuntime(runtime);
     defer _ = eval.boxy_abi.swapActiveRuntime(previous_runtime);
-    func(@ptrCast(ops), ret, arg_ptr);
+    func(ret, arg_ptr);
 }
 
 fn devProgramContainsCodeAddress(program: *const DevProgram, address: usize) bool {
@@ -946,6 +1012,9 @@ fn shimEntrypoint(
 
 fn shimDefaultMain(argc: usize, argv: [*][*:0]const u8) callconv(.c) usize {
     stack_probe.retain();
+    if (!builtin.is_test and builtin.os.tag == .linux and
+        (builtin.cpu.arch == .x86 or builtin.cpu.arch.isArm()))
+        @import("private_compiler_rt").retain();
     const ops = shim_host_abi.getOps();
     const app_args = if (argc > 1) argv[1..argc] else argv[0..0];
     var cli_args_list = shim_host_abi.buildDefaultRunCliArgs(app_args, allocator()) catch {

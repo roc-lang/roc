@@ -103,6 +103,25 @@ pub fn Index(comptime Policy: type) type {
             return id;
         }
 
+        /// Register bytes already appended to the owning store. Capacity for
+        /// one additional entry must have been reserved before the store
+        /// mutation that created `id`.
+        pub fn insertExistingAssumeCapacity(
+            self: *Self,
+            owner: anytype,
+            bytes: []const u8,
+            id: Policy.Id,
+        ) void {
+            const bytes_hash = Policy.hash(bytes);
+            const found = self.findStringOrSlot(owner, bytes_hash, bytes);
+            if (found.idx != null) return;
+            std.debug.assert(self.cells.len() != 0);
+            std.debug.assert(!wouldExceedMaxLoad(@as(usize, self.len) + 1, @intCast(self.cells.len())));
+            self.len += 1;
+            self.cells.items.items[found.slot] = Policy.cellForId(id);
+            if (use_fingerprints) self.fingerprints.items.items[found.slot] = fingerprint(bytes_hash);
+        }
+
         /// Reserve enough table storage for `total_count` entries. Once this
         /// succeeds, inserts up to that count cannot resize the index.
         pub fn ensureTotalCapacity(

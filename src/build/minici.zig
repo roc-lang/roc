@@ -3,6 +3,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
+const target = @import("roc_target");
 
 const out_dir = "zig-out/minici";
 const raw_dir = out_dir ++ "/raw";
@@ -139,6 +140,7 @@ const jobs = [_]Job{
     .{ .name = "run-test-playground", .kind = .harness },
     .{ .name = "run-test-cli", .kind = .harness },
     .{ .name = "run-test-serialization-sizes" },
+    .{ .name = "run-test-builtin-bake-reproducible" },
     .{ .name = "run-test-wasm-static-lib" },
     .{ .name = "run-test-dylib" },
     .{ .name = "run-test-archive" },
@@ -209,6 +211,44 @@ fn setSelectionOnly(selection: *Selection, value: []const u8, arg: []const u8) !
     }
     selection.from = value;
     selection.to = value;
+}
+
+/// Fail before doing anything else when this aarch64 machine lacks SHA-256
+/// instructions. aarch64 targets have them in their CPU baseline and
+/// `src/base/TypeDigestHasher.zig` has no software rounds for them, so on such
+/// a machine every artifact minici builds would die of SIGILL the first time it
+/// digests a type. The message says so instead. x86_64 machines choose rounds
+/// at runtime (`dispatches_at_runtime` in src/base/sha256_rounds.zig) or build
+/// with the portable rounds (`uses_software_rounds` there, i.e. x86_64 macOS),
+/// so they need no instructions and are let through.
+fn requireSha256Hardware() void {
+    const supported = switch (target.classifyCpuArch(builtin.cpu.arch)) {
+        .aarch64 => aarch64HasSha2(),
+        .x86_64, .aarch64_be, .arm, .wasm32, .other => true,
+    };
+    if (supported) return;
+    std.debug.print(
+        \\MiniCI: this CPU has no SHA-256 instructions (the ARMv8 `sha2` crypto extension).
+        \\roc requires them on aarch64: type digests are computed with the CPU's SHA-256
+        \\instructions and there are no software rounds for it (see
+        \\src/base/TypeDigestHasher.zig and addSha256Floor in build.zig).
+        \\An aarch64 CPU without them is not a supported machine for building or running
+        \\the roc compiler, so this run stops here rather than failing later with SIGILL.
+        \\
+    , .{});
+    std.process.exit(1);
+}
+
+fn aarch64HasSha2() bool {
+    if (builtin.cpu.arch != .aarch64) return false;
+    return switch (target.classifyOs(builtin.os.tag)) {
+        // HWCAP_SHA2 is bit 6 of AT_HWCAP on aarch64 Linux.
+        .linux => (std.os.linux.getauxval(std.elf.AT_HWCAP) & (1 << 6)) != 0,
+        // Every Apple Silicon CPU has the crypto extension, and Zig's macOS
+        // aarch64 baseline (apple_m1) already assumes it. Other aarch64 hosts
+        // trust the build target, which also requires `sha2`.
+        .macos, .windows, .freebsd, .openbsd, .netbsd, .other => true,
+    };
 }
 
 fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !ParsedArgs {
@@ -1434,6 +1474,7 @@ fn memoryAwareBuildJobs(_: std.Io, _: std.mem.Allocator, env: *const std.process
 /// streaming heartbeats and a machine-readable report. Limits only build graph
 /// parallelism on memory-constrained hosts (see `memoryAwareBuildJobs`).
 pub fn main(init: std.process.Init) !void {
+    requireSha256Hardware();
     const io = init.io;
     var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
     defer _ = build_options.debugGpaOk(gpa_impl.deinit());

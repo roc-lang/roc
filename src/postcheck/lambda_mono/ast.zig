@@ -173,10 +173,9 @@ pub const TryRecordSequence = struct {
 /// Direct call target after Lambda Mono lowering.
 pub const DirectCallTarget = union(enum(u8)) {
     local: FnId,
-    imported: Lifted.ImportedFnId,
 };
 
-/// Direct call to a known Lambda Mono function or loaded specialization shard.
+/// Direct call to a known Lambda Mono function.
 pub const DirectCall = struct {
     target: DirectCallTarget,
     args: Span(ExprId),
@@ -210,6 +209,8 @@ pub const ComptimeSiteKind = Lifted.ComptimeSiteKind;
 /// Metadata for one compile-time-observed control-flow site.
 pub const ComptimeSite = struct {
     kind: ComptimeSiteKind,
+    /// See `Lifted.ComptimeSite.owner`.
+    owner: Common.LoweringModuleId,
     region: base.Region,
     checked_site: ?checked.CheckedExhaustivenessSiteId = null,
     branch_regions: []const base.Region = &.{},
@@ -228,9 +229,17 @@ pub const Expr = struct {
     data: ExprData,
 };
 
+/// An immutable root-slot read. The initializer supplies representation and
+/// lambda-set evidence; it is never evaluated by the read itself.
+pub const ComptimeValue = struct {
+    root: Common.ComptimeValueRootId,
+    initializer: ExprId,
+};
+
 /// A restored compile-time value that may lower to static data once the final
 /// LIR const plan and target layout are known.
 pub const StaticDataCandidate = struct {
+    storage: Common.StaticDataStorage,
     static_data: Common.StaticDataId,
     runtime_expr: ExprId,
 };
@@ -254,6 +263,9 @@ pub const ExprData = union(enum) {
     str_lit: StringLiteralId,
     bytes_lit: PackedListLiteral,
     static_data_candidate: StaticDataCandidate,
+    /// Explicit run/omit consumer input retained through lambda solving.
+    inline_expects_enabled: void,
+    comptime_value: ComptimeValue,
     typed_boundary: TypedBoundary,
     list: Span(ExprId),
     tuple: Span(ExprId),
@@ -453,6 +465,8 @@ pub const FnBody = union(enum) {
 pub const Root = struct {
     fn_id: FnId,
     request: checked.RootRequest,
+    /// See `Lifted.Root.owner`.
+    owner: Common.LoweringModuleId,
 };
 
 /// Runtime layout requested for a checked data value.
@@ -502,6 +516,8 @@ pub const Program = struct {
     runtime_schema_requests: ProgramList(RuntimeSchemaRequest, "runtime_schema_requests"),
     static_data_values: ProgramList(StaticDataValue, "static_data_values"),
     comptime_sites: ProgramList(ComptimeSite, "comptime_sites"),
+    /// Owned descriptors in the source Lifted ID domain; reads outlive that source.
+    comptime_value_roots: ProgramList(Common.ComptimeValueRoot, "comptime_value_roots"),
     /// Source file table for `SourceLoc.file` indices (copied from the lifted
     /// program; owned by this program).
     source_files: ProgramList(base.SourceFileEntry, "source_files"),
@@ -558,6 +574,7 @@ pub const Program = struct {
             .runtime_schema_requests = .empty,
             .static_data_values = .empty,
             .comptime_sites = .empty,
+            .comptime_value_roots = .empty,
             .source_files = .empty,
             .expr_locs = .empty,
             .expr_regions = .empty,
@@ -587,12 +604,13 @@ pub const Program = struct {
             self.allocator.free(site.branch_regions);
         }
         self.comptime_sites.deinit(self.allocator);
+        self.comptime_value_roots.deinit(self.allocator);
         self.static_data_values.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.proc_debug_names.deinit();
-        for (self.string_literals.unsafeRawItemsForView()) |literal| self.allocator.free(literal.backing);
+        for (self.string_literals.unsafeRawItemsForView()) |literal| literal.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
         self.branches.deinit(self.allocator);
@@ -621,6 +639,16 @@ pub const Program = struct {
 
     pub fn constFnEvidenceFrames(self: *const Program, span: Mono.Span(check.ConstStore.ConstFnEvidenceFrame)) []const check.ConstStore.ConstFnEvidenceFrame {
         return self.const_fn_evidence_frames.unsafeRawItemsForView()[span.start..][0..span.len];
+    }
+
+    pub fn addComptimeValueRoot(self: *Program, root: Common.ComptimeValueRoot) std.mem.Allocator.Error!Common.ComptimeValueRootId {
+        const id: Common.ComptimeValueRootId = @enumFromInt(@as(u32, @intCast(self.comptime_value_roots.len())));
+        try self.comptime_value_roots.append(self.allocator, root);
+        return id;
+    }
+
+    pub fn getComptimeValueRoot(self: *const Program, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
+        return self.comptime_value_roots.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     pub fn addFn(self: *Program, fn_: Fn) std.mem.Allocator.Error!FnId {
@@ -682,6 +710,7 @@ pub const Program = struct {
     pub fn addComptimeSite(
         self: *Program,
         kind: ComptimeSiteKind,
+        owner: Common.LoweringModuleId,
         region: base.Region,
         checked_site: ?checked.CheckedExhaustivenessSiteId,
         branch_regions: []const base.Region,
@@ -691,6 +720,7 @@ pub const Program = struct {
         const id: ComptimeSiteId = @enumFromInt(@as(u32, @intCast(self.comptime_sites.len())));
         try self.comptime_sites.append(self.allocator, .{
             .kind = kind,
+            .owner = owner,
             .region = region,
             .checked_site = checked_site,
             .branch_regions = owned_branch_regions,

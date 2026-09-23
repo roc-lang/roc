@@ -31,20 +31,31 @@ const TestSetup = struct {
     store: LirStore,
     layouts: layout_mod.Store,
     env: RuntimeHostEnv,
+    /// What entering `env` as this thread's host displaced, once entered.
+    saved_host: ?builtins.in_process_host.Saved,
 
     fn init(allocator: std.mem.Allocator) std.mem.Allocator.Error!TestSetup {
         return .{
             .store = LirStore.init(allocator),
             .layouts = try layout_mod.Store.init(allocator, base.target.TargetUsize.native),
             .env = RuntimeHostEnv.init(allocator),
+            .saved_host = null,
         };
     }
 
+    /// Make `env` this thread's host until `deinit`. `env` must already sit at
+    /// its final address.
+    fn enterHost(self: *TestSetup) void {
+        self.saved_host = builtins.in_process_host.enter(self.env.get_ops(), null);
+    }
+
     fn startRuntime(self: *TestSetup, allocator: std.mem.Allocator, tables: boxy_runtime.BoxyTables) error{ OutOfMemory, AlreadyInitialized }!void {
+        self.enterHost();
         try boxy_abi.initGlobal(allocator, &self.store, &self.layouts, tables, self.env.get_ops());
     }
 
     fn deinit(self: *TestSetup) void {
+        if (self.saved_host) |saved| builtins.in_process_host.leave(saved);
         boxy_abi.deinitGlobal();
         self.env.deinit();
         self.layouts.deinit();
@@ -52,15 +63,19 @@ const TestSetup = struct {
     }
 };
 
+/// Set by test procs that a dispatch reached them.
+var proc_observed = false;
+
+/// The state a relocation test hands its procs.
+var relocation_test_state: ?*anyopaque = null;
+
 fn customInspectProc(
-    ops: *builtins.host_abi.RocOps,
-    test_context: ?*anyopaque,
     _: [*]const ?*const anyopaque,
     ret: ?*anyopaque,
     ret_desc: *?*const anyopaque,
 ) callconv(.c) void {
-    const context_observed: *bool = @ptrCast(@alignCast(test_context.?));
-    context_observed.* = true;
+    const ops = builtins.in_process_host.ops();
+    proc_observed = true;
     const rendered = builtins.str.RocStr.fromSlice("custom inspect result stored outside the small-string representation", ops);
     const out: *align(1) builtins.str.RocStr = @ptrCast(ret.?);
     out.* = rendered;
@@ -70,12 +85,11 @@ fn customInspectProc(
 var expectedInspectArgDesc: ?*const BoxyTypeDesc = null;
 
 fn customInspectChecksArgDesc(
-    ops: *builtins.host_abi.RocOps,
-    _: ?*anyopaque,
     args: [*]const ?*const anyopaque,
     ret: ?*anyopaque,
     ret_desc: *?*const anyopaque,
 ) callconv(.c) void {
+    const ops = builtins.in_process_host.ops();
     const raw_desc: *align(1) const usize = @ptrCast(args[1].?);
     const text = if (raw_desc.* == @intFromPtr(expectedInspectArgDesc.?)) "source descriptor" else "wrong descriptor";
     const out: *align(1) builtins.str.RocStr = @ptrCast(ret.?);
@@ -87,12 +101,11 @@ var reentrantInspectSourceDescs: [2]?*const BoxyTypeDesc = .{ null, null };
 var reentrantInspectTargetDescs: [2]?*const BoxyTypeDesc = .{ null, null };
 
 fn customInspectSpecializesDescriptor(
-    ops: *builtins.host_abi.RocOps,
-    _: ?*anyopaque,
     args: [*]const ?*const anyopaque,
     ret: ?*anyopaque,
     ret_desc: *?*const anyopaque,
 ) callconv(.c) void {
+    const ops = builtins.in_process_host.ops();
     const inspected: *align(1) const u64 = @ptrCast(args[0].?);
     const index: usize = if (inspected.* == 1) 0 else 1;
     const source_desc = reentrantInspectSourceDescs[index].?;
@@ -196,7 +209,6 @@ test "boxy abi inspect renders a scalar through its descriptor" {
     var rendered: builtins.str.RocStr = undefined;
     boxy_abi.roc_boxy_inspect(
         @ptrCast(&rendered),
-        null,
         @ptrCast(&value),
         @intFromEnum(layout_mod.Idx.u64),
         &descs[0],
@@ -236,15 +248,14 @@ test "boxy abi inspect dispatches descriptor method and releases its owned resul
 
     var value: u64 = 42;
     var rendered: builtins.str.RocStr = undefined;
-    var context_observed = false;
+    proc_observed = false;
     boxy_abi.roc_boxy_inspect(
         @ptrCast(&rendered),
-        @ptrCast(&context_observed),
         @ptrCast(&value),
         @intFromEnum(layout_mod.Idx.u64),
         &descs[0],
     );
-    try std.testing.expect(context_observed);
+    try std.testing.expect(proc_observed);
     try std.testing.expectEqualStrings("custom inspect result stored outside the small-string representation", rendered.asSlice());
     rendered.decref(setup.env.get_ops());
     try setup.env.checkForLeaks();
@@ -300,7 +311,6 @@ test "boxy abi reentrant inspect specialization keeps descriptors outside per-ca
         var rendered: builtins.str.RocStr = undefined;
         boxy_abi.roc_boxy_inspect(
             @ptrCast(&rendered),
-            null,
             @ptrCast(value),
             @intFromEnum(layout_mod.Idx.u64),
             &descs[index],
@@ -329,6 +339,7 @@ test "issue 11170 boxy record inspect reborrows descriptor refs after a custom m
     for (&descs, &refs, &slots, 0..) |*desc, *ref, *slot, index| {
         const proc = try setup.store.addProcSpec(.{
             .name = setup.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(2),
             .args = LIR.LocalSpan.empty(),
             .ret_layout = .str,
         });
@@ -343,6 +354,7 @@ test "issue 11170 boxy record inspect reborrows descriptor refs after a custom m
         };
         ref.* = .{ .static = @enumFromInt(index) };
     }
+    setup.enterHost();
     const runtime = try boxy_abi.createRuntimeFromStores(allocator, &setup.store, &setup.layouts, .{
         .type_descs = &descs,
         .desc_refs = &refs,
@@ -359,8 +371,9 @@ test "issue 11170 boxy record inspect reborrows descriptor refs after a custom m
         old_refs: std.ArrayList(LIR.BoxyDescRef) = .empty,
         stale_ref: LIR.BoxyDescRef,
 
-        fn current(ops: *builtins.host_abi.RocOps, context: ?*anyopaque, _: [*]const ?*const anyopaque, ret: ?*anyopaque, ret_desc: *?*const anyopaque) callconv(.c) void {
-            const state: *@This() = @ptrCast(@alignCast(context.?));
+        fn current(_: [*]const ?*const anyopaque, ret: ?*anyopaque, ret_desc: *?*const anyopaque) callconv(.c) void {
+            const ops = builtins.in_process_host.ops();
+            const state: *@This() = @ptrCast(@alignCast(relocation_test_state.?));
             if (state.old_refs.items.len == 0) {
                 // Force relocation while the old allocation is still live.
                 // Keep and poison it so a stale read deterministically renders
@@ -376,7 +389,8 @@ test "issue 11170 boxy record inspect reborrows descriptor refs after a custom m
             ret_desc.* = null;
         }
 
-        fn stale(ops: *builtins.host_abi.RocOps, _: ?*anyopaque, _: [*]const ?*const anyopaque, ret: ?*anyopaque, ret_desc: *?*const anyopaque) callconv(.c) void {
+        fn stale(_: [*]const ?*const anyopaque, ret: ?*anyopaque, ret_desc: *?*const anyopaque) callconv(.c) void {
+            const ops = builtins.in_process_host.ops();
             const out: *align(1) builtins.str.RocStr = @ptrCast(ret.?);
             out.* = builtins.str.RocStr.fromSlice("stale", ops);
             ret_desc.* = null;
@@ -393,7 +407,9 @@ test "issue 11170 boxy record inspect reborrows descriptor refs after a custom m
     };
     var values: [4]u64 align(16) = .{ 1, 2, 3, 4 };
     var rendered: builtins.str.RocStr = undefined;
-    boxy_abi.roc_boxy_inspect(@ptrCast(&rendered), @ptrCast(&state), @ptrCast(&values), @intFromEnum(aggregate_layout), &aggregate_desc);
+    relocation_test_state = @ptrCast(&state);
+    defer relocation_test_state = null;
+    boxy_abi.roc_boxy_inspect(@ptrCast(&rendered), @ptrCast(&values), @intFromEnum(aggregate_layout), &aggregate_desc);
     try std.testing.expectEqualStrings("(current, current)", rendered.asSlice());
     rendered.decref(setup.env.get_ops());
     try setup.env.checkForLeaks();
@@ -404,6 +420,7 @@ test "boxy residual tags preserve runtime source and target spans while growing"
     var setup = try TestSetup.init(allocator);
     defer setup.deinit();
     const union_layout = try setup.layouts.putTagUnion(&.{ .u64, .u64, .u64, .u64 });
+    setup.enterHost();
     const runtime = try boxy_abi.createRuntimeFromStores(allocator, &setup.store, &setup.layouts, .{}, setup.env.get_ops());
     defer boxy_abi.deinitRuntime(runtime);
     // Fill an exact allocation so producing even the first residual variant
@@ -456,6 +473,7 @@ test "boxy tag inspect preserves variant metadata across a custom method" {
     for (&descs, &refs, &slots, 0..) |*desc, *ref, *slot, index| {
         const proc = try setup.store.addProcSpec(.{
             .name = setup.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(1),
             .args = LIR.LocalSpan.empty(),
             .ret_layout = .str,
         });
@@ -470,6 +488,7 @@ test "boxy tag inspect preserves variant metadata across a custom method" {
         };
         ref.* = .{ .static = @enumFromInt(index) };
     }
+    setup.enterHost();
     const runtime = try boxy_abi.createRuntimeFromStores(allocator, &setup.store, &setup.layouts, .{
         .type_descs = &descs,
         .desc_refs = &refs,
@@ -497,8 +516,9 @@ test "boxy tag inspect preserves variant metadata across a custom method" {
         runtime: *boxy_abi.GlobalBoxyRuntime,
         old_variants: std.ArrayList(LirProgram.BoxyTagVariant) = .empty,
 
-        fn current(ops: *builtins.host_abi.RocOps, context: ?*anyopaque, _: [*]const ?*const anyopaque, ret: ?*anyopaque, ret_desc: *?*const anyopaque) callconv(.c) void {
-            const state: *@This() = @ptrCast(@alignCast(context.?));
+        fn current(_: [*]const ?*const anyopaque, ret: ?*anyopaque, ret_desc: *?*const anyopaque) callconv(.c) void {
+            const ops = builtins.in_process_host.ops();
+            const state: *@This() = @ptrCast(@alignCast(relocation_test_state.?));
             if (state.old_variants.items.len == 0) {
                 // Force relocation while the old allocation is still live.
                 // Keep and poison it so a stale read deterministically renders
@@ -514,7 +534,8 @@ test "boxy tag inspect preserves variant metadata across a custom method" {
             ret_desc.* = null;
         }
 
-        fn stale(ops: *builtins.host_abi.RocOps, _: ?*anyopaque, _: [*]const ?*const anyopaque, ret: ?*anyopaque, ret_desc: *?*const anyopaque) callconv(.c) void {
+        fn stale(_: [*]const ?*const anyopaque, ret: ?*anyopaque, ret_desc: *?*const anyopaque) callconv(.c) void {
+            const ops = builtins.in_process_host.ops();
             const out: *align(1) builtins.str.RocStr = @ptrCast(ret.?);
             out.* = builtins.str.RocStr.fromSlice("stale", ops);
             ret_desc.* = null;
@@ -531,7 +552,9 @@ test "boxy tag inspect preserves variant metadata across a custom method" {
     };
     var values: [4]u64 align(16) = .{ 1, 2, 3, 4 };
     var rendered: builtins.str.RocStr = undefined;
-    boxy_abi.roc_boxy_inspect(@ptrCast(&rendered), @ptrCast(&state), @ptrCast(&values), @intFromEnum(union_layout), &aggregate_desc);
+    relocation_test_state = @ptrCast(&state);
+    defer relocation_test_state = null;
+    boxy_abi.roc_boxy_inspect(@ptrCast(&rendered), @ptrCast(&values), @intFromEnum(union_layout), &aggregate_desc);
     try std.testing.expectEqualStrings("Pair(current, current)", rendered.asSlice());
     rendered.decref(setup.env.get_ops());
     try setup.env.checkForLeaks();
@@ -587,7 +610,6 @@ test "boxy abi custom inspect preserves a full descriptor across a payload-shape
     var rendered: builtins.str.RocStr = undefined;
     boxy_abi.roc_boxy_inspect(
         @ptrCast(&rendered),
-        null,
         @ptrCast(&value),
         @intFromEnum(aggregate_layout),
         &descs[0],
@@ -612,7 +634,6 @@ test "boxy abi custom inspect preserves a full descriptor across a payload-shape
 
     boxy_abi.roc_boxy_inspect(
         @ptrCast(&rendered),
-        null,
         @ptrCast(&boxed),
         @intFromEnum(box_layout),
         boxed_desc.?,
@@ -1876,14 +1897,11 @@ test "boxy abi descriptor copy materializes a template with local captures" {
 }
 
 fn sumTwoU64s(
-    _: *builtins.host_abi.RocOps,
-    test_context: ?*anyopaque,
     args: [*]const ?*const anyopaque,
     ret: ?*anyopaque,
     ret_desc: *?*const anyopaque,
 ) callconv(.c) void {
-    const context_observed: *bool = @ptrCast(@alignCast(test_context.?));
-    context_observed.* = true;
+    proc_observed = true;
     const a: *align(1) const u64 = @ptrCast(args[0].?);
     const b: *align(1) const u64 = @ptrCast(args[1].?);
     const out: *align(1) u64 = @ptrCast(ret.?);
@@ -1894,8 +1912,6 @@ fn sumTwoU64s(
 var expectedDictionaryArgDesc: ?*const BoxyTypeDesc = null;
 
 fn receivesExpectedDictionaryArgDesc(
-    _: *builtins.host_abi.RocOps,
-    _: ?*anyopaque,
     args: [*]const ?*const anyopaque,
     ret: ?*anyopaque,
     ret_desc: *?*const anyopaque,
@@ -1935,11 +1951,10 @@ test "boxy abi dictionary dispatch calls a registered native worker" {
     };
     var out: u64 = 0;
     var out_desc: ?*const BoxyTypeDesc = null;
-    var context_observed = false;
+    proc_observed = false;
     boxy_abi.roc_boxy_call_dict(
         @ptrCast(&out),
         &out_desc,
-        @ptrCast(&context_observed),
         &dicts[0],
         0,
         0,
@@ -1950,7 +1965,7 @@ test "boxy abi dictionary dispatch calls a registered native worker" {
         null,
         @intFromEnum(layout_mod.Idx.u64),
     );
-    try std.testing.expect(context_observed);
+    try std.testing.expect(proc_observed);
     try std.testing.expectEqual(@as(u64, 42), out);
     try std.testing.expectEqual(@as(?*const BoxyTypeDesc, null), out_desc);
 }
@@ -2012,7 +2027,6 @@ test "boxy abi dictionary call preserves a full descriptor across a payload-shap
     boxy_abi.roc_boxy_call_dict(
         @ptrCast(&out),
         &out_desc,
-        null,
         &dicts[0],
         0,
         0,
@@ -2067,7 +2081,6 @@ test "boxy abi dictionary dispatch runs structural equality slots inline" {
     boxy_abi.roc_boxy_call_dict(
         @ptrCast(&out),
         &out_desc,
-        null,
         &dicts[0],
         0,
         0,
@@ -2084,7 +2097,6 @@ test "boxy abi dictionary dispatch runs structural equality slots inline" {
     boxy_abi.roc_boxy_call_dict(
         @ptrCast(&out),
         &out_desc,
-        null,
         &dicts[0],
         0,
         0,
@@ -2171,6 +2183,10 @@ test "boxy abi sidecar view initializes the global runtime from image bytes" {
 
     var env = RuntimeHostEnv.init(allocator);
     defer env.deinit();
+
+    const saved_host = builtins.in_process_host.enter(env.get_ops(), null);
+
+    defer builtins.in_process_host.leave(saved_host);
     try boxy_abi.initGlobalFromSidecarView(allocator, &view, env.get_ops());
     defer boxy_abi.deinitGlobal();
 
@@ -2229,6 +2245,8 @@ test "boxy abi standalone sidecar preserves producer tag identities after litera
     defer view.deinit();
     var env = RuntimeHostEnv.init(allocator);
     defer env.deinit();
+    const saved_host = builtins.in_process_host.enter(env.get_ops(), null);
+    defer builtins.in_process_host.leave(saved_host);
     try boxy_abi.initGlobalFromSidecarView(allocator, &view, env.get_ops());
     defer boxy_abi.deinitGlobal();
 
@@ -2247,7 +2265,7 @@ test "boxy abi standalone sidecar preserves producer tag identities after litera
     try std.testing.expectEqual(payload, read);
     try std.testing.expectEqual(&view.tables.type_descs[0], read_desc.?);
     var rendered: builtins.str.RocStr = undefined;
-    boxy_abi.roc_boxy_inspect(@ptrCast(&rendered), null, &value, compiled.layout, desc);
+    boxy_abi.roc_boxy_inspect(@ptrCast(&rendered), &value, compiled.layout, desc);
     try std.testing.expectEqualStrings("Only(42)", rendered.asSlice());
     rendered.decref(env.get_ops());
     boxy_abi.roc_boxy_drop(&value, compiled.layout, desc, 1, 1, 0);

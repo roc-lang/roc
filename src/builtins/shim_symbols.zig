@@ -24,6 +24,13 @@ pub const roc_shim_hosted_fns = "roc_shim_hosted_fns";
 pub const roc_shim_hosted_count = "roc_shim_hosted_count";
 /// Backing array for `roc_shim_hosted_fns` in the generated shim module.
 pub const roc_shim_hosted_fns_table = "roc_shim_hosted_fns_table";
+/// Names of the hosted functions in `roc_shim_hosted_fns` order, so the
+/// machine-code shim can resolve a hosted symbol by name.
+pub const roc_shim_hosted_names = "roc_shim_hosted_names";
+/// The in-process host's recorder for the source region of a `?` that
+/// evaluated an `Err` inside a top-level `expect`. Builtins reference it
+/// weakly; a platform executable defines no such symbol.
+pub const roc_expect_err_region = "roc_expect_err_region";
 /// The default platform's `main` implementation inside the machine-code shim.
 pub const roc_shim_default_main = "roc_shim_default_main";
 /// The default platform's pre-main runtime initialization hook.

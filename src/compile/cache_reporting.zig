@@ -85,7 +85,7 @@ pub fn getUnitString(unit: DataSizeUnit) []const u8 {
 /// Create a cache statistics report using the Roc reporting framework.
 pub fn createCacheStatsReport(allocator: Allocator, stats: CacheStats) Allocator.Error!Report {
     const total_ops = stats.getTotalOps();
-    if (total_ops == 0) {
+    if (total_ops == 0 and stats.getCanonicalizedTotalOps() == 0) {
         return try Report.init(allocator, "Cache Statistics", "No cache operations performed.", .warning);
     }
 
@@ -140,6 +140,46 @@ pub fn createCacheStatsReport(allocator: Allocator, stats: CacheStats) Allocator
         const owned_invalidations = try report.addOwnedString(invalidations_str);
         try report.document.addText("INFO: Invalidations: ");
         try report.document.addAnnotated(owned_invalidations, .emphasized);
+        try report.document.addLineBreak();
+    }
+
+    // Canonicalized-module cache, reported separately from the checked cache
+    // above because the two key their entries on different inputs.
+    const canonicalized_ops = stats.getCanonicalizedTotalOps();
+    const canonicalized_str = try std.fmt.allocPrint(
+        allocator,
+        "{} ({} hits, {} misses, {d:.1}% hit rate)",
+        .{ canonicalized_ops, stats.canonicalized_hits, stats.canonicalized_misses, stats.getCanonicalizedHitRate() },
+    );
+    defer allocator.free(canonicalized_str);
+    const owned_canonicalized = try report.addOwnedString(canonicalized_str);
+    try report.document.addText("INFO: Canonicalized operations: ");
+    try report.document.addAnnotated(owned_canonicalized, .emphasized);
+    try report.document.addLineBreak();
+
+    const canonicalized_written_size = formatDataSize(stats.canonicalized_bytes_written);
+    const canonicalized_stores_str = try std.fmt.allocPrint(
+        allocator,
+        "{} successful, {} failed, {d:.1} {s} written",
+        .{
+            stats.canonicalized_stores,
+            stats.canonicalized_store_failures,
+            canonicalized_written_size.value,
+            getUnitString(canonicalized_written_size.unit),
+        },
+    );
+    defer allocator.free(canonicalized_stores_str);
+    const owned_canonicalized_stores = try report.addOwnedString(canonicalized_stores_str);
+    try report.document.addText("INFO: Canonicalized stores: ");
+    try report.document.addAnnotated(owned_canonicalized_stores, .emphasized);
+    try report.document.addLineBreak();
+
+    if (stats.canonicalized_invalidations > 0) {
+        const canonicalized_invalidations_str = try std.fmt.allocPrint(allocator, "{}", .{stats.canonicalized_invalidations});
+        defer allocator.free(canonicalized_invalidations_str);
+        const owned_canonicalized_invalidations = try report.addOwnedString(canonicalized_invalidations_str);
+        try report.document.addText("INFO: Canonicalized invalidations: ");
+        try report.document.addAnnotated(owned_canonicalized_invalidations, .emphasized);
         try report.document.addLineBreak();
     }
 

@@ -40,6 +40,7 @@ pub const Problem = union(enum) {
     where_alias_in_type_position: WhereAliasInTypePosition,
     recursive_where_alias: RecursiveWhereAlias,
     where_clause_receiver_not_introduced: WhereClauseReceiverNotIntroduced,
+    redundant_open_tag_union: RedundantOpenTagUnion,
     invalid_nominal_decl_recursion: InvalidNominalDeclRecursion,
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
@@ -54,6 +55,8 @@ pub const Problem = union(enum) {
     unsupported_generated_method: UnsupportedGeneratedMethod,
     associated_item_not_found: AssociatedItemNotFound,
     hosted_unboxed_function: HostedUnboxedFunction,
+    hosted_function_not_effectful: HostedFunctionNotEffectful,
+    hosted_type_variable_not_boxed: HostedTypeVariableNotBoxed,
     host_boundary_open_row: HostBoundaryOpenRow,
     host_boundary_optional_field: HostBoundaryOptionalField,
     platform_def_not_found: PlatformDefNotFound,
@@ -79,6 +82,7 @@ pub const Problem = union(enum) {
     non_exhaustive_destructure: NonExhaustiveDestructure,
     redundant_pattern: RedundantPattern,
     unmatchable_pattern: UnmatchablePattern,
+    match_alt_binder_missing: MatchAltBinderMissing,
     unreachable_code: UnreachableCode,
     comptime_unused_branch: ComptimeUnusedBranch,
     comptime_condition: ComptimeCondition,
@@ -132,6 +136,18 @@ pub const PlatformDefNotFound = struct {
 
 /// Hosted functions cannot accept or return unboxed functions.
 pub const HostedUnboxedFunction = struct {
+    region: base.Region,
+};
+
+/// Every function the host provides is effectful, so a hosted declaration
+/// must have an effectful function type (`=>`).
+pub const HostedFunctionNotEffectful = struct {
+    region: base.Region,
+};
+
+/// A hosted declaration's one C signature covers every use of it, so its type
+/// variables may appear only where the host sees a pointer: inside a `Box`.
+pub const HostedTypeVariableNotBoxed = struct {
     region: base.Region,
 };
 
@@ -483,8 +499,8 @@ pub const CrossModuleImport = struct {
 /// Problem data for a non-exhaustive match expression
 pub const NonExhaustiveMatch = struct {
     match_expr: CIR.Expr.Idx,
-    /// Snapshot of the condition type for error messages
-    condition_snapshot: SnapshotContentIdx,
+    /// Checked display text, retained independently of solver snapshots.
+    condition_type: ExtraStringIdx,
     /// Range into the problems store's missing_patterns_backing for pattern indices
     missing_patterns: MissingPatternsRange,
     /// This was discovered by compile-time evaluation taking the generated miss branch.
@@ -494,8 +510,8 @@ pub const NonExhaustiveMatch = struct {
 /// Problem data for a non-exhaustive destructuring pattern
 pub const NonExhaustiveDestructure = struct {
     pattern: CIR.Pattern.Idx,
-    /// Snapshot of the destructured value type for error messages
-    value_snapshot: SnapshotContentIdx,
+    /// Checked display text, retained independently of solver snapshots.
+    value_type: ExtraStringIdx,
     /// Range into the problems store's missing_patterns_backing for pattern indices
     missing_patterns: MissingPatternsRange,
     /// This was discovered by compile-time evaluation taking the generated miss branch.
@@ -534,6 +550,20 @@ pub const UnmatchablePattern = struct {
     match_expr: CIR.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
+};
+
+/// A name bound by one `|` alternative of a match branch but not by another,
+/// so the branch body could not know its value when the other alternative matched.
+pub const MatchAltBinderMissing = struct {
+    match_expr: CIR.Expr.Idx,
+    binder_ident: Ident.Idx,
+    /// The alternative that does not bind the name.
+    missing_pattern: CIR.Pattern.Idx,
+    branch_index: u32,
+    /// Zero-based index of an alternative that binds the name.
+    bound_pattern_index: u32,
+    /// Zero-based index of the alternative that does not bind the name.
+    missing_pattern_index: u32,
 };
 
 /// Code that appears after an expression or statement that never returns.
@@ -592,6 +622,10 @@ pub const DispatcherNotNominal = struct {
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
     method_name: Ident.Idx,
+    origin: types_mod.StaticDispatchConstraint.Origin,
+    /// Region of the expression that owns the failed obligation (see
+    /// `DispatcherDoesNotImplMethod.owner_region`).
+    owner_region: ?base.Region = null,
 };
 
 /// Error when you try to static dispatch but the dispatcher does not have that method
@@ -602,6 +636,12 @@ pub const DispatcherDoesNotImplMethod = struct {
     fn_var: Var,
     method_name: Ident.Idx,
     origin: types_mod.StaticDispatchConstraint.Origin,
+    /// Region of the expression that owns the failed obligation: the use of a
+    /// scheme whose instantiation created it (for example the call `f(x)` that
+    /// passes `x` to a function whose `where` clause `x`'s type violates). The
+    /// violation is reported there. Null for an ownerless definition-site
+    /// constraint, which is reported at its own provenance.
+    owner_region: ?base.Region = null,
     /// Optional numeric literal info for `from_literal` constraints of kind `numeral`
     num_literal: ?types_mod.NumeralInfo = null,
     /// Source region of the string literal for `from_literal` constraints of kind `quote`
@@ -620,6 +660,10 @@ pub const TypeDoesNotSupportEquality = struct {
     dispatcher_var: Var,
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
+    origin: types_mod.StaticDispatchConstraint.Origin,
+    /// Region of the expression that owns the failed obligation (see
+    /// `DispatcherDoesNotImplMethod.owner_region`).
+    owner_region: ?base.Region = null,
 };
 
 /// Error when compiler-derived `map`/`map!` cannot select one direct tag
@@ -628,6 +672,9 @@ pub const TypeDoesNotSupportMap = struct {
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
     method_name: Ident.Idx,
+    /// Region of the expression that owns the failed obligation (see
+    /// `DispatcherDoesNotImplMethod.owner_region`).
+    owner_region: ?base.Region = null,
 };
 
 /// Error when satisfying a static-dispatch constraint immediately requires the
@@ -703,5 +750,14 @@ pub const RecursiveWhereAlias = struct {
 pub const WhereClauseReceiverNotIntroduced = struct {
     type_var_name: base.Ident.Idx,
     method_name: base.Ident.Idx,
+    region: base.Region,
+};
+
+/// Warning for an explicit anonymous `..` on a tag union in an output position
+/// of an annotation whose binding generalizes regardless (a function, a pure
+/// signature, a value alias). Tag unions there are implicitly open, so the
+/// `..` is redundant.
+pub const RedundantOpenTagUnion = struct {
+    /// The region of the `..` itself
     region: base.Region,
 };

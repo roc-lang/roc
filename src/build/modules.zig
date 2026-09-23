@@ -82,14 +82,15 @@ const glue_platform_files = [_][]const u8{
     "AbiTagUnionLayout.roc",
     "AbiWidth.roc",
     "ArgShape.roc",
-    "EntryPoint.roc",
+    "CallableSignature.roc",
     "File.roc",
     "FunctionInfo.roc",
-    "FunctionRepr.roc",
+    "FunctionSignature.roc",
     "GlueInput.roc",
     "HostRcPlan.roc",
     "HostedFunctionInfo.roc",
     "ModuleTypeInfo.roc",
+    "ProvidedExport.roc",
     "ProvidesEntry.roc",
     "RecordField.roc",
     "RecordFieldInfo.roc",
@@ -543,7 +544,7 @@ pub const RocModules = struct {
     // The sources live under `vendor/`.
     vendor_parse_float: *Module,
     vendor_ryu: *Module,
-    vendor_eval_loader: *Module,
+    vendor_relocatable_loader: *Module,
     vendor_macho: *Module,
     vendor_llvm_ir: *Module,
     vendor_llvm_compile_bindings: *Module,
@@ -603,7 +604,7 @@ pub const RocModules = struct {
 
             .vendor_parse_float = b.addModule("vendor_parse_float", .{ .root_source_file = b.path("vendor/parse_float/parse_float.zig") }),
             .vendor_ryu = b.addModule("vendor_ryu", .{ .root_source_file = b.path("vendor/ryu.zig") }),
-            .vendor_eval_loader = b.addModule("vendor_eval_loader", .{ .root_source_file = b.path("vendor/eval_loader.zig") }),
+            .vendor_relocatable_loader = b.addModule("vendor_relocatable_loader", .{ .root_source_file = b.path("vendor/relocatable_loader/mod.zig") }),
             .vendor_macho = b.addModule("vendor_macho", .{ .root_source_file = b.path("vendor/macho/mod.zig") }),
             .vendor_llvm_ir = b.addModule("vendor_llvm_ir", .{ .root_source_file = b.path("vendor/llvm_ir/mod.zig") }),
             .vendor_llvm_compile_bindings = b.addModule("vendor_llvm_compile_bindings", .{ .root_source_file = b.path("vendor/llvm_compile_bindings.zig") }),
@@ -629,10 +630,6 @@ pub const RocModules = struct {
         // Darwin sysroot path baked in at build time.
         self.embedded_lld.addImport("collections", self.collections);
         self.embedded_lld.addImport("build_options", self.build_options);
-
-        // The vendored ELF loader reaches one roc helper (`elf_self_relocate`)
-        // through the `base` module.
-        self.vendor_eval_loader.addImport("base", self.base);
 
         // The vendored Mach-O code-signing helpers use the build-time `tracy`
         // tracing shim.
@@ -717,7 +714,7 @@ pub const RocModules = struct {
                 module.addImport("roc_str_view", self.roc_str_view);
             },
             .eval => {
-                module.addImport("vendor_eval_loader", self.vendor_eval_loader);
+                module.addImport("vendor_relocatable_loader", self.vendor_relocatable_loader);
             },
             .compile, .glue => {
                 module.addImport("compiler_platform_sources", self.compiler_platform_sources);

@@ -1,18 +1,23 @@
-# Mini tutorial for Roc's New Compiler
+# Mini Tutorial for Roc
 
-If you're feeling adventurous, you can try Roc's new bleeding-edge rewritten compiler. We're really excited about it!
+Roc is still a work in progress and has not reached a 0.1 release, so expect missing features and bugs.
 
-Be warned, this is far from a polished experience! Expect missing features, bugs, and almost no documentation (everything on [roc-lang.org](https://www.roc-lang.org) is referring to the old compiler and the old design; we haven't updated any of it yet).
+Helpful resources:
+- [Standard library docs](https://roc-lang.org/docs/main/)
+- [Examples](https://roc-lang.org/examples/)
+- [Language reference](https://roc-lang.org/docs/main/langref/)
+- [Roc syntax overview](https://github.com/roc-lang/roc/blob/main/test/echo/all_syntax_test.roc)
+- Learn roc by doing, with [exercism](https://exercism.org/tracks/roc/)
 
-The purpose of this document is to give you a sense of how the revised language and new compiler work, since [roc-lang.org](https://www.roc-lang.org) is all about the old stuff.
-
-By the way, if you want help, **the** best place to get it is [Roc Zulip](https://roc.zulipchat.com/) - you're welcome to ask any questions you have in [#beginners](https://roc.zulipchat.com/#narrow/channel/231634-beginners/).
+If you want help, the best place to get it is [Roc Zulip](https://roc.zulipchat.com/). You're welcome to ask any questions in [#beginners](https://roc.zulipchat.com/#narrow/channel/231634-beginners/).
 
 With those disclaimers in mind, let's get into the adventure!
 
 ## Hello, World
 
-First, [grab a nightly build of the new compiler](https://github.com/roc-lang/nightlies/releases). It'll have an executable named `roc` (or `roc.exe` on Windows). You'll want to [put that executable on your PATH] - you'll know it worked if you can run `roc version` in a terminal and see it print something like `Roc compiler version nightly-2026-July-31-123c5d7` (that's the tag of the nightly release, so yours will be different from this one).
+First, follow the [installation guide](https://www.roc-lang.org/install/) to install a nightly build.
+It includes an executable named `roc` (or `roc.exe` on Windows). You'll know it is available on your `PATH`
+if `roc version` works.
 
 Next, copy/paste this into a new file named `main.roc`:
 
@@ -26,7 +31,7 @@ main! = |_args| {
 You can run this with:
 
 ```bash
-$ roc main.roc
+roc main.roc
 ```
 
 You should see this:
@@ -35,7 +40,7 @@ You should see this:
 Hello, World!
 ```
 
-Hooray! 
+Hooray!
 
 > Tip: If you don't provide a path to a .roc file, `roc` will default to "main.roc" - so since your Roc program is named main.roc, you can run your program by just running `roc` in the future.
 
@@ -44,7 +49,7 @@ Hooray!
 You can also try Roc expressions and definitions without creating a file by running `roc repl`.
 
 ```bash
-$ roc repl
+roc repl
 ```
 
 Inside the REPL, enter an expression to evaluate it:
@@ -78,9 +83,7 @@ assigned `x`
 In Unix shells, use `printf` for the same thing:
 
 ```bash
-$ printf 'x = 1 + 1\nx * 2\n' | roc repl
-assigned `x`
-4.0
+printf 'x = 1 + 1\nx * 2\n' | roc repl
 ```
 
 Diagnostics from piped input are written to stderr, so tools can read successful results from stdout separately from parse and type errors. If you want plain diagnostics without ANSI color codes, use `roc repl --no-color` or set `NO_COLOR` environment variable.
@@ -127,16 +130,13 @@ shadowing if you want but the non-zero exit code prevents it from ending up in p
 
 The string `"Hello, ${name}!"` will evaluate to `"Hello, Rocco!"`.
 
-Note that `name` must be a string! Roc's string interpolation does not automatically convert other types
-to strings. For example, if you wanted to print an integer you'd need to call `to_str` on it like so:
+In an ordinary string interpolation, each interpolated expression must also produce a string; Roc does not automatically convert other types. For example, if you wanted to print an integer you'd need to call `to_str` on it like so:
 
 ```ruby
 echo!("Number of things: ${thing_count.to_str()}")
 ```
 
-You can put any expression you like inside string interpolation, although it all has to be on a single line.
-
-If you really wanted to, you could do something like this:
+You can put any expression you like inside a string interpolation. If you really wanted to, you could do something like this:
 
 ```ruby
 echo!("Answer: ${((numerator / denominator) + 1).negate().to_str()}")
@@ -152,8 +152,7 @@ values and a functional style.
 
 ### Expect
 
-To see both styles, let's write a function called `digits_to_num` which takes a list of digits and returns 
-the number they represent. When we're done, we'll be able to run `roc test` and see these `expect`s pass:
+To see both styles, let's write a function called `digits_to_num` which takes a list of digits and returns the number they represent. When we're done, we'll be able to run `roc test` and see these `expect`s pass:
 
 ```ruby
 expect digits_to_num([1, 2, 3]) == 123
@@ -163,7 +162,9 @@ expect digits_to_num([7]) == 7
 
 `expect` is Roc's lightweight testing keyword. You can put a boolean expression after it, and if that expression
 evaluates to `True`, the test will pass, and if it evaluates to `False`, the test will fail. When you run `roc test`,
-it runs all of top-level `expect`s in your files, as well as all the files they `import`.
+it runs all of top-level `expect`s in your files, as well as all the files they `import` (unless they belong to downloaded packages).
+
+A file run with `roc test` does not need a `main!` function (or an `app` header, which will be introduced shortly).
 
 > Another useful command is `roc fmt`, which formats your source code according to standard Roc style. By design, `roc fmt` has no configuration options at all.
 
@@ -221,6 +222,7 @@ Here's an example of a block expression:
 
 ```ruby
 answer = {
+    foo = 43
     inner_constant = foo - 1
     
     echo!("Inner constant: ${inner_constant.to_str()}")
@@ -245,15 +247,16 @@ and expressions is:
 values, you can't do things like pass them as function arguments. You couldn't write `echo!(for ...)` or
 `echo!(inner_constant = ...)` - you'd get a compile-time error if you did.
 
-Blocks are expressions, so you *could* write something like:
+Blocks are expressions, so you *could* write something like this inside an effectful function:
 
 ```ruby
 echo!({
-    for ... {
-      
+    var $total = 0
+    for number in 1..=10 {
+        $total = $total + number
     }
-    
-    some_expression 
+
+    $total.to_str()
 })
 ```
 
@@ -268,7 +271,7 @@ digits_to_num = |digits| {
     if digits.is_empty() {
         return 0
     }
-    
+
     # ...the rest of the function would go here
 }
 ```
@@ -283,19 +286,20 @@ Roc's `crash` keyword does what it says: it crashes the currently-running Roc ap
 ```ruby
 digits_to_num = |digits| {
     if digits.is_empty() {
-        crash "TODO add proper error handling."
+        crash "Expected a nonempty list."
     }
-    
+
     # ...the rest of the function would go here
 }
 ```
 
-The old tutorial for Roc alpha4 has [a useful section on `crash`](https://alpha4.roc-lang.org/tutorial#crashing). The section on [crashing for error handling](https://alpha4.roc-lang.org/tutorial#crashing-for-error-handling)
-is especially important, and has been copy/pasted here:
+`crash` is not for error handling.
 
-> `crash` is not for error handling.
-> The reason Roc has a `crash` keyword is for scenarios where it's expected that no error will ever happen (like in [unreachable branches](https://alpha4.roc-lang.org/tutorial#crashing-in-unreachable-branches)), or where graceful error handling is infeasible (like running out of memory).
-> Errors that are recoverable should be represented using normal Roc types (like `Try`) and then handled without crashing. For example, by having the application report that something went wrong, and then continue running from there.
+The reason Roc has a `crash` keyword is for scenarios where it's expected that no error will ever happen (like in unreachable branches), or where graceful error handling is infeasible (like running out of memory).
+
+Errors that are recoverable should be represented using normal Roc types (like `Try`) and then handled without crashing. For example, by having the application report that something went wrong, and then continue running from there.
+
+What happens after a crash is determined by the platform. Some may gracefully recover and have some way of continuing the process, but others may terminate the process immediately.
 
 Just like `return`, if you use `crash` in a block, you may get a warning if any statements or expressions 
 come after it in the block, as they will not be executed!
@@ -315,7 +319,7 @@ digits_to_num = |digits| {
         
     # From here on, we assume digits is nonempty!
     expect !digits.is_empty() 
-    
+
     # ...the rest of the function would go here
 }
 ```
@@ -353,7 +357,7 @@ main! = |_args| {
 
 Although printing is an I/O operation, the `dbg` statement can be used even in pure functions. It works in two different ways:
 
-- Roc evaluates all pure functions that are run on constants at compile time when possible. (This is known as [constant folding](https://en.wikipedia.org/wiki/Constant_folding), and Roc does it as much as possible.) When you put a `dbg` inside a pure function, and that pure function gets run at compile time, you'll see the `dbg` output at compile time.
+- Roc evaluates top-level constants at compile time. If evaluating one calls a pure function containing `dbg`, you'll see the `dbg` output at compile time. (Evaluating known expressions ahead of time is called [constant folding](https://en.wikipedia.org/wiki/Constant_folding).)
 - At runtime, `dbg` may work differently depending on where you're running the program. For example, in this command-line application it will be printed to stderr. However, when running a Roc program that's compiled to WebAssembly and running in the browser, it would likely appear in the browser console instead.
 
 Note that Roc's compile-time evaluation means there is no guarantee that a given `dbg` will run at runtime or at compile time. 
@@ -500,16 +504,14 @@ answer = match num_or_err {
 Here we have an extra `Err` branch, because `List.first` can return `Err(ListWasEmpty)` if the list was empty,
 whereas `I64.from_str` can return `Err(BadNumStr)`.
 
-> Note: `I64` is a number type—specifically, a 64-bit integer. Roc also supports 8-bit, 16-bit, 32-bit, and 128-bit integers, and they can be either signed (like `I64`) or unsigned (like `U64`). For non-integer types, Roc has `F32` and `F64` for the classic 32-bit and 64-bit binary floating point numbers, and also `Dec` for a 128-bit fixed-point decimal. If you don't specify a number type, Roc uses `Dec` as the default number—which is why in Roc, `0.1 + 0.2 == 0.3` is `True`, whereas [in most languages it isn't](rtfeldman.com/0.1-plus-0.2).
+> Note: `I64` is a number type—specifically, a 64-bit integer. Roc also supports 8-bit, 16-bit, 32-bit, and 128-bit integers, and they can be either signed (like `I64`) or unsigned (like `U64`). For non-integer types, Roc has `F32` and `F64` for the classic 32-bit and 64-bit binary floating point numbers, and also `Dec` for a 128-bit fixed-point decimal. If you don't specify a number type, Roc uses `Dec` as the default number—which is why in Roc, `0.1 + 0.2 == 0.3` is `True`, whereas [in most languages it isn't](https://rtfeldman.com/0.1-plus-0.2/).
 
 #### Exhaustiveness
 
 Neither of these `match` expressions had a default `_ =>` branch. They didn't need it because they are already _exhaustive_,
-which means they have exhaustively covered all possible cases. In fact, if you tried to add an `_ =>` branch, the compiler
-would give a warning that it was unreachable.
-
-> Note: As of December 1, 2025, exhaustiveness checking has not been ported over from the old compiler to the new one,
-> so you won't actually get these errors yet!
+which means they have covered all possible cases. If a `match` on a known type omits a possible case, the compiler reports
+a non-exhaustive match error. If you add `_ =>` after earlier branches have already covered every case, the compiler warns
+that the pattern is redundant.
 
 Roc code tends to avoid `_ =>` default branches because these exhaustiveness errors can be helpful for telling you when
 you've forgotten to handle something. For example, in our second `match` above, if we'd written `_ => 0` instead of
@@ -586,17 +588,14 @@ The `?` version is quite a bit more concise!
 
 So far we haven't seen any types. That's because although Roc is a statically type-checked language, it infers the types
 of everything you write. All type annotations in Roc are optional, but the compiler still infers every type, so you'll
-still get compile-time errors if you mix up types. Technically, Roc has [sound](https://en.wikipedia.org/wiki/Type_safety#Definitions), [decidable](https://en.wikipedia.org/wiki/Type_system), [principal](https://en.wikipedia.org/wiki/Principal_type) static type inference. All Roc values are semantically immutable, making them free of [Data races](https://en.wikipedia.org/wiki/Race_condition#Data_race) as well.
+still get compile-time errors if you mix up types. Technically, Roc has [sound](https://en.wikipedia.org/wiki/Type_safety#Definitions), [decidable](https://en.wikipedia.org/wiki/Type_system), [principal](https://en.wikipedia.org/wiki/Principal_type) static type inference. All Roc values are semantically immutable, making them free of [data races](https://en.wikipedia.org/wiki/Race_condition#Data_race) as well.
 
-<!-- TODO not implemented yet
 Roc has a "nonblocking compilation" design philosophy. This means that `roc` will still run your program and `roc test`
-will still run your tests, even if you have compile-time errors—including static type mismatches. The assumption is 
-that your editor will have tooling to tell you about any compile-time errors, so if you're choosing to run anyway, 
-you want to be unblocked to try something out despite knowing there are problems that might cause it to `crash`. 
+will still run your tests when possible, even if you have compile-time errors—including static type mismatches. The
+diagnostics are still printed and the command exits with a nonzero status, so CI will treat the run as a failure.
+This lets you try code despite known problems, although reaching invalid code at runtime may cause it to `crash`.
 
-You can use `roc check && roc` for a one-line command that will check for errors first and then only actually run the 
-program if there were none.
--->
+Use `roc check && roc` if you want to check for errors first and run the program only when there are none.
 
 ### Type Annotations
 
@@ -671,51 +670,57 @@ match on them later like we saw with `I64.from_str` and `List.first`.
 
 ### Nominal types
 
-As we saw with `ListWasEmpty` and `BadNumStr`, Tags don't have to wrap anything. You can also use them as enumerations, like so:
+As we saw with `ListWasEmpty` and `BadNumStr`, tags don't have to wrap anything. You can also use them as enumerations, like so:
 
 ```ruby
-Bool := [True, False]
+Color := [Red, Green, Blue]
 ```
 
 This is a _nominal_ type definition.
 
-## Old vs New Roc
+## Upgrading from alpha-4
 
-| Old | New |
-|-----|-----|
-| `List U8` | `List(U8)` |
-| `if/then/else` | `if/else` |
-| `Bool.true`/`Bool.false` | `Bool.True`/`Bool.False` |
-| `Result` | `Try` |
-| `Inspect.to_str` | `Str.inspect` |
-| `Num.to_str(123)` | `123.to_str()` |
+If you've been writing Roc before it was mainstream and you want to upgrade your code from alpha-4, compare the two all syntax examples:
+- [alpha-4 all syntax example](https://github.com/roc-lang/examples/blob/e4d7403466505c986180abc35de284b32fe2020d/examples/AllSyntax/main.roc)
+- [current all syntax example](https://github.com/roc-lang/roc/blob/main/test/echo/all_syntax_test.roc)
 
 ## Dependencies
 
-The initial hello world example at the start is a special kind of app, a headerless app.
-Many Roc apps you encounter will have a header similar to this one:
+The initial Hello World example is a headerless app. Headerless apps automatically use Roc's built-in
+Echo Platform, which provides the unqualified `echo!` function and is intentionally minimal.
+Other Roc apps select a platform explicitly. For example, this header uses
+[basic-cli](https://github.com/roc-lang/basic-cli), a platform for command-line applications:
 
 ```ruby
-app [main!] { pf: platform "https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/download/1.0.0/AnZoxzoGPtSGQ15EQh6pBeeaHJ7aizP9MQhK81dES3Uq.tar.zst" }
+app [main!] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.22.2/9zUBxb1LtXYVc4eR4hAtd1WQDwBYDhM6HQdZz1UFCm2m.tar.zst" }
 ```
 
 Let's break the header down:
 
 - `app` means this .roc file specifies a Roc _application_ - an executable, as opposed to a bundle of reusable code like a package
 - `[main!]` specifies the application's *entrypoint*. Some applications have multiple entrypoints, but it's most common to have just one—and also it's most common for that one to be named `main!`
-- `{ pf: platform "https://..." }` specifies the application's *platform*. If we wanted to add other dependencies, this is where we'd specify them - e.g. we might write `pg: "https://..."` to add a dependency on [roc-pg (uses Roc alpha4)](https://github.com/agu-z/roc-pg) for PostgreSQL access, at which point we'd be able to do things like `import pg.Cmd` and so on.
+- `{ pf: platform "https://..." }` specifies the application's *platform*. If we wanted to add other dependencies, this is where we'd specify them - e.g. we might write `uni: "https://..."` to add a dependency on [unicode](https://github.com/roc-lang/unicode) to process Unicode strings, at which point we'd be able to do things like `import uni.Grapheme` and so on.
+
+See the [modules documentation](https://www.roc-lang.org/docs/main/langref/modules/) for more examples.
 
 ### Platforms
 
 Roc has a first-class concept of _platforms_ and _applications_. You can [read about the design philosophy](https://www.roc-lang.org/docs/main/langref/platforms/), but for our purposes what matters is:
 
-- Every Roc application specifies [exactly one platform](https://www.roc-lang.org/faq#multiple-platforms) that it will be built on
-- The platform provides all the I/O primitives (such as `Stdout` and `Stdin` - they are imported as `pf.Stdout` and `pf.Stdin`)
-- Roc's standard library does not include any effectful functions; they all come from the platform. Most published platforms still use the old version of the compiler (e.g. [basic-cli](https://roc-lang.github.io/basic-cli/0.20.0/Stdout/) and [basic-webserver](https://roc-lang.github.io/basic-webserver/0.13.0/Http/#Request)) but ports are in progress!
+- Every Roc application specifies [exactly one platform](https://www.roc-lang.org/faq#multiple-platforms) that it will be built on.
+  A headerless app implicitly uses the Echo Platform.
+- The selected platform provides the app's I/O primitives. For example, the `basic-cli` platform gives access to the standard in and out using `Stdout` and `Stdin`, which are imported using the platform's shorthand, such as `pf.Stdout` and `pf.Stdin`.
+- Roc's standard library does not include any effectful functions; they all come from the platform. Here are some links to popular platforms:
+  - [basic-cli](https://github.com/roc-lang/basic-cli)
+  - [basic-webserver](https://github.com/roc-lang/basic-webserver)
+  - [roc-ray](https://github.com/lukewilliamboswell/roc-ray)
 
 ## Additional Resources
 
 For more, check out:
-- [All builtin functions](https://github.com/roc-lang/roc/blob/main/src/build/roc/Builtin.roc)
-- [A single file demonstrating all Roc syntax](https://github.com/roc-lang/roc/blob/main/test/echo/all_syntax_test.roc)
-- [Roc getting started guide](https://github.com/rickhull/roc-init) (community contributed)
+
+- [Roc's standard library and language documentation](https://www.roc-lang.org/docs/main/)
+- [Examples](https://www.roc-lang.org/examples/)
+- [The source code for all builtin functions](https://github.com/roc-lang/roc/blob/main/src/build/roc/Builtin.roc)
+- [A single file demonstrating Roc syntax](https://github.com/roc-lang/roc/blob/main/test/echo/all_syntax_test.roc)
+- [The Exercism.org Roc track](https://exercism.org/tracks/roc/)

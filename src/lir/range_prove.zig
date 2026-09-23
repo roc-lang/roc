@@ -88,7 +88,9 @@ const query_visit_cap: usize = 64;
 
 /// Prove and rewrite qualifying checks in every proc.
 pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!void {
-    var pass = Pass.init(store, layouts);
+    var analysis = BodyClone.AnalysisScratch.init(store.allocator);
+    defer analysis.deinit();
+    var pass = Pass.init(store, layouts, store.allocator, &analysis);
     defer pass.deinit();
 
     const proc_count = store.procSpecCount();
@@ -98,8 +100,81 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!voi
     }
 }
 
+/// Prove one procedure with task-local scratch; rewritten LIR stays in the store.
+pub fn runProc(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator) ResourceError!void {
+    var analysis = BodyClone.AnalysisScratch.init(scratch_allocator);
+    defer analysis.deinit();
+    try runProcWithScratch(store, layouts, proc_id, scratch_allocator, &analysis);
+}
+
+/// Retain counting and traversal capacity across procedures and proof rounds.
+pub fn runProcWithScratch(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator, analysis: *BodyClone.AnalysisScratch) ResourceError!void {
+    var pass = Pass.init(store, layouts, scratch_allocator, analysis);
+    defer pass.deinit();
+    try pass.transformProc(proc_id);
+}
+
 /// Identifier of one symbolic value node.
 const NodeId = u32;
+
+test "range prove ordered procedure runs match whole-store constant arithmetic and no-op" {
+    const testing = std.testing;
+    for ([_]bool{ false, true }) |procedure_local| {
+        var store = LirStore.init(testing.allocator);
+        defer store.deinit();
+        var layouts = try layout_mod.Store.init(testing.allocator, .u64);
+        defer layouts.deinit();
+        const lhs = try store.addLocal(.{ .layout_idx = .u64 });
+        const rhs = try store.addLocal(.{ .layout_idx = .u64 });
+        const result = try store.addLocal(.{ .layout_idx = .u64 });
+        const done = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        const add = try store.addCFStmt(.{ .assign_low_level = .{
+            .target = result,
+            .op = .num_int_add_crash_on_overflow,
+            .rc_effect = .none(),
+            .args = try store.addLocalSpan(&.{ lhs, rhs }),
+            .next = done,
+        } });
+        const right = try store.addCFStmt(.{ .assign_literal = .{
+            .target = rhs,
+            .value = .{ .i64_literal = .{ .value = 2, .layout_idx = .u64 } },
+            .next = add,
+        } });
+        const body = try store.addCFStmt(.{ .assign_literal = .{
+            .target = lhs,
+            .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+            .next = right,
+        } });
+        _ = try store.addProcSpec(.{
+            .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
+            .name = store.freshSyntheticSymbol(),
+            .args = .empty(),
+            .body = body,
+            .ret_layout = .u64,
+        });
+        const arg = try store.addLocal(.{ .layout_idx = .u64 });
+        const noop_body = try store.addCFStmt(.{ .ret = .{ .value = arg } });
+        const noop = try store.addProcSpec(.{
+            .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
+            .name = store.freshSyntheticSymbol(),
+            .args = try store.addLocalSpan(&.{arg}),
+            .body = noop_body,
+            .ret_layout = .u64,
+        });
+        if (procedure_local) {
+            for (0..store.procSpecCount()) |index| {
+                var scratch = std.heap.ArenaAllocator.init(testing.allocator);
+                defer scratch.deinit();
+                try runProc(&store, &layouts, @enumFromInt(index), scratch.allocator());
+            }
+        } else {
+            try run(&store, &layouts);
+        }
+        try testing.expectEqual(.num_int_add_proven_cannot_overflow, store.getCFStmt(add).assign_low_level.op);
+        try testing.expectEqual(noop_body, store.getProcSpec(noop).body.?);
+        try testing.expectEqual(arg, store.getCFStmt(noop_body).ret.value);
+    }
+}
 
 /// One symbolic value. A node is either a root (its own `root`, carrying
 /// inclusive unsigned bounds in `lo`/`hi`) or a bounded affine offset from a
@@ -457,9 +532,9 @@ const Pass = struct {
     proof_facts: std.ArrayList(Fact),
     last_claim: ?ProofClaim,
     read_counts: ?BodyClone.ReadCounts,
+    analysis: *BodyClone.AnalysisScratch,
 
-    fn init(store: *LirStore, layouts: *const layout_mod.Store) Pass {
-        const allocator = store.allocator;
+    fn init(store: *LirStore, layouts: *const layout_mod.Store, allocator: Allocator, analysis: *BodyClone.AnalysisScratch) Pass {
         return .{
             .store = store,
             .layouts = layouts,
@@ -506,6 +581,7 @@ const Pass = struct {
             .proof_facts = .empty,
             .last_claim = null,
             .read_counts = null,
+            .analysis = analysis,
         };
     }
 
@@ -897,7 +973,7 @@ const Pass = struct {
     fn prescanProc(self: *Pass, proc: LIR.LirProcSpec) ResourceError!void {
         if (self.read_counts) |*counts| counts.deinit();
         self.read_counts = null;
-        self.read_counts = if (proc.body) |body| try BodyClone.countReachableReads(self.store, body) else null;
+        self.read_counts = if (proc.body) |body| try BodyClone.countReachableReadsWithScratch(self.store, body, self.analysis) else null;
         const args = self.store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(args)) |i| {
             try self.bumpAssign(GuardedList.at(args, i));
@@ -1212,7 +1288,7 @@ const Pass = struct {
                 .crash,
                 => {
                     successors.clearRetainingCapacity();
-                    try BodyClone.appendSuccessors(self.store, &successors, item.stmt);
+                    try BodyClone.appendSuccessorsWithAllocator(self.store, &successors, item.stmt, self.allocator);
                     for (successors.items) |next| try stack.append(self.allocator, .{ .stmt = next, .join = item.join });
                 },
             }
@@ -2826,6 +2902,16 @@ const Pass = struct {
                 // proof, so it does not request another range-analysis round.
                 try self.bindFresh(s.target);
             },
+            .list_map_prepare_reuse => {
+                // Ownership transfer preserves the list value, including its
+                // length. Keep the input's value identity across the transfer.
+                std.debug.assert(arg_count == 1);
+                if (try self.valueOf(GuardedList.at(args, 0))) |node| {
+                    try self.bind(s.target, .{ .node = node });
+                } else {
+                    try self.bindFresh(s.target);
+                }
+            },
             .list_len => {
                 if (arg_count == 1) {
                     const list_local = GuardedList.at(args, 0);
@@ -3071,7 +3157,6 @@ const Pass = struct {
             .list_release_excess_capacity,
             .list_split_first,
             .list_split_last,
-            .list_map_prepare_reuse,
             .list_map_can_reuse,
             .list_map_cast_unsafe,
             .list_map_extract_unsafe,
@@ -3122,6 +3207,7 @@ const Pass = struct {
             .num_negate_checked,
             .num_abs_checked,
             .num_pow,
+            .num_atan2,
             .num_sqrt,
             .num_sin,
             .num_cos,

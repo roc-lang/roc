@@ -335,12 +335,12 @@ pub fn runWasmOutcomeWithStats(
         env_imports.addHostFunction("__multi3", &[_]bytebox.ValType{ .I32, .I64, .I64, .I64, .I64 }, &[_]bytebox.ValType{}, hostMulti3, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("__muloti4", &[_]bytebox.ValType{ .I32, .I64, .I64, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostMuloti4, null) catch return error.WasmExecFailed;
 
-        env_imports.addHostFunction(builtins.shim_symbols.roc_alloc, &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostRocAlloc, &run_state) catch return error.WasmExecFailed;
-        env_imports.addHostFunction(builtins.shim_symbols.roc_dealloc, &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostRocDealloc, null) catch return error.WasmExecFailed;
-        env_imports.addHostFunction(builtins.shim_symbols.roc_realloc, &[_]bytebox.ValType{ .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostRocRealloc, &run_state) catch return error.WasmExecFailed;
-        env_imports.addHostFunction(builtins.shim_symbols.roc_dbg, &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostRocDbg, &run_state) catch return error.WasmExecFailed;
-        env_imports.addHostFunction(builtins.shim_symbols.roc_expect_failed, &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostRocExpectFailed, &run_state) catch return error.WasmExecFailed;
-        env_imports.addHostFunction(builtins.shim_symbols.roc_crashed, &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostRocCrashed, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction(builtins.shim_symbols.roc_alloc, &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostRocAlloc, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction(builtins.shim_symbols.roc_dealloc, &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostRocDealloc, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction(builtins.shim_symbols.roc_realloc, &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostRocRealloc, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction(builtins.shim_symbols.roc_dbg, &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostRocDbg, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction(builtins.shim_symbols.roc_expect_failed, &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostRocExpectFailed, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction(builtins.shim_symbols.roc_crashed, &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostRocCrashed, &run_state) catch return error.WasmExecFailed;
 
         env_imports.addHostFunction("roc_i128_div_s", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostI128DivS, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_i128_mod_s", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostI128ModS, null) catch return error.WasmExecFailed;
@@ -359,7 +359,9 @@ pub fn runWasmOutcomeWithStats(
             .{ BuiltinSignatures.BuiltinKind.u128_to_f32, hostU128ToF32 },
             .{ BuiltinSignatures.BuiltinKind.u128_to_f64, hostU128ToF64 },
             .{ BuiltinSignatures.BuiltinKind.float_pow_f32, hostFloatPowF32 },
+            .{ BuiltinSignatures.BuiltinKind.float_atan2_f32, hostFloatAtan2F32 },
             .{ BuiltinSignatures.BuiltinKind.float_pow, hostFloatPow },
+            .{ BuiltinSignatures.BuiltinKind.float_atan2, hostFloatAtan2 },
             .{ BuiltinSignatures.BuiltinKind.float_rem_f32, hostFloatRemF32 },
             .{ BuiltinSignatures.BuiltinKind.float_rem, hostFloatRem },
             .{ BuiltinSignatures.BuiltinKind.float_sin_f32, hostFloatSinF32 },
@@ -387,6 +389,7 @@ pub fn runWasmOutcomeWithStats(
         env_imports.addHostFunction("roc_dec_div", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecDiv, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_div_trunc", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecDivTrunc, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_pow", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecPow, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_dec_atan2", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecAtan2, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_sqrt", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostDecSqrt, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_sin", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostDecSin, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_cos", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostDecCos, &run_state) catch return error.WasmExecFailed;
@@ -466,8 +469,8 @@ pub fn runWasmOutcomeWithStats(
         env_imports.addHostFunction("roc_list_copy_range_within", &[_]bytebox.ValType{ .I32, .I32, .I32, .I64, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostListCopyRangeWithin, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_append_sublist", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostListAppendSublist, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_append_le_bytes", &[_]bytebox.ValType{ .I32, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostListAppendLeBytes, &run_state) catch return error.WasmExecFailed;
-        env_imports.addHostFunction("roc_builtins_simd_store_16", &[_]bytebox.ValType{ .I32, .I64, .I64, .I32, .I32, .I32, .I64, .I32, .I32 }, &[_]bytebox.ValType{}, hostSimdStore16, &run_state) catch return error.WasmExecFailed;
-        env_imports.addHostFunction("roc_builtins_simd_append_16", &[_]bytebox.ValType{ .I32, .I64, .I64, .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostSimdAppend16, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_builtins_simd_store_16", &[_]bytebox.ValType{ .I32, .I64, .I64, .I32, .I32, .I32, .I64, .I32 }, &[_]bytebox.ValType{}, hostSimdStore16, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_builtins_simd_append_16", &[_]bytebox.ValType{ .I32, .I64, .I64, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostSimdAppend16, &run_state) catch return error.WasmExecFailed;
 
         const imports = [_]bytebox.ModuleImportPackage{env_imports};
         module_instance.instantiate(.{ .stack_size = 1024 * 256, .imports = &imports }) catch |err| {
@@ -491,9 +494,8 @@ pub fn runWasmOutcomeWithStats(
         }
         return error.WasmExecFailed;
     };
-    var params = [1]bytebox.Val{.{ .I32 = 0 }};
     var returns: [1]bytebox.Val = undefined;
-    module_instance.invoke(handle, &params, &returns, .{}) catch |err| {
+    module_instance.invoke(handle, &.{}, &returns, .{}) catch |err| {
         if (run_state.crashed) {
             return crashedWasmResult(&run_state);
         }
@@ -1080,6 +1082,22 @@ fn hostDecPow(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
     writeI128ToMem(buffer, result_ptr, result);
 }
 
+fn hostDecAtan2(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const state: *WasmRunState = @ptrCast(@alignCast(ctx));
+    const RocDec = builtins.dec.RocDec;
+    const buffer = module.store.getMemory(0).buffer();
+    const lhs_ptr: usize = @intCast(params[0].I32);
+    const rhs_ptr: usize = @intCast(params[1].I32);
+    const result_ptr: usize = @intCast(params[2].I32);
+    std.debug.assert(lhs_ptr + 16 <= buffer.len and rhs_ptr + 16 <= buffer.len and result_ptr + 16 <= buffer.len);
+
+    const y = RocDec{ .num = readI128FromMem(buffer, lhs_ptr) };
+    const x = RocDec{ .num = readI128FromMem(buffer, rhs_ptr) };
+    var dec_ops = wasmDecRocOps(state);
+    const result = builtins.dec.atan2C(y, x, &dec_ops);
+    writeI128ToMem(buffer, result_ptr, result);
+}
+
 fn hostDecUnaryMath(state: *WasmRunState, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, comptime op: DecUnaryMathOp) void {
     const RocDec = builtins.dec.RocDec;
     const buffer = module.store.getMemory(0).buffer();
@@ -1238,8 +1256,16 @@ fn hostFloatPowF32(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const 
     results[0] = .{ .F32 = builtins.dev_wrappers.roc_builtins_float_pow_f32(params[0].F32, params[1].F32) };
 }
 
+fn hostFloatAtan2F32(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    results[0] = .{ .F32 = builtins.dev_wrappers.roc_builtins_float_atan2_f32(params[0].F32, params[1].F32) };
+}
+
 fn hostFloatPow(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
     results[0] = .{ .F64 = builtins.dev_wrappers.roc_builtins_float_pow(params[0].F64, params[1].F64) };
+}
+
+fn hostFloatAtan2(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    results[0] = .{ .F64 = builtins.dev_wrappers.roc_builtins_float_atan2(params[0].F64, params[1].F64) };
 }
 
 fn hostFloatRemF32(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
@@ -1629,8 +1655,8 @@ fn allocWasmData(state: *WasmRunState, module: *bytebox.ModuleInstance, alignmen
 
 fn hostRocAlloc(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
     const state: *WasmRunState = @ptrCast(@alignCast(ctx));
-    const length: u32 = @bitCast(params[1].I32);
-    const alignment: u32 = @bitCast(params[2].I32);
+    const length: u32 = @bitCast(params[0].I32);
+    const alignment: u32 = @bitCast(params[1].I32);
     const data_ptr = allocWasmData(state, module, alignment, length);
     results[0] = .{ .I32 = @bitCast(data_ptr) };
 }
@@ -1640,9 +1666,9 @@ fn hostRocDealloc(_: ?*anyopaque, _: *bytebox.ModuleInstance, _: [*]const bytebo
 fn hostRocRealloc(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
     const state: *WasmRunState = @ptrCast(@alignCast(ctx));
     var buffer = module.store.getMemory(0).buffer();
-    const old_data_ptr: u32 = @bitCast(params[1].I32);
-    const new_length: u32 = @bitCast(params[2].I32);
-    const alignment: u32 = @bitCast(params[3].I32);
+    const old_data_ptr: u32 = @bitCast(params[0].I32);
+    const new_length: u32 = @bitCast(params[1].I32);
+    const alignment: u32 = @bitCast(params[2].I32);
     const old_length: usize = if (old_data_ptr >= 8 and old_data_ptr <= buffer.len)
         readIntLittle(u32, buffer, old_data_ptr - 8)
     else
@@ -1659,8 +1685,8 @@ fn hostRocRealloc(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]
 fn hostRocDbg(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const state: *WasmRunState = @ptrCast(@alignCast(ctx));
     const buffer = module.store.getMemory(0).buffer();
-    const msg_ptr: u32 = @bitCast(params[1].I32);
-    const msg_len: u32 = @bitCast(params[2].I32);
+    const msg_ptr: u32 = @bitCast(params[0].I32);
+    const msg_len: u32 = @bitCast(params[1].I32);
     if (msg_ptr + msg_len > buffer.len) return;
     state.recordEvent(.dbg, buffer[msg_ptr..][0..msg_len]);
 }
@@ -1668,8 +1694,8 @@ fn hostRocDbg(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
 fn hostRocExpectFailed(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const state: *WasmRunState = @ptrCast(@alignCast(ctx));
     const buffer = module.store.getMemory(0).buffer();
-    const msg_ptr: u32 = @bitCast(params[1].I32);
-    const msg_len: u32 = @bitCast(params[2].I32);
+    const msg_ptr: u32 = @bitCast(params[0].I32);
+    const msg_len: u32 = @bitCast(params[1].I32);
     if (msg_ptr + msg_len > buffer.len) return;
     state.recordEvent(.expect_failed, buffer[msg_ptr..][0..msg_len]);
 }
@@ -1677,8 +1703,8 @@ fn hostRocExpectFailed(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params
 fn hostRocCrashed(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const state: *WasmRunState = @ptrCast(@alignCast(ctx));
     const buffer = module.store.getMemory(0).buffer();
-    const msg_ptr: u32 = @bitCast(params[1].I32);
-    const msg_len: u32 = @bitCast(params[2].I32);
+    const msg_ptr: u32 = @bitCast(params[0].I32);
+    const msg_len: u32 = @bitCast(params[1].I32);
     if (msg_ptr + msg_len > buffer.len) return;
     state.recordCrash(buffer[msg_ptr..][0..msg_len]);
 }

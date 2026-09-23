@@ -354,7 +354,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 661)
+								(e-call (constraint-fn-var 663)
 									(e-lookup-local
 										(p-assign (ident "save")))
 									(e-string
@@ -388,7 +388,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 710)
+								(e-call (constraint-fn-var 712)
 									(e-lookup-local
 										(p-assign (ident "save")))
 									(e-string
@@ -431,7 +431,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 771)
+								(e-call (constraint-fn-var 775)
 									(e-lookup-local
 										(p-assign (ident "save")))
 									(e-string
@@ -465,7 +465,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 820)
+								(e-call (constraint-fn-var 824)
 									(e-lookup-local
 										(p-assign (ident "save")))
 									(e-string
@@ -507,7 +507,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 873)
+								(e-call (constraint-fn-var 879)
 									(e-lookup-local
 										(p-assign (ident "first")))
 									(e-string
@@ -539,7 +539,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 920)
+								(e-call (constraint-fn-var 926)
 									(e-lookup-local
 										(p-assign (ident "second")))
 									(e-string
@@ -582,7 +582,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 978)
+								(e-call (constraint-fn-var 986)
 									(e-lookup-local
 										(p-assign (ident "save")))
 									(e-string
@@ -614,9 +614,9 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-dispatch-call (method "map_err") (constraint-fn-var 1024)
+								(e-dispatch-call (method "map_err") (constraint-fn-var 1032)
 									(receiver
-										(e-call (constraint-fn-var 1022)
+										(e-call (constraint-fn-var 1030)
 											(e-lookup-local
 												(p-assign (ident "save")))
 											(e-string
@@ -665,7 +665,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 1109)
+								(e-call (constraint-fn-var 1119)
 									(e-lookup-local
 										(p-assign (ident "save")))
 									(e-string
@@ -697,7 +697,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 1153)
+								(e-call (constraint-fn-var 1163)
 									(e-lookup-local
 										(p-assign (ident "save")))
 									(e-string
@@ -749,14 +749,14 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "(c -> Try(ok, err)) -> Try({}, err) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
-		(patt (type "(c -> Try(ok, err)) -> Try({}, [WrappedA(err), WrappedB(err), ..]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
+		(patt (type "(c -> Try(ok, err)) -> Try({}, [WrappedA(err), WrappedB(err)]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
 		(patt (type "(c -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..err]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
 		(patt (type "(c -> Try(ok, [PersistFailed(err), ..d])), (f -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..d]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)]), f.from_quote : Str -> Try(f, [BadQuotedBytes(Str)])]"))
 		(patt (type "(c -> Try(ok, a)) -> Try({}, [PersistFailed(a), ..a]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
 		(patt (type "(Str -> Try({}, e)) -> Try({}, [PersistFailed(e), ..e])")))
 	(expressions
 		(expr (type "(c -> Try(ok, err)) -> Try({}, err) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
-		(expr (type "(c -> Try(ok, err)) -> Try({}, [WrappedA(err), WrappedB(err), ..]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
+		(expr (type "(c -> Try(ok, err)) -> Try({}, [WrappedA(err), WrappedB(err)]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
 		(expr (type "(c -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..err]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))
 		(expr (type "(c -> Try(ok, [PersistFailed(err), ..d])), (f -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..d]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)]), f.from_quote : Str -> Try(f, [BadQuotedBytes(Str)])]"))
 		(expr (type "(c -> Try(ok, a)) -> Try({}, [PersistFailed(a), ..a]) where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]"))

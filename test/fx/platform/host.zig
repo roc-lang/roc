@@ -31,6 +31,9 @@ const shim_io = @import("shim_io");
 const builtin = @import("builtin");
 const builtins = @import("builtins");
 const host_alloc = @import("host_alloc");
+
+/// This host defines the runtime symbols itself (see `exportRuntimeSymbols`).
+pub const roc_host_role: builtins.host_abi.HostRole = .platform;
 const host_crash_handlers = @import("host_crash_handlers");
 const build_options = @import("build_options");
 const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
@@ -1034,26 +1037,28 @@ fn hostTreeClonePayload(tree: *const HostTree, ops: *builtins.host_abi.RocOps) H
     };
 }
 
-fn hostTreeDropPayload(tree_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callconv(.c) void {
+fn hostTreeDropPayload(tree_ptr: ?[*]u8) callconv(.c) void {
+    const ops = builtins.in_process_host.ops();
     const tree = capturePtrAs(HostTree, tree_ptr);
     switch (tree.discriminant) {
         0 => {},
         1 => {
             boxed_host_drop_counts.recursive_tree_child_box_releases += 2;
-            builtins.dev_wrappers.roc_builtins_box_decref_with(tree.payload.node.left, @alignOf(HostTree), &hostTreeDropPayload, ops);
-            builtins.dev_wrappers.roc_builtins_box_decref_with(tree.payload.node.right, @alignOf(HostTree), &hostTreeDropPayload, ops);
+            builtins.dev_wrappers.roc_builtins_box_decref_with(tree.payload.node.left, @alignOf(HostTree), &hostTreeDropPayload);
+            builtins.dev_wrappers.roc_builtins_box_decref_with(tree.payload.node.right, @alignOf(HostTree), &hostTreeDropPayload);
         },
         else => ops.crash("host boxed recursive tree drop had invalid discriminant"),
     }
 }
 
-fn hostTreeDropPayloadWithoutReport(tree_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callconv(.c) void {
+fn hostTreeDropPayloadWithoutReport(tree_ptr: ?[*]u8) callconv(.c) void {
+    const ops = builtins.in_process_host.ops();
     const tree = capturePtrAs(HostTree, tree_ptr);
     switch (tree.discriminant) {
         0 => {},
         1 => {
-            builtins.dev_wrappers.roc_builtins_box_decref_with(tree.payload.node.left, @alignOf(HostTree), &hostTreeDropPayloadWithoutReport, ops);
-            builtins.dev_wrappers.roc_builtins_box_decref_with(tree.payload.node.right, @alignOf(HostTree), &hostTreeDropPayloadWithoutReport, ops);
+            builtins.dev_wrappers.roc_builtins_box_decref_with(tree.payload.node.left, @alignOf(HostTree), &hostTreeDropPayloadWithoutReport);
+            builtins.dev_wrappers.roc_builtins_box_decref_with(tree.payload.node.right, @alignOf(HostTree), &hostTreeDropPayloadWithoutReport);
         },
         else => ops.crash("host boxed recursive tree drop had invalid discriminant"),
     }
@@ -1078,16 +1083,15 @@ fn hostTreeCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u
 }
 
 fn hostTreeCaptureOnDrop(capture_ptr: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
-    const ops = g_roc_ops.?;
     const capture = capturePtrAs(TreeCapture, capture_ptr);
-    hostTreeDropPayload(@ptrCast(&capture.tree), ops);
+    hostTreeDropPayload(@ptrCast(&capture.tree));
     boxed_host_drop_counts.recursive_tree += 1;
 }
 
 fn hostedHostBoxedRecursiveTree(tree: HostTree) callconv(.c) ?[*]u8 {
     const ops = g_roc_ops.?;
     var tree_local = tree;
-    defer hostTreeDropPayloadWithoutReport(@ptrCast(&tree_local), ops);
+    defer hostTreeDropPayloadWithoutReport(@ptrCast(&tree_local));
     var ret: ?[*]u8 = null;
     writeErasedCallable(
         TreeCapture,
@@ -1298,8 +1302,6 @@ fn hostedHostResetBoxedDropReport() callconv(.c) void {
 /// only when the list's own count reaches zero, which is the same operation
 /// compiled Roc code performs when it drops a `List(Str)` it owns.
 fn hostedHostSumStrBytes(list: RocList) callconv(.c) u64 {
-    const ops = g_roc_ops.?;
-
     var total: u64 = 0;
     if (list.bytes) |bytes| {
         const elements: [*]const RocStr = @ptrCast(@alignCast(bytes));
@@ -1312,7 +1314,6 @@ fn hostedHostSumStrBytes(list: RocList) callconv(.c) u64 {
         list.bytes,
         list.length,
         list.capacity_or_alloc_ptr,
-        ops,
     );
 
     return total;

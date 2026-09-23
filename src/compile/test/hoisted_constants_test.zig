@@ -69,8 +69,10 @@ const HoistedConstantsTestError = std.mem.Allocator.Error ||
         StaticDataSymbolNotFound,
         TestExpectedEqual,
         TestUnexpectedResult,
+        UnexpectedLowLevel,
         UnsupportedBuiltinAnnotationOnly,
         UnsupportedHeader,
+        UnsupportedTarget,
         WriteFailed,
     };
 
@@ -245,7 +247,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
     }
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finalizeExecutableArtifacts();
+    try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = coord.executableRootCheckedArtifact();
@@ -412,7 +414,7 @@ test "imported checked bodies restore their module's hoisted constants" {
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finalizeExecutableArtifacts();
+    try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = coord.executableRootCheckedArtifact();
@@ -504,7 +506,7 @@ test "hoisted list constants lower to internal static data in request order" {
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finalizeExecutableArtifacts();
+    try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = coord.executableRootCheckedArtifact();
@@ -530,8 +532,8 @@ test "hoisted list constants lower to internal static data in request order" {
 
     if (lowered.lir_result.static_data_values.items.len != 2) return error.StaticDataInitializerCountMismatch;
     try expectStaticInitializersMaterializationOnly(&lowered.lir_result);
-    const first_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[0].initializer);
-    const second_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[1].initializer);
+    const first_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[0].initializer.?);
+    const second_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[1].initializer.?);
     const first_body = first_initializer.body orelse return error.StaticDataLiteralNotFound;
     const second_body = second_initializer.body orelse return error.StaticDataLiteralNotFound;
     // Reachable roots form a barrier before queued initializers, whose request
@@ -649,7 +651,7 @@ fn expectInlineListStaticDataLiteral(gpa: std.mem.Allocator, source: []const u8)
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finalizeExecutableArtifacts();
+    try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = coord.executableRootCheckedArtifact();
@@ -681,6 +683,206 @@ fn expectInlineListStaticDataLiteral(gpa: std.mem.Allocator, source: []const u8)
     try std.testing.expectEqual(@as(usize, 1), lowered.lir_result.static_data_values.items.len);
     try expectStaticInitializersMaterializationOnly(&lowered.lir_result);
     try expectStaticDataLiteralPresent(&lowered.lir_result);
+}
+
+// https://github.com/roc-lang/roc/issues/11376
+// Growing a folded list of records should grow static data, not executable IR.
+test "issue 11376: folded record List.repeat does not grow LIR per element" {
+    const small = try repeatedRecordListLirSize(4);
+    const larger = try repeatedRecordListLirSize(16);
+    try std.testing.expectEqual(small, larger);
+}
+
+fn repeatedRecordListLirSize(comptime count: usize) HoistedConstantsTestError!usize {
+    const source = std.fmt.comptimePrint(
+        \\app [main!] {{ pf: platform "./.roc_echo_platform/main.roc" }}
+        \\import pf.Echo
+        \\seqs = List.repeat({{ litrunlen_and_length: 0.U32, offset: 0.U16, offset_slot: 0.U16 }}, {d})
+        \\main! = |args| {{
+        \\    Echo.line!(Str.inspect(List.get(seqs, List.len(args))))
+        \\    Ok({{}})
+        \\}}
+    , .{count});
+    return try lowerEchoApp(source, struct {
+        fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
+            // The folded table rides in static data at any element count.
+            try expectLowLevelAbsent(result, .list_with_capacity);
+            try expectLowLevelAbsent(result, .list_append_unsafe);
+            try std.testing.expect(result.static_data_values.items.len > 0);
+            return try reachableStatementCount(result);
+        }
+    }.inspect);
+}
+
+test "a compile-time list of copies of one scalar is static data, not a per-read rebuild" {
+    _ = try lowerEchoApp(
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\table = List.repeat(0.U32, 6)
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(List.get(table, List.len(args))))
+        \\    Ok({})
+        \\}
+    , struct {
+        fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
+            // The table rides in static data; reading it must not reserve and
+            // fill a fresh list.
+            try expectLowLevelAbsent(result, .list_with_capacity);
+            try expectLowLevelAbsent(result, .list_append_unsafe);
+            try std.testing.expect(result.static_data_values.items.len > 0);
+            return 0;
+        }
+    }.inspect);
+}
+
+test "an empty compile-time list rebuilds with the capacity it was evaluated with" {
+    _ = try lowerEchoApp(
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\buffer : List(U64)
+        \\buffer = List.with_capacity(64)
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(List.append(buffer, List.len(args))))
+        \\    Ok({})
+        \\}
+    , struct {
+        fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
+            try std.testing.expectEqual(@as(usize, 0), result.static_data_values.items.len);
+            try expectLowLevelPresent(result, .list_with_capacity);
+            try expectIntLiteralPresent(result, 64);
+            return 0;
+        }
+    }.inspect);
+}
+
+test "a compile-time record of an empty list and a scalar lowers as its constructor" {
+    // The record is read whole: a field projection of a completed record
+    // is its own compile-time root, evaluated from the frozen record,
+    // whose empty list carries no capacity.
+    _ = try lowerEchoApp(
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\state : { items : List(U64), count : U64 }
+        \\state = { items: List.with_capacity(8), count: 3 }
+        \\fill : { items : List(U64), count : U64 }, U64 -> U64
+        \\fill = |record, n| List.len(List.append(record.items, n)) + record.count
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(fill(state, List.len(args))))
+        \\    Ok({})
+        \\}
+    , struct {
+        fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
+            try std.testing.expectEqual(@as(usize, 0), result.static_data_values.items.len);
+            try expectLowLevelPresent(result, .list_with_capacity);
+            try expectIntLiteralPresent(result, 8);
+            return 0;
+        }
+    }.inspect);
+}
+
+/// Checks and lowers an app over the echo platform, handing the lowered
+/// program to `inspect` while it is alive.
+fn lowerEchoApp(source: []const u8, comptime inspect: fn (*lir.Program.Result) HoistedConstantsTestError!usize) HoistedConstantsTestError!usize {
+    const gpa = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data = source,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const builtin_modules = try sharedBuiltinModules();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        .x64linux,
+        builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finishCheckedProgram(.executable_artifacts);
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .imports = imports,
+        },
+        .{
+            .requests = lir_roots,
+            .include_provided_data_exports = true,
+            .include_internal_static_data = true,
+        },
+        .{
+            .target_usize = base.target.TargetUsize.u64,
+        },
+    );
+    defer lowered.deinit();
+    return try inspect(&lowered.lir_result);
+}
+
+fn reachableStatementCount(result: *lir.Program.Result) HoistedConstantsTestError!usize {
+    // Include initializer procedures: moving per-element code out of the runtime
+    // entrypoint still makes the compiler process it (the regression in #11376).
+    var statement_count: usize = 0;
+    for (result.store.getProcSpecs()) |proc| {
+        const body = proc.body orelse continue;
+        var statements = try lir.BodyClone.ReachableStmts.init(&result.store, body);
+        defer statements.deinit();
+        while (try statements.next()) |_| statement_count += 1;
+    }
+    return statement_count;
+}
+
+fn expectLowLevelPresent(result: *const lir.Program.Result, op: lir.LIR.LowLevel) HoistedConstantsTestError!void {
+    for (result.store.getCFStmts()) |stmt| {
+        if (stmt == .assign_low_level and stmt.assign_low_level.op == op) return;
+    }
+    return error.StaticDataLiteralNotFound;
+}
+
+fn expectLowLevelAbsent(result: *const lir.Program.Result, op: lir.LIR.LowLevel) HoistedConstantsTestError!void {
+    for (result.store.getCFStmts()) |stmt| {
+        if (stmt == .assign_low_level and stmt.assign_low_level.op == op) return error.UnexpectedLowLevel;
+    }
+}
+
+fn expectIntLiteralPresent(result: *const lir.Program.Result, value: i128) HoistedConstantsTestError!void {
+    for (result.store.getCFStmts()) |stmt| {
+        if (stmt != .assign_literal) continue;
+        switch (stmt.assign_literal.value) {
+            .i128_literal => |literal| if (literal.value == value) return,
+            .i64_literal => |literal| if (literal.value == value) return,
+            .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => {},
+        }
+    }
+    return error.StaticDataLiteralNotFound;
 }
 
 test "callable binding with alias annotation is const-evaluated" {
@@ -783,7 +985,7 @@ test "callable binding with alias annotation is const-evaluated" {
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finalizeExecutableArtifacts();
+    try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
     const app_artifact = coord.appRootCheckedArtifact();
@@ -875,6 +1077,7 @@ test "hoisted constant crash reports original source region" {
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
     try std.testing.expect(coord.hasUserErrors());
 
     var found = false;
@@ -976,6 +1179,7 @@ test "inlined hoisted constant crash reports hoisted source region" {
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
     try std.testing.expect(coord.hasUserErrors());
 
     var found = false;
@@ -1073,6 +1277,7 @@ test "hoisted pattern extraction and validation failures report original destruc
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
     try std.testing.expect(coord.hasUserErrors());
 
     var found_validation = false;
@@ -1178,6 +1383,7 @@ test "hoisted pattern extraction base match failure reports match" {
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
     try std.testing.expect(coord.hasUserErrors());
 
     var found_match = false;
@@ -1279,6 +1485,7 @@ test "hoisted pattern extraction successful base match resolves pending diagnost
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
     try std.testing.expect(!coord.hasUserErrors());
 }
 
@@ -1338,6 +1545,7 @@ test "hoisted roots admit non-concrete transient locals without losing validatio
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
 
     try std.testing.expect(!coord.hasUserErrors());
     const artifact = coord.appRootCheckedArtifact();
@@ -1411,6 +1619,7 @@ test "issue 10721: compile-time known destructure of a match-returned closure re
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
 
     var found_non_exhaustive = false;
     var report_iter = coord.iterReports();
@@ -1478,6 +1687,7 @@ test "issue 10721: compile-time known destructure inside an effectful body resol
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
 
     var found_non_exhaustive = false;
     var report_iter = coord.iterReports();
@@ -1546,6 +1756,7 @@ test "issue 10721: compile-time validation reports a known failing destructure" 
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
     try std.testing.expect(coord.hasUserErrors());
 
     var found_non_exhaustive = false;
@@ -1613,6 +1824,7 @@ test "issue 10721: runtime-dependent callable use keeps one validating extractio
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
 
     try std.testing.expect(!coord.hasUserErrors());
 
@@ -1680,6 +1892,7 @@ test "hoisted match guard does not report unused branch warning" {
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
     try std.testing.expect(!coord.hasUserErrors());
 
     var found_unused_branch = false;
@@ -1756,6 +1969,7 @@ test "hoisted successful call does not clear runtime reachable helper exhaustive
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
     try std.testing.expect(coord.hasUserErrors());
 
     var found = false;
@@ -1827,6 +2041,7 @@ test "hoisted failing call into runtime reachable helper reports static diagnost
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
     try std.testing.expect(coord.hasUserErrors());
 
     var found = false;
@@ -2327,7 +2542,7 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
 
 fn expectStaticInitializersMaterializationOnly(result: *const lir.Program.Result) HoistedConstantsTestError!void {
     for (result.static_data_values.items) |value| {
-        try std.testing.expect(result.store.getProcSpec(value.initializer).is_static_initializer);
+        try std.testing.expect(result.store.getProcSpec(value.initializer.?).is_static_initializer);
     }
 }
 
@@ -2464,7 +2679,7 @@ test "issue 9733: nested expect statements remain inline" {
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finalizeExecutableArtifacts();
+    try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
     const app_artifact = coord.appRootCheckedArtifact();
@@ -2473,4 +2688,31 @@ test "issue 9733: nested expect statements remain inline" {
         @as(usize, 1),
         countCompileTimeRootKind(app_artifact, .expect),
     );
+}
+
+test "issue 11376: packed products stay compact in both lowering strategies" {
+    const harness = @import("lower_to_lir_harness.zig");
+    const Inspector = struct {
+        var count: usize = 0;
+        fn inspect(store: *const lir.LirStore, _: *const @import("layout").Store) harness.LowerToLirHarnessError!void {
+            count = store.cfStmtCount();
+        }
+    };
+    inline for (.{ base.SpecializationStrategy.lss, base.SpecializationStrategy.boxy }) |strategy| {
+        inline for (.{ base.target.TargetUsize.u32, base.target.TargetUsize.u64 }) |target| {
+            var small: usize = 0;
+            inline for (.{ 4, 16 }) |count| {
+                const source = std.fmt.comptimePrint(
+                    \\Pair := {{ a: U8, z: U64 }}
+                    \\xs = List.repeat({{ a: 3.U8, b: (17.U16, 2.5.F32), c: Pair.{{a: 9, z: 42}} }}, {d})
+                    \\main! = |args| {{
+                    \\    echo!(Str.inspect(List.get(xs, args.len())))
+                    \\    Ok({{}})
+                    \\}}
+                , .{count});
+                try harness.expectLirInspectionWithOptions(source, .{ .specialization_strategy = strategy, .target_usize = target, .include_internal_static_data = true }, Inspector.inspect);
+                if (count == 4) small = Inspector.count else try std.testing.expectEqual(small, Inspector.count);
+            }
+        }
+    }
 }

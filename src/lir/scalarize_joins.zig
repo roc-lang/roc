@@ -45,6 +45,11 @@ const Allocator = std.mem.Allocator;
 
 pub const ScalarizeError = std.mem.Allocator.Error;
 
+/// Internal aggregates can be scalarized under any procedure calling convention.
+pub fn rewritableProcBody(store: *const LirStore, proc_id: LIR.LirProcSpecId) ?LIR.CFStmtId {
+    return store.getProcSpec(proc_id).body;
+}
+
 /// Maximum scalarized field count per parameter; wider wrappers keep their
 /// shape. This must comfortably exceed the loop-carried state of large
 /// hand-written loops: a loop whose state struct stays unscalarized pays a
@@ -71,42 +76,22 @@ const Metrics = struct {
 };
 
 fn runMeasured(store: *LirStore, layouts: *const layout_mod.Store, metrics: ?*Metrics) ScalarizeError!void {
-    var pass = Pass{
-        .metrics = metrics,
-        .store = store,
-        .layouts = layouts,
-        .allocator = store.allocator,
-        .use_other = collections.DenseMap(LIR.LocalId, void).init(store.allocator),
-        .field_reads = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
-        .init_writes = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
-        .write_other = collections.DenseMap(LIR.LocalId, void).init(store.allocator),
-        .struct_builds = collections.DenseMap(LIR.LocalId, StructBuild).init(store.allocator),
-        .tag_reads = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
-        .tag_builds = collections.DenseMap(LIR.LocalId, TagBuild).init(store.allocator),
-        .tag_forward_writes = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
-        .struct_forward_writes = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
-        .alias_init_writes = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
-        .alias_defs = collections.DenseMap(LIR.LocalId, AliasDef).init(store.allocator),
-        .join_params = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(store.allocator),
-        .transparent = collections.DenseMap(LIR.LocalId, void).init(store.allocator),
-        .alias_children = collections.DenseMap(LIR.LocalId, LIR.LocalId).init(store.allocator),
-        .removed = collections.DenseMap(LIR.CFStmtId, LIR.CFStmtId).init(store.allocator),
-        .visited = collections.DenseMap(LIR.CFStmtId, void).init(store.allocator),
-        .stack = .empty,
-    };
+    var pass = Pass.init(store, layouts, store.allocator, metrics);
     defer pass.deinit();
 
     // Procs are independent (join parameters are proc-local), so each proc
     // converges on its own before moving on; a proc that changes nothing is
     // scanned exactly once instead of once per global round.
     for (0..store.procSpecCount()) |proc_index| {
-        var rounds: usize = 0;
-        while (rounds < max_rounds) : (rounds += 1) {
-            const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
-            const body = proc.body orelse break;
-            if (!try pass.scalarizeProc(@enumFromInt(@as(u32, @intCast(proc_index))), body)) break;
-        }
+        try pass.transformProc(@enumFromInt(@as(u32, @intCast(proc_index))));
     }
+}
+
+/// Scalarize one procedure with task-local scratch; rewritten LIR stays in the store.
+pub fn runProc(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator) ScalarizeError!void {
+    var pass = Pass.init(store, layouts, scratch_allocator, null);
+    defer pass.deinit();
+    try pass.transformProc(proc_id);
 }
 
 const StructBuild = struct {
@@ -249,6 +234,40 @@ const Pass = struct {
     /// Field-parameter locals created this round; they join the proc's
     /// frame locals so frame plans cover them.
     new_locals: std.ArrayList(LIR.LocalId) = .empty,
+
+    fn init(store: *LirStore, layouts: *const layout_mod.Store, allocator: Allocator, metrics: ?*Metrics) Pass {
+        return .{
+            .metrics = metrics,
+            .store = store,
+            .layouts = layouts,
+            .allocator = allocator,
+            .use_other = collections.DenseMap(LIR.LocalId, void).init(allocator),
+            .field_reads = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(allocator),
+            .init_writes = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(allocator),
+            .write_other = collections.DenseMap(LIR.LocalId, void).init(allocator),
+            .struct_builds = collections.DenseMap(LIR.LocalId, StructBuild).init(allocator),
+            .tag_reads = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(allocator),
+            .tag_builds = collections.DenseMap(LIR.LocalId, TagBuild).init(allocator),
+            .tag_forward_writes = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(allocator),
+            .struct_forward_writes = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(allocator),
+            .alias_init_writes = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(allocator),
+            .alias_defs = collections.DenseMap(LIR.LocalId, AliasDef).init(allocator),
+            .join_params = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(allocator),
+            .transparent = collections.DenseMap(LIR.LocalId, void).init(allocator),
+            .alias_children = collections.DenseMap(LIR.LocalId, LIR.LocalId).init(allocator),
+            .removed = collections.DenseMap(LIR.CFStmtId, LIR.CFStmtId).init(allocator),
+            .visited = collections.DenseMap(LIR.CFStmtId, void).init(allocator),
+            .stack = .empty,
+        };
+    }
+
+    fn transformProc(self: *Pass, proc_id: LIR.LirProcSpecId) ScalarizeError!void {
+        var rounds: usize = 0;
+        while (rounds < max_rounds) : (rounds += 1) {
+            const body = rewritableProcBody(self.store, proc_id) orelse break;
+            if (!try self.scalarizeProc(proc_id, body)) break;
+        }
+    }
 
     fn deinit(self: *Pass) void {
         self.use_other.deinit();
@@ -1641,9 +1660,9 @@ const Pass = struct {
                     try self.noteWrite(assign.target);
                     try self.stack.append(self.allocator, assign.next);
                 },
-                .init_uninitialized => |init| {
-                    try self.noteWrite(init.target);
-                    try self.stack.append(self.allocator, init.next);
+                .init_uninitialized => |initialize| {
+                    try self.noteWrite(initialize.target);
+                    try self.stack.append(self.allocator, initialize.next);
                 },
                 .assign_call => |assign| {
                     if (assign.result_desc) |result_desc| {
@@ -1937,6 +1956,11 @@ const ScalarizeTest = struct {
 };
 
 test "scalarize splits a literal-initialized struct join parameter" {
+    try testLiteralInitializedStruct(false);
+    try testLiteralInitializedStruct(true);
+}
+
+fn testLiteralInitializedStruct(procedure_local: bool) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     var f = try ScalarizeTest.init(testing.allocator);
     defer f.deinit();
     const store = &f.store;
@@ -1995,12 +2019,32 @@ test "scalarize splits a literal-initialized struct join parameter" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(12),
         .args = LIR.LocalSpan.empty(),
         .body = join,
         .ret_layout = .i64,
     });
 
-    try run(store, &f.layouts);
+    const noop_arg = try store.addLocal(.{ .layout_idx = .i64 });
+    const noop_body = try store.addCFStmt(.{ .ret = .{ .value = noop_arg } });
+    const noop = try store.addProcSpec(.{
+        .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{noop_arg}),
+        .body = noop_body,
+        .ret_layout = .i64,
+    });
+    if (procedure_local) {
+        for (0..store.procSpecCount()) |index| {
+            var scratch = std.heap.ArenaAllocator.init(testing.allocator);
+            defer scratch.deinit();
+            try runProc(store, &f.layouts, @enumFromInt(index), scratch.allocator());
+        }
+    } else {
+        try run(store, &f.layouts);
+    }
+    try testing.expectEqual(noop_body, store.getProcSpec(noop).body.?);
+    try testing.expectEqual(noop_arg, store.getCFStmt(noop_body).ret.value);
 
     // The join now carries two parameters, the field reads are aliases of
     // them, the jump site snapshots both operands before writing either
@@ -2087,6 +2131,7 @@ test "scalarize keeps descriptor-bearing struct join parameters" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(11),
         .args = try store.addLocalSpan(&.{state_desc}),
         .body = join,
         .ret_layout = .i64,
@@ -2157,6 +2202,7 @@ test "scalarize keeps parameters with whole-value uses" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(10),
         .args = LIR.LocalSpan.empty(),
         .body = join,
         .ret_layout = .i64,
@@ -2222,6 +2268,7 @@ test "scalarize splits a parameter built directly by a struct literal" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(9),
         .args = LIR.LocalSpan.empty(),
         .body = join,
         .ret_layout = .i64,
@@ -2322,6 +2369,7 @@ test "scalarize sees through pure aliases to field reads" {
     } });
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(8),
         .args = LIR.LocalSpan.empty(),
         .body = join,
         .ret_layout = .i64,
@@ -2400,6 +2448,7 @@ test "scalarize keeps parameters whose alias escapes whole" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(7),
         .args = LIR.LocalSpan.empty(),
         .body = join,
         .ret_layout = f.pair,
@@ -2463,6 +2512,7 @@ test "scalarize seeds field parameters from a non-literal initializer" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(6),
         .args = LIR.LocalSpan.empty(),
         .body = join,
         .ret_layout = .i64,
@@ -2564,6 +2614,7 @@ test "scalarize splits a parameter shared by two joins" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(5),
         .args = LIR.LocalSpan.empty(),
         .body = outer,
         .ret_layout = .i64,
@@ -2623,6 +2674,7 @@ test "scalarize batches independent constructors without recollecting each one" 
     }
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(4),
         .args = try store.addLocalSpan(&.{ number, text }),
         .body = body,
         .ret_layout = .i64,
@@ -2650,6 +2702,7 @@ test "scalarize propagates escaping alias chains in linear work" {
     }
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(3),
         .args = try store.addLocalSpan(aliases[0..1]),
         .body = body,
         .ret_layout = fixture.pair,
@@ -2693,6 +2746,7 @@ test "scalarize keeps a constructor with an alias definition and its source" {
     } });
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{ first, second, text }),
         .body = original,
         .ret_layout = .i64,
@@ -2728,7 +2782,7 @@ test "scalarize propagates an escaping whole value through a long alias chain" {
     }
     body = try store.addCFStmt(.{ .assign_ref = .{ .target = field, .op = .{ .field = .{ .source = record, .field_idx = 0 } }, .next = body } });
     const build = try store.addCFStmt(.{ .assign_struct = .{ .target = record, .fields = try store.addLocalSpan(&.{ num, text }), .next = body } });
-    const proc_id = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .args = try store.addLocalSpan(&.{ num, text }), .body = build, .ret_layout = f.pair });
+    const proc_id = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(1), .args = try store.addLocalSpan(&.{ num, text }), .body = build, .ret_layout = f.pair });
     try run(store, &f.layouts);
     // The field read does not justify deleting the constructor: the last
     // alias returns the entire record, so that use must reach its producer.

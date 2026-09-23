@@ -62,7 +62,6 @@ test "Monotype types are closed checked types without row tails" {
     try std.testing.expect(@hasField(MonoType.Content, "erased"));
     try std.testing.expect(@hasField(MonoType.Content, "zst"));
 
-    try std.testing.expect(!@hasField(MonoType.Content, "record_unbound"));
     try std.testing.expect(!@hasField(MonoType.Content, "empty_record"));
     try std.testing.expect(!@hasField(MonoType.Content, "empty_tag_union"));
     try std.testing.expect(!@hasField(MonoType.Content, "row_var"));
@@ -130,7 +129,6 @@ test "Monotype specialization has no target backend or LIR imports" {
         @embedFile("monotype/lower.zig"),
         @embedFile("monotype/solve.zig"),
         @embedFile("monotype/specialize.zig"),
-        @embedFile("monotype/serialize.zig"),
         @embedFile("monotype_lifted/ast.zig"),
         @embedFile("monotype_lifted/lift.zig"),
         @embedFile("monotype_lifted/spec_constr.zig"),
@@ -162,7 +160,6 @@ test "Lifted functions own captures and consume Monotype expression storage" {
     try std.testing.expect(@hasField(Lifted.ExprData, "call_proc"));
     try std.testing.expect(@hasField(Lifted.ExprData, "call_value"));
     try std.testing.expect(@hasField(Mono.FnSlot, "local"));
-    try std.testing.expect(@hasField(Mono.FnSlot, "imported"));
     try std.testing.expect(@hasField(Mono.ProcCallee, "func"));
     try std.testing.expect(@hasField(Mono.ProcCallee, "lifted"));
 }
@@ -745,7 +742,6 @@ test "Monotype open specialization lookup covers the complete function interface
     );
     inline for (.{ template_source, nested_source }) |lookup_source| {
         try expectContains(lookup_source, "functionInterfaceClassIterator(request_fn_node)");
-        try expectContains(lookup_source, "classMemberIterator(interface_class)");
         try expectContains(lookup_source, "seen_specs.getOrPut(raw_spec)");
         try expectContains(lookup_source, "draftOpenCandidateQualifies(");
         try expectContains(lookup_source, "spec.runtime_demand_guard_frames");
@@ -756,6 +752,15 @@ test "Monotype open specialization lookup covers the complete function interface
         try expectContains(lookup_source, "spec.initial_request_arg_classes");
         try expectNotContains(lookup_source, "functionInterfaceAnchor");
     }
+    try expectContains(template_source, "template_spec_lookup.openPairs(lookup_prefix)");
+    try expectContains(template_source, "if (open_pairs.len != 0)");
+    try expectContains(template_source, ".interface_roots = interface_roots.items");
+    try expectContains(template_source, "template_specs_by_template.get(template_ref)");
+    try expectNotContains(template_source, "classMemberIterator(");
+    try expectNotContains(template_source, "for (source_ctx.draft.template_specs.items");
+    const prefix_lookup = sourceSliceBetween(lower_source, "fn DraftSpecLookup(", "const EagerTemplateResolution");
+    try expectContains(prefix_lookup, "self.graph.sameClass(pair.node, root)");
+    try expectContains(nested_source, "classMemberIterator(interface_class)");
     try expectContains(template_source, "draftTemplateSpecLookupRequestNode(spec)");
     try expectContains(nested_source, "sameFunctionInterface(spec.request_fn_node, request_fn_node)");
     const interface_registration = sourceSliceBetween(
@@ -959,8 +964,8 @@ test "Monotype closed direct low-level lowering stays sealed and allocation disc
         "const BinderMap = struct",
         "const TypedBinder = struct",
     );
-    try expectContains(binder_map, "locals: ?[]?DraftLocalId = null");
-    try expectContains(binder_map, "if (self.locals == null)");
+    try expectContains(binder_map, "collections.VersionedDenseMap");
+    try expectNotContains(binder_map, "alloc(?DraftLocalId, self.binder_count)");
     try expectNotContains(binder_map, "AutoHashMap");
 
     const inst_node = sourceSliceBetween(
@@ -1378,17 +1383,25 @@ test "hosted Try adaptation consumes checker-recorded nominal provenance" {
         "fn graphHostedTryInfoOrNull(",
         "const Builder = struct",
     );
+    // The hosted `Try` adapter is now one instance of the general result-row
+    // widening adapter (design.md "Result-Row Widening Adapter"), so the two
+    // functions this slices between carry the general names. The adapter no
+    // longer returns early on a missing capability—a template whose result
+    // is a bare closed row is adapted without one—so the assertion that
+    // pinned the capability as the only route to `Try` moved to the two
+    // `hostedTryInfoOrNull` calls that read the `Try` rows through it.
     const adapter_source = sourceSliceBetween(
         lower_source,
-        "fn hostedTryAdapterSourceType(",
-        "fn hostedTryAdapterBody(",
+        "fn resultRowWideningAdapterSourceType(",
+        "fn resultRowWideningAdapterBody(",
     );
     try std.testing.expect(@hasField(check.CheckedModule.CheckedProcedureTemplate, "hosted_try_adapter"));
     try expectContains(lower_source, "template.hosted_try_adapter");
     try expectContains(graph_relation, "capability.def");
     try expectContains(graph_relation, "capability.ok_type_arg_index");
     try expectContains(graph_relation, "capability.err_type_arg_index");
-    try expectContains(adapter_source, "capability orelse return null");
+    try expectContains(adapter_source, "self.hostedTryInfoOrNull(try_capability, requested.ret)");
+    try expectContains(adapter_source, "self.hostedTryInfoOrNull(try_capability, declared.ret)");
     try expectContains(lower_source, "sameTypeDef(named.def, capability.def)");
     try expectContains(lower_source, "tagByNameOrNull(backing_ty.ty, capability.ok_tag)");
     try expectContains(lower_source, "tagByNameOrNull(backing_ty.ty, capability.err_tag)");
@@ -1398,11 +1411,22 @@ test "hosted Try adaptation consumes checker-recorded nominal provenance" {
     try expectNotContains(lower_source, "fn tagByTextOrNull(");
 }
 
-test "Monotype draft compaction preserves shared source files and procedure debug names" {
+test "Monotype source locations carry final program file ids and draft compaction preserves procedure debug names" {
     const lower_source = @embedFile("monotype/lower.zig");
+    // The program's source-file and checked-module tables are seeded in
+    // canonical order before any body is lowered, by the coordinator and
+    // borrowed by every worker, so drafts hold no source-file content of their
+    // own, sealing never relocates a location's file id, and a worker stamps
+    // the same owner on a compile-time site that the coordinator would.
+    try expectContains(lower_source, "try builder.seedProgramModuleTables();");
+    try expectContains(lower_source, "builder.borrowed_source_file_ids = inputs.source_file_ids;");
+    try expectContains(lower_source, "builder.borrowed_lowering_module_ids = inputs.lowering_module_ids;");
+    try expectNotContains(lower_source, "fn initSourceFileIds(");
+    try expectContains(lower_source, "std.mem.sort(SourceFileSeed, seeds.items, {}, SourceFileSeed.lessThan);");
+    try expectNotContains(lower_source, "fn sourceFileIdFor");
+    try expectNotContains(lower_source, "kind == .source_files");
     const compaction = sourceSliceBetween(lower_source, "fn buildDraftCoreMaps", "fn draftSpecIdentityEql");
-    try expectNotContains(compaction, "if (!retain) continue");
-    try expectContains(compaction, "retain or kind == .source_files");
+    try expectContains(compaction, "if (!draftOwnerRetained(owner_run.owner, emit_fns)) continue;");
     try expectContains(lower_source, "core_id_mode: CoreIdMode");
     try expectContains(lower_source, ".identity => identity_start + raw");
     try expectNotContains(lower_source, "core_maps: ?*const Builder.DraftCoreMaps");

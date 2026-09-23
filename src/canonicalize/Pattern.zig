@@ -90,6 +90,15 @@ pub const Pattern = union(enum) {
         backing_pattern: Pattern.Idx,
         backing_type: CIR.Expr.NominalBackingType,
     },
+    /// A pattern naming a type in an imported module, whose target declaration
+    /// is settled by `can`'s import-resolution drain. The drain rewrites this
+    /// node in place into `nominal_external` or into a malformed node carrying
+    /// the recorded diagnostic. See `ModuleEnv.DeferredImportRef`.
+    deferred_import_ref: struct {
+        ref: ModuleEnv.DeferredImportRef.Idx,
+        backing_pattern: Pattern.Idx,
+        backing_type: CIR.Expr.NominalBackingType,
+    },
     /// Pattern that destructures a record, extracting specific fields including nested records.
     ///
     /// ```roc
@@ -391,6 +400,19 @@ pub const Pattern = union(enum) {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-nominal");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+
+                const attrs = tree.beginNode();
+                try ir.store.getPattern(n.backing_pattern).pushToSExprTree(ir, tree, n.backing_pattern);
+                try tree.endNode(begin, attrs);
+            },
+            .deferred_import_ref => |n| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-deferred-import-ref");
+                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+
+                const entry = ir.deferred_import_refs.items.items[@intFromEnum(n.ref)];
+                try tree.pushStringPair("module", ir.getIdent(entry.moduleName()));
+                try tree.pushStringPair("path", ir.getIdent(entry.path()));
 
                 const attrs = tree.beginNode();
                 try ir.store.getPattern(n.backing_pattern).pushToSExprTree(ir, tree, n.backing_pattern);

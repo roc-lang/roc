@@ -3,6 +3,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 pub const SExprTree = @import("SExprTree.zig");
+pub const TextRankCache = @import("TextRankCache.zig");
 pub const Ident = @import("Ident.zig");
 pub const Region = @import("Region.zig");
 pub const StringLiteral = @import("StringLiteral.zig");
@@ -31,6 +32,7 @@ pub const SmallStringInterner = @import("SmallStringInterner.zig");
 pub const SerialStringInterner = @import("SerialStringInterner.zig");
 pub const InternedBytes = @import("InternedBytes.zig");
 pub const SpecializationStrategy = @import("SpecializationStrategy.zig").SpecializationStrategy;
+pub const TypeDigestHasher = @import("TypeDigestHasher.zig");
 pub const ModuleIdentity = @import("module_identity.zig");
 
 /// Single-threaded arena allocator, re-exported from `collections` for callers
@@ -42,7 +44,6 @@ pub const process_memory = @import("process_memory.zig");
 pub const signal_handler = @import("signal_handler.zig");
 pub const stack_budget = @import("stack_budget.zig");
 pub const stack_overflow = @import("stack_overflow.zig");
-pub const elf_self_relocate = @import("elf_self_relocate.zig");
 
 pub const target = @import("target.zig");
 pub const DataSpan = @import("DataSpan.zig").DataSpan;
@@ -59,21 +60,36 @@ pub const doc_comment = @import("doc_comment.zig");
 /// Canonical byte encodings shared across compiler stages.
 pub const byte_encoding = @import("byte_encoding.zig");
 
-/// The default general-purpose allocator for the current target (fast, not leak-checking).
-/// Prefers libc's malloc (its ASan/Valgrind/LD_PRELOAD tooling, and on LLVM paths
-/// it's the allocator LLVM already uses)—except on musl, whose malloc is slow,
-/// where smp_allocator wins. Falls back to smp_allocator without libc, and to
-/// wasm_allocator on freestanding.
-pub fn defaultGpa() std.mem.Allocator {
-    if (builtin.target.os.tag == .freestanding) return std.heap.wasm_allocator;
+/// Allocator wrapper that recycles freed large blocks instead of unmapping them.
+pub const LargeBlockAllocator = @import("LargeBlockAllocator.zig");
+/// Logical CPU counts used to size worker pools.
+pub const cpu_count = @import("cpu_count.zig");
+
+var default_large_blocks: LargeBlockAllocator = LargeBlockAllocator.init(defaultBackingGpa());
+
+fn defaultBackingGpa() std.mem.Allocator {
     if (builtin.link_libc and !builtin.target.abi.isMusl()) return std.heap.c_allocator;
     return std.heap.smp_allocator;
+}
+
+/// The default general-purpose allocator for the current target (fast, not leak-checking).
+/// Large blocks are recycled by `LargeBlockAllocator`; everything else goes to libc's
+/// malloc (its ASan/Valgrind/LD_PRELOAD tooling, and on LLVM paths it's the allocator
+/// LLVM already uses)—except on musl, whose malloc is slow, where smp_allocator wins.
+/// Without libc it is smp_allocator, and wasm_allocator on freestanding.
+pub fn defaultGpa() std.mem.Allocator {
+    if (builtin.target.os.tag == .freestanding) return std.heap.wasm_allocator;
+    return default_large_blocks.allocator();
 }
 
 test {
     const ident = @import("Ident.zig");
     const module_path_mod = @import("module_path.zig");
     std.testing.refAllDecls(ident);
+    std.testing.refAllDecls(TextRankCache);
+    std.testing.refAllDecls(LargeBlockAllocator);
+    std.testing.refAllDecls(cpu_count);
+    std.testing.refAllDecls(TypeDigestHasher);
     std.testing.refAllDecls(module_path_mod);
     std.testing.refAllDecls(@import("roc_version.zig"));
 }
@@ -161,6 +177,7 @@ test "base tests" {
     std.testing.refAllDecls(@import("module_identity.zig"));
     std.testing.refAllDecls(@import("PackedDataSpan.zig"));
     std.testing.refAllDecls(@import("parallel.zig"));
+    std.testing.refAllDecls(post_check_task_executor);
     std.testing.refAllDecls(@import("Region.zig"));
     std.testing.refAllDecls(@import("RegionInfo.zig"));
     std.testing.refAllDecls(@import("rc_effect_rules.zig"));
@@ -171,7 +188,6 @@ test "base tests" {
     std.testing.refAllDecls(@import("SerialStringInterner.zig"));
     std.testing.refAllDecls(@import("SmallStringInterner.zig"));
     std.testing.refAllDecls(@import("SpecializationStrategy.zig"));
-    std.testing.refAllDecls(@import("elf_self_relocate.zig"));
     std.testing.refAllDecls(@import("source_utils.zig"));
     std.testing.refAllDecls(@import("stack_overflow.zig"));
     std.testing.refAllDecls(@import("StringLiteral.zig"));
