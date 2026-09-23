@@ -1689,7 +1689,6 @@ const PendingPredeclaredSchemeUse = struct {
     checking_executable_root: bool,
     delayed_dependency_depth: u32,
     instantiation_is_immediate_callee: bool,
-    initial_scheme_use_index: ?u32,
     use_pairs: VarPairRange,
 };
 
@@ -14348,8 +14347,11 @@ fn instantiatePendingPredeclaredSchemeUse(
     env: *Env,
 ) Allocator.Error!void {
     try self.ensurePredeclaredIdentityCorrespondence(target_def, scheme_var);
-    const scheme_uses_before = self.cir.scheme_uses.items.items.len;
-    const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var, .{ .value_use = source_expr });
+    // This instantiation is needed immediately for checking, but the
+    // predeclared annotation is not the durable scheme for this use. Save its
+    // explicit substitution below and publish evidence only after the target
+    // body's completed scheme is available.
+    const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var, .none);
     const use_pairs_start: u32 = @intCast(self.pending_predeclared_use_pairs.items.len);
     var use_pairs = self.var_map.iterator();
     while (use_pairs.next()) |pair| {
@@ -14359,17 +14361,6 @@ fn instantiatePendingPredeclaredSchemeUse(
         });
     }
     _ = try self.unify(use_var, instantiated, env);
-
-    var initial_scheme_use_index: ?u32 = null;
-    if (self.cir.scheme_uses.items.items.len > scheme_uses_before) {
-        const last_index = self.cir.scheme_uses.items.items.len - 1;
-        const record = self.cir.scheme_uses.items.items[last_index];
-        if (record.node_idx == @intFromEnum(source_expr) and
-            record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.value_use))
-        {
-            initial_scheme_use_index = @intCast(last_index);
-        }
-    }
 
     // Pending predeclared uses are only minted while a group frame is open.
     std.debug.assert(self.group_stack.items.len > 0);
@@ -14386,7 +14377,6 @@ fn instantiatePendingPredeclaredSchemeUse(
         .checking_executable_root = self.checking_executable_root,
         .delayed_dependency_depth = self.delayed_dependency_depth,
         .instantiation_is_immediate_callee = self.instantiation_is_immediate_callee,
-        .initial_scheme_use_index = initial_scheme_use_index,
         .use_pairs = .{
             .start = use_pairs_start,
             .len = @intCast(self.pending_predeclared_use_pairs.items.len - @as(usize, use_pairs_start)),
@@ -14398,6 +14388,7 @@ fn replayPredeclaredSchemeUse(
     self: *Self,
     pending: PendingPredeclaredSchemeUse,
     scheme_root: Var,
+    scheme_idx: ?usize,
     env: *Env,
 ) Allocator.Error!void {
     const previous_active_scheme_root = self.active_scheme_root;
@@ -14422,7 +14413,11 @@ fn replayPredeclaredSchemeUse(
     self.delayed_dependency_depth = pending.delayed_dependency_depth;
     self.instantiation_is_immediate_callee = pending.instantiation_is_immediate_callee;
 
-    const scheme_idx = self.typeSchemeIndexForRoot(scheme_root).?;
+    // When a side-table scheme exists it must name the same root the caller
+    // resolved; requirements are copied only from that side-table entry.
+    if (scheme_idx) |idx| {
+        std.debug.assert(self.typeSchemeIndexForRoot(scheme_root).? == idx);
+    }
 
     // Compose body-scheme vars with this use through two pieces of explicit
     // producer data: body identity-slot → predeclared-scheme pairs, then the
@@ -14446,24 +14441,29 @@ fn replayPredeclaredSchemeUse(
         }
     }
 
-    var instantiator = Instantiator{
-        .store = self.types,
-        .idents = self.cir.getIdentStoreConst(),
-        .var_map = &self.var_map,
-        .current_rank = env.rank(),
-        .rigid_behavior = .fresh_flex,
-        .polarity_var_ident = self.cir.idents.polarity_var,
-        .anonymous_ext_ident = self.cir.idents.open_ext,
-        .polarity_var_behavior = .close,
-    };
+    // A completed scheme without a side-table entry has no explicit dispatch
+    // requirements to copy; its quantified-variable substitution comes entirely
+    // from the saved correspondence and use pairs below.
     var instantiated_requirements: std.ArrayListUnmanaged(InstantiatedSchemeDispatchRequirement) = .empty;
     defer instantiated_requirements.deinit(self.gpa);
-    try self.copySchemeDispatchRequirements(
-        scheme_idx,
-        &instantiator,
-        false,
-        &instantiated_requirements,
-    );
+    if (scheme_idx) |idx| {
+        var instantiator = Instantiator{
+            .store = self.types,
+            .idents = self.cir.getIdentStoreConst(),
+            .var_map = &self.var_map,
+            .current_rank = env.rank(),
+            .rigid_behavior = .fresh_flex,
+            .polarity_var_ident = self.cir.idents.polarity_var,
+            .anonymous_ext_ident = self.cir.idents.open_ext,
+            .polarity_var_behavior = .close,
+        };
+        try self.copySchemeDispatchRequirements(
+            idx,
+            &instantiator,
+            false,
+            &instantiated_requirements,
+        );
+    }
 
     // Register only vars created while copying the newly known requirements;
     // seeded body vars are the already-registered early-use vars. Build the
@@ -14536,27 +14536,18 @@ fn replayPredeclaredSchemeUse(
     try self.appendSchemeRequirementEvidencePairs(instantiated_requirements.items);
 
     try self.canonicalizeSchemeUsePairs(&self.scratch_evidence_pairs);
-
-    const scheme_uses_before = self.cir.scheme_uses.items.items.len;
-    try self.cir.recordSchemeUse(
-        @intFromEnum(pending.source_expr),
-        .value_use,
-        0,
-        scheme_root,
-        self.scratch_evidence_pairs.items,
-    );
-    self.scratch_evidence_pairs.clearRetainingCapacity();
-
-    // If the annotation itself already carried evidence, replace that early
-    // record with the complete body scheme's record. The replay appends exactly
-    // one value-use record; its pair range remains valid after removing the
-    // duplicate row at the tail.
-    if (pending.initial_scheme_use_index) |initial_index| {
-        std.debug.assert(self.cir.scheme_uses.items.items.len == scheme_uses_before + 1);
-        const complete_record = self.cir.scheme_uses.items.items[scheme_uses_before];
-        self.cir.scheme_uses.items.items[initial_index] = complete_record;
-        self.cir.scheme_uses.items.shrinkRetainingCapacity(scheme_uses_before);
+    // Publish exactly once, from the completed body scheme. A monomorphic
+    // scheme with no evidence parameters needs no durable use record.
+    if (self.scratch_evidence_pairs.items.len > 0 or try self.schemeHasEvidenceParams(scheme_root)) {
+        try self.cir.recordSchemeUse(
+            @intFromEnum(pending.source_expr),
+            .value_use,
+            0,
+            scheme_root,
+            self.scratch_evidence_pairs.items,
+        );
     }
+    self.scratch_evidence_pairs.clearRetainingCapacity();
 
     for (instantiated_requirements.items) |requirement| {
         try self.registerInstantiatedSchemeRequirement(
@@ -14571,7 +14562,9 @@ fn replayPredeclaredSchemeUse(
 /// Replay this frame's early annotated uses once their target bodies have
 /// published complete schemes. `current_boundary_captured` means the current
 /// recursive/SCC roots have just been captured; a current-group target with no
-/// side-table scheme then has no hidden requirements and can be discarded.
+/// side-table scheme has no hidden requirements, and its early use record is
+/// published from the completed body scheme when it has a substitution or
+/// evidence parameters.
 fn resolvePendingPredeclaredSchemeUses(
     self: *Self,
     env: *Env,
@@ -14590,18 +14583,25 @@ fn resolvePendingPredeclaredSchemeUses(
 
         const target_def = self.cir.store.getDef(pending.target_def);
         const target_scheme_root = ModuleEnv.varFrom(target_def.expr);
-        const has_pending_requirements = self.typeSchemeIndexForRoot(target_scheme_root) != null;
+        const target_scheme_idx = self.typeSchemeIndexForRoot(target_scheme_root);
         // Replays drain a frame's own pending list, so that frame is open.
         std.debug.assert(self.group_stack.items.len > 0);
         const current_group = self.group_stack.items[self.group_stack.items.len - 1].group_index;
         const target_boundary_finished = self.group_states.items[target_group] == .checked or
             (current_boundary_captured and target_group == current_group);
-        if (has_pending_requirements) {
-            try self.replayPredeclaredSchemeUse(pending, target_scheme_root, env);
+        if (target_scheme_idx) |scheme_idx| {
+            try self.replayPredeclaredSchemeUse(pending, target_scheme_root, scheme_idx, env);
             replayed_any = true;
             continue;
         }
-        if (target_boundary_finished) continue;
+        if (target_boundary_finished) {
+            // The completed scheme has no explicit dispatch requirements, so
+            // replay only the substitution publication from the completed body
+            // scheme. Its quantified variables may differ from the annotation
+            // (for example, the body can close an implicitly open row).
+            try self.replayPredeclaredSchemeUse(pending, target_scheme_root, null, env);
+            continue;
+        }
 
         self.pending_predeclared_scheme_uses.items[write] = pending;
         write += 1;

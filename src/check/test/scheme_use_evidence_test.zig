@@ -297,6 +297,50 @@ test "source-forward annotated recursive use records the complete body scheme" {
     try std.testing.expect(found_complete_forward_use);
 }
 
+test "annotated recursive self use whose body closes the annotation row publishes no evidence" {
+    // Issue #11526: `walk`'s predeclared annotation opens its result row (a
+    // quantified identity variable), but the body returns the closed input
+    // parameter, so the completed scheme has no quantified variables. The
+    // early predeclared use must not publish a record: the completed scheme
+    // has neither a substitution nor evidence parameters.
+    const source =
+        \\walk : [Open, Close] -> [Open, Close]
+        \\walk = |token|
+        \\    match token {
+        \\        Open => walk(Close)
+        \\        Close => token
+        \\    }
+        \\main = walk(Open)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const env = test_env.module_env;
+    const idents = env.getIdentStoreConst();
+    var walk_expr_var: ?u32 = null;
+    for (env.store.sliceDefs(env.all_defs)) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        const pattern = env.store.getPattern(def.pattern);
+        if (pattern != .assign) continue;
+        if (std.mem.eql(u8, idents.getText(pattern.assign.ident), "walk")) {
+            walk_expr_var = @intFromEnum(ModuleEnv.varFrom(def.expr));
+            break;
+        }
+    }
+    try std.testing.expect(walk_expr_var != null);
+
+    // The use of `walk` inside its own body needs no durable value-use record,
+    // because the completed scheme quantifies nothing.
+    var walk_self_use_records: usize = 0;
+    for (env.scheme_uses.items.items) |record| {
+        if (record.slot_kind != @intFromEnum(Slot.value_use)) continue;
+        if (record.scheme_root != walk_expr_var.?) continue;
+        walk_self_use_records += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 0), walk_self_use_records);
+}
+
 test "recursive reference provenance marks the annotated self use but not an external call" {
     const source =
         \\grow : U64 -> U64
