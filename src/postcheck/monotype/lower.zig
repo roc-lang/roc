@@ -10140,6 +10140,10 @@ const Builder = struct {
         boundary_index: usize,
     ) Allocator.Error!bool {
         const boundary = body_draft.deferred_structural_eqs.items[boundary_index];
+        if (boundary.mode == .tag_discriminant) {
+            body_draft.deferred_structural_eqs.items[boundary_index].emission_plan_ready = true;
+            return false;
+        }
         const owner_scope = try body_draft.enterOwner(boundary.owner);
         defer owner_scope.leave();
 
@@ -10723,6 +10727,13 @@ const Builder = struct {
                 boundary.lhs,
                 boundary.rhs,
                 eq.negated,
+                ret_ty,
+            ),
+            .tag_discriminant => |tag| try ctx.lowerEqualityAgainstTag(
+                tag.value,
+                operand_ty,
+                tag.tag,
+                tag.negated,
                 ret_ty,
             ),
             .hash => try ctx.lowerHashExpr(
@@ -14710,6 +14721,11 @@ const DraftDeferredStructuralEq = struct {
 
 const DraftStructuralDerivationMode = union(enum) {
     equality: struct { negated: bool },
+    tag_discriminant: struct {
+        value: DraftExprId,
+        tag: names.TagNameId,
+        negated: bool,
+    },
     hash,
 };
 
@@ -44978,21 +44994,41 @@ const BodyContext = struct {
         }
 
         if (try self.graph.typeIsResolved(fn_nodes.args[0])) {
+            const operand_ty = try self.activeTypeFromNode(fn_nodes.args[0]);
+            if (eq.discriminant) |discriminant| {
+                if (discriminant.value_operand >= operands.len) Common.invariant("tag-discriminant equality named a missing operand");
+                return try self.lowerEqualityAgainstTag(
+                    operands[discriminant.value_operand],
+                    operand_ty,
+                    try self.tagName(self.view, discriminant.tag),
+                    eq.negated,
+                    ret_ty,
+                );
+            }
             return try self.lowerStructuralEqFromOperands(
-                try self.activeTypeFromNode(fn_nodes.args[0]),
+                operand_ty,
                 operands[0],
                 operands[1],
                 eq.negated,
                 ret_ty,
             );
         }
-        return try self.deferStructuralEqOperandsAtNode(
-            ret_ty,
-            fn_nodes.args[0],
-            operands[0],
-            operands[1],
-            eq.negated,
-        );
+        if (eq.discriminant) |discriminant| {
+            if (discriminant.value_operand >= operands.len) Common.invariant("tag-discriminant equality named a missing operand");
+            const value = operands[discriminant.value_operand];
+            return try self.deferStructuralDerivationOperandsAtNode(
+                ret_ty,
+                fn_nodes.args[0],
+                value,
+                value,
+                .{ .tag_discriminant = .{
+                    .value = value,
+                    .tag = try self.tagName(self.view, discriminant.tag),
+                    .negated = eq.negated,
+                } },
+            );
+        }
+        return try self.deferStructuralEqOperandsAtNode(ret_ty, fn_nodes.args[0], operands[0], operands[1], eq.negated);
     }
 
     /// The hash counterpart of `lowerStructuralEqualityAtNode`: the hashed
@@ -51090,13 +51126,16 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         return switch (try self.structuralEqualityOperandType(eq)) {
-            .sealed => |operand_ty| try self.lowerDirectStructuralEqWithOperandType(
-                eq.lhs,
-                eq.rhs,
-                eq.negated,
-                ret_ty,
-                operand_ty,
-            ),
+            .sealed => |operand_ty| if (eq.discriminant) |discriminant|
+                try self.lowerEqualityAgainstTag(
+                    try self.lowerExprAtType(discriminant.value, operand_ty),
+                    operand_ty,
+                    try self.tagName(self.view, discriminant.tag),
+                    eq.negated,
+                    ret_ty,
+                )
+            else
+                try self.lowerDirectStructuralEqWithOperandType(eq.lhs, eq.rhs, eq.negated, ret_ty, operand_ty),
             .deferred => |operand_node| try self.deferStructuralEqAtNode(eq, ret_ty, operand_node),
         };
     }
@@ -51129,6 +51168,29 @@ const BodyContext = struct {
         return result;
     }
 
+    fn lowerEqualityAgainstTag(
+        self: *BodyContext,
+        value: DraftExprId,
+        value_ty: Type.TypeId,
+        tag_name: names.TagNameId,
+        negated: bool,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        const tag_pat = try self.addPat(.{ .ty = value_ty, .data = .{ .tag = .{
+            .name = tag_name,
+            .payloads = .empty(),
+        } } });
+        const other_pat = try self.addPat(.{ .ty = value_ty, .data = .wildcard });
+        const branches = [_]DraftBranch{
+            .{ .pat = tag_pat, .body = try self.boolLiteral(!negated, ret_ty) },
+            .{ .pat = other_pat, .body = try self.boolLiteral(negated, ret_ty) },
+        };
+        return try self.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
+            .scrutinee = value,
+            .branches = try self.addBranchSpan(&branches),
+        } } });
+    }
+
     const StructuralEqualityOperand = union(enum) {
         sealed: Type.TypeId,
         deferred: NodeId,
@@ -51158,6 +51220,20 @@ const BodyContext = struct {
         operand_node: NodeId,
     ) Allocator.Error!DraftExprId {
         const operand_cell = DraftTypeCell.fromGraphNode(operand_node);
+        if (eq.discriminant) |discriminant| {
+            const value = try self.lowerExprAtTypeCell(discriminant.value, operand_cell);
+            return try self.deferStructuralDerivationOperandsAtNode(
+                ret_ty,
+                operand_node,
+                value,
+                value,
+                .{ .tag_discriminant = .{
+                    .value = value,
+                    .tag = try self.tagName(self.view, discriminant.tag),
+                    .negated = eq.negated,
+                } },
+            );
+        }
         const lhs = try self.lowerExprAtTypeCell(eq.lhs, operand_cell);
         const rhs = try self.lowerExprAtTypeCell(eq.rhs, operand_cell);
         return try self.deferStructuralDerivationOperandsAtNode(
@@ -51274,6 +51350,7 @@ const BodyContext = struct {
     fn structuralDerivationMethodName(mode: DraftStructuralDerivationMode) []const u8 {
         return switch (mode) {
             .equality => "is_eq",
+            .tag_discriminant => Common.invariant("tag-discriminant equality requested a structural method name"),
             .hash => "to_hash",
         };
     }
@@ -51355,6 +51432,7 @@ const BodyContext = struct {
                             .structural => |kind| {
                                 const expected: static_dispatch.StructuralKind = switch (mode) {
                                     .equality => .equality,
+                                    .tag_discriminant => Common.invariant("tag-discriminant equality requested structural evidence"),
                                     .hash => .hash,
                                 };
                                 if (kind != expected) {
@@ -51415,6 +51493,7 @@ const BodyContext = struct {
         const ret_node = try self.graph.importMono(result_ty);
         const callable_node = switch (mode) {
             .equality => try self.graphFunctionNode(&.{ node, node }, ret_node),
+            .tag_discriminant => Common.invariant("tag-discriminant equality requested a structural method call"),
             .hash => try self.graphFunctionNode(&.{ node, ret_node }, ret_node),
         };
         const callee = try self.methodTargetCalleeAtNode(lookup, callable_node, null);

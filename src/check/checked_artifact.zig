@@ -10636,6 +10636,19 @@ pub const CheckedFieldBackingAccess = enum(u8) {
     opaque_definition_private,
 };
 
+/// Checker-authored plan for equality against one payload-free tag.
+pub const CheckedTagDiscriminantEquality = struct {
+    value: CheckedExprId,
+    tag: canonical.TagLabelId,
+};
+
+fn zeroPayloadTagIdent(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
+    const data = module.expr(expr_idx).data;
+    if (data == .e_zero_argument_tag) return data.e_zero_argument_tag.name;
+    if (data == .e_tag and data.e_tag.args.span.len == 0) return data.e_tag.name;
+    return null;
+}
+
 /// Public `CheckedExprData` declaration.
 pub const CheckedExprData = union(enum) {
     pending,
@@ -10728,6 +10741,9 @@ pub const CheckedExprData = union(enum) {
         lhs: CheckedExprId,
         rhs: CheckedExprId,
         negated: bool,
+        /// Explicit checker decision that this equality only compares a tag
+        /// discriminant. Null means ordinary structural equality.
+        discriminant: ?CheckedTagDiscriminantEquality = null,
     },
     structural_hash: struct {
         value: CheckedExprId,
@@ -10890,6 +10906,7 @@ pub const StoredCheckedExprData = union(enum) {
         lhs: CheckedExprId,
         rhs: CheckedExprId,
         negated: bool,
+        discriminant: ?CheckedTagDiscriminantEquality = null,
     },
     structural_hash: struct {
         value: CheckedExprId,
@@ -11130,7 +11147,7 @@ fn reconstructCheckedExprData(pool_owner: anytype, stored: StoredCheckedExprData
             .parts = pool_owner.interpolationPartPool()[i.parts.start .. i.parts.start + i.parts.len],
             .step_fn_ty = i.step_fn_ty,
         } },
-        .structural_eq => |e| .{ .structural_eq = .{ .lhs = e.lhs, .rhs = e.rhs, .negated = e.negated } },
+        .structural_eq => |e| .{ .structural_eq = .{ .lhs = e.lhs, .rhs = e.rhs, .negated = e.negated, .discriminant = e.discriminant } },
         .structural_hash => |h| .{ .structural_hash = .{ .value = h.value, .hasher = h.hasher } },
         .method_eq => |p| .{ .method_eq = p },
         .type_dispatch_call => |p| .{ .type_dispatch_call = p },
@@ -12660,7 +12677,7 @@ pub const CheckedBodyStore = struct {
                 .parts = try self.appendInterpolationParts(allocator, i.parts),
                 .step_fn_ty = i.step_fn_ty,
             } },
-            .structural_eq => |e| .{ .structural_eq = .{ .lhs = e.lhs, .rhs = e.rhs, .negated = e.negated } },
+            .structural_eq => |e| .{ .structural_eq = .{ .lhs = e.lhs, .rhs = e.rhs, .negated = e.negated, .discriminant = e.discriminant } },
             .structural_hash => |h| .{ .structural_hash = .{ .value = h.value, .hasher = h.hasher } },
             .method_eq => |p| .{ .method_eq = p },
             .type_dispatch_call => |p| .{ .type_dispatch_call = p },
@@ -14602,6 +14619,7 @@ const CheckedBodyPayloadCopier = struct {
                 .lhs = self.checkedExpr(eq.lhs),
                 .rhs = self.checkedExpr(eq.rhs),
                 .negated = eq.negated,
+                .discriminant = try self.checkedTagDiscriminantEquality(eq.lhs, eq.rhs),
             } },
             .e_structural_hash => |h| .{ .structural_hash = .{
                 .value = self.checkedExpr(h.value),
@@ -15416,6 +15434,26 @@ const CheckedBodyPayloadCopier = struct {
             std.debug.panic("checked artifact invariant violated: expression {d} was not copied into checked body store", .{raw});
         }
         unreachable;
+    }
+
+    fn checkedTagDiscriminantEquality(
+        self: *@This(),
+        lhs: CIR.Expr.Idx,
+        rhs: CIR.Expr.Idx,
+    ) Allocator.Error!?CheckedTagDiscriminantEquality {
+        if (zeroPayloadTagIdent(self.module, rhs)) |tag| {
+            return .{
+                .value = self.checkedExpr(lhs),
+                .tag = try self.names.internTagIdent(self.module.identStoreConst(), tag),
+            };
+        }
+        if (zeroPayloadTagIdent(self.module, lhs)) |tag| {
+            return .{
+                .value = self.checkedExpr(rhs),
+                .tag = try self.names.internTagIdent(self.module.identStoreConst(), tag),
+            };
+        }
+        return null;
     }
 
     fn checkedTypeForRequiredVar(
@@ -39596,8 +39634,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x64, 0xD0, 0x16, 0xC7, 0x59, 0xDA, 0x77, 0xD7, 0xF3, 0xF1, 0xD0, 0xDE, 0x5C, 0x0E, 0xBA, 0xA8,
-        0xE5, 0x23, 0x29, 0x25, 0xBE, 0x89, 0xA9, 0x3D, 0x66, 0xBB, 0xFE, 0xF0, 0xAD, 0x9E, 0xD8, 0xE8,
+        0x8C, 0xC8, 0x25, 0x68, 0xA9, 0x64, 0x28, 0x43, 0x53, 0xE9, 0xA5, 0x77, 0x65, 0xDE, 0x97, 0x46,
+        0x78, 0x26, 0x1F, 0x87, 0x7A, 0x9F, 0x38, 0xD8, 0x51, 0xB8, 0xC4, 0xC2, 0x93, 0xB8, 0x30, 0xE5,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

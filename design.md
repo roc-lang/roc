@@ -3009,6 +3009,12 @@ Checked CIR may contain source-level forms such as static-dispatch calls,
 method equality, type-dispatch calls, and source `for` loops because those are
 part of the checked source module.
 
+Equality against a payload-free tag carries an explicit checked discriminant
+decision: the checked operation records the value operand and exact tag
+identity. Runtime lowering consumes that plan directly. It does not rediscover
+the decision from checked-expression shape, lowered expression shape, or the
+runtime representation of the union.
+
 Those forms do not survive runtime lowering. The `.lss` strategy removes them
 while producing Monotype IR. The `.boxy` strategy removes them while producing
 LIR directly from checked data.

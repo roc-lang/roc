@@ -4528,7 +4528,8 @@ pub fn canonicalizeFile(
             // Extract required type signatures for type checking using the new for-clause syntax
             // This stores the types in env.requires_types without creating local definitions
             // Also introduces type aliases (like Model) into the platform's top-level scope
-            try self.processRequiresEntries(h.requires_entries);
+            // Requires annotations can refer to modules imported in the body.
+            // Canonicalize them after those imports enter scope below.
         },
         .hosted => |h| {
             self.env.module_kind = .hosted;
@@ -4612,6 +4613,16 @@ pub fn canonicalizeFile(
     try self.declScopeEnter(file.scope);
     defer self.declScopeExit();
 
+    if (header == .platform) {
+        for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
+            const stmt = self.parse_ir.store.getStatement(stmt_id);
+            if (stmt == .import) {
+                _ = try self.canonicalizeImportStatement(stmt.import);
+            }
+        }
+        try self.processRequiresEntries(header.platform.requires_entries);
+    }
+
     // Walk every top-level statement in source order. Names defined later in the
     // file—recursive values, recursive or mutually-recursive types, associated
     // items that reference siblings, types appearing before their declaration—
@@ -4625,7 +4636,9 @@ pub fn canonicalizeFile(
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         switch (stmt) {
             .import => |import_stmt| {
-                _ = try self.canonicalizeImportStatement(import_stmt);
+                if (header != .platform) {
+                    _ = try self.canonicalizeImportStatement(import_stmt);
+                }
             },
             .decl => |decl| {
                 _ = try self.canonicalizeStmtDecl(stmt_id, decl, null);

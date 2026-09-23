@@ -3221,22 +3221,30 @@ const Lowerer = struct {
             self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared capture record type");
         }
 
+        // Captures can contain a callable whose lambda set refers back to
+        // this capture span. Reserve the record before lowering its fields so
+        // that recursive references use the same type and layout commitment.
+        const ty = try self.types.add(.zst);
+        try self.capture_types.put(captures, ty);
+        errdefer {
+            if (self.capture_types.get(captures) == ty) _ = self.capture_types.remove(captures);
+        }
+
         const capture_items = self.captureSpan(captures);
         const fields = try self.allocator.alloc(Type.CaptureField, capture_items.len);
         defer self.allocator.free(fields);
         for (capture_items, 0..) |capture, i| {
-            const ty = try self.lowerType(capture.ty);
+            const capture_ty = try self.lowerType(capture.ty);
             fields[i] = .{
                 .symbol = capture.symbol,
                 .binder = capture.binder,
                 .capture_id = capture.capture_id,
                 .checked_capture_id = capture.checked_capture_id,
-                .ty = ty,
-                .storage_ty = try self.captureFieldStorageType(capture, ty),
+                .ty = capture_ty,
+                .storage_ty = try self.captureFieldStorageType(capture, capture_ty),
             };
         }
-        const ty = try self.types.add(.{ .capture_record = try self.types.addCaptureFields(fields) });
-        try self.capture_types.put(captures, ty);
+        self.types.set(ty, .{ .capture_record = try self.types.addCaptureFields(fields) });
         return ty;
     }
 
