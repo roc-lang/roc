@@ -15,10 +15,14 @@ pub const TOKEN_TYPES = [_][]const u8{
     "number", // 9 - numeric literals
     "operator", // 10 - operators
     "comment", // 11 - comments
+    "typeParameter", // 12 - type variables
 };
 
-/// Semantic token modifiers (currently unused).
-pub const TOKEN_MODIFIERS = [_][]const u8{};
+/// Semantic token modifiers.
+/// Order matters - each index is a bit in a token's modifier set.
+pub const TOKEN_MODIFIERS = [_][]const u8{
+    "declaration", // 0 - the name a type declaration introduces
+};
 
 /// Aggregates all server capabilities supported by the Roc LSP.
 pub const ServerCapabilities = struct {

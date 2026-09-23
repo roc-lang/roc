@@ -15,7 +15,7 @@
 //! itself).
 //!
 //! The pipeline:
-//! 1. Parse platform header to extract requires entries and type aliases
+//! 1. Parse platform header to extract hosted entries and type aliases
 //! 2. Compile the platform via BuildEnv with a synthetic app, publishing checked artifacts
 //! 3. Collect hosted functions and module type info from checked artifacts
 //! 4. Build the glue input type table from artifact-owned checked type data
@@ -126,7 +126,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         return error.GlueSpecNotFound;
     };
 
-    // 1. Parse platform header to get requires entries and verify it's a platform file.
+    // 1. Parse platform header to get hosted entries and verify it's a platform file.
     // Header parsing is still allowed here because it is parser-stage syntax handling,
     // not post-check semantic recovery.
     const platform_info = parsePlatformHeader(gpa, args.platform_path, std_io) catch |err| {
@@ -219,12 +219,9 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         }
     }
 
-    // 4. Register platform entrypoint type ids and provided exports from the
-    // platform main artifact's published requires metadata and provided
-    // export table.
-    var entrypoint_type_ids = std.StringHashMap(u64).init(gpa);
-    defer entrypoint_type_ids.deinit();
-
+    // 4. Register provided exports from the platform main artifact's provided
+    // export table. Application requirements are Roc-internal bindings that
+    // never cross the host boundary, so they are not glue roots.
     var provides_entries = std.ArrayList(CollectedProvidesEntry).empty;
     defer {
         for (provides_entries.items) |entry| entry.deinit(gpa);
@@ -235,18 +232,6 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         if (!mod.is_platform_main) continue;
         const artifact = mod.semantic.checked_artifact orelse return error.ModuleRetrieval;
         type_table.clearVarMap();
-
-        for (artifact.platform_required_declarations.declarations) |declaration| {
-            const name = artifact.canonical_names.exportNameText(declaration.platform_name);
-            const checked_type = platformRequiredEntrypointCheckedType(artifact, declaration);
-            type_table.boundary_value_name = name;
-            defer type_table.boundary_value_name = null;
-            const type_id = type_table.getOrInsertRoot(artifact, checked_type) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.UnresolvedByValue => return reportUnresolvedTypeVariable(stderr, &type_table),
-            };
-            try entrypoint_type_ids.put(name, type_id);
-        }
 
         try provides_entries.ensureUnusedCapacity(gpa, artifact.provided_exports.exports.len);
         for (artifact.provided_exports.exports) |provided| {
@@ -296,7 +281,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         .schemas = &lowered.runtime_value_schemas,
         .roc_ops = runtime_env.get_ops(),
     };
-    var types_list = constructTypesRocList(&glue_writer, collected_modules.items, &platform_info, provides_entries.items, &type_table, &entrypoint_type_ids, arg_layouts[0]);
+    var types_list = constructTypesRocList(&glue_writer, collected_modules.items, provides_entries.items, &type_table, arg_layouts[0]);
 
     const proc = lowered.lir_result.store.getProcSpec(glue_proc);
     const ret_size_align = lowered.lir_result.layouts.layoutSizeAlign(lowered.lir_result.layouts.getLayout(proc.ret_layout));
@@ -1183,27 +1168,6 @@ fn selectGlueSpecRootProc(
     return null;
 }
 
-fn platformRequiredEntrypointCheckedType(
-    artifact: *const CheckedArtifact.CheckedModuleArtifact,
-    declaration: CheckedArtifact.PlatformRequiredDeclaration,
-) CheckedArtifact.CheckedTypeId {
-    if (artifact.platform_required_bindings.lookupByRequiredIndex(declaration.requires_idx)) |binding| {
-        if (binding.declaration != declaration.id) {
-            glueInvariant("platform-required binding disagreed with declaration id", .{});
-        }
-        const relation = artifact.platform_requirement_relations.lookupByRelationId(binding.checked_relation) orelse
-            glueInvariant("platform-required binding has no checked relation row", .{});
-        if (relation.declaration != declaration.id or relation.requires_idx != declaration.requires_idx) {
-            glueInvariant("platform-required relation disagreed with declaration", .{});
-        }
-        return relation.requested_source_ty_payload;
-    }
-
-    const scheme = artifact.checked_types.schemeForKey(declaration.declared_source_ty) orelse
-        glueInvariant("platform-required declaration has no checked type scheme", .{});
-    return scheme.root;
-}
-
 fn argLayoutsForProc(
     allocator: Allocator,
     store: *const lir.LirStore,
@@ -1224,12 +1188,7 @@ fn argLayoutsForProc(
 
 /// Information extracted from a platform header for glue generation.
 pub const PlatformHeaderInfo = struct {
-    requires_entries: []RequiresEntry,
     hosted_entries: []HostedEntry,
-
-    pub const RequiresEntry = struct {
-        name: []const u8,
-    };
 
     pub const HostedEntry = struct {
         key: []const u8,
@@ -1237,17 +1196,9 @@ pub const PlatformHeaderInfo = struct {
     };
 
     pub fn deinit(self: *const PlatformHeaderInfo, gpa: std.mem.Allocator) void {
-        deinitPlatformRequiresEntries(gpa, self.requires_entries);
         deinitPlatformHostedEntries(gpa, self.hosted_entries);
     }
 };
-
-fn deinitPlatformRequiresEntries(gpa: std.mem.Allocator, entries: []const PlatformHeaderInfo.RequiresEntry) void {
-    for (entries) |entry| {
-        gpa.free(entry.name);
-    }
-    gpa.free(entries);
-}
 
 fn deinitPlatformHostedEntries(gpa: std.mem.Allocator, entries: []const PlatformHeaderInfo.HostedEntry) void {
     for (entries) |entry| {
@@ -1297,7 +1248,7 @@ fn hostedEntryKeyAllocFromAst(
     return try hostedKeyAlloc(gpa, module_name, local_name);
 }
 
-/// Parse a platform header to extract requires entries and validate it's a platform file.
+/// Parse a platform header to extract hosted entries and validate it's a platform file.
 fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io) (Allocator.Error || error{ FileNotFound, ParseFailed, NotPlatformFile })!PlatformHeaderInfo {
     // Read source file
     var source = std.Io.Dir.cwd().readFileAlloc(std_io, platform_path, gpa, .unlimited) catch |err| switch (err) {
@@ -1364,16 +1315,6 @@ fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io
     if (header != .platform) return error.NotPlatformFile;
     const platform_header = header.platform;
     {
-        // Extract requires entries
-        const requires_entries_ast = parse_ast.store.requiresEntrySlice(platform_header.requires_entries);
-        var requires_entries = std.ArrayList(PlatformHeaderInfo.RequiresEntry).empty;
-        errdefer {
-            for (requires_entries.items) |entry| {
-                gpa.free(entry.name);
-            }
-            requires_entries.deinit(gpa);
-        }
-
         var hosted_entries = std.ArrayList(PlatformHeaderInfo.HostedEntry).empty;
         errdefer {
             for (hosted_entries.items) |entry| {
@@ -1401,24 +1342,10 @@ fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io
             };
         }
 
-        for (requires_entries_ast) |entry_idx| {
-            const entry = parse_ast.store.getRequiresEntry(entry_idx);
-
-            if (parse_ast.tokens.resolveIdentifier(entry.entrypoint_name)) |ident_idx| {
-                const name = env.common.getIdent(ident_idx);
-                try requires_entries.append(gpa, .{
-                    .name = try gpa.dupe(u8, name),
-                });
-            }
-        }
-
-        const requires_entries_owned = try requires_entries.toOwnedSlice(gpa);
-        errdefer deinitPlatformRequiresEntries(gpa, requires_entries_owned);
         const hosted_entries_owned = try hosted_entries.toOwnedSlice(gpa);
         errdefer deinitPlatformHostedEntries(gpa, hosted_entries_owned);
 
         return PlatformHeaderInfo{
-            .requires_entries = requires_entries_owned,
             .hosted_entries = hosted_entries_owned,
         };
     }
@@ -1585,8 +1512,8 @@ const CollectedTagInfo = struct {
 /// asks the compiler for directly.
 ///
 /// Roots are the types a host sees at the platform boundary: hosted function
-/// arguments and results, provided procedure arguments and results, provided
-/// data, and required entrypoints. A function value reached from them is an
+/// arguments and results, provided procedure arguments and results, and
+/// provided data. A function value reached from them is an
 /// erased callable whose own layout does not depend on its signature, but a
 /// host invoking it needs its argument and result layouts, so those are roots
 /// too whenever the compiler can lay them out standalone (see
@@ -1751,7 +1678,7 @@ const TypeTable = struct {
     /// variable by value. Set alongside `error.UnresolvedByValue`; owned here
     /// and freed in `deinit`.
     unresolved_error: ?[]const u8 = null,
-    /// Source-level name of the hosted, provided, or required value whose
+    /// Source-level name of the hosted or provided value whose
     /// signature is being converted, for that message. Borrowed from the
     /// caller for the duration of the conversion.
     boundary_value_name: ?[]const u8 = null,
@@ -4420,25 +4347,6 @@ fn buildModuleTypeInfoList(
     return allocated.list;
 }
 
-fn buildEntryPointList(
-    writer: *const GlueRocValueWriter,
-    platform_info: *const PlatformHeaderInfo,
-    entrypoint_type_ids: *const std.StringHashMap(u64),
-    list_layout: layout.Idx,
-) RocList {
-    const allocated = writer.allocateList(list_layout, platform_info.requires_entries.len, true);
-    if (allocated.bytes == null) return allocated.list;
-    for (platform_info.requires_entries, 0..) |entry, index| {
-        const elem_base = allocated.bytes.? + index * allocated.elem_size;
-        writer.zeroValue(elem_base, allocated.elem_layout);
-        writer.writeField(elem_base, allocated.elem_layout, "EntryPoint", "name", RocStr, createBigRocStr(entry.name, writer.roc_ops));
-        const type_id = entrypoint_type_ids.get(entry.name) orelse
-            glueInvariant("entrypoint '{s}' missing reflected type id", .{entry.name});
-        writer.writeField(elem_base, allocated.elem_layout, "EntryPoint", "type_id", u64, type_id);
-    }
-    return allocated.list;
-}
-
 fn buildProvidesEntryList(
     writer: *const GlueRocValueWriter,
     provides_entries: []const CollectedProvidesEntry,
@@ -4512,10 +4420,8 @@ fn writeFunctionSignature(
 fn constructTypesRocList(
     writer: *const GlueRocValueWriter,
     collected_modules: []const CollectedModuleTypeInfo,
-    platform_info: *const PlatformHeaderInfo,
     provides_entries: []const CollectedProvidesEntry,
     type_table: *const TypeTable,
-    entrypoint_type_ids: *const std.StringHashMap(u64),
     list_layout: layout.Idx,
 ) RocList {
     const allocated = writer.allocateList(list_layout, 1, true);
@@ -4523,12 +4429,10 @@ fn constructTypesRocList(
     const types_base = bytes;
     writer.zeroValue(types_base, allocated.elem_layout);
 
-    const entrypoints_slot = writer.recordField(types_base, allocated.elem_layout, "Types", "entrypoints");
     const modules_slot = writer.recordField(types_base, allocated.elem_layout, "Types", "modules");
     const provides_slot = writer.recordField(types_base, allocated.elem_layout, "Types", "provides_entries");
     const types_slot = writer.recordField(types_base, allocated.elem_layout, "Types", "types");
 
-    writer.writeField(types_base, allocated.elem_layout, "Types", "entrypoints", RocList, buildEntryPointList(writer, platform_info, entrypoint_type_ids, entrypoints_slot.layout_idx));
     writer.writeField(types_base, allocated.elem_layout, "Types", "modules", RocList, buildModuleTypeInfoList(writer, collected_modules, modules_slot.layout_idx));
     writer.writeField(types_base, allocated.elem_layout, "Types", "provides_entries", RocList, buildProvidesEntryList(writer, provides_entries, provides_slot.layout_idx));
     writer.writeField(types_base, allocated.elem_layout, "Types", "types", RocList, buildTypeInfoRocList(writer, type_table, types_slot.layout_idx));
@@ -5058,7 +4962,6 @@ const GlueProtocolLock = struct {
         bool_,
         unit,
         types,
-        entry_point,
         provides_entry,
         provided_export,
         function_signature,
@@ -5083,7 +4986,6 @@ const GlueProtocolLock = struct {
         tag_variant,
         list_u64,
         list_types,
-        list_entry_point,
         list_provides_entry,
         list_module_info,
         list_function_info,
@@ -5106,7 +5008,6 @@ const GlueProtocolLock = struct {
             .unit => try expectGlueSchemaEqual(.zst, idx),
             .list_u64 => try self.list(idx, .u64_),
             .list_types => try self.list(idx, .types),
-            .list_entry_point => try self.list(idx, .entry_point),
             .list_provides_entry => try self.list(idx, .provides_entry),
             .list_module_info => try self.list(idx, .module_info),
             .list_function_info => try self.list(idx, .function_info),
@@ -5119,10 +5020,8 @@ const GlueProtocolLock = struct {
             .list_record_field => try self.list(idx, .record_field),
             .list_tag_variant => try self.list(idx, .tag_variant),
             .types => try self.record(idx, "Types", &.{
-                .{ .name = "entrypoints", .type = .list_entry_point },         .{ .name = "modules", .type = .list_module_info },
-                .{ .name = "provides_entries", .type = .list_provides_entry }, .{ .name = "types", .type = .list_type_info },
+                .{ .name = "modules", .type = .list_module_info }, .{ .name = "provides_entries", .type = .list_provides_entry }, .{ .name = "types", .type = .list_type_info },
             }),
-            .entry_point => try self.record(idx, "EntryPoint", &.{ .{ .name = "name", .type = .str_ }, .{ .name = "type_id", .type = .u64_ } }),
             .provides_entry => try self.record(idx, "ProvidesEntry", &.{ .{ .name = "exported", .type = .provided_export }, .{ .name = "ffi_symbol", .type = .str_ }, .{ .name = "name", .type = .str_ } }),
             .provided_export => try self.tagUnion(idx, "ProvidedExport", &.{ .{ .name = "ProvidedData", .type = .u64_ }, .{ .name = "ProvidedProcedure", .type = .function_signature } }),
             .function_signature => try self.record(idx, "FunctionSignature", &.{ .{ .name = "args", .type = .list_u64 }, .{ .name = "ret", .type = .u64_ } }),
@@ -5235,9 +5134,7 @@ test "glue platform schema lock rejects field rename addition and type mutation"
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     const mutations = [_]struct { path: []const u8, source: []const u8 }{
-        .{ .path = "EntryPoint.roc", .source = "EntryPoint := { renamed : Str, type_id : U64 }" },
-        .{ .path = "EntryPoint.roc", .source = "EntryPoint := { name : Str, type_id : U64, added : U64 }" },
-        .{ .path = "EntryPoint.roc", .source = "EntryPoint := { name : Str, type_id : U32 }" },
+        .{ .path = "Types.roc", .source = "import ModuleTypeInfo exposing [ModuleTypeInfo]\nimport TypeInfo exposing [TypeInfo]\nimport ProvidesEntry exposing [ProvidesEntry]\nTypes := { modules : List(ModuleTypeInfo), provides_entries : List(ProvidesEntry), types : List(TypeInfo), added : U64 }" },
         .{ .path = "ProvidesEntry.roc", .source = "import ProvidedExport exposing [ProvidedExport]\nProvidesEntry := { exported : ProvidedExport, ffi_symbol : Str, name : Str, type_id : U64 }" },
         .{ .path = "ProvidedExport.roc", .source = "import FunctionSignature exposing [FunctionSignature]\nProvidedExport := [ProvidedData(U32), ProvidedProcedure(FunctionSignature)]" },
         .{ .path = "FunctionSignature.roc", .source = "FunctionSignature := { args : List(U64), result : U64 }" },

@@ -298,7 +298,35 @@ import json.Parser
 
 ### Importing constants
 
-TODO
+Since `import` only imports types, constants (and functions) are imported by way of the type they're
+associated with. For example, given this type module:
+
+```roc
+# Color.roc
+Color := [Red, Green, Blue].{
+    all : List(Color)
+    all = [Red, Green, Blue]
+
+    to_str : Color -> Str
+    to_str = |color| match color {
+        Red => "red"
+        Green => "green"
+        Blue => "blue"
+    }
+}
+```
+
+...another module can `import Color` and then refer to `Color.all` and `Color.to_str`. To use them without
+the `Color.` prefix, use [`exposing`](#exposing):
+
+```roc
+import Color exposing [all, to_str]
+
+names = all.map(to_str)
+```
+
+If you have some constants that don't naturally belong to any particular type, you can associate them
+with a [void module](#void-modules)'s type instead.
 
 ### Importing mutually recursive types
 
@@ -435,7 +463,9 @@ Local declarations must resolve to the same platform root file.
 
 ### Package Shorthands
 
-TODO
+The record at the end of a package module's header gives a [shorthand](packages#shorthands) to each of the
+package's dependencies. Any module in the package can then use that shorthand to import types from the
+dependency, as in `import json.Parser`. See [Packages](packages) for how dependencies are located and versioned.
 
 ## Platform Modules
 
@@ -528,7 +558,37 @@ The default behaviour for `roc build` without a `--target` flag is the first com
 
 ### Hosted type modules
 
-TODO
+A platform's type modules can declare _hosted_ functions, which are implemented by the platform's
+[host](platforms#host) rather than in Roc. A hosted function is declared as an associated item with a type
+annotation but no implementation:
+
+```roc
+# Stdout.roc
+Stdout := [].{
+    line! : Str => {}
+}
+```
+
+The platform module's header then lists each hosted function in its `hosted` section, along with the
+name of the symbol the host uses to implement it:
+
+```roc
+platform ""
+    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+    exposes [Stdout]
+    packages {}
+    provides { "roc_main": main_for_host! }
+    hosted { "roc_stdout_line": Stdout.line! }
+```
+
+Here, the host must provide a function named `roc_stdout_line`, and whenever Roc code calls `Stdout.line!`,
+that host function will be called.
+
+Hosted functions have a few restrictions:
+
+- They must be [effectful functions](functions#effectful-functions) (with `=>` in their types), because the compiler can't run host code during [compile-time evaluation](compile-time).
+- Every hosted function declaration must be listed in the platform's `hosted` section; otherwise, there would be no host function for calls to it to reach.
+- Type variables in a hosted function's type can only appear inside a `Box`. A `Box` is always a pointer at runtime no matter what it contains, so this lets a single host function work for every type the variable could be.
 
 ## Application Modules
 

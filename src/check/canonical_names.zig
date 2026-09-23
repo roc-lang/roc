@@ -342,10 +342,7 @@ pub const CanonicalNameStore = struct {
         inline for (.{ "module_names", "module_identities", "type_names", "method_names", "record_field_labels", "tag_labels", "export_names", "external_symbol_names" }) |field| {
             const source = &@field(self, field);
             const destination = &@field(result, field);
-            for (0..source.count()) |index| {
-                const id = try destination.insert(allocator, source.getText(@intCast(index)));
-                std.debug.assert(id == index);
-            }
+            destination.* = try source.clone(allocator);
         }
         for (self.proc_bases.items.items, 0..) |key, index| {
             const id = try result.internProcBase(key);

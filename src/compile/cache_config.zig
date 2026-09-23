@@ -214,7 +214,19 @@ pub const Constants = struct {
     ///     update's base row is an ordinary record whose tail is a flex var.
     /// 98: Checked procedure template tables publish the templates whose
     ///     evaluation can reach code checking replaced with a runtime error.
-    pub const CACHE_VERSION = 98;
+    /// 99: Calls of non-function values report a dedicated diagnostic, and
+    ///     a call to an in-flight recursive def whose annotation is an alias
+    ///     of a function type classifies its effect through the alias.
+    /// 100: A static-dispatch obligation whose where-method signature is
+    ///      erroneous is recorded as rejected on every receiver.
+    /// 101: Canonicalization caches source-local output and defers imported
+    ///      names, including literal suffixes, until imports finish checking.
+    /// 102: Generated-codec method roles identify subject types modulo
+    ///      transparent aliases, so subjects spelled through different aliases
+    ///      of one type share a role.
+    /// 103: A use of an annotated binding's predeclared scheme is recorded
+    ///      against the binding's own scheme, never the predeclared copy.
+    pub const CACHE_VERSION = 103;
 };
 
 /// Configuration for the Roc cache system.
@@ -308,6 +320,26 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "mod" });
     }
 
+    /// Exact platform/app composition results, separate from reusable modules.
+    pub fn getPlatformPairingCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
+        const version_dir = try self.getVersionCacheDir(allocator);
+        defer allocator.free(version_dir);
+        return std.fs.path.join(allocator, &.{ version_dir, "pair" });
+    }
+
+    /// Get the canonicalized-module cache directory.
+    ///
+    /// Separate from the checked-artifact directory because the two caches key
+    /// their entries on different inputs: a canonicalized entry names one
+    /// module's source alone, while a checked entry names a module together
+    /// with its imports' checked keys.
+    pub fn getCanonicalizedModuleCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
+        const version_dir = try self.getVersionCacheDir(allocator);
+        defer allocator.free(version_dir);
+
+        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "can" });
+    }
+
     /// Get the module source cache directory for tooling-owned materialized sources.
     pub fn getModuleCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
@@ -361,6 +393,8 @@ pub const CacheConfig = struct {
 /// This struct tracks cache performance metrics that can be
 /// displayed with the --verbose flag.
 pub const CacheStats = struct {
+    /// Checked-module cache counters. These keep their original meaning: they
+    /// count only checked-artifact entries.
     hits: u64 = 0,
     misses: u64 = 0,
     invalidations: u64 = 0,
@@ -369,45 +403,120 @@ pub const CacheStats = struct {
     bytes_read: u64 = 0,
     bytes_written: u64 = 0,
 
+    /// Canonicalized-module cache counters, parallel to the checked ones above.
+    canonicalized_hits: u64 = 0,
+    canonicalized_misses: u64 = 0,
+    canonicalized_invalidations: u64 = 0,
+    canonicalized_stores: u64 = 0,
+    canonicalized_store_failures: u64 = 0,
+    canonicalized_bytes_read: u64 = 0,
+    canonicalized_bytes_written: u64 = 0,
+
     const Self = @This();
+
+    /// Which cache an operation belongs to. Every recording call names one, so
+    /// no counter is ever shared between the two caches.
+    pub const Kind = enum { checked, canonicalized };
 
     /// Record a cache hit.
     pub fn recordHit(self: *Self, bytes_read: u64) void {
-        self.hits += 1;
-        self.bytes_read += bytes_read;
+        self.recordHitFor(.checked, bytes_read);
     }
 
     /// Record a cache miss.
     pub fn recordMiss(self: *Self) void {
-        self.misses += 1;
+        self.recordMissFor(.checked);
     }
 
     /// Record a cache invalidation.
     pub fn recordInvalidation(self: *Self) void {
-        self.invalidations += 1;
+        self.recordInvalidationFor(.checked);
     }
 
     /// Record a successful cache store.
     pub fn recordStore(self: *Self, bytes_written: u64) void {
-        self.stores += 1;
-        self.bytes_written += bytes_written;
+        self.recordStoreFor(.checked, bytes_written);
     }
 
     /// Record a failed cache store.
     pub fn recordStoreFailure(self: *Self) void {
-        self.store_failures += 1;
+        self.recordStoreFailureFor(.checked);
     }
 
-    /// Get total cache operations.
+    /// Record a cache hit for one cache.
+    pub fn recordHitFor(self: *Self, kind: Kind, bytes_read: u64) void {
+        switch (kind) {
+            .checked => {
+                self.hits += 1;
+                self.bytes_read += bytes_read;
+            },
+            .canonicalized => {
+                self.canonicalized_hits += 1;
+                self.canonicalized_bytes_read += bytes_read;
+            },
+        }
+    }
+
+    /// Record a cache miss for one cache.
+    pub fn recordMissFor(self: *Self, kind: Kind) void {
+        switch (kind) {
+            .checked => self.misses += 1,
+            .canonicalized => self.canonicalized_misses += 1,
+        }
+    }
+
+    /// Record a cache invalidation for one cache.
+    pub fn recordInvalidationFor(self: *Self, kind: Kind) void {
+        switch (kind) {
+            .checked => self.invalidations += 1,
+            .canonicalized => self.canonicalized_invalidations += 1,
+        }
+    }
+
+    /// Record a successful cache store for one cache.
+    pub fn recordStoreFor(self: *Self, kind: Kind, bytes_written: u64) void {
+        switch (kind) {
+            .checked => {
+                self.stores += 1;
+                self.bytes_written += bytes_written;
+            },
+            .canonicalized => {
+                self.canonicalized_stores += 1;
+                self.canonicalized_bytes_written += bytes_written;
+            },
+        }
+    }
+
+    /// Record a failed cache store for one cache.
+    pub fn recordStoreFailureFor(self: *Self, kind: Kind) void {
+        switch (kind) {
+            .checked => self.store_failures += 1,
+            .canonicalized => self.canonicalized_store_failures += 1,
+        }
+    }
+
+    /// Get total checked-cache operations.
     pub fn getTotalOps(self: Self) u64 {
         return self.hits + self.misses;
     }
 
-    /// Get cache hit rate as a percentage.
+    /// Get total canonicalized-cache operations.
+    pub fn getCanonicalizedTotalOps(self: Self) u64 {
+        return self.canonicalized_hits + self.canonicalized_misses;
+    }
+
+    /// Get checked-cache hit rate as a percentage.
     pub fn getHitRate(self: Self) f64 {
         const total = self.getTotalOps();
         if (total == 0) return 0.0;
         return (@as(f64, @floatFromInt(self.hits)) / @as(f64, @floatFromInt(total))) * 100.0;
+    }
+
+    /// Get canonicalized-cache hit rate as a percentage.
+    pub fn getCanonicalizedHitRate(self: Self) f64 {
+        const total = self.getCanonicalizedTotalOps();
+        if (total == 0) return 0.0;
+        return (@as(f64, @floatFromInt(self.canonicalized_hits)) / @as(f64, @floatFromInt(total))) * 100.0;
     }
 };
 

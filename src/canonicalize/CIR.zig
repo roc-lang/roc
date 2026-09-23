@@ -655,9 +655,12 @@ pub const ExposedItem = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = extern struct { span: base.DataSpan };
 
+    pub const Kind = enum(u1) { value, type };
+
     name: base.Ident.Idx,
     alias: ?base.Ident.Idx,
     is_wildcard: bool,
+    kind: Kind,
 
     pub fn pushToSExprTree(self: *const ExposedItem, _: anytype, cir: anytype, tree: anytype) Allocator.Error!void {
         const begin = tree.beginNode();

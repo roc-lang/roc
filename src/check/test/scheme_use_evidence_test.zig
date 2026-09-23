@@ -297,12 +297,12 @@ test "source-forward annotated recursive use records the complete body scheme" {
     try std.testing.expect(found_complete_forward_use);
 }
 
-test "annotated recursive self use whose body closes the annotation row publishes no evidence" {
+test "annotated recursive self use whose body closes the annotation row records the body scheme" {
     // Issue #11526: `walk`'s predeclared annotation opens its result row (a
     // quantified identity variable), but the body returns the closed input
     // parameter, so the completed scheme has no quantified variables. The
-    // early predeclared use must not publish a record: the completed scheme
-    // has neither a substitution nor evidence parameters.
+    // in-flight self-use must name the body's scheme, not the standalone
+    // annotation, so artifact construction gives it an empty substitution.
     const source =
         \\walk : [Open, Close] -> [Open, Close]
         \\walk = |token|
@@ -330,15 +330,23 @@ test "annotated recursive self use whose body closes the annotation row publishe
     }
     try std.testing.expect(walk_expr_var != null);
 
-    // The use of `walk` inside its own body needs no durable value-use record,
-    // because the completed scheme quantifies nothing.
+    const self_use_offset = std.mem.find(u8, source, "walk(Close)") orelse unreachable;
     var walk_self_use_records: usize = 0;
     for (env.scheme_uses.items.items) |record| {
         if (record.slot_kind != @intFromEnum(Slot.value_use)) continue;
-        if (record.scheme_root != walk_expr_var.?) continue;
+        const region = env.store.getNodeRegion(@enumFromInt(record.node_idx));
+        if (region.start.offset != self_use_offset) continue;
+        try std.testing.expectEqual(walk_expr_var.?, record.scheme_root);
+        const scheme_info = try @import("../canonical_type_keys.zig").fromVarInfo(
+            std.testing.allocator,
+            &env.types,
+            env,
+            @enumFromInt(record.scheme_root),
+        );
+        try std.testing.expect(!scheme_info.contains_identity_variables);
         walk_self_use_records += 1;
     }
-    try std.testing.expectEqual(@as(usize, 0), walk_self_use_records);
+    try std.testing.expectEqual(@as(usize, 1), walk_self_use_records);
 }
 
 test "recursive reference provenance marks the annotated self use but not an external call" {

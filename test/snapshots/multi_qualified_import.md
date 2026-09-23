@@ -21,12 +21,12 @@ data = json.Core.Utf8.encode("hello")
 # EXPECTED
 EXPECTED RECORD ACCESSOR - multi_qualified_import.md:12:12:12:17
 EXPECTED RECORD ACCESSOR - multi_qualified_import.md:12:17:12:22
-MOD NOT FOUND - multi_qualified_import.md:3:16:3:23
 DOES NOT EXIST - multi_qualified_import.md:4:16:4:45
 MOD NOT IMPORTED - multi_qualified_import.md:7:11:7:33
 UNUSED VARIABLE - multi_qualified_import.md:8:12:8:19
 MOD NOT IMPORTED - multi_qualified_import.md:11:8:11:34
 UNRECOGNIZED SYNTAX - multi_qualified_import.md:12:8:12:38
+MOD NOT FOUND - multi_qualified_import.md:3:16:3:23
 # PROBLEMS
 ~~~clojure
 (reports
@@ -108,18 +108,6 @@ UNRECOGNIZED SYNTAX - multi_qualified_import.md:12:8:12:38
 			(source-region (file "multi_qualified_import.md") (start 12 17) (end 12 22) (annotation error) (line-text "data = json.Core.Utf8.encode(\"hello\")"))))
 	(report
 		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 3 16) (end 3 23))
-		(headline
-			(text "This ")
-			(annotated code "Encoder")
-			(reflow " type is declared to be in ")
-			(annotated code "json.Core")
-			(reflow ", which does not exist."))
-		(document
-			(source-region (file "multi_qualified_import.md") (start 3 16) (end 3 23) (annotation error) (line-text "json_encoder : Encoder"))))
-	(report
-		(severity runtime_error)
 		(title "Does Not Exist")
 		(region (start 4 16) (end 4 45))
 		(headline
@@ -176,7 +164,19 @@ UNRECOGNIZED SYNTAX - multi_qualified_import.md:12:8:12:38
 		(document
 			(source-region (file "multi_qualified_import.md") (start 12 8) (end 12 38) (annotation error) (line-text "data = json.Core.Utf8.encode(\"hello\")"))
 			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo."))))
+			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 3 16) (end 3 23))
+		(headline
+			(text "This ")
+			(annotated code "Encoder")
+			(reflow " type is declared to be in ")
+			(annotated code "json.Core")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "multi_qualified_import.md") (start 3 16) (end 3 23) (annotation error) (line-text "json_encoder : Encoder")))))
 ~~~
 # TOKENS
 ~~~zig

@@ -82,11 +82,9 @@ pub const ResourceError = Allocator.Error;
 
 /// Rewrite qualifying loops in every proc.
 pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!void {
-    var prepared = try prepareCallees(store, store.allocator);
-    defer prepared.deinit();
     var analysis = body_clone.AnalysisScratch.init(store.allocator);
     defer analysis.deinit();
-    var pass = Pass.init(store, layouts, store.allocator, &prepared, &analysis);
+    var pass = Pass.init(store, layouts, store.allocator, &analysis);
     defer pass.deinit();
     const proc_count = store.procSpecCount();
     var proc_index: usize = 0;
@@ -120,15 +118,15 @@ pub fn prepareCallees(store: *LirStore, allocator: Allocator) ResourceError!Prep
 }
 
 /// Rewrite one procedure using immutable, phase-wide helper summaries.
-pub fn runProc(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator, prepared_callees: *const PreparedCallees) ResourceError!void {
+pub fn runProc(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator) ResourceError!void {
     var analysis = body_clone.AnalysisScratch.init(scratch_allocator);
     defer analysis.deinit();
-    try runProcWithScratch(store, layouts, proc_id, scratch_allocator, prepared_callees, &analysis);
+    try runProcWithScratch(store, layouts, proc_id, scratch_allocator, &analysis);
 }
 
 /// Rewrite with independent pooled counts for the procedure and its loop body.
-pub fn runProcWithScratch(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator, prepared_callees: *const PreparedCallees, analysis: *body_clone.AnalysisScratch) ResourceError!void {
-    var pass = Pass.init(store, layouts, scratch_allocator, prepared_callees, analysis);
+pub fn runProcWithScratch(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator, analysis: *body_clone.AnalysisScratch) ResourceError!void {
+    var pass = Pass.init(store, layouts, scratch_allocator, analysis);
     defer pass.deinit();
     try pass.transformProc(proc_id);
 }
@@ -252,7 +250,10 @@ const Pass = struct {
     store: *LirStore,
     layouts: *const layout_mod.Store,
     allocator: Allocator,
-    prepared_callees: *const PreparedCallees,
+    /// Helper summaries classified on demand for the callees the current
+    /// procedure's loops reach. The classifier reads the frozen phase input,
+    /// so a task-local memo is exact for every callee it meets.
+    classifier: CalleeClassifier,
     /// Definitions of every owned-flag local threaded in the current proc.
     owned_defs: collections.DenseMap(LocalId, std.ArrayList(OwnedSource)),
     /// Set-site dispatch switches of the current proc.
@@ -262,13 +263,17 @@ const Pass = struct {
 
     analysis: *body_clone.AnalysisScratch,
 
-    fn init(store: *LirStore, layouts: *const layout_mod.Store, allocator: Allocator, prepared_callees: *const PreparedCallees, analysis: *body_clone.AnalysisScratch) Pass {
+    fn init(store: *LirStore, layouts: *const layout_mod.Store, allocator: Allocator, analysis: *body_clone.AnalysisScratch) Pass {
         return .{
             .store = store,
             .analysis = analysis,
             .layouts = layouts,
             .allocator = allocator,
-            .prepared_callees = prepared_callees,
+            .classifier = .{
+                .store = store,
+                .allocator = allocator,
+                .append_kind = collections.DenseMap(LIR.LirProcSpecId, ?ProcKind).init(allocator),
+            },
             .owned_defs = collections.DenseMap(LocalId, std.ArrayList(OwnedSource)).init(allocator),
             .set_dispatches = collections.DenseMap(CFStmtId, void).init(allocator),
             .loop_versions = collections.DenseMap(CFStmtId, LoopVersion).init(allocator),
@@ -277,6 +282,7 @@ const Pass = struct {
 
     fn deinit(self: *Pass) void {
         self.resetProcState();
+        self.classifier.append_kind.deinit();
         self.owned_defs.deinit();
         self.set_dispatches.deinit();
         self.loop_versions.deinit();
@@ -694,7 +700,7 @@ const Pass = struct {
                     const arg_count = GuardedList.borrowLen(args);
                     var matched = false;
                     if (arg_count == 2 and self.isListLocal(GuardedList.at(args, 0)) and self.isListLocal(assign.target) and !self.isListLocal(GuardedList.at(args, 1))) {
-                        if (self.prepared_callees.kinds.get(assign.proc).? == ProcKind.checked_append) {
+                        if ((try self.classifier.classifyProc(assign.proc)) == ProcKind.checked_append) {
                             matched = true;
                             try scan.edges.append(allocator, .{
                                 .kind = .append_call,
@@ -2351,11 +2357,9 @@ test "promote carrier index visits reverse ordered edges once and excludes unrel
 /// Compare the once-only scan against the original subtree definition, not
 /// another lexical-scope algorithm, and account for every visited statement.
 fn expectLoopScan(f: *PromoteTest, body: CFStmtId, statements: usize, jumps: usize, loops: usize) (Allocator.Error || error{TestExpectedEqual})!void {
-    var prepared = try prepareCallees(&f.store, testing.allocator);
-    defer prepared.deinit();
     var analysis = body_clone.AnalysisScratch.init(testing.allocator);
     defer analysis.deinit();
-    var pass = Pass.init(&f.store, &f.layouts, testing.allocator, &prepared, &analysis);
+    var pass = Pass.init(&f.store, &f.layouts, testing.allocator, &analysis);
     defer pass.deinit();
     var scan = Pass.Scan{
         .total_uses = collections.DenseMap(LocalId, u32).init(testing.allocator),
@@ -2799,11 +2803,9 @@ test "promote threads slack through an append-only loop" {
     });
 
     {
-        var prepared = try prepareCallees(store, testing.allocator);
-        defer prepared.deinit();
         var scratch = std.heap.ArenaAllocator.init(testing.allocator);
         defer scratch.deinit();
-        try runProc(store, &f.layouts, proc_id, scratch.allocator(), &prepared);
+        try runProc(store, &f.layouts, proc_id, scratch.allocator());
     }
 
     // The loop gained a slack parameter.

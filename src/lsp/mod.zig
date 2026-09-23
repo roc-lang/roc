@@ -11,6 +11,7 @@ pub const document_store = @import("document_store.zig");
 pub const line_info = @import("line_info.zig");
 pub const position = @import("position.zig");
 pub const semantic_tokens = @import("semantic_tokens.zig");
+pub const capabilities = @import("capabilities.zig");
 pub const scope_map = @import("scope_map.zig");
 pub const dependency_graph = @import("dependency_graph.zig");
 pub const uri = @import("uri.zig");

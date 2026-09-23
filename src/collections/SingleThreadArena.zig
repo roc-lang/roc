@@ -57,11 +57,19 @@ fn usableBuf(node: *BufNode) []u8 {
     return @as([*]u8, @ptrCast(node))[@sizeOf(BufNode)..node.capacity];
 }
 
+/// Debug facility for allocation checkers: when set, every arena forwards
+/// each allocation, resize, and free straight to its child allocator instead
+/// of bumping through chunks, so a leak- or double-free-detecting child
+/// allocator observes every individual allocation. Nothing in a build sets
+/// this; test runners do so in their forked children on request.
+pub var pass_through: bool = false;
+
 pub fn init(child_allocator: Allocator) SingleThreadArena {
     return (State{}).promote(child_allocator);
 }
 
 pub fn deinit(arena: SingleThreadArena) void {
+    if (pass_through) return;
     var it = arena.state.first;
     while (it) |node| {
         // Read `next` before freeing, since the free invalidates the node.
@@ -112,6 +120,7 @@ pub const ResetMode = union(enum) {
 /// case, just without the requested preheating. `free_all` always returns
 /// `true`.
 pub fn reset(arena: *SingleThreadArena, mode: ResetMode) bool {
+    if (pass_through) return true;
     const requested_capacity = switch (mode) {
         .retain_capacity => arena.queryCapacity(),
         .retain_with_limit => |limit| @min(limit, arena.queryCapacity()),
@@ -167,8 +176,9 @@ fn createNode(arena: *SingleThreadArena, prev_capacity: usize, minimum_size: usi
     return node;
 }
 
-fn alloc(ctx: *anyopaque, n: usize, alignment: Alignment, _: usize) ?[*]u8 {
+fn alloc(ctx: *anyopaque, n: usize, alignment: Alignment, ret_addr: usize) ?[*]u8 {
     const arena: *SingleThreadArena = @ptrCast(@alignCast(ctx));
+    if (pass_through) return arena.child_allocator.rawAlloc(n, alignment, ret_addr);
     assert(n > 0);
 
     const ptr_align = alignment.toByteUnits();
@@ -197,8 +207,9 @@ fn alloc(ctx: *anyopaque, n: usize, alignment: Alignment, _: usize) ?[*]u8 {
     }
 }
 
-fn resize(ctx: *anyopaque, buf: []u8, _: Alignment, new_len: usize, _: usize) bool {
+fn resize(ctx: *anyopaque, buf: []u8, alignment: Alignment, new_len: usize, ret_addr: usize) bool {
     const arena: *SingleThreadArena = @ptrCast(@alignCast(ctx));
+    if (pass_through) return arena.child_allocator.rawResize(buf, alignment, new_len, ret_addr);
 
     const cur_node = arena.state.first orelse return false;
     const cur_buf = usableBuf(cur_node);
@@ -222,8 +233,9 @@ fn remap(ctx: *anyopaque, buf: []u8, alignment: Alignment, new_len: usize, ret_a
     return if (resize(ctx, buf, alignment, new_len, ret_addr)) buf.ptr else null;
 }
 
-fn free(ctx: *anyopaque, buf: []u8, _: Alignment, _: usize) void {
+fn free(ctx: *anyopaque, buf: []u8, alignment: Alignment, ret_addr: usize) void {
     const arena: *SingleThreadArena = @ptrCast(@alignCast(ctx));
+    if (pass_through) return arena.child_allocator.rawFree(buf, alignment, ret_addr);
 
     const cur_node = arena.state.first orelse return;
     const cur_buf = usableBuf(cur_node);
