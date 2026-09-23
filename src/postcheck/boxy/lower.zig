@@ -1684,14 +1684,29 @@ const ProcedureBuilder = struct {
     fn staticInspectArgDescsForRep(
         self: *ProcedureBuilder,
         rep_id: Plan.TypeRepId,
+        self_desc: LIR.BoxyTypeDescId,
+        building_worker_rep: ?Plan.TypeRepId,
         sources: ?*const StaticDescriptorSourceMap,
         context: ?*StaticDescInstantiationContext,
     ) Allocator.Error!LIR.BoxySpan {
         const inspect = self.plan.inspectMethodForRep(rep_id) orelse return .{};
+        // A descriptor already built as the worker parameter's instantiation
+        // describes the value in that parameter's storage.
+        const is_worker_instantiation = if (building_worker_rep) |building|
+            self.descriptorIdentityRep(building) == self.descriptorIdentityRep(self.inspectWorkerArgRep(inspect))
+        else
+            false;
+        if (is_worker_instantiation or self.inspectArgumentIsIdentity(inspect)) {
+            return try self.appendStaticHiddenDescRefs(&.{.{ .static = self_desc }});
+        }
         const worker_arg = self.inspectWorkerArgRep(inspect);
         var arg_sources = StaticDescriptorSourceMap{};
         defer arg_sources.deinit(self.allocator);
+        // The worker parameter's own structure is instantiated at the
+        // descriptors of its type parameters.
         for (self.plan.directCallHiddenDescriptorArgSlice(inspect.hidden_desc_args)) |arg| {
+            const worker_param = self.plan.representations.items[@intFromEnum(self.descriptorIdentityRep(arg.worker_rep))];
+            if (worker_param.kind != .dynamic or worker_param.children.len != 0 or worker_param.tag_variants.len != 0) continue;
             const source_rep = if (sources) |source_map|
                 source_map.get(self.plan.representations.items[@intFromEnum(arg.rep)].descriptor orelse arg.worker_desc) orelse arg.rep
             else
@@ -1702,6 +1717,17 @@ const ProcedureBuilder = struct {
         defer local_context.deinit(self.allocator);
         const ref = try self.staticDescRefForWorkerRepWithSourceMap(worker_arg, null, &arg_sources, context orelse &local_context);
         return try self.appendStaticHiddenDescRefs(&.{ref});
+    }
+
+    /// Whether the inspect call instantiates its worker at the worker's own
+    /// type parameters; the inspected descriptor then already describes the
+    /// value in the worker parameter's storage.
+    fn inspectArgumentIsIdentity(self: *const ProcedureBuilder, inspect: Plan.InspectMethodPlan) bool {
+        if (self.descriptorIdentityRep(inspect.source_rep) != self.descriptorIdentityRep(self.inspectWorkerArgRep(inspect))) return false;
+        for (self.plan.directCallHiddenDescriptorArgSlice(inspect.hidden_desc_args)) |arg| {
+            if (self.descriptorIdentityRep(arg.rep) != self.descriptorIdentityRep(arg.worker_rep)) return false;
+        }
+        return true;
     }
 
     fn inspectWorkerArgRep(self: *const ProcedureBuilder, inspect: Plan.InspectMethodPlan) Plan.TypeRepId {
@@ -2949,15 +2975,25 @@ const ProcedureBuilder = struct {
 
         const outer_env = context.env;
         defer context.env = outer_env;
-        var substitutions = self.plan.nominalBackingSubstitutions(worker_rep.nominal_backing_arg_substitutions);
-        if (worker_rep.nominal_backing_arg_substitutions.len != 0) {
+        // The descriptor describes the complete backing-shape chain, so every
+        // nominal on it binds its formals, outermost first.
+        var shape_worker: ?Plan.TypeRepId = identity_worker;
+        var shape_source = identity_source;
+        while (shape_worker) |current_worker| : ({
+            shape_worker = self.descriptorBackingShapeRep(current_worker);
+            shape_source = if (shape_source) |current_source| self.descriptorBackingShapeRep(current_source) else null;
+        }) {
+            const current_rep = self.plan.representations.items[@intFromEnum(current_worker)];
+            if (current_rep.nominal_backing_arg_substitutions.len == 0) continue;
+            const level_env = context.env;
+            var substitutions = self.plan.nominalBackingSubstitutions(current_rep.nominal_backing_arg_substitutions);
             var bindings = std.ArrayList(StaticDescInstantiationContext.Binding).empty;
             defer bindings.deinit(self.allocator);
             while (substitutions.next()) |substitution| {
                 const formal_rep = substitution.formal_rep orelse continue;
                 const formal = self.plan.representations.items[@intFromEnum(formal_rep)];
                 if (formal.descriptor == null) continue;
-                const actual_source = if (identity_source) |source| blk: {
+                const actual_source = if (shape_source) |source| blk: {
                     const source_rep = self.plan.representations.items[@intFromEnum(source)];
                     break :blk self.plan.nominalBackingActual(source_rep.nominal_backing_arg_substitutions, substitution.arg_index);
                 } else null;
@@ -2967,7 +3003,7 @@ const ProcedureBuilder = struct {
                     .formal = formal_rep,
                     .actual = substitution.actual_rep,
                     .source = actual_source,
-                    .env = outer_env,
+                    .env = level_env,
                 };
                 // A formal forwarded from an enclosing nominal retains that
                 // nominal's environment, rather than referring to this new scope.
@@ -2977,7 +3013,7 @@ const ProcedureBuilder = struct {
                     binding.env = forwarded.env;
                     context.env = forwarded.env;
                 }
-                context.env = outer_env;
+                context.env = level_env;
                 if (!self.plan.representations.items[@intFromEnum(binding.actual)].contains_dynamic) binding.env = 0;
                 try bindings.append(self.allocator, binding);
             }
@@ -3032,9 +3068,9 @@ const ProcedureBuilder = struct {
             else
                 try self.staticInspectHiddenDescsForRep(identity_worker, desc_id, descriptor_sources, context),
             .inspect_arg_descs = if (identity_source) |source_rep|
-                try self.staticInspectArgDescsForRep(source_rep, null, null)
+                try self.staticInspectArgDescsForRep(source_rep, desc_id, identity_worker, null, null)
             else
-                try self.staticInspectArgDescsForRep(identity_worker, descriptor_sources, context),
+                try self.staticInspectArgDescsForRep(identity_worker, desc_id, identity_worker, descriptor_sources, context),
             .presence_slot_present_discriminant = worker_rep.presence_slot_present_discriminant,
             .debug_checked_type = worker_rep.source_type.ty,
         };
@@ -3913,7 +3949,7 @@ const ProcedureBuilder = struct {
             .inspect_opaque = self.repInspectsOpaque(rep_id),
             .inspect_method = try self.staticInspectMethodForRep(rep_id),
             .inspect_hidden_descs = try self.staticInspectHiddenDescsForRep(rep_id, desc_id, null, null),
-            .inspect_arg_descs = try self.staticInspectArgDescsForRep(rep_id, null, null),
+            .inspect_arg_descs = try self.staticInspectArgDescsForRep(rep_id, desc_id, null, null, null),
             .presence_slot_present_discriminant = rep.presence_slot_present_discriminant,
             .debug_checked_type = rep.source_type.ty,
         };
@@ -18671,7 +18707,7 @@ const ProcBodyBuilder = struct {
         if (self.module.checked_bodies.expr(planned.call.expr).data == .str_from_quote) {
             try self.bindQuoteDictionaryDescriptorArgs(hidden_desc_args, dict_local, required_method, match.slot, &pre_arg_descriptor_initializers);
         }
-        const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(hidden_desc_args, arg_types, lowered, arg_reps, null, null, &pre_arg_descriptor_initializers);
+        const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(hidden_desc_args, lowered, arg_reps, arg_reps);
         defer self.parent.allocator.free(hidden_desc_locals);
 
         const hidden_arg_locals = try self.parent.allocator.alloc(LIR.LocalId, hidden_desc_locals.len);
@@ -19081,15 +19117,12 @@ const ProcBodyBuilder = struct {
         }
         var pre_adaptation_descriptor_initializers = std.ArrayList(DescriptorArgLocal).empty;
         defer pre_adaptation_descriptor_initializers.deinit(self.parent.allocator);
-        const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(
-            hidden_desc_args,
-            hidden_desc_arg_types,
-            source_args,
-            source_arg_reps,
-            adapted_args,
-            worker_arg_children,
-            &pre_adaptation_descriptor_initializers,
-        );
+        const call_arg_reps = try self.parent.allocator.alloc(Plan.TypeRepId, source_args.len);
+        defer self.parent.allocator.free(call_arg_reps);
+        for (call_arg_reps, arg_types, 0..) |*call_arg_rep, arg_type, arg_index| {
+            call_arg_rep.* = if (arg_substitutions) |substitutions| substitutions[arg_index].call_rep else self.repForTypeRef(arg_type);
+        }
+        const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(hidden_desc_args, source_args, source_arg_reps, call_arg_reps);
         defer self.parent.allocator.free(hidden_desc_locals);
         const call_descriptor_snapshot = try self.snapshotDescriptorBindings();
         defer call_descriptor_snapshot.deinit(self.parent.allocator);
@@ -19234,14 +19267,17 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("boxy direct call result descriptor materialization had no descriptor");
             continuation = try self.prependDescriptorArgMaterialization(materialize, desc, continuation);
         }
-        continuation = try self.prependHiddenDescriptorArgMaterialization(hidden_desc_locals, continuation);
         continuation = try self.prependHiddenDictionaryArgMaterialization(hidden_dict_locals, continuation);
-        self.restoreDescriptorBindings(call_descriptor_snapshot);
-        call_descriptor_bindings_restored = true;
+        // Hidden descriptors read only the original operands and the caller
+        // frame, so they are initialized before the operands are adapted and
+        // describe the worker representations those adaptations target.
         const enclosing_call_boundary_substitution = self.call_boundary_substitution;
         self.call_boundary_substitution = hidden_desc_args;
         defer self.call_boundary_substitution = enclosing_call_boundary_substitution;
         continuation = try self.prependWorkerCallArgAdaptations(arg_types, source_args, adapted_args, worker_arg_children, actual_arg_reps, arg_substitutions, continuation);
+        continuation = try self.prependHiddenDescriptorArgMaterialization(hidden_desc_locals, continuation);
+        self.restoreDescriptorBindings(call_descriptor_snapshot);
+        call_descriptor_bindings_restored = true;
         return try self.prependDescriptorArgMaterializations(pre_adaptation_descriptor_initializers.items, continuation);
     }
 
@@ -25466,7 +25502,7 @@ const ProcBodyBuilder = struct {
             &call_arg_descriptor_initializers,
         );
         defer self.parent.allocator.free(argument_desc_locals);
-        const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(hidden_desc_args, arg_types, arg_locals, arg_reps, null, null, &pre_arg_descriptor_initializers);
+        const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(hidden_desc_args, arg_locals, arg_reps, arg_reps);
         defer self.parent.allocator.free(hidden_desc_locals);
         try self.recordDirectCallResultDescriptorEnvironment(
             target,
@@ -26394,23 +26430,12 @@ const ProcBodyBuilder = struct {
     fn lowerDirectCallHiddenDescriptorArgs(
         self: *ProcBodyBuilder,
         hidden_args: []const Plan.DirectCallHiddenDescriptorArg,
-        call_arg_types: []const Plan.CheckedTypeIdentity,
         source_args: []const LIR.LocalId,
         source_arg_reps: []const Plan.TypeRepId,
-        descriptor_args: ?[]const LIR.LocalId,
-        descriptor_arg_reps: ?[]const Plan.RepChild,
-        pre_arg_descriptor_initializers: *std.ArrayList(DescriptorArgLocal),
+        call_arg_reps: []const Plan.TypeRepId,
     ) Allocator.Error![]DescriptorArgLocal {
-        if (call_arg_types.len != source_args.len or source_arg_reps.len != source_args.len) {
+        if (source_arg_reps.len != source_args.len or call_arg_reps.len != source_args.len) {
             boxyLowerInvariant("boxy direct call hidden descriptor source metadata length mismatch");
-        }
-        if ((descriptor_args == null) != (descriptor_arg_reps == null)) {
-            boxyLowerInvariant("boxy direct call descriptor value and representation plans disagreed");
-        }
-        if (descriptor_args) |args| {
-            if (args.len != source_args.len or descriptor_arg_reps.?.len != source_args.len) {
-                boxyLowerInvariant("boxy direct call adapted descriptor source arity disagreed with operands");
-            }
         }
         const lowered = try self.parent.allocator.alloc(DescriptorArgLocal, hidden_args.len);
         errdefer self.parent.allocator.free(lowered);
@@ -26426,23 +26451,19 @@ const ProcBodyBuilder = struct {
                 local.* = .{ .local = lowered[source_index].local, .from_source_value = true };
                 continue;
             }
-            if (try self.sourceValueDescriptorLocalForHiddenArg(
-                arg,
-                call_arg_types,
-                source_args,
-                source_arg_reps,
-                descriptor_args,
-                descriptor_arg_reps,
-                pre_arg_descriptor_initializers,
-            )) |source_desc| {
-                local.* = source_desc;
-                continue;
-            }
+            // A bare type parameter receives the descriptor of the caller
+            // type the call substitutes for it: the operand's own descriptor
+            // when the plan names one, otherwise the caller frame's. A
+            // compound worker parameter is the worker representation
+            // instantiated with those descriptors; it is materialized below,
+            // once they are bound.
             if (self.directCallHiddenDescriptorUsesCallShape(arg)) {
-                if (try self.descriptorLocalForMatchingSourceArg(arg, call_arg_types, source_args, pre_arg_descriptor_initializers)) |desc_local| {
-                    local.* = desc_local;
+                if (try self.sourceValueDescriptorLocalForHiddenArg(arg, source_args, source_arg_reps, call_arg_reps)) |source_desc| {
+                    local.* = source_desc;
                     continue;
                 }
+            }
+            if (self.directCallHiddenDescriptorUsesCallShape(arg)) {
                 const identity_rep = self.descriptorStorageRep(arg.rep);
                 const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
                 const desc = rep.descriptor orelse {
@@ -26520,119 +26541,40 @@ const ProcBodyBuilder = struct {
         return lowered;
     }
 
+    /// A planned argument source reads the original operand's own
+    /// descriptor: the whole descriptor when the operand is the hidden
+    /// representation, or the nested descriptor at the representation path
+    /// from the operand to it.
     fn sourceValueDescriptorLocalForHiddenArg(
         self: *ProcBodyBuilder,
         hidden_arg: Plan.DirectCallHiddenDescriptorArg,
-        arg_types: []const Plan.CheckedTypeIdentity,
         source_args: []const LIR.LocalId,
         source_arg_reps: []const Plan.TypeRepId,
-        descriptor_args: ?[]const LIR.LocalId,
-        descriptor_arg_reps: ?[]const Plan.RepChild,
-        pre_arg_descriptor_initializers: *std.ArrayList(DescriptorArgLocal),
+        call_arg_reps: []const Plan.TypeRepId,
     ) Allocator.Error!?DescriptorArgLocal {
         const source_arg_index = hidden_arg.source_arg_index orelse return null;
         const index: usize = @intCast(source_arg_index);
-        if (index >= arg_types.len or index >= source_args.len or index >= source_arg_reps.len) {
+        if (index >= source_args.len or index >= source_arg_reps.len) {
             boxyLowerInvariant("boxy direct call hidden descriptor source argument index exceeded call arity");
         }
-
-        if (hidden_arg.source_value_rep == null) {
-            boxyLowerInvariant("boxy hidden descriptor argument source had no planned value representation");
-        }
-        const use_adapted = hidden_arg.argument_source == .adapted and descriptor_args != null;
-        const source = if (use_adapted) descriptor_args.?[index] else source_args[index];
-        const source_rep = if (use_adapted) descriptor_arg_reps.?[index].rep else source_arg_reps[index];
-        const hidden_rep = if (use_adapted) hidden_arg.worker_rep else hidden_arg.rep;
-        const identity_source_rep = self.descriptorStorageRep(source_rep);
-        const identity_hidden_rep = self.descriptorStorageRep(hidden_rep);
-        if (identity_source_rep != identity_hidden_rep) {
-            // A planned source argument's live descriptor is authoritative for
-            // descriptor-bearing children stored in that value. Its local
-            // environment can also contain bindings for other values that
-            // share the same generic representation.
-            if (try self.sourceNestedDescriptorLocalForHiddenArg(source, source_rep, hidden_rep)) |projected| {
-                return projected;
-            }
-        }
-        if (self.localDescriptorEnvironmentForLocal(source)) |env| {
-            const call_identity_rep = self.descriptorStorageRep(hidden_arg.rep);
-            try self.bindLocalDescriptorEnvironment(source);
-            const source_template = try self.descriptorMaterializationForKnownRep(call_identity_rep);
-            for (env.bindings) |binding| {
-                if (self.descriptorStorageRep(binding.rep) != call_identity_rep) continue;
-                if (identity_hidden_rep == call_identity_rep) {
-                    return .{ .local = binding.local, .from_source_value = true };
-                }
-
-                const adapted = try self.adapterDescriptorForCallBoundary(
-                    identity_hidden_rep,
-                    call_identity_rep,
-                    .{
-                        .desc = .{ .local = binding.local },
-                        .template = source_template,
-                    },
-                    pre_arg_descriptor_initializers,
-                );
-                if (adapted.prerequisite) |prerequisite| {
-                    try pre_arg_descriptor_initializers.append(self.parent.allocator, prerequisite);
-                }
-                const adapted_desc = adapted.desc orelse
-                    boxyLowerInvariant("boxy hidden descriptor representation adapter produced no descriptor");
-                if (adapted.materialize) |materialize| {
-                    if (adapted_desc.localOrNull() != materialize.local) {
-                        boxyLowerInvariant("boxy hidden descriptor adapter materialization did not produce its result descriptor");
-                    }
-                    return materialize;
-                }
-                return .{
-                    .local = try self.addFrameLocal(.opaque_ptr),
-                    .materialize = adapted_desc,
-                };
-            }
-        }
-        if (identity_source_rep != identity_hidden_rep) {
-            return null;
-        }
-
-        // The source value's live descriptor describes it in the concrete
-        // call-site representation. When the worker receives the argument as
-        // aggregate storage whose runtime layout differs from that concrete
-        // source, a generic child was boxed as the value crossed the call
-        // boundary, and the concrete descriptor lacks the nested descriptors
-        // the worker navigates. The worker representation must then supply the
-        // descriptor, so defer to the worker-rep path. Tag unions (which
-        // reshape by row extension, not child boxing) and whole-value boxing
-        // into an opaque worker scalar both keep the concrete source
-        // descriptor.
-        const worker_canonical_rep = self.parent.plan.representations.items[@intFromEnum(self.descriptorStorageRep(hidden_arg.worker_rep))];
-        const worker_uses_aggregate_storage = worker_canonical_rep.tag_variants.len == 0 and switch (worker_canonical_rep.kind) {
-            .record, .tuple, .nominal, .list, .box => true,
-            .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => false,
-        };
-        if (worker_uses_aggregate_storage) {
-            const source_layout = self.parent.result.store.getLocal(source).layout_idx;
-            const worker_layout = self.workerRuntimeLayoutForRep(hidden_arg.worker_rep);
-            if (source_layout != worker_layout.layoutIdx()) {
-                return null;
-            }
+        const source = source_args[index];
+        const source_rep = source_arg_reps[index];
+        // The operand and the call's instantiated parameter are one checked
+        // type, so either names the whole operand.
+        const hidden_identity = self.descriptorStorageRep(hidden_arg.rep);
+        const whole_operand = self.descriptorStorageRep(source_rep) == hidden_identity or
+            self.descriptorStorageRep(call_arg_reps[index]) == hidden_identity;
+        if (!whole_operand) {
+            return try self.sourceNestedDescriptorLocalForHiddenArg(source, source_rep, hidden_arg.rep);
         }
         if (self.parent.result.store.getLocal(source).boxy_desc) |existing| {
             if (existing.localOrNull()) |existing_local| {
-                // The producer that assigned `source` also assigned this
-                // descriptor local. It is the exact metadata for the live
-                // value and must cross the call boundary unchanged.
                 return .{ .local = existing_local, .from_source_value = true };
             }
-
-            if (worker_uses_aggregate_storage) {
-                return null;
-            }
         }
-
         const materialization = try self.descriptorMaterializationForSourceStorageLocalRep(source, source_rep);
-        const local = try self.addFrameLocal(.opaque_ptr);
         return .{
-            .local = local,
+            .local = try self.addFrameLocal(.opaque_ptr),
             .materialize = materialization.desc,
             .captures = materialization.captures,
             .from_source_value = true,
@@ -26776,14 +26718,15 @@ const ProcBodyBuilder = struct {
                     break :blk layout_idx;
                 },
                 .tuple_elem => |index| self.parent.recordPayloadFieldLayout(payload_layout, index),
-                .box_payload => self.parent.descriptorPayloadLayoutForRep(child.rep),
                 .list_elem => self.parent.listElementLayout(payload_layout),
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
+                // A Box payload read is its own descriptor operation, not a
+                // nested-index read.
+                .box_payload, .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
             };
             const nested = self.nestedDescriptorRepForStorage(
                 child.rep,
                 field_layout,
-                child.role == .box_payload or self.parent.layoutIsBoxStorage(field_layout),
+                self.parent.layoutIsBoxStorage(field_layout),
             ) orelse continue;
             try read_path.append(self.parent.allocator, .{ .nested = nested_index });
             if (try self.findDescriptorReadPath(nested, target_rep_id, read_path, active)) return true;
@@ -28249,7 +28192,7 @@ const ProcBodyBuilder = struct {
             .inspect_opaque = self.parent.repInspectsOpaque(rep_id),
             .inspect_method = try self.parent.staticInspectMethodForRep(rep_id),
             .inspect_hidden_descs = try self.templateInspectHiddenDescsForRep(rep_id, desc_id, current_desc, captures, context),
-            .inspect_arg_descs = try self.templateInspectArgDescsForRep(rep_id, current_desc, captures, context),
+            .inspect_arg_descs = try self.templateInspectArgDescsForRep(rep_id, desc_id, current_desc, captures, context),
             .presence_slot_present_discriminant = rep.presence_slot_present_discriminant,
             .debug_checked_type = rep.source_type.ty,
         };
@@ -28290,11 +28233,13 @@ const ProcBodyBuilder = struct {
     fn templateInspectArgDescsForRep(
         self: *ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
+        self_desc: LIR.BoxyTypeDescId,
         current_desc: ?Plan.DescriptorRequirementId,
         captures: *std.ArrayList(LIR.LocalId),
         context: *DescriptorTemplateContext,
     ) Allocator.Error!LIR.BoxySpan {
         const inspect = self.parent.plan.inspectMethodForRep(rep_id) orelse return .{};
+        if (self.parent.inspectArgumentIsIdentity(inspect)) return try self.parent.appendStaticHiddenDescRefs(&.{.{ .static = self_desc }});
         const worker_arg = self.parent.inspectWorkerArgRep(inspect);
         const scope = DescriptorTemplateScope{
             .bindings_start = context.bindings.items.len,
