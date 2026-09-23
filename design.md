@@ -939,6 +939,9 @@ names the merged variables. Both arms remain visible through lifting and lambda
 solving, including callable identities stored in compile-time results. The
 consumer input is opaque to value folding until target LIR lowering supplies the
 configured run/omit Boolean. No specialization is repeated.
+Run-only lowering uses the same explicit state-result binding without the
+consumer branch; it must not lower a mutating condition as an isolated Boolean
+whose state updates are lost to the enclosing continuation.
 
 Monotype lowering, lifting, SpecConstr, lambda solving, and inline analysis
 run once over the union of the compilation's compile-time and runtime root
@@ -10466,6 +10469,22 @@ from the loop body supplies exactly one value for every loop parameter, in the
 same order and with the same types. Loops with no carried state use empty spans.
 `break_` carries the loop result when the loop is value-producing and carries no
 expression when the loop result is unit/control-only.
+
+Source `for` expressions and statements share one state-carrying lowering
+contract, which condition loops (`while`, infinite, and breakable loops) also
+follow. Checked publication records every loop's mutation identities once, with
+disjoint ranges for mutations outside `expect` and mutations occurring only in
+`expect` conditions. A `for` plan covers its body; a condition loop's plan also
+covers its condition, which runs on every iteration. Publication follows
+resolved assignment identities and explicit dispatch operands, excludes nested
+function bodies, and reuses nested loop summaries. A loop-only table holds these
+compact ranges into the checked binder pool; loops reference it by ID without
+widening unrelated expression payloads. Both the table and pool survive
+serialization. Post-check lowering never rediscovers a loop's mutations.
+Only binders in scope at loop entry become carried state. Every iteration and
+exit transports that state explicitly. An expression-form loop produces unit
+after binding its exit state, and enclosing branch results must be constructed
+inside the scope of those bindings. Discarding unit never discards mutations.
 
 Monotype normally preserves source control structure, but compiler-generated
 algorithms may introduce typed `join_point` and `jump` expressions when their

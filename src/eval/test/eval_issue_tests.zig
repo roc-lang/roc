@@ -266,6 +266,168 @@ const issue11377GenericNominalCollectionSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        // https://github.com/roc-lang/roc/issues/11618
+        // Bare for expressions must carry outer var updates through the loop and match.
+        .name = "issue 11618: bare for match arms preserve outer var updates",
+        .source_kind = .module,
+        .source =
+        \\Node := [Leaf(List(U64)), Branch(List(U64))]
+        \\fold : Node, U64 -> U64
+        \\fold = |node, initial| {
+        \\    var $state = initial
+        \\    match node {
+        \\        Leaf(slots) =>
+        \\            for slot in slots {
+        \\                $state = $state + slot
+        \\            }
+        \\        Branch(children) =>
+        \\            for child in children {
+        \\                $state = $state + child * 10
+        \\            }
+        \\    }
+        \\    $state
+        \\}
+        \\main = (fold(Leaf([1, 2, 3]), 0), fold(Branch([1, 2]), 0), fold(Leaf([]), 7))
+        ,
+        .expected = .{ .inspect_str = "(6, 30, 7)" },
+    },
+    .{
+        .name = "issue 11618: bound match result composes nested loop state",
+        .source =
+        \\{
+        \\    var $sum = 1.U64
+        \\    done = match True {
+        \\        True => match True {
+        \\            True => for item in [2.U64, 3] {
+        \\                $sum = $sum + item
+        \\            }
+        \\            False => {}
+        \\        }
+        \\        False => {}
+        \\    }
+        \\    (done, $sum)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "({}, 6)" },
+    },
+    .{
+        .name = "issue 11618: directly bound for expression preserves state",
+        .source =
+        \\{
+        \\    var $sum = 1.U64
+        \\    done = for item in [2.U64, 3] {
+        \\        $sum = $sum + item
+        \\    }
+        \\    (done, $sum)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "({}, 6)" },
+    },
+    .{
+        .name = "issue 11618: expression loop skips and breaks with multiple carries",
+        .source =
+        \\{
+        \\    var $sum = 0.I64
+        \\    var $seen = []
+        \\    iter = Iter.keep_if([1.I64, 2, 3, 4, 5].iter(), |item| I64.rem_by(item, 2) == 1)
+        \\    match True {
+        \\        True => for item in iter {
+        \\            $sum = $sum + item
+        \\            $seen = $seen.append(item)
+        \\            if item == 3 { break }
+        \\        }
+        \\        False => {}
+        \\    }
+        \\    ($sum, $seen)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(4, [1, 3])" },
+    },
+    .{
+        .name = "issue 11618: nested for expressions preserve outer and inner carries",
+        .source =
+        \\{
+        \\    var $sum = 0.U64
+        \\    match True {
+        \\        True => for row in [1.U64, 2] {
+        \\            var $subtotal = 0.U64
+        \\            match True {
+        \\                True => for column in [3.U64, 4] {
+        \\                    $subtotal = $subtotal + row * column
+        \\                }
+        \\                False => {}
+        \\            }
+        \\            $sum = $sum + $subtotal
+        \\        }
+        \\        False => {}
+        \\    }
+        \\    $sum
+        \\}
+        ,
+        .expected = .{ .inspect_str = "21" },
+    },
+    .{
+        .name = "issue 11618: for expression returns from enclosing function",
+        .source =
+        \\{
+        \\    fold = |stop| {
+        \\        var $sum = 0.U64
+        \\        match True {
+        \\            True => for item in [1.U64, 2, 3] {
+        \\                $sum = $sum + item
+        \\                if item == stop { return $sum }
+        \\            }
+        \\            False => {}
+        \\        }
+        \\        $sum
+        \\    }
+        \\    (fold(2), fold(4))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(3, 6)" },
+    },
+    .{
+        .name = "issue 11618: for expression carries mutations in expect conditions",
+        .source =
+        \\{
+        \\    var $sum = 0.U64
+        \\    match True {
+        \\        True => for item in [1.U64, 2, 3] {
+        \\            expect {
+        \\                $sum = $sum + item
+        \\                True
+        \\            }
+        \\        }
+        \\        False => {}
+        \\    }
+        \\    $sum
+        \\}
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        .name = "issue 11618: while inside for carries body and expect condition mutations",
+        .source =
+        \\{
+        \\    var $count = 0.U64
+        \\    var $sum = 0.U64
+        \\    for item in [1.U64, 2] {
+        \\        var $i = 0.U64
+        \\        while $i < item {
+        \\            $i = $i + 1
+        \\            expect {
+        \\                $count = $count + 1
+        \\                True
+        \\            }
+        \\            $sum = $sum + item
+        \\        }
+        \\    }
+        \\    ($count, $sum)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(3, 5)" },
+    },
+    .{
         .name = "issue 11377: nested nominal alias applications retain outer parameters",
         .source_kind = .module,
         .source =
