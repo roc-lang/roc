@@ -70,3 +70,21 @@ expect Str.inspect(wrapped) == "Ok(Dict.from_list([(\"a\", 1)]))"
 expect Dict.empty().insert(1.U64, Dict.empty().insert("a", 2.U8)) == Dict.empty().insert(1, Dict.empty().insert("a", 2))
 
 expect Set.empty().insert(Set.empty().insert(1.U64)) != Set.empty().insert(Set.empty().insert(2))
+
+# A field of a constant built by a custom numeral conversion, passed to a call,
+# must have its descriptors initialized before the call's operands run.
+Px := { n : U32, m ?: U32 }.{
+	from_numeral : Numeral -> Try(Px, [InvalidNumeral(Str)])
+	from_numeral = |numeral| {
+		Inner : U32
+		match Inner.from_numeral(numeral) {
+			Ok(n) => Ok(Px.{ n })
+			Err(err) => Err(err)
+		}
+	}
+}
+
+above_three : U32 -> Bool
+above_three = |x| x > 3
+
+expect above_three(380.Px.n)

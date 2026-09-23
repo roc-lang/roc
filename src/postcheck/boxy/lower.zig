@@ -19284,7 +19284,9 @@ const ProcBodyBuilder = struct {
             }
         }
         self.parent.result.store.getCFStmtPtr(call_entry).* = .runtime_error;
-        return operands_entry;
+        // Restoring the outer descriptor bindings forgets slots the operands
+        // reserved; initialize them before the operands run.
+        return try self.prependStaticDescriptorMaterializationsForScopedSlots(&descriptor_snapshot, operands_entry);
     }
 
     fn directCallOperandStorageRep(
@@ -34091,7 +34093,8 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!?LIR.CFStmtId {
         const actual = self.nominalFormalActualBelow(self.nominal_formal_bindings.items.len, target_rep) orelse return null;
         if (self.repIsBareDynamic(actual)) return null;
-        if (self.representationBoundaryIsDirect(actual, source_rep)) return null;
+        if (self.descriptorStorageRep(actual) == source_rep or
+            self.representationBoundaryIsDirect(actual, source_rep)) return null;
         const converted = try self.addFrameBoundaryTargetLocalForRep(actual);
         const boxed = try self.assignRepresentationBoundary(target, converted, target_rep, actual, next);
         return try self.assignRepresentationBoundary(converted, source, actual, source_rep, boxed);
