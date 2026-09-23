@@ -16676,14 +16676,14 @@ const ProcBodyBuilder = struct {
             self.parent.plan.directCallHiddenDescriptorArgSlice(use.hidden_desc_args),
         );
         defer self.parent.allocator.free(capture_desc_sources);
-        const capture_dict_reps = try self.erasedCaptureDictionaryRepsForFunctionUse(worker_id, value_function, captures);
-        defer self.parent.allocator.free(capture_dict_reps);
         const planned_dict_args = self.parent.plan.directCallHiddenDictionaryArgSlice(use.hidden_dict_args);
+        const capture_dict_reps = try self.erasedCaptureDictionaryRepsForFunctionUse(worker_id, value_function, captures, planned_dict_args.len);
+        defer self.parent.allocator.free(capture_dict_reps);
         var planned_dict_index = planned_dict_args.len;
 
         for (captures, capture_desc_sources, capture_dict_reps) |capture, desc_source, dict_rep| {
             switch (capture.kind) {
-                .hidden_desc => if (!self.canMaterializeDescriptorRefForKnownRep(desc_source.rep)) return false,
+                .hidden_desc => if (!try self.canMaterializeDescriptorRefForKnownRep(desc_source.rep)) return false,
                 .hidden_dict => {
                     if (planned_dict_index != 0) {
                         planned_dict_index -= 1;
@@ -16700,14 +16700,32 @@ const ProcBodyBuilder = struct {
         return true;
     }
 
+    /// Whether this frame can describe `rep_id`: through its bound descriptor,
+    /// or, for a representation built from others, through a template whose
+    /// type-variable leaves are each bound or sealed to their default.
     fn canMaterializeDescriptorRefForKnownRep(
         self: *ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
-    ) bool {
+    ) Allocator.Error!bool {
+        var visited = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
+        defer visited.deinit();
+        return try self.canMaterializeDescriptorRefForKnownRepVisited(rep_id, &visited);
+    }
+
+    fn canMaterializeDescriptorRefForKnownRepVisited(
+        self: *ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        visited: *collections.DenseMap(Plan.TypeRepId, void),
+    ) Allocator.Error!bool {
         const identity_rep = self.descriptorStorageRep(rep_id);
+        if ((try visited.getOrPut(identity_rep)).found_existing) return true;
         const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
-        if (rep.descriptor) |desc| {
-            return self.descriptorBindingIsBoundForRep(identity_rep) and self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep) != null;
+        const desc = rep.descriptor orelse return true;
+        if (self.descriptorBindingIsBoundForRep(identity_rep) and self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep) != null) return true;
+        if (rep.kind == .dynamic and rep.children.len == 0 and rep.tag_variants.len == 0) return rep.sealed_default != null;
+        for (self.parent.plan.childSlice(rep.children)) |child| {
+            if (self.parent.plan.childIsSharedBackingTemplate(identity_rep, child)) continue;
+            if (!try self.canMaterializeDescriptorRefForKnownRepVisited(child.rep, visited)) return false;
         }
         return true;
     }
@@ -16935,7 +16953,7 @@ const ProcBodyBuilder = struct {
             hidden_desc_args orelse &.{},
         );
         defer self.parent.allocator.free(capture_desc_sources);
-        const capture_dict_reps = try self.erasedCaptureDictionaryRepsForFunctionUse(worker_id, value_function, captures);
+        const capture_dict_reps = try self.erasedCaptureDictionaryRepsForFunctionUse(worker_id, value_function, captures, if (hidden_dict_args) |args| args.len else 0);
         defer self.parent.allocator.free(capture_dict_reps);
         var result_desc_initializers = std.ArrayList(DescriptorArgLocal).empty;
         defer result_desc_initializers.deinit(self.parent.allocator);
@@ -37401,11 +37419,14 @@ const ProcBodyBuilder = struct {
         return true;
     }
 
+    /// The value-side representation of each dictionary capture that the use's
+    /// planned dictionary arguments do not supply.
     fn erasedCaptureDictionaryRepsForFunctionUse(
         self: *ProcBodyBuilder,
         worker_id: Plan.WorkerPlanId,
         value_function: FunctionChildren,
         captures: []const Plan.ErasedCapture,
+        planned_dict_count: usize,
     ) Allocator.Error![]Plan.TypeRepId {
         const result = try self.parent.allocator.alloc(Plan.TypeRepId, captures.len);
         errdefer self.parent.allocator.free(result);
@@ -37415,7 +37436,7 @@ const ProcBodyBuilder = struct {
 
         const worker = self.parent.plan.workers.items[@intFromEnum(worker_id)];
         const params = self.parent.plan.hiddenDictionaryParamSlice(worker.hidden_dicts);
-        if (params.len == 0) return result;
+        if (params.len == 0 or planned_dict_count >= params.len) return result;
 
         const worker_function = self.functionChildrenForRep(worker.rep) orelse
             boxyLowerInvariant("boxy erased callable with hidden dictionaries was not a function worker");

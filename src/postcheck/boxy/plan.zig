@@ -4901,7 +4901,15 @@ const Builder = struct {
                 .{ .source_type = source_type, .kind = .empty_tag_union }
             else blk: {
                 var rep = try self.dynamicRepresentation(source_type, flex.constraints, .flex);
-                if (!self.host_mode and (!self.flexConstraintsRequireScheme(source_type, flex.constraints) or flex.numeric_default_phase != null)) {
+                // A literal's numeric default applies only if nothing resolves
+                // it: when a scheme quantifies the variable, each instantiation
+                // supplies its type through the descriptor the scheme's uses
+                // pass, so only an unquantified one seals to that default.
+                const seals = if (flex.numeric_default_phase != null)
+                    !self.quantified_variables.contains(source_type)
+                else
+                    !self.flexConstraintsRequireScheme(source_type, flex.constraints);
+                if (!self.host_mode and seals) {
                     rep.sealed_default = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
                     try self.plan.representations.append(self.allocator, .{
                         .source_type = source_type,
@@ -7196,6 +7204,32 @@ const Builder = struct {
     /// A direct call's scheme substitution names caller-side types that
     /// supply its callee's type-variable descriptors; they are analyzed when
     /// the call is planned, before descriptor requirements are fixed.
+    /// The checked substitution a callable-value or stored nested-function use
+    /// applied to its worker's scheme, when checking instantiated one there.
+    fn useSchemeSubstitution(self: *Builder, worker_id: WorkerPlanId, use: CheckedExprIdentity) ?SchemeCallSubstitution {
+        const site_view = self.moduleForId(use.module);
+        const site_types = site_view.static_dispatch_plans.siteSubstitution(use.expr) orelse return null;
+        if (site_types.len == 0) return null;
+        const scheme = self.workerSchemeVars(self.plan.workers.items[@intFromEnum(worker_id)].source) orelse return null;
+        if (scheme.vars.len != site_types.len) {
+            boxyPlanInvariant("checked use-site substitution disagreed with its worker scheme's variables");
+        }
+        return .{
+            .callee_view = scheme.view,
+            .scheme_vars = scheme.vars,
+            .site_view = site_view,
+            .site_types = site_types,
+        };
+    }
+
+    fn analyzeUseSchemeSubstitution(self: *Builder, worker_id: WorkerPlanId, use: CheckedExprIdentity) Allocator.Error!void {
+        const substitution = self.useSchemeSubstitution(worker_id, use) orelse return;
+        for (substitution.site_types) |site_type| {
+            if (substitution.site_view.checked_types.payload(site_type) == .err) continue;
+            _ = try self.analyzeType(substitution.site_view, site_type);
+        }
+    }
+
     fn analyzeDirectCallSchemeSubstitution(self: *Builder, direct: DirectCallPlan) Allocator.Error!void {
         const substitution = self.directCallSchemeSubstitution(direct) orelse return;
         for (substitution.site_types) |site_type| {
@@ -8139,6 +8173,7 @@ const Builder = struct {
                 use.callable_ty,
                 evidence.view,
                 evidence.entries,
+                self.useSchemeSubstitution(use.worker, use.use),
             );
         }
         for (self.plan.nested_callable_uses.items) |*use| {
@@ -8151,6 +8186,7 @@ const Builder = struct {
                 use.callable_ty,
                 evidence.view,
                 evidence.entries,
+                self.useSchemeSubstitution(use.worker, use.use),
             );
         }
 
@@ -8168,6 +8204,7 @@ const Builder = struct {
         callable_type: CheckedTypeIdentity,
         view: ModuleView,
         evidence: ?[]const static_dispatch.CheckedEvidence,
+        scheme_substitution: ?SchemeCallSubstitution,
     ) Allocator.Error!Span {
         const callable_rep = self.plan.repForSourceType(callable_type) orelse
             boxyPlanInvariant("boxy callable use type was not analyzed for descriptor captures");
@@ -8180,13 +8217,14 @@ const Builder = struct {
             arg_type.* = self.plan.representations.items[@intFromEnum(child.rep)].source_type;
         }
         const ret_type = self.plan.representations.items[@intFromEnum(function.ret)].source_type;
-        return try self.materializeWorkerCallHiddenDescriptorArgsWithEvidence(
+        return try self.materializeWorkerCallHiddenDescriptorArgsWithSubstitution(
             worker,
             arg_types,
             arg_types,
             ret_type,
             view,
             evidence,
+            scheme_substitution,
         );
     }
 
@@ -8831,6 +8869,15 @@ const Builder = struct {
         var path_index: usize = 0;
         while (path_index < path.len) {
             const path_step = path[path_index];
+            // An alias is transparent: a use can instantiate a path's structural
+            // step at an alias of that structure, and the step applies to its
+            // backing.
+            switch (path_step.stepKind()) {
+                .alias_arg, .alias_backing => {},
+                else => while (self.plan.representations.items[@intFromEnum(current)].kind == .alias) {
+                    current = self.repQuery().requiredSingleChild(current, .alias_backing).rep;
+                },
+            }
             const current_rep = self.plan.representations.items[@intFromEnum(current)];
             const children = self.plan.childSlice(current_rep.children);
             if (current_rep.kind == .nominal) {
@@ -11842,6 +11889,7 @@ const Builder = struct {
         const use = CheckedExprIdentity{ .module = view.key, .expr = expr_id };
         const caller = self.active_worker orelse
             boxyPlanInvariant("boxy callable lookup was analyzed outside a worker body");
+        try self.analyzeUseSchemeSubstitution(worker, use);
         if (self.plan.callableUsePlan(use, caller) == null) {
             try self.plan.callable_uses.append(self.allocator, .{
                 .use = use,
@@ -12094,10 +12142,14 @@ const Builder = struct {
     ) Allocator.Error!void {
         const caller = self.active_worker orelse
             boxyPlanInvariant("boxy nested callable value was analyzed outside a worker body");
+        // A generalized function stored in a containing value is used as the
+        // instance checking stored there, not as its own generalized type.
+        const use_ty = view.static_dispatch_plans.siteInstanceType(expr_id) orelse view.checked_bodies.expr(expr_id).ty;
+        _ = try self.analyzeType(view, use_ty);
         return try self.recordNestedCallableExprUseForCaller(
             view,
             expr_id,
-            typeRef(view, view.checked_bodies.expr(expr_id).ty),
+            typeRef(view, use_ty),
             caller,
         );
     }
@@ -12119,6 +12171,7 @@ const Builder = struct {
             }
         }
         const worker = try self.ensureNestedCallableWorker(view, expr_id);
+        try self.analyzeUseSchemeSubstitution(worker, use);
         try self.plan.nested_callable_uses.append(self.allocator, .{
             .use = use,
             .caller = caller,
