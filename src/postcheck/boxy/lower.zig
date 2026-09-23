@@ -11316,7 +11316,7 @@ const ProcedureBuilder = struct {
         var index = context.fields.len;
         while (index > 0) {
             index -= 1;
-            const missing = try self.lowerGeneratedMissingRecordField(proc, context, index, context.cursor, continuation);
+            const missing = try self.lowerGeneratedMissingRecordField(proc, context, index, continuation);
             continuation = try self.result.store.addCFStmt(.{ .switch_initialized_payload = .{
                 .cond = context.presence[index / 64],
                 .cond_mask = @as(u64, 1) << @intCast(index % 64),
@@ -11337,7 +11337,6 @@ const ProcedureBuilder = struct {
         proc: *ProcBodyBuilder,
         context: GeneratedParserRecordContext,
         field_index: usize,
-        rest: LIR.LocalId,
         present_continuation: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const field = context.fields[field_index];
@@ -11372,51 +11371,27 @@ const ProcedureBuilder = struct {
         }
 
         const target_err = proc.generatedParserTagVariant(context.target_rep, "Err");
-        return switch (self.plan.generatedParserMissingRequiredField(context.worker)) {
-            .missing_required_field_tag => |error_type| blk: {
-                const error_rep = proc.repForTypeRef(error_type);
-                const error_value = try proc.addFrameLocalForRep(error_rep);
-                const missing = proc.generatedParserTagVariant(error_rep, "MissingRequiredField");
-                const missing_payloads = self.plan.childSlice(missing.variant.payloads);
-                if (missing_payloads.len != 1) boxyLowerInvariant("MissingRequiredField did not carry one Str payload");
-                const continuation = try proc.assignGeneratedParserTag(
-                    context.target,
-                    context.target_rep,
-                    target_err,
-                    error_value,
-                    error_rep,
-                    context.next,
-                );
-                break :blk try proc.assignGeneratedParserTag(
-                    error_value,
-                    error_rep,
-                    missing,
-                    field.renamed,
-                    missing_payloads[0].rep,
-                    continuation,
-                );
-            },
-            .invalid_value => blk: {
-                const call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "invalid_value", null);
-                const error_rep = proc.repForTypeRef(call.ret_type);
-                const error_value = try proc.addFrameLocalForRep(error_rep);
-                const continuation = try proc.assignGeneratedParserTag(
-                    context.target,
-                    context.target_rep,
-                    target_err,
-                    error_value,
-                    error_rep,
-                    context.next,
-                );
-                break :blk try self.lowerGeneratedCodecCallLocalsInto(
-                    proc,
-                    call,
-                    error_value,
-                    &.{ context.encoding, rest },
-                    continuation,
-                );
-            },
-        };
+        const error_rep = proc.repForTypeRef(self.plan.generatedParserMissingRequiredField(context.worker));
+        const error_value = try proc.addFrameLocalForRep(error_rep);
+        const missing = proc.generatedParserTagVariant(error_rep, "MissingRequiredField");
+        const missing_payloads = self.plan.childSlice(missing.variant.payloads);
+        if (missing_payloads.len != 1) boxyLowerInvariant("MissingRequiredField did not carry one Str payload");
+        const continuation = try proc.assignGeneratedParserTag(
+            context.target,
+            context.target_rep,
+            target_err,
+            error_value,
+            error_rep,
+            context.next,
+        );
+        return try proc.assignGeneratedParserTag(
+            error_value,
+            error_rep,
+            missing,
+            field.renamed,
+            missing_payloads[0].rep,
+            continuation,
+        );
     }
 
     fn lowerGeneratedFinishedRecord(
