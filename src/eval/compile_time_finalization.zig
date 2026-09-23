@@ -69,6 +69,8 @@ pub const Options = struct {
     stderr: ?StderrWriter = null,
     event_callback: ?EventCallback = null,
     debug_events: ?*DebugEvents = null,
+    /// Artifact copies store results independently; shared slots publish once.
+    publish_shared_slots: bool = true,
     /// A coordinator may persist an early dependency batch, then replay all
     /// stored and new observations together with the complete program.
     defer_debug_replay: bool = false,
@@ -155,6 +157,10 @@ const ModuleOwners = struct {
     /// Position in `modules` per `LIR.LoweringModuleId`, or null when the
     /// lowering carried a checked module this finalization does not complete.
     positions: []const ?u32,
+    /// Independently owned artifacts with the same checked identity.
+    next_alias: []const ?u32,
+    /// Site observations apply once to every artifact of the declared owner.
+    report_sites: bool = true,
 
     fn init(
         allocator: Allocator,
@@ -163,18 +169,23 @@ const ModuleOwners = struct {
     ) Allocator.Error!ModuleOwners {
         const positions = try allocator.alloc(?u32, result.lowering_modules.items.len);
         errdefer allocator.free(positions);
+        const next_alias = try allocator.alloc(?u32, modules.len);
+        errdefer allocator.free(next_alias);
+        @memset(next_alias, null);
         for (result.lowering_modules.items, positions) |key, *slot| {
             slot.* = null;
+            var tail = slot;
             for (modules, 0..) |entry, index| {
                 if (!entry.module.key.eql(key)) continue;
-                slot.* = @intCast(index);
-                break;
+                tail.* = @intCast(index);
+                tail = &next_alias[index];
             }
         }
-        return .{ .modules = modules, .positions = positions };
+        return .{ .modules = modules, .positions = positions, .next_alias = next_alias };
     }
 
     fn deinit(self: *const ModuleOwners, allocator: Allocator) void {
+        allocator.free(self.next_alias);
         allocator.free(self.positions);
     }
 
@@ -698,7 +709,7 @@ fn finalizeLoweredProgram(
         const Root = struct { module: usize, request: usize };
         allocator: Allocator,
         modules: []const ProgramModule,
-        owners: *const ModuleOwners,
+        owners: *ModuleOwners,
         lowered: *lir.CheckedPipeline.LoweredProgram,
         program: @TypeOf(program),
         options: Options,
@@ -715,16 +726,34 @@ fn finalizeLoweredProgram(
 
         fn evaluate(self: *Self, ordinal: usize) (FinalizeError || error{CompileTimeDependencyCycle})!void {
             const root = self.roots[ordinal];
-            const entry = self.modules[root.module];
-            const state = &self.states[root.module];
-            const id = state.completion.request_root_ids[root.request];
-            if (state.completion.isDone(id)) return;
-            if (self.active[ordinal]) return error.CompileTimeDependencyCycle;
-            self.active[ordinal] = true;
-            defer self.active[ordinal] = false;
-            const requests = entry.module.root_requests.compile_time_requests;
-            _ = try evalProgramRoots(self.allocator, entry.module, requests[root.request..][0..1], state.completion.request_root_ids[root.request..][0..1], &state.completion, entry.problem_store, &state.coverage, self.owners, self.options, self.lowered, self.lowered.lir_result.const_roots.items[ordinal..][0..1], self.program);
-            if (!state.completion.isDone(id)) finalizationInvariant("demanded compile-time producer did not complete");
+            const first_state = &self.states[root.module];
+            const id = first_state.completion.request_root_ids[root.request];
+            const demand_ordinal = first_state.ordinals[@intFromEnum(id)].?;
+            if (first_state.completion.isDone(id)) return;
+            if (self.active[demand_ordinal]) return error.CompileTimeDependencyCycle;
+            self.active[demand_ordinal] = true;
+            defer self.active[demand_ordinal] = false;
+            var module_index: ?u32 = @intCast(root.module);
+            while (module_index) |index| : (module_index = self.owners.next_alias[index]) {
+                const entry = self.modules[index];
+                const state = &self.states[index];
+                const request_index = state.completion.requestIndexForRoot(id);
+                const requests = entry.module.root_requests.compile_time_requests;
+                // Each artifact owns its ConstStore and diagnostics, but debug
+                // observations persist and replay once per checked identity.
+                var alias_events = DebugEvents{ .allocator = self.allocator };
+                defer alias_events.deinit();
+                var evaluation_options = self.options;
+                if (index != root.module) {
+                    evaluation_options.debug_events = &alias_events;
+                    evaluation_options.publish_shared_slots = false;
+                }
+                const previous_report_sites = self.owners.report_sites;
+                self.owners.report_sites = index == root.module;
+                defer self.owners.report_sites = previous_report_sites;
+                _ = try evalProgramRoots(self.allocator, entry.module, requests[request_index..][0..1], state.completion.request_root_ids[request_index..][0..1], &state.completion, entry.problem_store, &state.coverage, self.owners, evaluation_options, self.lowered, self.lowered.lir_result.const_roots.items[demand_ordinal..][0..1], self.program);
+                if (!state.completion.isDone(id)) finalizationInvariant("demanded compile-time producer did not complete");
+            }
         }
     };
     var owners = try ModuleOwners.init(allocator, &lowered.lir_result, modules);
@@ -769,8 +798,22 @@ fn finalizeLoweredProgram(
         const request_index = state.completion.requestIndexForRoot(root_id);
         roots[ordinal] = .{ .module = module_index, .request = request_index };
         const slot = &state.ordinals[@intFromEnum(root_id)];
-        if (slot.* != null) finalizationInvariant("lowered program published one compile-time root twice");
-        slot.* = ordinal;
+        if (slot.*) |existing| {
+            if (owners.next_alias[module_index] == null) {
+                finalizationInvariant("lowered program published one compile-time root twice");
+            }
+            // Shared identity permits repeated requests, never conflicting
+            // execution or representation evidence for the same root.
+            if (!std.meta.eql(plan, const_roots[existing])) {
+                finalizationInvariant("lowered program published conflicting plans for one compile-time root");
+            }
+        } else {
+            var alias: ?u32 = module_index;
+            while (alias) |index| : (alias = owners.next_alias[index]) {
+                _ = states[index].completion.requestIndexForRoot(root_id);
+                states[index].ordinals[@intFromEnum(root_id)] = ordinal;
+            }
+        }
     }
     for (states) |*state| {
         for (state.completion.request_root_ids) |id| {
@@ -1610,7 +1653,7 @@ fn evalInterpreterProgramRoots(
                     };
                 };
                 defer interpreter.dropValue(eval_result.value, root.ret_layout);
-                try program.publishRoot(lowered, module.key, root_id, root, eval_result.value);
+                if (options.publish_shared_slots) try program.publishRoot(lowered, module.key, root_id, root, eval_result.value);
                 succeeded = true;
                 break :blk if (compile_time_root.kind == .hoisted_validation)
                     .discarded
@@ -1623,7 +1666,7 @@ fn evalInterpreterProgramRoots(
             switch (eval_result) {
                 .value => |value| {
                     defer interpreter.dropValue(value.value, root.ret_layout);
-                    try program.publishRoot(lowered, module.key, root_id, root, value.value);
+                    if (options.publish_shared_slots) try program.publishRoot(lowered, module.key, root_id, root, value.value);
                     succeeded = true;
                     break :blk if (compile_time_root.kind == .hoisted_validation)
                         .discarded
@@ -1637,7 +1680,7 @@ fn evalInterpreterProgramRoots(
             }
         };
 
-        if (!succeeded) {
+        if (!succeeded and options.publish_shared_slots) {
             const message = failed_message orelse finalizationInvariant("failed interpreter root omitted its explicit failure message");
             program.slotEnvironment().publishFailureOrigin(lowered, module.key, root_id, .{ .loc = interpreter.getFailedSourceLoc(), .region = interpreter.getFailedCheckedRegion() });
             try program.slotEnvironment().publishFailure(lowered, module.key, root_id, message, .{ .resolve = InterpreterProgram.resolveFunction });
@@ -2861,15 +2904,15 @@ fn evalDevProgramRoots(
                 try writer.storeRoot(job.root, .{ .ptr = job.ret_buf.ptr }),
         };
 
-        if (job.result == .success) try native.publishRoot(lowered, module.key, job.root_id, job.root, .{ .ptr = job.ret_buf.ptr });
+        if (options.publish_shared_slots and job.result == .success) try native.publishRoot(lowered, module.key, job.root_id, job.root, .{ .ptr = job.ret_buf.ptr });
         const failure_message: ?[]const u8 = switch (job.result) {
             .success => null,
             .crashed => job.host.crashMessage() orelse "Roc crashed",
             .comptime_exhaustiveness => "compile-time exhaustiveness failure",
             .pending, .host_oom, .host_error => unreachable,
         };
-        if (failure_message != null) native.slots.publishFailureOrigin(lowered, module.key, job.root_id, .{ .loc = job.host.failed_loc, .region = job.host.failed_region });
-        try native.publishFailure(lowered, module.key, job.root_id, failure_message);
+        if (options.publish_shared_slots and failure_message != null) native.slots.publishFailureOrigin(lowered, module.key, job.root_id, .{ .loc = job.host.failed_loc, .region = job.host.failed_region });
+        if (options.publish_shared_slots) try native.publishFailure(lowered, module.key, job.root_id, failure_message);
 
         try recordComptimeSiteHits(problem_store, coverage, owners, job.root.owner, job.compile_time_root, &lowered.lir_result, job.host.comptime_branch_hits.items, job.root.proc);
 
@@ -3402,9 +3445,11 @@ fn recordComptimeSiteHits(
     _ = maybe_problem_store orelse return;
     for (hits) |hit| {
         const site = lir_result.comptime_sites.items[@intFromEnum(hit.site)];
-        if (comptimeSiteEmpiricalKind(site.kind) != null) {
+        if (owners.report_sites and comptimeSiteEmpiricalKind(site.kind) != null) {
             if (site.checked_site) |checked_site| {
-                if (owners.get(site.owner)) |owner| {
+                var alias = owners.position(site.owner);
+                while (alias) |index| : (alias = owners.next_alias[index]) {
+                    const owner = owners.modules[index];
                     if (owner.problem_store) |store| {
                         const owning_root: ?checked.ComptimeRootId = if (site.owner == root_owner) compile_time_root.id else null;
                         if (comptimeSiteMayResolvePending(owner.module, owning_root, checked_site)) {
@@ -3465,6 +3510,7 @@ fn appendCompileTimeExhaustivenessProblem(
     root_proc: lir.LIR.LirProcSpecId,
     site_id: lir.LIR.ComptimeSiteId,
 ) Allocator.Error!void {
+    if (!owners.report_sites) return;
     const site = lir_result.comptime_sites.items[@intFromEnum(site_id)];
     _ = comptimeSiteEmpiricalKind(site.kind) orelse switch (site.kind) {
         .if_ => finalizationInvariant("if expression reached empirical exhaustiveness failure"),
@@ -3473,27 +3519,29 @@ fn appendCompileTimeExhaustivenessProblem(
     const checked_site = site.checked_site orelse {
         finalizationInvariant("empirical exhaustiveness failure had no checked site id");
     };
-    const owner = owners.get(site.owner) orelse {
+    var alias: ?u32 = owners.position(site.owner) orelse
         finalizationInvariant("empirical exhaustiveness failure named a checked module this finalization does not complete");
-    };
-    const problem_store = owner.problem_store orelse {
-        finalizationInvariant("compile-time root reached an empirical exhaustiveness failure without a checking problem store");
-    };
     discardUnreachedRootComptimeSites(owners, lir_result, root_proc, site.owner, checked_site, site_id);
-    const owning_root: ?checked.ComptimeRootId = if (site.owner == root_owner) root.id else null;
-    if (!comptimeSiteMayResolvePending(owner.module, owning_root, checked_site)) {
-        const site_record = owner.module.exhaustiveness_sites.get(checked_site);
-        if (!site_record.requires_pairing) switch (site_record.policy) {
-            .runtime_reachable => {},
-            .not_pending,
-            .compile_time_only,
-            .compile_time_replaced_by_root,
-            => finalizationInvariant("compile-time exhaustiveness failure had an impossible site policy"),
+    while (alias) |index| : (alias = owners.next_alias[index]) {
+        const owner = owners.modules[index];
+        const problem_store = owner.problem_store orelse {
+            finalizationInvariant("compile-time root reached an empirical exhaustiveness failure without a checking problem store");
         };
-    }
-    const matched = try problem_store.appendEmpiricalExhaustivenessFailureRetaining(allocator, checked_site, owner.module.exhaustiveness_sites.get(checked_site).requires_pairing);
-    if (!matched) {
-        finalizationInvariant("empirical exhaustiveness failure had no pending static diagnostic");
+        const owning_root: ?checked.ComptimeRootId = if (site.owner == root_owner) root.id else null;
+        if (!comptimeSiteMayResolvePending(owner.module, owning_root, checked_site)) {
+            const site_record = owner.module.exhaustiveness_sites.get(checked_site);
+            if (!site_record.requires_pairing) switch (site_record.policy) {
+                .runtime_reachable => {},
+                .not_pending,
+                .compile_time_only,
+                .compile_time_replaced_by_root,
+                => finalizationInvariant("compile-time exhaustiveness failure had an impossible site policy"),
+            };
+        }
+        const matched = try problem_store.appendEmpiricalExhaustivenessFailureRetaining(allocator, checked_site, owner.module.exhaustiveness_sites.get(checked_site).requires_pairing);
+        if (!matched) {
+            finalizationInvariant("empirical exhaustiveness failure had no pending static diagnostic");
+        }
     }
 }
 
@@ -3511,17 +3559,20 @@ fn discardUnreachedRootComptimeSites(
         if (comptimeSiteEmpiricalKind(root_site.kind) == null) continue;
         const checked_site = root_site.checked_site orelse continue;
         if (root_site.owner == failed_owner and checked_site == failed_checked_site) continue;
-        const owner = owners.get(root_site.owner) orelse continue;
-        const problem_store = owner.problem_store orelse continue;
-        const site = owner.module.exhaustiveness_sites.get(checked_site);
-        if (site.requires_pairing) continue;
-        switch (site.policy) {
-            .compile_time_replaced_by_root,
-            .compile_time_only,
-            => problem_store.discardPendingStaticExhaustiveness(checked_site),
-            .runtime_reachable,
-            .not_pending,
-            => {},
+        var alias = owners.position(root_site.owner);
+        while (alias) |index| : (alias = owners.next_alias[index]) {
+            const owner = owners.modules[index];
+            const problem_store = owner.problem_store orelse continue;
+            const site = owner.module.exhaustiveness_sites.get(checked_site);
+            if (site.requires_pairing) continue;
+            switch (site.policy) {
+                .compile_time_replaced_by_root,
+                .compile_time_only,
+                => problem_store.discardPendingStaticExhaustiveness(checked_site),
+                .runtime_reachable,
+                .not_pending,
+                => {},
+            }
         }
     }
 }
@@ -3905,12 +3956,14 @@ test "module owners resolve a lowered program's module ids to their finalized mo
     // Finalization completes a subset of the lowering's modules, in an order
     // of its own. Only `key` is read, so the rest of each artifact stays out
     // of this test.
-    var artifacts: [2]checked.CheckedModuleArtifact = undefined;
+    var artifacts: [3]checked.CheckedModuleArtifact = undefined;
     artifacts[0].key = keys[2];
     artifacts[1].key = keys[0];
+    artifacts[2].key = keys[2];
     const modules = [_]ProgramModule{
         .{ .module = &artifacts[0], .problem_store = null },
         .{ .module = &artifacts[1], .problem_store = null },
+        .{ .module = &artifacts[2], .problem_store = null },
     };
 
     var owners = try ModuleOwners.init(allocator, &program, &modules);
@@ -3921,6 +3974,9 @@ test "module owners resolve a lowered program's module ids to their finalized mo
     try std.testing.expect(owners.get(@enumFromInt(1)) == null);
     try std.testing.expectEqual(&artifacts[0], owners.get(@enumFromInt(2)).?.module);
     try std.testing.expectEqual(&artifacts[1], owners.get(.first).?.module);
+    try std.testing.expectEqual(@as(?u32, 2), owners.next_alias[0]);
+    try std.testing.expectEqual(@as(?u32, null), owners.next_alias[1]);
+    try std.testing.expectEqual(@as(?u32, null), owners.next_alias[2]);
 }
 
 test "compile-time progress elapsed rejects unset and future timestamps" {
