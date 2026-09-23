@@ -1859,7 +1859,10 @@ fn parserDeclIsDefiningAssocAlias(self: *const Self, decl_idx: AST.DeclIndex.Dec
 }
 
 fn parserTypeDeclCanPrepare(self: *const Self, decl: AST.DeclIndex.Decl) bool {
-    if (declIndexTypeKind(decl.kind) == null) return false;
+    // Where aliases are preparable too: a where clause may name one before its
+    // declaration, and the placeholder arm in ensureParserTypeDeclBinding fills
+    // it in when the real declaration is canonicalized.
+    if (declIndexTypeKind(decl.kind) == null and decl.kind != .where_alias) return false;
 
     const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(decl.statement);
     const ast_stmt = self.parse_ir.store.getStatement(ast_stmt_idx);
@@ -3231,7 +3234,10 @@ fn ensureParserTypeDeclBinding(
     if (!self.parserTypeDeclCanPrepare(decl)) return null;
     if (!self.parserTypeDeclIsSelected(decl_idx)) return null;
     if (!try self.parserScopeCanSupplyForwardTypeDecl(decl.scope)) return null;
-    const kind = declIndexTypeKind(decl.kind) orelse return null;
+    const kind = declIndexTypeKind(decl.kind) orelse if (decl.kind == .where_alias)
+        AST.TypeDeclKind.where_alias
+    else
+        return null;
     const name_ident = decl.name_ident orelse return null;
     const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(decl.statement);
     const region = self.parserDeclRegion(decl);
