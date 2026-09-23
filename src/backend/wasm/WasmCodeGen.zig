@@ -21567,7 +21567,7 @@ test "wasm backend fuses overflow predicate with matching wrapping result" {
 }
 
 /// Find the single relocation of `type_id`, failing if it is not unique.
-fn expectOneReloc(module: *const WasmModule, type_id: anytype) !WasmLinking.RelocationEntry {
+fn expectOneReloc(module: *const WasmModule, type_id: anytype) error{TestUnexpectedResult}!WasmLinking.RelocationEntry {
     var found: ?WasmLinking.RelocationEntry = null;
     for (module.reloc_code.entries.items) |entry| {
         const matches = switch (entry) {

@@ -9480,7 +9480,7 @@ test "wasm platform exports are exactly the header declaration" {
 
 fn writeDevWasmObject(
     ctx: *CliCtx,
-    build_cache_dir: []const u8,
+    artifact_dir: []const u8,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
     static_data_exports: []const backend.StaticDataExport,
@@ -9565,7 +9565,7 @@ fn writeDevWasmObject(
     try mergeBoxySidecarWasm(ctx, &codegen.module, &lowered.lir_result, .relocatable_object);
     return writeSealedWasmObject(
         ctx,
-        build_cache_dir,
+        artifact_dir,
         "roc_app_wasm32.o",
         &codegen.module,
         &lowered.lir_result,
@@ -9580,7 +9580,6 @@ fn rocBuildWasm(
     target: RocTarget,
     link_type: roc_target.OutputKind,
     final_output_path: []const u8,
-    build_cache_dir: []const u8,
     platform_dir: []const u8,
     targets_config: roc_target.TargetsConfig,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
@@ -9596,10 +9595,17 @@ fn rocBuildWasm(
 
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
 
+    // The intermediate objects have fixed names, so concurrent builds sharing
+    // one directory would link each other's half-written files.
+    const scratch_dir = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+    defer if (!args.keep_temp) compile.CacheCleanup.deleteTempDir(ctx.io.std_io, scratch_dir);
+
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints, static_data_exports, target.cpuLevel());
+        const obj_path = try writeDevWasmObject(ctx, scratch_dir, lowered, entrypoints, static_data_exports, target.cpuLevel());
         try writeArchiveOutput(ctx, .wasm32, final_output_path, link_inputs, &.{obj_path});
         return;
     }
@@ -9614,7 +9620,7 @@ fn rocBuildWasm(
     // global definitions are the platform's `provides` symbols.
     const obj_path = try writeDevWasmObject(
         ctx,
-        build_cache_dir,
+        scratch_dir,
         lowered,
         entrypoints,
         static_data_exports,
@@ -9647,7 +9653,7 @@ fn rocBuildWasm(
         .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
         .wasm_exports = wasm_exports,
         .platform_files_dir = link_inputs.platform_files_dir,
-        .scratch_dir = build_cache_dir,
+        .scratch_dir = scratch_dir,
     };
     linker.link(ctx, link_config) catch |err| {
         return ctx.fail(.{ .linker_failed = .{
@@ -10762,7 +10768,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             target,
             link_type,
             final_output_path,
-            build_cache_dir,
             platform_dir,
             resolved_targets_config,
             &lowered,

@@ -17,44 +17,54 @@ const std = @import("std");
 const ar_magic = "!<arch>\n";
 const wasm_magic = "\x00asm";
 
-/// Relocation type ids from the wasm linking ABI.
-const Reloc = struct {
-    const table_index_sleb: u8 = 1;
-    const memory_addr_leb: u8 = 3;
-    const memory_addr_sleb: u8 = 4;
-    const memory_addr_i32: u8 = 5;
-    const function_offset_i32: u8 = 8;
-    const section_offset_i32: u8 = 9;
-    const memory_addr_rel_sleb: u8 = 11;
-    const table_index_rel_sleb: u8 = 12;
+/// Relocation types from the wasm linking ABI.
+const Reloc = enum(u8) {
+    table_index_sleb = 1,
+    memory_addr_leb = 3,
+    memory_addr_sleb = 4,
+    memory_addr_i32 = 5,
+    function_offset_i32 = 8,
+    section_offset_i32 = 9,
+    memory_addr_rel_sleb = 11,
+    table_index_rel_sleb = 12,
+    _,
 
     /// Absolute forms that make the object unlinkable as a shared module.
-    fn isAbsolute(type_id: u8) bool {
-        return type_id == memory_addr_sleb or type_id == table_index_sleb;
+    fn isAbsolute(self: Reloc) bool {
+        return self == .memory_addr_sleb or self == .table_index_sleb;
     }
 
-    fn isPic(type_id: u8) bool {
-        return type_id == memory_addr_rel_sleb or type_id == table_index_rel_sleb;
+    fn isPic(self: Reloc) bool {
+        return self == .memory_addr_rel_sleb or self == .table_index_rel_sleb;
     }
 
-    fn hasAddend(type_id: u8) bool {
-        return switch (type_id) {
-            memory_addr_leb,
-            memory_addr_sleb,
-            memory_addr_i32,
-            function_offset_i32,
-            section_offset_i32,
-            memory_addr_rel_sleb,
+    fn hasAddend(self: Reloc) bool {
+        return switch (self) {
+            .memory_addr_leb,
+            .memory_addr_sleb,
+            .memory_addr_i32,
+            .function_offset_i32,
+            .section_offset_i32,
+            .memory_addr_rel_sleb,
             => true,
-            else => false,
+            .table_index_sleb,
+            .table_index_rel_sleb,
+            => false,
+            _ => false,
         };
     }
 
-    fn name(type_id: u8) []const u8 {
-        return switch (type_id) {
-            table_index_sleb => "R_WASM_TABLE_INDEX_SLEB",
-            memory_addr_sleb => "R_WASM_MEMORY_ADDR_SLEB",
-            else => "unknown",
+    fn name(self: Reloc) []const u8 {
+        return switch (self) {
+            .table_index_sleb => "R_WASM_TABLE_INDEX_SLEB",
+            .memory_addr_leb => "R_WASM_MEMORY_ADDR_LEB",
+            .memory_addr_sleb => "R_WASM_MEMORY_ADDR_SLEB",
+            .memory_addr_i32 => "R_WASM_MEMORY_ADDR_I32",
+            .function_offset_i32 => "R_WASM_FUNCTION_OFFSET_I32",
+            .section_offset_i32 => "R_WASM_SECTION_OFFSET_I32",
+            .memory_addr_rel_sleb => "R_WASM_MEMORY_ADDR_REL_SLEB",
+            .table_index_rel_sleb => "R_WASM_TABLE_INDEX_REL_SLEB",
+            _ => "unknown",
         };
     }
 };
@@ -99,7 +109,7 @@ const Cursor = struct {
 const Counts = struct {
     absolute: usize = 0,
     pic: usize = 0,
-    first_absolute: ?u8 = null,
+    first_absolute: ?Reloc = null,
 };
 
 /// Walk the `reloc.*` custom sections, ignoring the DWARF ones: debug info is
@@ -123,15 +133,15 @@ fn countRelocations(obj: []const u8, counts: *Counts) ParseError!void {
         _ = try section.uleb(); // target section index
         const count = try section.uleb();
         for (0..count) |_| {
-            const type_id = try section.byte();
+            const reloc: Reloc = @enumFromInt(try section.byte());
             _ = try section.uleb(); // offset
             _ = try section.uleb(); // symbol index
-            if (Reloc.hasAddend(type_id)) try section.skipSleb();
+            if (reloc.hasAddend()) try section.skipSleb();
 
-            if (Reloc.isAbsolute(type_id)) {
+            if (reloc.isAbsolute()) {
                 counts.absolute += 1;
-                if (counts.first_absolute == null) counts.first_absolute = type_id;
-            } else if (Reloc.isPic(type_id)) {
+                if (counts.first_absolute == null) counts.first_absolute = reloc;
+            } else if (reloc.isPic()) {
                 counts.pic += 1;
             }
         }
@@ -140,7 +150,7 @@ fn countRelocations(obj: []const u8, counts: *Counts) ParseError!void {
 
 /// Count relocations in every wasm member of an ar archive, or in the file
 /// itself when it is a bare wasm object.
-fn countFile(bytes: []const u8, counts: *Counts) !usize {
+fn countFile(bytes: []const u8, counts: *Counts) ParseError!usize {
     if (!std.mem.startsWith(u8, bytes, ar_magic)) {
         try countRelocations(bytes, counts);
         return 1;
@@ -190,7 +200,7 @@ pub fn main(init: std.process.Init) anyerror!void {
     if (counts.absolute != 0) {
         std.debug.print(
             "FAILED: {s} has {d} absolute relocation(s) (e.g. {s}); a shared/SIDE_MODULE link rejects these\n",
-            .{ path, counts.absolute, Reloc.name(counts.first_absolute.?) },
+            .{ path, counts.absolute, counts.first_absolute.?.name() },
         );
         return error.NotPositionIndependent;
     }
