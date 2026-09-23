@@ -7828,13 +7828,25 @@ const ProcedureBuilder = struct {
             continuation,
         );
 
+        // A required field whose checked kind is still parametric is stored
+        // in its presence slot; the value writer encodes the Present payload.
+        const present_read = try self.generatedEncoderRequiredPresenceRead(proc, field);
+        const encoded_value = if (present_read) |read| read.payload.local else field_value;
+
         const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
         const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
         defer self.allocator.free(capture_values);
         capture_values[0] = proc.erased_capture_locals.items[0];
-        capture_values[1] = field_value;
+        capture_values[1] = encoded_value;
         @memcpy(capture_values[2..], name_captures);
         continuation = try self.packGeneratedCodecCallable(proc, thunk, thunk_rep, thunk_worker, capture_values, continuation);
+        if (present_read) |read| {
+            continuation = try proc.generatedParserReadTagPayload(field_value, read.present, read.payload, continuation);
+            const present_variants = [_]GeneratedParserTagVariant{read.present};
+            const present_bodies = [_]LIR.CFStmtId{continuation};
+            const impossible = try self.result.store.addCFStmt(.runtime_error);
+            continuation = try proc.generatedParserTagDispatch(field_value, field.rep, &present_variants, &present_bodies, impossible);
+        }
         if (field.optional_missing) {
             const skipped = try self.lowerGeneratedEncoderRecordFieldsFrom(
                 proc,
@@ -7884,6 +7896,32 @@ const ProcedureBuilder = struct {
             .op = .{ .field = .{ .source = record_value, .field_idx = @intCast(field.index) } },
             .next = continuation,
         } });
+    }
+
+    const GeneratedEncoderPresentRead = struct {
+        present: GeneratedParserTagVariant,
+        payload: ProcBodyBuilder.GeneratedParserTagPayload,
+    };
+
+    fn generatedEncoderRequiredPresenceRead(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        field: GeneratedEncoderRecordField,
+    ) Allocator.Error!?GeneratedEncoderPresentRead {
+        if (field.optional_error_type != null) return null;
+        const slot_rep = proc.tagVariantRepForBoundary(field.rep) orelse return null;
+        const slot = self.plan.representations.items[@intFromEnum(slot_rep)];
+        const present_index = slot.presence_slot_present_discriminant orelse return null;
+        const variants = self.plan.tagVariantSlice(slot.tag_variants);
+        if (present_index >= variants.len) boxyLowerInvariant("encoded presence slot Present discriminant exceeded its variants");
+        const present = GeneratedParserTagVariant{
+            .boundary_rep = field.rep,
+            .tag_rep = slot_rep,
+            .owner_rep = slot_rep,
+            .index = present_index,
+            .variant = variants[present_index],
+        };
+        return .{ .present = present, .payload = try proc.generatedParserSingleTagPayloadLocal(present) };
     }
 
     fn lowerGeneratedEncoderSequenceElementsInto(
