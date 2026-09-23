@@ -10226,7 +10226,12 @@ const Builder = struct {
         var methods = std.ArrayList(DictionaryMethodEvidence).empty;
         defer methods.deinit(self.allocator);
         try methods.ensureTotalCapacity(self.allocator, selected.items.len);
-        for (selected.items, self.plan.dictionarySlice(dictionaries)) |entry, requirement| {
+        if (selected.items.len != dictionaries.len) {
+            boxyPlanInvariant("callable dictionary evidence did not cover every dictionary requirement");
+        }
+        for (selected.items, 0..) |entry, requirement_index| {
+            // Analysis below can append requirements, so each one is read by id.
+            const requirement = self.plan.dictionaries.items[dictionaries.start + requirement_index];
             const planned: DictionaryMethodEvidence = switch (entry.resolution) {
                 .direct => |node_id| blk: {
                     const node = view.static_dispatch_plans.evidenceNode(node_id);
@@ -10671,6 +10676,7 @@ const Builder = struct {
         const source_rep = self.plan.representations.items[@intFromEnum(source_rep_id)];
         const source_view = self.moduleForId(source_rep.source_type.module);
         const requirement_view = self.moduleForId(requirement.source_type.module);
+        _ = try self.analyzeType(requirement_view, requirement.fn_ty.ty);
         const owner = methodOwnerForModuleType(source_view, source_rep.source_type.ty) orelse
             self.defaultedDictionaryOwner(source_rep_id);
         if (owner) |method_owner| {

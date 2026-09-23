@@ -32178,6 +32178,8 @@ const ProcBodyBuilder = struct {
         var bindings = std.ArrayList(LocalDescriptorEnvironmentBinding).empty;
         defer bindings.deinit(self.parent.allocator);
         for (hidden_args, hidden_locals) |arg, hidden| {
+            // The result's environment describes only types inside the result.
+            if (!try self.repQuery().repSubtreeContainsRep(result_rep, arg.worker_rep)) continue;
             const local_rep = self.directCallHiddenDescriptorLocalRep(arg, hidden);
             try self.appendLocalDescriptorEnvironmentBinding(&bindings, arg.worker_desc, local_rep, hidden.local);
             try self.appendDescriptorIdentityLocalEnvironmentBinding(&bindings, arg.worker_desc, local_rep, hidden.local);
