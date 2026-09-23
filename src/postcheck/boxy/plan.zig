@@ -10140,12 +10140,19 @@ const Builder = struct {
                 => null,
             };
             var call_source: ?u32 = null;
-            // A call descriptor describes the requirement's storage. It serves
-            // the worker only when the actual needs runtime instantiation; a
+            // A call descriptor describes the requirement's storage of the
+            // actual. It serves a worker descriptor for a bare type variable,
+            // whose storage is the actual's own, and one whose actual needs
+            // runtime instantiation. A structured worker position with a
             // concrete actual gets a static descriptor of the worker's own
-            // storage, which can differ (a concrete `List(U64)` key reaching a
+            // storage, which differs (a concrete `List(U64)` key reaching a
             // `List(item)` worker stores its items boxed).
-            if (argument_source == null and try self.repQuery().repSubtreeHasDescriptor(worker_arg.rep)) {
+            const param_value = self.plan.representations.items[@intFromEnum(param.rep)];
+            const param_is_bare_variable = param_value.kind == .dynamic and param_value.children.len == 0 and
+                param_value.tag_variants.len == 0 and param_value.declared_fields.len == 0;
+            if (argument_source == null and
+                (param_is_bare_variable or try self.repQuery().repSubtreeHasDescriptor(worker_arg.rep)))
+            {
                 const requirement_source_identity = self.repQuery().descriptorArgumentIdentityRep(worker_arg.rep);
                 for (requirement_args, 0..) |requirement_arg, call_index| {
                     const requirement_call_identity = self.repQuery().descriptorArgumentIdentityRep(requirement_arg.rep);
