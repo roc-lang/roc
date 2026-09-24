@@ -4860,6 +4860,8 @@ const ProcedureBuilder = struct {
         for (self.result.boxy_type_descs.items, 0..) |desc, parent_index| {
             const parent: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(parent_index)));
             try self.collectDescriptorGraphRefs(desc.nested_descs, parent, captures, parents);
+            try self.collectDescriptorGraphRefs(desc.inspect_hidden_descs, parent, captures, parents);
+            try self.collectDescriptorGraphRefs(desc.inspect_arg_descs, parent, captures, parents);
             if (desc.tag_ext_desc) |desc_ref| {
                 try self.collectDescriptorGraphRef(desc_ref, parent, captures, parents);
             }
