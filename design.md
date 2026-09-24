@@ -9873,9 +9873,9 @@ available before any dependency identity is chosen. Transitive replay reaches
 a fixed point across arbitrary wrapper depth and recursive call graphs without
 making source syntax or body-lowering order part of type meaning.
 
-A procedure template whose checked function root contains no type variables
-and whose scheme quantifies none (hidden requirement receivers included) has a
-closed interface: its checked root is the complete answer to every request for
+A procedure template whose checked function root contains no type variables,
+whose scheme quantifies none (hidden requirement receivers included), and whose
+callers supply no evidence has a closed interface: its checked root is the complete answer to every request for
 it, and its relation table relates only cells private to its own body.
 Requesters relate the request to that root and stop. Neither a dependency edge
 nor a deferred request replays a closed template's relations, so a caller's

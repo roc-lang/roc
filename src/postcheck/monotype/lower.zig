@@ -961,16 +961,19 @@ const SealedSubstSlot = union(enum) {
 const SealedSubstitution = []const SealedSubstSlot;
 
 /// Whether a procedure template's checked function type is its complete
-/// specialization interface. With no type variables in that root and none
-/// quantified by its scheme (hidden requirement receivers included), a request
-/// is exactly the checked root: the template's relation table relates only
-/// cells private to its own body, so requesters never replay it.
+/// specialization interface. With no type variables in that root, none
+/// quantified by its scheme (hidden requirement receivers included), and no
+/// evidence supplied by its callers, a request is exactly the checked root:
+/// the template's relation table relates only cells private to its own body,
+/// so requesters never replay it.
 fn templateInterfaceIsClosed(view: ModuleView, template: *const checked.CheckedProcedureTemplate) bool {
     const raw = @intFromEnum(template.checked_fn_root);
     if (raw >= view.types.roots.len) {
         Common.invariant("procedure template interface query referenced a missing checked root");
     }
-    return template.scheme_vars.len == 0 and !view.types.roots[raw].contains_identity_variables;
+    return template.scheme_vars.len == 0 and
+        template.evidence_params.len == 0 and
+        !view.types.roots[raw].contains_identity_variables;
 }
 
 /// The requirement schema of a procedure template's scheme.
