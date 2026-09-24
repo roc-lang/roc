@@ -14643,16 +14643,13 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         // template (`lower.AdapterReachability.no_adapter`), so neither can
         // reach the widening adapter that serves a widened use.
         //
-        // Restricted, too, to signatures with no `where` clause. A use whose
+        // A signature with a `where` clause coerces too. A use whose
         // static-dispatch evidence resolves to a local procedure is lowered as
         // a caller-owned specialization (`local_context_dependent` in
-        // `lower.zig`), which is completed inline at its declared interface and
-        // never mints an adapter. Evidence exists only for a `where` clause, so
-        // without one every use is adapter-reachable. With one, the coercion
-        // would open a row a use could widen and lowering could not serve, so
-        // the definition keeps closing by body and such a widening is an
-        // ordinary mismatch (design.md "Row Subsumption", "What remains").
-        if (def_is_function and self.cir.store.getAnnotation(annotation_idx).where == null) {
+        // `lower.zig`), and that specialization is defined as a widening
+        // adapter in the caller's draft when its use widened the row
+        // (`lower.completeCallerOwnedResultRowWideningAdapter`).
+        if (def_is_function) {
             const site = self.annotationResultRowCoercedSite(annotation_idx);
             if (site != .none) {
                 try self.cir.recordResultRowCoercion(ModuleEnv.nodeIdxFrom(def_idx), site == .try_error_row);

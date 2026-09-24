@@ -9037,14 +9037,11 @@ test "check type - polarity - coercion does not reach a local binding" {
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
-test "check type - polarity - coercion does not reach a signature with a where clause" {
+test "check type - polarity - coercion reaches a signature with a where clause" {
     // A use whose `where` evidence resolves to a LOCAL procedure (`Loc.get`
-    // here) is lowered as a caller-owned specialization that never mints an
-    // adapter, so a coerced row it widened could be served by nothing: the
-    // checker accepted this program and lowering then crashed with
-    // "instantiation widened a closed tag union". A `where` clause is the only
-    // source of that evidence, so such a signature keeps closing by body and
-    // the widening is an ordinary mismatch at the use.
+    // here) is lowered as a caller-owned specialization, and lowering defines
+    // it as a widening adapter in the caller's draft, so the signature
+    // coerces exactly like one without a `where` clause.
     const source =
         \\fwd : a, [A, B] -> [A, B] where [a.get : a -> Str]
         \\fwd = |x, t| {
@@ -9065,13 +9062,12 @@ test "check type - polarity - coercion does not reach a signature with a where c
         \\    wider(Loc.L, B)
         \\}
     ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> [A, B, C]");
 }
 
-test "check type - polarity - a where-free forwarder still coerces beside a where-constrained one" {
-    // The negative control for the restriction above: it keys on the `where`
-    // clause, not on the forwarding body, so the same forwarder without one
-    // still publishes a row its callers may widen.
+test "check type - polarity - a where-free forwarder coerces" {
+    // The where-free counterpart of the test above: the same forwarder with
+    // no `where` clause presents a row its callers may widen.
     const source =
         \\fwd : Str, [A, B] -> [A, B]
         \\fwd = |_, t| t

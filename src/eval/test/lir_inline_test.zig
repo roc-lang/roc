@@ -9161,6 +9161,171 @@ test "row subsumption coerces a generic forwarder" {
     , 1);
 }
 
+test "row subsumption serves a where-clause forwarder whose evidence is a local procedure" {
+    // `Loc.get` is a LOCAL procedure, so the use of `fwd` is lowered as a
+    // caller-owned specialization. Its widened row is served by an adapter
+    // built in the caller's draft that calls the caller-owned specialization
+    // at the declared row and re-tags the result. The declared row numbers
+    // `B` 0 and `C` 1 while the requested row numbers them 1 and 2, so a
+    // missing or misordered re-tag reports the wrong tag.
+    try expectRowSubsumptionProgram(
+        \\fwd : a, [B, C] -> [B, C] where [a.get : a -> Str]
+        \\fwd = |x, t| {
+        \\    _s = x.get()
+        \\    t
+        \\}
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\outer : {} -> Bool
+        \\outer = |_| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "loc"
+        \\    }
+        \\
+        \\    wider : Loc, [B, C] -> [A, B, C]
+        \\    wider = |l, t| fwd(l, t)
+        \\
+        \\    show(wider(Loc.L, B)) == "B" and show(wider(Loc.L, C)) == "C"
+        \\}
+        \\
+        \\main : Bool
+        \\main = outer({})
+    , 1);
+}
+
+test "row subsumption serves a where-clause forwarder's Try error row through a caller-owned adapter" {
+    // `Gone` sorts before `NotFound`, so the declared row numbers `NotFound`
+    // 0 and the requested row numbers it 1: a missing or misordered re-tag
+    // reports `Gone` where `fwd` forwarded `NotFound`.
+    try expectRowSubsumptionProgram(
+        \\fwd : a, Try(Str, [NotFound]) -> Try(Str, [NotFound]) where [a.get : a -> Str]
+        \\fwd = |x, t| {
+        \\    _s = x.get()
+        \\    t
+        \\}
+        \\
+        \\show : Try(Str, [Gone, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(NotFound) => "NotFound" }
+        \\
+        \\outer : {} -> Bool
+        \\outer = |_| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "loc"
+        \\    }
+        \\
+        \\    wider : Loc, Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])
+        \\    wider = |l, t| fwd(l, t)
+        \\
+        \\    show(wider(Loc.L, Err(NotFound))) == "NotFound" and show(wider(Loc.L, Ok("x"))) == "Ok(x)"
+        \\}
+        \\
+        \\main : Bool
+        \\main = outer({})
+    , 1);
+}
+
+test "row subsumption serves a recursive where-clause forwarder through a caller-owned adapter" {
+    // The recursive reference inside `fwd`'s body is at the declared row, so
+    // it joins the declared-row specialization the adapter calls rather than
+    // the adapter itself.
+    try expectRowSubsumptionProgram(
+        \\fwd : a, [B, C], U64 -> [B, C] where [a.get : a -> Str]
+        \\fwd = |x, t, n| {
+        \\    _s = x.get()
+        \\    if n == 0 t else fwd(x, t, n - 1)
+        \\}
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\outer : {} -> Bool
+        \\outer = |_| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "loc"
+        \\    }
+        \\
+        \\    wider : Loc, [B, C] -> [A, B, C]
+        \\    wider = |l, t| fwd(l, t, 3)
+        \\
+        \\    show(wider(Loc.L, B)) == "B" and show(wider(Loc.L, C)) == "C"
+        \\}
+        \\
+        \\main : Bool
+        \\main = outer({})
+    , 1);
+}
+
+test "row subsumption shares one caller-owned adapter between two uses at the same row" {
+    // `first` and `second` request the same wide row inside one caller, so
+    // they join one adapter; `narrow`'s use at the declared row joins the
+    // adapter's declared-row specialization and needs no adapter at all.
+    try expectRowSubsumptionProgram(
+        \\fwd : a, [B, C] -> [B, C] where [a.get : a -> Str]
+        \\fwd = |x, t| {
+        \\    _s = x.get()
+        \\    t
+        \\}
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\outer : {} -> Bool
+        \\outer = |_| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "loc"
+        \\    }
+        \\
+        \\    first : Loc, [B, C] -> [A, B, C]
+        \\    first = |l, t| fwd(l, t)
+        \\
+        \\    second : Loc, [B, C] -> [A, B, C]
+        \\    second = |l, t| fwd(l, t)
+        \\
+        \\    narrow : Loc, [B, C] -> [B, C]
+        \\    narrow = |l, t| fwd(l, t)
+        \\
+        \\    same = match narrow(Loc.L, C) { B => "B", C => "C" }
+        \\
+        \\    show(first(Loc.L, B)) == "B" and show(second(Loc.L, C)) == "C" and same == "C"
+        \\}
+        \\
+        \\main : Bool
+        \\main = outer({})
+    , 1);
+}
+
+test "row subsumption serves a where-clause forwarder whose evidence is top-level" {
+    // Top-level evidence keeps the specialization context-free, so the
+    // coordinator's template completion mints the adapter.
+    try expectRowSubsumptionProgram(
+        \\fwd : a, [B, C] -> [B, C] where [a.get : a -> Str]
+        \\fwd = |x, t| {
+        \\    _s = x.get()
+        \\    t
+        \\}
+        \\
+        \\Top := [T].{
+        \\    get : Top -> Str
+        \\    get = |_| "top"
+        \\}
+        \\
+        \\wider : Top, [B, C] -> [A, B, C]
+        \\wider = |l, t| fwd(l, t)
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Top.T, B)) == "B" and show(wider(Top.T, C)) == "C"
+    , 1);
+}
+
 test "row subsumption coerces a forwarder passed as a value" {
     // The coerced function is not called directly: it is passed to a
     // higher-order function at the wider function type, so the widening is

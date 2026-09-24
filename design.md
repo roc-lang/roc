@@ -7084,13 +7084,15 @@ function's return to the result and its arguments out of reach. A declaration
 standing as the signature that is not a function is a bare value annotation,
 which opens no result row.
 
-What remains: deleting the CHECKER half of Hosted Try Question Widening
-(below), the residue for annotated VALUE bindings, whose rows are grounded rather than coerced, and
-signatures with a `where` clause. Those are not coerced: a use whose `where`
+A signature with a `where` clause coerces as well. A use whose `where`
 evidence resolves to a local procedure is lowered as a caller-owned
-specialization, completed inline at its declared interface with no adapter,
-so a coerced row it widened could be served by nothing. Extending the adapter
-to caller-owned specializations would lift that restriction.
+specialization, and the Result-Row Widening Adapter serves such a
+specialization too (see "Caller-owned adapters" there), so every use of a
+coerced top-level function reaches an adapter.
+
+What remains: deleting the CHECKER half of Hosted Try Question Widening
+(below), and the residue for annotated VALUE bindings, whose rows are grounded
+rather than coerced.
 
 The argument for it is interchangeability. A signature is the whole of what a
 caller reads, so two definitions carrying identical annotations must be usable
@@ -7198,9 +7200,8 @@ unification rejects the pair, and that mismatch is a type error by design: a
 closed error row is not widened into an open annotated row at use sites
 (issue #9798's program is rejected). Under polarity a non-hosted callee's
 annotated error row is itself implicitly open, and row subsumption (see Row
-Subsumption) re-opens a forwarded closed row only at a use of a top-level
-function without a `where` clause, so the pairing is not confined to host
-rows.
+Subsumption) re-opens a forwarded closed row at a use of a top-level
+function, so the pairing is not confined to host rows.
 At a host boundary it is GUARANTEED: `..` is rejected there by rule, so a host
 error row is closed by declaration rather than by inference, and every hosted
 call whose caller wants a wider row meets it.
@@ -7502,6 +7503,22 @@ annotated result row a flexible tail that defaults to the empty tag union.
 Deriving the answer a second time from the recorded type therefore reports
 "closed" for rows the relation had already unified, minting an adapter over a
 second, narrow specialization of a template that needed neither.
+
+Caller-owned adapters. A specialization whose evidence depends on the
+caller's local procedures is lowered in the caller's own draft rather than by
+template completion, so the adapter that serves its widened request is built
+there too, from the same graph the request was related in. The widened
+specialization does not lower the template body at all: it is defined as a
+generated adapter that calls a second caller-owned specialization, requested
+at the template's DECLARED interface, and re-tags that call's result into the
+requested row exactly as the completion adapter does (the direct row, or a
+`Try`'s error row with `Ok` passed through). The declared-row specialization
+is found or created by the same lookup every request uses, so it is shared
+with the caller's other uses at the declared row, and requesting the declared
+interface is a fixpoint of the relation: it cannot widen again. It is
+requested under the owner the widened request was made under, which makes it
+the adapter's sibling rather than its descendant, so a recursive reference
+inside its body selects it and never the adapter.
 
 Since a payload's representation is taken from the REQUEST rather than from
 the declared type, a polymorphic implementation's rigid payloads are correct
