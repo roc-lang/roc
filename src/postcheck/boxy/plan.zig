@@ -2991,7 +2991,6 @@ const Builder = struct {
                         .constructor = worker_id,
                         .runtime = runtime_worker,
                     });
-                    try self.alignConstructorReturnWithRuntimeWorker(function, runtime_worker);
                 },
                 .parser_runtime,
                 => {
@@ -3072,25 +3071,6 @@ const Builder = struct {
     /// its own signature, and lowering satisfies each of the packed runtime
     /// callable's descriptor captures from those inputs, so the constructor's
     /// result must be the same representation the runtime worker declares.
-    fn alignConstructorReturnWithRuntimeWorker(
-        self: *Builder,
-        function: FunctionChildren,
-        runtime_worker: WorkerPlanId,
-    ) Allocator.Error!void {
-        const runtime_rep = self.plan.workers.items[@intFromEnum(runtime_worker)].rep;
-        if (runtime_rep == function.ret or runtime_rep == function.rep) return;
-
-        const children = self.plan.representations.items[@intFromEnum(function.rep)].children;
-        var index: u32 = children.start;
-        const end = children.start + children.len;
-        while (index < end) : (index += 1) {
-            if (self.plan.children.items[index].role != .function_ret) continue;
-            self.plan.children.items[index].rep = runtime_rep;
-            return;
-        }
-        boxyPlanInvariant("generated codec constructor representation had no return child");
-    }
-
     fn ensureGeneratedCodecCall(
         self: *Builder,
         caller: WorkerPlanId,
