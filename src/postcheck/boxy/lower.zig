@@ -2020,13 +2020,31 @@ const ProcedureBuilder = struct {
             if (requirement_sources.get(desc) != null) continue;
             try requirement_sources.put(self.allocator, desc, pair.site_rep);
         }
+        // A dictionary a worker passes to its own recursive instantiation has
+        // a requirement written in that worker's scheme variables, so one
+        // descriptor names the requirement's instantiation and the worker's.
+        // Such an adapter converts through the checked callable type at this
+        // edge: the requirement side is lowered apart from the worker's
+        // descriptor bindings, and each side reads only its own sources.
+        const concrete_function: ?StaticMethodFunction = if (try proc.staticMethodSidesShareDescriptors(requirement_function, worker_id)) concrete: {
+            const concrete_rep = self.plan.repForSourceType(requirement_fn_ty) orelse
+                boxyLowerInvariant("static dictionary method callable type was not analyzed");
+            const concrete = self.staticMethodFunctionForRep(concrete_rep) orelse
+                boxyLowerInvariant("static dictionary method callable type was not callable");
+            if (concrete.arg_count != requirement_function.arg_count) {
+                boxyLowerInvariant("static dictionary method callable type arity disagreed with its requirement");
+            }
+            break :concrete concrete;
+        } else null;
         var slot_sources = StaticDescriptorSourceMap{};
         defer slot_sources.deinit(self.allocator);
         for (descriptor_sources.entries.items) |entry| {
             try slot_sources.put(self.allocator, entry.worker_desc, entry.source_rep);
         }
-        for (requirement_sources.entries.items) |entry| {
-            try slot_sources.put(self.allocator, entry.worker_desc, entry.source_rep);
+        if (concrete_function == null) {
+            for (requirement_sources.entries.items) |entry| {
+                try slot_sources.put(self.allocator, entry.worker_desc, entry.source_rep);
+            }
         }
         var desc_context = StaticDescInstantiationContext{};
         defer desc_context.deinit(self.allocator);
@@ -2034,6 +2052,16 @@ const ProcedureBuilder = struct {
             .sources = &slot_sources,
             .context = &desc_context,
         };
+        var requirement_context = StaticDescInstantiationContext{};
+        defer requirement_context.deinit(self.allocator);
+        const requirement_scope = StaticDescriptorMaterializationScope{
+            .sources = &requirement_sources,
+            .context = &requirement_context,
+        };
+        const concrete_children: []const Plan.RepChild = if (concrete_function) |concrete|
+            self.plan.childSlice(self.plan.representations.items[@intFromEnum(concrete.rep)].children)[concrete.args_start..][0..concrete.arg_count]
+        else
+            &.{};
 
         for (requirement_args) |arg| {
             const local = try proc.addArgLocalForRep(arg.rep);
@@ -2087,7 +2115,13 @@ const ProcedureBuilder = struct {
         else
             null;
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = result } });
-        var continuation = try proc.assignStaticMethodBoundary(
+        var continuation = if (concrete_function) |concrete| split: {
+            const concrete_result = try proc.addFrameLocalForRep(concrete.ret);
+            const detached = try proc.enterDetachedDescriptorScope(requirement_scope);
+            const to_requirement = try proc.assignStaticMethodBoundary(result, concrete_result, requirement_function.ret, concrete.ret, ret_stmt);
+            const requirement_step = try proc.leaveDetachedDescriptorScope(detached, to_requirement);
+            break :split try proc.assignStaticMethodBoundary(concrete_result, raw_result, concrete.ret, worker_function.ret, requirement_step);
+        } else try proc.assignStaticMethodBoundary(
             result,
             raw_result,
             requirement_function.ret,
@@ -2105,6 +2139,27 @@ const ProcedureBuilder = struct {
         while (arg_index > 0) {
             arg_index -= 1;
             if (worker_call_args[arg_index] == proc.arg_locals.items[arg_index]) continue;
+            if (concrete_function != null) {
+                const concrete_arg = concrete_children[arg_index].rep;
+                const concrete_local = try proc.addFrameLocalForRep(concrete_arg);
+                continuation = try proc.assignStaticMethodBoundary(
+                    worker_call_args[arg_index],
+                    concrete_local,
+                    worker_args[arg_index].rep,
+                    concrete_arg,
+                    continuation,
+                );
+                const detached = try proc.enterDetachedDescriptorScope(requirement_scope);
+                const to_concrete = try proc.assignStaticMethodBoundary(
+                    concrete_local,
+                    proc.arg_locals.items[arg_index],
+                    concrete_arg,
+                    requirement_args[arg_index].rep,
+                    continuation,
+                );
+                continuation = try proc.leaveDetachedDescriptorScope(detached, to_concrete);
+                continue;
+            }
             continuation = try proc.assignStaticMethodBoundary(
                 worker_call_args[arg_index],
                 proc.arg_locals.items[arg_index],
@@ -26934,41 +26989,6 @@ const ProcBodyBuilder = struct {
         return self.parent.tagPayloadStorageDescRepForLayout(rep_id, storage_layout, force);
     }
 
-    fn descriptorLocalForMatchingSourceArg(
-        self: *ProcBodyBuilder,
-        hidden_arg: Plan.DirectCallHiddenDescriptorArg,
-        arg_types: []const Plan.CheckedTypeIdentity,
-        source_args: []const LIR.LocalId,
-        pre_arg_descriptor_initializers: *std.ArrayList(DescriptorArgLocal),
-    ) Allocator.Error!?DescriptorArgLocal {
-        if (!self.directCallHiddenDescriptorUsesCallShape(hidden_arg)) return null;
-        for (arg_types, source_args) |arg_type, source| {
-            if (!planTypeRefEql(arg_type, hidden_arg.source_type)) continue;
-            const arg_rep = self.repForTypeRef(arg_type);
-            const identity_arg_rep = self.descriptorStorageRep(arg_rep);
-            const identity_hidden_rep = self.descriptorStorageRep(hidden_arg.rep);
-            if (identity_arg_rep != identity_hidden_rep) continue;
-            const desc_ref = self.parent.result.store.getLocal(source).boxy_desc orelse continue;
-            if (desc_ref.localOrNull()) |desc_local| {
-                if (!self.localIsReadOnlyDescriptorInput(desc_local)) {
-                    const materialization = try self.descriptorMaterializationForSourceRep(identity_arg_rep);
-                    try pre_arg_descriptor_initializers.append(self.parent.allocator, .{
-                        .local = desc_local,
-                        .materialize = materialization.desc,
-                        .captures = materialization.captures,
-                    });
-                }
-                return .{ .local = desc_local, .from_source_value = true };
-            }
-            return .{
-                .local = try self.addFrameLocal(.opaque_ptr),
-                .materialize = desc_ref,
-                .from_source_value = true,
-            };
-        }
-        return null;
-    }
-
     fn directCallResultDescriptorRef(
         self: *ProcBodyBuilder,
         result_rep: Plan.TypeRepId,
@@ -35471,6 +35491,68 @@ const ProcBodyBuilder = struct {
         const dict_index = @intFromEnum(dict);
         if (dict_index >= self.dictionary_bound.len) return false;
         return self.dictionary_bound[dict_index];
+    }
+
+    const DetachedDescriptorScope = struct {
+        outer_bindings: DescriptorBindingsSnapshot,
+        outer_static: ?StaticDescriptorMaterializationScope,
+        static: StaticDescriptorMaterializationScope,
+    };
+
+    /// Lower a region whose descriptors come only from `static`, apart from
+    /// every descriptor this frame has bound.
+    fn enterDetachedDescriptorScope(
+        self: *ProcBodyBuilder,
+        static: StaticDescriptorMaterializationScope,
+    ) Allocator.Error!DetachedDescriptorScope {
+        const outer_bindings = try self.snapshotDescriptorBindings();
+        @memset(self.descriptor_locals, null);
+        @memset(self.descriptor_local_reps, null);
+        @memset(self.descriptor_bound, false);
+        @memset(self.descriptor_evidence_bound, false);
+        @memset(self.descriptor_slots, null);
+        @memset(self.descriptor_slot_reps, null);
+        self.descriptor_rep_bindings.items.len = 0;
+        const outer_static = self.static_descriptor_materialization_scope;
+        self.static_descriptor_materialization_scope = static;
+        return .{ .outer_bindings = outer_bindings, .outer_static = outer_static, .static = static };
+    }
+
+    /// End `scope` around `body`: initialize the descriptor slots the region
+    /// used from its static sources, then restore the frame's bindings.
+    fn leaveDetachedDescriptorScope(
+        self: *ProcBodyBuilder,
+        scope: DetachedDescriptorScope,
+        body: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        defer scope.outer_bindings.deinit(self.parent.allocator);
+        const continuation = try self.prependStaticDescriptorMaterializationsForSlotsWithSources(
+            scope.static.sources,
+            scope.static.context,
+            body,
+        );
+        self.restoreDescriptorBindings(scope.outer_bindings);
+        self.static_descriptor_materialization_scope = scope.outer_static;
+        return continuation;
+    }
+
+    /// Whether a static method's requirement type and its worker describe
+    /// values with one descriptor requirement.
+    fn staticMethodSidesShareDescriptors(
+        self: *ProcBodyBuilder,
+        requirement_function: ProcedureBuilder.StaticMethodFunction,
+        worker_id: Plan.WorkerPlanId,
+    ) Allocator.Error!bool {
+        var requirement_params = std.ArrayList(Plan.HiddenDescriptorParam).empty;
+        defer requirement_params.deinit(self.parent.allocator);
+        try self.collectAllHiddenDescriptorParamsForRep(requirement_function.rep, &requirement_params);
+        const worker = self.parent.plan.workers.items[@intFromEnum(worker_id)];
+        for (self.parent.plan.hiddenDescriptorParamSlice(worker.hidden_descs)) |worker_param| {
+            for (requirement_params.items) |requirement_param| {
+                if (requirement_param.desc == worker_param.desc) return true;
+            }
+        }
+        return false;
     }
 
     fn snapshotDescriptorBindings(self: *ProcBodyBuilder) Allocator.Error!DescriptorBindingsSnapshot {
