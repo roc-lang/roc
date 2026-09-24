@@ -99,7 +99,11 @@ const DictCopyKeyContext = struct {
     }
 
     pub fn eql(_: DictCopyKeyContext, a: DictCopyKey, b: DictCopyKey) bool {
-        return a.dict_id == b.dict_id and std.mem.eql(usize, a.capture_values, b.capture_values);
+        if (a.dict_id != b.dict_id or a.capture_values.len != b.capture_values.len) return false;
+        for (a.capture_values, b.capture_values) |a_value, b_value| {
+            if (a_value != b_value) return false;
+        }
+        return true;
     }
 };
 
