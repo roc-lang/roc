@@ -39436,6 +39436,11 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     try std.testing.expectEqual(@as(usize, 2), v.nominalDeclarationById(loaded.nominal_declarations.items[0].id).declaredRecordFields(v).len);
 }
 
+/// Convert an intentional fixture-table position while preserving enum inference.
+fn fixtureTableIndex(comptime index: u32) u32 {
+    return index;
+}
+
 test "loop mutation plans preserve expect mode, dispatch operands, nesting, condition loops and serialization" {
     // Loop-only metadata must not widen the expression union's existing call payload.
     try std.testing.expect(@sizeOf(@TypeOf(@as(StoredCheckedExprData, undefined).for_)) <= @sizeOf(@TypeOf(@as(StoredCheckedExprData, undefined).call)));
@@ -39444,15 +39449,15 @@ test "loop mutation plans preserve expect mode, dispatch operands, nesting, cond
     defer store.deinit(gpa);
     const Fixture = struct {
         fn expression(id: u32, data: CheckedExprData) CheckedExpr {
-            return .{ .id = @enumFromInt(id), .ty = @enumFromInt(0), .source_region = base.Region.from_raw_offsets(0, 0), .data = data };
+            return .{ .id = @enumFromInt(id), .ty = @enumFromInt(fixtureTableIndex(0)), .source_region = base.Region.from_raw_offsets(0, 0), .data = data };
         }
         fn statement(id: u32, data: CheckedStatementData) CheckedStatement {
             return .{ .id = @enumFromInt(id), .source_region = base.Region.from_raw_offsets(0, 0), .data = data };
         }
     };
-    const e0: CheckedExprId = @enumFromInt(0);
-    const p0: CheckedPatternId = @enumFromInt(0);
-    const b0: PatternBinderId = @enumFromInt(0);
+    const e0: CheckedExprId = @enumFromInt(fixtureTableIndex(0));
+    const p0: CheckedPatternId = @enumFromInt(fixtureTableIndex(0));
+    const b0: PatternBinderId = @enumFromInt(fixtureTableIndex(0));
     const b1: PatternBinderId = @enumFromInt(1);
     const b2: PatternBinderId = @enumFromInt(2);
     for ([_]PatternBinderId{ b0, b1, b2 }) |binder| try store.pattern_binders.append(gpa, .{
@@ -39465,13 +39470,13 @@ test "loop mutation plans preserve expect mode, dispatch operands, nesting, cond
         Fixture.expression(1, .{ .block = .{ .statements = &.{ @enumFromInt(1), @enumFromInt(2) }, .final_expr = e0 } }),
         Fixture.expression(2, .{ .expect = @enumFromInt(1) }),
         Fixture.expression(3, .{ .lambda = .{ .args = &.{}, .body = @enumFromInt(6) } }),
-        Fixture.expression(4, .{ .block = .{ .statements = &.{ @enumFromInt(0), @enumFromInt(3), @enumFromInt(4) }, .final_expr = e0 } }),
+        Fixture.expression(4, .{ .block = .{ .statements = &.{ @enumFromInt(fixtureTableIndex(0)), @enumFromInt(3), @enumFromInt(4) }, .final_expr = e0 } }),
         Fixture.expression(5, .{ .for_ = .{ .pattern = p0, .expr = e0, .body = @enumFromInt(7), .plan = null } }),
         Fixture.expression(6, .{ .block = .{ .statements = &.{@enumFromInt(5)}, .final_expr = e0 } }),
-        Fixture.expression(7, .{ .dispatch_call = @enumFromInt(0) }),
+        Fixture.expression(7, .{ .dispatch_call = @enumFromInt(fixtureTableIndex(0)) }),
         Fixture.expression(8, .{ .for_ = .{ .pattern = p0, .expr = e0, .body = @enumFromInt(5), .plan = null } }),
         Fixture.expression(9, .{ .block = .{ .statements = &.{@enumFromInt(7)}, .final_expr = e0 } }),
-        Fixture.expression(10, .{ .block = .{ .statements = &.{@enumFromInt(0)}, .final_expr = e0 } }),
+        Fixture.expression(10, .{ .block = .{ .statements = &.{@enumFromInt(fixtureTableIndex(0))}, .final_expr = e0 } }),
         Fixture.expression(11, .{ .for_ = .{ .pattern = p0, .expr = e0, .body = @enumFromInt(9), .plan = null } }),
     });
     try store.commitStatements(gpa, &.{
