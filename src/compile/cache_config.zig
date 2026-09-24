@@ -250,7 +250,12 @@ pub const Constants = struct {
     /// 111: A hosted function records a row coercion for the `Try` error row
     ///      its annotation closes as written, so every use re-opens its copy;
     ///      a signature with a `where` clause records one like any other.
-    pub const CACHE_VERSION = 111;
+    /// 112: A signature naming a parameterised function alias opens its
+    ///      formal's result occurrence as its own row, an alias's backing
+    ///      decides where its argument rows sit, and a static-dispatch use
+    ///      re-opens a coerced target's result row, so more definitions
+    ///      record a row coercion for the same source.
+    pub const CACHE_VERSION = 112;
 };
 
 /// Configuration for the Roc cache system.

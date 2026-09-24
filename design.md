@@ -7094,6 +7094,46 @@ function's return to the result and its arguments out of reach. A declaration
 standing as the signature that is not a function is a bare value annotation,
 which opens no result row.
 
+An alias's own arguments do not decide where a row sits. A referenced alias
+stores the vars substituted for its formals twice—in its argument list and in
+its backing—and the instantiator copies the BACKING first, so the memo that
+keeps a shared var shared hands the argument list the copy the backing's
+position decided. `Fwd : Res([E]) -> Res([E])` with `Res(e) : Try(Str, e)`
+therefore opens the error row its backing puts on the result, as the inline
+spelling does. A var the backing itself uses at a nested position before the
+result stays out of reach (every constructor visits its out-of-reach children
+first), which fails closed.
+
+A PARAMETERISED function alias coerces at the result occurrence of its formal.
+Substitution shares one var at every occurrence of a formal, but a row written
+in place is decided per position, and one variable cannot be closed at the
+input and open at the result (`Fwd(e) : Try(Str, e) -> Try(Str, e)` with
+`fwd : Fwd([NotFound])`). So for a declaration standing as the signature, the
+annotation walk builds a twin of each argument that is a row it generated—the
+same tags behind a fresh extension, opened exactly as a row written at the
+result is—and the instantiator substitutes the twin at the occurrence it
+reaches as `.result` or `.try_row`, and the shared argument everywhere else,
+including the alias's own argument list (`Instantiator.ResultRowTwin`). The
+instantiator finds that occurrence by the same reach it already computes while
+walking the declaration's type, so an imported alias is answered exactly as a
+local one, with no recorded axis. A where-method signature's twin carries the
+deferral marker instead, decided per use like the inline row. The twin shares
+the argument's payloads, so a row nested inside it keeps the argument's
+generation (fail-closed where the inline spelling would open a payload row); a
+written extension (`..r`) and `[]` get no twin, since neither is reopened by
+position.
+
+Every use of a coerced definition re-opens its row, however it names it: a
+local or external lookup, an associated lookup (`Type.item`, including through
+an alias of the owner), and a static-dispatch method call, whose selected
+target reads its definition's record in `instantiateDispatchTargetMethodVar`
+exactly as a lookup does. A use cannot precede the record: top-level
+definitions are checked in dependency order, and a reference to an unchecked
+definition outside the current recursive group is an invariant violation.
+Inside the group a use instantiates the predeclared annotation, whose result
+row is still the annotation's implicitly open row, so an in-group widening
+use is accepted and served by the same adapter once the body's record lands.
+
 A signature with a `where` clause coerces as well. A use whose `where`
 evidence resolves to a local procedure is lowered as a caller-owned
 specialization, and the Result-Row Widening Adapter serves such a
@@ -7506,7 +7546,10 @@ with the caller's other uses at the declared row, and requesting the declared
 interface is a fixpoint of the relation: it cannot widen again. It is
 requested under the owner the widened request was made under, which makes it
 the adapter's sibling rather than its descendant, so a recursive reference
-inside its body selects it and never the adapter.
+inside its body selects it and never the adapter. The adapter itself relates
+none of the template's codec, dispatch, or interface relations: it lowers no
+template body, and the declared-row specialization it calls relates all of
+them when it is requested, so the adapter relies on that specialization's.
 
 Since a payload's representation is taken from the REQUEST rather than from
 the declared type, a polymorphic implementation's rigid payloads are correct
@@ -9344,11 +9387,30 @@ Other solved-graph mutations:
   that it closed the `Try` error row standing as the result (inline, or
   through an alias via `Instantiator.closed_marker_reaches`). An associated
   lookup through an alias of the owner (`checkResolvedAssociatedTarget`)
-  re-opens like a local or external lookup. Pinned in
+  and a static-dispatch use (`reopenCoercedDispatchTarget`) re-open like a
+  local or external lookup. A signature naming a parameterised function
+  alias opens its formal's result occurrence through a twin row
+  (`addResultRowTwin`, `Instantiator.ResultRowTwin`). Pinned in
+  src/check/test/type_checking_integration.zig: accepted—"a parameterised
+  function alias's Try error row coerces", "... whose formal is only the
+  result coerces", "an imported parameterised function alias coerces its
+  result occurrence", "a where-method named through a parameterised function
+  alias widens", "an alias argument standing on the result row through a
+  function alias coerces", "a method call to a coerced forwarder re-opens its
+  result row", "a method call to an imported coerced method re-opens its
+  result row", "a qualified call to a coerced method re-opens its result
+  row", "a recursive-group use of a forwarder sees its annotated open row";
+  rejected—"a parameterised function alias keeps its input occurrence
+  closed", "... does not reach a nested occurrence", "an alias argument
+  nested through a function alias stays closed", "a method call does not
+  re-open a coerced method's input row", "a method call does not reach a
+  nested row of a coerced method", "a curried function alias signature does
+  not reach the inner return". Pinned in
   src/compile/test/hosted_row_subsumption_test.zig: accepted—"a hosted Try
   error row widens at an annotated binding", "... declared through an alias
   widens", "... named through an alias of its owner widens", "... carried as
-  a value widens", "`?` on a hosted call in an unannotated function widens";
+  a value widens", "`?` on a hosted call in an unannotated function widens",
+  "a hosted Try error row widens at a method call";
   rejected—"a hosted direct result row does not widen", "a hosted Try ok row
   does not widen", "a hosted error row written open is reported, not
   coerced"; and at run time by test/fx-open/hosted_widening_channels.roc.

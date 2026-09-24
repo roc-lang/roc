@@ -7824,7 +7824,10 @@ const Builder = struct {
         // A declared-row specialization this request created is owned exactly
         // as the widened request was, never by the adapter: its lexical owner
         // and its recursion ancestry are the caller's. (One found instead was
-        // created by an earlier request, under that request's owner.)
+        // created by an earlier request, under that request's owner.) This
+        // restates what the lookup-or-create path above constructs; it guards
+        // only the created case, since a found specialization's owner was
+        // fixed by the request that created it.
         if (narrow_spec >= specs_before and
             (!std.meta.eql(source_ctx.draft.fns.items[@intFromEnum(narrow_fn)].parent_owner, caller_owner) or
                 !std.meta.eql(source_ctx.draft.template_specs.items[narrow_spec].lexical_owner, spec.lexical_owner)))
@@ -18901,10 +18904,14 @@ const BodyContext = struct {
     /// (see `OptionalDestructBind`), drained by the same owners that drain
     /// `pattern_literal_guards`.
     optional_destruct_binds: std.ArrayList(OptionalDestructBind) = .empty,
-    /// Reused by the caller-owned result-row widening adapter and its draft
-    /// re-tag helpers (`injectTagRowAtNodes`): each use appends from the
-    /// current length and shrinks back when done, so one buffer per kind
-    /// serves every adapter this context builds.
+    /// Scratch for the caller-owned result-row widening adapter and its draft
+    /// re-tag helpers (`injectTagRowAtNodes`). A body context lowers one
+    /// specialization and builds at most one such adapter, so these are not
+    /// shared across adapters: they start empty and allocate only if this
+    /// context builds one. Within that adapter each use appends from the
+    /// current length and shrinks back when done, so the call's arguments and
+    /// every re-tagged tag's payloads share one buffer per kind instead of
+    /// allocating a list per tag.
     row_injection_branches: std.ArrayList(DraftBranch) = .empty,
     row_injection_pats: std.ArrayList(DraftPatId) = .empty,
     row_injection_exprs: std.ArrayList(DraftExprId) = .empty,

@@ -68,6 +68,29 @@ const written_open_platform_module =
     \\}
 ;
 
+/// A hosted function reached by METHOD-call syntax: `conn.read!()` is a
+/// static-dispatch use of `Host.read!`, not a lookup of it.
+const method_platform_main =
+    \\platform ""
+    \\    requires {} { main! : () => U64 }
+    \\    exposes [Host]
+    \\    packages {}
+    \\    provides { "result": result! }
+    \\    hosted { "open": Host.open!, "read": Host.read! }
+    \\
+    \\import Host
+    \\
+    \\result! : () => U64
+    \\result! = || main!()
+;
+
+const method_platform_module =
+    \\Host := [Conn(U64)].{
+    \\    open! : U64 => Host
+    \\    read! : Host => Try(U64, [HostErr(U64)])
+    \\}
+;
+
 const PlatformFiles = struct {
     main: []const u8,
     module: []const u8,
@@ -159,7 +182,11 @@ fn inspectNothing(_: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToL
 /// Checks the app cleanly, then lowers it under both specialization
 /// strategies.
 fn expectAccepted(app_source: []const u8) TestError!void {
-    var workspace = try Workspace.init(app_source, default_platform);
+    try expectAcceptedOn(app_source, default_platform);
+}
+
+fn expectAcceptedOn(app_source: []const u8, platform: PlatformFiles) TestError!void {
+    var workspace = try Workspace.init(app_source, platform);
     defer workspace.deinit();
     try expectReports(workspace.app_path, &.{});
     for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
@@ -271,6 +298,27 @@ test "hosted row subsumption: `?` on a hosted call in an unannotated function wi
         \\    }
         \\}
     );
+}
+
+test "hosted row subsumption: a hosted Try error row widens at a method call" {
+    // The dispatch use reads the hosted definition's coercion record exactly
+    // as a lookup does, so the widened use is served by the hosted adapter.
+    try expectAcceptedOn(
+        \\app [main!] { pf: platform "./platform/main.roc" }
+        \\import pf.Host
+        \\
+        \\main! : () => U64
+        \\main! = || {
+        \\    conn = Host.open!(1)
+        \\    value : Try(U64, [HostErr(U64), Widened])
+        \\    value = conn.read!()
+        \\    match value {
+        \\        Ok(n) => n
+        \\        Err(HostErr(n)) => n
+        \\        Err(Widened) => 0
+        \\    }
+        \\}
+    , .{ .main = method_platform_main, .module = method_platform_module });
 }
 
 test "hosted row subsumption: a hosted direct result row does not widen" {

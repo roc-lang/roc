@@ -9379,6 +9379,350 @@ test "check type - polarity - a function alias signature does not open its input
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
+test "check type - polarity - a where-method named through a function alias widens like its inline spelling" {
+    // `Classify(a)` names the whole where-method signature. Its return is the
+    // signature's direct result exactly as `a -> [Low, High]` written inline
+    // is, so the body's use may widen it per use.
+    const source =
+        \\Classify(a) : a -> [Low, High]
+        \\
+        \\describe : a -> [Low, High, Unknown] where [a.classify : Classify(a)]
+        \\describe = |x| x.classify()
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "a -> [High, Low, Unknown] where [a.classify : Classify(a)]");
+}
+
+test "check type - polarity - a where-method named through a function alias keeps a nested row closed" {
+    // The rejected side: a row inside a `List` in that alias's return is out
+    // of the adapter's reach, so a body use that widens it is a mismatch, as
+    // it is when the signature is written inline.
+    const source =
+        \\Classify(a) : a -> List([Low, High])
+        \\
+        \\describe : a -> List([Low, High, Unknown]) where [a.classify : Classify(a)]
+        \\describe = |x| x.classify()
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - a where-method named through a parameterised function alias widens" {
+    // The row reaches the result through the alias's FORMAL: `e` is the
+    // alias's whole return, so the argument `[Low, High]` stands on the
+    // signature's direct result and defers per use like the inline spelling.
+    const source =
+        \\Classify(a, e) : a -> e
+        \\
+        \\describe : a -> [Low, High, Unknown] where [a.classify : Classify(a, [Low, High])]
+        \\describe = |x| x.classify()
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "a -> [High, Low, Unknown] where [a.classify : Classify(a, [High, Low])]");
+}
+
+test "check type - polarity - a parameterised function alias's Try error row coerces" {
+    // `e` stands in BOTH the input and the result, so the one argument var
+    // cannot be open on the output side and closed on the input side. The
+    // result occurrence gets its own row, opened exactly where the inline
+    // spelling `Try(Str, [NotFound]) -> Try(Str, [NotFound])` opens it.
+    const source =
+        \\Fwd(e) : Try(Str, e) -> Try(Str, e)
+        \\
+        \\fwd : Fwd([NotFound])
+        \\fwd = |t| t
+        \\
+        \\wider : Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])");
+}
+
+test "check type - polarity - a parameterised function alias whose formal is only the result coerces" {
+    const source =
+        \\Fwd(e) : [A, B] -> e
+        \\
+        \\fwd : Fwd([A, B])
+        \\fwd = |x| x
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| fwd(x)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A, B] -> [A, B, C]");
+}
+
+test "check type - polarity - a parameterised function alias keeps its input occurrence closed" {
+    // The input occurrence of `e` keeps the argument as written.
+    const source =
+        \\Fwd(e) : Try(Str, e) -> Try(Str, e)
+        \\
+        \\fwd : Fwd([NotFound])
+        \\fwd = |t| t
+        \\
+        \\bad = fwd(Err(Gone))
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - a parameterised function alias does not reach a nested occurrence" {
+    // `e` inside a `List` in the return is out of the adapter's reach.
+    const source =
+        \\Fwd(e) : Try(Str, e) -> List(Try(Str, e))
+        \\
+        \\fwd : Fwd([NotFound])
+        \\fwd = |t| [t]
+        \\
+        \\wider : Try(Str, [NotFound]) -> List(Try(Str, [Gone, NotFound]))
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - an alias argument standing on the result row through a function alias coerces" {
+    // `Res([E])` inside `Fwd`'s return: the alias's argument var is shared
+    // with its backing, and the backing's `Try` error cell is the position
+    // that decides whether the row is reachable, exactly as the inline
+    // `Res([E]) -> Res([E])` decides it.
+    const source =
+        \\Res(e) : Try(Str, e)
+        \\
+        \\Fwd : Res([E]) -> Res([E])
+        \\
+        \\fwd : Fwd
+        \\fwd = |t| t
+        \\
+        \\wider : Try(Str, [E]) -> Try(Str, [E, F])
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(Str, [E]) -> Try(Str, [E, F])");
+}
+
+test "check type - polarity - an alias argument nested through a function alias stays closed" {
+    const source =
+        \\Many(e) : List(e)
+        \\
+        \\Fwd : Many([E]) -> Many([E])
+        \\
+        \\fwd : Fwd
+        \\fwd = |t| t
+        \\
+        \\wider : List([E]) -> List([E, F])
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - an effectful function alias signature coerces" {
+    const source =
+        \\Fwd : [A, B] => [A, B]
+        \\
+        \\fwd! : Fwd
+        \\fwd! = |x| {
+        \\    dbg x
+        \\    x
+        \\}
+        \\
+        \\wider! : [A, B] => [A, B, C]
+        \\wider! = |x| fwd!(x)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A, B] => [A, B, C]");
+}
+
+test "check type - polarity - an alias of a function alias signature coerces" {
+    const source =
+        \\F1 : [A, B] -> [A, B]
+        \\
+        \\F2 : F1
+        \\
+        \\fwd : F2
+        \\fwd = |x| x
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| fwd(x)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A, B] -> [A, B, C]");
+}
+
+test "check type - polarity - a curried function alias signature does not reach the inner return" {
+    // Only the signature's OWN function's return is reachable; the function
+    // it returns is a nested position.
+    const source =
+        \\Fwd : [A, B] -> ([A, B] -> [A, B])
+        \\
+        \\fwd : Fwd
+        \\fwd = |_| |y| y
+        \\
+        \\wider : [A, B] -> ([A, B] -> [A, B, C])
+        \\wider = |x| fwd(x)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - a method call to a coerced forwarder re-opens its result row" {
+    // A static-dispatch use reaches the same definition a lookup does, so it
+    // reads the same coercion record and re-opens its own copy of the row.
+    const source =
+        \\Holder := [Holder].{
+        \\    fwd : Holder, [A, B] -> [A, B]
+        \\    fwd = |_, x| x
+        \\}
+        \\
+        \\wider : Holder, [A, B] -> [A, B, C]
+        \\wider = |b, x| b.fwd(x)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Holder, [A, B] -> [A, B, C]");
+}
+
+test "check type - polarity - a qualified call to a coerced method re-opens its result row" {
+    const source =
+        \\Holder := [Holder].{
+        \\    fwd : Holder, [A, B] -> [A, B]
+        \\    fwd = |_, x| x
+        \\}
+        \\
+        \\wider : Holder, [A, B] -> [A, B, C]
+        \\wider = |b, x| Holder.fwd(b, x)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Holder, [A, B] -> [A, B, C]");
+}
+
+test "check type - polarity - a method call does not re-open a coerced method's input row" {
+    const source =
+        \\Holder := [Holder].{
+        \\    fwd : Holder, [A, B] -> [A, B]
+        \\    fwd = |_, x| x
+        \\}
+        \\
+        \\bad = |b| b.fwd(C)
+        \\
+        \\use : Holder -> [A, B]
+        \\use = |b| bad(b)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - a method call does not reach a nested row of a coerced method" {
+    const source =
+        \\Holder := [Holder].{
+        \\    wrap : Holder, [A, B] -> List([A, B])
+        \\    wrap = |_, x| [x]
+        \\}
+        \\
+        \\wider : Holder, [A, B] -> List([A, B, C])
+        \\wider = |b, x| b.wrap(x)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - a recursive-group use of a forwarder sees its annotated open row" {
+    // Top-level definitions are checked in dependency order, so a use outside
+    // a forwarder's own recursive group always finds its coercion record. A
+    // use INSIDE the group instantiates the predeclared annotation, whose
+    // result row is still the annotation's implicitly open row.
+    const source =
+        \\fwd : [A, B], U64 -> [A, B]
+        \\fwd = |x, n| if n == 0 x else {
+        \\    _ = wider(x, n - 1)
+        \\    x
+        \\}
+        \\
+        \\wider : [A, B], U64 -> [A, B, C]
+        \\wider = |x, n| fwd(x, n)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A, B], U64 -> [A, B, C]");
+}
+
+test "check type - polarity - an imported function alias forwarder coerces at the use" {
+    const source_lib =
+        \\module [Fwd, fwd]
+        \\
+        \\Fwd : [A, B] -> [A, B]
+        \\
+        \\fwd : Fwd
+        \\fwd = |x| x
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| Lib.fwd(x)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertLastDefType("[A, B] -> [A, B, C]");
+}
+
+test "check type - polarity - an imported function alias names a local forwarder's signature" {
+    const source_lib =
+        \\module [Fwd]
+        \\
+        \\Fwd : [A, B] -> [A, B]
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\fwd : Lib.Fwd
+        \\fwd = |x| x
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| fwd(x)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertLastDefType("[A, B] -> [A, B, C]");
+}
+
+test "check type - polarity - an imported parameterised function alias coerces its result occurrence" {
+    // No recorded axis is needed: the instantiator finds the result
+    // occurrence by walking the imported declaration's type.
+    const source_lib =
+        \\module [Fwd]
+        \\
+        \\Fwd(e) : Try(Str, e) -> Try(Str, e)
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\fwd : Lib.Fwd([NotFound])
+        \\fwd = |t| t
+        \\
+        \\wider : Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])
+        \\wider = |t| fwd(t)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertLastDefType("Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])");
+}
+
+test "check type - polarity - a method call to an imported coerced method re-opens its result row" {
+    const source_lib =
+        \\module [Holder]
+        \\
+        \\Holder := [Holder].{
+        \\    fwd : Holder, [A, B] -> [A, B]
+        \\    fwd = |_, x| x
+        \\}
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib exposing [Holder]
+        \\
+        \\wider : Holder, [A, B] -> [A, B, C]
+        \\wider = |b, x| b.fwd(x)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertLastDefType("Holder, [A, B] -> [A, B, C]");
+}
+
 test "check type - polarity - annotated input union stays closed" {
     const source =
         \\handle : [Known] -> Str

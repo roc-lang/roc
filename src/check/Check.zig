@@ -7567,6 +7567,161 @@ fn recordOpenedMarkerExts(self: *Self, opened: []const Instantiator.OpenedMarker
     }
 }
 
+/// The per-occurrence result rows one declaration application built
+/// (`Instantiator.ResultRowTwin`), with what the checker needs to record a
+/// consumed one. Stack-held: a declaration has at most
+/// `max_tracked_alias_formals` formals this walk tracks, and an application
+/// past that arity builds no twin, which keeps every argument shared exactly
+/// as before (the conservative answer).
+const ResultRowTwins = struct {
+    twins: [max_tracked_alias_formals]Instantiator.ResultRowTwin = undefined,
+    rows: [max_tracked_alias_formals]Row = undefined,
+    len: usize = 0,
+
+    const Row = struct {
+        ext: Var,
+        union_var: Var,
+        listed_tags: types_mod.Tag.SafeMultiList.Range,
+        region: Region,
+    };
+
+    fn slice(self: *ResultRowTwins) []Instantiator.ResultRowTwin {
+        return self.twins[0..self.len];
+    }
+};
+
+/// Build the result-row twin of one argument of a declaration that stands
+/// as the whole signature (`Instantiator.ResultRowTwin`), when the argument
+/// is a row that the inline spelling would open there.
+///
+/// Only a signature root qualifies: that is the one position whose
+/// declaration can put a formal on the result row (`AdapterReachPosition.
+/// signature`); anywhere deeper the instantiator reaches no `.result`, and a
+/// `Try` written at the result already passes its reach to its error argument
+/// directly (`applyTryErrorArgIndex`). A host-boundary annotation keeps its
+/// rows as written, so it builds none.
+///
+/// The argument qualifies when it is, through transparent alias layers, a row
+/// with at least one tag whose extension this annotation generated: `[]` (the
+/// argument was generated closed for its formal's variance) or the flagged
+/// flex of an implicitly opened row (generated open for a covariant formal).
+/// Any other extension was written (`..r`) and means the same thing at every
+/// occurrence, and `[]` with no tags asserts uninhabitedness; neither is
+/// reopened by position, so neither gets a twin.
+fn addResultRowTwin(
+    self: *Self,
+    twins: *ResultRowTwins,
+    ctx: GenTypeAnnoCtx,
+    polarity: Polarity,
+    formal: Ident.Idx,
+    arg_var: Var,
+    region: Region,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const anno_ctx = switch (ctx) {
+        .annotation => |anno_ctx| anno_ctx,
+        .type_decl => return,
+    };
+    if (anno_ctx.adapter_reach != .signature or polarity != .pos) return;
+    switch (anno_ctx.opening) {
+        .implicit_open, .per_use => {},
+        .as_written => return,
+    }
+    if (twins.len == max_tracked_alias_formals) return;
+
+    // The alias layers above the row, outermost first.
+    var layers: [max_result_row_twin_alias_layers]types_mod.Alias = undefined;
+    var layers_len: usize = 0;
+    var current = arg_var;
+    const tag_union = while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                if (layers_len == layers.len) return;
+                layers[layers_len] = alias;
+                layers_len += 1;
+                current = self.types.getAliasBackingVar(alias);
+            },
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| break tag_union,
+                .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => return,
+            },
+            .flex, .rigid, .field_presence, .err => return,
+        }
+    };
+    if (tag_union.tags.count == 0) return;
+    const ext_resolved = self.types.resolveVar(tag_union.ext);
+    const generated_ext = switch (ext_resolved.desc.content) {
+        .structure => |flat| flat == .empty_tag_union,
+        .flex => |flex| ext_resolved.desc.flags.annotation_tag_ext and flex.constraints.len() == 0,
+        .alias, .rigid, .field_presence, .err => false,
+    };
+    if (!generated_ext) return;
+
+    const ext = switch (anno_ctx.opening) {
+        .implicit_open => blk: {
+            const open_ext = try self.fresh(env, region);
+            try self.types.markAnnotationTagExt(open_ext);
+            break :blk open_ext;
+        },
+        // A where-method signature defers the row's decision to each use,
+        // exactly as a row written at its result does.
+        .per_use => try self.freshFromContent(.{ .rigid = Rigid.init(self.cir.idents.polarity_var) }, env, region),
+        .as_written => unreachable,
+    };
+    const union_var = try self.freshFromContent(
+        .{ .structure = .{ .tag_union = .{ .tags = tag_union.tags, .ext = ext } } },
+        env,
+        region,
+    );
+    var twin = union_var;
+    var layer_idx = layers_len;
+    while (layer_idx > 0) {
+        layer_idx -= 1;
+        twin = try self.copiedAliasWithBacking(layers[layer_idx], twin, env, region);
+    }
+    twins.twins[twins.len] = .{ .formal = formal, .twin = twin };
+    twins.rows[twins.len] = .{
+        .ext = ext,
+        .union_var = union_var,
+        .listed_tags = tag_union.tags,
+        .region = region,
+    };
+    twins.len += 1;
+}
+
+/// How many transparent alias layers `addResultRowTwin` copies around an
+/// argument's row. Deeper is declined (no twin), the conservative answer;
+/// the bound keeps the walk allocation-free.
+const max_result_row_twin_alias_layers: usize = 8;
+
+/// Record each twin the instantiation took as the implicitly opened result
+/// row it now is, at the site its reach names, exactly as a row written
+/// there is recorded. A where-method twin's row is a deferral marker, decided
+/// per use rather than audited, so it records nothing, like the inline
+/// spelling's.
+fn recordConsumedResultRowTwins(self: *Self, twins: *const ResultRowTwins, ctx: GenTypeAnnoCtx) std.mem.Allocator.Error!void {
+    const opening = switch (ctx) {
+        .annotation => |anno_ctx| anno_ctx.opening,
+        .type_decl => return,
+    };
+    if (opening != .implicit_open) return;
+    for (twins.twins[0..twins.len], twins.rows[0..twins.len]) |twin, row| {
+        const reach = twin.consumed_at orelse continue;
+        try self.implicit_open_exts.append(self.gpa, .{
+            .var_ = row.ext,
+            .region = row.region,
+            .listed_tags = row.listed_tags,
+            .union_var = row.union_var,
+            .result_row = switch (reach) {
+                .result => .direct,
+                .try_row => .try_error_row,
+                .signature, .nested => .none,
+            },
+        });
+    }
+}
+
 /// Record the reaches of alias markers a host-boundary annotation's
 /// instantiation closed as written, so a row that annotation names through an
 /// alias reports the same result-row site the inline spelling reports
@@ -7767,7 +7922,7 @@ fn instantiateVarWithSubs(
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
-    return self.instantiateVarWithSubsPolarized(var_to_instantiate, subs, env, region_behavior, .close, .pos, .nested, .ignore);
+    return self.instantiateVarWithSubsPolarized(var_to_instantiate, subs, env, region_behavior, .close, .pos, .nested, .ignore, &.{});
 }
 
 /// `instantiateVarWithSubs` with explicit polarity var handling; see
@@ -7782,6 +7937,7 @@ fn instantiateVarWithSubsPolarized(
     polarity: Polarity,
     reach: Instantiator.AdapterReach,
     written_rows: WrittenResultRows,
+    result_row_twins: []Instantiator.ResultRowTwin,
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -7808,6 +7964,7 @@ fn instantiateVarWithSubsPolarized(
             .record => &closed_marker_reaches,
             .ignore => null,
         },
+        .result_row_twins = result_row_twins,
     };
     const instantiated = try self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false, .none);
     try self.recordOpenedMarkerExts(opened_marker_exts.items, region_behavior);
@@ -19319,7 +19476,7 @@ fn instantiateWhereAliasConstraint(
         // A faithful copy: the declaration's where-method signatures keep
         // their polarity markers, which the referencing annotation's own body
         // uses and obligations resolve.
-        .fn_var = try self.instantiateVarWithSubsPolarized(constraint.fn_var, subs, env, .{ .explicit = region }, .preserve, .pos, .nested, .ignore),
+        .fn_var = try self.instantiateVarWithSubsPolarized(constraint.fn_var, subs, env, .{ .explicit = region }, .preserve, .pos, .nested, .ignore, &.{}),
         .origin = .{ .where_clause = .{} },
     };
 }
@@ -19982,7 +20139,8 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
                     // Then, built the map of applied variables
                     self.rigid_var_substitutions.clearRetainingCapacity();
-                    for (decl_arg_vars, anno_arg_vars) |decl_arg_var, anno_arg_var| {
+                    var result_row_twins: ResultRowTwins = .{};
+                    for (decl_arg_vars, anno_arg_vars, 0..) |decl_arg_var, anno_arg_var, arg_index| {
                         const decl_arg_resolved = self.types.resolveVar(decl_arg_var).desc.content;
 
                         if (decl_arg_resolved == .err) {
@@ -19993,6 +20151,15 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         const decl_arg_rigid = decl_arg_resolved.rigid;
 
                         try self.rigid_var_substitutions.put(self.gpa, decl_arg_rigid.name, anno_arg_var);
+                        if (decl_is_alias) try self.addResultRowTwin(
+                            &result_row_twins,
+                            ctx,
+                            polarity,
+                            decl_arg_rigid.name,
+                            anno_arg_var,
+                            self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(anno_args[arg_index])),
+                            env,
+                        );
                     }
 
                     // Then instantiate the variable, substituting the rigid
@@ -20007,7 +20174,9 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         polarity,
                         ctx.instantiationReach(),
                         ctx.writtenResultRows(),
+                        result_row_twins.slice(),
                     );
+                    try self.recordConsumedResultRowTwins(&result_row_twins, ctx);
                     if (decl_is_alias and !try self.validateAliasRows(instantiated_var, env, anno_region)) {
                         try self.markErroneous(anno_var);
                         return;
@@ -20067,7 +20236,8 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
                         // Then, built the map of applied variables
                         self.rigid_var_substitutions.clearRetainingCapacity();
-                        for (ext_arg_vars, anno_arg_vars) |decl_arg_var, anno_arg_var| {
+                        var result_row_twins: ResultRowTwins = .{};
+                        for (ext_arg_vars, anno_arg_vars, 0..) |decl_arg_var, anno_arg_var, arg_index| {
                             const decl_arg_resolved = self.types.resolveVar(decl_arg_var).desc.content;
 
                             if (decl_arg_resolved == .err) {
@@ -20078,6 +20248,15 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             const decl_arg_rigid = decl_arg_resolved.rigid;
 
                             try self.rigid_var_substitutions.put(self.gpa, decl_arg_rigid.name, anno_arg_var);
+                            if (ext_is_alias) try self.addResultRowTwin(
+                                &result_row_twins,
+                                ctx,
+                                polarity,
+                                decl_arg_rigid.name,
+                                anno_arg_var,
+                                self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(anno_args[arg_index])),
+                                env,
+                            );
                         }
 
                         // Then instantiate the variable, substituting the rigid
@@ -20092,7 +20271,9 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             polarity,
                             ctx.instantiationReach(),
                             ctx.writtenResultRows(),
+                            result_row_twins.slice(),
                         );
+                        try self.recordConsumedResultRowTwins(&result_row_twins, ctx);
                         if (ext_is_alias and !try self.validateAliasRows(instantiated_var, env, anno_region)) {
                             try self.markErroneous(anno_var);
                             return;
@@ -36084,10 +36265,12 @@ fn instantiateDispatchTargetMethodVar(
         break :blk expr_var_for_method;
     } else if (method_lookup.is_this_module) blk: {
         const local_method_type_var = predeclared_scheme_for_method orelse method_type_var;
-        break :blk try self.instantiateBindingVar(local_method_type_var, env, .use_last_var, evidence);
+        const instantiated = try self.instantiateBindingVar(local_method_type_var, env, .use_last_var, evidence);
+        break :blk try self.reopenCoercedDispatchTarget(instantiated, method_lookup, env, region);
     } else blk: {
         const imported_scheme = try self.importedMethodScheme(method_lookup);
-        break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = region }, evidence);
+        const instantiated = try self.instantiateVar(imported_scheme, env, .{ .explicit = region }, evidence);
+        break :blk try self.reopenCoercedDispatchTarget(instantiated, method_lookup, env, region);
     };
     if (predeclared_annotation) |annotation_idx| {
         try self.recordPredeclaredDispatchUse(
@@ -36139,6 +36322,28 @@ fn instantiateDispatchTargetMethodVar(
     });
     self.dispatch_target_instantiation_by_fn_var.putAssumeCapacityNoClobber(constraint.fn_var, raw_index);
     return method_var;
+}
+
+/// Row subsumption at a static-dispatch use: the selected target is a use of
+/// its definition exactly like a lookup of it, so it reads the producing
+/// module's coercion record for that definition and re-opens its own copy of
+/// the result row (design.md "Row Subsumption"). A target whose definition is
+/// still in flight has no record yet, so its use is left as instantiated, as
+/// a lookup's is. A target that reuses an in-flight cycle var performs no
+/// instantiation and is never passed here.
+fn reopenCoercedDispatchTarget(
+    self: *Self,
+    method_var: Var,
+    method_lookup: StaticDispatchMethodBinding,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    return try self.reopenCoercedResultRow(
+        method_var,
+        coercedResultRowSite(method_lookup.env, ModuleEnv.nodeIdxFrom(method_lookup.binding.def_idx)),
+        env,
+        region,
+    );
 }
 
 /// Resolve one selected dispatch target. Revisiting an edge is the common

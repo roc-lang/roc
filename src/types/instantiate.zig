@@ -373,6 +373,11 @@ pub const Instantiator = struct {
     /// learn which of those closed rows stands at the result row the Monotype
     /// result-row widening adapter re-tags (`Check.recordClosedMarkerReaches`).
     closed_marker_reaches: ?*std.ArrayListUnmanaged(AdapterReachPosition) = null,
+    /// Per-occurrence rows for the arguments of a declaration standing as the
+    /// whole signature (see `ResultRowTwin`). A substituted formal reached at
+    /// a positive `.result` or `.try_row` position takes its twin instead of
+    /// the shared argument, and the twin records where it was taken.
+    result_row_twins: []ResultRowTwin = &.{},
     /// How to resolve polarity vars (see `PolarityVarBehavior`). `.close`
     /// reproduces the written (closed) row and is the safe default.
     polarity_var_behavior: PolarityVarBehavior = .close,
@@ -402,6 +407,29 @@ pub const Instantiator = struct {
     pub const TryNominalIdent = struct {
         short: Ident.Idx,
         qualified: Ident.Idx,
+    };
+
+    /// A second copy of one declaration argument's row, for the one
+    /// occurrence of its formal that stands on the signature's result row.
+    ///
+    /// Substituting an argument shares ONE var at every occurrence of its
+    /// formal, but a row written in place is decided per position: in
+    /// `Fwd(e) : Try(Str, e) -> Try(Str, e)`, the inline spelling
+    /// `Try(Str, [NotFound]) -> Try(Str, [NotFound])` closes the input row and
+    /// opens the result row, and one variable cannot be both. The caller
+    /// builds the twin (the argument's row with its own extension, opened the
+    /// way a row written at the result is); every other occurrence, including
+    /// the alias's own argument list, keeps the argument as generated. The
+    /// instantiator decides which occurrence is the result by the reach it
+    /// already computes while walking the declaration, so a local and an
+    /// imported declaration are answered identically.
+    pub const ResultRowTwin = struct {
+        /// The declaration formal's rigid name.
+        formal: Ident.Idx,
+        twin: Var,
+        /// Where the twin was taken; null when no occurrence of the formal
+        /// stood on the result row.
+        consumed_at: ?AdapterReachPosition = null,
     };
 
     /// Re-exported so callers name one enum: `Instantiator.AdapterReach`.
@@ -778,6 +806,22 @@ pub const Instantiator = struct {
             if (!copy_structure and !is_polarity_marker) {
                 try machine.value_stack.append(self.store.gpa, resolved_var);
                 return true;
+            }
+        }
+
+        // A formal standing on the result row takes its argument's twin.
+        // Checked before the memo: the formal's other occurrences memoise the
+        // shared argument, and the twin is deliberately not memoised, so the
+        // two never answer for each other.
+        if (self.result_row_twins.len > 0 and self.current_polarity == .pos and resolved.desc.content == .rigid) {
+            switch (self.current_reach) {
+                .result, .try_row => for (self.result_row_twins) |*twin| {
+                    if (!twin.formal.eql(resolved.desc.content.rigid.name)) continue;
+                    twin.consumed_at = self.current_reach;
+                    try machine.value_stack.append(self.store.gpa, twin.twin);
+                    return true;
+                },
+                .signature, .nested => {},
             }
         }
 
@@ -1220,13 +1264,19 @@ pub const Instantiator = struct {
         const machine = self.scratch();
         while (true) {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
-            if (arrived < frame.args_count) {
-                const arg_var = self.store.vars.items.items[frame.args_start + arrived];
-                self.current_reach = .nested;
-                if (!try self.requestVar(arg_var, false)) return false;
-                continue;
-            }
-            if (arrived == frame.args_count) {
+            // The backing is copied BEFORE the arguments. An alias's arguments
+            // are the presentation of vars that also occur in its backing
+            // (the declaration substituted them there), and the var_map memo
+            // hands every later visit of a var the copy its first visit made.
+            // Where a shared var sits relative to the result row is decided
+            // by the TYPE, which is the backing: copying the arguments first
+            // at `.nested` would let the memo hand the backing's reachable
+            // position a copy decided out of reach, so `Res([E])` named
+            // through a function alias would open no result row while the
+            // inline spelling does. A reach-aware memo is not an option: a
+            // formal substituted by a type variable and visited at two
+            // reaches would be copied twice, splitting one variable in two.
+            if (arrived == 0) {
                 const backing_var = self.store.getAliasBackingVar(frame.alias);
                 // An alias is transparent: its backing occupies the same
                 // position the alias reference does.
@@ -1234,9 +1284,15 @@ pub const Instantiator = struct {
                 if (!try self.requestVar(backing_var, false)) return false;
                 continue;
             }
+            if (arrived < frame.args_count + 1) {
+                const arg_var = self.store.vars.items.items[frame.args_start + arrived - 1];
+                self.current_reach = .nested;
+                if (!try self.requestVar(arg_var, false)) return false;
+                continue;
+            }
             const values = machine.value_stack.items;
-            const fresh_backing_var = values[frame.vars_base + frame.args_count];
-            const fresh_args = values[frame.vars_base..][0..frame.args_count];
+            const fresh_backing_var = values[frame.vars_base];
+            const fresh_args = values[frame.vars_base + 1 ..][0..frame.args_count];
             const fresh_content = try self.store.mkAliasWithSourceDeclAndBuiltinOrigin(
                 frame.alias.ident,
                 fresh_backing_var,

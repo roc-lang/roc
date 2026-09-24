@@ -9132,6 +9132,99 @@ test "row subsumption coerces a forwarded Try error row spelled through an alias
     , 1);
 }
 
+test "row subsumption coerces the result occurrence of a parameterised function alias" {
+    // `Fwd(e)` puts `e` in its input AND its result. The result occurrence is
+    // its own row (the instantiator's result-row twin), so the widened use is
+    // served by one adapter exactly as the inline spelling is. `Gone` sorts
+    // before `NotFound`, so a missing re-tag reports the wrong tag.
+    try expectRowSubsumptionProgram(
+        \\Fwd(e) : Try(Str, e) -> Try(Str, e)
+        \\
+        \\fwd : Fwd([NotFound])
+        \\fwd = |t| t
+        \\
+        \\wider : Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])
+        \\wider = |t| fwd(t)
+        \\
+        \\show : Try(Str, [Gone, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(NotFound) => "NotFound" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Err(NotFound))) == "NotFound" and show(wider(Ok("x"))) == "Ok(x)"
+    , 1);
+}
+
+test "row subsumption coerces an alias argument standing on the result row of a function alias" {
+    // `Res([E])` in `Fwd`'s return: the alias backing decides the argument
+    // row's reach, so the error row is the adapter-reachable one.
+    try expectRowSubsumptionProgram(
+        \\Res(e) : Try(Str, e)
+        \\
+        \\Fwd : Res([E]) -> Res([E])
+        \\
+        \\fwd : Fwd
+        \\fwd = |t| t
+        \\
+        \\wider : Try(Str, [E]) -> Try(Str, [D, E])
+        \\wider = |t| fwd(t)
+        \\
+        \\show : Try(Str, [D, E]) -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(D) => "D", Err(E) => "E" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Err(E))) == "E" and show(wider(Ok("x"))) == "Ok(x)"
+    , 1);
+}
+
+test "row subsumption serves a method call to a coerced forwarder" {
+    // A static-dispatch use and a qualified use of the same coerced method
+    // both widen the row; both are served by the one adapter at that row.
+    try expectRowSubsumptionProgram(
+        \\Holder := [Holder].{
+        \\    fwd : Holder, [A, C] -> [A, C]
+        \\    fwd = |_, x| x
+        \\}
+        \\
+        \\by_method : Holder, [A, C] -> [A, B, C]
+        \\by_method = |h, x| h.fwd(x)
+        \\
+        \\by_name : Holder, [A, C] -> [A, B, C]
+        \\by_name = |h, x| Holder.fwd(h, x)
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\main : Bool
+        \\main = {
+        \\    h : Holder
+        \\    h = Holder
+        \\    show(by_method(h, C)) == "C" and show(by_name(h, C)) == "C" and show(by_method(h, A)) == "A"
+        \\}
+    , 1);
+}
+
+test "row subsumption serves a widened use inside the forwarder's recursive group" {
+    // `wider` and `fwd` form one recursive group, so `wider`'s use of `fwd`
+    // instantiates the predeclared annotation. `fwd`'s body still forwards,
+    // so its row is coerced and the widened call is served by an adapter.
+    try expectRowSubsumptionProgram(
+        \\fwd : [A, C], U64 -> [A, C]
+        \\fwd = |x, n| if n == 0 x else {
+        \\    _ = wider(x, n - 1)
+        \\    x
+        \\}
+        \\
+        \\wider : [A, C], U64 -> [A, B, C]
+        \\wider = |x, n| fwd(x, n)
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\main : Bool
+        \\main = show(wider(C, 2)) == "C" and show(wider(A, 0)) == "A"
+    , 1);
+}
+
 test "row subsumption coerces a forwarder whose signature is a function alias" {
     // The signature NAMES a whole function type. Its result row is the direct
     // result exactly as in `fwd : Status -> Status`, so the widened use is
