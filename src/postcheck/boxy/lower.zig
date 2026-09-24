@@ -3392,59 +3392,7 @@ const ProcedureBuilder = struct {
         return desc_id;
     }
 
-    fn bindStaticNominalBackingSubstitutions(
-        self: *ProcedureBuilder,
-        worker_rep_id: Plan.TypeRepId,
-        source_rep_id: ?Plan.TypeRepId,
-        context: *StaticDescInstantiationContext,
-    ) Allocator.Error!void {
-        const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
-        if (worker_rep.nominal_backing_arg_substitutions.len == 0) return;
-        const link_env = context.env;
-        var bindings = std.ArrayList(StaticDescInstantiationContext.Binding).empty;
-        defer bindings.deinit(self.allocator);
-        var substitutions = self.plan.nominalBackingSubstitutions(worker_rep.nominal_backing_arg_substitutions);
-        while (substitutions.next()) |substitution| {
-            const formal_rep = substitution.formal_rep orelse continue;
-            const formal = self.plan.representations.items[@intFromEnum(formal_rep)];
-            if (formal.descriptor == null) continue;
-            const actual_source = if (source_rep_id) |source| blk: {
-                const source_rep = self.plan.representations.items[@intFromEnum(source)];
-                break :blk self.plan.nominalBackingActual(source_rep.nominal_backing_arg_substitutions, substitution.arg_index);
-            } else null;
-            if (formal_rep == substitution.actual_rep and
-                (actual_source == null or actual_source == formal_rep)) continue;
-            try bindings.append(self.allocator, self.forwardStaticDescBinding(.{
-                .formal = formal_rep,
-                .actual = substitution.actual_rep,
-                .source = actual_source,
-                .env = link_env,
-            }, context));
-        }
-        for (bindings.items) |binding| try context.bind(self.allocator, binding);
-    }
 
-    /// Resolve `binding.actual` through the bindings visible from
-    /// `binding.env`. A formal forwarded from an enclosing nominal retains that
-    /// nominal's environment, rather than referring to the new scope.
-    fn forwardStaticDescBinding(
-        self: *const ProcedureBuilder,
-        initial: StaticDescInstantiationContext.Binding,
-        context: *StaticDescInstantiationContext,
-    ) StaticDescInstantiationContext.Binding {
-        const current_env = context.env;
-        defer context.env = current_env;
-        var binding = initial;
-        context.env = binding.env;
-        while (context.bound(binding.actual)) |forwarded| {
-            binding.actual = forwarded.actual;
-            binding.source = forwarded.source;
-            binding.env = forwarded.env;
-            context.env = forwarded.env;
-        }
-        if (!self.plan.representations.items[@intFromEnum(binding.actual)].contains_dynamic) binding.env = 0;
-        return binding;
-    }
 
     fn effectiveStaticDescriptorSource(
         self: *const ProcedureBuilder,
@@ -28082,26 +28030,6 @@ const ProcBodyBuilder = struct {
         };
     }
 
-    /// The representation whose descriptor describes `field.local`, which
-    /// holds the field adapted into target storage. A concrete target has its
-    /// own exact descriptor. Otherwise the source's descriptor is the exact
-    /// description when adaptation kept the source's storage; when adaptation
-    /// changed it, only the target describes the adapted bytes.
-    fn constructedFieldStorageDescRep(
-        self: *const ProcBodyBuilder,
-        field: AggregateDescriptorField,
-        field_layout: layout.Idx,
-        force: bool,
-    ) ?Plan.TypeRepId {
-        if (!self.repIsFullyConcrete(field.target_rep)) {
-            switch (self.parent.tagPayloadStorageDescRepMatch(field.source_rep, field_layout, force)) {
-                .not_needed => return null,
-                .rep => |rep| return rep,
-                .layout_mismatch => {},
-            }
-        }
-        return self.parent.tagPayloadStorageDescRepForLayout(field.target_rep, field_layout, force);
-    }
 
     fn prepareConstructedFieldDescriptorLocal(
         self: *ProcBodyBuilder,
