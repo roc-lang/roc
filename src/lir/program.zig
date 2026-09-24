@@ -860,13 +860,10 @@ test "boxy side tables initialize empty and use flat pools" {
     });
     const method_slots = BoxySpan{ .start = @intCast(method_slots_start), .len = 1 };
 
-    const hidden_descs_start = result.boxy_desc_refs.items.len;
     try result.boxy_desc_refs.append(allocator, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
-    const hidden_descs = BoxySpan{ .start = @intCast(hidden_descs_start), .len = 1 };
 
     try result.boxy_dicts.append(allocator, .{
         .method_slots = method_slots,
-        .hidden_descs = hidden_descs,
     });
 
     const adapt_steps_start = result.boxy_adapt_steps.items.len;
