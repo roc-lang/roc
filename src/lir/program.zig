@@ -321,12 +321,13 @@ pub const BoxyTypeDesc = struct {
     structural_eq: ?LIR.LirProcSpecId = null,
     structural_hash: ?LIR.LirProcSpecId = null,
     inspect_method: ?BoxyMethodSlotId = null,
-    /// Descriptor of `inspect_method`'s adapted receiver argument, and the
-    /// worker's hidden descriptors in parameter order. They describe this
-    /// descriptor's instantiation of the owning nominal, so they are resolved
-    /// with its captures; the slot is shared by every instantiation.
-    inspect_arg_descs: BoxySpan = .{},
+    /// The hidden descriptors `inspect_method`'s worker receives, in worker
+    /// parameter order. They describe this descriptor's own type arguments,
+    /// so a runtime-instantiated descriptor carries its own copies.
     inspect_hidden_descs: BoxySpan = .{},
+    /// One descriptor: this value in the storage of `inspect_method`'s
+    /// worker parameter, instantiated at this descriptor's type arguments.
+    inspect_arg_descs: BoxySpan = .{},
     debug_checked_type: ?checked.CheckedTypeId = null,
 };
 
@@ -376,8 +377,9 @@ pub const BoxyMethodSlot = struct {
 pub const BoxyDict = struct {
     debug_dispatch_plan: ?dispatch.StaticDispatchPlanId = null,
     method_slots: BoxySpan = .{},
-    hidden_descs: BoxySpan = .{},
-    nested_dicts: BoxySpan = .{},
+    /// The method slots name frame locals (`.local` descriptor and dictionary
+    /// references); an `assign_boxy_dict_ref` with captures materializes it.
+    template: bool = false,
 };
 
 /// Tag variant in a constant storage plan.
@@ -860,13 +862,10 @@ test "boxy side tables initialize empty and use flat pools" {
     });
     const method_slots = BoxySpan{ .start = @intCast(method_slots_start), .len = 1 };
 
-    const hidden_descs_start = result.boxy_desc_refs.items.len;
     try result.boxy_desc_refs.append(allocator, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
-    const hidden_descs = BoxySpan{ .start = @intCast(hidden_descs_start), .len = 1 };
 
     try result.boxy_dicts.append(allocator, .{
         .method_slots = method_slots,
-        .hidden_descs = hidden_descs,
     });
 
     const adapt_steps_start = result.boxy_adapt_steps.items.len;

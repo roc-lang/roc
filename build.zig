@@ -5771,6 +5771,41 @@ pub fn build(b: *std.Build) void {
         run_wasm_archive_check.addArgs(&.{ "--archive", "test/archive/app-wasm32.a", "roc_builtins" });
         run_wasm_archive_check.step.dependOn(&build_wasm_archive_app.step);
         run_test_archive_step.dependOn(&run_wasm_archive_check.step);
+
+        // The same app through the LLVM backend: `llvmObjectUsesPic` decides
+        // PIC for that object, so the dev-backend archive above cannot cover it.
+        const build_wasm_archive_app_llvm = b.addRunArtifact(roc_exe);
+        build_wasm_archive_app_llvm.addArgs(&.{
+            "build",
+            "test/archive/app.roc",
+            "--opt=speed",
+            "--target=wasm32",
+            "--output=test/archive/app-wasm32-speed.a",
+        });
+        build_wasm_archive_app_llvm.step.dependOn(build_test_hosts_step);
+
+        // A wasm32 archive is handed to a foreign linker, so it must contain no
+        // absolute data/table relocations or emcc cannot build a SIDE_MODULE
+        // from it. Checked for both backends that produce these objects.
+        const wasm_pic_check_exe = b.addExecutable(.{
+            .name = "wasm_pic_check",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/archive/wasm_pic_check.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(wasm_pic_check_exe, target);
+
+        const run_wasm_pic_check_dev = b.addRunArtifact(wasm_pic_check_exe);
+        run_wasm_pic_check_dev.addArgs(&.{"test/archive/app-wasm32.a"});
+        run_wasm_pic_check_dev.step.dependOn(&build_wasm_archive_app.step);
+        run_test_archive_step.dependOn(&run_wasm_pic_check_dev.step);
+
+        const run_wasm_pic_check_llvm = b.addRunArtifact(wasm_pic_check_exe);
+        run_wasm_pic_check_llvm.addArgs(&.{"test/archive/app-wasm32-speed.a"});
+        run_wasm_pic_check_llvm.step.dependOn(&build_wasm_archive_app_llvm.step);
+        run_test_archive_step.dependOn(&run_wasm_pic_check_llvm.step);
     }
 
     // Check fx platform test coverage convenience step

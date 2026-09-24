@@ -1563,11 +1563,6 @@ test "boxy representation queries have one definition on the plan" {
         "sameChildRoleKind",
         "childRolesMatch",
         "findMatchingChildByRole",
-        "findMatchingChildBySourceType",
-        "findMatchingDictionaryChildBySourceType",
-        "findMatchingTagPayloadInRep",
-        "findMatchingTagPayloadInRowExtension",
-        "findMatchingTagPayloadInRowExtensionInner",
         "recordFieldNameMatches",
         "tagLabelNameMatches",
     };
