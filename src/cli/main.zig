@@ -16773,7 +16773,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
         .{ .name = "Interface replay digest node misses", .count = counters.interface_replay_digest_node_misses },
         .{ .name = "Interface relation requests", .count = counters.interface_relation_requests },
         .{ .name = "Interface replay hits", .count = counters.interface_replay_hits },
-        .{ .name = "Interface closed dependencies", .count = counters.interface_closed_dependencies },
+        .{ .name = "Interface closed expansions", .count = counters.interface_closed_expansions },
         .{ .name = "Exact type checks", .count = counters.exact_type_checks },
         .{ .name = "Nominal backing reuses", .count = counters.nominal_backing_reuses },
         .{ .name = "Nominal backing instantiations", .count = counters.nominal_backing_instantiations },
