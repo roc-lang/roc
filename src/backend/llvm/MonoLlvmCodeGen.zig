@@ -2439,7 +2439,7 @@ pub const MonoLlvmCodeGen = struct {
             const desc = if (self.erasedArgDescOffsetForKey(proc.erased_arg_desc_offsets, param.key)) |offset|
                 try self.loadPointer(try self.offsetPtr(capture_ptr, offset))
             else blk: {
-                if (param.source_nested_index == std.math.maxInt(u16)) {
+                if (param.read == .call_key) {
                     llvmInvariantFmt("exact erased descriptor parameter had no capture offset", .{});
                 }
                 var parent_local: ?LocalId = null;
@@ -2453,15 +2453,27 @@ pub const MonoLlvmCodeGen = struct {
                 }
                 const parent = parent_local orelse
                     llvmInvariantFmt("projected erased descriptor had no preceding parent parameter", .{});
-                break :blk try self.callBoxy(
-                    "roc_boxy_nested_desc",
-                    try self.ptrType(),
-                    &.{ try self.ptrType(), .i32 },
-                    &.{
-                        try self.loadPointer(self.slot(parent).ptr),
-                        try self.boxyInt(.i32, param.source_nested_index),
-                    },
-                );
+                break :blk switch (param.read) {
+                    .call_key, .nested => try self.callBoxy(
+                        "roc_boxy_nested_desc",
+                        try self.ptrType(),
+                        &.{ try self.ptrType(), .i32 },
+                        &.{
+                            try self.loadPointer(self.slot(parent).ptr),
+                            try self.boxyInt(.i32, param.source_nested_index),
+                        },
+                    ),
+                    .tag_payload => try self.callBoxy(
+                        "roc_boxy_tag_payload_desc",
+                        try self.ptrType(),
+                        &.{ try self.ptrType(), .i32, .i32 },
+                        &.{
+                            try self.loadPointer(self.slot(parent).ptr),
+                            try self.boxyInt(.i32, @intFromEnum(param.source_tag_name)),
+                            try self.boxyInt(.i32, param.source_nested_index),
+                        },
+                    ),
+                };
             };
             try self.storePointer(self.slot(param.local).ptr, desc);
         }

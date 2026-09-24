@@ -21713,7 +21713,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(desc_reg);
                     self.codegen.freeGeneral(capture_reg);
                 } else {
-                    if (builtin.mode == .Debug and param.source_nested_index == std.math.maxInt(u16)) {
+                    if (builtin.mode == .Debug and param.read == .call_key) {
                         std.debug.panic(
                             "Dev/codegen invariant violated: exact erased descriptor parameter had no capture offset",
                             .{},
@@ -21735,8 +21735,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const source_slot = try self.boxyDescRefToSlot(.{ .local = source });
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     try builder.addMemArg(frame_ptr, source_slot);
-                    try builder.addImmArg(param.source_nested_index);
-                    try self.callBoxyBuiltin(&builder, .nested_desc);
+                    switch (param.read) {
+                        .call_key, .nested => {
+                            try builder.addImmArg(param.source_nested_index);
+                            try self.callBoxyBuiltin(&builder, .nested_desc);
+                        },
+                        .tag_payload => {
+                            try builder.addImmArg(@intFromEnum(param.source_tag_name));
+                            try builder.addImmArg(param.source_nested_index);
+                            try self.callBoxyBuiltin(&builder, .tag_payload_desc);
+                        },
+                    }
                     try self.emitStore(.w64, frame_ptr, desc_slot, ret_reg_0);
                 }
                 try self.setLocalLocation(

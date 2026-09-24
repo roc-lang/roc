@@ -12367,6 +12367,21 @@ erased-call descriptor keys, for arguments and function-typed results alike.
 A generated codec callable whose enclosing frame does not receive one of its
 descriptor captures materializes that capture from its representation.
 
+An erased procedure's argument descriptor parameters are keyed by their
+pre-order position under the argument, but a caller's view of the argument can
+be more generic than the callee's. A dictionary slot is called through the
+consumer's declared requirement, for example a bare `val`. So every argument
+descriptor that an earlier parameter's descriptor holds is read from that
+parent rather than from its own key: a nested descriptor read for aggregate,
+list and box positions, and a tag payload read
+(`ErasedArgDescRead.tag_payload`) for a variant payload such as a presence
+slot's `Present` value. Only a descriptor no earlier parameter holds is read
+from its call-site key.
+
+An evidence-only descriptor collected inside an evidence dispatcher's
+representation, such as a presence slot of a record dispatcher, takes the
+representation at the same position of that dispatcher's call source.
+
 A custom `to_inspect` slot reached through a descriptor takes its hidden
 descriptors and argument descriptors from the inspected descriptor's own
 `inspect_hidden_descs` and `inspect_arg_descs` spans. The inspected
