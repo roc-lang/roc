@@ -157,11 +157,12 @@ fn tidyGlossaryLinks(io: std.Io, file: SourceFile, errors: *Errors) void {
     var links = MarkdownLinkTargets{ .text = file.text };
     while (links.next()) |link| {
         if (!isRepositoryLink(link.target)) continue;
-        std.Io.Dir.cwd().access(io, link.target, .{}) catch {
+        const path = linkTargetPath(link.target);
+        std.Io.Dir.cwd().access(io, path, .{}) catch {
             errors.emit(
                 "{s}:{d}: error: link target '{s}' does not exist. If you recently moved or deleted " ++
                     "this path, update or remove the link in {s}.\n",
-                .{ file.path, file.lineNumber(link.offset), link.target, glossary_path },
+                .{ file.path, file.lineNumber(link.offset), path, glossary_path },
             );
         };
     }
@@ -187,6 +188,13 @@ const MarkdownLinkTargets = struct {
     }
 };
 
+/// The file or directory a repository link points at: the target without its
+/// `#heading` fragment. Fragments are not checked.
+fn linkTargetPath(target: []const u8) []const u8 {
+    const fragment_start = std.mem.findScalar(u8, target, '#') orelse target.len;
+    return target[0..fragment_start];
+}
+
 fn isRepositoryLink(target: []const u8) bool {
     return !std.mem.startsWith(u8, target, "http") and !std.mem.startsWith(u8, target, "#");
 }
@@ -211,6 +219,11 @@ test "only repository links are checked" {
     try std.testing.expect(isRepositoryLink("src/base"));
     try std.testing.expect(!isRepositoryLink("https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)"));
     try std.testing.expect(!isRepositoryLink("#tokenization"));
+}
+
+test "link fragments are not part of the checked path" {
+    try std.testing.expectEqualStrings("src/foo.md", linkTargetPath("src/foo.md#section"));
+    try std.testing.expectEqualStrings("src/parse/Parser.zig", linkTargetPath("src/parse/Parser.zig"));
 }
 
 fn runGitLints(gpa: Allocator, io: std.Io) !void {
