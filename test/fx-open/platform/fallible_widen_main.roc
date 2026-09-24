@@ -4,6 +4,7 @@ platform ""
     packages {}
     provides { "roc_main": main_for_host! }
     hosted {
+        "roc_fallible_not_found": FallibleNotFound.not_found!,
         "roc_fallible_str_ok": FallibleHost.str_ok!,
         "roc_stdout_line": Stdout.line!,
     }
@@ -20,6 +21,7 @@ platform ""
     }
 
 import FallibleHost
+import FallibleNotFound
 import FallibleWiden
 import Stdout
 

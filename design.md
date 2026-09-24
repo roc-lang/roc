@@ -7074,11 +7074,26 @@ later use. So the re-open copies each `tag_union` link of the chain and
 replaces only its closed tail. The tail rule is explicit: `[]` is re-opened; an
 error tail, left by an already-reported type error, leaves the use unchanged;
 any other tail is an invariant violation, since a recorded coercion means the
-body grounded that tail and unification cannot re-open a closed row. An alias
-never appears as a link: the coerced tail is the annotation's implicit
-extension, written behind the row's own tags, and unification extends a row
-only with fresh `tag_union` links (it gathers through an alias and binds the
-gathered tail), so an alias link is an invariant violation too.
+tail was grounded (by the body, or as written at a host boundary) and
+unification cannot re-open a closed row. An ALIAS link is re-opened through
+its backing. A row's extension can be an alias the annotation names—
+`Errs : Wrap(Base)` with `Wrap(ext) : [HostErr(U64), ..ext]` continues
+`Errs`'s row through `Base`, whose own marker is the row's tail—and a hosted
+annotation closes that tail as written with no body to unify it away, so the
+link reaches every use.
+
+The copy keeps no alias layer anywhere on its spine: not the signature's
+(`Fwd`), not the result cell's (`IoResult(Str)`), not the row's (`Errs`), and
+not an extension link. Each of those aliases names the NARROW type the
+definition closed, and the copy is the wider type a use may widen it to, so a
+copied alias would present the widened row under a name whose declaration
+lists fewer tags, in every type the use reports. Alias spelling is
+presentation, so dropping it changes no verdict.
+
+A `[]` result row (`Try(U64, [])`) is never re-opened: `[]` asserts
+uninhabitedness, the annotation walk opens no such row, and the re-open finds
+no tag row in that cell and leaves the use as it is, even where a hosted
+definition records the cell.
 
 The row coerced is the one adapter-reachable result row of the signature
 (`ResultRowSite`: the direct result, or the error row of a `Try` standing
@@ -7104,11 +7119,13 @@ spelling does. A var the backing itself uses at a nested position before the
 result stays out of reach (every constructor visits its out-of-reach children
 first), which fails closed.
 
-A PARAMETERISED function alias coerces at the result occurrence of its formal.
+A PARAMETERISED alias standing on the result row coerces at the result
+occurrence of its formal.
 Substitution shares one var at every occurrence of a formal, but a row written
 in place is decided per position, and one variable cannot be closed at the
 input and open at the result (`Fwd(e) : Try(Str, e) -> Try(Str, e)` with
-`fwd : Fwd([NotFound])`). So for a declaration standing as the signature, the
+`fwd : Fwd([NotFound])`). So for a declaration standing as the signature, at
+the signature's direct result, or at a result `Try`'s error row, the
 annotation walk builds a twin of each argument that is a row it generated—the
 same tags behind a fresh extension, opened exactly as a row written at the
 result is—and the instantiator substitutes the twin at the occurrence it
@@ -7121,7 +7138,15 @@ deferral marker instead, decided per use like the inline row. The twin shares
 the argument's payloads, so a row nested inside it keeps the argument's
 generation (fail-closed where the inline spelling would open a payload row); a
 written extension (`..r`) and `[]` get no twin, since neither is reopened by
-position.
+position. The same rule covers a formal the declaration puts on the row's own
+EXTENSION: `Try(U64, Wrap(Base))` written in place opens `Base`'s row exactly
+as `Try(U64, Errs)` with `Errs : Wrap(Base)` does, and `Id([A, B])` at the
+result opens like `[A, B]`. An argument the application already generated at
+a reachable position (a result `Try`'s error argument) opens there in place and
+gets no twin, since a second opened row would make the signature decline. A
+host-boundary annotation's twin is the argument itself, still closed as
+written: taking it only reports the site its row stands on, so a hosted
+`Try(U64, Wrap(Base))` records the same coercion as `Try(U64, Errs)`.
 
 Every use of a coerced definition re-opens its row, however it names it: a
 local or external lookup, an associated lookup (`Type.item`, including through
@@ -9399,21 +9424,31 @@ Other solved-graph mutations:
   function alias coerces", "a method call to a coerced forwarder re-opens its
   result row", "a method call to an imported coerced method re-opens its
   result row", "a qualified call to a coerced method re-opens its result
-  row", "a recursive-group use of a forwarder sees its annotated open row";
+  row", "a recursive-group use of a forwarder sees its annotated open row",
+  "a coerced Try error row whose extension is an alias coerces", "a coerced
+  direct row whose extension is an alias coerces", "a result-row twin
+  standing as a row's extension coerces", "an alias applied at the result
+  row whose formal is the row's extension coerces", "an identity alias
+  applied at the result row coerces";
   rejected—"a parameterised function alias keeps its input occurrence
   closed", "... does not reach a nested occurrence", "an alias argument
   nested through a function alias stays closed", "a method call does not
   re-open a coerced method's input row", "a method call does not reach a
   nested row of a coerced method", "a curried function alias signature does
-  not reach the inner return". Pinned in
+  not reach the inner return", "an alias extension of a coerced row keeps
+  the input row closed". Pinned in
   src/compile/test/hosted_row_subsumption_test.zig: accepted—"a hosted Try
   error row widens at an annotated binding", "... declared through an alias
   widens", "... named through an alias of its owner widens", "... carried as
   a value widens", "`?` on a hosted call in an unannotated function widens",
-  "a hosted Try error row widens at a method call";
+  "a hosted Try error row widens at a method call", "a hosted Try error row
+  whose extension chain has an alias link widens", "a hosted Try error row
+  applying an extension alias inline widens";
   rejected—"a hosted direct result row does not widen", "a hosted Try ok row
   does not widen", "a hosted error row written open is reported, not
-  coerced"; and at run time by test/fx-open/hosted_widening_channels.roc.
+  coerced", "an uninhabited hosted Try error row does not widen"; and at run
+  time by test/fx-open/hosted_widening_channels.roc (which also reads a host
+  that returns Err).
 - `closeRecordRowForDerivedParse` / `closeRecordRowForDerivedEncode`—policy:
   Derived Structural Codec Record-Row Closure (above). After derived codec
   dispatch reaches quiescence, a record inferred from use sites closes its

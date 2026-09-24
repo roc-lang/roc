@@ -1,4 +1,5 @@
 import FallibleHost
+import FallibleNotFound
 
 # Every channel a hosted function's result reaches a caller through, each
 # asking for an error row wider than the one FallibleHost.str_ok! declares. A
@@ -64,6 +65,18 @@ FallibleWiden := [].{
 	via_unannotated_question! = |{}| unannotated_question!({})
 
 	unannotated_question! = |{}| Ok(FallibleHost.str_ok!({})?)
+
+	# A host that actually returns Err. FallibleNotFound.not_found! returns
+	# Err(NotFound) from its declared row [NotFound, PermissionDenied]; asked
+	# for here at a row where `Aborted` sorts first, every declared
+	# discriminant shifts by one, so a missing or misordered re-tag reads a
+	# different tag than the host returned.
+	via_host_err! : {} => Try(Str, [Aborted, NotFound, PermissionDenied])
+	via_host_err! = |{}| {
+		value : Try(Str, [Aborted, NotFound, PermissionDenied])
+		value = FallibleNotFound.not_found!({})
+		value
+	}
 
 	# Channel: the hosted function named through an alias of its owner.
 	via_alias_owner! : {} => Try(Str, [HostErr(Str), Widened(I32)])

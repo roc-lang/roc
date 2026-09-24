@@ -7590,16 +7590,24 @@ const ResultRowTwins = struct {
     }
 };
 
-/// Build the result-row twin of one argument of a declaration that stands
-/// as the whole signature (`Instantiator.ResultRowTwin`), when the argument
-/// is a row that the inline spelling would open there.
+/// Build the result-row twin of one argument of a declaration standing on
+/// the result row (`Instantiator.ResultRowTwin`), when the argument is a row
+/// that the inline spelling would open there.
 ///
-/// Only a signature root qualifies: that is the one position whose
-/// declaration can put a formal on the result row (`AdapterReachPosition.
-/// signature`); anywhere deeper the instantiator reaches no `.result`, and a
-/// `Try` written at the result already passes its reach to its error argument
-/// directly (`applyTryErrorArgIndex`). A host-boundary annotation keeps its
-/// rows as written, so it builds none.
+/// A declaration qualifies when it stands at the whole signature, at the
+/// signature's direct result, or at a result `Try`'s error row: those are the
+/// positions whose declaration can put a formal on the result row, whether as
+/// the function's return (`Fwd(e) : Try(Str, e) -> Try(Str, e)`) or as the
+/// row's own extension (`Wrap(ext) : [HostErr(U64), ..ext]` in
+/// `Try(U64, Wrap(Base))`). An argument the application already generated at
+/// a reachable position (a `Try`'s error argument, `applyTryErrorArgIndex`)
+/// opens there in place and needs no twin; a second opened row would make the
+/// signature decline to coerce.
+///
+/// A host-boundary annotation keeps its rows as written, so its "twin" is the
+/// argument itself: substituting it changes nothing, and taking it only
+/// reports the site the as-written row stands on (`written_result_rows`),
+/// exactly as a row the declaration's own marker closes there reports it.
 ///
 /// The argument qualifies when it is, through transparent alias layers, a row
 /// with at least one tag whose extension this annotation generated: `[]` (the
@@ -7616,17 +7624,18 @@ fn addResultRowTwin(
     formal: Ident.Idx,
     arg_var: Var,
     region: Region,
+    arg_reached: bool,
     env: *Env,
 ) std.mem.Allocator.Error!void {
     const anno_ctx = switch (ctx) {
         .annotation => |anno_ctx| anno_ctx,
         .type_decl => return,
     };
-    if (anno_ctx.adapter_reach != .signature or polarity != .pos) return;
-    switch (anno_ctx.opening) {
-        .implicit_open, .per_use => {},
-        .as_written => return,
+    switch (anno_ctx.adapter_reach) {
+        .signature, .result, .try_row => {},
+        .nested => return,
     }
+    if (arg_reached or polarity != .pos) return;
     if (twins.len == max_tracked_alias_formals) return;
 
     // The alias layers above the row, outermost first.
@@ -7658,6 +7667,18 @@ fn addResultRowTwin(
     };
     if (!generated_ext) return;
 
+    if (anno_ctx.opening == .as_written) {
+        twins.twins[twins.len] = .{ .formal = formal, .twin = arg_var };
+        twins.rows[twins.len] = .{
+            .ext = tag_union.ext,
+            .union_var = current,
+            .listed_tags = tag_union.tags,
+            .region = region,
+        };
+        twins.len += 1;
+        return;
+    }
+
     const ext = switch (anno_ctx.opening) {
         .implicit_open => blk: {
             const open_ext = try self.fresh(env, region);
@@ -7667,7 +7688,7 @@ fn addResultRowTwin(
         // A where-method signature defers the row's decision to each use,
         // exactly as a row written at its result does.
         .per_use => try self.freshFromContent(.{ .rigid = Rigid.init(self.cir.idents.polarity_var) }, env, region),
-        .as_written => unreachable,
+        .as_written => unreachable, // handled above
     };
     const union_var = try self.freshFromContent(
         .{ .structure = .{ .tag_union = .{ .tags = tag_union.tags, .ext = ext } } },
@@ -7697,14 +7718,22 @@ const max_result_row_twin_alias_layers: usize = 8;
 
 /// Record each twin the instantiation took as the implicitly opened result
 /// row it now is, at the site its reach names, exactly as a row written
-/// there is recorded. A where-method twin's row is a deferral marker, decided
-/// per use rather than audited, so it records nothing, like the inline
-/// spelling's.
+/// there is recorded. A host-boundary twin reports the site its as-written
+/// row stands on instead. A where-method twin's row is a deferral marker,
+/// decided per use rather than audited, so it records nothing, like the
+/// inline spelling's.
 fn recordConsumedResultRowTwins(self: *Self, twins: *const ResultRowTwins, ctx: GenTypeAnnoCtx) std.mem.Allocator.Error!void {
     const opening = switch (ctx) {
         .annotation => |anno_ctx| anno_ctx.opening,
         .type_decl => return,
     };
+    if (opening == .as_written) {
+        for (twins.twins[0..twins.len]) |twin| {
+            const reach = twin.consumed_at orelse continue;
+            try self.recordClosedMarkerReaches(&.{reach});
+        }
+        return;
+    }
     if (opening != .implicit_open) return;
     for (twins.twins[0..twins.len], twins.rows[0..twins.len]) |twin, row| {
         const reach = twin.consumed_at orelse continue;
@@ -17435,8 +17464,16 @@ fn reopenCoercedResultRow(
 }
 
 /// The signature layer of `reopenCoercedResultRow`: alias layers are
-/// transparent and are copied around their backing; the function's arguments
-/// and effect kind are the use's own and only its return is copied.
+/// transparent and the copy is made of their backing alone; the function's
+/// arguments and effect kind are the use's own and only its return is copied.
+///
+/// No alias layer on the spine survives into the copy, here or in the cell,
+/// error-row and extension layers below. Every such alias names the NARROW
+/// type the definition closed (`Errs`, `IoResult(Str)`, `Fwd`), and the copy
+/// is the wider type the use may widen it to, so a copied alias would
+/// present the widened row under a name whose declaration lists fewer tags—
+/// in every type the use reports. Alias spelling is presentation, so dropping
+/// it changes no verdict.
 fn reopenCoercedSignature(
     self: *Self,
     var_: Var,
@@ -17453,7 +17490,7 @@ fn reopenCoercedSignature(
                 env,
                 region,
             )) orelse return null;
-            return try self.copiedAliasWithBacking(alias, backing, env, region);
+            return backing;
         },
         .structure => |flat| switch (flat) {
             .fn_pure => |func| return try self.copiedFuncWithResult(.pure, func, site, env, region),
@@ -17510,7 +17547,7 @@ fn reopenCoercedResultCell(
                 env,
                 region,
             )) orelse return null;
-            return try self.copiedAliasWithBacking(alias, backing, env, region);
+            return backing;
         },
         .structure => |flat| switch (flat) {
             .tag_union => |tag_union| {
@@ -17560,7 +17597,7 @@ fn reopenCoercedErrorRow(
                 env,
                 region,
             )) orelse return null;
-            return try self.copiedAliasWithBacking(alias, backing, env, region);
+            return backing;
         },
         .structure => |flat| switch (flat) {
             .tag_union => |tag_union| return try self.reopenedTagRow(tag_union, env, region),
@@ -17602,13 +17639,17 @@ fn reopenedTagRow(
 /// - An error tail means the row already took part in a reported type error;
 ///   the use is left unchanged (returns null) so checking recovers without a
 ///   second diagnostic.
+/// - An alias link is re-opened through its backing, and the copy is the
+///   backing alone, exactly as for the alias layers above the row (see
+///   `reopenCoercedSignature`). A row's extension can be an alias the
+///   annotation names: `Errs : Wrap(Base)` with `Wrap(ext) : [HostErr(U64),
+///   ..ext]` continues `Errs`'s row through `Base`, whose own marker is the
+///   row's tail. A hosted annotation closes that tail as written and no body
+///   ever unifies it, so the link survives to every use.
 /// - Anything else is impossible: the definition recorded its coercion only
-///   because its body grounded this row's tail to `[]`, and unification can
-///   restructure a closed row but never re-open it. That includes an alias
-///   link: the coerced tail is the annotation's implicit extension, which the
-///   annotation leaves unbound behind the row's written tags, and unification
-///   extends a row only with fresh `tag_union` links (it gathers through an
-///   alias and binds the gathered tail, never the alias).
+///   because its tail was grounded to `[]` (by the body, or as written at a
+///   host boundary), and unification can restructure a closed row but never
+///   re-open it.
 fn reopenedTagRowExt(
     self: *Self,
     ext_var: Var,
@@ -17622,8 +17663,16 @@ fn reopenedTagRowExt(
             .tag_union => |link| return try self.reopenedTagRow(link, env, region),
             .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record => {},
         },
+        .alias => |alias| {
+            const backing = (try self.reopenedTagRowExt(
+                self.types.getAliasBackingVar(alias),
+                env,
+                region,
+            )) orelse return null;
+            return backing;
+        },
         .err => return null,
-        .alias, .flex, .rigid, .field_presence => {},
+        .flex, .rigid, .field_presence => {},
     }
     std.debug.panic("type checker invariant violated: a coerced result row's extension chain did not end in a closed tail", .{});
 }
@@ -20158,6 +20207,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             decl_arg_rigid.name,
                             anno_arg_var,
                             self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(anno_args[arg_index])),
+                            try_error_row_reachable and arg_index == try_error_arg_index.?,
                             env,
                         );
                     }
@@ -20255,6 +20305,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                 decl_arg_rigid.name,
                                 anno_arg_var,
                                 self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(anno_args[arg_index])),
+                                try_error_row_reachable and arg_index == try_error_arg_index.?,
                                 env,
                             );
                         }

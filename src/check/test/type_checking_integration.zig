@@ -9723,6 +9723,108 @@ test "check type - polarity - a method call to an imported coerced method re-ope
     try main_env.assertLastDefType("Holder, [A, B] -> [A, B, C]");
 }
 
+test "check type - polarity - a coerced Try error row whose extension is an alias coerces" {
+    // `Errs`'s row continues through the alias `Base` (substituted for
+    // `Wrap`'s extension formal), so the coerced row's extension chain has an
+    // ALIAS link, and `Base`'s own marker is the tail the body closed. The
+    // re-open copies through that link.
+    const source =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\fwd : Try(U64, Errs) -> Try(U64, Errs)
+        \\fwd = |t| t
+        \\
+        \\wider : Try(U64, Errs) -> Try(U64, [HostErr(U64), Other, Widened])
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, Errs) -> Try(U64, [HostErr(U64), Other, Widened])");
+}
+
+test "check type - polarity - a coerced direct row whose extension is an alias coerces" {
+    const source =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\fwd : Errs -> Errs
+        \\fwd = |t| t
+        \\
+        \\wider : Errs -> [HostErr(U64), Other, Widened]
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Errs -> [HostErr(U64), Other, Widened]");
+}
+
+test "check type - polarity - an alias extension of a coerced row keeps the input row closed" {
+    const source =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\fwd : Errs -> Errs
+        \\fwd = |t| t
+        \\
+        \\bad = fwd(Widened)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - an alias applied at the result row whose formal is the row's extension coerces" {
+    // `Wrap(Base)` written in the result's error cell means exactly what
+    // `Errs : Wrap(Base)` named there means: `Base` stands on the row's own
+    // extension, so its row is the adapter-reachable one either way.
+    const source =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\fwd : Try(U64, Wrap(Base)) -> Try(U64, Wrap(Base))
+        \\fwd = |t| t
+        \\
+        \\wider : Try(U64, [HostErr(U64), Other]) -> Try(U64, [HostErr(U64), Other, Widened])
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, [HostErr(U64), Other]) -> Try(U64, [HostErr(U64), Other, Widened])");
+}
+
+test "check type - polarity - an identity alias applied at the result row coerces" {
+    const source =
+        \\Id(a) : a
+        \\
+        \\fwd : [A, B] -> Id([A, B])
+        \\fwd = |x| x
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| fwd(x)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A, B] -> [A, B, C]");
+}
+
+test "check type - polarity - a result-row twin standing as a row's extension coerces" {
+    // `e` is the EXTENSION of the result's error row, so its result-row twin
+    // is an alias link (`Base`) in that row's chain.
+    const source =
+        \\Base : [Other]
+        \\
+        \\Fwd(e) : Try(U64, [HostErr(U64), ..e]) -> Try(U64, [HostErr(U64), ..e])
+        \\
+        \\fwd : Fwd(Base)
+        \\fwd = |t| t
+        \\
+        \\wider : Try(U64, [HostErr(U64), Other]) -> Try(U64, [HostErr(U64), Other, Widened])
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, [HostErr(U64), Other]) -> Try(U64, [HostErr(U64), Other, Widened])");
+}
+
 test "check type - polarity - annotated input union stays closed" {
     const source =
         \\handle : [Known] -> Str

@@ -9225,6 +9225,50 @@ test "row subsumption serves a widened use inside the forwarder's recursive grou
     , 1);
 }
 
+test "row subsumption re-tags a coerced row whose extension chain has an alias link" {
+    // `Errs`'s row continues through the alias `Base`, so the coerced row's
+    // extension chain has an alias link. `Aborted` sorts first, so every
+    // declared discriminant shifts in the widened row.
+    try expectRowSubsumptionProgram(
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\fwd : Try(U64, Errs) -> Try(U64, Errs)
+        \\fwd = |t| t
+        \\
+        \\wider : Try(U64, Errs) -> Try(U64, [Aborted, HostErr(U64), Other])
+        \\wider = |t| fwd(t)
+        \\
+        \\show : Try(U64, [Aborted, HostErr(U64), Other]) -> Str
+        \\show = |v| match v { Ok(_) => "Ok", Err(Aborted) => "Aborted", Err(HostErr(_)) => "HostErr", Err(Other) => "Other" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Err(Other))) == "Other" and show(wider(Err(HostErr(1)))) == "HostErr"
+    , 1);
+    try expectRowSubsumptionProgram(
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\fwd : Errs -> Errs
+        \\fwd = |t| t
+        \\
+        \\wider : Errs -> [Aborted, HostErr(U64), Other]
+        \\wider = |t| fwd(t)
+        \\
+        \\show : [Aborted, HostErr(U64), Other] -> Str
+        \\show = |v| match v { Aborted => "Aborted", HostErr(_) => "HostErr", Other => "Other" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Other)) == "Other" and show(wider(HostErr(1))) == "HostErr"
+    , 1);
+}
+
 test "row subsumption coerces a forwarder whose signature is a function alias" {
     // The signature NAMES a whole function type. Its result row is the direct
     // result exactly as in `fwd : Status -> Status`, so the widened use is

@@ -8,7 +8,9 @@ app [main!] { pf: platform "./platform/fallible_widen_main.roc" }
 # subsumption re-opens the hosted `Try` error row at each use (design.md "Row
 # Subsumption"), so all of them typecheck.
 #
-# The host always returns Ok("ok"), so every line must print "ok". An extern
+# FallibleHost.str_ok!'s host always returns Ok("ok"), so every channel line
+# must print "ok"; the last line reads FallibleNotFound.not_found!, whose host
+# returns Err(NotFound), and must print "NotFound". An extern
 # emitted at the wider row instead of the declared one would read those same
 # bytes as Err (design.md "Host Symbol ABI"), which is why each line prints
 # what it actually received. hosted_channels_declared.roc is the same set of
@@ -27,6 +29,7 @@ main! = |_args| {
 	Stdout.line!("box: ${wider_row(FallibleWiden.via_box!({}))}")
 	Stdout.line!("unannotated question: ${wider_row(FallibleWiden.via_unannotated_question!({}))}")
 	Stdout.line!("alias owner: ${wider_row(FallibleWiden.via_alias_owner!({}))}")
+	Stdout.line!("host err: ${host_err_row(FallibleWiden.via_host_err!({}))}")
 
 	Ok({})
 }
@@ -37,4 +40,13 @@ wider_row = |result|
 		Ok(value) => value
 		Err(HostErr(message)) => "misread as Err(HostErr(${message}))"
 		Err(Widened(_)) => "misread as Err(Widened)"
+	}
+
+host_err_row : Try(Str, [Aborted, NotFound, PermissionDenied]) -> Str
+host_err_row = |result|
+	match result {
+		Ok(value) => "misread as Ok(${value})"
+		Err(Aborted) => "misread as Err(Aborted)"
+		Err(NotFound) => "NotFound"
+		Err(PermissionDenied) => "misread as Err(PermissionDenied)"
 	}

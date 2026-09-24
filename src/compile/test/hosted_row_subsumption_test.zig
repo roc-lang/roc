@@ -91,6 +91,40 @@ const method_platform_module =
     \\}
 ;
 
+/// A hosted `Try` error row whose extension chain continues through an alias
+/// (`Base`, substituted for `Wrap`'s extension formal): the row the
+/// annotation closes as written has an ALIAS link, and `Base`'s marker is its
+/// closed tail.
+const alias_chain_platform_main =
+    \\platform ""
+    \\    requires {} { main! : () => U64 }
+    \\    exposes [Host]
+    \\    packages {}
+    \\    provides { "result": result! }
+    \\    hosted { "chain": Host.chain!, "inline_chain": Host.inline_chain!, "never": Host.never! }
+    \\
+    \\import Host
+    \\
+    \\result! : () => U64
+    \\result! = || main!()
+;
+
+const alias_chain_platform_module =
+    \\Base : [Other]
+    \\
+    \\Wrap(ext) : [HostErr(U64), ..ext]
+    \\
+    \\Errs : Wrap(Base)
+    \\
+    \\Host := [].{
+    \\    chain! : U64 => Try(U64, Errs)
+    \\    inline_chain! : U64 => Try(U64, Wrap(Base))
+    \\    never! : U64 => Try(U64, [])
+    \\}
+;
+
+const alias_chain_platform = PlatformFiles{ .main = alias_chain_platform_main, .module = alias_chain_platform_module };
+
 const PlatformFiles = struct {
     main: []const u8,
     module: []const u8,
@@ -319,6 +353,66 @@ test "hosted row subsumption: a hosted Try error row widens at a method call" {
         \\    }
         \\}
     , .{ .main = method_platform_main, .module = method_platform_module });
+}
+
+test "hosted row subsumption: a hosted Try error row whose extension chain has an alias link widens" {
+    try expectAcceptedOn(
+        \\app [main!] { pf: platform "./platform/main.roc" }
+        \\import pf.Host
+        \\
+        \\main! : () => U64
+        \\main! = || {
+        \\    value : Try(U64, [Aborted, HostErr(U64), Other])
+        \\    value = Host.chain!(1)
+        \\    match value {
+        \\        Ok(n) => n
+        \\        Err(Aborted) => 0
+        \\        Err(HostErr(n)) => n
+        \\        Err(Other) => 2
+        \\    }
+        \\}
+    , alias_chain_platform);
+}
+
+test "hosted row subsumption: a hosted Try error row applying an extension alias inline widens" {
+    // `Wrap(Base)` written in the error cell closes the same row `Errs`
+    // names, so it records the same coercion.
+    try expectAcceptedOn(
+        \\app [main!] { pf: platform "./platform/main.roc" }
+        \\import pf.Host
+        \\
+        \\main! : () => U64
+        \\main! = || {
+        \\    value : Try(U64, [Aborted, HostErr(U64), Other])
+        \\    value = Host.inline_chain!(1)
+        \\    match value {
+        \\        Ok(n) => n
+        \\        Err(Aborted) => 0
+        \\        Err(HostErr(n)) => n
+        \\        Err(Other) => 2
+        \\    }
+        \\}
+    , alias_chain_platform);
+}
+
+test "hosted row subsumption: an uninhabited hosted Try error row does not widen" {
+    // `[]` asserts uninhabitedness, so the annotation walk opens no such row
+    // and a use re-opens nothing: the hosted definition may record the cell,
+    // but the re-open finds no tag row there and leaves the use as it is.
+    try expectRejected(
+        \\app [main!] { pf: platform "./platform/main.roc" }
+        \\import pf.Host
+        \\
+        \\main! : () => U64
+        \\main! = || {
+        \\    value : Try(U64, [Widened])
+        \\    value = Host.never!(1)
+        \\    match value {
+        \\        Ok(n) => n
+        \\        Err(Widened) => 0
+        \\    }
+        \\}
+    , alias_chain_platform, &app_mismatch);
 }
 
 test "hosted row subsumption: a hosted direct result row does not widen" {

@@ -7,12 +7,10 @@ app [main!] { pf: platform "./platform/fallible_reject_main.roc" }
 # checking this app must fail with a type mismatch in that platform module.
 
 import pf.FallibleReject
-import pf.Stdout
 
-main! : List(Str) => Try({}, [Exit(I32), ..])
+main! : List(Str) => Try({}, [Exit(I32)])
 main! = |_args| {
-	value = FallibleReject.mismatched!({})?
-	Stdout.line!("unreachable: ${value}")
+	_value = FallibleReject.mismatched!({})?
 
 	Ok({})
 }

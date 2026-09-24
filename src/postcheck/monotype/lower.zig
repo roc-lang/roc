@@ -6177,8 +6177,9 @@ const Builder = struct {
         // Such a request is served by specializing the template at its
         // declared row and generating an adapter at the requested row that
         // calls it and re-tags the result. Hosted templates are the instance
-        // where the declared row is the host ABI: a use site widens the
-        // (closed) hosted error row through `?`, and the adapter keeps the
+        // where the declared row is the host ABI: every use of a hosted
+        // function may widen its (closed) `Try` error row, through any
+        // channel (design.md "Row Subsumption"), and the adapter keeps the
         // extern boundary at its declared type instead of emitting a hosted
         // spec whose layout would not match the host ABI.
         if (try self.resultRowWideningAdapterOrNull(

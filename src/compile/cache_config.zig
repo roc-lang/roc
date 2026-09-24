@@ -255,7 +255,10 @@ pub const Constants = struct {
     ///      decides where its argument rows sit, and a static-dispatch use
     ///      re-opens a coerced target's result row, so more definitions
     ///      record a row coercion for the same source.
-    pub const CACHE_VERSION = 112;
+    /// 113: A coerced row's re-open crosses alias links in its extension
+    ///      chain and keeps no alias layer on its spine; an alias whose formal
+    ///      is the result row's extension opens it however it is spelled.
+    pub const CACHE_VERSION = 113;
 };
 
 /// Configuration for the Roc cache system.
