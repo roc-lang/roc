@@ -10529,10 +10529,10 @@ expression when the loop result is unit/control-only.
 
 Source `for` expressions and statements share one state-carrying lowering
 contract, which condition loops (`while`, infinite, and breakable loops) also
-follow. Checked publication records every loop's mutation identities once, with
+follow. Checked output records every loop's mutation identities once, with
 disjoint ranges for mutations outside `expect` and mutations occurring only in
 `expect` conditions. A `for` plan covers its body; a condition loop's plan also
-covers its condition, which runs on every iteration. Publication follows
+covers its condition, which runs on every iteration. Recording follows
 resolved assignment identities and explicit dispatch operands, excludes nested
 function bodies, and reuses nested loop summaries. A loop-only table holds these
 compact ranges into the checked binder pool; loops reference it by ID without
