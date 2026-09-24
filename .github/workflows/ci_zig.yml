@@ -302,6 +302,7 @@ jobs:
 
       - name: roc executable minimal check (Windows)
         if: runner.os == 'Windows'
+        shell: pwsh
         run: |
           zig-out\bin\roc.exe check ./CONTRIBUTING/profiling/bench_repeated_check.roc
 
@@ -350,6 +351,7 @@ jobs:
 
       - name: check if statically linked (Windows)
         if: startsWith(matrix.os, 'windows')
+        shell: pwsh
         run: |
           $imports = (Get-Command zig-out\bin\roc.exe).FileVersionInfo.ImportCharacterSet
           if ($imports) {
