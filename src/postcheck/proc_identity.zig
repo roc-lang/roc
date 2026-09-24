@@ -113,7 +113,7 @@ pub const Renderer = struct {
         writeBytes(&hasher, return_reuse);
         const signature = switch (self.types.get(self.renderedRoot(solved_fn_ty))) {
             .func => |func| func,
-            else => Common.invariant("procedure identity requires a solved function signature"),
+            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .lambda_set, .erased, .zst, .mono => Common.invariant("procedure identity requires a solved function signature"),
         };
         writeBytes(&hasher, "args");
         const args = self.types.span(signature.args);
@@ -692,10 +692,14 @@ test "procedure identity excludes outer callable sets but retains nested callabl
     defer memo.deinit();
     var fn_by_symbol = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator);
     defer fn_by_symbol.deinit();
-    const first: Common.Symbol = @enumFromInt(0);
-    const second: Common.Symbol = @enumFromInt(1);
-    try fn_by_symbol.put(first, @enumFromInt(0));
-    try fn_by_symbol.put(second, @enumFromInt(1));
+    var symbols = Common.SymbolGen{};
+    const first = symbols.fresh();
+    const second = symbols.fresh();
+    // Renderer function arrays use the dense IDs assigned by this symbol table.
+    const first_fn: Lifted.FnId = @enumFromInt(fn_by_symbol.count());
+    try fn_by_symbol.put(first, first_fn);
+    const second_fn: Lifted.FnId = @enumFromInt(fn_by_symbol.count());
+    try fn_by_symbol.put(second, second_fn);
     const scalar = try types.add(.{ .primitive = .i64 });
     const args = try types.addSpan(&.{ scalar, scalar });
     const singleton = try types.add(.{ .lambda_set = try types.addMembers(&.{
@@ -720,21 +724,24 @@ test "procedure identity excludes outer callable sets but retains nested callabl
         .fn_by_symbol = &fn_by_symbol,
         .memo = &memo,
     };
-    const identity = try renderer.specIdentity(@enumFromInt(0), alone, &.{}, "finite", "none");
-    try std.testing.expectEqual(identity, try renderer.specIdentity(@enumFromInt(0), beside_lambda, &.{}, "finite", "none"));
+    const identity = try renderer.specIdentity(first_fn, alone, &.{}, "finite", "none");
+    try std.testing.expectEqual(identity, try renderer.specIdentity(first_fn, beside_lambda, &.{}, "finite", "none"));
     // Function values still distinguish the members their dispatch can select.
     try std.testing.expect(!std.mem.eql(u8, &try renderer.typeDigest(alone), &try renderer.typeDigest(beside_lambda)));
     for ([_][2]SolvedType.TypeVarId{ .{ takes_alone, takes_joined }, .{ returns_alone, returns_joined } }) |pair| {
-        const left = try renderer.specIdentity(@enumFromInt(0), pair[0], &.{}, "finite", "none");
-        const right = try renderer.specIdentity(@enumFromInt(0), pair[1], &.{}, "finite", "none");
+        const left = try renderer.specIdentity(first_fn, pair[0], &.{}, "finite", "none");
+        const right = try renderer.specIdentity(first_fn, pair[1], &.{}, "finite", "none");
         try std.testing.expect(!std.mem.eql(u8, &left, &right));
     }
-    var capture = SolvedType.Capture{ .local = @enumFromInt(0), .symbol = first, .binder = null, .ty = alone };
-    const captures_alone = try renderer.specIdentity(@enumFromInt(0), alone, &.{capture}, "finite", "none");
+    var mono = @import("monotype/ast.zig").ProgramBuilder.init(allocator);
+    defer mono.deinit();
+    const capture_local = try mono.addLocal(first, try mono.types.add(.{ .primitive = .i64 }));
+    var capture = SolvedType.Capture{ .local = capture_local, .symbol = first, .binder = null, .ty = alone };
+    const captures_alone = try renderer.specIdentity(first_fn, alone, &.{capture}, "finite", "none");
     capture.ty = beside_lambda;
-    const captures_joined = try renderer.specIdentity(@enumFromInt(0), alone, &.{capture}, "finite", "none");
+    const captures_joined = try renderer.specIdentity(first_fn, alone, &.{capture}, "finite", "none");
     try std.testing.expect(!std.mem.eql(u8, &captures_alone, &captures_joined));
-    try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(@enumFromInt(1), alone, &.{}, "finite", "none")));
-    try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(@enumFromInt(0), alone, &.{}, "erased", "none")));
-    try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(@enumFromInt(0), alone, &.{}, "finite", "reuse")));
+    try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(second_fn, alone, &.{}, "finite", "none")));
+    try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(first_fn, alone, &.{}, "erased", "none")));
+    try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(first_fn, alone, &.{}, "finite", "reuse")));
 }

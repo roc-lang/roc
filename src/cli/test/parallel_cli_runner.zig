@@ -6184,17 +6184,25 @@ fn customIssue11673CallableCache(
     timer: *harness.Timer,
     timeout_ms: u64,
 ) ?TestResult {
-    const apps = [_]struct { file: []const u8, expect: StoreExpectations }{
-        .{ .file = "main", .expect = .{ .uncached_baseline = true, .stdout = "differs\na\n" } },
+    var trace_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone callable-cache test environment: {}", .{err}),
+    };
+    defer trace_env.env_map.deinit();
+    for ([_][]const u8{ "ROC_SPEC_CENSUS", "ROC_PACK_TRACE" }) |key| {
+        trace_env.env_map.put(key, "1") catch |err|
+            return customInfraFailure(allocator, timer, "failed to enable callable-cache tracing: {}", .{err});
+    }
+    const apps = [_]struct { path: []const u8, prefix: []const u8, expect: StoreExpectations }{
+        .{ .path = "test/cli/issue_11673_callable_cache/main.roc", .prefix = "main", .expect = .{ .uncached_baseline = true, .stdout = "differs\na\n", .pack_hit_proc = "Eq.same" } },
         // This caller order evaluates Eq.same while checking. Its first
         // cached build consumes the sibling's object pack; the next reuses
         // the checked constant and no longer needs that procedure.
-        .{ .file = "reversed", .expect = .{ .uncached_baseline = true, .stdout = "a\ndiffers\n", .cache_hit_build = .first_cached } },
+        .{ .path = "test/cli/issue_11673_callable_cache/reversed.roc", .prefix = "reversed", .expect = .{ .uncached_baseline = true, .stdout = "a\ndiffers\n", .cache_hit_build = .first_cached, .pack_hit_proc = "Eq.same" } },
     };
     for (apps) |app| {
-        const path = std.fmt.allocPrint(allocator, "test/cli/issue_11673_callable_cache/{s}.roc", .{app.file}) catch |err|
-            return customInfraFailure(allocator, timer, "failed to allocate fixture path: {}", .{err});
-        if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, path, env.dirs.work_dir, app.file, app.expect)) |failure| return failure;
+        if (storeBuildsBehaveIdentically(io, allocator, &trace_env, timer, timeout_ms, app.path, env.dirs.work_dir, app.prefix, app.expect)) |failure| return failure;
     }
     return null;
 }
@@ -6243,6 +6251,9 @@ const StoreExpectations = struct {
     /// Which cached build must consume an object pack. Later checked-cache
     /// hits can already contain evaluated constants and need no procedure.
     cache_hit_build: enum { first_cached, last } = .last,
+    /// Require a hit for this procedure's census key, not just an aggregate hit.
+    /// The case must enable ROC_SPEC_CENSUS and ROC_PACK_TRACE.
+    pack_hit_proc: ?[]const u8 = null,
     /// Require every execution to produce this exact output.
     stdout: ?[]const u8 = null,
 };
@@ -6295,6 +6306,9 @@ fn storeBuildsBehaveIdentically(
             const at = std.mem.find(u8, built.stderr, hits_marker) orelse
                 return failureFromRun(allocator, timer, built, "build with the object cache did not report pack hits");
             if (countAfterMarker(built.stderr[at + hits_marker.len ..]) == 0) return failureFromRun(allocator, timer, built, "expected object-cache consumer reported no pack hits");
+            if (expect.pack_hit_proc) |procedure| {
+                if (!hasNamedPackHit(built.stderr, procedure)) return failureFromRun(allocator, timer, built, "expected procedure's specialization key had no object-cache hit");
+            }
             if (expect.evaluator_artifacts) {
                 const evaluator_at = std.mem.find(u8, built.stderr, evaluator_marker) orelse
                     return failureFromRun(allocator, timer, built, "build with the object cache did not report evaluator artifacts");
@@ -6315,6 +6329,37 @@ fn storeBuildsBehaveIdentically(
         };
     }
     return null;
+}
+
+/// Join the producer's named specialization key to the cache lookup trace.
+/// A hit for an unrelated procedure or an identity mismatch cannot satisfy it.
+fn hasNamedPackHit(stderr: []const u8, procedure: []const u8) bool {
+    var census_lines = std.mem.splitScalar(u8, stderr, '\n');
+    while (census_lines.next()) |line| {
+        var fields = std.mem.splitScalar(u8, line, '\t');
+        if (!std.mem.eql(u8, fields.next() orelse continue, "CENSUS_KEY")) continue;
+        if (!std.mem.eql(u8, fields.next() orelse continue, procedure)) continue;
+        const key = fields.next() orelse continue;
+        var trace_lines = std.mem.splitScalar(u8, stderr, '\n');
+        while (trace_lines.next()) |trace| {
+            for ([_][]const u8{ "lookup monotype key=", "lookup direct-lir key=" }) |prefix| {
+                if (!std.mem.startsWith(u8, trace, prefix)) continue;
+                const lookup = trace[prefix.len..];
+                if (std.mem.startsWith(u8, lookup, key) and std.mem.eql(u8, lookup[key.len..], " hit")) return true;
+            }
+        }
+    }
+    return false;
+}
+
+test "named pack hit requires the selected procedure's key and a successful lookup" {
+    const census = "CENSUS_KEY\tEq.same\t1234\tev=abcd\nCENSUS_KEY\tOther.same\t5678\tev=abcd\n";
+    try std.testing.expect(hasNamedPackHit(census ++ "lookup monotype key=1234 hit\n", "Eq.same"));
+    try std.testing.expect(hasNamedPackHit(census ++ "lookup direct-lir key=1234 hit\n", "Eq.same"));
+    try std.testing.expect(!hasNamedPackHit(census ++ "lookup monotype key=5678 hit\npack hits: 1\n", "Eq.same"));
+    try std.testing.expect(!hasNamedPackHit(census ++ "lookup direct-lir key=1234 identity-mismatch\n", "Eq.same"));
+    try std.testing.expect(!hasNamedPackHit(census ++ "lookup monotype key=12345 hit\n", "Eq.same"));
+    try std.testing.expect(!hasNamedPackHit("lookup monotype key=1234 hit\n", "Eq.same"));
 }
 
 /// The decimal number at the start of `text`, or zero when it starts with none.
