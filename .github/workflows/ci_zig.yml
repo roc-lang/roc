@@ -380,10 +380,10 @@ jobs:
           zig build run-coverage-parser
 
           echo "=== Coverage summary ==="
-          cat kcov-output/parser/parse_unit_coverage/coverage.json | jq '{total: .total_lines, covered: .covered_lines, percent: .percent_covered}'
+          jq '{total: .total_lines, covered: .covered_lines, percent: .percent_covered}' kcov-output/parser/parse_unit_coverage/coverage.json
 
           echo "=== Files found ==="
-          cat kcov-output/parser/parse_unit_coverage/coverage.json | jq -r '.files[].file' | head -10
+          jq -r '.files[].file' kcov-output/parser/parse_unit_coverage/coverage.json | head -10
 
       - name: Eval Code Coverage
         if: matrix.os == 'ubuntu-24.04-arm'
