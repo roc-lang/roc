@@ -232,7 +232,10 @@ pub const Constants = struct {
     ///      already covers names the derivation that covers it.
     /// 106: A stored nested-function use records its scheme substitution and
     ///      the checked instance its containing value stores.
-    pub const CACHE_VERSION = 106;
+    /// 107: A tag row names a tag repeated along its extension chain once,
+    ///      relating the occurrences' payloads, and publishes such a row
+    ///      flattened.
+    pub const CACHE_VERSION = 107;
 };
 
 /// Configuration for the Roc cache system.

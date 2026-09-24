@@ -7016,42 +7016,31 @@ test "check type - composed body preserves shared tagged callback errors" {
     try test_env.assertNoErrors();
 }
 
-test "check type - wrapped try overlap reports the wrapper in either source order" {
-    for ([_]struct { source: []const u8, wrapper_line: u32 }{
-        .{
-            .source =
-            \\run = |save| {
-            \\    _ = save({})?
-            \\    _ = save({}) ? PersistFailed
-            \\    Ok({})
-            \\}
-            \\use = run(|_| Err(PersistFailed(Foo)))
-            ,
-            .wrapper_line = 3,
-        },
-        .{
-            .source =
-            \\run = |save| {
-            \\    _ = save({}) ? PersistFailed
-            \\    _ = save({})?
-            \\    Ok({})
-            \\}
-            \\use = run(|_| Err(PersistFailed(Foo)))
-            ,
-            .wrapper_line = 2,
-        },
-    }) |case| {
-        var test_env = try TestEnv.init("Test", case.source);
-        defer test_env.deinit();
-        try test_env.assertOneTypeErrorHighlightsWithin("Type Mismatch", .{
-            .line = case.wrapper_line,
-            .start_column = 9,
-            .end_column = 33,
-        });
+test "check type - wrapped try overlap is anonymous recursion in either source order" {
+    // The callback's `PersistFailed(Foo)` and `run`'s own `PersistFailed(e)`
+    // are one tag of the composed row, so its payload `e` would have to
+    // contain `PersistFailed(e)`.
+    inline for ([_][]const u8{
+        \\run = |save| {
+        \\    _ = save({})?
+        \\    _ = save({}) ? PersistFailed
+        \\    Ok({})
+        \\}
+        \\use = run(|_| Err(PersistFailed(Foo)))
+        ,
+        \\run = |save| {
+        \\    _ = save({}) ? PersistFailed
+        \\    _ = save({})?
+        \\    Ok({})
+        \\}
+        \\use = run(|_| Err(PersistFailed(Foo)))
+        ,
+    }) |source| {
+        try checkTypesModule(source, .fail_first, "Anonymous Recursion");
     }
 }
 
-test "check type - issue 11470 rejects wrapper overlap after instantiation" {
+test "check type - issue 11470 rejects wrapper overlap after instantiation as anonymous recursion" {
     const source =
         \\find = |query| {
         \\    value = query({})?
@@ -7064,7 +7053,7 @@ test "check type - issue 11470 rejects wrapper overlap after instantiation" {
         \\}
         \\use = show(|_| Err(Wrapped(NotFound)))
     ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
+    try checkTypesModule(source, .fail_first, "Anonymous Recursion");
 }
 
 test "check type - issue 11470 rejects incompatible shared tag payloads" {

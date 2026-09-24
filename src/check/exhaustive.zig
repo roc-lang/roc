@@ -1114,7 +1114,13 @@ fn buildUnionFromTagUnion(
         const tag_names = tags_slice.items(.name);
         const tag_args = tags_slice.items(.args);
 
+        const link_base = all_tags.items.len;
         for (tag_names, tag_args) |name, args_range| {
+            // A tag an earlier link already supplied is the same constructor.
+            const repeated = for (all_tags.items[0..link_base]) |earlier| {
+                if (earlier.name.eql(name)) break true;
+            } else false;
+            if (repeated) continue;
             try all_tags.append(allocator, .{ .name = name, .args = args_range });
         }
 
@@ -2486,25 +2492,33 @@ fn getCtorArgTypes(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
     const content = resolved.desc.content;
 
     if (content.unwrapTagUnion()) |tag_union| {
-        // Follow extension chain to find the tag at the given index
+        // Follow extension chain to find the tag at the given index. Ids
+        // number the row's constructors as `buildUnionFromTagUnion` gathers
+        // them: a tag an earlier link already supplied takes no id of its own.
         var current_tags = tag_union.tags;
         var current_ext = tag_union.ext;
-        var current_offset: usize = 0;
         const target_idx = @intFromEnum(tag_id);
+        var gathered_names: std.ArrayList(Ident.Idx) = .empty;
+        defer gathered_names.deinit(type_store.gpa);
 
         // Track seen extension variables to detect cycles
         var seen_exts = std.AutoHashMap(Var, void).init(type_store.gpa);
         defer seen_exts.deinit();
 
         while (true) {
-            // Check if the target index is in this level
-            if (target_idx < current_offset + current_tags.count) {
-                const local_idx = target_idx - current_offset;
-                return .{ .vars = type_store.getTagAt(current_tags, @intCast(local_idx)).args };
+            const link_base = gathered_names.items.len;
+            var local_idx: u32 = 0;
+            while (local_idx < current_tags.count) : (local_idx += 1) {
+                const tag = type_store.getTagAt(current_tags, local_idx);
+                const repeated = for (gathered_names.items[0..link_base]) |earlier| {
+                    if (earlier.eql(tag.name)) break true;
+                } else false;
+                if (repeated) continue;
+                if (gathered_names.items.len == target_idx) return .{ .vars = tag.args };
+                try gathered_names.append(type_store.gpa, tag.name);
             }
 
             // Move to the extension
-            current_offset += current_tags.count;
             const ext_resolved = type_store.resolveVar(current_ext);
             const ext_var = ext_resolved.var_;
 

@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=An inferred wrapped try row rejects a propagated tag overlap after instantiation
+description=A propagated tag that repeats an inferred wrapped try row tag relates its payload, which here is an anonymous recursive type
 type=snippet
 ~~~
 # SOURCE
@@ -14,35 +14,43 @@ run = |save| {
 use = run(|_| Err(PersistFailed(Foo)))
 ~~~
 # EXPECTED
-TYPE MISMATCH - issue_11097_wrapped_try_overlap.md:3:6:3:30
+ANONYMOUS RECURSION - issue_11097_wrapped_try_overlap.md:7:1:7:39
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 3 6) (end 3 30))
+		(title "Anonymous Recursion")
+		(region (start 7 1) (end 7 39))
 		(headline
-			(reflow "This expression is used in an unexpected way."))
+			(reflow "I am inferring a recursive type that has no name somewhere in")
+			(reflow " ")
+			(annotated code "use")
+			(reflow "."))
 		(document
-			(source-region (file "issue_11097_wrapped_try_overlap.md") (start 3 6) (end 3 30) (annotation error) (line-text "\t_ = save({}) ? PersistFailed"))
+			(source-region (file "issue_11097_wrapped_try_overlap.md") (start 7 1) (end 7 39) (annotation error) (line-text "use = run(|_| Err(PersistFailed(Foo)))"))
 			(line-break)
-			(reflow "It has the type:")
+			(reflow "Here is the type I'm inferring. You will see")
+			(reflow " ")
+			(annotated code "<RecursiveType>")
+			(reflow " ")
+			(reflow "for parts of the type that repeat.")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[PersistFailed([Foo])]")
+			(text "[Foo, PersistFailed(<RecursiveType>)]")
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "But you are trying to use it as:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "[]")
-			(annotation-end))))
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Recursive types are only allowed through nominal types.")
+			(reflow " ")
+			(reflow "If you need a recursive data structure, define a nominal type using")
+			(reflow " ")
+			(annotated code ":=")
+			(reflow "."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -194,8 +202,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "({} -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..err])"))
-		(patt (type "Try({}, Error)")))
+		(patt (type "Error")))
 	(expressions
 		(expr (type "({} -> Try(ok, err)) -> Try({}, [PersistFailed(err), ..err])"))
-		(expr (type "Try({}, Error)"))))
+		(expr (type "Error"))))
 ~~~

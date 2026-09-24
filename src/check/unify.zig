@@ -1598,11 +1598,38 @@ const Unifier = struct {
         try self.scheduleGuardedPair(post.a_backing_var, post.b_backing_var, .ignore);
     }
 
-    fn rowExtMergeTarget(self: *Self, vars: *const ResolvedVarDescs) types_mod.DescStoreIdx {
-        return self.types_store.resolveVar(vars.b.var_).desc_idx;
+    /// The descriptors a merge overwrites. `union_` gives both sides the
+    /// merged content, so a tag row extension reaching EITHER one would become
+    /// a self-cycle unless its current row meaning is spliced in first: a tag
+    /// row that extends itself includes its own tags, so `t ~ [H, ..t]` leaves
+    /// `t` as `[H, ..fresh]`.
+    const RowExtMergeTargets = struct {
+        a: types_mod.DescStoreIdx,
+        b: types_mod.DescStoreIdx,
+        spliced_a: bool = false,
+        spliced_b: bool = false,
+
+        fn contains(self: RowExtMergeTargets, desc_idx: types_mod.DescStoreIdx) bool {
+            return desc_idx == self.a or desc_idx == self.b;
+        }
+
+        /// Record reaching `desc_idx`, returning whether it was reached before.
+        fn markSpliced(self: *RowExtMergeTargets, desc_idx: types_mod.DescStoreIdx) bool {
+            const flag = if (desc_idx == self.a) &self.spliced_a else &self.spliced_b;
+            const was_spliced = flag.*;
+            flag.* = true;
+            return was_spliced;
+        }
+    };
+
+    fn rowExtMergeTargets(self: *Self, vars: *const ResolvedVarDescs) RowExtMergeTargets {
+        return .{
+            .a = self.types_store.resolveVar(vars.a.var_).desc_idx,
+            .b = self.types_store.resolveVar(vars.b.var_).desc_idx,
+        };
     }
 
-    fn recordExtReachesDesc(self: *Self, ext: Var, target_desc: types_mod.DescStoreIdx) bool {
+    fn recordExtReachesDesc(self: *Self, ext: Var, targets: RowExtMergeTargets) bool {
         var ext_var = ext;
         var guard = types_mod.debug.IterationGuard.init("recordExtReachesDesc");
 
@@ -1610,7 +1637,7 @@ const Unifier = struct {
             guard.tick();
 
             const resolved = self.types_store.resolveVar(ext_var);
-            if (resolved.desc_idx == target_desc) return true;
+            if (targets.contains(resolved.desc_idx)) return true;
 
             switch (resolved.desc.content) {
                 .alias => |alias| {
@@ -1637,7 +1664,7 @@ const Unifier = struct {
         }
     }
 
-    fn tagExtReachesDesc(self: *Self, ext: Var, target_desc: types_mod.DescStoreIdx) bool {
+    fn tagExtReachesDesc(self: *Self, ext: Var, targets: RowExtMergeTargets) bool {
         var ext_var = ext;
         var guard = types_mod.debug.IterationGuard.init("tagExtReachesDesc");
 
@@ -1645,7 +1672,7 @@ const Unifier = struct {
             guard.tick();
 
             const resolved = self.types_store.resolveVar(ext_var);
-            if (resolved.desc_idx == target_desc) return true;
+            if (targets.contains(resolved.desc_idx)) return true;
 
             switch (resolved.desc.content) {
                 .alias => |alias| {
@@ -1682,14 +1709,49 @@ const Unifier = struct {
         );
     }
 
-    fn mergeTagsIntoScratch(self: *Self, range: *TagSafeList.Range, tags: TagSafeMultiList.Range) std.mem.Allocator.Error!void {
+    fn mergeTagsIntoScratch(self: *Self, vars: *const ResolvedVarDescs, range: *TagSafeList.Range, tags: TagSafeMultiList.Range) std.mem.Allocator.Error!void {
         const next_tags = self.types_store.tags.sliceRange(tags);
+        const repeated_start: u32 = @intCast(self.scratch.repeated_tags.len());
         try self.scratch.mergeSortedExtensionTags(
             range,
             next_tags.items(.name),
             next_tags.items(.args),
             self.ident_store,
         );
+        try self.relateRepeatedTags(vars, repeated_start);
+    }
+
+    /// A tag repeated along one extension chain is one tag of that row, so the
+    /// occurrence the row keeps and every later one it drops carry the same
+    /// payload. Equal arities relate their payloads pairwise; unequal arities
+    /// relate as two closed one-tag rows, which is an ordinary tag mismatch.
+    fn relateRepeatedTags(self: *Self, vars: *const ResolvedVarDescs, start: u32) std.mem.Allocator.Error!void {
+        var idx = start;
+        while (idx < self.scratch.repeated_tags.len()) : (idx += 1) {
+            const pair = self.scratch.repeated_tags.get(@enumFromInt(idx)).*;
+            const arity = pair.a.args.len();
+            if (arity == pair.b.args.len()) {
+                var arg_idx: u32 = 0;
+                while (arg_idx < arity) : (arg_idx += 1) {
+                    try self.scheduleGuardedPair(
+                        self.types_store.getVarAt(pair.a.args, arg_idx),
+                        self.types_store.getVarAt(pair.b.args, arg_idx),
+                        .propagate,
+                    );
+                }
+                continue;
+            }
+            const kept = try self.fresh(vars, .{ .structure = .{ .tag_union = .{
+                .tags = try self.types_store.appendTags(&.{pair.a}),
+                .ext = try self.fresh(vars, .{ .structure = .empty_tag_union }),
+            } } });
+            const dropped = try self.fresh(vars, .{ .structure = .{ .tag_union = .{
+                .tags = try self.types_store.appendTags(&.{pair.b}),
+                .ext = try self.fresh(vars, .{ .structure = .empty_tag_union }),
+            } } });
+            try self.scheduleGuardedPair(kept, dropped, .propagate);
+        }
+        self.scratch.repeated_tags.items.shrinkRetainingCapacity(start);
     }
 
     fn finishRecordForMerge(self: *Self, range: RecordFieldSafeList.Range, ext: Var) std.mem.Allocator.Error!types_mod.Record {
@@ -1703,27 +1765,29 @@ const Unifier = struct {
     }
 
     fn recordForMerge(self: *Self, vars: *const ResolvedVarDescs, record: types_mod.Record) std.mem.Allocator.Error!types_mod.Record {
-        const target_desc = self.rowExtMergeTarget(vars);
-        if (!self.recordExtReachesDesc(record.ext, target_desc)) return record;
+        // Record extensions stay disjoint: a merge side reached through its
+        // own extension is an infinite type, reported at binding roots. Only
+        // the destination's current meaning is spliced before the overwrite.
+        const destination = self.types_store.resolveVar(vars.b.var_).desc_idx;
+        var targets: RowExtMergeTargets = .{ .a = destination, .b = destination };
+        if (!self.recordExtReachesDesc(record.ext, targets)) return record;
 
         var range = try self.scratch.copyGatherFieldsFromMultiList(
             &self.types_store.record_fields,
             record.fields,
         );
         var ext_var = record.ext;
-        var spliced_target = false;
         var guard = types_mod.debug.IterationGuard.init("recordForMerge");
 
         while (true) {
             guard.tick();
 
             const resolved = self.types_store.resolveVar(ext_var);
-            if (resolved.desc_idx == target_desc) {
-                if (spliced_target) {
+            if (targets.contains(resolved.desc_idx)) {
+                if (targets.markSpliced(resolved.desc_idx)) {
                     return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content));
                 }
 
-                spliced_target = true;
                 switch (resolved.desc.content) {
                     .structure => |flat_type| {
                         switch (flat_type) {
@@ -1774,32 +1838,30 @@ const Unifier = struct {
     }
 
     fn tagUnionForMerge(self: *Self, vars: *const ResolvedVarDescs, tag_union: TagUnion) std.mem.Allocator.Error!TagUnion {
-        const target_desc = self.rowExtMergeTarget(vars);
-        if (!self.tagExtReachesDesc(tag_union.ext, target_desc)) return tag_union;
+        var targets = self.rowExtMergeTargets(vars);
+        if (!self.tagExtReachesDesc(tag_union.ext, targets)) return tag_union;
 
         var range = try self.scratch.copyGatherTagsFromMultiList(
             &self.types_store.tags,
             tag_union.tags,
         );
         var ext_var = tag_union.ext;
-        var spliced_target = false;
         var guard = types_mod.debug.IterationGuard.init("tagUnionForMerge");
 
         while (true) {
             guard.tick();
 
             const resolved = self.types_store.resolveVar(ext_var);
-            if (resolved.desc_idx == target_desc) {
-                if (spliced_target) {
+            if (targets.contains(resolved.desc_idx)) {
+                if (targets.markSpliced(resolved.desc_idx)) {
                     return try self.finishTagUnionForMerge(range, try self.fresh(vars, resolved.desc.content));
                 }
 
-                spliced_target = true;
                 switch (resolved.desc.content) {
                     .structure => |flat_type| {
                         switch (flat_type) {
                             .tag_union => |target_tag_union| {
-                                try self.mergeTagsIntoScratch(&range, target_tag_union.tags);
+                                try self.mergeTagsIntoScratch(vars, &range, target_tag_union.tags);
                                 ext_var = target_tag_union.ext;
                             },
                             .record,
@@ -1825,7 +1887,7 @@ const Unifier = struct {
                 .structure => |flat_type| {
                     switch (flat_type) {
                         .tag_union => |ext_tag_union| {
-                            try self.mergeTagsIntoScratch(&range, ext_tag_union.tags);
+                            try self.mergeTagsIntoScratch(vars, &range, ext_tag_union.tags);
                             ext_var = ext_tag_union.ext;
                         },
                         .record,
@@ -2987,8 +3049,8 @@ const Unifier = struct {
         defer trace.end();
 
         // Unwrap all fields for tag unions, erroring on invalid ext var
-        const a_gathered_tags = try self.gatherTagUnionTags(a_tag_union);
-        const b_gathered_tags = try self.gatherTagUnionTags(b_tag_union);
+        const a_gathered_tags = try self.gatherTagUnionTags(vars, a_tag_union);
+        const b_gathered_tags = try self.gatherTagUnionTags(vars, b_tag_union);
 
         // Then partition the tags
         const partitioned = try self.partitionTags(
@@ -3159,7 +3221,7 @@ const Unifier = struct {
     /// * the final tail extension variable, which is either a flex var or an empty tag_union
     ///
     /// Errors if it encounters a malformed or invalid extension (e.g. a non-tag_union type).
-    fn gatherTagUnionTags(self: *Self, tag_union: TagUnion) Error!GatheredTags {
+    fn gatherTagUnionTags(self: *Self, vars: *const ResolvedVarDescs, tag_union: TagUnion) Error!GatheredTags {
         // first, copy from the store's MultiList record fields array into scratch's
         // regular list, capturing the insertion range
         var range = try self.scratch.copyGatherTagsFromMultiList(
@@ -3188,12 +3250,14 @@ const Unifier = struct {
                             const next_tags = self.types_store.tags.sliceRange(ext_tag_union.tags);
 
                             // Merge extension tags while maintaining sorted order
+                            const repeated_start: u32 = @intCast(self.scratch.repeated_tags.len());
                             try self.scratch.mergeSortedExtensionTags(
                                 &range,
                                 next_tags.items(.name),
                                 next_tags.items(.args),
                                 self.ident_store,
                             );
+                            try self.relateRepeatedTags(vars, repeated_start);
 
                             ext_var = ext_tag_union.ext;
                         },
@@ -4013,6 +4077,11 @@ pub const Scratch = struct {
     only_in_a_tags: TagSafeList,
     only_in_b_tags: TagSafeList,
     in_both_tags: TwoTagsSafeList,
+    /// Each extension tag `mergeSortedExtensionTags` dropped because an
+    /// earlier occurrence in the same chain already supplies it, paired as
+    /// (earlier occurrence, dropped occurrence). A row names a tag once however
+    /// many links of its chain repeat it, so the caller relates their payloads.
+    repeated_tags: TwoTagsSafeList,
 
     // constraints
     deferred_constraints: DeferredConstraintCheck.SafeList,
@@ -4180,6 +4249,7 @@ pub const Scratch = struct {
             .only_in_a_tags = try TagSafeList.initCapacity(gpa, 32),
             .only_in_b_tags = try TagSafeList.initCapacity(gpa, 32),
             .in_both_tags = try TwoTagsSafeList.initCapacity(gpa, 32),
+            .repeated_tags = try TwoTagsSafeList.initCapacity(gpa, 4),
             .deferred_constraints = try DeferredConstraintCheck.SafeList.initCapacity(gpa, 32),
             .only_in_a_static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, 32),
             .only_in_b_static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, 32),
@@ -4213,6 +4283,7 @@ pub const Scratch = struct {
         self.only_in_a_tags.deinit(self.gpa);
         self.only_in_b_tags.deinit(self.gpa);
         self.in_both_tags.deinit(self.gpa);
+        self.repeated_tags.deinit(self.gpa);
         self.deferred_constraints.deinit(self.gpa);
         self.only_in_a_static_dispatch_constraints.deinit(self.gpa);
         self.only_in_b_static_dispatch_constraints.deinit(self.gpa);
@@ -4245,6 +4316,7 @@ pub const Scratch = struct {
         self.only_in_a_tags.items.clearRetainingCapacity();
         self.only_in_b_tags.items.clearRetainingCapacity();
         self.in_both_tags.items.clearRetainingCapacity();
+        self.repeated_tags.items.clearRetainingCapacity();
         self.deferred_constraints.items.clearRetainingCapacity();
         self.only_in_a_static_dispatch_constraints.items.clearRetainingCapacity();
         self.only_in_b_static_dispatch_constraints.items.clearRetainingCapacity();
@@ -4361,13 +4433,21 @@ pub const Scratch = struct {
         const current_tags = self.gathered_tags.sliceRange(range.*);
         const current_len = current_tags.len;
 
-        // Count how many extension tags are NOT duplicates
+        // Count how many extension tags are NOT duplicates, recording each
+        // duplicate against the earlier occurrence that supplies it.
         var new_count: usize = 0;
-        for (ext_names) |ext_name| {
-            const is_dup = for (current_tags) |existing| {
-                if (existing.name.eql(ext_name)) break true;
-            } else false;
-            if (!is_dup) new_count += 1;
+        for (ext_names, ext_args) |ext_name, ext_arg_range| {
+            const earlier = for (current_tags) |existing| {
+                if (existing.name.eql(ext_name)) break existing;
+            } else null;
+            if (earlier) |existing| {
+                _ = try self.repeated_tags.append(self.gpa, .{
+                    .a = existing,
+                    .b = .{ .name = ext_name, .args = ext_arg_range },
+                });
+            } else {
+                new_count += 1;
+            }
         }
 
         if (new_count == 0) return;

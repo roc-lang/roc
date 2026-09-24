@@ -195,6 +195,11 @@ try_return_rows: TryReturnRows,
 var_map: collections.DenseMap(Var, Var),
 /// A map from one var to another. Used in instantiation and var copying
 var_set: std.AutoHashMap(Var, void),
+/// Each (kept occurrence, repeated occurrence) pair of a tag repeated along a
+/// row chain that has been related, keyed by their payload ranges, with
+/// whether the payloads agreed. Many rows can share the chain that repeats a
+/// tag; the pair is related, and a disagreement reported, once.
+related_repeated_tags: std.AutoHashMapUnmanaged(u64, bool) = .empty,
 /// Reusable visited set for validating the concrete content of values passed
 /// to `Str.inspect`. Each value is a bitset of occurrence positions because
 /// the same type variable can appear both as a row tail and as an ordinary
@@ -2940,6 +2945,7 @@ pub fn deinit(self: *Self) void {
     self.return_constraint_frames.deinit(self.gpa);
     self.try_return_rows.deinit(self.gpa);
     self.var_set.deinit();
+    self.related_repeated_tags.deinit(self.gpa);
     self.inspect_type_visits.deinit();
     self.type_visit_stack.deinit(self.gpa);
     self.alias_row_frames.deinit(self.gpa);
@@ -5493,7 +5499,7 @@ fn validateSettledValueTagRows(self: *Self, env: *Env) std.mem.Allocator.Error!v
         }
     }.lessThan);
 
-    var seen_names: std.AutoHashMapUnmanaged(Ident.Idx, void) = .empty;
+    var seen_names: std.AutoHashMapUnmanaged(Ident.Idx, types_mod.Tag) = .empty;
     defer seen_names.deinit(self.gpa);
     var seen_parts: std.AutoHashMapUnmanaged(Var, void) = .empty;
     defer seen_parts.deinit(self.gpa);
@@ -5515,10 +5521,19 @@ fn validateSettledValueTagRows(self: *Self, env: *Env) std.mem.Allocator.Error!v
                 .alias => |alias| current = self.types.getAliasBackingVar(alias),
                 .structure => |flat_type| switch (flat_type) {
                     .tag_union => |tag_union| {
-                        const tags = self.types.getTagsSlice(tag_union.tags);
-                        for (tags.items(.name)) |name| {
-                            const entry = try seen_names.getOrPut(self.gpa, name);
-                            if (entry.found_existing) {
+                        const tag_count = tag_union.tags.len();
+                        var tag_idx: u32 = 0;
+                        while (tag_idx < tag_count) : (tag_idx += 1) {
+                            const tag = self.types.getTagsSlice(tag_union.tags).get(tag_idx);
+                            const entry = try seen_names.getOrPut(self.gpa, tag.name);
+                            if (!entry.found_existing) {
+                                entry.value_ptr.* = tag;
+                                continue;
+                            }
+                            // A tag repeated along the chain is one tag of the
+                            // row: relate this occurrence's payload to the one
+                            // the row keeps.
+                            if (!try self.relateRepeatedTag(entry.value_ptr.*, tag, resolved.var_, env)) {
                                 invalid_at = resolved.var_;
                                 break;
                             }
@@ -5562,6 +5577,37 @@ fn validateSettledValueTagRows(self: *Self, env: *Env) std.mem.Allocator.Error!v
     for (invalid_rows.items) |row_root| {
         try self.types.setVarContent(row_root, .err);
     }
+}
+
+/// Relate a tag repeated along one row chain to the occurrence the row keeps,
+/// as two closed one-tag rows. Returns whether their payloads agree; a
+/// disagreement is reported by the relation itself, at the link that
+/// introduced the repeat.
+fn relateRepeatedTag(self: *Self, kept: types_mod.Tag, repeated: types_mod.Tag, repeated_link: Var, env: *Env) Allocator.Error!bool {
+    const kept_len = kept.args.len();
+    const repeated_len = repeated.args.len();
+    if (kept_len == 0 and repeated_len == 0) return true;
+    const absent = std.math.maxInt(u32);
+    const kept_key: u64 = if (kept_len == 0) absent else @intFromEnum(kept.args.start);
+    const repeated_key: u64 = if (repeated_len == 0) absent else @intFromEnum(repeated.args.start);
+    const entry = try self.related_repeated_tags.getOrPut(self.gpa, (kept_key << 32) | repeated_key);
+    if (entry.found_existing) return entry.value_ptr.*;
+    entry.value_ptr.* = true;
+
+    const region = self.getRegionAt(repeated_link);
+    const empty_kept = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
+    const kept_row = try self.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try self.types.appendTags(&.{kept}),
+        .ext = empty_kept,
+    } } }, env, region);
+    const empty_repeated = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
+    const repeated_row = try self.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try self.types.appendTags(&.{repeated}),
+        .ext = empty_repeated,
+    } } }, env, region);
+    const agreed = (try self.unify(kept_row, repeated_row, env)).isEstablished();
+    self.related_repeated_tags.getPtr((kept_key << 32) | repeated_key).?.* = agreed;
+    return agreed;
 }
 
 /// The settled-state occurs sweep: check every binding root—top-level defs
@@ -13951,6 +13997,7 @@ fn predeclareAnnotationScheme(
         .use_last_var,
     );
     try self.judgeFieldKindsAtBoundary(env);
+    try self.relateRepeatedTagsAtBoundary(env);
     self.unify_scratch.clearPersistentOpenings();
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
     try self.deduplicateGeneralizedDispatchRequirements(scheme_var, env);
@@ -14509,6 +14556,7 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
             }
         }
         try self.judgeFieldKindsAtBoundary(env);
+        try self.relateRepeatedTagsAtBoundary(env);
         self.unify_scratch.clearPersistentOpenings();
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
         try self.captureEscapedSchemeDispatchRequirements(member_roots, env);
@@ -20128,6 +20176,7 @@ const ExprCheckFrame = struct {
                 try checker.defaultLiteralsAtGeneralizationBoundary(.{ .owner = self.expr_var_raw, .interface = self.expr_var }, env);
             }
             try checker.judgeFieldKindsAtBoundary(env);
+            try checker.relateRepeatedTagsAtBoundary(env);
             checker.unify_scratch.clearPersistentOpenings();
             try checker.generalizer.generalize(checker.gpa, &env.var_pool, env.rank());
             try checker.captureEscapedSchemeDispatchRequirements(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }}, env);
@@ -23660,6 +23709,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     try self.judgeRecordDestructBinds(env);
                     try self.defaultLiteralsAtGeneralizationBoundary(.{ .owner = decl_pattern_var, .interface = decl_pattern_var }, env);
                     try self.judgeFieldKindsAtBoundary(env);
+                    try self.relateRepeatedTagsAtBoundary(env);
                     self.unify_scratch.clearPersistentOpenings();
                     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
                     try self.captureEscapedSchemeDispatchRequirements(&.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }}, env);
@@ -27718,6 +27768,89 @@ const FinalizeScope = union(enum) {
     },
     repl_expr: CIR.Expr.Idx,
 };
+
+/// Relate every tag repeated along a row chain rooted at this boundary's rank
+/// to the occurrence the row keeps, before the rank generalizes. Instantiating
+/// an inferred open row can expose a repeat that no later relation of the row
+/// would gather, and a scheme must not quantify the two payloads apart.
+fn relateRepeatedTagsAtBoundary(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    var tags_sfa = std.heap.stackFallback(16 * @sizeOf(types_mod.Tag), self.gpa);
+    const tags_alloc = tags_sfa.get();
+    var kept: std.ArrayListUnmanaged(types_mod.Tag) = .empty;
+    defer kept.deinit(tags_alloc);
+    var rejected_rows: std.ArrayListUnmanaged(Var) = .empty;
+    defer rejected_rows.deinit(self.gpa);
+
+    // Relating payloads registers fresh vars at this rank, so the pool is
+    // re-read by index; the rows those vars hold have no extension links.
+    var var_idx: usize = 0;
+    while (var_idx < env.var_pool.getVarsForRank(env.rank()).len) : (var_idx += 1) {
+        const row_var = env.var_pool.getVarsForRank(env.rank())[var_idx];
+        const head = switch (self.types.resolveVar(row_var).desc.content) {
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| tag_union,
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => continue,
+            },
+            .flex, .rigid, .alias, .field_presence, .err => continue,
+        };
+        if (self.tagRowExtensionLink(head.ext) == null) continue;
+
+        kept.clearRetainingCapacity();
+        const head_tags = self.types.getTagsSlice(head.tags);
+        var head_idx: u32 = 0;
+        while (head_idx < head_tags.len) : (head_idx += 1) {
+            try kept.append(tags_alloc, head_tags.get(head_idx));
+        }
+        var link = self.tagRowExtensionLink(head.ext);
+        var guard = types_mod.debug.IterationGuard.init("relateRepeatedTagsAtBoundary");
+        while (link) |link_row| {
+            guard.tick();
+            const tag_union = link_row.tag_union;
+            const link_tags_len = tag_union.tags.len();
+            var link_idx: u32 = 0;
+            while (link_idx < link_tags_len) : (link_idx += 1) {
+                const tag = self.types.getTagsSlice(tag_union.tags).get(link_idx);
+                const earlier = for (kept.items) |existing| {
+                    if (existing.name.eql(tag.name)) break existing;
+                } else null;
+                if (earlier) |existing| {
+                    if (!try self.relateRepeatedTag(existing, tag, link_row.var_, env)) {
+                        try rejected_rows.append(self.gpa, row_var);
+                    }
+                } else {
+                    try kept.append(tags_alloc, tag);
+                }
+            }
+            link = self.tagRowExtensionLink(tag_union.ext);
+        }
+    }
+
+    // As the settled sweep does, recovery waits until every repeat at this
+    // boundary has been related against the unchanged graph; a rejected row
+    // is then `err`, so no scheme publishes it for later uses to re-report.
+    for (rejected_rows.items) |row_var| {
+        try self.types.setVarContent(row_var, .err);
+    }
+}
+
+/// The tag-union link a tag row extends into, following aliases, or null when
+/// the row ends there.
+fn tagRowExtensionLink(self: *Self, ext: Var) ?struct { var_: Var, tag_union: types_mod.TagUnion } {
+    var current = ext;
+    var guard = types_mod.debug.IterationGuard.init("tagRowExtensionLink");
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| return .{ .var_ = resolved.var_, .tag_union = tag_union },
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return null,
+            },
+            .flex, .rigid, .field_presence, .err => return null,
+        }
+    }
+}
 
 /// Judge the recorded `.?field` accesses now that the module's types have
 /// settled: an access whose presence variable resolved to the concrete

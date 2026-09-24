@@ -1247,6 +1247,7 @@ fn gatherTags(
     initial_ext: Var,
     row_var: Var,
 ) std.mem.Allocator.Error!TagUnionExt {
+    const row_base = self.scratch_tags.items.len;
     const slice = self.types.getTagsSlice(tags);
     try self.scratch_tags.ensureUnusedCapacity(tags.len());
     for (slice.items(.name), slice.items(.args)) |name, args| {
@@ -1281,7 +1282,14 @@ fn gatherTags(
                     .tag_union => |ext_tu| {
                         const ext_slice = self.types.getTagsSlice(ext_tu.tags);
                         try self.scratch_tags.ensureUnusedCapacity(ext_tu.tags.len());
+                        const link_base = self.scratch_tags.items.len;
                         for (ext_slice.items(.name), ext_slice.items(.args)) |name, args| {
+                            // A tag an earlier link already supplied is the
+                            // same tag of this row; it is written once.
+                            const repeated = for (self.scratch_tags.items[row_base..link_base]) |earlier| {
+                                if (earlier.name.eql(name)) break true;
+                            } else false;
+                            if (repeated) continue;
                             self.scratch_tags.appendAssumeCapacity(.{ .name = name, .args = args });
                         }
                         ext = ext_tu.ext;

@@ -8007,12 +8007,20 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         }
     }
 
+    /// Append one link's tags. A tag an earlier link of the same row already
+    /// supplied is the same tag (checking related the repeated occurrences'
+    /// payloads), so the key names it once, at its first occurrence.
     fn appendTagsForKey(
         self: *SubstitutedCheckedTypeKeyBuilder,
         tags: *std.ArrayList(TagForKey),
         source: []const CheckedTag,
     ) Allocator.Error!void {
+        const link_base = tags.items.len;
         for (source) |tag| {
+            const repeated = for (tags.items[0..link_base]) |earlier| {
+                if (self.names.tagLabelTextEql(earlier.name, tag.name)) break true;
+            } else false;
+            if (repeated) continue;
             try tags.append(self.allocator, .{
                 .name = tag.name,
                 .args = tag.argsSlice(self.store),
@@ -8987,6 +8995,13 @@ fn copyCheckedFlatType(
             if (tag_union.tags.len() == 0 and checkedTagUnionExtIsEmpty(module, tag_union.ext)) {
                 break :blk .empty_tag_union;
             }
+            if (try checkedTagRowRepeatsAlongChain(allocator, module, tag_union)) |flattened| {
+                defer allocator.free(flattened.tags);
+                const tags = try copyCheckedTagSlice(allocator, module, names, imports, store, active, flattened.tags);
+                errdefer deinitCheckedTagsBuild(allocator, tags);
+                const ext = try appendCheckedTypeRootWithRowDefault(allocator, module, names, imports, store, active, flattened.ext, .empty_tag_union);
+                break :blk .{ .tag_union = .{ .tags = tags, .ext = ext } };
+            }
             const tags = try copyCheckedTags(allocator, module, names, imports, store, active, tag_union.tags);
             errdefer deinitCheckedTagsBuild(allocator, tags);
             const ext = try appendCheckedTypeRootWithRowDefault(allocator, module, names, imports, store, active, tag_union.ext, .empty_tag_union);
@@ -9158,6 +9173,100 @@ fn copyCheckedRecordFields(
             .name = try names.internRecordFieldIdent(module.identStoreConst(), field_name),
             .ty = ty,
             .kind = kind,
+        };
+    }
+    return out;
+}
+
+/// A tag row whose extension chain repeats one of its tags names that tag
+/// once, at its first occurrence (checking related the occurrences'
+/// payloads). Such a row publishes as its first occurrences over the chain's
+/// terminal extension, so no checked row carries a repeated label; a row with
+/// no repeat returns null and publishes its links unchanged.
+fn checkedTagRowRepeatsAlongChain(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    head: types.TagUnion,
+) Allocator.Error!?struct { tags: []types.Tag, ext: Var } {
+    const type_store = module.typeStoreConst();
+    if (!checkedTagRowHasExtensionLink(type_store, head.ext)) return null;
+    var tags: std.ArrayList(types.Tag) = .empty;
+    errdefer tags.deinit(allocator);
+    const head_tags = type_store.getTagsSlice(head.tags);
+    for (head_tags.items(.name), head_tags.items(.args)) |name, args| {
+        try tags.append(allocator, .{ .name = name, .args = args });
+    }
+    var repeated = false;
+    var ext = head.ext;
+    var guard = types.debug.IterationGuard.init("checkedTagRowRepeatsAlongChain");
+    while (true) {
+        guard.tick();
+        const resolved = type_store.resolveVar(ext);
+        const link = switch (resolved.desc.content) {
+            .alias => |alias| {
+                ext = type_store.getAliasBackingVar(alias);
+                continue;
+            },
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| tag_union,
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => break,
+            },
+            .flex, .rigid, .field_presence, .err => break,
+        };
+        const link_base = tags.items.len;
+        const link_tags = type_store.getTagsSlice(link.tags);
+        for (link_tags.items(.name), link_tags.items(.args)) |name, args| {
+            const earlier = for (tags.items[0..link_base]) |existing| {
+                if (existing.name.eql(name)) break true;
+            } else false;
+            if (earlier) {
+                repeated = true;
+                continue;
+            }
+            try tags.append(allocator, .{ .name = name, .args = args });
+        }
+        ext = link.ext;
+    }
+    if (!repeated) {
+        tags.deinit(allocator);
+        return null;
+    }
+    return .{ .tags = try tags.toOwnedSlice(allocator), .ext = ext };
+}
+
+fn checkedTagRowHasExtensionLink(type_store: *const types.Store, ext: Var) bool {
+    var current = ext;
+    var guard = types.debug.IterationGuard.init("checkedTagRowHasExtensionLink");
+    while (true) {
+        guard.tick();
+        switch (type_store.resolveVar(current).desc.content) {
+            .alias => |alias| current = type_store.getAliasBackingVar(alias),
+            .structure => |flat| return flat == .tag_union,
+            .flex, .rigid, .field_presence, .err => return false,
+        }
+    }
+}
+
+fn copyCheckedTagSlice(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    imports: CheckedImportViews,
+    store: *CheckedTypeStore,
+    active: *CheckedSourceTypeRoots,
+    source: []const types.Tag,
+) Allocator.Error![]const CheckedTagBuild {
+    if (source.len == 0) return &.{};
+    const out = try allocator.alloc(CheckedTagBuild, source.len);
+    for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
+    errdefer {
+        for (out) |tag| allocator.free(tag.args);
+        allocator.free(out);
+    }
+    for (source, 0..) |tag, i| {
+        out[i] = .{
+            .name = try names.internTagIdent(module.identStoreConst(), tag.name),
+            .args = try copyCheckedTypeRange(allocator, module, names, imports, store, active, module.typeStoreConst().sliceVars(tag.args)),
         };
     }
     return out;

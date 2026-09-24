@@ -6941,19 +6941,44 @@ Ordinary tag-row unification remains the sole owner of tag merging and
 payload compatibility. Composition chooses its explicit source and destination
 rows before those relations; it never repairs a recursive solved graph.
 
-Tag names remain unique across a complete extension chain. Because an inferred
-tail can be generalized before a later use instantiates it, the checker
-validates this invariant over all reachable settled value types before it
-builds `CheckedModule`. Thus `[Wrapped(e), ..e]` remains polymorphic
-while `e` is an open tail, but an instantiation that makes `e` itself contain
-`Wrapped` is rejected. The validation reaches each type-store class once and
-starts only at tag-row roots, so an ordinary extension chain is walked once;
-it adds no metadata to every type variable and no work to the unifier's hot
-path. A duplicate-tag diagnostic snapshots the offending extension but points
-at the enclosing row's source, which introduced the conflicting head tag; the
-extension's solver representative does not own that source location. Rejected
-rows are poisoned only after all diagnostics snapshot the same settled graph,
-keeping recovery independent of traversal order.
+A tag row names each tag once however many links of its extension chain
+repeat it: `[H, ..r]` is `H` together with `r`'s tags, and a tag in both is
+one tag whose occurrences carry the same payload. This is what makes the
+composed row an inclusion rather than a disjoint union. An inferred tail can
+be generalized before a later use instantiates it, so instantiation can
+expose a repeat: `apply = |f, n| { _ = step(n)?; f(n) }` infers
+`[StepFailed, ..e]`, and `apply(step, n)` makes `e` fail with `StepFailed`
+too, while `rec = |n| apply(rec, n)` makes `e` the very row that extends it.
+Tag-row extension chains are the only ones with this meaning; record
+extension chains stay disjoint.
+
+The checker relates every repeated occurrence's payload to the occurrence the
+row keeps, which is the first along its chain, by relating the two as closed
+one-tag rows under ordinary unification. The unifier does so for each repeat
+it gathers or splices. Each generalization boundary does so for the tag rows
+at its rank before they generalize, so a scheme never quantifies two
+occurrences' payloads apart; a row of one link costs a single extension read
+there. A final sweep over all reachable settled value rows does so before
+`CheckedModule` is built. A repeat whose payload cannot relate is a type
+mismatch against the enclosing row's source, which introduced the head tag;
+the rejected row roots are set to `err` only after every diagnostic has
+snapshotted the same settled graph, keeping recovery independent of
+traversal order.
+
+A tag row that extends itself includes its own tags: when a merge would make
+a tag row's extension reach either merged side, the unifier splices that
+side's current row in first, so `t ~ [H, ..t]` leaves `t` as `[H, ..fresh]`
+rather than a cycle. This is what types `collect = |n, out| match step(n)? {
+Done => Ok(out), More => collect(n, out.append(n)) }`, whose body row is its
+own result row, and it holds for mutual recursion and for recursion through a
+generalized helper alike.
+
+Readers of a row name a repeated tag once, at its first occurrence: canonical
+type keys, checked substitution keys, exhaustiveness constructors, and type
+printing. Monotype's graph row composition keeps the same first-occurrence
+precedence. `[Wrapped(e), ..e]` therefore remains polymorphic, and an
+instantiation in which `e` also contains `Wrapped(x)` requires `x` to be `e`
+itself, which is an anonymous recursive type and is rejected as one.
 
 The rule is confined to deferred returns carrying the explicit `try_suffix`
 return context emitted by canonicalization. Annotated returns retain the Hosted
@@ -6982,7 +7007,10 @@ the enclosing row. Body inclusion is pinned by
 `test/snapshots/issue/issue_11469_higher_order_try_error_row.md`, and the
 return-boundary crossing at runtime on every backend by
 `test/fx-open/issue_11469_higher_order_try_error_row.roc` and
-`test/fx-open/issue_11097_bare_and_wrapped_try_runtime.roc`. The rejected side
+`test/fx-open/issue_11097_bare_and_wrapped_try_runtime.roc`. The repeated-tag
+rule is pinned by `src/check/test/issue_11621_test.zig`, whose rejected side
+is a repeat with an incompatible payload, and at runtime by
+`test/fx-open/issue_11621_recursive_try.roc`. The rejected side
 is pinned by `test/snapshots/issue/issue_11097_wrapped_try_overlap.md` and the
 issue #9798 integration test cited above.
 
@@ -8781,11 +8809,19 @@ Other solved-graph mutations:
   relates its residual tail after visible tags have merged; independent
   contributions retain full-row equality. No solved source row is redirected,
   and no checked metadata is restamped.
-- `validateSettledValueTagRows`—policy: Inferred Try Return-Row Composition
-  (above). A read-only walk rejects duplicate tag names exposed across a
-  settled value row's extension chain; after every rejection is reported from
-  the unchanged graph, the rejected row roots are set to `err` so no checked
-  module data can contain an invalid row.
+- `validateSettledValueTagRows`—policy: Try Return-Row Composition (above),
+  the repeated-tag rule. A walk over every settled value row relates each tag
+  repeated along its extension chain to the occurrence the row keeps, as two
+  closed one-tag rows under ordinary unification; a repeat whose payload
+  cannot relate is reported, and after every diagnostic the rejected row roots
+  are set to `err` so no checked module data can contain an invalid row.
+- `relateRepeatedTagsAtBoundary`—policy: Try Return-Row Composition (above),
+  the repeated-tag rule. Before a generalization boundary generalizes, each
+  tag row at its rank relates its repeated tags' payloads exactly as the
+  settled sweep does, so no scheme quantifies them apart. A disagreement is
+  reported once per occurrence pair, and after the pass its rows are set to
+  `err`, so a published scheme carries no rejected row for later uses to
+  report again.
 - `constrainInterpolationPartToStr`—policy: Builtin Str Interpolation Part
   Compatibility (above). One commit-probe unifies the part with `Str` and
   validates every attached dispatch constraint; only full success is committed.

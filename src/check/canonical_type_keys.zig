@@ -1045,14 +1045,24 @@ fn Walk(comptime digest: bool) type {
             }
         }
 
+        /// Append one link's tags to the row starting at `tags_base`. A tag an
+        /// earlier link already supplied is the same tag of the row (the
+        /// checker relates repeated occurrences' payloads), so the row's key
+        /// names it once, at its first occurrence.
         fn appendTagsForKey(
             self: *Self,
             range: types.Tag.SafeMultiList.Range,
+            tags_base: u32,
         ) Allocator.Error!void {
             const slice = self.store.getTagsSlice(range);
             const names = slice.items(.name);
             const args = slice.items(.args);
+            const link_base = self.pending_tags.items.len;
             for (names, args) |name, arg_range| {
+                const repeated = for (self.pending_tags.items[tags_base..link_base]) |earlier| {
+                    if (self.idents.idxTextEql(earlier.name, name)) break true;
+                } else false;
+                if (repeated) continue;
                 try self.pending_tags.append(self.allocator, .{
                     .name = name,
                     .args = arg_range,
@@ -1066,7 +1076,7 @@ fn Walk(comptime digest: bool) type {
             ext: Var,
         ) Allocator.Error!bool {
             const tags_base: u32 = @intCast(self.pending_tags.items.len);
-            try self.appendTagsForKey(head);
+            try self.appendTagsForKey(head, tags_base);
 
             var tail: ?Var = ext;
             self.ext_seen.clearRetainingCapacity();
@@ -1084,7 +1094,7 @@ fn Walk(comptime digest: bool) type {
                     break;
                 }
                 if (flat_tag == .tag_union) {
-                    try self.appendTagsForKey(flat.tag_union.tags);
+                    try self.appendTagsForKey(flat.tag_union.tags, tags_base);
                     tail = flat.tag_union.ext;
                     continue;
                 }
