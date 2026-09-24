@@ -12650,6 +12650,16 @@ worker is likewise instantiated by its evidence edge's recorded substitution
 (`EvidenceNode.subst`); its enclosing descriptors take their types from that
 substitution.
 
+When a worker passes a dictionary to its own recursive instantiation (such as
+`List.encoder_for` over `List(List(Str))`), the requirement type and the method
+worker are written in the same scheme, so one descriptor requirement names two
+instantiations. The static method adapter then converts through the checked
+callable type at the evidence edge: worker-side boundaries read the worker's
+bound descriptors, and requirement-side boundaries are lowered in a detached
+descriptor scope that sees none of the frame's bindings and materializes its
+descriptors only from the requirement substitution. Adapters whose two sides
+share no descriptor requirement convert directly.
+
 Boxy box/unbox/adapt operations are explicit LIR statements or explicit helper
 calls selected by the lowerer:
 
