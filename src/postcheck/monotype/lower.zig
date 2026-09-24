@@ -42873,8 +42873,9 @@ const BodyContext = struct {
 
     /// Stored functions have graph-free evidence. Recreate its lexical
     /// substitution in the restoration context, where saved callable and
-    /// capture interfaces will constrain the same checked identities. Hidden
-    /// receivers additionally consume their retained method contracts.
+    /// capture interfaces will constrain the same checked identities. Every
+    /// retained method contract also constrains the variables reached through
+    /// its signature, even when its receiver is reachable from the callable.
     fn restoreEvidenceFrame(
         self: *BodyContext,
         view: ModuleView,
@@ -42891,7 +42892,6 @@ const BodyContext = struct {
         var ctx: ?BodyContext = null;
         defer if (ctx) |*context| context.deinit();
         for (schema.params, vector) |param, entry| {
-            if (!evidenceParamRequiresConstraintRelation(param)) continue;
             switch (entry) {
                 .target => |target| {
                     if (ctx == null) {
@@ -42900,7 +42900,14 @@ const BodyContext = struct {
                     }
                     try self.relateTargetToConstraint(target, &ctx.?, param);
                 },
-                .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+                .structural => |structural| if (structural.checked) |checked_structural| {
+                    if (ctx == null) {
+                        ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, owner, self.graph, self.draft);
+                        try ctx.?.seedSubstitution(schema, subst);
+                    }
+                    try self.relateStructuralEvidenceToConstraint(checked_structural, &ctx.?, param);
+                },
+                .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
             }
         }
         return .{ .scope = .{ .owner = owner, .lexical = scope }, .schema = schema, .subst = subst, .vector = vector, .parent = parent };

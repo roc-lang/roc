@@ -405,6 +405,7 @@ const CustomCase = enum {
     native_build_pack_objects,
     native_build_pack_hits,
     issue_11673_callable_cache,
+    issue_11678_recursive_callback_cache,
     issue_10733_wasm_boxy_dev_sealed_object,
     issue_10827_private_compiler_support,
     issue_11134_wasm_post_llvm_pipeline,
@@ -1719,6 +1720,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output assembled from its own procedure artifacts is identical", .timeout_ms = 600_000, .body = .{ .custom = .native_build_artifact_round_trip } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev pack programs are deterministic and round-trip through artifacts", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_objects } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11673: imported callable identity survives cold warm and sibling builds", .timeout_ms = 600_000, .body = .{ .custom = .issue_11673_callable_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11678: cached recursive callbacks retain method result rows", .body = .{ .custom = .issue_11678_recursive_callback_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev serves closed specializations from a previous build's packs", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_hits } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build macOS output basename does not affect bytes", .body = .{ .custom = .macos_output_basename_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on x64musl", .body = .{ .custom = .default_platform_crash_x64musl } },
@@ -3351,6 +3353,7 @@ fn runCustomCase(
         .native_build_artifact_round_trip => customNativeBuildArtifactRoundTrip(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_objects => customNativeBuildPackObjects(io, allocator, &env, &timer, timeout_ms),
         .issue_11673_callable_cache => customIssue11673CallableCache(io, allocator, &env, &timer, timeout_ms),
+        .issue_11678_recursive_callback_cache => customIssue11678RecursiveCallbackCache(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_hits => customNativeBuildPackHits(io, allocator, &env, &timer, timeout_ms),
         .issue_10733_wasm_boxy_dev_sealed_object => customIssue10733WasmBoxyDevSealedObject(io, allocator, &env, &timer, timeout_ms),
         .issue_10827_private_compiler_support => customIssue10827PrivateCompilerSupport(io, allocator, &env, &timer, timeout_ms),
@@ -6177,6 +6180,49 @@ fn customNativeBuildPackHits(
 
 // Both caller orders share one cache, so the second app also consumes packs
 // produced under a different root. Each app has an uncached execution oracle.
+fn customIssue11678RecursiveCallbackCache(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const exe = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "recursive_callback" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const out_arg = outputArg(allocator, exe) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+    for (0..3) |index| {
+        const args: []const []const u8 = if (index == 0)
+            &.{ "build", "--no-cache", "--opt=dev", "--verbose", out_arg }
+        else
+            &.{ "build", "--opt=dev", "--verbose", out_arg };
+        const built = switch (captureRocRun(io, allocator, env, timer, timeout_ms, .{
+            .args = args,
+            .roc_file = "test/cli/issue_11678_recursive_callback_cache/main.roc",
+            .contains = &.{.{ .stream = .stdout, .text = "0 errors and 0 warnings" }},
+        })) {
+            .result => |run| run,
+            .failure => |failure| return failure,
+        };
+        // The final build must restore the app as well as its dependencies.
+        // Object-pack hits alone do not exercise stored closure restoration.
+        if (index == 2 and std.mem.find(u8, built.stdout, " cached, 0 built") == null) {
+            return failureFromRun(allocator, timer, built, "warm build did not reuse every checked module");
+        }
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
+            .args = &.{},
+            .stdout_exact = "read denied\n",
+        })) |failure| return failure;
+        // Two arguments enter the recursive branch before matching Gone
+        // through the wildcard, so both tags must survive restoration.
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{ exe, "one", "two" }, env.dirs.work_dir, .{
+            .args = &.{},
+            .stdout_exact = "write error\n",
+        })) |failure| return failure;
+    }
+    return null;
+}
+
 fn customIssue11673CallableCache(
     io: std.Io,
     allocator: Allocator,
