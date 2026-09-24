@@ -50,11 +50,41 @@ pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: 
     }
 }
 
+/// Whether two calls of one generated codec body select the same method with
+/// the same proof: equal checked types modulo transparent aliases and fresh
+/// variable names, and equivalent resolution graphs. Repeated occurrences of a
+/// subject each record their own edge, whose evidence nodes are distinct
+/// allocations with the same content.
+pub fn callsEquivalent(
+    allocator: Allocator,
+    types: checked.CheckedTypeStoreView,
+    table: *const dispatch.StaticDispatchPlanTable,
+    left: dispatch.GeneratedCodecCall,
+    right: dispatch.GeneratedCodecCall,
+) Allocator.Error!bool {
+    var comparer = Comparer{ .allocator = allocator, .types = types, .table = table, .types_eql = .alias_transparent };
+    defer comparer.deinit();
+    if (left.method != right.method or std.meta.activeTag(left.resolution) != std.meta.activeTag(right.resolution)) return false;
+    try comparer.typesPair(left.dispatcher_ty, right.dispatcher_ty);
+    try comparer.typesPair(left.callable_ty, right.callable_ty);
+    if (!try comparer.optionalTypes(left.subject_ty, right.subject_ty)) return false;
+    switch (left.resolution) {
+        .pending => unreachable,
+        .checked_error => {},
+        .callable => |id| try comparer.work.append(allocator, .{ .kind = .evidence, .left = @intFromEnum(id), .right = @intFromEnum(right.resolution.callable) }),
+        .structural => |id| _ = try comparer.codecs(id, right.resolution.structural),
+    }
+    return try comparer.run();
+}
+
 const Pair = struct { kind: enum { codec, evidence }, left: u32, right: u32 };
 const Comparer = struct {
     allocator: Allocator,
     types: checked.CheckedTypeStoreView,
     table: *const dispatch.StaticDispatchPlanTable,
+    /// Specialization identity is exact; agreement between repeated
+    /// occurrences of one role is modulo transparent aliases, like the role.
+    types_eql: enum { exact, alias_transparent } = .exact,
     work: std.ArrayList(Pair) = .empty,
     seen: std.AutoHashMapUnmanaged(Pair, void) = .empty,
     left_types: std.ArrayList(TypeId) = .empty,
@@ -107,12 +137,20 @@ const Comparer = struct {
         return true;
     }
 
-    fn equal(self: *Comparer, left: u32, right: u32) Allocator.Error!bool {
+    fn reset(self: *Comparer) void {
         self.work.clearRetainingCapacity();
         self.seen.clearRetainingCapacity();
         self.left_types.clearRetainingCapacity();
         self.right_types.clearRetainingCapacity();
+    }
+
+    fn equal(self: *Comparer, left: u32, right: u32) Allocator.Error!bool {
+        self.reset();
         try self.work.append(self.allocator, .{ .kind = .codec, .left = left, .right = right });
+        return try self.run();
+    }
+
+    fn run(self: *Comparer) Allocator.Error!bool {
         while (self.work.pop()) |pair| {
             const visited = try self.seen.getOrPut(self.allocator, pair);
             if (visited.found_existing) continue;
@@ -159,7 +197,10 @@ const Comparer = struct {
         }
         // One bijection covers all roots, including sharing across nested
         // evidence and source/frozen roles. Individual root equality is weaker.
-        return self.types.rootsAlphaExactEql(self.allocator, self.left_types.items, self.right_types.items);
+        return switch (self.types_eql) {
+            .exact => self.types.rootsAlphaExactEql(self.allocator, self.left_types.items, self.right_types.items),
+            .alias_transparent => self.types.rootsAliasTransparentAlphaEql(self.allocator, self.left_types.items, self.right_types.items),
+        };
     }
 };
 

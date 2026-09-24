@@ -4895,7 +4895,8 @@ pub const CheckedTypeStore = struct {
         for (module_env.scheme_uses.items.items) |record| {
             if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.dispatch_target) or
                 record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.recursive_dispatch_target) or
-                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use))
+                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
+                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.nested_function_use))
             {
                 _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @enumFromInt(record.slot_data));
             }
@@ -18606,6 +18607,7 @@ const EvidencePass = struct {
                     .len = spans.refs.len,
                     .subst_start = spans.subst.start,
                     .subst_len = spans.subst.len,
+                    .instance_ty = self.siteInstanceType(deferred.record_idx),
                 });
             }
         }
@@ -18630,6 +18632,34 @@ const EvidencePass = struct {
         self.plan_table.site_substitutions = try self.site_substitutions.toOwnedSlice(self.allocator);
         self.plan_table.template_root_evidence = try self.allocator.dupe(?artifact_serialize.Span, self.template_root_evidence);
         try @import("codec_identity.zig").intern(self.allocator, self.checked_types.store.view(), self.plan_table);
+        if (builtin.mode == .Debug) try self.debugVerifyGeneratedCodecRoleAgreement();
+    }
+
+    /// A generated body records one checked edge per source occurrence.
+    /// Repeated fields whose subjects denote one type share a role, and so one
+    /// prepared target, which is sound only when every edge in the role agrees
+    /// on its complete callable relation and proof. Runs once the evidence
+    /// graph is published, since that proof spans the plan table.
+    fn debugVerifyGeneratedCodecRoleAgreement(self: *EvidencePass) Allocator.Error!void {
+        if (builtin.mode != .Debug) return;
+        const type_view = self.checked_types.store.view();
+        for (self.plan_table.generated_codec_derivations) |derivation| {
+            const calls = derivation.callsSlice(self.plan_table);
+            for (calls, 0..) |call, index| {
+                for (calls[0..index]) |previous| {
+                    if (previous.method != call.method or previous.method_role != call.method_role) continue;
+                    if (!try @import("codec_identity.zig").callsEquivalent(self.allocator, type_view, self.plan_table, previous, call)) {
+                        checkedArtifactInvariant(
+                            "checked generated codec method role contained ambiguous calls",
+                            .{},
+                        );
+                    }
+                    // Every call in a role agrees with its first, so the rest
+                    // of the role needs no further comparison.
+                    break;
+                }
+            }
+        }
     }
 
     /// The solver root of the scheme a compile-time root evaluates: the
@@ -19046,32 +19076,6 @@ const EvidencePass = struct {
                             );
                         }
                     }
-                    // A generated body records one checked edge per source
-                    // occurrence. Repeated fields whose subjects denote one
-                    // type share a role, and may share one prepared target,
-                    // only when the complete callable relation agrees modulo
-                    // transparent aliases and the fresh variable names
-                    // allocated for each method instantiation.
-                    const call_types_equal = if (call.subject_ty) |subject_ty|
-                        try type_view.rootsAliasTransparentAlphaEql(
-                            self.allocator,
-                            &.{ previous.subject_ty.?, previous.dispatcher_ty, previous.callable_ty },
-                            &.{ subject_ty, call.dispatcher_ty, call.callable_ty },
-                        )
-                    else
-                        try type_view.rootsAliasTransparentAlphaEql(
-                            self.allocator,
-                            &.{ previous.dispatcher_ty, previous.callable_ty },
-                            &.{ call.dispatcher_ty, call.callable_ty },
-                        );
-                    if (!call_types_equal or
-                        !self.generatedCodecCallResolutionsEql(previous.resolution, call.resolution))
-                    {
-                        checkedArtifactInvariant(
-                            "checked generated codec method role contained ambiguous calls",
-                            .{},
-                        );
-                    }
                 }
                 if (!has_previous_role) {
                     checkedArtifactInvariant(
@@ -19081,48 +19085,6 @@ const EvidencePass = struct {
                 }
             }
         }
-    }
-
-    fn generatedCodecCallResolutionsEql(
-        self: *const EvidencePass,
-        left: static_dispatch.GeneratedCodecCallResolution,
-        right: static_dispatch.GeneratedCodecCallResolution,
-    ) bool {
-        return switch (left) {
-            .pending => right == .pending,
-            .checked_error => right == .checked_error,
-            .structural => |left_id| switch (right) {
-                .structural => |right_id| left_id == right_id,
-                .pending, .checked_error, .callable => false,
-            },
-            .callable => |left_id| switch (right) {
-                .callable => |right_id| blk: {
-                    const left_node = self.evidence_nodes.items[@intFromEnum(left_id)];
-                    const right_node = self.evidence_nodes.items[@intFromEnum(right_id)];
-                    if (!std.meta.eql(left_node.target, right_node.target) or
-                        left_node.generated_codec_derivation != right_node.generated_codec_derivation)
-                    {
-                        break :blk false;
-                    }
-                    break :blk switch (left_node.nested) {
-                        .from_callable => right_node.nested == .from_callable,
-                        .resolved => |left_span| switch (right_node.nested) {
-                            .from_callable => false,
-                            .resolved => |right_span| refs: {
-                                const left_refs = self.evidence_refs.items[left_span.start .. left_span.start + left_span.len];
-                                const right_refs = self.evidence_refs.items[right_span.start .. right_span.start + right_span.len];
-                                if (left_refs.len != right_refs.len) break :refs false;
-                                for (left_refs, right_refs) |left_ref, right_ref| {
-                                    if (!std.meta.eql(left_ref, right_ref)) break :refs false;
-                                }
-                                break :refs true;
-                            },
-                        },
-                    };
-                },
-                .pending, .checked_error, .structural => false,
-            },
-        };
     }
 
     fn schemeSchema(self: *EvidencePass, root: Var) Allocator.Error!SchemeSchema {
@@ -20127,13 +20089,12 @@ const EvidencePass = struct {
             entries.appendAssumeCapacity(evidence);
         }
 
-        // A nested-function-use record's scheme root is the stored
-        // expression's own type; only a value use instantiates a referenced
-        // scheme, so only value uses carry a substitution for one.
-        const nested = record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.nested_function_use);
+        // A value use instantiates the referenced scheme; a nested-function use
+        // instantiates the stored expression's own scheme for the value that
+        // stores it. Either way the pairs name each quantified variable's copy.
         return .{
             .refs = try self.appendEvidenceRefs(entries.items),
-            .subst = if (nested) .{} else try self.appendSiteSubstitution(@enumFromInt(record.scheme_root), pairs),
+            .subst = try self.appendSiteSubstitution(@enumFromInt(record.scheme_root), pairs),
         };
     }
 
@@ -20430,7 +20391,20 @@ const EvidencePass = struct {
             .len = spans.refs.len,
             .subst_start = spans.subst.start,
             .subst_len = spans.subst.len,
+            .instance_ty = self.siteInstanceType(record_idx),
         });
+    }
+
+    /// The instance a stored nested-function use places into its containing
+    /// value, as a `SiteEvidenceEntry.instance_ty`.
+    fn siteInstanceType(self: *EvidencePass, record_idx: u32) u32 {
+        const record = self.module.moduleEnvConst().scheme_uses.items.items[record_idx];
+        if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.nested_function_use)) {
+            return static_dispatch.SiteEvidenceEntry.no_site_instance;
+        }
+        const instance = self.checked_types.rootForSourceVar(self.module, @enumFromInt(record.slot_data)) orelse
+            checkedArtifactInvariant("stored nested function instance type was not published", .{});
+        return @intFromEnum(instance);
     }
 
     /// Publish the complete construction recipe for a generalized nested
@@ -32597,6 +32571,7 @@ pub const DispatchEvidenceFailure = struct {
         site_evidence_key_out_of_bounds,
         site_evidence_refs_out_of_bounds,
         site_substitution_out_of_bounds,
+        site_instance_type_out_of_bounds,
         scheme_vars_out_of_bounds,
         evidence_param_slot_out_of_bounds,
         site_evidence_keys_unsorted,
@@ -33960,6 +33935,11 @@ pub const CheckedModuleArtifact = struct {
             }
             if (@as(u64, entry.subst_start) + entry.subst_len > table.site_substitutions.len) {
                 return .{ .kind = .site_substitution_out_of_bounds, .index = @intCast(i) };
+            }
+            if (entry.instance_ty != static_dispatch.SiteEvidenceEntry.no_site_instance and
+                entry.instance_ty >= self.checked_types.payloadCount())
+            {
+                return .{ .kind = .site_instance_type_out_of_bounds, .index = @intCast(i) };
             }
             if (i > 0 and table.site_evidence[i - 1].key >= entry.key) {
                 return .{ .kind = .site_evidence_keys_unsorted, .index = @intCast(i) };
@@ -39992,8 +39972,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x1F, 0x43, 0x41, 0xB8, 0xA6, 0xC5, 0x3E, 0x8A, 0xF5, 0x09, 0x06, 0x84, 0x78, 0xB0, 0x9D, 0xAC,
-        0x0F, 0xBD, 0xBC, 0x5C, 0xDC, 0x20, 0xDA, 0x7C, 0x91, 0xB5, 0x30, 0x56, 0xFE, 0x86, 0xB3, 0xA0,
+        0x14, 0xB9, 0x46, 0x76, 0xEA, 0x9F, 0x35, 0xA6, 0x9C, 0xE8, 0x91, 0x43, 0xF3, 0x89, 0xD8, 0xF6,
+        0x69, 0xA7, 0xC7, 0xB4, 0xD1, 0xE1, 0x42, 0x26, 0x2F, 0xA2, 0x40, 0xF3, 0x46, 0x32, 0x42, 0x83,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
