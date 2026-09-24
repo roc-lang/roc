@@ -2860,6 +2860,12 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 try solver.binding_facts.append(allocator, .{ .demand = local });
                 try solver.unique_facts.append(allocator, .{ .read = local });
             }
+            const captures = store.getLocalSpan(assign.captures);
+            for (0..GuardedList.borrowLen(captures)) |index| {
+                const local = GuardedList.at(captures, index);
+                try solver.binding_facts.append(allocator, .{ .demand = local });
+                try solver.unique_facts.append(allocator, .{ .read = local });
+            }
         },
         .assign_boxy_box => |assign| {
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });

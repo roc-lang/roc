@@ -230,7 +230,9 @@ pub const Constants = struct {
     ///      parser always adds `MissingRequiredField(Str)` to its error row.
     /// 105: A generated-codec call for a derived nominal application the walk
     ///      already covers names the derivation that covers it.
-    pub const CACHE_VERSION = 105;
+    /// 106: A stored nested-function use records its scheme substitution and
+    ///      the checked instance its containing value stores.
+    pub const CACHE_VERSION = 106;
 };
 
 /// Configuration for the Roc cache system.

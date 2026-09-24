@@ -719,8 +719,9 @@ pub const SchemeUseRecord = extern struct {
     /// discharge instantiated this scheme—unique per constraint
     /// instantiation, so nested evidence chains resolve without ambiguity.
     /// For `where_method_use`, the raw fn `Var` of the body dispatch whose
-    /// callable instantiated the where-method signature. 0 for value and
-    /// nested-function use slots (keyed by `node_idx` instead).
+    /// callable instantiated the where-method signature. For
+    /// `nested_function_use`, the raw `Var` of the instance the containing
+    /// value stores. 0 for value use slots (keyed by `node_idx` instead).
     slot_data: u32,
     /// The scheme root `Var` used at this edge. For imported schemes this is
     /// the pristine local copy; for shared uses it is the in-flight local root.

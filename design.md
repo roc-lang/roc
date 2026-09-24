@@ -4418,6 +4418,21 @@ as a fallback. Stored generated callables retain their generated worker kind
 and compiler-assigned capture identities so restoration rebuilds the same
 ordinary Boxy callable from `ConstStore` data.
 
+Boxy generated encoders call the same format methods, with the same callback
+protocols, as the checked derivation contract names. A tag union of any
+variant arity calls `encode_tag` with a payload-items callback. `Dict`
+calls `encode_dict`; its entry writer receives the container state and two
+thunks, and the key thunk calls the format's key protocol (`encode_key_start`,
+`encode_key_str`, or the scalar's `encode_key_<scalar>`). `Set` calls
+`encode_list` with `Set` as the call subject. A record field stored in a
+presence slot is written from its `Present` payload, and a `Missing` slot is
+skipped. A generated codec constructor keeps its checked callable
+representation. When the runtime worker it returns has a different
+representation (for example, a presence slot where the constructor's return
+names an inline required field), the constructor's pack boundary adapts the
+runtime worker to the checked return. Planning never rewrites the
+constructor's representation to match its runtime worker.
+
 Generated workers follow the same descriptor-production contract as source
 workers. Planning assigns the exact descriptor source for every descriptor-
 bearing output, including branch results, parser result tags, record fields,
@@ -9061,7 +9076,11 @@ applies in `lowerCheckedTypeVariable`: its numeric default when it carries a
 numeric default phase, otherwise its row default (`{}` or `[]`), otherwise the
 empty tag union. Planning records that sealed representation as explicit
 `sealed_default` data on the flex representation, so lowering reads it rather
-than re-deriving a default from the checked type. A flex variable carrying
+than re-deriving a default from the checked type. A literal's numeric default
+applies only when nothing resolves the variable, so a numeric-literal variable
+that a scheme quantifies has no sealed default: every instantiation supplies its
+type through the descriptor the scheme's uses pass, exactly as for any other
+quantified variable. A flex variable carrying
 static-dispatch constraints that a quantifying scheme would have to own has no
 sealed default, because each of those needs a dictionary only a quantifying
 scheme can supply; reaching it without a bound descriptor, like reaching an
@@ -12213,7 +12232,12 @@ declaration whose body is shared by every edge that selects it, while the edge
 instantiation describes only one call's boundary.
 
 For an ordinary instantiated lookup, the checked call-site substitution names
-its callee scheme's exact type-variable instantiations. These bindings take
+its callee scheme's exact type-variable instantiations. A generalized
+expression-position function stored into a containing value (a record, tuple,
+list, tag, or nominal) is instantiated there as well: its site records the
+same substitution for the function's own scheme together with the checked type
+of the instance the containing value stores, and Boxy plans that use at the
+instance. These bindings take
 precedence over argument pairs obtained while traversing wrappers. A wrapper
 must not replace an explicit scheme binding with a distinct checked row from
 its own callable type. Nominal declaration bindings still shadow enclosing
@@ -12325,6 +12349,53 @@ argument descriptor, a result descriptor, or another explicitly named planned
 value. The lowerer does not recursively compare worker and call representation
 trees, match children by source type or display name, or search row extensions
 to reconstruct these sources.
+
+A hidden descriptor whose worker parameter is a bare formal takes its source
+from the planned worker position. When that position is the whole operand, the
+source is the operand's own descriptor. When it is a position inside the
+operand, the source is a descriptor read at the planned `source_operand_rep`
+path. Otherwise the source is the caller frame's descriptor for the call
+representation. A compound parameter's descriptor is its worker representation
+described under the call's bindings. Evidence-only descriptors (worker scheme
+variables absent from the signature) take the checked call-site substitution
+wherever it names their variable. Hidden descriptors are materialized before
+argument adaptation, and the adaptation is lowered with those bindings active.
+
+An erased callable's hidden-descriptor captures come only from the use's
+planned hidden descriptor arguments. Each capture initializer is materialized
+from its planned source before the capture field locals are bound, and capture
+field locals are never registered in the enclosing frame's descriptor table.
+A callable adapter materializes its captures at the call boundary's
+substitution: while argument adaptation or a dictionary-argument adapter is
+lowered, the boundary's hidden descriptor arguments map each worker
+representation to its call representation. A callable value boundary between
+two distinct representations is direct only when neither side takes hidden
+descriptor parameters. Otherwise an adapter makes both sides agree on the
+erased-call descriptor keys, for arguments and function-typed results alike.
+A generated codec callable whose enclosing frame does not receive one of its
+descriptor captures materializes that capture from its representation.
+
+An erased procedure's argument descriptor parameters are keyed by their
+pre-order position under the argument, but a caller's view of the argument can
+be more generic than the callee's. A dictionary slot is called through the
+consumer's declared requirement, for example a bare `val`. So every argument
+descriptor that an earlier parameter's descriptor holds is read from that
+parent rather than from its own key: a nested descriptor read for aggregate,
+list and box positions, and a tag payload read
+(`ErasedArgDescRead.tag_payload`) for a variant payload such as a presence
+slot's `Present` value. Only a descriptor no earlier parameter holds is read
+from its call-site key.
+
+An evidence-only descriptor collected inside an evidence dispatcher's
+representation, such as a presence slot of a record dispatcher, takes the
+representation at the same position of that dispatcher's call source.
+
+A custom `to_inspect` slot reached through a descriptor takes its hidden
+descriptors and argument descriptors from the inspected descriptor's own
+`inspect_hidden_descs` and `inspect_arg_descs` spans. The inspected
+representation itself maps to the descriptor being built. Descriptor template
+capture sets include both spans, so every local an inspect span names is
+supplied to the materialization.
 
 Every non-identity representation boundary also has a planned adapter request.
 After layouts are committed, the adapter builder resolves each request to an
@@ -12480,7 +12551,13 @@ binding or using the value. No consumer reconstructs capture descriptors from
 capture bytes, layouts, or the worker's contextual types.
 
 Every callable-value use edge records the exact hidden descriptor arguments for
-that use. Descriptors required only by the callable body are captured from
+that use. Planning determines the descriptors a body requires from the checked
+expression and pattern types it analyzes for that body: each unsealed type
+variable those types reach, and each one a callable the body creates or calls
+needs beyond its own scheme variables, unless the signature or checked evidence
+already supplies it. A variable a generalized local scope quantifies belongs to
+the outermost scope listing it and is required only by that scope and the
+bodies it encloses. Descriptors required only by the callable body are captured from
 those planned use-site arguments; descriptors represented structurally in the
 callable signature remain ordinary callable boundary descriptors. An
 uninstantiated declaration use may share a descriptor source only when the plan
@@ -12583,6 +12660,44 @@ and conflicting mappings are invariant failures. Once two tag variants have
 been matched by checked tag identity, their payload descriptors align by the
 checked payload index. The adapter does not search ambient descriptor locals or
 reconstruct a nested source from layout shape.
+
+A dictionary requirement's type is written in the scheme variables of the
+worker receiving the dictionary, and a variable can appear there only inside a
+function-typed argument, or only in a where-clause and never in the worker's
+signature. The checked substitution of the call, callable use, or dispatch
+evidence edge that supplies a static dictionary names the type each of those
+variables took, so the plan records it as representation pairs on every
+dictionary method it builds. The adapter describes requirement positions that
+the call descriptors do not cover with those pairs. A dictionary method's own
+worker is likewise instantiated by its evidence edge's recorded substitution
+(`EvidenceNode.subst`); its enclosing descriptors take their types from that
+substitution.
+
+When a worker passes a dictionary to its own recursive instantiation (such as
+`List.encoder_for` over `List(List(Str))`), the requirement type and the method
+worker are written in the same scheme, so one descriptor requirement names two
+instantiations. The static method adapter then converts through the checked
+callable type at the evidence edge: worker-side boundaries read the worker's
+bound descriptors, and requirement-side boundaries are lowered in a detached
+descriptor scope that sees none of the frame's bindings and materializes its
+descriptors only from the requirement substitution. Adapters whose two sides
+share no descriptor requirement convert directly.
+
+Nested dictionary evidence resolves against the worker that lowers the call,
+so a nested dictionary the checker forwards from a scheme requirement is that
+frame's own bound dictionary (`to_json = |a| Json.to_str([a])` needs
+`List(a)`'s encoder, whose `item` dictionary is `to_json`'s dictionary for
+`a`). A dictionary whose method evidence names such a frame value, directly or
+through its nested dictionaries or method descriptors, is a template: its
+method slots name the frame's dictionary and descriptor locals, it is marked
+`template`, and the `assign_boxy_dict_ref` that produces it lists those locals
+as captures. The runtime materializes the template into runtime dictionary
+tables with the captured values (interning equal copies); every other read of
+a template is an invariant failure. A template slot also carries, after the
+worker's hidden descriptors, the requirement-side descriptors and the frame's
+own type variables that its method adapter needs; the adapter binds them
+(requirement descriptors only where the requirement side is lowered) and
+describes representations naming them through those bindings.
 
 Boxy box/unbox/adapt operations are explicit LIR statements or explicit helper
 calls selected by the lowerer:

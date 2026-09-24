@@ -7254,7 +7254,7 @@ fn instantiateVarHelp(
             const slot: ModuleEnv.SchemeUseRecord.Slot, const node_idx: u32, const slot_data: u32 = switch (evidence) {
                 .none => unreachable,
                 .value_use => |expr| .{ .value_use, @intFromEnum(expr), 0 },
-                .nested_function_use => |expr| .{ .nested_function_use, @intFromEnum(expr), 0 },
+                .nested_function_use => |expr| .{ .nested_function_use, @intFromEnum(expr), @intFromEnum(instantiated_var) },
                 .dispatch_target => |site| .{ .dispatch_target, site.node_idx, @intFromEnum(site.constraint_fn_var) },
             };
             try self.cir.recordSchemeUse(node_idx, slot, slot_data, var_to_instantiate, self.scratch_evidence_pairs.items);

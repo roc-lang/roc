@@ -419,6 +419,7 @@ pub const BoxyBuiltinFn = enum {
     drop,
     tag_match,
     desc_copy,
+    dict_copy,
     dynamic_num_literal,
     dynamic_num_literal_ref,
     dynamic_frac_literal_ref,
@@ -471,6 +472,7 @@ pub const BoxyBuiltinFn = enum {
             .drop => "roc_boxy_drop",
             .tag_match => "roc_boxy_tag_match",
             .desc_copy => "roc_boxy_desc_copy",
+            .dict_copy => "roc_boxy_dict_copy",
             .dynamic_num_literal => "roc_boxy_dynamic_num_literal",
             .dynamic_num_literal_ref => "roc_boxy_dynamic_num_literal_ref",
             .dynamic_frac_literal_ref => "roc_boxy_dynamic_frac_literal_ref",
@@ -538,6 +540,7 @@ pub const BoxyBuiltinFn = enum {
             .drop,
             .tag_match,
             .desc_copy,
+            .dict_copy,
             .dynamic_num_literal,
             .dynamic_num_literal_ref,
             .dynamic_frac_literal_ref,
@@ -4512,6 +4515,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try self.emitLoad(.w64, tmp, frame_ptr, list_off + off);
                             try self.emitStore(.w64, frame_ptr, result_offset + list_field_offset + off, tmp);
                         }
+                        return .{ .stack = .{ .offset = result_offset } };
+                    }
+
+                    if (try self.boxyListElementDescForLocals(list_abi, &.{list_local}, null)) |boxy_elem| {
+                        const base_reg = frame_ptr;
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        try builder.addLeaArg(base_reg, result_offset + list_field_offset);
+                        try builder.addMemArg(base_reg, list_off);
+                        try builder.addMemArg(base_reg, list_off + 8);
+                        try builder.addMemArg(base_reg, list_off + 16);
+                        try builder.addImmArg(@intCast(list_abi.alignment_bytes));
+                        try builder.addMemArg(base_reg, index_off);
+                        try builder.addLeaArg(base_reg, elem_off);
+                        try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                        try builder.addLeaArg(base_reg, result_offset + value_field_offset);
+                        try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
+                        try builder.addMemArg(base_reg, boxy_elem.desc_slot);
+                        try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
+
+                        try self.callBoxyBuiltin(&builder, .list_replace);
                         return .{ .stack = .{ .offset = result_offset } };
                     }
 
@@ -17761,6 +17784,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const loc = try self.emitValueLocal(local);
                     return try self.ensureOnStack(loc, 8);
                 },
+                .runtime => std.debug.panic("Dev/codegen invariant violated: a runtime dictionary reference reached dev codegen", .{}),
             }
         }
 
@@ -17944,16 +17968,47 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn generateBoxyDictRef(self: *Self, assign: anytype) Allocator.Error!ValueLocation {
             const target_layout = self.localLayout(assign.target);
+            const captures = self.store.getLocalSpan(assign.captures);
             switch (assign.dict) {
                 .static => |dict_id| {
+                    if (captures.len == 0) {
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        try builder.addImmArg(@intFromEnum(dict_id));
+                        try self.callBoxyBuiltin(&builder, .static_dict);
+                        const slot = self.codegen.allocStackSlot(8);
+                        try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
+                        return self.stackLocationForLayout(target_layout, slot);
+                    }
+                    // A template dictionary is materialized with the values of
+                    // the frame locals its method slots name.
+                    const count = captures.len;
+                    const ids_slot = self.codegen.allocStackSlot(@intCast(count * 4));
+                    const values_slot = self.codegen.allocStackSlot(@intCast(count * 8));
+                    for (0..GuardedList.borrowLen(captures)) |i| {
+                        const capture_local = GuardedList.at(captures, i);
+                        const id_reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(id_reg, @intFromEnum(capture_local));
+                        try self.emitStore(.w32, frame_ptr, ids_slot + @as(i32, @intCast(i * 4)), id_reg);
+                        self.codegen.freeGeneral(id_reg);
+
+                        const value_off = try self.ensureOnStack(try self.emitValueLocal(capture_local), 8);
+                        const ptr_reg = try self.allocTempGeneral();
+                        try self.emitLoad(.w64, ptr_reg, frame_ptr, value_off);
+                        try self.emitStore(.w64, frame_ptr, values_slot + @as(i32, @intCast(i * 8)), ptr_reg);
+                        self.codegen.freeGeneral(ptr_reg);
+                    }
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     try builder.addImmArg(@intFromEnum(dict_id));
-                    try self.callBoxyBuiltin(&builder, .static_dict);
+                    try builder.addLeaArg(frame_ptr, ids_slot);
+                    try builder.addLeaArg(frame_ptr, values_slot);
+                    try builder.addImmArg(@intCast(count));
+                    try self.callBoxyBuiltin(&builder, .dict_copy);
                     const slot = self.codegen.allocStackSlot(8);
                     try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
                     return self.stackLocationForLayout(target_layout, slot);
                 },
                 .local => |local| return try self.emitValueLocal(local),
+                .runtime => std.debug.panic("Dev/codegen invariant violated: a runtime dictionary reference reached dev codegen", .{}),
             }
         }
 
@@ -21693,7 +21748,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(desc_reg);
                     self.codegen.freeGeneral(capture_reg);
                 } else {
-                    if (builtin.mode == .Debug and param.source_nested_index == std.math.maxInt(u16)) {
+                    if (builtin.mode == .Debug and param.read == .call_key) {
                         std.debug.panic(
                             "Dev/codegen invariant violated: exact erased descriptor parameter had no capture offset",
                             .{},
@@ -21715,8 +21770,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const source_slot = try self.boxyDescRefToSlot(.{ .local = source });
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     try builder.addMemArg(frame_ptr, source_slot);
-                    try builder.addImmArg(param.source_nested_index);
-                    try self.callBoxyBuiltin(&builder, .nested_desc);
+                    switch (param.read) {
+                        .call_key, .nested => {
+                            try builder.addImmArg(param.source_nested_index);
+                            try self.callBoxyBuiltin(&builder, .nested_desc);
+                        },
+                        .tag_payload => {
+                            try builder.addImmArg(@intFromEnum(param.source_tag_name));
+                            try builder.addImmArg(param.source_nested_index);
+                            try self.callBoxyBuiltin(&builder, .tag_payload_desc);
+                        },
+                    }
                     try self.emitStore(.w64, frame_ptr, desc_slot, ret_reg_0);
                 }
                 try self.setLocalLocation(

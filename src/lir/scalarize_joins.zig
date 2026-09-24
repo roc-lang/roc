@@ -1704,6 +1704,8 @@ const Pass = struct {
                 },
                 .assign_boxy_dict_ref => |assign| {
                     try self.noteDictUse(assign.dict);
+                    const captures = self.store.getLocalSpan(assign.captures);
+                    for (0..GuardedList.borrowLen(captures)) |index| try self.noteUse(GuardedList.at(captures, index));
                     try self.noteWrite(assign.target);
                     try self.stack.append(self.allocator, assign.next);
                 },
