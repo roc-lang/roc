@@ -8022,8 +8022,6 @@ const Builder = struct {
                 try self.propagateInspectDemand(child.rep, row, seen);
             } else if (self.namedQuery().findMatchingChildByRole(call_children, child)) |call_child| {
                 try self.propagateInspectDemand(child.rep, call_child.rep, seen);
-            } else if (try self.namedQuery().findMatchingTagPayloadInRowExtension(call_children, child)) |call_child| {
-                try self.propagateInspectDemand(child.rep, call_child.rep, seen);
             }
         }
     }
@@ -10088,14 +10086,6 @@ const Builder = struct {
                     continue;
                 }
             }
-            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(call_children, worker_child)) |call_child| {
-                try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_child.rep, context);
-                continue;
-            }
-            if (try self.repQuery().findMatchingDictionaryChildBySourceType(call_children, worker_child)) |call_child| {
-                try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_child.rep, context);
-                continue;
-            }
             if (self.workerPresenceSlotPayloadMatchesUnwrappedCallRep(worker_rep_id, call_rep_id, worker_child)) {
                 try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_rep_id, context);
                 continue;
@@ -10170,14 +10160,6 @@ const Builder = struct {
                     try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_child.rep, substitutions, seen);
                     continue;
                 }
-            }
-            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(call_children, worker_child)) |call_child| {
-                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_child.rep, substitutions, seen);
-                continue;
-            }
-            if (try self.repQuery().findMatchingDictionaryChildBySourceType(call_children, worker_child)) |call_child| {
-                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_child.rep, substitutions, seen);
-                continue;
             }
             if (self.workerPresenceSlotPayloadMatchesUnwrappedCallRep(worker_rep_id, call_rep_id, worker_child)) {
                 try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_rep_id, substitutions, seen);
@@ -13659,39 +13641,6 @@ pub const RepQuery = struct {
             .ret = ret orelse boxyPlanInvariant("function representation had no return child"),
         };
     }
-
-    /// The single child of `children` whose checked source type matches
-    /// `target` and whose subtree carries a descriptor.
-    pub fn findMatchingChildBySourceType(
-        self: RepQuery,
-        children: []const RepChild,
-        target: RepChild,
-    ) Allocator.Error!?RepChild {
-        var found: ?RepChild = null;
-        for (children) |child| {
-            if (!typeRefEql(child.source_type, target.source_type)) continue;
-            if (!try self.repSubtreeHasDescriptor(child.rep)) continue;
-            if (found != null) boxyPlanInvariant("boxy direct call descriptor mapping found ambiguous checked-type children");
-            found = child;
-        }
-        return found;
-    }
-
-    /// The dictionary counterpart of `findMatchingChildBySourceType`.
-    pub fn findMatchingDictionaryChildBySourceType(
-        self: RepQuery,
-        children: []const RepChild,
-        target: RepChild,
-    ) Allocator.Error!?RepChild {
-        var found: ?RepChild = null;
-        for (children) |child| {
-            if (!typeRefEql(child.source_type, target.source_type)) continue;
-            if (!try self.repSubtreeHasDictionary(child.rep)) continue;
-            if (found != null) boxyPlanInvariant("boxy direct call dictionary mapping found ambiguous checked-type children");
-            found = child;
-        }
-        return found;
-    }
 };
 
 fn repIsTagRow(rep: TypeRepresentation) bool {
@@ -13874,56 +13823,6 @@ pub fn NamedRepQuery(comptime Modules: type) type {
                 if (self.childRolesMatch(target, child)) return child;
             }
             return null;
-        }
-
-        /// The tag payload matching `target` reachable through the tag-row
-        /// extensions of `children`.
-        pub fn findMatchingTagPayloadInRowExtension(
-            self: Self,
-            children: []const RepChild,
-            target: RepChild,
-        ) Allocator.Error!?RepChild {
-            if (target.role != .tag_payload) return null;
-
-            var seen = collections.DenseMap(TypeRepId, void).init(self.query.allocator);
-            defer seen.deinit();
-            return try self.findMatchingTagPayloadInRowExtensionInner(children, target, &seen);
-        }
-
-        fn findMatchingTagPayloadInRowExtensionInner(
-            self: Self,
-            children: []const RepChild,
-            target: RepChild,
-            seen: *collections.DenseMap(TypeRepId, void),
-        ) Allocator.Error!?RepChild {
-            for (children) |child| {
-                if (child.role != .tag_ext) continue;
-                if (try self.findMatchingTagPayloadInRep(child.rep, target, seen)) |match| return match;
-            }
-            return null;
-        }
-
-        /// The tag payload matching `target` inside `rep_id`, following
-        /// structural wrappers and tag-row extensions.
-        pub fn findMatchingTagPayloadInRep(
-            self: Self,
-            rep_id: TypeRepId,
-            target: RepChild,
-            seen: *collections.DenseMap(TypeRepId, void),
-        ) Allocator.Error!?RepChild {
-            const entry = try seen.getOrPut(rep_id);
-            if (entry.found_existing) return null;
-
-            const children = self.query.plan.childSlice(self.query.rep(rep_id).children);
-            if (self.findMatchingChildByRole(children, target)) |match| return match;
-
-            if (self.query.structuralWrapperBackingRep(rep_id)) |backing_rep| {
-                const backing_children = self.query.plan.childSlice(self.query.rep(backing_rep).children);
-                if (self.findMatchingChildByRole(backing_children, target)) |match| return match;
-                if (try self.findMatchingTagPayloadInRowExtensionInner(backing_children, target, seen)) |match| return match;
-            }
-
-            return try self.findMatchingTagPayloadInRowExtensionInner(children, target, seen);
         }
     };
 }

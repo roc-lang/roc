@@ -2595,14 +2595,6 @@ const ProcedureBuilder = struct {
                     continue;
                 }
             }
-            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(requirement_children, worker_child)) |requirement_child| {
-                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
-                continue;
-            }
-            if (try self.repQuery().findMatchingChildBySourceType(requirement_children, worker_child)) |requirement_child| {
-                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
-                continue;
-            }
             if (!has_call_supplied_desc) continue;
             if (try self.workerChildCanMatchUnwrappedSourceRep(worker_rep_id, worker_child)) {
                 try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_rep_id, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
@@ -2628,14 +2620,6 @@ const ProcedureBuilder = struct {
                     try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                     continue;
                 }
-            }
-            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(worker_children, requirement_child)) |worker_child| {
-                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
-                continue;
-            }
-            if (try self.repQuery().findMatchingChildBySourceType(worker_children, requirement_child)) |worker_child| {
-                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
-                continue;
             }
             if (try self.workerChildCanMatchUnwrappedSourceRep(requirement_rep_id, requirement_child)) {
                 try self.collectStaticMethodCallDescSourcesForRep(worker_rep_id, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
@@ -2839,14 +2823,6 @@ const ProcedureBuilder = struct {
                     continue;
                 }
             }
-            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(requirement_children, worker_child)) |requirement_child| {
-                try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(worker_child.rep, requirement_child.rep, owner_requirement_rep_id, source_rep_id, params, binding_scope, sources, seen);
-                continue;
-            }
-            if (try self.repQuery().findMatchingChildBySourceType(requirement_children, worker_child)) |requirement_child| {
-                try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(worker_child.rep, requirement_child.rep, owner_requirement_rep_id, source_rep_id, params, binding_scope, sources, seen);
-                continue;
-            }
             if (try self.workerChildCanMatchUnwrappedSourceRep(worker_rep_id, worker_child)) {
                 try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(worker_child.rep, requirement_rep_id, owner_requirement_rep_id, source_rep_id, params, binding_scope, sources, seen);
                 continue;
@@ -2910,14 +2886,6 @@ const ProcedureBuilder = struct {
                     try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, source_child.rep, params, binding_scope, sources, seen);
                     continue;
                 }
-            }
-            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(source_children, worker_child)) |source_child| {
-                try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, source_child.rep, params, binding_scope, sources, seen);
-                continue;
-            }
-            if (try self.repQuery().findMatchingChildBySourceType(source_children, worker_child)) |source_child| {
-                try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, source_child.rep, params, binding_scope, sources, seen);
-                continue;
             }
             if (try self.workerChildCanMatchUnwrappedSourceRep(identity_worker, worker_child)) {
                 try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, identity_source, params, binding_scope, sources, seen);
@@ -3466,8 +3434,6 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!?Plan.TypeRepId {
         if (source_children.len == 0) return null;
         if (self.namedQuery().findMatchingChildByRole(source_children, worker_child)) |source_child| return source_child.rep;
-        if (try self.namedQuery().findMatchingTagPayloadInRowExtension(source_children, worker_child)) |source_child| return source_child.rep;
-        if (try self.repQuery().findMatchingChildBySourceType(source_children, worker_child)) |source_child| return source_child.rep;
         return null;
     }
 
@@ -26324,14 +26290,6 @@ const ProcBodyBuilder = struct {
                     continue;
                 }
             }
-            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(call_children, worker_child)) |call_child| {
-                try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
-                continue;
-            }
-            if (try self.repQuery().findMatchingChildBySourceType(call_children, worker_child)) |call_child| {
-                try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
-                continue;
-            }
             if (try self.repQuery().workerChildCanMatchUnwrappedCallRep(worker_rep_id, worker_child)) {
                 try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, call_rep_id, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
                 continue;
@@ -36525,14 +36483,6 @@ const ProcBodyBuilder = struct {
                     try self.collectErasedCaptureDictionaryReps(worker_child.rep, value_child.rep, mapped, seen_rep_pairs);
                     continue;
                 }
-            }
-            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(value_children, worker_child)) |value_child| {
-                try self.collectErasedCaptureDictionaryReps(worker_child.rep, value_child.rep, mapped, seen_rep_pairs);
-                continue;
-            }
-            if (try self.repQuery().findMatchingDictionaryChildBySourceType(value_children, worker_child)) |value_child| {
-                try self.collectErasedCaptureDictionaryReps(worker_child.rep, value_child.rep, mapped, seen_rep_pairs);
-                continue;
             }
             if (try self.repQuery().workerChildCanMatchUnwrappedCallRepForDictionaries(worker_rep_id, worker_child)) {
                 try self.collectErasedCaptureDictionaryReps(worker_child.rep, effective_value_rep_id, mapped, seen_rep_pairs);
