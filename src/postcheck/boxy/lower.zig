@@ -28494,7 +28494,6 @@ const ProcBodyBuilder = struct {
         }
     }
 
-
     /// Restore the bindings and environment a descent replaced.
     fn popDescriptorTemplateExactReps(
         context: *DescriptorTemplateContext,
