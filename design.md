@@ -7097,10 +7097,10 @@ Three consumers keep the rule exact:
   their labels; the outer part's meaning is unchanged by the omission. A part
   left with no labels redirects to its extension
   (`RedirectRule.row_union_normalization`), taking the lower of the two ranks
-  as unification would. Each relation is first probed against throwaway
-  problem stores and rolled back, together with an occurs check of the row, so
-  a conflicting pair records nothing and changes nothing before it is
-  reported. Relations can bind further tails and expose further repeats; the
+  as unification would. A row's repeated pairs relate together or not at
+  all: they are first probed as one set against throwaway problem stores,
+  with an occurs check of the row after each, and rolled back, so a rejected
+  row records nothing and leaves no relation on the types it shares. Relations can bind further tails and expose further repeats; the
   chain is rescanned until none remain, and each pass removes a label.
 - The type-key writer reports a repeated label to the checker
   instead of keying it, in the requests the checker makes while inference is
