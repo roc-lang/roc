@@ -64,3 +64,30 @@ fwd_generic : a, [B(Str), D] -> [B(Str), D]
 fwd_generic = |_, t| t
 
 expect show_direct(fwd_generic("x", B("g"))) == "B(g)" and show_direct(fwd_generic(1, D)) == "D"
+
+# A widened row carrying an iterator: the result reaches the eager iterator
+# path, which must leave the widened request to the adapter.
+fwd_iter : [Some(Iter(U64)), None] -> [Some(Iter(U64)), None]
+fwd_iter = |t| t
+
+sum_iter : [Some(Iter(U64)), None, Extra] -> U64
+sum_iter = |v| match v {
+    Some(it) => List.from_iter(it).sum()
+    None => 0
+    Extra => 99
+}
+
+expect sum_iter(fwd_iter(Some([1, 2, 3].iter()))) == 6
+
+# A generic forwarder's `Try` error row, used twice after a producer whose
+# open `[NotFound, ..]` error row chains the shared declared row.
+fwd_try_generic : a, Try(Str, [Missing, NotFound]) -> Try(Str, [Missing, NotFound])
+fwd_try_generic = |_, t| t
+
+not_found : {} -> Try(Str, [NotFound])
+not_found = |_| Err(NotFound)
+
+show_try_wide : Try(Str, [Gone, Missing, NotFound]) -> Str
+show_try_wide = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(Missing) => "Missing", Err(NotFound) => "NotFound" }
+
+expect show_try_wide(fwd_try_generic("x", not_found({}))) == "NotFound" and show_try_wide(fwd_try_generic(1, not_found({}))) == "NotFound"

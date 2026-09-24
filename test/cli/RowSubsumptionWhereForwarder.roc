@@ -122,7 +122,32 @@ check_try_twice = |_| {
     show_try2(fwd_try2(Loc.L, Err(NotFound))) == "NotFound" and show_try2(fwd_try2(Loc.L, Err(Missing))) == "Missing"
 }
 
+# A widened row carrying an iterator produced in the caller.
+fwd_iter : a, [Some(Iter(U64)), None] -> [Some(Iter(U64)), None] where [a.get : a -> Str]
+fwd_iter = |x, t| {
+    _s = x.get()
+    t
+}
+
+sum_iter : [Some(Iter(U64)), None, Extra] -> U64
+sum_iter = |v| match v {
+    Some(it) => List.from_iter(it).sum()
+    None => 0
+    Extra => 99
+}
+
+check_iter : List(U64) -> Bool
+check_iter = |xs| {
+    Loc := [L].{
+        get : Loc -> Str
+        get = |_| "loc"
+    }
+
+    sum_iter(fwd_iter(Loc.L, Some(xs.iter().map(|v| v + 1)))) == 9 and sum_iter(fwd_iter(Loc.L, None)) == 0
+}
+
 expect check_direct({})
+expect check_iter([1, 2, 3])
 expect check_try({})
 expect check_rec({})
 expect check_twice({})

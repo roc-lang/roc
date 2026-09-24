@@ -7630,6 +7630,39 @@ const Builder = struct {
         {
             try relateFunctionRequestInterface(source_ctx.graph, root_node, request_fn_node);
         }
+        if (local_context_dependent and closed_row_widened) {
+            // A caller-owned adapter lowers no template body: it calls the
+            // declared-row specialization requested below, which instantiates
+            // this template's codec contract, dispatch relations and interface
+            // relations itself, against a checked root it unifies with
+            // `root_node`. Instantiating them here as well would relate a
+            // second, unused copy of the template's internals to the same
+            // interface and replay its interface dependencies from the
+            // adapter's owner, where nothing calls them.
+            if (template.target == .hosted) {
+                Common.invariant("hosted template specialization depended on a local procedure context");
+            }
+            body_ctx.owner_context_fn_key = source_fn_key;
+            body_ctx.current_fn_key = source_fn_key;
+            try self.completeCallerOwnedResultRowWideningAdapter(
+                source_ctx,
+                &body_ctx,
+                spec_index,
+                caller_owner,
+                view,
+                template_ref,
+                template,
+                source_fn_ty,
+                source_fn_key,
+                root_node,
+                request_fn_node,
+                edge,
+                family,
+                signature_relation,
+                codec_contract,
+            );
+            return .{ .local = .{ .draft = fn_id } };
+        }
         if (codec_contract) |contract| {
             try body_ctx.instantiateCodecContractAtCall(
                 contract.anchor,
@@ -7653,26 +7686,6 @@ const Builder = struct {
         }
         body_ctx.owner_context_fn_key = source_fn_key;
         body_ctx.current_fn_key = source_fn_key;
-        if (closed_row_widened) {
-            try self.completeCallerOwnedResultRowWideningAdapter(
-                source_ctx,
-                &body_ctx,
-                spec_index,
-                caller_owner,
-                view,
-                template_ref,
-                template,
-                source_fn_ty,
-                source_fn_key,
-                root_node,
-                request_fn_node,
-                edge,
-                family,
-                signature_relation,
-                codec_contract,
-            );
-            return .{ .local = .{ .draft = fn_id } };
-        }
         // A generated-private request is the exact runtime interface owned by
         // this specialization. The checked root remains the public interface
         // used to instantiate dispatch relations, but lowering the body
@@ -7773,6 +7786,7 @@ const Builder = struct {
             Common.compilerBug("caller-owned result-row widening request carried a generated-private interface");
         }
 
+        const specs_before = source_ctx.draft.template_specs.items.len;
         const narrow_slot = narrow: {
             const caller_scope = try source_ctx.draft.enterOwner(caller_owner);
             defer caller_scope.leave();
@@ -7807,6 +7821,16 @@ const Builder = struct {
         if (source_ctx.draft.template_specs.items[narrow_spec].widened_result_row) {
             Common.compilerBug("caller-owned declared-row specialization widened the declared row again");
         }
+        // A declared-row specialization this request created is owned exactly
+        // as the widened request was, never by the adapter: its lexical owner
+        // and its recursion ancestry are the caller's. (One found instead was
+        // created by an earlier request, under that request's owner.)
+        if (narrow_spec >= specs_before and
+            (!std.meta.eql(source_ctx.draft.fns.items[@intFromEnum(narrow_fn)].parent_owner, caller_owner) or
+                !std.meta.eql(source_ctx.draft.template_specs.items[narrow_spec].lexical_owner, spec.lexical_owner)))
+        {
+            Common.compilerBug("caller-owned declared-row specialization was not owned by the widened request's owner");
+        }
         const callee_fn_node = try body_ctx.draftFnSlotTypeNode(narrow_slot, root_node);
         try relateFunctionRequestInterface(graph, root_node, callee_fn_node);
 
@@ -7828,19 +7852,19 @@ const Builder = struct {
             Common.compilerBug("instantiated declared result row disagreed with the checker's recorded labels");
         }
 
-        const args = try self.allocator.alloc(DraftTypedLocal, request.args.len);
-        defer self.allocator.free(args);
-        const call_args = try self.allocator.alloc(DraftExprId, request.args.len);
-        defer self.allocator.free(call_args);
-        for (request.args, 0..) |arg_node, index| {
+        const args_start = body_ctx.row_injection_args.items.len;
+        defer body_ctx.row_injection_args.shrinkRetainingCapacity(args_start);
+        const call_args_start = body_ctx.row_injection_exprs.items.len;
+        defer body_ctx.row_injection_exprs.shrinkRetainingCapacity(call_args_start);
+        for (request.args) |arg_node| {
             const cell = DraftTypeCell.fromGraphNode(arg_node);
             const local = try body_ctx.addLocalWithBinderCell(self.symbols.fresh(), cell, null);
-            args[index] = .{ .local = local, .ty = cell };
-            call_args[index] = try body_ctx.addExprWithTypeCell(cell, .{ .local = local });
+            try body_ctx.row_injection_args.append(self.allocator, .{ .local = local, .ty = cell });
+            try body_ctx.row_injection_exprs.append(self.allocator, try body_ctx.addExprWithTypeCell(cell, .{ .local = local }));
         }
         const call = try body_ctx.addExprWithTypeCell(DraftTypeCell.fromGraphNode(declared.ret), .{ .call_proc = .{
             .callee = draftProcCalleeForSlot(narrow_slot),
-            .args = try body_ctx.addExprSpan(call_args),
+            .args = try body_ctx.addExprSpan(body_ctx.row_injection_exprs.items[call_args_start..]),
         } });
         const body = if (try_capability) |capability|
             try body_ctx.injectTryErrorRowAtNodes(capability, call, declared.ret, request.ret)
@@ -7856,7 +7880,7 @@ const Builder = struct {
             .symbol = spec.symbol,
             .fn_def = adapter_template,
             .fn_id = .{ .draft = fn_id },
-            .args = try source_ctx.draft.addTypedLocalSpan(args),
+            .args = try source_ctx.draft.addTypedLocalSpan(body_ctx.row_injection_args.items[args_start..]),
             .body = body,
             .ret = DraftTypeCell.fromGraphNode(request.ret),
         });
@@ -18877,6 +18901,14 @@ const BodyContext = struct {
     /// (see `OptionalDestructBind`), drained by the same owners that drain
     /// `pattern_literal_guards`.
     optional_destruct_binds: std.ArrayList(OptionalDestructBind) = .empty,
+    /// Reused by the caller-owned result-row widening adapter and its draft
+    /// re-tag helpers (`injectTagRowAtNodes`): each use appends from the
+    /// current length and shrinks back when done, so one buffer per kind
+    /// serves every adapter this context builds.
+    row_injection_branches: std.ArrayList(DraftBranch) = .empty,
+    row_injection_pats: std.ArrayList(DraftPatId) = .empty,
+    row_injection_exprs: std.ArrayList(DraftExprId) = .empty,
+    row_injection_args: std.ArrayList(DraftTypedLocal) = .empty,
     /// Frozen-at-creation reachability topology attached to runtime demands
     /// emitted while lowering one match branch. The root plus explicit
     /// constructor payload/element cells prove when that branch cannot run.
@@ -19911,6 +19943,10 @@ const BodyContext = struct {
         self.direct_call_requests.deinit(self.allocator);
         self.pattern_literal_guards.deinit(self.allocator);
         self.optional_destruct_binds.deinit(self.allocator);
+        self.row_injection_branches.deinit(self.allocator);
+        self.row_injection_pats.deinit(self.allocator);
+        self.row_injection_exprs.deinit(self.allocator);
+        self.row_injection_args.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
         self.inhabitation_visiting.deinit(self.allocator);
         self.instantiation.deinit();
@@ -20415,41 +20451,40 @@ const BodyContext = struct {
             Common.compilerBug("result-row widening adapter source was not a tag row");
         const target = (try self.graph.tagRowNodesOrNull(target_row)) orelse
             Common.compilerBug("result-row widening adapter target was not a tag row");
-        const branches = try self.allocator.alloc(DraftBranch, source.tags.len);
-        defer self.allocator.free(branches);
-        for (source.tags, 0..) |source_tag, index| {
+        const branches_start = self.row_injection_branches.items.len;
+        defer self.row_injection_branches.shrinkRetainingCapacity(branches_start);
+        for (source.tags) |source_tag| {
             const target_tag = graphTagByName(target.tags, source_tag.name) orelse
                 Common.compilerBug("result-row widening request removed a declared label");
             if (source_tag.payloads.len != target_tag.payloads.len) {
                 Common.compilerBug("result-row widening request changed a declared payload arity");
             }
-            const payload_pats = try self.allocator.alloc(DraftPatId, source_tag.payloads.len);
-            defer self.allocator.free(payload_pats);
-            const payload_exprs = try self.allocator.alloc(DraftExprId, source_tag.payloads.len);
-            defer self.allocator.free(payload_exprs);
-            for (source_tag.payloads, target_tag.payloads, 0..) |source_payload, target_payload, payload_index| {
+            const pats_start = self.row_injection_pats.items.len;
+            defer self.row_injection_pats.shrinkRetainingCapacity(pats_start);
+            const exprs_start = self.row_injection_exprs.items.len;
+            defer self.row_injection_exprs.shrinkRetainingCapacity(exprs_start);
+            for (source_tag.payloads, target_tag.payloads) |source_payload, target_payload| {
                 if (!self.graph.sameClass(source_payload, target_payload)) {
                     Common.compilerBug("result-row widening request changed a declared payload type");
                 }
                 const cell = DraftTypeCell.fromGraphNode(source_payload);
                 const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), cell, null);
-                payload_pats[payload_index] = try self.addPatWithTypeCell(cell, .{ .bind = local });
-                payload_exprs[payload_index] = try self.addExprWithTypeCell(cell, .{ .local = local });
+                try self.row_injection_pats.append(self.allocator, try self.addPatWithTypeCell(cell, .{ .bind = local }));
+                try self.row_injection_exprs.append(self.allocator, try self.addExprWithTypeCell(cell, .{ .local = local }));
             }
-            branches[index] = .{
-                .pat = try self.addConstructorPatAtNode(source_row, .{ .tag = .{
-                    .name = source_tag.name,
-                    .payloads = try self.addPatSpan(payload_pats),
-                } }),
-                .body = try self.addConstructorExprAtNode(target_row, .{ .tag = .{
-                    .name = source_tag.name,
-                    .payloads = try self.addExprSpan(payload_exprs),
-                } }),
-            };
+            const pat = try self.addConstructorPatAtNode(source_row, .{ .tag = .{
+                .name = source_tag.name,
+                .payloads = try self.addPatSpan(self.row_injection_pats.items[pats_start..]),
+            } });
+            const body = try self.addConstructorExprAtNode(target_row, .{ .tag = .{
+                .name = source_tag.name,
+                .payloads = try self.addExprSpan(self.row_injection_exprs.items[exprs_start..]),
+            } });
+            try self.row_injection_branches.append(self.allocator, .{ .pat = pat, .body = body });
         }
         return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(target_row), .{ .match_ = .{
             .scrutinee = source_expr,
-            .branches = try self.addBranchSpan(branches),
+            .branches = try self.addBranchSpan(self.row_injection_branches.items[branches_start..]),
         } });
     }
 

@@ -8935,6 +8935,36 @@ fn checkedGeneratedFnCount(program: *const MonoAst.Program) usize {
     return count;
 }
 
+/// Monotype functions specializing the template the program's widening
+/// adapters adapt, other than the adapters themselves: the declared-row
+/// specializations the adapters call. Every adapter in the program must adapt
+/// one and the same template.
+fn adaptedTemplateSpecializationCount(program: *const MonoAst.Program) usize {
+    var adapted: ?@TypeOf(program.view().fns[0].source.fn_def.checked_generated) = null;
+    for (program.view().fns) |function| {
+        switch (function.source.fn_def) {
+            .checked_generated => |template| {
+                if (adapted) |known| {
+                    if (!std.meta.eql(known, template)) @panic("widening adapters adapted more than one template");
+                }
+                adapted = template;
+            },
+            .local_template, .imported_template, .nested, .local_hosted, .imported_hosted, .parser_runtime, .encoder_for_runtime => {},
+        }
+    }
+    const template = adapted orelse return 0;
+    var count: usize = 0;
+    for (program.view().fns) |function| {
+        switch (function.source.fn_def) {
+            .local_template, .imported_template => |candidate| {
+                if (std.meta.eql(candidate, template)) count += 1;
+            },
+            .checked_generated, .nested, .local_hosted, .imported_hosted, .parser_runtime, .encoder_for_runtime => {},
+        }
+    }
+    return count;
+}
+
 test "row subsumption coerced definition is reached through a generated adapter" {
     const allocator = std.testing.allocator;
     // The narrowest witness for row subsumption (design.md "Deferred: Row
@@ -9386,6 +9416,169 @@ test "row subsumption serves a where-clause forwarder with top-level evidence at
         \\
         \\main : Bool
         \\main = show(fwd(Top.T, B)) == "B" and show(fwd(Top.T, C)) == "C"
+    , 1);
+}
+
+test "row subsumption serves two different wide rows in one caller from one declared-row specialization" {
+    // Two widened rows are two adapters, and both call the one caller-owned
+    // specialization at the declared row.
+    const allocator = std.testing.allocator;
+    const source =
+        \\fwd : a, [B, C] -> [B, C] where [a.get : a -> Str]
+        \\fwd = |x, t| {
+        \\    _s = x.get()
+        \\    t
+        \\}
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\show2 : [B, C, D] -> Str
+        \\show2 = |v| match v { B => "B", C => "C", D => "D" }
+        \\
+        \\outer : {} -> Bool
+        \\outer = |_| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "loc"
+        \\    }
+        \\
+        \\    show(fwd(Loc.L, B)) == "B" and show2(fwd(Loc.L, C)) == "C"
+        \\}
+        \\
+        \\main : Bool
+        \\main = outer({})
+    ;
+    try expectRowSubsumptionProgram(source, 2);
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), adaptedTemplateSpecializationCount(&lowered.mono));
+}
+
+test "row subsumption serves a local-evidence where-clause forwarder passed as a value" {
+    try expectRowSubsumptionProgram(
+        \\fwd : a, [B, C] -> [B, C] where [a.get : a -> Str]
+        \\fwd = |x, t| {
+        \\    _s = x.get()
+        \\    t
+        \\}
+        \\
+        \\apply : (l, [B, C] -> [A, B, C]), l, [B, C] -> [A, B, C]
+        \\apply = |f, l, t| f(l, t)
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\outer : {} -> Bool
+        \\outer = |_| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "loc"
+        \\    }
+        \\
+        \\    show(apply(fwd, Loc.L, B)) == "B" and show(apply(fwd, Loc.L, C)) == "C"
+        \\}
+        \\
+        \\main : Bool
+        \\main = outer({})
+    , 1);
+}
+
+test "row subsumption serves a where-clause forwarder whose recursion joins partially" {
+    // The recursive reference passes a different closure, so it joins the
+    // declared-row specialization through a partial recursive interface
+    // match. That specialization must be the adapter's sibling rather than
+    // its descendant; `completeCallerOwnedResultRowWideningAdapter` checks the
+    // owner it was created under, which is what this program pins.
+    try expectRowSubsumptionProgram(
+        \\fwd : a, (U64 -> U64), [B, C], U64 -> [B, C] where [a.get : a -> Str]
+        \\fwd = |x, f, t, n| {
+        \\    _s = x.get()
+        \\    if n == 0 t else fwd(x, |v| f(v) + 1, t, n - 1)
+        \\}
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\outer : {} -> Bool
+        \\outer = |_| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "loc"
+        \\    }
+        \\
+        \\    wide : Loc, [B, C] -> [A, B, C]
+        \\    wide = |l, t| fwd(l, |v| v, t, 3)
+        \\
+        \\    show(wide(Loc.L, B)) == "B" and show(wide(Loc.L, C)) == "C"
+        \\}
+        \\
+        \\main : Bool
+        \\main = outer({})
+    , 1);
+}
+
+test "row subsumption serves a forwarder whose widened row carries an iterator" {
+    // A result carrying an iterator reaches the eager iterator path, which
+    // must leave a widened request to template completion's adapter.
+    try expectRowSubsumptionProgram(
+        \\fwd : [Some(Iter(U64)), None] -> [Some(Iter(U64)), None]
+        \\fwd = |t| t
+        \\
+        \\sum : [Some(Iter(U64)), None, Extra] -> U64
+        \\sum = |v| match v {
+        \\    Some(it) => List.from_iter(it).sum()
+        \\    None => 0
+        \\    Extra => 99
+        \\}
+        \\
+        \\main : Bool
+        \\main = sum(fwd(Some([1, 2, 3].iter()))) == 6 and sum(fwd(None)) == 0
+    , 1);
+}
+
+test "row subsumption serves a local-evidence where-clause forwarder whose widened row carries an iterator" {
+    try expectRowSubsumptionProgram(
+        \\fwd : a, [Some(Iter(U64)), None] -> [Some(Iter(U64)), None] where [a.get : a -> Str]
+        \\fwd = |x, t| {
+        \\    _s = x.get()
+        \\    t
+        \\}
+        \\
+        \\sum : [Some(Iter(U64)), None, Extra] -> U64
+        \\sum = |v| match v {
+        \\    Some(it) => List.from_iter(it).sum()
+        \\    None => 0
+        \\    Extra => 99
+        \\}
+        \\
+        \\outer : List(U64) -> Bool
+        \\outer = |xs| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "loc"
+        \\    }
+        \\
+        \\    sum(fwd(Loc.L, Some(xs.iter().map(|v| v + 1)))) == 9 and sum(fwd(Loc.L, None)) == 0
+        \\}
+        \\
+        \\main : Bool
+        \\main = outer([1, 2, 3])
+    , 1);
+}
+
+test "row subsumption serves a generic forwarder's Try error row after a use chains it" {
+    try expectRowSubsumptionProgram(
+        \\fwd : a, Try(Str, [Missing, NotFound]) -> Try(Str, [Missing, NotFound])
+        \\fwd = |_, t| t
+        \\
+        \\nf = |_| Err(NotFound)
+        \\
+        \\show : Try(Str, [Gone, Missing, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => s, Err(Gone) => "Gone", Err(Missing) => "Missing", Err(NotFound) => "NotFound" }
+        \\
+        \\main : Bool
+        \\main = show(fwd("x", nf({}))) == "NotFound" and show(fwd("y", nf({}))) == "NotFound"
     , 1);
 }
 

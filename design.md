@@ -7074,11 +7074,15 @@ The row is re-opened as a ROW, down its whole extension chain, and not by its
 head alone. A partially generalized definition (`fwd : a, [B, C] -> [B, C]`)
 shares its ground rows between uses, and one use unifying a literal `[B, ..]`
 into the shared row leaves it spelled as a chain (`[B | [C | []]]`) for every
-later use. So the re-open copies each link of the chain and replaces only its
-closed tail. The tail rule is explicit: `[]` is re-opened; an error tail, left
-by an already-reported type error, leaves the use unchanged; any other tail is
-an invariant violation, since a recorded coercion means the body grounded that
-tail and unification cannot re-open a closed row.
+later use. So the re-open copies each `tag_union` link of the chain and
+replaces only its closed tail. The tail rule is explicit: `[]` is re-opened; an
+error tail, left by an already-reported type error, leaves the use unchanged;
+any other tail is an invariant violation, since a recorded coercion means the
+body grounded that tail and unification cannot re-open a closed row. An alias
+never appears as a link: the coerced tail is the annotation's implicit
+extension, written behind the row's own tags, and unification extends a row
+only with fresh `tag_union` links (it gathers through an alias and binds the
+gathered tail), so an alias link is an invariant violation too.
 
 The row coerced is the one adapter-reachable result row of the signature
 (`ResultRowSite`: the direct result, or the error row of a `Try` standing
@@ -9349,17 +9353,19 @@ Other solved-graph mutations:
   the solved annotated result row (a ground `[]` extension means the body
   FORWARDED a closed value) and stamps module metadata that makes every use,
   in this module and in importers, re-open its own copy of that one row.
-  Scoped to a top-level function with no `where` clause, at the one
-  adapter-reachable result row (`ResultRowSite`), whether written inline or
-  through an alias. Pinned in src/check/test/type_checking_integration.zig:
+  Scoped to a top-level function, with or without a `where` clause, at the
+  one adapter-reachable result row (`ResultRowSite`), whether written inline
+  or through an alias. Pinned in src/check/test/type_checking_integration.zig:
   accepted—"a forwarded closed value still exposes an open row", "a
   forwarded closed Try error row coerces", the two "... spelled through an
   alias coerces" tests, "an imported forwarder's result row coerces at the
-  use"; rejected—"a forwarding body is still bounded by its annotation",
-  "coercion does not open an input row", "coercion does not reach a nested
-  result row", "coercion through an alias does not reach a nested row",
-  "coercion does not reach a local binding", "coercion does not reach a
-  signature with a where clause". The lowering side is pinned by the "row
+  use", "coercion reaches a signature with a where clause", "a generic
+  forwarder coerces at every use after a literal use"; rejected—"a
+  forwarding body is still bounded by its annotation", "coercion does not
+  open an input row", "coercion does not reach a nested result row",
+  "coercion through an alias does not reach a nested row", "coercion does
+  not reach a local binding", "a generic forwarder's input row stays closed
+  after a literal use". The lowering side is pinned by the "row
   subsumption ..." tests in src/eval/test/lir_inline_test.zig.
 - `closeRecordRowForDerivedParse` / `closeRecordRowForDerivedEncode`—policy:
   Derived Structural Codec Record-Row Closure (above). After derived codec

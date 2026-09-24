@@ -17309,9 +17309,9 @@ fn reopenCoercedErrorRow(
 /// argument and the result row of a forwarder—so a use that unifies a literal
 /// `[B, ..]` into that row restructures it into a chain for every later use.
 /// Reading only the head would find a `tag_union` where the tail should be and
-/// leave every later use closed. So every link of the chain is copied with its
-/// own tags (their payloads stay shared, as they are off the spine) and only
-/// the tail is replaced.
+/// leave every later use closed. So every `tag_union` link of the chain is
+/// copied with its own tags (their payloads stay shared, as they are off the
+/// spine) and only the tail is replaced.
 fn reopenedTagRow(
     self: *Self,
     tag_union: types_mod.TagUnion,
@@ -17334,7 +17334,11 @@ fn reopenedTagRow(
 ///   second diagnostic.
 /// - Anything else is impossible: the definition recorded its coercion only
 ///   because its body grounded this row's tail to `[]`, and unification can
-///   restructure a closed row but never re-open it.
+///   restructure a closed row but never re-open it. That includes an alias
+///   link: the coerced tail is the annotation's implicit extension, which the
+///   annotation leaves unbound behind the row's written tags, and unification
+///   extends a row only with fresh `tag_union` links (it gathers through an
+///   alias and binds the gathered tail, never the alias).
 fn reopenedTagRowExt(
     self: *Self,
     ext_var: Var,
@@ -17343,21 +17347,13 @@ fn reopenedTagRowExt(
 ) std.mem.Allocator.Error!?Var {
     const resolved = self.types.resolveVar(ext_var);
     switch (resolved.desc.content) {
-        .alias => |alias| {
-            const backing = (try self.reopenedTagRowExt(
-                self.types.getAliasBackingVar(alias),
-                env,
-                region,
-            )) orelse return null;
-            return try self.copiedAliasWithBacking(alias, backing, env, region);
-        },
         .structure => |flat| switch (flat) {
             .empty_tag_union => return try self.fresh(env, region),
             .tag_union => |link| return try self.reopenedTagRow(link, env, region),
             .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record => {},
         },
         .err => return null,
-        .flex, .rigid, .field_presence => {},
+        .alias, .flex, .rigid, .field_presence => {},
     }
     std.debug.panic("type checker invariant violated: a coerced result row's extension chain did not end in a closed tail", .{});
 }

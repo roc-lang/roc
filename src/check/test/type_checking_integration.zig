@@ -9192,6 +9192,53 @@ test "check type - polarity - a generic forwarder's input row stays closed after
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
+test "check type - polarity - a generic forwarder's Try error row coerces after a use chains it" {
+    // `nf`'s result is an open `[NotFound, ..]` error row, so unifying it into
+    // the forwarder's shared two-tag error row restructures that row into an
+    // extension chain for the second use.
+    const source =
+        \\fwd : a, Try(Str, [Missing, NotFound]) -> Try(Str, [Missing, NotFound])
+        \\fwd = |_, t| t
+        \\
+        \\nf = |_| Err(NotFound)
+        \\
+        \\show : Try(Str, [Gone, Missing, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => s, Err(Gone) => "Gone", Err(Missing) => "Missing", Err(NotFound) => "NotFound" }
+        \\
+        \\two : {} -> Bool
+        \\two = |_| show(fwd("x", nf({}))) == "NotFound" and show(fwd("y", nf({}))) == "NotFound"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Bool");
+}
+
+test "check type - polarity - a rejected argument does not hide a later use's mismatch" {
+    // A partial scheme's uses share its ground row, so a use's error must not
+    // poison that row: the argument relation is owned by its call, and a
+    // later use at a row the forwarder cannot reach is still reported.
+    const source =
+        \\fwd : a, [B, C] -> [B, C]
+        \\fwd = |_, t| t
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\only_d : [D] -> Str
+        \\only_d = |_| "d"
+        \\
+        \\bad : {} -> Str
+        \\bad = |_| show(fwd("x", Z))
+        \\
+        \\later_ok : {} -> Str
+        \\later_ok = |_| show(fwd("x", C))
+        \\
+        \\later_bad : {} -> Str
+        \\later_bad = |_| only_d(fwd("x", C))
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertTypeErrorTitles(&.{ "Type Mismatch", "Type Mismatch" });
+}
+
 test "check type - polarity - a where-free forwarder coerces" {
     // The where-free counterpart of the test above: the same forwarder with
     // no `where` clause presents a row its callers may widen.
