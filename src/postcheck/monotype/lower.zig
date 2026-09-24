@@ -5608,8 +5608,10 @@ const Builder = struct {
         var fn_template = self.fnDefForTemplate(view, template_ref, source_fn_ty, source_fn_key, lower_fn_ty);
         fn_template.evidence_digest = evidence_digest;
         // Only a closed request names a specialization the object cache can
-        // hold: a function type anywhere in it makes the body depend on the
-        // program's lambda sets.
+        // hold: a function type in its arguments or result makes the body
+        // depend on the program's lambda sets. The request's outer arrow does
+        // not: procedure identity selects its source and captures explicitly,
+        // independently of the callable set its value joins in the caller.
         // A hosted template has no procedure of its own to cache: callers
         // reach the host directly through its declared ABI.
         if (template.target != .hosted and !try self.monoFnTypeMentionsFunction(lower_fn_ty)) {

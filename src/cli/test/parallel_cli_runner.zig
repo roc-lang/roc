@@ -404,6 +404,7 @@ const CustomCase = enum {
     native_build_artifact_round_trip,
     native_build_pack_objects,
     native_build_pack_hits,
+    issue_11673_callable_cache,
     issue_10733_wasm_boxy_dev_sealed_object,
     issue_10827_private_compiler_support,
     issue_11134_wasm_post_llvm_pipeline,
@@ -1717,6 +1718,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output is identical across thread counts and repeated builds", .timeout_ms = 600_000, .body = .{ .custom = .native_build_thread_count_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output assembled from its own procedure artifacts is identical", .timeout_ms = 600_000, .body = .{ .custom = .native_build_artifact_round_trip } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev pack programs are deterministic and round-trip through artifacts", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_objects } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11673: imported callable identity survives cold warm and sibling builds", .timeout_ms = 600_000, .body = .{ .custom = .issue_11673_callable_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev serves closed specializations from a previous build's packs", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_hits } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build macOS output basename does not affect bytes", .body = .{ .custom = .macos_output_basename_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on x64musl", .body = .{ .custom = .default_platform_crash_x64musl } },
@@ -3348,6 +3350,7 @@ fn runCustomCase(
         .native_build_thread_count_reproducible => customNativeBuildThreadCountReproducible(io, allocator, &env, &timer, timeout_ms),
         .native_build_artifact_round_trip => customNativeBuildArtifactRoundTrip(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_objects => customNativeBuildPackObjects(io, allocator, &env, &timer, timeout_ms),
+        .issue_11673_callable_cache => customIssue11673CallableCache(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_hits => customNativeBuildPackHits(io, allocator, &env, &timer, timeout_ms),
         .issue_10733_wasm_boxy_dev_sealed_object => customIssue10733WasmBoxyDevSealedObject(io, allocator, &env, &timer, timeout_ms),
         .issue_10827_private_compiler_support => customIssue10827PrivateCompilerSupport(io, allocator, &env, &timer, timeout_ms),
@@ -6172,6 +6175,30 @@ fn customNativeBuildPackHits(
     return null;
 }
 
+// Both caller orders share one cache, so the second app also consumes packs
+// produced under a different root. Each app has an uncached execution oracle.
+fn customIssue11673CallableCache(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const apps = [_]struct { file: []const u8, expect: StoreExpectations }{
+        .{ .file = "main", .expect = .{ .uncached_baseline = true, .stdout = "differs\na\n" } },
+        // This caller order evaluates Eq.same while checking. Its first
+        // cached build consumes the sibling's object pack; the next reuses
+        // the checked constant and no longer needs that procedure.
+        .{ .file = "reversed", .expect = .{ .uncached_baseline = true, .stdout = "a\ndiffers\n", .cache_hit_build = .first_cached } },
+    };
+    for (apps) |app| {
+        const path = std.fmt.allocPrint(allocator, "test/cli/issue_11673_callable_cache/{s}.roc", .{app.file}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate fixture path: {}", .{err});
+        if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, path, env.dirs.work_dir, app.file, app.expect)) |failure| return failure;
+    }
+    return null;
+}
+
 /// Copies the compile-time object-cache app into the case's work directory,
 /// with its platform path pointing back at the repository, so the case can
 /// edit it between builds.
@@ -6204,18 +6231,25 @@ fn stageComptimeApp(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer
     return null;
 }
 
-/// What the second of two store builds must report beyond pack hits.
+/// Expected cache consumption and behavior across store builds.
 const StoreExpectations = struct {
     /// Append a comment to the app between the builds, so the second build
     /// checks it again instead of reusing its cached checked artifact.
     edit_between_builds: bool = false,
     /// The compile-time evaluator spliced at least one entry.
     evaluator_artifacts: bool = false,
+    /// Run an uncached build before populating the store.
+    uncached_baseline: bool = false,
+    /// Which cached build must consume an object pack. Later checked-cache
+    /// hits can already contain evaluated constants and need no procedure.
+    cache_hit_build: enum { first_cached, last } = .last,
+    /// Require every execution to produce this exact output.
+    stdout: ?[]const u8 = null,
 };
 
 /// Builds `roc_file` twice with the object cache on under the case's cache
-/// root, requires the second build to report pack hits and whatever
-/// `expect` asks, and requires both programs to behave identically.
+/// root, optionally after an uncached baseline. Requires the selected build
+/// to report pack hits and every execution to succeed and behave identically.
 fn storeBuildsBehaveIdentically(
     io: std.Io,
     allocator: Allocator,
@@ -6229,8 +6263,8 @@ fn storeBuildsBehaveIdentically(
 ) ?TestResult {
     const hits_marker = "pack hits: ";
     const evaluator_marker = "evaluator artifacts: ";
-    const store_exes = [_][]const u8{ "a", "b" };
-    var store_runs: [store_exes.len]std.process.RunResult = undefined;
+    const store_exes: []const []const u8 = if (expect.uncached_baseline) &.{ "uncached", "a", "b" } else &.{ "a", "b" };
+    var store_runs: [3]std.process.RunResult = undefined;
     for (store_exes, 0..) |name, index| {
         const exe = std.fmt.allocPrint(allocator, "{s}/{s}_{s}", .{ out_dir, prefix, name }) catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
@@ -6247,15 +6281,20 @@ fn storeBuildsBehaveIdentically(
             std.Io.Dir.cwd().writeFile(io, .{ .sub_path = roc_file, .data = edited }) catch |err|
                 return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ roc_file, err });
         }
-        const built = runRocInEnv(io, allocator, env, &.{ "build", "--opt=dev", out_arg }, roc_file, .relative, &.{}, null, build_timeout) catch |err|
+        const build_args: []const []const u8 = if (expect.uncached_baseline and index == 0) &.{ "build", "--no-cache", "--opt=dev", out_arg } else &.{ "build", "--opt=dev", out_arg };
+        const built = runRocInEnv(io, allocator, env, build_args, roc_file, .relative, &.{}, null, build_timeout) catch |err|
             return customInfraFailure(allocator, timer, "store build spawn error: {}", .{err});
         if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
             return failureFromRun(allocator, timer, built, "build with the object cache did not succeed");
         }
-        if (last) {
+        const require_hits = switch (expect.cache_hit_build) {
+            .first_cached => index == @intFromBool(expect.uncached_baseline),
+            .last => last,
+        };
+        if (require_hits) {
             const at = std.mem.find(u8, built.stderr, hits_marker) orelse
                 return failureFromRun(allocator, timer, built, "build with the object cache did not report pack hits");
-            if (countAfterMarker(built.stderr[at + hits_marker.len ..]) == 0) return failureFromRun(allocator, timer, built, "second build with the object cache reported no pack hits");
+            if (countAfterMarker(built.stderr[at + hits_marker.len ..]) == 0) return failureFromRun(allocator, timer, built, "expected object-cache consumer reported no pack hits");
             if (expect.evaluator_artifacts) {
                 const evaluator_at = std.mem.find(u8, built.stderr, evaluator_marker) orelse
                     return failureFromRun(allocator, timer, built, "build with the object cache did not report evaluator artifacts");
@@ -6267,8 +6306,13 @@ fn storeBuildsBehaveIdentically(
         store_runs[index] = runRawInEnv(io, allocator, env, &.{exe}, env.dirs.work_dir, "", exe_timeout) catch |err|
             return customInfraFailure(allocator, timer, "store program spawn error: {}", .{err});
     }
-    if (!std.meta.eql(store_runs[0].term, store_runs[1].term) or !std.mem.eql(u8, store_runs[0].stdout, store_runs[1].stdout)) {
-        return failureFromRun(allocator, timer, store_runs[1], "program served from the object cache behaves differently from the build that filled it");
+    for (store_runs[0..store_exes.len]) |run| {
+        if (!processSucceeded(run.term) or !std.mem.eql(u8, store_runs[0].stdout, run.stdout)) {
+            return failureFromRun(allocator, timer, run, "program served from the object cache failed or behaves differently from the baseline");
+        }
+        if (expect.stdout) |expected| if (!std.mem.eql(u8, expected, run.stdout)) {
+            return failureFromRun(allocator, timer, run, "object-cache program output disagrees with the expected result");
+        };
     }
     return null;
 }
