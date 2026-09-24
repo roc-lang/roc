@@ -7070,6 +7070,16 @@ the copy would open the INPUT row, and a call at an unlisted tag would begin
 to typecheck. The copy therefore duplicates only the spine down to the row
 being re-opened.
 
+The row is re-opened as a ROW, down its whole extension chain, and not by its
+head alone. A partially generalized definition (`fwd : a, [B, C] -> [B, C]`)
+shares its ground rows between uses, and one use unifying a literal `[B, ..]`
+into the shared row leaves it spelled as a chain (`[B | [C | []]]`) for every
+later use. So the re-open copies each link of the chain and replaces only its
+closed tail. The tail rule is explicit: `[]` is re-opened; an error tail, left
+by an already-reported type error, leaves the use unchanged; any other tail is
+an invariant violation, since a recorded coercion means the body grounded that
+tail and unification cannot re-open a closed row.
+
 The row coerced is the one adapter-reachable result row of the signature
 (`ResultRowSite`: the direct result, or the error row of a `Try` standing
 there), whether the signature writes it inline or names it through an alias:

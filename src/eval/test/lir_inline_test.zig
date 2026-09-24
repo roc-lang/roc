@@ -9261,8 +9261,8 @@ test "row subsumption serves a recursive where-clause forwarder through a caller
 }
 
 test "row subsumption shares one caller-owned adapter between two uses at the same row" {
-    // `first` and `second` request the same wide row inside one caller, so
-    // they join one adapter; `narrow`'s use at the declared row joins the
+    // Both `show(fwd(..))` uses request the same wide row inside one caller,
+    // so they join one adapter; `narrow`'s use at the declared row joins the
     // adapter's declared-row specialization and needs no adapter at all.
     try expectRowSubsumptionProgram(
         \\fwd : a, [B, C] -> [B, C] where [a.get : a -> Str]
@@ -9281,18 +9281,10 @@ test "row subsumption shares one caller-owned adapter between two uses at the sa
         \\        get = |_| "loc"
         \\    }
         \\
-        \\    first : Loc, [B, C] -> [A, B, C]
-        \\    first = |l, t| fwd(l, t)
+        \\    narrow : [B, C] -> Str
+        \\    narrow = |t| match fwd(Loc.L, t) { B => "B", C => "C" }
         \\
-        \\    second : Loc, [B, C] -> [A, B, C]
-        \\    second = |l, t| fwd(l, t)
-        \\
-        \\    narrow : Loc, [B, C] -> [B, C]
-        \\    narrow = |l, t| fwd(l, t)
-        \\
-        \\    same = match narrow(Loc.L, C) { B => "B", C => "C" }
-        \\
-        \\    show(first(Loc.L, B)) == "B" and show(second(Loc.L, C)) == "C" and same == "C"
+        \\    show(fwd(Loc.L, B)) == "B" and show(fwd(Loc.L, C)) == "C" and narrow(C) == "C"
         \\}
         \\
         \\main : Bool
@@ -9323,6 +9315,77 @@ test "row subsumption serves a where-clause forwarder whose evidence is top-leve
         \\
         \\main : Bool
         \\main = show(wider(Top.T, B)) == "B" and show(wider(Top.T, C)) == "C"
+    , 1);
+}
+
+test "row subsumption serves a generic forwarder at two widened uses in one body" {
+    // A partial scheme shares its ground row between uses; the first use's
+    // literal argument restructures that row, and the second use must still
+    // be widened. Both uses request one row, so they share one adapter.
+    try expectRowSubsumptionProgram(
+        \\fwd : a, [B, C] -> [B, C]
+        \\fwd = |_, t| t
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\main : Bool
+        \\main = show(fwd("x", B)) == "B" and show(fwd("y", C)) == "C"
+    , 1);
+}
+
+test "row subsumption serves a generic forwarder's Try error row at two widened uses in one body" {
+    // `Gone` sorts first, so every declared error tag moves in the requested
+    // row and a missing or misordered re-tag reports the wrong tag.
+    try expectRowSubsumptionProgram(
+        \\fwd : a, Try(Str, [Missing, NotFound]) -> Try(Str, [Missing, NotFound])
+        \\fwd = |_, t| t
+        \\
+        \\show : Try(Str, [Gone, Missing, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => s, Err(Gone) => "Gone", Err(Missing) => "Missing", Err(NotFound) => "NotFound" }
+        \\
+        \\main : Bool
+        \\main = show(fwd("x", Err(NotFound))) == "NotFound" and show(fwd("y", Err(Missing))) == "Missing"
+    , 1);
+}
+
+test "row subsumption serves a generic forwarder at a let-bound use and a later use" {
+    try expectRowSubsumptionProgram(
+        \\fwd : a, [B, C] -> [B, C]
+        \\fwd = |_, t| t
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\check : {} -> Bool
+        \\check = |_| {
+        \\    x = fwd("x", C)
+        \\    show(x) == "C" and show(fwd("x", B)) == "B"
+        \\}
+        \\
+        \\main : Bool
+        \\main = check({})
+    , 1);
+}
+
+test "row subsumption serves a where-clause forwarder with top-level evidence at two uses in one body" {
+    try expectRowSubsumptionProgram(
+        \\fwd : a, [B, C] -> [B, C] where [a.get : a -> Str]
+        \\fwd = |x, t| {
+        \\    _s = x.get()
+        \\    t
+        \\}
+        \\
+        \\Top := [T].{
+        \\    get : Top -> Str
+        \\    get = |_| "top"
+        \\}
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\main : Bool
+        \\main = show(fwd(Top.T, B)) == "B" and show(fwd(Top.T, C)) == "C"
     , 1);
 }
 

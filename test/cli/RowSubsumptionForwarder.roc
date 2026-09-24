@@ -56,3 +56,11 @@ show_alias = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => 
 
 expect show_alias(wide_alias(Ok("a"))) == "Ok(a)"
 expect show_alias(wide_alias(Err("b"))) == "Err(b)"
+
+# A GENERIC forwarder is a partial scheme: its uses share the ground row
+# `[B(Str), D]`, and the first use's literal argument restructures it for the
+# second. Both uses in one body must still be widened.
+fwd_generic : a, [B(Str), D] -> [B(Str), D]
+fwd_generic = |_, t| t
+
+expect show_direct(fwd_generic("x", B("g"))) == "B(g)" and show_direct(fwd_generic(1, D)) == "D"

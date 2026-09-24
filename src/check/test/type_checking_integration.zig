@@ -9065,6 +9065,133 @@ test "check type - polarity - coercion reaches a signature with a where clause" 
     try checkTypesModule(source, .{ .pass = .last_def }, "{} -> [A, B, C]");
 }
 
+test "check type - polarity - a generic forwarder coerces at every use after a literal use" {
+    // `fwd` is a partial scheme: its uses copy the root to reach `a` and share
+    // the ground row `[B, C]`, which is both its argument and its result row.
+    // The first use unifies the literal `B` into that shared row, restructuring
+    // it into an extension chain; every later use must still re-open it.
+    const source =
+        \\fwd : a, [B, C] -> [B, C]
+        \\fwd = |_, t| t
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\two : {} -> Bool
+        \\two = |_| show(fwd("x", B)) == "B" and show(fwd("x", C)) == "C"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Bool");
+}
+
+test "check type - polarity - a generic forwarder coerces at a let-bound use and a later use" {
+    const source =
+        \\fwd : a, [B, C] -> [B, C]
+        \\fwd = |_, t| t
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\two : {} -> Bool
+        \\two = |_| {
+        \\    x = fwd("x", C)
+        \\    show(x) == "C" and show(fwd("x", C)) == "C"
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Bool");
+}
+
+test "check type - polarity - a generic forwarder coerces at uses with different type arguments" {
+    const source =
+        \\fwd : a, [B, C] -> [B, C]
+        \\fwd = |_, t| t
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\two : {} -> Bool
+        \\two = |_| show(fwd("x", B)) == "B" and show(fwd(1, C)) == "C"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Bool");
+}
+
+test "check type - polarity - a generic forwarder's literal use does not close a use in another definition" {
+    // The row is shared by the scheme's uses across the whole module, so one
+    // definition's literal use restructures it for another's.
+    const source =
+        \\fwd : a, [B, C] -> [B, C]
+        \\fwd = |_, t| t
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\one : {} -> Str
+        \\one = |_| show(fwd("x", B))
+        \\
+        \\two : {} -> Str
+        \\two = |_| show(fwd("x", C))
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Str");
+}
+
+test "check type - polarity - a where-clause forwarder coerces at two uses in one body" {
+    const source =
+        \\fwd : a, [B, C] -> [B, C] where [a.get : a -> Str]
+        \\fwd = |x, t| {
+        \\    _s = x.get()
+        \\    t
+        \\}
+        \\
+        \\Top := [T].{
+        \\    get : Top -> Str
+        \\    get = |_| "top"
+        \\}
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\two : {} -> Bool
+        \\two = |_| show(fwd(Top.T, B)) == "B" and show(fwd(Top.T, C)) == "C"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Bool");
+}
+
+test "check type - polarity - a generic forwarder's Try error row coerces at every use after a literal use" {
+    // The `Try` error-row cell of the same scenario. (A literal reaches this
+    // row through the nominal, which does not leave it chained, so this pins
+    // acceptance rather than the chain walk itself.)
+    const source =
+        \\fwd : a, Try(Str, [Missing, NotFound]) -> Try(Str, [Missing, NotFound])
+        \\fwd = |_, t| t
+        \\
+        \\show : Try(Str, [Gone, Missing, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => s, Err(Gone) => "Gone", Err(Missing) => "Missing", Err(NotFound) => "NotFound" }
+        \\
+        \\two : {} -> Bool
+        \\two = |_| show(fwd("x", Err(NotFound))) == "NotFound" and show(fwd("x", Err(Missing))) == "Missing"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Bool");
+}
+
+test "check type - polarity - a generic forwarder's input row stays closed after a literal use" {
+    // The rejected side: re-opening each use's result row after the shared
+    // row was restructured must not open the INPUT row, so an unlisted
+    // argument is still a mismatch.
+    const source =
+        \\fwd : a, [B, C] -> [B, C]
+        \\fwd = |_, t| t
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\bad : {} -> Str
+        \\bad = |_| {
+        \\    _first = show(fwd("x", B))
+        \\    show(fwd("x", A))
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
 test "check type - polarity - a where-free forwarder coerces" {
     // The where-free counterpart of the test above: the same forwarder with
     // no `where` clause presents a row its callers may widen.

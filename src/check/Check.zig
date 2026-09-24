@@ -17150,9 +17150,9 @@ fn coercedResultRowSite(env: *const ModuleEnv, node_idx: CIR.Node.Idx) ResultRow
 /// which is what an instantiation of a ground scheme shares today.
 ///
 /// Returns `use_var` unchanged when the spine is not the shape the annotation
-/// walk recorded, or when the row is not closed after all: the definition then
-/// behaves exactly as it does without subsumption, which is the conservative
-/// answer.
+/// walk recorded, or when the row carries an already-reported type error (see
+/// `reopenedTagRowExt`, which also states why a row that is not closed is an
+/// invariant violation rather than a case).
 fn reopenCoercedResultRow(
     self: *Self,
     use_var: Var,
@@ -17300,24 +17300,66 @@ fn reopenCoercedErrorRow(
     }
 }
 
-/// The same row with a fresh, unbound extension—but only when the row really is
-/// closed. A row whose extension still carries something is left alone: the
-/// coercion may never DROP tags, only stop a closed tail from bounding the use.
+/// The same row with a fresh, unbound extension in place of its closed tail.
+///
+/// The row is read as a ROW, not as its head: it can reach a use spelled as an
+/// extension chain (`[B | [C | []]]`) rather than as one `tag_union`. A
+/// partial scheme's uses share its ground rows—`fwd : a, [B, C] -> [B, C]`
+/// copies the root to reach `a` and shares `[B, C]`, which is both the
+/// argument and the result row of a forwarder—so a use that unifies a literal
+/// `[B, ..]` into that row restructures it into a chain for every later use.
+/// Reading only the head would find a `tag_union` where the tail should be and
+/// leave every later use closed. So every link of the chain is copied with its
+/// own tags (their payloads stay shared, as they are off the spine) and only
+/// the tail is replaced.
 fn reopenedTagRow(
     self: *Self,
     tag_union: types_mod.TagUnion,
     env: *Env,
     region: Region,
 ) std.mem.Allocator.Error!?Var {
-    const ext = self.types.resolveVar(tag_union.ext);
-    if (ext.desc.content != .structure) return null;
-    if (ext.desc.content.structure != .empty_tag_union) return null;
-    const fresh_ext = try self.fresh(env, region);
+    const ext = (try self.reopenedTagRowExt(tag_union.ext, env, region)) orelse return null;
     return try self.freshFromContent(
-        .{ .structure = .{ .tag_union = .{ .tags = tag_union.tags, .ext = fresh_ext } } },
+        .{ .structure = .{ .tag_union = .{ .tags = tag_union.tags, .ext = ext } } },
         env,
         region,
     );
+}
+
+/// The extension chain beneath `reopenedTagRow`'s head, copied link by link
+/// down to its tail. The tail rule is explicit:
+/// - `[]` is the closed tail the coercion re-opens: it becomes a fresh flex.
+/// - An error tail means the row already took part in a reported type error;
+///   the use is left unchanged (returns null) so checking recovers without a
+///   second diagnostic.
+/// - Anything else is impossible: the definition recorded its coercion only
+///   because its body grounded this row's tail to `[]`, and unification can
+///   restructure a closed row but never re-open it.
+fn reopenedTagRowExt(
+    self: *Self,
+    ext_var: Var,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!?Var {
+    const resolved = self.types.resolveVar(ext_var);
+    switch (resolved.desc.content) {
+        .alias => |alias| {
+            const backing = (try self.reopenedTagRowExt(
+                self.types.getAliasBackingVar(alias),
+                env,
+                region,
+            )) orelse return null;
+            return try self.copiedAliasWithBacking(alias, backing, env, region);
+        },
+        .structure => |flat| switch (flat) {
+            .empty_tag_union => return try self.fresh(env, region),
+            .tag_union => |link| return try self.reopenedTagRow(link, env, region),
+            .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record => {},
+        },
+        .err => return null,
+        .flex, .rigid, .field_presence => {},
+    }
+    std.debug.panic("type checker invariant violated: a coerced result row's extension chain did not end in a closed tail", .{});
 }
 
 /// `alias` with a copied backing and its own arguments, every identity bit

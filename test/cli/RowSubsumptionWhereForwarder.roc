@@ -77,6 +77,54 @@ check_rec = |_| {
     show_direct(wide(Loc.L, B("r"))) == "B(r)" and show_direct(wide(Loc.L, D)) == "D"
 }
 
+# Two widened uses in one body, then a let-bound use followed by another: a
+# where-clause forwarder is a partial scheme whose uses share its ground row,
+# and a literal argument at one use restructures that row for the next.
+check_twice : {} -> Bool
+check_twice = |_| {
+    Loc := [L].{
+        get : Loc -> Str
+        get = |_| "loc"
+    }
+
+    show_direct(fwd_direct(Loc.L, B("p"))) == "B(p)" and show_direct(fwd_direct(Loc.L, D)) == "D"
+}
+
+check_let : {} -> Bool
+check_let = |_| {
+    Loc := [L].{
+        get : Loc -> Str
+        get = |_| "loc"
+    }
+
+    first = fwd_direct(Loc.L, D)
+    show_direct(first) == "D" and show_direct(fwd_direct(Loc.L, B("q"))) == "B(q)"
+}
+
+# Two uses in one body of a forwarder's `Try` error row. `Gone` sorts first,
+# so every declared error tag moves in the requested row.
+fwd_try2 : a, Try(Str, [Missing, NotFound]) -> Try(Str, [Missing, NotFound]) where [a.get : a -> Str]
+fwd_try2 = |x, t| {
+    _s = x.get()
+    t
+}
+
+show_try2 : Try(Str, [Gone, Missing, NotFound]) -> Str
+show_try2 = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(Missing) => "Missing", Err(NotFound) => "NotFound" }
+
+check_try_twice : {} -> Bool
+check_try_twice = |_| {
+    Loc := [L].{
+        get : Loc -> Str
+        get = |_| "loc"
+    }
+
+    show_try2(fwd_try2(Loc.L, Err(NotFound))) == "NotFound" and show_try2(fwd_try2(Loc.L, Err(Missing))) == "Missing"
+}
+
 expect check_direct({})
 expect check_try({})
 expect check_rec({})
+expect check_twice({})
+expect check_let({})
+expect check_try_twice({})
