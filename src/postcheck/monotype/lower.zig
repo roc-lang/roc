@@ -2755,7 +2755,7 @@ const TemplateBodyScheduling = enum { immediate, queued };
 
 /// Bound running plus completed-but-unaccepted jobs. Extra slots let free
 /// lanes continue working when an earlier dispatch delays ordered acceptance.
-const parallel_spec_jobs_per_lane: usize = 4;
+pub const parallel_spec_jobs_per_lane: usize = 64;
 const SharedSummaries = WorkerInputs.AppendIndex(InterfaceReplayAddress, InterfaceSummaryEntry);
 
 const SpecJobRunId = enum(u32) { _ };
