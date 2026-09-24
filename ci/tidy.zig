@@ -116,6 +116,9 @@ fn runTidy(gpa: Allocator, io: std.Io) !void {
 
         const source_file = SourceFile{ .path = file_path, .text = file_buffer[0..bytes_read :0] };
         try tidyFile(gpa, &counter, source_file, &errors);
+        if (std.mem.eql(u8, file_path, glossary_path)) {
+            tidyGlossaryLinks(io, source_file, &errors);
+        }
     }
 
     checkNoCommittedScratchFiles(paths, &errors);
@@ -142,6 +145,72 @@ fn checkNoCommittedScratchFiles(paths: []const []const u8, errors: *Errors) void
             .{line},
         );
     }
+}
+
+const glossary_path = "Glossary.md";
+
+/// Glossary.md points readers at the code that implements each term, e.g.
+/// `[Parser](src/parse/Parser.zig)`. Those repository links must name a path
+/// that exists, so the glossary cannot silently rot as code moves or is
+/// deleted. External (`http...`) and in-page (`#...`) links are not checked.
+fn tidyGlossaryLinks(io: std.Io, file: SourceFile, errors: *Errors) void {
+    var links = MarkdownLinkTargets{ .text = file.text };
+    while (links.next()) |link| {
+        if (!isRepositoryLink(link.target)) continue;
+        std.Io.Dir.cwd().access(io, link.target, .{}) catch {
+            errors.emit(
+                "{s}:{d}: error: link target '{s}' does not exist. If you recently moved or deleted " ++
+                    "this path, update or remove the link in {s}.\n",
+                .{ file.path, file.lineNumber(link.offset), link.target, glossary_path },
+            );
+        };
+    }
+}
+
+/// Iterates the targets of inline Markdown links: the text between each `](`
+/// and the next `)`.
+const MarkdownLinkTargets = struct {
+    text: []const u8,
+    index: usize = 0,
+
+    const Link = struct {
+        target: []const u8,
+        offset: usize,
+    };
+
+    fn next(links: *MarkdownLinkTargets) ?Link {
+        const opener = "](";
+        const start = (std.mem.findPos(u8, links.text, links.index, opener) orelse return null) + opener.len;
+        const end = std.mem.findScalarPos(u8, links.text, start, ')') orelse links.text.len;
+        links.index = end;
+        return .{ .target = links.text[start..end], .offset = start };
+    }
+};
+
+fn isRepositoryLink(target: []const u8) bool {
+    return !std.mem.startsWith(u8, target, "http") and !std.mem.startsWith(u8, target, "#");
+}
+
+test "markdown link targets are extracted in order" {
+    const text =
+        \\foo [bar](src/baz.md)...
+        \\hey asjkl [zod](boz.md) asmd
+        \\[bam](src/check/Check.zig)
+    ;
+    var links = MarkdownLinkTargets{ .text = text };
+    try std.testing.expectEqualStrings("src/baz.md", links.next().?.target);
+    try std.testing.expectEqualStrings("boz.md", links.next().?.target);
+    const last = links.next().?;
+    try std.testing.expectEqualStrings("src/check/Check.zig", last.target);
+    try std.testing.expectEqual(@as(usize, 3), (SourceFile{ .path = "x", .text = text }).lineNumber(last.offset));
+    try std.testing.expect(links.next() == null);
+}
+
+test "only repository links are checked" {
+    try std.testing.expect(isRepositoryLink("src/parse/Parser.zig"));
+    try std.testing.expect(isRepositoryLink("src/base"));
+    try std.testing.expect(!isRepositoryLink("https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)"));
+    try std.testing.expect(!isRepositoryLink("#tokenization"));
 }
 
 fn runGitLints(gpa: Allocator, io: std.Io) !void {
