@@ -315,6 +315,19 @@ pub const TypeWriter = struct {
         try self.inspector.writeVar(var_);
         try out.appendSlice(self.inspector.allocator, self.inspector.identity_variables.entries.items);
     }
+
+    /// Like `appendIdentityVarsFromVar`, treating every var whose resolved
+    /// root is in `opaque_roots` as an opaque leaf (see `opaque_roots`).
+    pub fn appendIdentityVarsFromVarWithOpaqueRoots(
+        self: *TypeWriter,
+        var_: Var,
+        opaque_roots: []const Var,
+        out: *std.ArrayListUnmanaged(Var),
+    ) Allocator.Error!void {
+        self.inspector.opaque_roots = opaque_roots;
+        defer self.inspector.opaque_roots = &.{};
+        try self.appendIdentityVarsFromVar(var_, out);
+    }
 };
 
 /// Whether the canonical-key traversal for `var_` reaches erroneous checked
@@ -465,6 +478,13 @@ fn Walk(comptime digest: bool) type {
         /// Structural scheme-interface walks stop at an identity so attached
         /// requirements do not become externally visible anchors.
         walk_identity_constraints: bool = true,
+        /// Resolved roots the walk treats as opaque leaves: it neither enters
+        /// their content nor enumerates them as identities. A hole-sharing
+        /// predeclared scheme passes its live `_` hole vars here, because a
+        /// hole is monomorphic within its recursive group and shared by the
+        /// scheme and the body, so whatever the group has solved it to so far
+        /// is not part of either side's quantified interface.
+        opaque_roots: []const Var = &.{},
 
         fn init(allocator: Allocator, store: *const TypeStore, env: *const ModuleEnv) Self {
             return .{
@@ -566,6 +586,14 @@ fn Walk(comptime digest: bool) type {
             const root = resolved.var_;
             if (!digest) {
                 if (try self.visited.getOrPush(root) != null) return true;
+            }
+
+            for (self.opaque_roots) |opaque_root| {
+                if (opaque_root == root) {
+                    self.writeTag("opaque");
+                    self.writeU32(@intFromEnum(root));
+                    return true;
+                }
             }
 
             if (self.err_by_var and resolved.desc.content == .err) {

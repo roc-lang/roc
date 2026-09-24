@@ -2849,6 +2849,20 @@ reference to an imported scheme copy; the def itself still checks with its
 annotation generated in its body's frame, sharing vars with the scheme the
 checked module outputs, which checked dispatch-evidence resolution relies on.
 
+An annotation with `_` holes cannot be predeclared module-wide: a hole's type
+is inferred from its body, so quantifying it into a standalone scheme would
+hand every use an unconstrained variable the body never committed to. When
+such an annotated member belongs to a recursive binding group, its scheme is
+instead predeclared at the start of that group, inside the group's shared rank
+frame. The scheme quantifies the annotation's named variables exactly like a
+module-wide predeclaration, but it shares the live hole variables with the
+body's annotation rather than copying them: every in-group use instantiates
+fresh copies of the named variables and constrains the very hole variables
+the body's inference constrains. The holes therefore stay monomorphic across
+the group, and two members' same-named variables are never unified with each
+other. The group's boundary generalizes the holes like any other
+body-inferred variable.
+
 Roc generalization is exclusively rank-1. Quantification belongs to a value
 binding; an arbitrary expression does not acquire a scheme, and the result of
 calling a polymorphic function is a monotype even when that result contains a
@@ -7305,7 +7319,12 @@ without CIR nodes included, so slot i of one is slot i of the other. The body
 side is enumerated at the moment the body generates the annotation, before
 anything unifies with it; it is enumerated for every predeclared annotation,
 because a use made while the body is being checked is only discovered after
-that generation. The predeclared side is enumerated at the first use. A use
+that generation. The predeclared side is enumerated at the first use. A
+group-start predeclaration's shared hole variables are opaque leaves in both
+enumerations: a hole is never quantified by the predeclared scheme, and
+whatever the group has unified it with by the time either side is enumerated
+is not part of either side's interface, so both sides still enumerate exactly
+the annotation's own variables in the same order. A use
 keeps only its copies of the predeclared slots (and of their where-clause
 callables), and its record pairs each body slot that is still a variable with
 the copy of the same predeclared slot. A use made while the body is in flight
