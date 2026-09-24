@@ -2270,6 +2270,7 @@ const Inserter = struct {
             .assign_boxy_dict_ref => |assign| try self.store.addCFStmt(.{ .assign_boxy_dict_ref = .{
                 .target = assign.target,
                 .dict = assign.dict,
+                .captures = assign.captures,
                 .next = next,
             } }),
             .assign_boxy_box => |assign| try self.store.addCFStmt(.{ .assign_boxy_box = .{
@@ -2797,7 +2798,7 @@ const Inserter = struct {
                     step.pre_release = if (try self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
                     const dict_local = assign.dict.localOrNull() orelse assign.target;
                     const singles = [_]LIR.LocalId{ dict_local, assign.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.captures, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
                 .assign_boxy_box => |assign| {
@@ -6366,6 +6367,7 @@ const Inserter = struct {
                 },
                 .assign_boxy_dict_ref => |assign| {
                     if (assign.dict.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    try self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.captures);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },

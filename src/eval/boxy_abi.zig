@@ -155,6 +155,7 @@ pub const GlobalBoxyRuntime = struct {
     runtime_boxy_tag_variants: std.ArrayList(LirProgram.BoxyTagVariant) = .empty,
     runtime_boxy_tag_payload_descs: std.ArrayList(LirProgram.BoxyTagPayloadDesc) = .empty,
     runtime_boxy_payload_steps: std.ArrayList(LirProgram.BoxyPayloadStep) = .empty,
+    runtime_boxy_dicts: boxy_runtime.RuntimeBoxyDicts = .{},
     /// Backs runtime-materialized descriptors; they live until deinit.
     desc_arena: std.heap.ArenaAllocator,
     /// Backs value temporaries; reset when the outermost wrapper call
@@ -295,6 +296,7 @@ fn createRuntime(
             .runtime_boxy_tag_variants = undefined,
             .runtime_boxy_tag_payload_descs = undefined,
             .runtime_boxy_payload_steps = undefined,
+            .runtime_boxy_dicts = undefined,
             .roc_ops = roc_ops,
             .scratch = gpa,
             .descriptor_arena = undefined,
@@ -308,6 +310,7 @@ fn createRuntime(
     g.runtime.runtime_boxy_tag_variants = &g.runtime_boxy_tag_variants;
     g.runtime.runtime_boxy_tag_payload_descs = &g.runtime_boxy_tag_payload_descs;
     g.runtime.runtime_boxy_payload_steps = &g.runtime_boxy_payload_steps;
+    g.runtime.runtime_boxy_dicts = &g.runtime_boxy_dicts;
     g.runtime.descriptor_arena = g.desc_arena.allocator();
     g.runtime.eval_arena = g.desc_arena.allocator();
     return g;
@@ -395,6 +398,7 @@ pub fn createRuntimeFromSidecarView(
 /// points at.
 pub fn deinitRuntime(g: *GlobalBoxyRuntime) void {
     g.desc_copy_cache.deinit(g.gpa);
+    g.runtime_boxy_dicts.deinit(g.gpa);
     g.adapter_desc_specializations.deinit(g.gpa);
     g.runtime_boxy_desc_ids.deinit(g.gpa);
     g.runtime_boxy_payload_steps.deinit(g.gpa);
@@ -448,7 +452,18 @@ const AbiHooks = struct {
     pub fn resolveDictRef(self: AbiHooks, dict_ref: LIR.BoxyDictRef) Error!*const BoxyDict {
         return switch (dict_ref) {
             .static => |dict_id| self.g.runtime.requireBoxyDict(dict_id),
-            .local => error.RuntimeError,
+            .runtime => |runtime_id| try self.g.runtime.requireRuntimeBoxyDict(runtime_id),
+            // Only a template dictionary names locals; `roc_boxy_dict_copy`
+            // binds their values while it materializes the template.
+            .local => |local| blk: {
+                for (self.g.capture_ids, self.g.capture_descs) |capture_id, capture_value| {
+                    if (capture_id == @intFromEnum(local)) {
+                        const value = capture_value orelse abiCrash(self.g, "template dictionary capture was null");
+                        break :blk @ptrCast(@alignCast(value));
+                    }
+                }
+                abiCrash(self.g, "template dictionary capture was not supplied");
+            },
         };
     }
 
@@ -1949,6 +1964,34 @@ pub fn roc_boxy_desc_copy(
         .capture_descs = owned_descs,
     }, result) catch abiCrash(g, "descriptor materialization cache");
     return result;
+}
+
+/// Materialize a template dictionary into the runtime dictionary tables.
+/// `capture_ids`/`capture_values` bind the descriptor and dictionary locals its
+/// method slots name; equal values yield the same dictionary.
+pub fn roc_boxy_dict_copy(
+    dict_id: u32,
+    capture_ids: ?[*]const u32,
+    capture_values: ?[*]const usize,
+    capture_count: usize,
+) callconv(.c) *const BoxyDict {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    const ids = if (capture_ids) |supplied| supplied[0..capture_count] else &.{};
+    const values = if (capture_values) |supplied| supplied[0..capture_count] else &.{};
+    // Descriptor and dictionary captures are both pointers; the hooks read
+    // each local's value through the descriptor capture table.
+    const descs: []const ?*const BoxyTypeDesc = @ptrCast(values);
+    const outer_ids = g.capture_ids;
+    const outer_descs = g.capture_descs;
+    g.capture_ids = ids;
+    g.capture_descs = descs;
+    defer {
+        g.capture_ids = outer_ids;
+        g.capture_descs = outer_descs;
+    }
+    return g.runtime.materializeBoxyDictTemplate(hooks(g), @enumFromInt(dict_id), values) catch abiCrash(g, "dictionary materialization");
 }
 
 /// Resolve a static descriptor id to its descriptor pointer in the global
