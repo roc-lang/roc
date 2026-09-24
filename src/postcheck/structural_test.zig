@@ -1413,12 +1413,14 @@ test "hosted Try adaptation consumes checker-recorded nominal provenance" {
 
 test "Monotype source locations carry final program file ids and draft compaction preserves procedure debug names" {
     const lower_source = @embedFile("monotype/lower.zig");
-    // The program's source-file table is seeded in canonical order before any
-    // body is lowered, by the coordinator and borrowed by every worker,
-    // so drafts hold no source-file content of their own and sealing
-    // never relocates a location's file id.
-    try expectContains(lower_source, "try builder.seedProgramSourceFiles();");
+    // The program's source-file and checked-module tables are seeded in
+    // canonical order before any body is lowered, by the coordinator and
+    // borrowed by every worker, so drafts hold no source-file content of their
+    // own, sealing never relocates a location's file id, and a worker stamps
+    // the same owner on a compile-time site that the coordinator would.
+    try expectContains(lower_source, "try builder.seedProgramModuleTables();");
     try expectContains(lower_source, "builder.borrowed_source_file_ids = inputs.source_file_ids;");
+    try expectContains(lower_source, "builder.borrowed_lowering_module_ids = inputs.lowering_module_ids;");
     try expectNotContains(lower_source, "fn initSourceFileIds(");
     try expectContains(lower_source, "std.mem.sort(SourceFileSeed, seeds.items, {}, SourceFileSeed.lessThan);");
     try expectNotContains(lower_source, "fn sourceFileIdFor");
@@ -1564,11 +1566,6 @@ test "boxy representation queries have one definition on the plan" {
         "sameChildRoleKind",
         "childRolesMatch",
         "findMatchingChildByRole",
-        "findMatchingChildBySourceType",
-        "findMatchingDictionaryChildBySourceType",
-        "findMatchingTagPayloadInRep",
-        "findMatchingTagPayloadInRowExtension",
-        "findMatchingTagPayloadInRowExtensionInner",
         "recordFieldNameMatches",
         "tagLabelNameMatches",
     };

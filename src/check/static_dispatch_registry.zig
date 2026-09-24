@@ -1235,6 +1235,12 @@ pub const StaticDispatchResultMode = union(enum) {
     equality: struct {
         structural_allowed: bool,
         negated: bool,
+        /// Checker-selected discriminant-only comparison. The named operand is
+        /// the value being tested; the other operand is the payload-free tag.
+        discriminant: ?struct {
+            value_operand: u32,
+            tag: canonical.TagLabelId,
+        } = null,
     },
     /// A `to_hash : self, Hasher -> Hasher` dispatch whose receiver is an
     /// anonymous structural type. When `structural_allowed` is set, lowering
@@ -1463,6 +1469,11 @@ pub const SiteEvidenceEntry = extern struct {
     /// at this site, in the scheme's `scheme_vars` order.
     subst_start: u32 = 0,
     subst_len: u32 = 0,
+    /// For a stored nested-function use, `@intFromEnum` of the checked type of
+    /// the instance the containing value stores; `no_site_instance` otherwise.
+    instance_ty: u32 = no_site_instance,
+
+    pub const no_site_instance = std.math.maxInt(u32);
 };
 
 /// Public `EvidencePathStep` declaration: one semantic step from a type to a
@@ -1661,9 +1672,6 @@ pub const GeneratedCodecCallResolution = union(enum(u8)) {
 /// One exact method edge inside a compiler-generated parser or encoder.
 pub const GeneratedCodecCall = struct {
     method: canonical.MethodNameId,
-    /// This checked edge is consumed only by a specialization whose boundary
-    /// selects the corresponding generated-code path.
-    conditional: bool = false,
     /// Dense producer role among distinct subject obligations for `method`.
     /// This is the post-check selection key; subject types remain validation
     /// metadata and are never rediscovered from a Monotype graph.
@@ -2043,6 +2051,12 @@ pub const StaticDispatchPlanTable = struct {
                         .result_mode = .{ .equality = .{
                             .structural_allowed = true,
                             .negated = eq.negated,
+                            .discriminant = if (zeroPayloadTagIdent(module, eq.rhs)) |tag_ident|
+                                .{ .value_operand = 0, .tag = try names.internTagIdent(idents, tag_ident) }
+                            else if (zeroPayloadTagIdent(module, eq.lhs)) |tag_ident|
+                                .{ .value_operand = 1, .tag = try names.internTagIdent(idents, tag_ident) }
+                            else
+                                null,
                         } },
                     });
                     try plan_sources.append(allocator, .{
@@ -2121,7 +2135,6 @@ pub const StaticDispatchPlanTable = struct {
                 }
                 try generated_codec_calls.append(allocator, .{
                     .method = method,
-                    .conditional = call.conditional != 0,
                     .method_role = method_role.?,
                     .dispatcher_ty = dispatcher_ty,
                     .callable_ty = callable_ty,
@@ -2491,6 +2504,14 @@ pub const StaticDispatchPlanTable = struct {
     /// type per quantified variable of that scheme, in the scheme's
     /// `scheme_vars` order. Null when the expression has no site entry at
     /// all; empty when its entry recorded no instantiation.
+    /// The checked type of the instance a stored nested-function use at
+    /// `expr` places into its containing value.
+    pub fn siteInstanceType(self: *const StaticDispatchPlanTable, expr: CheckedExprId) ?CheckedTypeId {
+        const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence, @intFromEnum(expr), siteEvidenceOrder) orelse return null;
+        if (found.instance_ty == SiteEvidenceEntry.no_site_instance) return null;
+        return @enumFromInt(found.instance_ty);
+    }
+
     pub fn siteSubstitution(self: *const StaticDispatchPlanTable, expr: CheckedExprId) ?[]const CheckedTypeId {
         const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence, @intFromEnum(expr), siteEvidenceOrder) orelse return null;
         return self.site_substitutions[found.subst_start .. found.subst_start + found.subst_len];
@@ -2974,6 +2995,13 @@ fn staticDispatchOperandsForSlice(
         out[i] = .{ .checked_expr = checkedExprIdForSource(checked_bodies, expr) };
     }
     return out;
+}
+
+fn zeroPayloadTagIdent(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
+    const data = module.expr(expr_idx).data;
+    if (data == .e_zero_argument_tag) return data.e_zero_argument_tag.name;
+    if (data == .e_tag and data.e_tag.args.span.len == 0) return data.e_tag.name;
+    return null;
 }
 
 fn checkedExprIdForSource(checked_bodies: anytype, expr: CIR.Expr.Idx) CheckedExprId {

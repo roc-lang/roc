@@ -3096,6 +3096,7 @@ pub fn build(b: *std.Build) void {
     const run_test_builtin_bake_reproducible_step = b.step("run-test-builtin-bake-reproducible", "Bake the builtins in three separate processes and compare every output byte");
     const build_test_wasm_static_lib_runner_step = b.step("build-test-wasm-static-lib-runner", "Build WASM static library test runner");
     const run_test_wasm_static_lib_step = b.step("run-test-wasm-static-lib", "Run WASM static library test runner");
+    const repro_issue_11529_step = b.step("repro-issue-11529", "Build and run the wasm32 top-level boxed function regression");
     const run_test_dylib_step = b.step("run-test-dylib", "Build a Roc shared library and run it through the loader test");
     const run_test_archive_step = b.step("run-test-archive", "Build a Roc static archive, link a consumer against it, and run it");
     const run_check_machine_code_shim_archive_step = b.step("run-check-machine-code-shim-archive", "Check that the machine-code shim keeps compiler-private support local");
@@ -5274,6 +5275,18 @@ pub fn build(b: *std.Build) void {
         build_wasm_issue_11455_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11455_app.step);
 
+        const build_wasm_issue_11529_app = b.addRunArtifact(roc_exe);
+        build_wasm_issue_11529_app.addArgs(&.{
+            "build",
+            "test/wasm/issue_11529_top_level_boxed_function_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--no-cache",
+            "--output=test/wasm/issue_11529_top_level_boxed_function_static_lib_app.wasm",
+        });
+        build_wasm_issue_11529_app.step.dependOn(wasm_host_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11529_app.step);
+
         const wasm_test_exe = b.addExecutable(.{
             .name = "wasm_static_lib_test",
             .root_module = b.createModule(.{
@@ -5316,9 +5329,21 @@ pub fn build(b: *std.Build) void {
         run_test_wasm_static_lib_step.dependOn(&run_wasm_dce_check.step);
 
         const run_wasm_test = b.addRunArtifact(wasm_test_exe);
+        const run_wasm_issue_11529_test = b.addRunArtifact(wasm_test_exe);
+        run_wasm_issue_11529_test.addArgs(&.{
+            "--wasm-path",
+            "test/wasm/issue_11529_top_level_boxed_function_static_lib_app.wasm",
+            "--expected",
+            "x",
+        });
+        run_wasm_issue_11529_test.step.dependOn(&install.step);
+        run_wasm_issue_11529_test.step.dependOn(&build_wasm_issue_11529_app.step);
+        repro_issue_11529_step.dependOn(&run_wasm_issue_11529_test.step);
         if (run_args.len != 0) {
             run_wasm_test.addArgs(run_args);
         } else {
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11529_test.step);
+
             const run_wasm_provided_callable_test = b.addRunArtifact(wasm_test_exe);
             run_wasm_provided_callable_test.addArgs(&.{
                 "--wasm-path",
@@ -5746,6 +5771,41 @@ pub fn build(b: *std.Build) void {
         run_wasm_archive_check.addArgs(&.{ "--archive", "test/archive/app-wasm32.a", "roc_builtins" });
         run_wasm_archive_check.step.dependOn(&build_wasm_archive_app.step);
         run_test_archive_step.dependOn(&run_wasm_archive_check.step);
+
+        // The same app through the LLVM backend: `llvmObjectUsesPic` decides
+        // PIC for that object, so the dev-backend archive above cannot cover it.
+        const build_wasm_archive_app_llvm = b.addRunArtifact(roc_exe);
+        build_wasm_archive_app_llvm.addArgs(&.{
+            "build",
+            "test/archive/app.roc",
+            "--opt=speed",
+            "--target=wasm32",
+            "--output=test/archive/app-wasm32-speed.a",
+        });
+        build_wasm_archive_app_llvm.step.dependOn(build_test_hosts_step);
+
+        // A wasm32 archive is handed to a foreign linker, so it must contain no
+        // absolute data/table relocations or emcc cannot build a SIDE_MODULE
+        // from it. Checked for both backends that produce these objects.
+        const wasm_pic_check_exe = b.addExecutable(.{
+            .name = "wasm_pic_check",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/archive/wasm_pic_check.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(wasm_pic_check_exe, target);
+
+        const run_wasm_pic_check_dev = b.addRunArtifact(wasm_pic_check_exe);
+        run_wasm_pic_check_dev.addArgs(&.{"test/archive/app-wasm32.a"});
+        run_wasm_pic_check_dev.step.dependOn(&build_wasm_archive_app.step);
+        run_test_archive_step.dependOn(&run_wasm_pic_check_dev.step);
+
+        const run_wasm_pic_check_llvm = b.addRunArtifact(wasm_pic_check_exe);
+        run_wasm_pic_check_llvm.addArgs(&.{"test/archive/app-wasm32-speed.a"});
+        run_wasm_pic_check_llvm.step.dependOn(&build_wasm_archive_app_llvm.step);
+        run_test_archive_step.dependOn(&run_wasm_pic_check_llvm.step);
     }
 
     // Check fx platform test coverage convenience step

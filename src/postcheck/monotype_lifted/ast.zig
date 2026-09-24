@@ -181,6 +181,8 @@ pub const FnBody = union(enum) {
 pub const Root = struct {
     fn_id: FnId,
     request: check.CheckedModule.RootRequest,
+    /// See `Mono.Root.owner`.
+    owner: Common.LoweringModuleId,
 };
 
 /// Runtime layout requested for a checked data value.
@@ -248,6 +250,8 @@ pub const ProgramView = struct {
     static_data_values: []const StaticDataValue,
     comptime_value_roots: []const Common.ComptimeValueRoot,
     comptime_sites: []const ComptimeSite,
+    /// See `Mono.ProgramBuilder.lowering_modules`.
+    lowering_modules: []const check.CheckedModule.ModuleId,
     source_files: []const base.SourceFileEntry,
     expr_locs: []const base.SourceLoc,
     expr_regions: []const base.Region,
@@ -511,6 +515,9 @@ pub const Program = struct {
     /// Frozen shared metadata for SpecConstr; workers never append descriptors.
     comptime_value_roots: ProgramList(Common.ComptimeValueRoot, "comptime_value_roots") = .empty,
     comptime_sites: ProgramList(ComptimeSite, "comptime_sites"),
+    /// Checked modules of this lowering's input, moved from Monotype and
+    /// addressed by `Common.LoweringModuleId`.
+    lowering_modules: ProgramList(check.CheckedModule.ModuleId, "lowering_modules") = .empty,
     /// Source file table for `SourceLoc.file` indices (moved from Monotype).
     source_files: ProgramList(base.SourceFileEntry, "source_files"),
     /// Source location per expression, parallel to `exprs`.
@@ -744,6 +751,7 @@ pub const Program = struct {
             self.allocator.free(file.qualified_name);
         }
         self.source_files.deinit(self.allocator);
+        self.lowering_modules.deinit(self.allocator);
         for (self.comptime_sites.unsafeRawItemsForView()) |site| {
             self.allocator.free(site.branch_regions);
         }
@@ -814,6 +822,7 @@ pub const Program = struct {
             .static_data_values = self.static_data_values.unsafeRawItemsForView(),
             .comptime_value_roots = self.comptime_value_roots.unsafeRawItemsForView(),
             .comptime_sites = self.comptime_sites.unsafeRawItemsForView(),
+            .lowering_modules = self.loweringModules(),
             .source_files = self.source_files.unsafeRawItemsForView(),
             .expr_locs = self.expr_locs.unsafeRawItemsForView(),
             .expr_regions = self.expr_regions.unsafeRawItemsForView(),
@@ -1181,6 +1190,11 @@ pub const Program = struct {
     pub fn sourceFiles(self: *const Program) []const base.SourceFileEntry {
         if (self.body_prefix) |prefix| return prefix.source.sourceFiles();
         return self.source_files.unsafeRawItemsForView();
+    }
+
+    pub fn loweringModules(self: *const Program) []const check.CheckedModule.ModuleId {
+        if (self.body_prefix) |prefix| return prefix.source.loweringModules();
+        return self.lowering_modules.unsafeRawItemsForView();
     }
 
     pub fn takeStringLiterals(self: *Program) std.ArrayList(Mono.StringLiteral) {
