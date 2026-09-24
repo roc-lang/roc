@@ -12652,15 +12652,20 @@ const ProcBodyBuilder = struct {
 
     /// A dictionary reference built in this frame, with the frame locals it
     /// names when it is a template.
-    const FrameDictRef = struct {
+    const FrameDictionary = struct {
         dict: LIR.BoxyDictRef,
         captures: LIR.LocalSpan = .{ .start = 0, .len = 0 },
     };
 
     /// Whether describing `rep_id` reads a descriptor only this frame holds.
     fn repDescriptorNeedsFrame(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!bool {
-        const materialization = try self.descriptorMaterializationForSourceRep(rep_id);
-        return materialization.desc.localOrNull() != null or materialization.captures.len != 0;
+        const identity_rep = self.parent.descriptorIdentityRep(rep_id);
+        const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
+        if (rep.descriptor) |desc| {
+            if (self.descriptorBindingIsBoundForRep(identity_rep) and
+                self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep) != null) return true;
+        }
+        return try self.descriptorTemplateNeedsCapturesForKnownRep(identity_rep);
     }
 
     /// The local this frame binds for `dictionaries`.
@@ -12682,7 +12687,7 @@ const ProcBodyBuilder = struct {
         source_rep: Plan.TypeRepId,
         worker_dictionaries: Plan.Span,
         method_evidence: Plan.Span,
-    ) Allocator.Error!FrameDictRef {
+    ) Allocator.Error!FrameDictionary {
         var template = DictTemplateFrame{ .frame = self };
         defer template.captures.deinit(self.parent.allocator);
         const dict_id = try self.parent.dictForRepInFrame(source_rep, worker_dictionaries, method_evidence, &template);
@@ -17774,7 +17779,7 @@ const ProcBodyBuilder = struct {
         if (capture.kind != .hidden_dict) {
             boxyLowerInvariant("non-dictionary erased capture reached dictionary materialization");
         }
-        const dict_ref: FrameDictRef = if (planned_arg) |arg|
+        const dict_ref: FrameDictionary = if (planned_arg) |arg|
             try self.dictionaryRefForPlannedSource(arg)
         else
             .{ .dict = try self.dictionaryRefForKnownRep(source_rep, capture.dictionaries) };
@@ -28861,7 +28866,7 @@ const ProcBodyBuilder = struct {
     fn dictionaryRefForPlannedSource(
         self: *ProcBodyBuilder,
         arg: Plan.DirectCallHiddenDictionaryArg,
-    ) Allocator.Error!FrameDictRef {
+    ) Allocator.Error!FrameDictionary {
         return switch (arg.source) {
             .bound_dictionaries => |dictionaries| .{ .dict = .{ .local = self.boundDictionaryLocal(dictionaries) } },
             .static_rep => |source_rep| try self.staticDictRefInFrame(

@@ -12656,6 +12656,22 @@ descriptor scope that sees none of the frame's bindings and materializes its
 descriptors only from the requirement substitution. Adapters whose two sides
 share no descriptor requirement convert directly.
 
+Nested dictionary evidence resolves against the worker that lowers the call,
+so a nested dictionary the checker forwards from a scheme requirement is that
+frame's own bound dictionary (`to_json = |a| Json.to_str([a])` needs
+`List(a)`'s encoder, whose `item` dictionary is `to_json`'s dictionary for
+`a`). A dictionary whose method evidence names such a frame value, directly or
+through its nested dictionaries or method descriptors, is a template: its
+method slots name the frame's dictionary and descriptor locals, it is marked
+`template`, and the `assign_boxy_dict_ref` that produces it lists those locals
+as captures. The runtime materializes the template into runtime dictionary
+tables with the captured values (interning equal copies); every other read of
+a template is an invariant failure. A template slot also carries, after the
+worker's hidden descriptors, the requirement-side descriptors and the frame's
+own type variables that its method adapter needs; the adapter binds them
+(requirement descriptors only where the requirement side is lowered) and
+describes representations naming them through those bindings.
+
 Boxy box/unbox/adapt operations are explicit LIR statements or explicit helper
 calls selected by the lowerer:
 
