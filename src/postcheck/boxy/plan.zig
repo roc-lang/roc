@@ -15514,7 +15514,7 @@ test "call wrappers of a structural worker position resolve to their backing und
     var builder = Builder.init(gpa, .{});
     defer builder.deinit();
 
-    const call_alias: TypeRepId = @enumFromInt(0);
+    const call_alias: TypeRepId = @enumFromInt(fixtureTableIndex(0));
     const call_nominal: TypeRepId = @enumFromInt(1);
     const backing: TypeRepId = @enumFromInt(2);
     const formal: TypeRepId = @enumFromInt(3);
@@ -15534,7 +15534,7 @@ test "call wrappers of a structural worker position resolve to their backing und
     });
     const call_substitutions = try testNominalSubstitution(&builder.plan, formal, actual);
     try builder.plan.representations.appendSlice(gpa, &.{
-        .{ .source_type = rootTypeRef(@enumFromInt(0)), .kind = .alias, .children = .{ .start = 0, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .alias, .children = .{ .start = 0, .len = 1 } },
         .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .{ .nominal = .builtin_other }, .children = .{ .start = 1, .len = 2 }, .nominal_backing_arg_substitutions = call_substitutions },
         .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .list, .children = .{ .start = 3, .len = 1 } },
         .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .{ .dynamic = .rigid }, .contains_dynamic = true },
