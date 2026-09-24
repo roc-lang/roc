@@ -9875,15 +9875,16 @@ making source syntax or body-lowering order part of type meaning.
 
 A procedure template whose checked function root contains no type variables,
 whose scheme quantifies none (hidden requirement receivers included), and whose
-callers supply no evidence has a closed interface: its checked root is the complete answer to every request for
-it, and its relation table relates only cells private to its own body.
-Requesters relate the request to that root and stop. Neither a dependency edge
-nor a deferred request replays a closed template's relations, so a caller's
-specialization work never grows with the bodies of its closed callees, and
-transitive replay is bounded by the open templates it actually reaches. A
-request that lowers the callee body in the caller's own draft (a caller-owned
-lexical specialization or an eager iterator completion) still replays them,
-because that replay is the body's own relation production.
+callers supply no evidence has a closed interface: its checked root is the
+complete answer to every request for it, and its relation table relates only
+cells private to its own body. Requesters relate the request to that root and
+stop. A dependency edge to a closed template keeps the exact-address memo below,
+but its expansion instantiates only the root, and a deferred request replays
+nothing. A caller's specialization work therefore never grows with the bodies
+of its closed callees, and transitive replay is bounded by the open templates
+it actually reaches. A request that lowers the callee body in the caller's own
+draft (a caller-owned lexical specialization or an eager iterator completion)
+still replays them, because that replay is the body's own relation production.
 
 Repeated open dependency requests are memoized by the complete procedure
 family (template, method scope, and checked source-function key), exact evidence
