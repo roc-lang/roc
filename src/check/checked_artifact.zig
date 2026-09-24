@@ -1691,8 +1691,11 @@ fn verifyCompileTimeRequestsScheduled(
 /// already checked at the application, so they count as concrete).
 const ConcreteRootWalk = enum { value_graph, decl_template };
 
-/// Where in the type the walk currently stands. A `.row_extension` is the tail
-/// of a record or tag union; every other position is a `.value` position.
+/// Where in the type the walk currently stands. A `.record_extension` or
+/// `.tag_union_extension` is the tail of a record or tag union; every other
+/// position is a `.value` position. The two tails are kept apart because each
+/// seals to its own empty row, and a variable's recorded `row_default` must
+/// name the one its position needs.
 ///
 /// The distinction exists because an unbound row tail has one runtime
 /// representation the whole compiler already agrees on and an unbound value
@@ -1714,7 +1717,7 @@ const ConcreteRootWalk = enum { value_graph, decl_template };
 /// src/check/Check.zig) keeps the stricter rule on purpose: it decides whether
 /// a sub-expression becomes a root at all, and admitting an unbound tail there
 /// would hoist expressions that are not hoisted today. See its doc comment.
-const ConcreteRootPosition = enum { value, row_extension };
+const ConcreteRootPosition = enum { value, record_extension, tag_union_extension };
 
 fn checkedTypeIsConcreteCompileTimeRoot(
     allocator: Allocator,
@@ -1727,12 +1730,19 @@ fn checkedTypeIsConcreteCompileTimeRoot(
     return try checkedTypeIsConcreteCompileTimeRootInner(.value_graph, .value, checked_types, root, quantified_row, &active);
 }
 
-/// Whether this published variable is an undecided row tail that Monotype will
-/// seal to the empty row. A variable carrying static-dispatch constraints has
-/// an undecided method table rather than an undecided row, and a numeric
-/// defaulting phase is a value default, so neither is sealable here.
-fn checkedTypeVariableSealsToCanonicalRow(variable: CheckedTypeVariable) bool {
-    return variable.constraints.len == 0 and variable.numeric_default_phase == null;
+/// Whether this published variable, standing at `position`, is an undecided
+/// row tail that Monotype will seal to that position's empty row. The sealing
+/// rule itself is `CheckedTypePayload.variableSealsToRowDefault`, shared with
+/// Monotype's sealed-cell guard so the two cannot drift; this adds only that
+/// the recorded default is the empty row of the tail the variable stands in.
+fn checkedTypeVariableSealsToCanonicalRow(variable: CheckedTypeVariable, position: ConcreteRootPosition) bool {
+    const expected: RowDefault = switch (position) {
+        .value => return false,
+        .record_extension => .empty_record,
+        .tag_union_extension => .empty_tag_union,
+    };
+    if (!(CheckedTypePayload{ .flex = variable }).variableSealsToRowDefault()) return false;
+    return variable.row_default.? == expected;
 }
 
 fn checkedTypeIsConcreteCompileTimeRootInner(
@@ -1758,8 +1768,7 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
         // adds nothing to it, so the root is concrete AT ITS SEALED ROW. The
         // caller records that so the stored representation can say so.
         .flex => |variable| blk: {
-            if (position != .row_extension) break :blk false;
-            if (!checkedTypeVariableSealsToCanonicalRow(variable)) break :blk false;
+            if (!checkedTypeVariableSealsToCanonicalRow(variable, position)) break :blk false;
             quantified_row.* = true;
             break :blk true;
         },
@@ -1770,7 +1779,7 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
         .alias => |alias| (try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, alias.args, quantified_row, active)) and
             try checkedTypeIsConcreteCompileTimeRootInner(walk, position, checked_types, alias.backing, quantified_row, active),
         .record => |record| (try checkedFieldTypesAreConcreteCompileTimeRoots(walk, checked_types, record.fields, quantified_row, active)) and
-            try checkedTypeIsConcreteCompileTimeRootInner(walk, .row_extension, checked_types, record.ext, quantified_row, active),
+            try checkedTypeIsConcreteCompileTimeRootInner(walk, .record_extension, checked_types, record.ext, quantified_row, active),
         .tuple => |items| checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, items, quantified_row, active),
         .nominal => |nominal| blk: {
             if (!try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, nominal.args, quantified_row, active)) break :blk false;
@@ -1811,7 +1820,7 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
         .function => |function| (try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, function.args, quantified_row, active)) and
             try checkedTypeIsConcreteCompileTimeRootInner(walk, .value, checked_types, function.ret, quantified_row, active),
         .tag_union => |tag_union| (try checkedTagsAreConcreteCompileTimeRoots(walk, checked_types, tag_union.tags, quantified_row, active)) and
-            try checkedTypeIsConcreteCompileTimeRootInner(walk, .row_extension, checked_types, tag_union.ext, quantified_row, active),
+            try checkedTypeIsConcreteCompileTimeRootInner(walk, .tag_union_extension, checked_types, tag_union.ext, quantified_row, active),
     };
 }
 
@@ -1869,7 +1878,7 @@ test "compile-time roots accept a quantified row extension and report it" {
     defer store.deinit(allocator);
 
     const ext: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
-    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .flex = .{} }));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .flex = .{ .row_default = .empty_tag_union } }));
 
     const tags = try allocator.alloc(CheckedTagBuild, 1);
     tags[0] = .{ .name = testIndexId(canonical.TagLabelId, 3) };
@@ -1894,6 +1903,45 @@ test "compile-time roots accept a quantified row extension and report it" {
     var value_quantified_row = false;
     try std.testing.expect(!try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, value_position, &value_quantified_row));
     try std.testing.expect(!value_quantified_row);
+}
+
+test "compile-time roots reject a row extension whose default is missing or names the other row" {
+    const allocator = std.testing.allocator;
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    // No recorded default: Monotype has no explicit row to seal it to.
+    const undefaulted: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .flex = .{} }));
+    const tags = try allocator.alloc(CheckedTagBuild, 1);
+    tags[0] = .{ .name = testIndexId(canonical.TagLabelId, 3) };
+    const tag_row: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .tag_union = .{
+        .tags = tags,
+        .ext = undefaulted,
+    } }));
+
+    var quantified_row = false;
+    try std.testing.expect(!try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, tag_row, &quantified_row));
+    try std.testing.expect(!quantified_row);
+
+    // A record tail whose default is the empty TAG UNION seals to the wrong row.
+    const leaf: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .empty_record));
+    const mismatched: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .flex = .{ .row_default = .empty_tag_union } }));
+    const fields = try allocator.alloc(CheckedRecordField, 1);
+    fields[0] = .{
+        .name = testIndexId(canonical.RecordFieldLabelId, 7),
+        .ty = leaf,
+        .kind = .undetermined(leaf),
+    };
+    const record_row: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .record = .{ .fields = fields, .ext = mismatched } }));
+
+    var record_quantified_row = false;
+    try std.testing.expect(!try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, record_row, &record_quantified_row));
+    try std.testing.expect(!record_quantified_row);
 }
 
 test "compile-time data roots with reachable callables require producer type evidence" {
@@ -27181,7 +27229,7 @@ pub const CompileTimeRootRequestEligibility = enum(u8) {
 /// value is the representation every use asks for.
 ///
 /// `sealed_row`: the solved type leaves at least one row extension unbound
-/// (`ConcreteRootPosition.row_extension`), so the value was evaluated with
+/// (`ConcreteRootPosition.record_extension` / `.tag_union_extension`), so the value was evaluated with
 /// each such tail sealed to the empty row. A use that instantiates one of
 /// those rows differently does not share that representation, and lowering
 /// gives it the root's eval template instead

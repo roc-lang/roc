@@ -7516,7 +7516,8 @@ fn instantiateVarPolarized(
 
 /// Record alias markers an annotation-position instantiation resolved open,
 /// so the post-body audit covers rows opened through an alias exactly like
-/// rows opened directly in the annotation.
+/// rows opened directly in the annotation, and row subsumption coerces one
+/// exactly where it would coerce the inline spelling (`ResultRowSite`).
 fn recordOpenedMarkerExts(self: *Self, opened: []const Instantiator.OpenedMarkerExt, region_behavior: InstantiateRegionBehavior) std.mem.Allocator.Error!void {
     if (opened.len == 0) return;
     const region = switch (region_behavior) {
@@ -7530,6 +7531,11 @@ fn recordOpenedMarkerExts(self: *Self, opened: []const Instantiator.OpenedMarker
             .region = region,
             .listed_tags = marker.listed_tags,
             .union_var = marker.union_var,
+            .result_row = switch (marker.reach) {
+                .result => .direct,
+                .try_row => .try_error_row,
+                .nested => .none,
+            },
         });
     }
 }
@@ -14608,15 +14614,15 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
             env,
         );
 
-        // A value binding whose implicitly opened rows were NOT quantified is
-        // the residue of the syntactic pre-test
-        // (`annotationOpensValueRow`): generation minted an extension the
-        // pre-test did not predict, so no rank was pushed and the extension
-        // joined no scheme. Record it so
-        // `groundUnquantifiedValueImplicitOpenExts` can close it once the
-        // module solves. The recorded range is deliberately over-inclusive:
-        // an extension that did join a scheme is skipped there by its rank.
-        if (!generalizes_regardless and !self.isGeneralizableValueBinding(annotation_idx, true, true)) {
+        // Every value binding's implicitly opened rows are recorded, whatever
+        // the syntactic pre-test (`annotationOpensValueRow`) predicted, so
+        // `groundUnquantifiedValueImplicitOpenExts` can close the ones that
+        // did not end up quantified once the module solves. The pre-test is
+        // not the filter: an extension it approved can still fail to quantify
+        // when the body unifies it with an outer-rank row, and an extension it
+        // did not predict joins no scheme at all. What actually decides is
+        // the extension's rank, read there after solving.
+        if (!generalizes_regardless) {
             if (self.annotation_implicit_open_exts.get(annotation_idx)) |range| {
                 if (range.len > 0) try self.unquantified_value_implicit_open_ext_ranges.append(self.gpa, range);
             }
@@ -14634,7 +14640,17 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         // binding's callee is a `.local_proc` dispatch target with no procedure
         // template (`lower.AdapterReachability.no_adapter`), so neither can
         // reach the widening adapter that serves a widened use.
-        if (def_is_function) {
+        //
+        // Restricted, too, to signatures with no `where` clause. A use whose
+        // static-dispatch evidence resolves to a local procedure is lowered as
+        // a caller-owned specialization (`local_context_dependent` in
+        // `lower.zig`), which is completed inline at its declared interface and
+        // never mints an adapter. Evidence exists only for a `where` clause, so
+        // without one every use is adapter-reachable. With one, the coercion
+        // would open a row a use could widen and lowering could not serve, so
+        // the definition keeps closing by body and such a widening is an
+        // ordinary mismatch (design.md "Row Subsumption", "What remains").
+        if (def_is_function and self.cir.store.getAnnotation(annotation_idx).where == null) {
             const site = self.annotationResultRowCoercedSite(annotation_idx);
             if (site != .none) {
                 try self.cir.recordResultRowCoercion(ModuleEnv.nodeIdxFrom(def_idx), site == .try_error_row);
@@ -16874,8 +16890,15 @@ const GenTypeAnnoCtx = union(enum) {
         return switch (self) {
             .annotation => |anno_ctx| switch (anno_ctx.adapter_reach) {
                 // A declaration standing as the whole where-method signature
-                // is walked by the instantiator from its direct result.
-                .signature, .result => .result,
+                // is walked by the instantiator from its direct result. A bare
+                // VALUE annotation has no call boundary to adapt at, so the
+                // declaration it names contributes no result row; this is the
+                // `.signature => .none` of the inline walk's `ResultRowSite`.
+                .signature => switch (anno_ctx.opening) {
+                    .per_use => .result,
+                    .implicit_open, .as_written => .nested,
+                },
+                .result => .result,
                 .try_row => .try_row,
                 .nested => .nested,
             },
@@ -17673,10 +17696,13 @@ fn reportImplicitOpenExtExtension(
 /// of a value binding that did NOT generalize (design.md "Three Syntactic
 /// Walks"). This is a BACKSTOP, not the rule: an annotated value binding that
 /// mints such an extension generalizes, so the extension is quantified and
-/// skipped here by its rank. What reaches this loop is the residue of the
-/// syntactic pre-test, whose one known gap is an IMPORTED alias whose body is
-/// a bare row—the pre-test cannot read another module's CIR. A sweep of every
-/// `.roc` file in the tree found no program that reaches it.
+/// skipped here by its rank. Every value binding's range is recorded and the
+/// rank is the only filter, so what reaches the grounding below is exactly
+/// what did not quantify: an extension the pre-test approved whose body
+/// unified it with an outer-rank row (`x = if c e else Boom` with `e` a
+/// top-level weak value). The pre-test itself no longer has a module-boundary
+/// gap, because an imported declaration's row-opening answer is published
+/// (`TypeDeclVariance.opensRowAt`).
 ///
 /// Grounding is what the gap needs. An extension left bare-flex in the
 /// published type is copied by `copy_import.zig` with `rank = .generalized`,
@@ -17689,13 +17715,8 @@ fn reportImplicitOpenExtExtension(
 /// quantified variable after it has been instantiated would desync the scheme
 /// from its uses.
 ///
-/// This pass is RETIRABLE, not permanent. Recording a per-declaration metadata
-/// entry an importer reads—the same entry that would let
-/// `applyFormalVariances` and `applyTryErrorArgIndex` answer for an
-/// `.external` base instead of declining—gives `annotationOpensValueRow` the
-/// capability it is missing, at which point `.external` can be answered
-/// properly and this residue shrinks to nothing. Make that change before
-/// deleting this.
+/// The pass is permanent for that reason: whether a row quantifies depends on
+/// what the body unifies it with, which no syntactic walk can see.
 ///
 /// Every entry point runs this AFTER `runLateImplicitOpenExtAudit`, for the
 /// reason stated there: grounding an extension empties it, and the late audit
@@ -17749,23 +17770,32 @@ const ImportedDeclRef = union(enum) {
 };
 
 /// The declaring module's recorded answers for the declaration an external type
-/// reference names, or null when there are none.
+/// reference names, or null when the reference's import did not resolve (a
+/// failure already reported where the import is diagnosed).
 ///
 /// The record is written by the declaring module's own `Check`
 /// (`recordTypeDeclVariances`), which is the only place a declaration's own
-/// annotation can be read. Absence is the conservative answer everywhere it is
-/// consulted, so an unresolved import, a stale import index, and a declaration
-/// the producer's walk could not answer all fall through the same `orelse`.
+/// annotation can be read, and it writes one for every alias and nominal
+/// declaration. A resolved reference whose module or record is missing is
+/// therefore a broken invariant rather than an unknown answer.
 fn importedTypeDeclVariance(self: *const Self, ref: ImportedDeclRef) ?ModuleEnv.TypeDeclVariance {
-    return switch (ref) {
+    const env: *const ModuleEnv, const target_node_idx: u32 = switch (ref) {
         .external => |ext| blk: {
-            const module_idx = self.cir.imports.getResolvedModule(ext.module_idx) orelse break :blk null;
-            if (module_idx >= self.imported_modules.len) break :blk null;
-            break :blk self.imported_modules[module_idx].typeDeclVarianceForNode(ext.target_node_idx);
+            const module_idx = self.cir.imports.getResolvedModule(ext.module_idx) orelse return null;
+            if (module_idx >= self.imported_modules.len) {
+                std.debug.panic("type checker invariant violated: resolved import {d} is outside the imported modules ({d})", .{
+                    module_idx,
+                    self.imported_modules.len,
+                });
+            }
+            break :blk .{ self.imported_modules[module_idx], ext.target_node_idx };
         },
-        .external_identity => |ext| self.moduleEnvForIdentity(self.cir, ext.module_identity).env
-            .typeDeclVarianceForNode(ext.target_node_idx),
+        .external_identity => |ext| .{ self.moduleEnvForIdentity(self.cir, ext.module_identity).env, ext.target_node_idx },
     };
+    return env.typeDeclVarianceForNode(target_node_idx) orelse std.debug.panic(
+        "type checker invariant violated: module '{s}' published no declaration record for type node {d}",
+        .{ env.module_name, target_node_idx },
+    );
 }
 
 /// Whether this type application is the builtin `Try(ok, err)`. A `Try`
@@ -17850,12 +17880,11 @@ fn applyTryErrorArgIndex(self: *const Self, apply: CIR.TypeAnno.Apply) ?usize {
 /// Which of the IMPORTED declaration's own formals reaches the builtin `Try`'s
 /// error cell, for a reference that passes it `formal_count` arguments.
 ///
-/// Absence of a record, a record that declined that axis, and a record
-/// describing a declaration of some other arity are one answer: null, the
-/// conservative one. The arity check is the stale-index safety - a wrong
-/// `target_node_idx` can only land on another declaration's entry, and an entry
-/// for a different arity declines rather than naming a formal this reference
-/// does not have.
+/// An unresolved import, a record that declined that axis, and a reference
+/// whose argument count differs from the declaration's arity are one answer:
+/// null, the conservative one. The arity mismatch is a user error reported
+/// where the reference is generated; declining keeps this walk from naming a
+/// formal the reference does not have.
 fn importedTryErrorFormalIndex(self: *const Self, ref: ImportedDeclRef, formal_count: usize) ?usize {
     const record = self.importedTypeDeclVariance(ref) orelse return null;
     if (record.try_error_formal == ModuleEnv.TypeDeclVariance.no_try_error_formal) return null;
@@ -18172,9 +18201,10 @@ const ApplyDeclKnowledge = union(enum) {
     /// ceasing to bound the caller.
     ///
     /// What still lands here now that declarations publish their variances: an
-    /// unresolved or stale import, a `.pending` base (which carries a type
-    /// name, not a node index, so it can never key a record), and a
-    /// declaration whose producer's own walk could not answer: an arity past
+    /// unresolved import, a `.pending` base (which carries a type name, not a
+    /// node index, so it can never key a record), a reference whose argument
+    /// count differs from the declaration's arity, and a declaration whose
+    /// producer's own walk could not answer: an arity past
     /// `max_tracked_alias_formals`, a declaration cycle, or an exhausted walk.
     unknown,
 };
@@ -18218,10 +18248,12 @@ fn importedApplyDeclKnowledge(self: *const Self, ref: ImportedDeclRef, apply: CI
 /// Whether `record` answers the variance axis for a reference with `args_len`
 /// arguments.
 ///
-/// The arity check is the stale-index safety: a wrong `target_node_idx` can
-/// only land on some other declaration's entry, and a mismatched arity makes
-/// that entry decline rather than answer for formals it does not have. It is
-/// the same check the local walk applies to itself in `applyFormalVariances`.
+/// The arity check covers a reference whose argument count differs from the
+/// declaration's, a user error reported where the reference is generated:
+/// the record then declines rather than answer for formals the reference does
+/// not have. It is the same check the local walk applies to itself in
+/// `applyFormalVariances`. The record itself is keyed by the exact
+/// declaration node, so it always describes the declaration referenced.
 fn recordAnswersFormalVariances(record: ModuleEnv.TypeDeclVariance, args_len: usize) bool {
     return record.variancesKnown() and
         record.formal_count <= max_tracked_alias_formals and
@@ -18243,15 +18275,14 @@ fn uniformFormalVariances(
 
 /// One recorded variance byte as a `FormalVariance`.
 ///
-/// Matched against the enum's own fields rather than converted, because the
-/// byte arrives from another module's serialized data where a value outside
-/// the enum is corruption rather than a bug in this file. `.invariant` is the
-/// answer that stays conservative if one ever appears.
+/// Matched against the enum's own fields rather than converted, so a byte
+/// outside the enum—serialized data that no `Check` wrote—stops the build as a
+/// broken invariant instead of being read as some variance.
 fn formalVarianceFromRecordByte(raw: u8) FormalVariance {
     inline for (@typeInfo(FormalVariance).@"enum".fields) |field| {
         if (raw == field.value) return @field(FormalVariance, field.name);
     }
-    return .invariant;
+    std.debug.panic("type checker invariant violated: a published formal variance byte {d} names no variance", .{raw});
 }
 
 /// Copy a declaring module's recorded formal variances into `out` and return
@@ -18592,9 +18623,11 @@ fn recordTypeDeclVariances(self: *Self) std.mem.Allocator.Error!void {
     }
 }
 
-/// Record one declaration's answers, if either walk answered. A declaration
-/// with no entry reads as unknown, which is every consumer's existing
-/// conservative answer, so declining to record is always safe.
+/// Record one declaration's answers. Every alias and nominal declaration gets an
+/// entry, because whether its body opens a row (`declOpensRow`) is always
+/// answered; the variance and `Try` axes are answered only within the tracked
+/// arity, and an unanswered axis reads as unknown, which is every consumer's
+/// existing conservative answer.
 fn recordOneTypeDeclVariance(self: *Self, decl_idx: CIR.Statement.Idx) std.mem.Allocator.Error!void {
     const header = switch (self.cir.store.getStatement(decl_idx)) {
         .s_alias_decl => |decl| decl.header,
@@ -18622,18 +18655,29 @@ fn recordOneTypeDeclVariance(self: *Self, decl_idx: CIR.Statement.Idx) std.mem.A
     };
 
     const formal_count = self.cir.store.sliceTypeAnnos(self.cir.store.getTypeHeader(header).args).len;
-    // A reference to a zero-arity declaration has no arguments at all, so both
-    // consumers' loops have no iterations and an absent entry is provably the
-    // same answer as a present one. Past the tracked arity neither walk answers.
-    if (formal_count == 0 or formal_count > max_tracked_alias_formals) return;
+    const tracked_arity = formal_count <= max_tracked_alias_formals;
 
     var entry = ModuleEnv.TypeDeclVariance{
         .node_idx = @intFromEnum(decl_idx),
-        .formal_count = @intCast(formal_count),
+        .formal_count = if (tracked_arity) @intCast(formal_count) else 0,
         .flags = 0,
         .try_error_formal = ModuleEnv.TypeDeclVariance.no_try_error_formal,
         .formal_variances = [_]u8{@intFromEnum(FormalVariance.unused)} ** max_tracked_alias_formals,
     };
+
+    // The declaration's own answer to `declOpensRow`, at both polarities, so an
+    // importer's syntactic pre-test predicts exactly the extensions generation
+    // mints from an imported declaration, as it does for a local one. This
+    // axis is independent of arity: a zero-arity alias's body is the common
+    // case (`Color : [Red, Green]`).
+    const local_base = CIR.TypeAnno.LocalOrExternal{ .local = .{ .decl_idx = decl_idx } };
+    if (self.declOpensRow(local_base, .pos, 0)) entry.flags |= ModuleEnv.TypeDeclVariance.opens_row_pos_flag;
+    if (self.declOpensRow(local_base, .neg, 0)) entry.flags |= ModuleEnv.TypeDeclVariance.opens_row_neg_flag;
+
+    if (!tracked_arity) {
+        try self.cir.recordTypeDeclVariance(entry);
+        return;
+    }
 
     // A FRESH walk, deliberately: the per-reference walk carries the enclosing
     // reference's `open_decls` and its remaining fuel, so it can legitimately
@@ -18662,8 +18706,6 @@ fn recordOneTypeDeclVariance(self: *Self, decl_idx: CIR.Statement.Idx) std.mem.A
         entry.try_error_formal = @intCast(formal_index);
     }
 
-    const answered_try_axis = entry.try_error_formal != ModuleEnv.TypeDeclVariance.no_try_error_formal;
-    if (!entry.variancesKnown() and !answered_try_axis) return;
     try self.cir.recordTypeDeclVariance(entry);
 }
 
@@ -19273,16 +19315,20 @@ fn anyAnnoOpensRow(
 /// instantiating anything, and a `.pending` reference is poisoned before it
 /// generates.
 ///
-/// `.external` and `.external_identity` are the positions this walk cannot
-/// read: the declaration's CIR lives in another module's stores, the same wall
-/// `ApplyDeclKnowledge.unknown` stops at. It answers NO rather than
-/// conservatively YES, and the reason is measured rather than argued: YES here
-/// makes every `r : Str` in a test module generalize, because a Builtin type
-/// reaches an ordinary module as an `.external`, and that moved verdicts in
-/// tests with no row in them at all. An imported alias whose body is a bare row
-/// is therefore the one shape whose extension this walk can still miss; the
-/// backstop below (`groundUnquantifiedValueImplicitOpenExts`) closes it, and a
-/// corpus sweep of every `.roc` file found no program that reaches it.
+/// `.external` and `.external_identity` name a declaration whose CIR lives in
+/// another module, so this walk reads the answer that module's own `Check`
+/// published instead (`TypeDeclVariance.opensRowAt`, written by
+/// `recordOneTypeDeclVariance` from this same walk over the local declaration).
+/// A Builtin nominal such as `Str` answers NO from its record exactly as a
+/// local nominal does, so no blanket answer for imports is needed.
+/// `declOpensRow` for a declaration another module owns: its producer's
+/// published answer. Every alias and nominal declaration has a record, so a
+/// missing one means the reference does not name a type declaration.
+fn importedDeclOpensRow(self: *const Self, ref: ImportedDeclRef, polarity: Polarity) bool {
+    const record = self.importedTypeDeclVariance(ref) orelse return false;
+    return record.opensRowAt(polarity == .pos);
+}
+
 fn declOpensRow(
     self: *const Self,
     decl_base: CIR.TypeAnno.LocalOrExternal,
@@ -19290,7 +19336,9 @@ fn declOpensRow(
     decl_depth: usize,
 ) bool {
     return switch (decl_base) {
-        .builtin, .pending, .external, .external_identity => false,
+        .builtin, .pending => false,
+        .external => |ext| self.importedDeclOpensRow(.{ .external = ext }, polarity),
+        .external_identity => |ext| self.importedDeclOpensRow(.{ .external_identity = ext }, polarity),
         // Only an ALIAS body carries polarity markers. A nominal body closes
         // as written, and nothing else is a type declaration at all. Listed
         // exhaustively rather than with an `else`, so a new statement kind is

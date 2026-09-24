@@ -242,7 +242,12 @@ pub const Constants = struct {
     ///      closed value publish that fact, which every use—importing modules
     ///      included—reads to re-open its own copy of the row (design.md
     ///      "Row Subsumption").
-    pub const CACHE_VERSION = 109;
+    /// 110: Every alias and nominal declaration publishes whether its body
+    ///      opens a row at a positive or negative position; a result row named
+    ///      through an alias records its adapter-reachable site; a signature
+    ///      with a `where` clause publishes no row coercion; and a value
+    ///      binding's unquantified implicitly opened rows are grounded by rank.
+    pub const CACHE_VERSION = 110;
 };
 
 /// Configuration for the Roc cache system.

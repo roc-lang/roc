@@ -473,6 +473,12 @@ pub const Instantiator = struct {
         /// consumer that needs to find the solved row again has to hold the
         /// union rather than its extension.
         union_var: ?Var = null,
+        /// Where the union this marker extends stood relative to the row the
+        /// result-row widening adapter can re-tag, at the moment the marker
+        /// opened. The consumer maps it to the same result-row site an
+        /// inline row at that position records, so a row opened through an
+        /// alias is coercible exactly where the inline spelling is.
+        reach: AdapterReachPosition,
     };
 
     const Self = @This();
@@ -792,7 +798,10 @@ pub const Instantiator = struct {
                         };
                         const marker_var = try self.store.freshFromContentWithRank(marker_content, self.current_rank);
                         if (opened) {
-                            if (self.opened_marker_exts) |sink| try sink.append(self.store.gpa, .{ .ext = marker_var });
+                            if (self.opened_marker_exts) |sink| try sink.append(self.store.gpa, .{
+                                .ext = marker_var,
+                                .reach = self.current_reach,
+                            });
                         }
                         try self.var_map.put(resolved_var, marker_var);
                         try machine.value_stack.append(self.store.gpa, marker_var);

@@ -3821,6 +3821,19 @@ function at the use's type, so only an `exact` root is read that way; a use of
 a `sealed_row` root lowers the eval template at its own type, and no use can
 make the root evaluate at a row other than its sealed one.
 
+Boxy has no instantiation graph, so it cannot tell whether a use asks for the
+sealed row, and it always lowers the eval template of a `sealed_row` root. This
+is a runtime cost, not a behaviour change, and it is not confined to values
+written with `..`: an annotated top-level value whose output-position row is
+quantified (see "Polarity") is a `sealed_row` root too, so under boxy
+`table : List([A, B])` re-runs its body at every use rather than being read
+once. The stored value cannot simply serve every use instead: boxy's
+representation boundary does not re-tag a stored tag value into a wider row,
+and restoring the sealed-row value at a widened use fails at run time. Removing
+the cost needs boxy to compare a use's requested checked type against the
+stored root type structurally, in both its plan and its lowering, and take the
+stored value on a match.
+
 One constant per instantiation is not expressible: the decision is made for one
 module with no importer in view, and `copy_import` stamps every imported
 descriptor generalized, so a defining module can never bound the set of rows
@@ -6878,11 +6891,12 @@ toward the closed row, which is the direction where the annotation keeps
 bounding and a rejected program is the worst outcome.
 
 The generalization walk stops at a declaration chain past
-`max_value_row_decl_depth`, where it answers by polarity alone, and at the same
-module boundary—where it answers NO, the opposite direction from its other
-stops. That asymmetry is measured rather than reasoned: answering yes for an
+`max_value_row_decl_depth`, where it answers by polarity alone. At the module
+boundary it reads the declaring module's recorded answer instead of choosing
+a blanket one, and both blanket answers have been tried: YES for every
 `.external` base made every `r : Str` generalize and moved dispatch verdicts
-in modules holding no tag row at all.
+in modules holding no tag row at all, and NO missed every imported alias whose
+body is a bare row.
 
 That is worth stating as its own trap, because it has now bitten this axis
 twice from opposite directions: A BUILTIN TYPE REACHES AN ORDINARY MODULE AS
@@ -6896,21 +6910,23 @@ vocabulary into value generalization. Neither blanket answer is available, and
 a walk that reaches this boundary has to say which of the two it is choosing
 and why.
 
-The cost of answering NO is that an imported ALIAS whose body is a bare row
-can still mint an extension this walk does not see, and
-`Check.groundUnquantifiedValueImplicitOpenExts` is the backstop that closes
-exactly that residue: a value binding that did not generalize and still holds
-an open extension after the module solves has it grounded to `[]`, which is
-what the whole value rule used to do. A sweep of every `.roc` file in the tree
-found no program that reaches it.
+`Check.groundUnquantifiedValueImplicitOpenExts` is the backstop for an
+extension the walk predicted wrongly: a value binding's implicitly opened
+extension that did not quantify and is still open after the module solves is
+grounded to `[]`, which is what the whole value rule used to do. The walk's prediction is not the
+filter. Every value binding's extensions are recorded and the solved rank
+decides, because an extension the walk approved can still fail to quantify:
+`x : [Boom]` whose body joins its row to a top-level weak value's row
+(`x = if c e else Boom` with `e = Boom`) is pinned at that value's rank, and
+left bare it would reach importers open and be quantified per use there.
 
-That backstop is expected to be RETIRABLE rather than permanent. Recording a
-per-declaration metadata entry an importer reads—the same entry that lets
-`applyFormalVariances` and `applyTryErrorArgIndex` answer for an `.external`
-base instead of declining—gives this walk the capability it is missing, at
-which point `.external` can be answered properly and the residue shrinks to
-nothing. That is the change to make before deleting the pass, and the reason
-the pass is still here.
+Imported aliases are no longer such a case: every alias and nominal
+declaration records whether its body opens a row at a positive or a negative
+position (`TypeDeclVariance.opensRowAt`, computed by the declaring module's own
+`declOpensRow`), zero-arity declarations included, so `c : Lib.Color` with
+`Color : [Red, Green]` is predicted exactly as the local spelling is. A
+rank-pinned row is not a gap in the walk at all, since whether a row
+quantifies depends on what the body unifies it with, so the backstop stays.
 
 The variance walk answers UNKNOWN variance by generating the argument, and
 everything beneath it, AS WRITTEN: no row under an unknown formal is
@@ -7054,9 +7070,22 @@ the copy would open the INPUT row, and a call at an unlisted tag would begin
 to typecheck. The copy therefore duplicates only the spine down to the row
 being re-opened.
 
+The row coerced is the one adapter-reachable result row of the signature
+(`ResultRowSite`: the direct result, or the error row of a `Try` standing
+there), whether the signature writes it inline or names it through an alias:
+an alias's markers record the same site the inline walk does, because lowering
+crosses alias layers when it adapts a result row, and a checker that opened
+fewer spellings than lowering adapts would make identical signatures behave
+differently.
+
 What remains: deleting the CHECKER half of Hosted Try Question Widening
-(below), the `test/cli` fixture this section asks for, and the residue for
-annotated VALUE bindings, whose rows are grounded rather than coerced.
+(below), the `test/cli` fixture this section asks for, the residue for
+annotated VALUE bindings, whose rows are grounded rather than coerced, and
+signatures with a `where` clause. Those are not coerced: a use whose `where`
+evidence resolves to a local procedure is lowered as a caller-owned
+specialization, completed inline at its declared interface with no adapter,
+so a coerced row it widened could be served by nothing. Extending the adapter
+to caller-owned specializations would lift that restriction.
 
 The argument for it is interchangeability. A signature is the whole of what a
 caller reads, so two definitions carrying identical annotations must be usable
@@ -7078,16 +7107,18 @@ for every CONSTRUCTING definition, so the coercion removes an inconsistency
 rather than creating one. `.as_written` exists, so the spelling stays cheap to
 add later if the dead branch turns out to matter.
 
-The change itself is at one unification: where a closed row meets an
-implicitly open annotated output row, coerce rather than bind. An incoming row
-whose tags are a subset of the listed tags coerces and leaves the extension
-open; an incoming row carrying unlisted tags binds as it does today, and
-`Check.auditImplicitOpenExts` reports it. The coercion's first instance is
-already built and running: the Result-Row Widening Adapter specializes a
-template at its own declared row and re-tags the result at the requested row.
-That adapter is wired to template completion for dispatch plans, so the one
-open question is whether a value coerced inside an ordinary body needs a
-re-tag it does not reach there.
+Stated as a rule, the coercion sits where a closed row meets an implicitly
+open annotated output row: a row whose tags are a subset of the listed tags
+coerces rather than binds, and a row carrying unlisted tags binds and is
+reported by `Check.auditImplicitOpenExts`. As implemented it is realized at the
+use, as described above: the body still binds its own row, the definition
+records that it did, and each use re-opens its copy. That is what keeps one
+narrow representation per definition, so the Result-Row Widening Adapter, which
+specializes a template at its declared row and re-tags the result at the
+requested row, serves every widened use. A value coerced inside an ordinary
+body is not a case: value bindings are quantified or grounded rather than
+coerced, and a local definition has no procedure template for an adapter to
+complete.
 
 Subsumption deletes the CHECKER half of Hosted Try Question Widening: the
 use-site redirect that widens a `?` condition, together with the guard that
@@ -7143,11 +7174,14 @@ importer with nothing quantified in the picture. Both halves are pinned by
 cross-module tests, including one asserting the importer does not thereby
 open the INPUT row.
 
-The acceptance bar is that no fixture is edited: a program this design says
-should typecheck must typecheck as written. The hosted instance already meets
-it (`test/fx-open/issue_9963_hosted_try_question_mark.roc`). No corpus program
+The acceptance bar is that a program this design says should typecheck must
+typecheck as written. The hosted instance meets it
+(`test/fx-open/issue_9963_hosted_try_question_mark.roc`). No corpus program
 spells a NON-hosted closed forwarder, so subsumption needs a fixture of its
-own.
+own. The widening fixtures are a separate matter: they need a CLOSED value to
+widen, and neither an annotated value (its row is quantified) nor a top-level
+forwarder (its row is coerced) produces one any more, so they read it out of a
+nominal field, whose body closes its rows as written.
 
 ### Hosted Try Question Widening
 
@@ -7157,10 +7191,10 @@ enclosing annotated return's row is open (a rigid extension), ordinary
 unification rejects the pair, and that mismatch is a type error by design: a
 closed error row is not widened into an open annotated row at use sites
 (issue #9798's program is rejected). Under polarity a non-hosted callee's
-annotated error row is itself implicitly open, but until row subsumption
-replaces closing-by-body (see Row Subsumption) a body that forwards
-a closed value still leaves the row closed, so the pairing is not confined to
-host rows.
+annotated error row is itself implicitly open, and row subsumption (see Row
+Subsumption) re-opens a forwarded closed row only at a use of a top-level
+function without a `where` clause, so the pairing is not confined to host
+rows.
 At a host boundary it is GUARANTEED: `..` is rejected there by rule, so a host
 error row is closed by declaration rather than by inference, and every hosted
 call whose caller wants a wider row meets it.
@@ -7391,7 +7425,7 @@ principal type needs the row inclusion `err ⊆ r` to survive generalization
 between two otherwise free row variables, which no equality-based scheme
 expresses; the checker collapses `r = err`, and a caller that re-tags the
 callback's errors then needs a recursive row. That is a bounded-row question
-for Deferred: Row Subsumption, not a defect of composition.
+for Row Subsumption's later stages, not a defect of composition.
 
 The `composed body preserves shared tagged callback errors` checker test pins
 a tail call whose tagged source row is also a wrapper payload.
@@ -9262,6 +9296,37 @@ Other solved-graph mutations:
   Accepted and rejected codec cases are pinned by
   `src/check/test/issue_11632_test.zig` and the polarity derivation tests in
   `src/check/test/type_checking_integration.zig`.
+- `groundUnquantifiedValueImplicitOpenExts`—policy: Polarity (above), the
+  backstop for a value binding's implicitly opened row. After the module
+  solves, every such extension of a value binding that is still an unbound,
+  unconstrained flex and did NOT quantify (its rank is not `.generalized`)
+  unifies with the empty tag union, so a row this module never decided to
+  quantify does not reach an importer bare and get quantified per use
+  (`copy_import` stamps an imported descriptor generalized). Every value
+  binding's range is recorded; the rank is the only filter. Pinned by
+  "check type - polarity - a value row the body tied to a weak row is
+  grounded, not left open" (rejected: the importer's widening of a row
+  `Lib` tied to a weak value) against "... an annotated value's opened row
+  is quantified" and "... an annotated value's verdict does not depend on
+  use order" (accepted: a quantified row is left alone).
+- Row subsumption: `annotationResultRowCoercedSite` →
+  `ModuleEnv.recordResultRowCoercion`, read back at every use by
+  `reopenCoercedResultRow`—policy: Row Subsumption (below). The probe reads
+  the solved annotated result row (a ground `[]` extension means the body
+  FORWARDED a closed value) and stamps module metadata that makes every use,
+  in this module and in importers, re-open its own copy of that one row.
+  Scoped to a top-level function with no `where` clause, at the one
+  adapter-reachable result row (`ResultRowSite`), whether written inline or
+  through an alias. Pinned in src/check/test/type_checking_integration.zig:
+  accepted—"a forwarded closed value still exposes an open row", "a
+  forwarded closed Try error row coerces", the two "... spelled through an
+  alias coerces" tests, "an imported forwarder's result row coerces at the
+  use"; rejected—"a forwarding body is still bounded by its annotation",
+  "coercion does not open an input row", "coercion does not reach a nested
+  result row", "coercion through an alias does not reach a nested row",
+  "coercion does not reach a local binding", "coercion does not reach a
+  signature with a where clause". The lowering side is pinned by the "row
+  subsumption ..." tests in src/eval/test/lir_inline_test.zig.
 - `closeRecordRowForDerivedParse` / `closeRecordRowForDerivedEncode`—policy:
   Derived Structural Codec Record-Row Closure (above). After derived codec
   dispatch reaches quiescence, a record inferred from use sites closes its
@@ -11544,10 +11609,20 @@ about them.
 Narrowing the interface digest can never merge two specializations that must
 stay apart, because every digest comparison on the reuse path is a PRE-FILTER
 in front of exact structural equality: a candidate must match on digest and
-then be confirmed by `typeEql` before it is reused. So the digest decides how
+then be confirmed by `typeEql` before it is reused. That includes the nominal
+backing walk's argument comparison (`sameNominalArgs`), which compares with
+`typeEql` rather than deciding on digests alone. So the digest decides how
 much work the lookup does, while exact equality decides what may be reused.
 A key that observes MORE than exact equality does not make reuse safer; it only
 splits procedures that were already allowed to be one.
+
+One of the three fields is still read downstream: `tag.checked_name` travels
+into LIR, and `solved_lir_lower` compares it in its own type equality. Merging
+two specializations that differ only in it is unobservable because every
+Monotype lowering site that builds a tag sets `checked_name` equal to `name`
+(`appendTags`, `instTags`, and the builtin-shaped constructions). A lowering
+site that set them apart would have to make the interface digest observe
+`checked_name` again, and bump the domain.
 
 That is not a hypothetical. The checked type store is hash-consed, but consing
 is skipped for any graph containing an identity variable, and a quantified row

@@ -17,17 +17,17 @@ load = |x| {
     Ok(s)
 }
 
-# `closed_value` is deliberately UNANNOTATED. An annotated value's implicitly
-# opened row is quantified now (design.md "Polarity"), so an annotation can no
-# longer produce a closed row at all. `closed` takes the row in an INPUT
-# position, where it is generated as written, and returns it, so its result row
-# is bound to `[]` by its own body: an input-position parameter is one of the
-# closed sources design.md names. `closed_value` is therefore still a top-level
-# constant whose row is closed, which is what this fixture needs.
-closed : Res([IoErr]) -> Res([IoErr])
-closed = |v| v
+# `closed_try` is deliberately UNANNOTATED, and its row is read out of a nominal
+# field. Neither an annotation nor a forwarding function can produce a closed
+# row any more: an annotated value's implicitly opened row is quantified
+# (design.md "Polarity"), and a top-level function that FORWARDS a closed value
+# has its result row coerced open again at every use (design.md "Row
+# Subsumption"). A nominal declaration's body closes its rows as written, so a
+# field of `Closed` is a closed source that no coercion reopens, and `closed_try`
+# is a top-level constant whose row is closed, which is what this fixture needs.
+Closed := { v : Res([IoErr]) }
 
-closed_try = closed(Ok("hit"))
+closed_try = Closed.{ v: Ok("hit") }.v
 
 Src := [S].{
     fetch : Src -> Res([IoErr])

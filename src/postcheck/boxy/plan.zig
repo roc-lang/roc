@@ -12188,9 +12188,10 @@ const Builder = struct {
                 // A sealed-row constant's stored value is its representation
                 // at one row only, and boxy has no instantiation graph to
                 // decide whether THIS use asks for that row, so it plans the
-                // retained eval template exactly as it did before such a root
-                // could be compile-time evaluated. `lower.zig` makes the same
-                // choice, so the planned worker is the one the body calls.
+                // retained eval template: the constant's body runs at each use
+                // (design.md "Roots Whose Row Tail Is Unbound"). `lower.zig`
+                // makes the same choice, so the planned worker is the one the
+                // body calls.
                 .stored_const => |stored| if (stored.other_row_template) |eval| {
                     eval_template = eval;
                 } else {

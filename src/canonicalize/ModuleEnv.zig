@@ -963,22 +963,29 @@ pub const max_tracked_alias_formals: usize = 8;
 /// A declaration's variance is a property of its own annotation, so the module
 /// that owns the annotation is the only place it can be decided; an importer
 /// holds that module's `ModuleEnv` but not its ident store's meaning, which is
-/// why the answer travels rather than the walk. Present only for declarations
-/// whose producer's walk ANSWERED: an absent entry means "unknown", which every
-/// consumer must read as its existing conservative answer rather than as a
-/// permissive one. The table is kept sorted by `node_idx` for allocation-free
-/// imported lookup, like `binding_schemes`.
+/// why the answer travels rather than the walk. Every alias and nominal
+/// declaration has an entry, because the row-opening bits are always answered;
+/// the variance and `Try` axes are answered only where their walks answered,
+/// and an unanswered axis must be read as its consumer's existing conservative
+/// answer rather than as a permissive one. The table is kept sorted by
+/// `node_idx` for allocation-free imported lookup, like `binding_schemes`.
 pub const TypeDeclVariance = extern struct {
     /// The declaration's CIR node index: a `CIR.Statement.Idx` widened, which
     /// is exactly the `target_node_idx` an external type reference carries.
     node_idx: u32,
-    /// The declaration header's arity. A reference whose argument count differs
-    /// is an arity error reported elsewhere; until then the positional
-    /// correspondence this record assumes does not hold, so consumers decline.
+    /// The declaration header's arity, or 0 past `max_tracked_alias_formals`,
+    /// where neither the variance nor the `Try` axis is answered. A reference
+    /// whose argument count differs is an arity error reported elsewhere; until
+    /// then the positional correspondence this record assumes does not hold, so
+    /// consumers decline.
     formal_count: u8,
     /// Bit 0 (`variances_known_flag`): the variance walk answered, so
     /// `formal_variances` is meaningful. The two axes have independent stop
     /// conditions, so one entry can be half-known.
+    /// Bits 1 and 2 (`opens_row_pos_flag`, `opens_row_neg_flag`): whether a
+    /// reference to this declaration standing at a positive or a negative
+    /// position mints an implicitly opened row from the declaration's own body
+    /// (the checker's `declOpensRow`). Always answered.
     flags: u8,
     /// Which of THIS declaration's own formals reaches the builtin `Try`'s
     /// ERROR cell across transparent alias layers, or `no_try_error_formal`.
@@ -996,6 +1003,17 @@ pub const TypeDeclVariance = extern struct {
 
     /// `flags` bit 0.
     pub const variances_known_flag: u8 = 1;
+    /// `flags` bit 1.
+    pub const opens_row_pos_flag: u8 = 2;
+    /// `flags` bit 2.
+    pub const opens_row_neg_flag: u8 = 4;
+
+    /// Whether a reference to this declaration at a position of the given
+    /// polarity mints an implicitly opened row from the declaration's body.
+    pub fn opensRowAt(self: @This(), positive: bool) bool {
+        const flag = if (positive) opens_row_pos_flag else opens_row_neg_flag;
+        return self.flags & flag != 0;
+    }
 
     /// Whether `formal_variances` is meaningful for this entry.
     pub fn variancesKnown(self: @This()) bool {

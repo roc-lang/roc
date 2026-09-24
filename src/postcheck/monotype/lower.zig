@@ -8372,7 +8372,7 @@ const Builder = struct {
             try seen.put(current, {});
             switch (type_store.get(current)) {
                 .named => |named| {
-                    if (named.kind != .alias and (!sameTypeDef(named.def, owner_def) or !self.sameNominalArgs(named.args, mono_args))) {
+                    if (named.kind != .alias and (!sameTypeDef(named.def, owner_def) or !try self.sameNominalArgs(named.args, mono_args))) {
                         return current;
                     }
                     const next = named.backing orelse return current;
@@ -8383,7 +8383,11 @@ const Builder = struct {
         }
     }
 
-    fn sameNominalArgs(self: *Builder, actual_span: Type.Span, expected: []const Type.TypeId) bool {
+    /// Whether two nominal argument lists are the same Monotypes. Decided by
+    /// exact equality (`typeEql`), the authority on reuse, rather than by
+    /// specialization digest, so the interface digest stays a pre-filter
+    /// everywhere (design.md "Digest Domains").
+    fn sameNominalArgs(self: *Builder, actual_span: Type.Span, expected: []const Type.TypeId) Allocator.Error!bool {
         const type_store = self.activeTypeStore();
         const name_store = self.activeNameStore();
         const actual = type_store.span(actual_span);
@@ -8391,9 +8395,7 @@ const Builder = struct {
         for (expected, 0..) |expected_ty, index| {
             const actual_ty = GuardedList.at(actual, index);
             if (actual_ty == expected_ty) continue;
-            const actual_digest = type_store.specializationDigest(name_store, actual_ty);
-            const expected_digest = type_store.specializationDigest(name_store, expected_ty);
-            if (!std.mem.eql(u8, actual_digest.bytes[0..], expected_digest.bytes[0..])) return false;
+            if (!try type_store.typeEql(name_store, actual_ty, expected_ty)) return false;
         }
         return true;
     }

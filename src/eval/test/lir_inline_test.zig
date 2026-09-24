@@ -9015,6 +9015,131 @@ test "row subsumption coerced definition is reached through a generated adapter"
     try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&constructing_lowered.mono));
 }
 
+/// Lower `source`, require exactly `expected_adapters` generated adapters, then
+/// run it and require `main` to be `True`. The adapter count proves which
+/// strategy served the widened use; running proves the re-tag is right, which
+/// the count alone cannot (a misordered injection still counts as one adapter).
+fn expectRowSubsumptionProgram(source: []const u8, expected_adapters: usize) TestError!void {
+    const allocator = std.testing.allocator;
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+    try std.testing.expectEqual(expected_adapters, checkedGeneratedFnCount(&lowered.mono));
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
+}
+
+test "row subsumption coerces a forwarded Try error row through a re-tagging adapter" {
+    // The `Try` error-row cell (`ResultRowSite.try_error_row`). `Gone` sorts
+    // before `NotFound`, so the declared row numbers `NotFound` 0 and the
+    // requested row numbers it 1: a missing or misordered re-tag reports
+    // `Gone` where `fwd` forwarded `NotFound`.
+    try expectRowSubsumptionProgram(
+        \\fwd : Try(Str, [NotFound]) -> Try(Str, [NotFound])
+        \\fwd = |t| t
+        \\
+        \\wider : Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])
+        \\wider = |t| fwd(t)
+        \\
+        \\show : Try(Str, [Gone, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(NotFound) => "NotFound" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Err(NotFound))) == "NotFound" and show(wider(Ok("x"))) == "Ok(x)"
+    , 1);
+}
+
+test "row subsumption coerces a forwarded row spelled through an alias" {
+    // The alias spelling of the direct result row. `Extra` sorts between `Err`
+    // and `Ok`, so a wrong re-tag shows up as a wrong discriminant.
+    try expectRowSubsumptionProgram(
+        \\Status : [Ok(Str), Err(Str)]
+        \\
+        \\fwd : Status -> Status
+        \\fwd = |s| s
+        \\
+        \\wider : Status -> [Ok(Str), Err(Str), Extra]
+        \\wider = |s| fwd(s)
+        \\
+        \\show : [Ok(Str), Err(Str), Extra] -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Ok("a"))) == "Ok(a)" and show(wider(Err("b"))) == "Err(b)"
+    , 1);
+}
+
+test "row subsumption coerces a forwarded Try error row spelled through an alias" {
+    try expectRowSubsumptionProgram(
+        \\IoResult(a) : Try(a, [NotFound])
+        \\
+        \\fwd : IoResult(Str) -> IoResult(Str)
+        \\fwd = |t| t
+        \\
+        \\wider : IoResult(Str) -> Try(Str, [Gone, NotFound])
+        \\wider = |t| fwd(t)
+        \\
+        \\show : Try(Str, [Gone, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(NotFound) => "NotFound" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Err(NotFound))) == "NotFound" and show(wider(Ok("x"))) == "Ok(x)"
+    , 1);
+}
+
+test "row subsumption coerces a generic forwarder" {
+    // A coerced definition that is also generalized over a type variable takes
+    // the checker's generalized instantiation branch rather than the
+    // monomorphic one; the widened use must still be served by an adapter.
+    try expectRowSubsumptionProgram(
+        \\pick : a, [A, B] -> [A, B]
+        \\pick = |_, t| t
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |t| pick("s", t)
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\main : Bool
+        \\main = show(wider(A)) == "A" and show(wider(B)) == "B"
+    , 1);
+}
+
+test "row subsumption coerces a forwarder passed as a value" {
+    // The coerced function is not called directly: it is passed to a
+    // higher-order function at the wider function type, so the widening is
+    // requested of the function VALUE.
+    try expectRowSubsumptionProgram(
+        \\id : [A, B] -> [A, B]
+        \\id = |x| x
+        \\
+        \\apply : ([A, B] -> [A, B, C]), [A, B] -> [A, B, C]
+        \\apply = |f, x| f(x)
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\main : Bool
+        \\main = show(apply(id, A)) == "A" and show(apply(id, B)) == "B"
+    , 1);
+}
+
 test "W6b widened closed where-method impl is reached through a generated adapter" {
     const allocator = std.testing.allocator;
     // `status` is published at the closed row `[Ok(Str), Err(Str)]` while
@@ -9028,10 +9153,9 @@ test "W6b widened closed where-method impl is reached through a generated adapte
         \\describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
         \\describe = |x| x.status()
         \\
-        \\closed : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]
-        \\closed = |v| v
+        \\Closed := { v : [Ok(Str), Err(Str)] }
         \\
-        \\closed_value = closed(Ok("cv"))
+        \\closed_value = Closed.{ v: Ok("cv") }.v
         \\
         \\Job := [Pending].{
         \\    status : Job -> [Ok(Str), Err(Str)]
@@ -9057,10 +9181,9 @@ test "W6b widened closed where-method impl is reached through a generated adapte
         \\describe : a -> [Ok(Str), Err(Str)] where [a.status : a -> [Ok(Str), Err(Str)]]
         \\describe = |x| x.status()
         \\
-        \\closed : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]
-        \\closed = |v| v
+        \\Closed := { v : [Ok(Str), Err(Str)] }
         \\
-        \\closed_value = closed(Ok("cv"))
+        \\closed_value = Closed.{ v: Ok("cv") }.v
         \\
         \\Job := [Pending].{
         \\    status : Job -> [Ok(Str), Err(Str)]
@@ -9094,10 +9217,9 @@ test "W6b question-widened closed Try impl is reached through a generated adapte
         \\    Ok(s)
         \\}
         \\
-        \\closed : Try(Str, [NotFound]) -> Try(Str, [NotFound])
-        \\closed = |v| v
+        \\Closed := { v : Try(Str, [NotFound]) }
         \\
-        \\closed_try = closed(Ok("hit"))
+        \\closed_try = Closed.{ v: Ok("hit") }.v
         \\
         \\Src := [S].{
         \\    fetch : Src -> Try(Str, [NotFound])
@@ -9127,12 +9249,11 @@ test "W6b closed impl reached through nested evidence is adapted" {
     // and only proves it computes the right answer; the adapter count is what
     // proves the mechanism.
     const source =
-        \\closed : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]
-        \\closed = |v| v
+        \\Closed := { v : [Ok(Str), Err(Str)] }
         \\
-        \\closed_ok = closed(Ok("ok"))
+        \\closed_ok = Closed.{ v: Ok("ok") }.v
         \\
-        \\closed_err = closed(Err("err"))
+        \\closed_err = Closed.{ v: Err("err") }.v
         \\
         \\Wrap(a) := [W(a)].{
         \\    status : Wrap(a) -> [Ok(Str), Err(Str)] where [a.name : a -> Str]
@@ -9224,12 +9345,11 @@ test "W6b direct-result widening adapter re-tags into the requested row at run t
     // can catch. (`Err` maps 0 to 0 and proves nothing on its own; it is here
     // so both constructors travel through the adapter.)
     const source =
-        \\closed : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]
-        \\closed = |v| v
+        \\Closed := { v : [Ok(Str), Err(Str)] }
         \\
-        \\closed_ok = closed(Ok("ok"))
+        \\closed_ok = Closed.{ v: Ok("ok") }.v
         \\
-        \\closed_err = closed(Err("bad"))
+        \\closed_err = Closed.{ v: Err("bad") }.v
         \\
         \\Job := [Pending, Failed].{
         \\    status : Job -> [Ok(Str), Err(Str)]
@@ -9285,12 +9405,11 @@ test "W6b Try error-row widening adapter re-tags into the requested row at run t
     // row numbers `Gone` 0 and `NotFound` 1, and a missing or misordered
     // injection reports `Gone` where the callee returned `NotFound`.
     const source =
-        \\closed : Try(Str, [NotFound]) -> Try(Str, [NotFound])
-        \\closed = |v| v
+        \\Closed := { v : Try(Str, [NotFound]) }
         \\
-        \\closed_hit = closed(Ok("hit"))
+        \\closed_hit = Closed.{ v: Ok("hit") }.v
         \\
-        \\closed_miss = closed(Err(NotFound))
+        \\closed_miss = Closed.{ v: Err(NotFound) }.v
         \\
         \\Src := [Found, Missing].{
         \\    fetch : Src -> Try(Str, [NotFound])
@@ -9355,12 +9474,11 @@ test "W6b alias-wrapped closed Try error row is adapted and re-tagged at run tim
     const source =
         \\IoResult(a) : Try(a, [NotFound])
         \\
-        \\closed : IoResult(Str) -> IoResult(Str)
-        \\closed = |v| v
+        \\Closed := { v : IoResult(Str) }
         \\
-        \\closed_hit = closed(Ok("hit"))
+        \\closed_hit = Closed.{ v: Ok("hit") }.v
         \\
-        \\closed_miss = closed(Err(NotFound))
+        \\closed_miss = Closed.{ v: Err(NotFound) }.v
         \\
         \\Src := [Found, Missing].{
         \\    fetch : Src -> IoResult(Str)

@@ -8963,7 +8963,7 @@ test "check type - polarity - a forwarded closed value keeps the annotated type"
     try checkTypesModule(source, .{ .pass = .last_def }, "[A, B] -> [A, B]");
 }
 
-test "check type - polarity - a forwarded closed value still publishes an open row" {
+test "check type - polarity - a forwarded closed value still exposes an open row" {
     // Row subsumption: the closed value COERCES into the annotated row instead
     // of binding it, so what a caller may do with `id`'s result no longer
     // depends on whether `id`'s body constructed its tags or forwarded them.
@@ -9033,6 +9033,113 @@ test "check type - polarity - coercion does not reach a local binding" {
         \\
         \\    wider(v)
         \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - coercion does not reach a signature with a where clause" {
+    // A use whose `where` evidence resolves to a LOCAL procedure (`Loc.get`
+    // here) is lowered as a caller-owned specialization that never mints an
+    // adapter, so a coerced row it widened could be served by nothing: the
+    // checker accepted this program and lowering then crashed with
+    // "instantiation widened a closed tag union". A `where` clause is the only
+    // source of that evidence, so such a signature keeps closing by body and
+    // the widening is an ordinary mismatch at the use.
+    const source =
+        \\fwd : a, [A, B] -> [A, B] where [a.get : a -> Str]
+        \\fwd = |x, t| {
+        \\    _s = x.get()
+        \\    t
+        \\}
+        \\
+        \\outer : {} -> [A, B, C]
+        \\outer = |_| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "loc"
+        \\    }
+        \\
+        \\    wider : Loc, [A, B] -> [A, B, C]
+        \\    wider = |l, t| fwd(l, t)
+        \\
+        \\    wider(Loc.L, B)
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - a where-free forwarder still coerces beside a where-constrained one" {
+    // The negative control for the restriction above: it keys on the `where`
+    // clause, not on the forwarding body, so the same forwarder without one
+    // still publishes a row its callers may widen.
+    const source =
+        \\fwd : Str, [A, B] -> [A, B]
+        \\fwd = |_, t| t
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |t| fwd("s", t)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A, B] -> [A, B, C]");
+}
+
+test "check type - polarity - a forwarded closed Try error row coerces" {
+    // The other adapter-reachable cell: the error row of a `Try` standing as
+    // the direct result. Forwarding a closed `Try` coerces that row exactly as
+    // forwarding a closed tag union coerces the direct result.
+    const source =
+        \\fwd : Try(Str, [NotFound]) -> Try(Str, [NotFound])
+        \\fwd = |t| t
+        \\
+        \\wider : Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])");
+}
+
+test "check type - polarity - a forwarded closed row spelled through an alias coerces" {
+    // The alias spelling of "a forwarded closed value still publishes an open
+    // row". Lowering crosses alias layers when it adapts a result row, so the
+    // checker must open the same set: `Status` names the very row the inline
+    // spelling writes, and `wider` is accepted for the same reason.
+    const source =
+        \\Status : [Ok(Str), Err(Str)]
+        \\
+        \\fwd : Status -> Status
+        \\fwd = |s| s
+        \\
+        \\wider : Status -> [Ok(Str), Err(Str), Extra]
+        \\wider = |s| fwd(s)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Status -> [Err(Str), Extra, Ok(Str)]");
+}
+
+test "check type - polarity - a forwarded Try error row spelled through an alias coerces" {
+    // The alias spelling of the `Try` error-row cell: `IoResult(Str)` is
+    // `Try(Str, [NotFound])`, and its error row is the adapter-reachable one.
+    const source =
+        \\IoResult(a) : Try(a, [NotFound])
+        \\
+        \\fwd : IoResult(Str) -> IoResult(Str)
+        \\fwd = |t| t
+        \\
+        \\wider : IoResult(Str) -> Try(Str, [Gone, NotFound])
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "IoResult(Str) -> Try(Str, [Gone, NotFound])");
+}
+
+test "check type - polarity - coercion through an alias does not reach a nested row" {
+    // The alias twin of "coercion does not reach a nested result row": the row
+    // `Statuses` holds sits inside a `List`, out of the adapter's reach, so it
+    // keeps closing by body even though the alias stands at the result.
+    const source =
+        \\Statuses : List([A, B])
+        \\
+        \\wrap : [A, B] -> Statuses
+        \\wrap = |x| [x]
+        \\
+        \\wider : [A, B] -> List([A, B, C])
+        \\wider = |x| wrap(x)
     ;
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
@@ -9509,10 +9616,9 @@ test "check type - polarity - an imported alias over Try opens its error row per
         \\    Ok(s)
         \\}
         \\
-        \\closed : Lib.Res([IoErr]) -> Lib.Res([IoErr])
-        \\closed = |v| v
+        \\Closed := { v : Lib.Res([IoErr]) }
         \\
-        \\closed_try = closed(Ok("hit"))
+        \\closed_try = Closed.{ v: Ok("hit") }.v
         \\
         \\Src := [S].{
         \\    fetch : Src -> Lib.Res([IoErr])
@@ -9551,10 +9657,9 @@ test "check type - polarity - an imported alias's Try ok row still rejects a wid
         \\describe : a -> Lib.OkRes([Red, Green, Blue]) where [a.status : a -> Lib.OkRes([Red, Green])]
         \\describe = |x| x.status()
         \\
-        \\closed : Lib.OkRes([Red, Green]) -> Lib.OkRes([Red, Green])
-        \\closed = |v| v
+        \\Closed := { v : Lib.OkRes([Red, Green]) }
         \\
-        \\closed_value = closed(Ok(Red))
+        \\closed_value = Closed.{ v: Ok(Red) }.v
         \\
         \\Job := [Pending].{
         \\    status : Job -> Lib.OkRes([Red, Green])
@@ -9771,6 +9876,92 @@ test "check type - polarity - an annotated value's verdict does not depend on us
         defer test_env.deinit();
         try test_env.assertNoErrors();
     }
+}
+
+test "check type - polarity - an imported alias on a value opens a quantified row" {
+    // The imported twin of "an annotated value's opened row is quantified".
+    // `Color` has no formals, and its body is a bare row, so the only way the
+    // importer's pre-test can know that `c : Lib.Color` mints an opened row is
+    // the declaration's own published answer. Without it the row was one weak
+    // variable shared by both uses, and `use_b` failed on `use_a`'s widening.
+    const source_lib =
+        \\module [Color]
+        \\
+        \\Color : [Red, Green]
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\c : Lib.Color
+        \\c = Red
+        \\
+        \\use_a : Str -> [A, Red, Green]
+        \\use_a = |_| c
+        \\
+        \\use_b : Str -> [B, Red, Green]
+        \\use_b = |_| c
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertNoErrors();
+}
+
+test "check type - polarity - an imported nominal on a value stays closed" {
+    // The negative control: a nominal body closes as written, and its
+    // published answer says so, so the value's row is not opened and a use
+    // widening it is an ordinary mismatch.
+    const source_lib =
+        \\module [Color]
+        \\
+        \\Color := [Red, Green]
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\c : Lib.Color
+        \\c = Lib.Color.Red
+        \\
+        \\use_a : Str -> [A, Red, Green]
+        \\use_a = |_| c
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - polarity - a value row the body tied to a weak row is grounded, not left open" {
+    // The syntactic pre-test approves `x`'s annotation for generalization, but
+    // the body unifies `x`'s implicitly opened row with `e`'s top-level weak
+    // row, so the extension never quantifies. It must still be grounded:
+    // left bare, `copy_import` would stamp it generalized and `Main` would
+    // quantify per use a row `Lib` never decided to quantify, accepting a
+    // widening `Lib` itself shares with every other use of `e`.
+    const source_lib =
+        \\module [x]
+        \\
+        \\e = Boom
+        \\
+        \\x : [Boom]
+        \\x = if Bool.true e else Boom
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\y : [Boom, Other]
+        \\y = Lib.x
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertOneTypeError("Type Mismatch");
 }
 
 test "check type - polarity - a defaulted field use may widen a value row" {
