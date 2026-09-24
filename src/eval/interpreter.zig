@@ -4502,7 +4502,7 @@ pub const Interpreter = struct {
         const bindings = try self.arena.allocator().alloc(EvalDescriptorBinding, params.len);
 
         for (params, 0..) |param, param_index| {
-            const desc = if (param.source_nested_index == std.math.maxInt(u16)) direct: {
+            const desc = if (param.read == .call_key) direct: {
                 var capture_offset: ?u32 = null;
                 for (offsets) |entry| {
                     if (!std.meta.eql(entry.key, param.key)) continue;
@@ -4536,14 +4536,15 @@ pub const Interpreter = struct {
                         break;
                     }
                 }
-                break :projected try self.boxy_runtime.nestedBoxyDesc(
-                    self.boxyFrameHooks(null),
-                    parent orelse return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: erased descriptor projection parent was not bound",
-                        .{},
-                    ),
-                    param.source_nested_index,
+                const parent_desc = parent orelse return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: erased descriptor projection parent was not bound",
+                    .{},
                 );
+                break :projected switch (param.read) {
+                    .call_key => return self.invariantFailedError("LIR/interpreter invariant violated: erased descriptor parameter read from its call key reached a parent read", .{}),
+                    .nested => try self.boxy_runtime.nestedBoxyDesc(self.boxyFrameHooks(null), parent_desc, param.source_nested_index),
+                    .tag_payload => try self.boxy_runtime.tagPayloadBoxyDesc(self.boxyFrameHooks(null), parent_desc, param.source_tag_name, param.source_nested_index),
+                };
             };
             bindings[param_index] = .{ .local = param.local, .desc = desc };
         }
@@ -4674,7 +4675,7 @@ pub const Interpreter = struct {
             const resolved_descs = try self.arena.allocator().alloc(*const LirProgram.BoxyTypeDesc, desc_params.len);
             const descriptor_bindings = try self.arena.allocator().alloc(EvalDescriptorBinding, desc_params.len);
             for (desc_params, 0..) |param, desc_param_index| {
-                const desc = if (param.source_nested_index == std.math.maxInt(u16)) direct: {
+                const desc = if (param.read == .call_key) direct: {
                     var incoming_desc: ?*const LirProgram.BoxyTypeDesc = null;
                     for (arg_desc_keys, arg_descs) |key, desc| {
                         if (!std.meta.eql(key, param.key)) continue;
@@ -4701,14 +4702,15 @@ pub const Interpreter = struct {
                             break;
                         }
                     }
-                    break :projected try self.boxy_runtime.nestedBoxyDesc(
-                        self.boxyFrameHooks(frame),
-                        parent_desc orelse return self.invariantFailedError(
-                            "LIR/interpreter invariant violated: erased descriptor projection parent was not bound",
-                            .{},
-                        ),
-                        param.source_nested_index,
+                    const parent = parent_desc orelse return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: erased descriptor projection parent was not bound",
+                        .{},
                     );
+                    break :projected switch (param.read) {
+                        .call_key => return self.invariantFailedError("LIR/interpreter invariant violated: erased descriptor parameter read from its call key reached a parent read", .{}),
+                        .nested => try self.boxy_runtime.nestedBoxyDesc(self.boxyFrameHooks(frame), parent, param.source_nested_index),
+                        .tag_payload => try self.boxy_runtime.tagPayloadBoxyDesc(self.boxyFrameHooks(frame), parent, param.source_tag_name, param.source_nested_index),
+                    };
                 };
                 resolved_descs[desc_param_index] = desc;
                 descriptor_bindings[desc_param_index] = .{ .local = param.local, .desc = desc };

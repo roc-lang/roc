@@ -213,3 +213,15 @@ expect Json.to_str(Dict.from_list([("a", 1.U64)])) == "{\"a\":1}"
 expect Json.to_str(Dict.from_list([(Red, 1.U64)])) == "{\"Red\":1}"
 
 expect Json.to_str(Set.from_list(["a"])) == "[\"a\"]"
+
+# A generic function encoding a record or tuple built from its own type
+# variables forwards its dictionary to the generic encoder, which describes the
+# record's presence-slot payloads through the record's own descriptor.
+
+record_json = |a, b| Json.to_str({ a, b })
+
+expect record_json("x", "y") == "{\"a\":\"x\",\"b\":\"y\"}"
+
+tuple_json = |a, b| Json.to_str((a, b))
+
+expect tuple_json("x", "y") == "[\"x\",\"y\"]"

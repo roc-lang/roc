@@ -9364,7 +9364,7 @@ fn bindErasedCallableAdapterParams(
             try self.emitLocalGet(capture_ptr_local);
             try self.emitLoadOpSized(.i32, @sizeOf(u32), offset);
         } else {
-            if (param.source_nested_index == std.math.maxInt(u16)) {
+            if (param.read == .call_key) {
                 wasmInvariantFmt(
                     "WASM/codegen invariant violated: exact erased descriptor parameter had no capture offset",
                     .{},
@@ -9384,8 +9384,17 @@ fn bindErasedCallableAdapterParams(
                 .{},
             );
             try self.emitProcLocal(source);
-            try self.emitI32Const(@intCast(param.source_nested_index));
-            try self.emitBoxyCall("roc_boxy_nested_desc");
+            switch (param.read) {
+                .call_key, .nested => {
+                    try self.emitI32Const(@intCast(param.source_nested_index));
+                    try self.emitBoxyCall("roc_boxy_nested_desc");
+                },
+                .tag_payload => {
+                    try self.emitI32Const(@bitCast(@intFromEnum(param.source_tag_name)));
+                    try self.emitI32Const(@intCast(param.source_nested_index));
+                    try self.emitBoxyCall("roc_boxy_tag_payload_desc");
+                },
+            }
         }
         try self.emitLocalSet(desc_local);
     }

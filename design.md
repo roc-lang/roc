@@ -4588,9 +4588,9 @@ encoding and state types for exactly the methods needed by that shape:
 `StaticDispatchPlanTable.generated_codec_derivations` stores each parser/encoder
 derivation as an explicit generated-codec contract. It records every generated
 call's method, concrete dispatcher and callable types, optional subject role,
-whether the edge is unconditional or a checker-validated conditional
-capability, and exact resolution to either checked callable evidence or another
-generated-codec contract. A
+and exact resolution to either checked callable evidence or another
+generated-codec contract. Every recorded call is an unconditional edge of the
+generated body. A
 structural dispatch plan and any stored generated runtime name that contract by
 identity. Boxy and Monotype consume the identity directly; they must not find a
 derivation by comparing runtime types or resolve one of its calls by looking up
@@ -4641,8 +4641,8 @@ explicit root classification.
 
 Completed generated codec proof graphs also carry a producer-proven identity
 for specialization reuse. Type-role keys and call metadata select candidates; equality
-compares all source and frozen roles, every method selection and conditional
-edge, and nested evidence and substitutions. One alpha-equivalence bijection
+compares all source and frozen roles, every method selection, and nested
+evidence and substitutions. One alpha-equivalence bijection
 covers all type roots, including cross-root sharing. Cycles are compared as
 finite proof graphs. Source contracts remain intact for replay; specialization
 equality uses the shared identity rather than the per-use derivation index.
@@ -4869,9 +4869,9 @@ that entry down and an uncounted record calls `parse_record_after_field`, whose
 
 If the generated finisher sees that a required field was never filled, the
 generated parser itself reports the failure, as described in "Derived Parser
-Required-Field Error Composition": `MissingRequiredField(field_name)` when the
-parser's error row retains that tag, otherwise the format's checked
-`invalid_value` capability. Formats implement no missing-field callback. A field
+Required-Field Error Composition": `MissingRequiredField(field_name)`, a tag
+every such parser's error row carries. Formats implement no missing-field
+callback. A field
 whose key may be absent says so through its kind or type: an absent
 `Try(Str, [Missing])` field is `Err(Missing)`, an absent `?:` field is in its
 missing state, and an absent `??` field holds its default. A field annotated as
@@ -6335,42 +6335,32 @@ wrote—marking that extension erroneous (diagnostic recovery, like every
 other reported problem).
 
 That pass is a single READ of a mutable variable, and a definition can still
-widen its own row afterwards when the widening comes from a constraint the
-definition DEFERRED: a generated codec's error row reaches the annotated row
-only once `finalizeGeneratedCodecConstraintsToQuiescence` resolves it, which is
-after every audit in the module has run. The audit is therefore replayed once.
-Every extension the post-body pass cleared is carried forward; just before
-`finalizeTypes` the list is narrowed to those still carrying no tags
-(`Check.dropSettledLateImplicitOpenExtAudits`), because one that gained a tag
-while the rest of the module was checked was widened by a CALLER, which is
-exactly what an output-position row is open for. The narrowing is applied a
-second time inside `finalizeTypes`, immediately after `checkPendingDefaults`:
-that is the one finalize pass that still runs `checkExpr` over user source, and
-a defaulted record field's default expression is a use site like any other, so
-a row it widens was widened by a caller too. What survives is
-re-examined after finalize by `Check.runLateImplicitOpenExtAudit`, before
-`closeWeakValueImplicitOpenExts` grounds the leftovers to `[]` (a grounded
-extension carries no tags, so the audit would skip it). The rejected-parent-row
-case of issue #11246 is what this replay catches.
+widen its own row afterwards through a generated codec its body introduced: a
+derived parser or encoder is often validated only once
+`finalizeGeneratedCodecConstraintsToQuiescence` resolves it, after every audit
+in the module has run, and its validation adds error tags to the codec's error
+row (Derived Parser Required-Field Error Composition). Every extension the
+post-body pass cleared is therefore kept, stamped with the source region of its
+binding's right-hand side (`Check.LateImplicitOpenExtAudit.owner_rhs`). Each
+codec validation records, with the region of the expression that introduced
+the codec relation, exactly which tags it requires in which error row
+(`Check.codec_row_demands`): `MissingRequiredField(Str)`, a nested custom
+parser's error tags, and any tag the validation added to the row by relating it
+to a format method. After finalize, `Check.runLateImplicitOpenExtAudit` reports
+every demanded tag that lies in the extension of a binding whose right-hand side
+contains the demanding expression and whose row the demand shares (the two rows
+end in the same extension variable), before `closeWeakValueImplicitOpenExts`
+grounds the leftovers to `[]`. The rejected-parent-row case of issue #11246 is
+one such report.
 
-Timing alone does not identify WHO widened a row in that final window, so the
-replay does not rely on it. The deferred relation it exists to catch is
-resolved by `finalizeGeneratedCodecConstraintsToQuiescence`, and a CALLER's use
-of a generated parser is resolved by the very same mechanism on the very same
-pass—the two arrive together and no narrowing can order them apart. The replay
-therefore asks about provenance instead. Each surviving entry is stamped, at
-the audit, with the source region of its binding's right-hand side
-(`Check.LateImplicitOpenExtAudit.owner_rhs`); each relation punted to the final
-type boundary records the region of the expression that introduced it
-(`Check.late_self_widening_writers`). The replay reports only when some
-recorded region lies INSIDE the binding's right-hand side, which is the
-definition widening its own row. Containment rather than equality: the
-deferring expression is routinely a nested local binding inside the annotated
-definition's body, and that is still the definition's own widening. Both
-unknowns—a binding with no region for its right-hand side, an empty set of
-recorded regions—answer "not the definition", because a binding is blamed on
-evidence or not at all. The clause is a conjunction with the tag test above it,
-so it can only withhold a report, never create one.
+Provenance is exact, so neither timing nor type-graph reachability decides who
+widened a row. A caller that widens the same row with other tags is not
+blamed, and a caller that happens to add a demanded tag first does not excuse
+the definition: the derived body still produces that tag on the definition's
+behalf, and the annotation bounds what the definition produces. Containment
+rather than equality: the demanding expression is routinely a nested local
+binding inside the annotated definition's body, and that is still the
+definition's own codec.
 
 A closed value flowing into an implicitly open output row WIDENS into it: the
 row recorded at that position is the one the annotation declares, whatever
@@ -7135,10 +7125,19 @@ implementation, owns the failure produced when a required field is absent.
 When a parsed record contains at least one field whose type is not the
 recognized optional-field shape `Try(_, [Missing, ..])`, the checker requires
 the parser's shared error row to contain `MissingRequiredField(Str)`. It does so
-by unifying that row with an open row containing the tag. Records whose fields
-are all optional do not add this error, and non-record shapes do not add it.
-Nested derived shapes contribute the error whenever any reachable derived
-record has a required field.
+by unifying that row with an open row containing the tag, unconditionally: the
+generated body always reports an absent required field as
+`MissingRequiredField(field_name)`. Records whose fields are all optional do
+not add this error, and non-record shapes do not add it. Nested derived shapes
+contribute the error whenever any reachable derived record has a required
+field.
+
+An open row simply gains the tag, so a program that never mentions it still
+sees `MissingRequiredField(field_name)`. A row the program closed without the
+tag rejects it: a closed row reports an ordinary type mismatch at the
+unification, and an annotated output row, whose extension is implicitly open,
+reports that the definition can produce a tag its annotation does not list
+(Polarity). The failure is never mapped onto a format error.
 
 A custom nominal parser nested inside a derived shape keeps its own minimal
 error row. During checking, `constrainDerivedParserErrorRowIncludes` closes an
@@ -7166,44 +7165,34 @@ test/cli/JsonNestedNominalContract.roc (both reads at one row, at a row wider
 than the shape demands, and at two different rows).
 
 Input formats contribute only errors that arise from reading their syntax and
-values. They do not implement a missing-required-field callback. After source
-types settle, checking finalizes the generated parser contract for every body
-that owns a required-field path. If the format has an `invalid_value` method
-compatible with the exact encoding, state, and parser error types, one
-commit-probe records that fully checked call as a CONDITIONAL contract
-capability. Failure of that optional probe is rolled back completely: a parser
-whose error row retains `MissingRequiredField(Str)` never calls the method, so
-an absent or incompatible declaration is irrelevant. If the precise tag is not
-available at the source boundary, the same method is mandatory and ordinary
-static-dispatch checking reports its absence or incompatible type.
-
-Monotype specialization repeats only the checker-declared error relation when
-a parser constraint was generalized before its concrete dispatcher was known:
-it constrains an open instantiated callable error extension to include
-`MissingRequiredField(Str)`. A specialization boundary that is already closed
-without the tag selects the contract's conditional `invalid_value` slot and
-maps the generated missing-field path through that exact checked callable.
-There is no method lookup, recovery, or unchecked call after the checked
-boundary. An open-row parser directly constructs
-`MissingRequiredField(field_name)`; a closed-row parser emits one direct call
-to the selected `invalid_value` specialization. This remains correct when an
-enclosing generic function consumes and maps every parse error.
+values. They do not implement a missing-required-field callback, and a derived
+record parser never calls a format's `invalid_value` for an absent field.
+Every type and every error-row tag is settled by checking: Monotype and Boxy
+construct `MissingRequiredField(field_name)` at the checked contract error row
+and treat a derived record parser whose checked row lacks the tag as a compiler
+invariant violation. No post-check stage widens a row or chooses a failure
+representation.
 
 Both sides are pinned by tests: accepted—
 test/cli/ParserRequiredFieldError.roc (a non-JSON derived parser reports the
-generic error with the missing field name and the precise-tag path ignores an
+generic error with the missing field name and never constrains an
 incompatible, unused `invalid_value` declaration),
 test/cli/JsonParseErrorComposition.roc (JSON scalar parsing has only
 `InvalidJson(Str)`, while a required-record parser composes in
 `MissingRequiredField(Str)`),
+test/cli/ParserMissingFieldOpenRow.roc (an unannotated or `_` row gains the tag
+although nothing in the program names it),
 test/cli/JsonParseGenericWrapperErrors.roc (a generalized wrapper may consume
-the parser errors and a closed specialization consumes the checked conditional
-mapping capability),
+the parser errors),
 and test/cli/ParserCustomNominalField.roc (a custom nominal parser's narrower
 error row injects into its containing record row); rejected—
-test/cli/ParserMissingRequiredFieldError.roc (a required-record parser cannot
-use a closed format error row that omits `MissingRequiredField(Str)` when the
-format supplies no checked `invalid_value` capability).
+test/cli/ParserMissingRequiredFieldError.roc (a closed format error row that
+omits `MissingRequiredField(Str)`),
+test/cli/Issue11561ClosedErrorRow.roc (annotated value and function rows that
+omit it), test/cli/Issue11561ClosedRowPattern.roc (a use that names the tag
+does not excuse the annotation), and
+test/cli/ParserChildErrorOutsideAnnotation.roc (a nested custom parser's error
+tag outside the annotated row, including when a caller also widens the row).
 
 ### Builtin Str Interpolation Part Compatibility
 
@@ -8724,14 +8713,6 @@ Other solved-graph mutations:
   Required-Field Error Composition (above). A structural probe of derived
   record fields gates ordinary unification of the parser's shared error row
   with `[MissingRequiredField(Str), ..]`.
-- `tryValidateOptionalInvalidValueMethod`—policy: Derived Parser
-  Required-Field Error Composition (above). Once source types settle, one
-  commit-probe instantiates and relates the format's optional `invalid_value`
-  capability at the exact parser boundary. Full success records the checked
-  conditional call; absence or mismatch rolls back every type, evidence, and
-  worklist mutation. `JsonParseGenericWrapperErrors.roc` pins the committed
-  side, while `ParserRequiredFieldError.roc` pins rollback by declaring an
-  incompatible unused method and still reporting the precise generated tag.
 - `constrainDerivedParserFormatError` /
   `constrainDerivedParserErrorRowIncludes`—policy: Derived Parser
   Required-Field Error Composition (above). A format or custom parser method's
@@ -12366,6 +12347,21 @@ descriptor parameters. Otherwise an adapter makes both sides agree on the
 erased-call descriptor keys, for arguments and function-typed results alike.
 A generated codec callable whose enclosing frame does not receive one of its
 descriptor captures materializes that capture from its representation.
+
+An erased procedure's argument descriptor parameters are keyed by their
+pre-order position under the argument, but a caller's view of the argument can
+be more generic than the callee's. A dictionary slot is called through the
+consumer's declared requirement, for example a bare `val`. So every argument
+descriptor that an earlier parameter's descriptor holds is read from that
+parent rather than from its own key: a nested descriptor read for aggregate,
+list and box positions, and a tag payload read
+(`ErasedArgDescRead.tag_payload`) for a variant payload such as a presence
+slot's `Present` value. Only a descriptor no earlier parameter holds is read
+from its call-site key.
+
+An evidence-only descriptor collected inside an evidence dispatcher's
+representation, such as a presence slot of a record dispatcher, takes the
+representation at the same position of that dispatcher's call source.
 
 A custom `to_inspect` slot reached through a descriptor takes its hidden
 descriptors and argument descriptors from the inspected descriptor's own

@@ -1283,6 +1283,17 @@ pub const BoxyRuntime = struct {
         captures: LIR.LocalSpan,
     ) Error!*const LirProgram.BoxyTypeDesc {
         const desc = try self.materializeBoxyDescRefValueWithCaptures(hooks, desc_ref, captures);
+        return try self.tagPayloadBoxyDesc(hooks, desc, tag_name, payload_index);
+    }
+
+    /// The descriptor of payload `payload_index` of tag `tag_name` in `desc`.
+    pub fn tagPayloadBoxyDesc(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        desc: *const LirProgram.BoxyTypeDesc,
+        tag_name: LIR.BoxyNameId,
+        payload_index: u32,
+    ) Error!*const LirProgram.BoxyTypeDesc {
         const variant = self.findLocalBoxyTagVariant(desc, tag_name) orelse {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: descriptor payload layout {d} missing tag variant id {d}; checked_type={any} proc={d}",

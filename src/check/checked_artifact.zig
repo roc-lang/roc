@@ -18806,8 +18806,7 @@ const EvidencePass = struct {
                             &.{ previous.dispatcher_ty, previous.callable_ty },
                             &.{ call.dispatcher_ty, call.callable_ty },
                         );
-                    if (previous.conditional != call.conditional or
-                        !call_types_equal or
+                    if (!call_types_equal or
                         !self.generatedCodecCallResolutionsEql(previous.resolution, call.resolution))
                     {
                         checkedArtifactInvariant(
@@ -39660,8 +39659,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x27, 0x29, 0x2F, 0x5B, 0x61, 0xD2, 0xDF, 0x8E, 0x59, 0xE4, 0x56, 0xAB, 0xF7, 0xD8, 0x18, 0x76,
-        0xDC, 0x14, 0x18, 0x9A, 0xA2, 0xA5, 0x1C, 0xF9, 0x82, 0x7D, 0x5A, 0xDE, 0x39, 0x70, 0x06, 0xDD,
+        0x34, 0xB6, 0xC5, 0x7C, 0x80, 0x64, 0xC2, 0xA8, 0x8D, 0x94, 0xC9, 0xE2, 0xE5, 0xD9, 0x58, 0x0D,
+        0xBA, 0x88, 0x6C, 0x91, 0x83, 0x90, 0xA3, 0xF8, 0xED, 0xFA, 0x4E, 0x20, 0x18, 0x94, 0x3C, 0x5B,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

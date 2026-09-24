@@ -811,9 +811,6 @@ pub const GeneratedCodecDerivation = extern struct {
 /// One exact method callable used inside a checked generated codec.
 pub const GeneratedCodecCall = extern struct {
     method_ident: u32,
-    /// Nonzero when checking proved this call as an available specialization
-    /// capability rather than an unconditional generated-body edge.
-    conditional: u32,
     dispatcher_var: u32,
     callable_var: u32,
     /// Exact generated callable relation whose dispatch-target record owns the

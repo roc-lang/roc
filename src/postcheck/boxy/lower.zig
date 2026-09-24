@@ -11526,7 +11526,7 @@ const ProcedureBuilder = struct {
         var index = context.fields.len;
         while (index > 0) {
             index -= 1;
-            const missing = try self.lowerGeneratedMissingRecordField(proc, context, index, context.cursor, continuation);
+            const missing = try self.lowerGeneratedMissingRecordField(proc, context, index, continuation);
             continuation = try self.result.store.addCFStmt(.{ .switch_initialized_payload = .{
                 .cond = context.presence[index / 64],
                 .cond_mask = @as(u64, 1) << @intCast(index % 64),
@@ -11547,7 +11547,6 @@ const ProcedureBuilder = struct {
         proc: *ProcBodyBuilder,
         context: GeneratedParserRecordContext,
         field_index: usize,
-        rest: LIR.LocalId,
         present_continuation: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const field = context.fields[field_index];
@@ -11582,51 +11581,27 @@ const ProcedureBuilder = struct {
         }
 
         const target_err = proc.generatedParserTagVariant(context.target_rep, "Err");
-        return switch (self.plan.generatedParserMissingRequiredField(context.worker)) {
-            .missing_required_field_tag => |error_type| blk: {
-                const error_rep = proc.repForTypeRef(error_type);
-                const error_value = try proc.addFrameLocalForRep(error_rep);
-                const missing = proc.generatedParserTagVariant(error_rep, "MissingRequiredField");
-                const missing_payloads = self.plan.childSlice(missing.variant.payloads);
-                if (missing_payloads.len != 1) boxyLowerInvariant("MissingRequiredField did not carry one Str payload");
-                const continuation = try proc.assignGeneratedParserTag(
-                    context.target,
-                    context.target_rep,
-                    target_err,
-                    error_value,
-                    error_rep,
-                    context.next,
-                );
-                break :blk try proc.assignGeneratedParserTag(
-                    error_value,
-                    error_rep,
-                    missing,
-                    field.renamed,
-                    missing_payloads[0].rep,
-                    continuation,
-                );
-            },
-            .invalid_value => blk: {
-                const call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "invalid_value", null);
-                const error_rep = proc.repForTypeRef(call.ret_type);
-                const error_value = try proc.addFrameLocalForRep(error_rep);
-                const continuation = try proc.assignGeneratedParserTag(
-                    context.target,
-                    context.target_rep,
-                    target_err,
-                    error_value,
-                    error_rep,
-                    context.next,
-                );
-                break :blk try self.lowerGeneratedCodecCallLocalsInto(
-                    proc,
-                    call,
-                    error_value,
-                    &.{ context.encoding, rest },
-                    continuation,
-                );
-            },
-        };
+        const error_rep = proc.repForTypeRef(self.plan.generatedParserMissingRequiredField(context.worker));
+        const error_value = try proc.addFrameLocalForRep(error_rep);
+        const missing = proc.generatedParserTagVariant(error_rep, "MissingRequiredField");
+        const missing_payloads = self.plan.childSlice(missing.variant.payloads);
+        if (missing_payloads.len != 1) boxyLowerInvariant("MissingRequiredField did not carry one Str payload");
+        const continuation = try proc.assignGeneratedParserTag(
+            context.target,
+            context.target_rep,
+            target_err,
+            error_value,
+            error_rep,
+            context.next,
+        );
+        return try proc.assignGeneratedParserTag(
+            error_value,
+            error_rep,
+            missing,
+            field.renamed,
+            missing_payloads[0].rep,
+            continuation,
+        );
     }
 
     fn lowerGeneratedFinishedRecord(
@@ -13682,8 +13657,8 @@ const ProcBodyBuilder = struct {
                 if (descriptor_index > std.math.maxInt(u16)) {
                     boxyLowerInvariant("boxy erased argument descriptor index exceeded its key range");
                 }
-                const source = self.erasedArgumentDescriptorParamSource(arg_params, descriptor_index);
-                if (source.nested_index != std.math.maxInt(u16)) continue;
+                const source = try self.erasedArgumentDescriptorParamSource(arg_params, descriptor_index);
+                if (source.read != .call_key) continue;
                 var capture_index: ?u16 = null;
                 for (captures, 0..) |capture, index| {
                     if (capture.kind != .hidden_desc or
@@ -13755,7 +13730,7 @@ const ProcBodyBuilder = struct {
                     boxyLowerInvariant("boxy erased argument descriptor parameter index exceeded its key range");
                 }
                 const descriptor_index: u16 = @intCast(param_index);
-                const descriptor_source = self.erasedArgumentDescriptorParamSource(params.items, param_index);
+                const descriptor_source = try self.erasedArgumentDescriptorParamSource(params.items, param_index);
                 const is_root_descriptor = self.repOwnsShapeDescriptor(param.rep, param.desc) and
                     arg_identity_rep == self.descriptorShapeIdentityRep(param.rep);
                 const governs_arg_storage = if (governing_rep) |field_rep|
@@ -13781,6 +13756,8 @@ const ProcBodyBuilder = struct {
                     .local = local,
                     .source_descriptor_index = descriptor_source.descriptor_index,
                     .source_nested_index = descriptor_source.nested_index,
+                    .source_tag_name = descriptor_source.tag_name,
+                    .read = descriptor_source.read,
                 });
             }
 
@@ -13878,22 +13855,33 @@ const ProcBodyBuilder = struct {
         };
     }
 
+    /// The tag name an erased descriptor parameter carries when it is not a
+    /// `tag_payload` read; images store fixed bytes for it.
+    const no_tag_payload_read: LIR.BoxyNameId = @enumFromInt(std.math.maxInt(u32));
+
     const ErasedArgumentDescriptorParamSource = struct {
         descriptor_index: u16,
         nested_index: u16,
+        tag_name: LIR.BoxyNameId,
+        read: LIR.ErasedArgDescRead,
     };
 
+    /// Every descriptor of an erased argument that an earlier parameter holds
+    /// is read from that parent, so any caller supplies it through the
+    /// parent's key, whatever its view of the argument's type.
     fn erasedArgumentDescriptorParamSource(
         self: *ProcBodyBuilder,
         params: []const Plan.HiddenDescriptorParam,
         param_index: usize,
-    ) ErasedArgumentDescriptorParamSource {
+    ) Allocator.Error!ErasedArgumentDescriptorParamSource {
         if (param_index > std.math.maxInt(u16)) {
             boxyLowerInvariant("boxy erased argument descriptor source index exceeded its key range");
         }
         const direct = ErasedArgumentDescriptorParamSource{
             .descriptor_index = @intCast(param_index),
             .nested_index = std.math.maxInt(u16),
+            .tag_name = no_tag_payload_read,
+            .read = .call_key,
         };
         if (param_index == 0) return direct;
 
@@ -13901,19 +13889,53 @@ const ProcBodyBuilder = struct {
         var source: ?ErasedArgumentDescriptorParamSource = null;
         for (params[0..param_index], 0..) |candidate, candidate_index| {
             const parent_rep = self.descriptorStorageRep(candidate.rep);
-            const nested_index = self.immediateNestedDescriptorIndexForRep(parent_rep, target_rep) orelse continue;
-            if (nested_index > std.math.maxInt(u16)) {
-                boxyLowerInvariant("boxy erased argument nested descriptor index exceeded its ABI range");
-            }
+            const projected: ErasedArgumentDescriptorParamSource = if (self.immediateNestedDescriptorIndexForRep(parent_rep, target_rep)) |nested_index| nested: {
+                if (nested_index > std.math.maxInt(u16)) {
+                    boxyLowerInvariant("boxy erased argument nested descriptor index exceeded its ABI range");
+                }
+                break :nested .{
+                    .descriptor_index = @intCast(candidate_index),
+                    .nested_index = @intCast(nested_index),
+                    .tag_name = no_tag_payload_read,
+                    .read = .nested,
+                };
+            } else (try self.immediateTagPayloadDescriptorForRep(parent_rep, target_rep, candidate_index)) orelse continue;
             if (source != null) {
                 boxyLowerInvariant("boxy erased argument descriptor had multiple direct parent parameters");
             }
-            source = .{
-                .descriptor_index = @intCast(candidate_index),
-                .nested_index = @intCast(nested_index),
-            };
+            source = projected;
         }
         return source orelse direct;
+    }
+
+    /// The tag payload of `parent_rep_id`'s descriptor that describes
+    /// `target_rep` directly, read from parameter `parent_index`.
+    fn immediateTagPayloadDescriptorForRep(
+        self: *ProcBodyBuilder,
+        parent_rep_id: Plan.TypeRepId,
+        target_rep: Plan.TypeRepId,
+        parent_index: usize,
+    ) Allocator.Error!?ErasedArgumentDescriptorParamSource {
+        if (self.tagVariantRepForBoundary(parent_rep_id) == null) return null;
+        var read_path = std.ArrayList(DescriptorReadStep).empty;
+        defer read_path.deinit(self.parent.allocator);
+        var active = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
+        defer active.deinit();
+        if (!try self.findDescriptorReadPath(parent_rep_id, target_rep, &read_path, &active)) return null;
+        if (read_path.items.len != 1) return null;
+        const payload = switch (read_path.items[0]) {
+            .tag_payload => |payload| payload,
+            .nested, .tag_ext, .box_payload => return null,
+        };
+        if (payload.payload_index > std.math.maxInt(u16)) {
+            boxyLowerInvariant("boxy erased argument tag payload descriptor index exceeded its ABI range");
+        }
+        return .{
+            .descriptor_index = @intCast(parent_index),
+            .nested_index = @intCast(payload.payload_index),
+            .tag_name = payload.tag_name,
+            .read = .tag_payload,
+        };
     }
 
     fn prependErasedCaptureBindings(self: *ProcBodyBuilder, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
@@ -32100,8 +32122,8 @@ const ProcBodyBuilder = struct {
                 if (descriptor_index > std.math.maxInt(u16)) {
                     boxyLowerInvariant("boxy callable adapter argument descriptor index exceeded its key range");
                 }
-                const source = self.erasedArgumentDescriptorParamSource(params.items, descriptor_index);
-                if (source.nested_index != std.math.maxInt(u16)) continue;
+                const source = try self.erasedArgumentDescriptorParamSource(params.items, descriptor_index);
+                if (source.read != .call_key) continue;
                 var capture_index: ?u16 = null;
                 for (descriptor_captures, 0..) |capture, index| {
                     if (capture.desc != param.desc) continue;
