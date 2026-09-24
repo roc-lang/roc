@@ -276,30 +276,82 @@ pub const InterfaceConstraints = struct {
         cells: ?FieldKindCells,
     };
 
+    /// Maps and lists one capture fills. A graph keeps one set and every
+    /// capture borrows it, so repeated captures keep their allocated chunks
+    /// instead of allocating and zeroing them again; each capture leaves them
+    /// empty.
+    pub const CaptureScratch = struct {
+        node_ids: collections.DenseMap(NodeId, NodeId),
+        kind_ids: collections.DenseMap(FieldKindId, FieldKindId),
+        shareable: collections.DenseMap(NodeId, bool),
+        share_seen: collections.DenseMap(NodeId, void),
+        related_ids: std.AutoHashMap(Capture.RelatedKey, u32),
+        nodes: std.ArrayList(Node) = .empty,
+        open_nodes: std.ArrayList(OpenNode) = .empty,
+        kinds: std.ArrayList(Kind) = .empty,
+
+        pub fn init(allocator: Allocator) CaptureScratch {
+            return .{
+                .node_ids = collections.DenseMap(NodeId, NodeId).init(allocator),
+                .kind_ids = collections.DenseMap(FieldKindId, FieldKindId).init(allocator),
+                .shareable = collections.DenseMap(NodeId, bool).init(allocator),
+                .share_seen = collections.DenseMap(NodeId, void).init(allocator),
+                .related_ids = std.AutoHashMap(Capture.RelatedKey, u32).init(allocator),
+            };
+        }
+
+        pub fn deinit(self: *CaptureScratch, allocator: Allocator) void {
+            self.node_ids.deinit();
+            self.kind_ids.deinit();
+            self.shareable.deinit();
+            self.share_seen.deinit();
+            self.related_ids.deinit();
+            self.nodes.deinit(allocator);
+            self.open_nodes.deinit(allocator);
+            self.kinds.deinit(allocator);
+        }
+    };
+
     pub fn capture(graph: *InstGraph, allocator: Allocator, roots: []const NodeId) Allocator.Error!InterfaceConstraints {
         var retained = GraphTypeFinals.initRetainedTypeView(graph);
         defer retained.deinit();
         var settled = GraphTypeFinals.initSettledInterface(graph);
         defer settled.deinit();
+        const scratch = &graph.capture_scratch;
         var builder = Capture{
             .settled = &settled,
             .retained = &retained,
             .graph = graph,
             .allocator = allocator,
-            .node_ids = collections.DenseMap(NodeId, NodeId).init(graph.allocator),
-            .kind_ids = collections.DenseMap(FieldKindId, FieldKindId).init(graph.allocator),
-            .shareable = collections.DenseMap(NodeId, bool).init(graph.allocator),
-            .share_seen = collections.DenseMap(NodeId, void).init(graph.allocator),
-            .related_ids = std.AutoHashMap(Capture.RelatedKey, u32).init(graph.allocator),
+            .node_ids = scratch.node_ids,
+            .kind_ids = scratch.kind_ids,
+            .shareable = scratch.shareable,
+            .share_seen = scratch.share_seen,
+            .related_ids = scratch.related_ids,
+            .nodes = scratch.nodes,
+            .open_nodes = scratch.open_nodes,
+            .kinds = scratch.kinds,
         };
-        defer builder.node_ids.deinit();
-        defer builder.kind_ids.deinit();
-        defer builder.shareable.deinit();
-        defer builder.share_seen.deinit();
-        defer builder.related_ids.deinit();
-        defer builder.nodes.deinit(graph.allocator);
-        defer builder.open_nodes.deinit(graph.allocator);
-        defer builder.kinds.deinit(graph.allocator);
+        defer {
+            builder.node_ids.clearRetainingCapacity();
+            builder.kind_ids.clearRetainingCapacity();
+            builder.shareable.clearRetainingCapacity();
+            builder.share_seen.clearRetainingCapacity();
+            builder.related_ids.clearRetainingCapacity();
+            builder.nodes.clearRetainingCapacity();
+            builder.open_nodes.clearRetainingCapacity();
+            builder.kinds.clearRetainingCapacity();
+            scratch.* = .{
+                .node_ids = builder.node_ids,
+                .kind_ids = builder.kind_ids,
+                .shareable = builder.shareable,
+                .share_seen = builder.share_seen,
+                .related_ids = builder.related_ids,
+                .nodes = builder.nodes,
+                .open_nodes = builder.open_nodes,
+                .kinds = builder.kinds,
+            };
+        }
         const captured_roots = try mapValue(&builder, []const NodeId, roots);
         return .{
             .roots = captured_roots,
@@ -338,7 +390,7 @@ pub const InterfaceConstraints = struct {
                 .open => |index| self.open_nodes[index],
             };
             _ = try graph.replaceContentWithoutSnapshotInvalidation(id, try mapValue(&instance, InstNode, node.content));
-            if (node.finished) |ty| try graph.imported_monos.put(id, ty);
+            if (node.finished) |ty| try graph.recordImportedMono(id, ty);
             graph.private_backing_roots.items[@intFromEnum(id)] = graph.private_backing_roots.items[@intFromEnum(id)] or node.private_backing;
             if (node.recursive_slot) graph.markRecursiveValueSlot(id);
             if (node.forced_dynamic) graph.markForcedDynamicIteratorRoot(id);
@@ -536,15 +588,7 @@ pub const InterfaceConstraints = struct {
             captured.forced_dynamic = self.graph.forced_dynamic_iterator_roots.items[@intFromEnum(root)];
             captured.constructor_evidence = self.graph.requestPropagatesConstructorEvidence(raw);
             captured.private_backing = self.graph.private_backing_roots.items[@intFromEnum(root)];
-            {
-                var member: ?NodeId = self.graph.class_member_head.items[@intFromEnum(root)];
-                while (member) |current| : (member = self.graph.class_member_next.items[@intFromEnum(current)]) {
-                    if (self.graph.imported_monos.get(current)) |ty| {
-                        captured.finished = try self.retained.sealType(ty);
-                        break;
-                    }
-                }
-            }
+            if (self.graph.classImportedMono(root)) |ty| captured.finished = try self.retained.sealType(ty);
             if (self.graph.content(root) == .named and self.graph.related_named_instances.contains(root)) {
                 const named = self.graph.content(root).named;
                 const next_group: u32 = @intCast(self.related_ids.count());
@@ -1199,6 +1243,10 @@ pub const InstGraph = struct {
     /// imported request use the exact finished TypeId rather than reconstructing
     /// an equivalent public shape.
     imported_monos: collections.DenseMap(NodeId, Type.TypeId),
+    /// Per class root: the imported Monotype of the first class member, in
+    /// member order, that has one. Unions keep the winner's, whose members
+    /// precede the loser's.
+    class_imported_monos: std.ArrayList(?Type.TypeId),
     /// Exact declaration-plus-current-argument-roots index for instantiated
     /// nominal backings. Keys point into the stable argument storage owned by
     /// `nominal_backing_instances`.
@@ -1247,6 +1295,8 @@ pub const InstGraph = struct {
     /// maps re-allocate and re-zero sparse chunks across the node/type ID
     /// domains on every walk; pooled maps keep their chunks.
     node_set_pool: collections.DenseMapPool(NodeId, void),
+    /// Maps and lists borrowed by every `InterfaceConstraints.capture`.
+    capture_scratch: InterfaceConstraints.CaptureScratch,
     /// Roots whose every reachable node was found resolved, stamped with the
     /// `resolved_epoch` current at that walk. Resolvedness survives every
     /// union (a concrete class always wins over a variable), every content
@@ -1316,6 +1366,7 @@ pub const InstGraph = struct {
             .request_source_interfaces = .empty,
             .constructor_evidence_requests = .empty,
             .private_backing_roots = .empty,
+            .class_imported_monos = .empty,
             .forced_dynamic_iterator_roots = .empty,
             .recursive_value_slots = .empty,
             .containment_pending = .empty,
@@ -1323,6 +1374,7 @@ pub const InstGraph = struct {
             .containment_visit_epoch = 0,
             .containment_cache = collections.DenseMap(NodeId, ContainmentCacheEntry).init(allocator),
             .node_set_pool = collections.DenseMapPool(NodeId, void).init(allocator),
+            .capture_scratch = InterfaceConstraints.CaptureScratch.init(allocator),
             .resolved_roots = collections.DenseMap(NodeId, u32).init(allocator),
             .resolved_epoch = 0,
             .structure_epoch = 0,
@@ -1378,6 +1430,7 @@ pub const InstGraph = struct {
         self.request_source_interfaces.clearRetainingCapacity();
         self.constructor_evidence_requests.clearRetainingCapacity();
         self.private_backing_roots.clearRetainingCapacity();
+        self.class_imported_monos.clearRetainingCapacity();
         self.forced_dynamic_iterator_roots.clearRetainingCapacity();
         self.recursive_value_slots.clearRetainingCapacity();
         self.containment_pending.clearRetainingCapacity();
@@ -1445,6 +1498,7 @@ pub const InstGraph = struct {
         self.request_source_interfaces.deinit(allocator);
         self.constructor_evidence_requests.deinit(allocator);
         self.private_backing_roots.deinit(allocator);
+        self.class_imported_monos.deinit(allocator);
         self.forced_dynamic_iterator_roots.deinit(allocator);
         self.recursive_value_slots.deinit(allocator);
         self.containment_pending.deinit(allocator);
@@ -1453,6 +1507,7 @@ pub const InstGraph = struct {
         self.snapshot_free_types.deinit();
         self.resolved_roots.deinit();
         self.node_set_pool.deinit();
+        self.capture_scratch.deinit(allocator);
         self.type_set_pool.deinit();
         var containment_entries = self.containment_cache.valueIterator();
         while (containment_entries.next()) |entry| {
@@ -1981,6 +2036,30 @@ pub const InstGraph = struct {
 
     fn markForcedDynamicIteratorRoot(self: *InstGraph, node: NodeId) void {
         self.forced_dynamic_iterator_roots.items[@intFromEnum(self.find(node))] = true;
+    }
+
+    /// Record `node`'s finished Monotype and keep its class's first imported
+    /// member current. A node that already shares its class may follow a
+    /// member that imported earlier, so only then is the class order read.
+    fn recordImportedMono(self: *InstGraph, node: NodeId, ty: Type.TypeId) Allocator.Error!void {
+        try self.imported_monos.put(node, ty);
+        const root = self.find(node);
+        if (self.class_member_head.items[@intFromEnum(root)] == node) {
+            self.class_imported_monos.items[@intFromEnum(root)] = ty;
+            return;
+        }
+        var members = self.classMemberIterator(root);
+        while (members.next()) |member| {
+            if (self.imported_monos.get(member)) |first| {
+                self.class_imported_monos.items[@intFromEnum(root)] = first;
+                return;
+            }
+        }
+    }
+
+    /// The imported Monotype of the first member of `node`'s class that has one.
+    fn classImportedMono(self: *InstGraph, node: NodeId) ?Type.TypeId {
+        return self.class_imported_monos.items[@intFromEnum(self.find(node))];
     }
 
     const generated_iterator_mint_depth_limit: u8 = 16;
@@ -2651,6 +2730,7 @@ pub const InstGraph = struct {
         std.debug.assert(self.private_backing_roots.items.len == self.nodes.items.len);
         std.debug.assert(self.forced_dynamic_iterator_roots.items.len == self.nodes.items.len);
         std.debug.assert(self.recursive_value_slots.items.len == self.nodes.items.len);
+        std.debug.assert(self.class_imported_monos.items.len == self.nodes.items.len);
     }
 
     pub fn newNode(self: *InstGraph, node_content: InstNode) Allocator.Error!NodeId {
@@ -2668,6 +2748,7 @@ pub const InstGraph = struct {
         try self.private_backing_roots.ensureUnusedCapacity(self.allocator, 1);
         try self.forced_dynamic_iterator_roots.ensureUnusedCapacity(self.allocator, 1);
         try self.recursive_value_slots.ensureUnusedCapacity(self.allocator, 1);
+        try self.class_imported_monos.ensureUnusedCapacity(self.allocator, 1);
         try self.updateGeneratedIterator(id, node_content);
         if (contentHasGeneratedPrivateBacking(node_content)) self.generated_private_nodes += 1;
         self.nodes.appendAssumeCapacity(node_content);
@@ -2681,6 +2762,7 @@ pub const InstGraph = struct {
         self.private_backing_roots.appendAssumeCapacity(false);
         self.forced_dynamic_iterator_roots.appendAssumeCapacity(false);
         self.recursive_value_slots.appendAssumeCapacity(false);
+        self.class_imported_monos.appendAssumeCapacity(null);
         self.markPrivateBacking(node_content);
         if (node_content == .named and node_content.named.generated_iterator != null) self.generated_iterator_nodes += 1;
         self.countDiagnostic("nodes_created");
@@ -3480,10 +3562,7 @@ pub const InstGraph = struct {
             const entry = try seen.getOrPut(node);
             if (entry.found_existing) continue;
             self.countDiagnostic("finished_mono_nodes_visited");
-            var members = self.classMemberIterator(node);
-            while (members.next()) |member| {
-                if (self.imported_monos.contains(member)) return true;
-            }
+            if (self.classImportedMono(node) != null) return true;
             switch (self.nodes.items[@intFromEnum(node)]) {
                 .redirect => unreachable,
                 .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
@@ -4798,6 +4877,9 @@ pub const InstGraph = struct {
         self.private_backing_roots.items[@intFromEnum(winner)] = self.private_backing_roots.items[@intFromEnum(winner)] or self.private_backing_roots.items[@intFromEnum(loser)];
         self.forced_dynamic_iterator_roots.items[@intFromEnum(winner)] = self.forced_dynamic_iterator_roots.items[@intFromEnum(winner)] or self.forced_dynamic_iterator_roots.items[@intFromEnum(loser)];
         self.recursive_value_slots.items[@intFromEnum(winner)] = self.recursive_value_slots.items[@intFromEnum(winner)] or self.recursive_value_slots.items[@intFromEnum(loser)];
+        if (self.class_imported_monos.items[@intFromEnum(winner)] == null) {
+            self.class_imported_monos.items[@intFromEnum(winner)] = self.class_imported_monos.items[@intFromEnum(loser)];
+        }
         self.constructor_evidence_requests.items[@intFromEnum(winner)] =
             self.constructor_evidence_requests.items[@intFromEnum(winner)] or
             self.constructor_evidence_requests.items[@intFromEnum(loser)];
@@ -6143,7 +6225,7 @@ pub const InstGraph = struct {
         } else {
             try self.imported_type_nodes.put(ty, node);
         }
-        try self.imported_monos.put(node, ty);
+        try self.recordImportedMono(node, ty);
 
         const types = self.types;
         const imported: InstNode = switch (types.get(ty)) {
