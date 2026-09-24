@@ -812,6 +812,10 @@ pub const Store = struct {
         /// the marker closes: it redirects to the empty tag union, the same
         /// outcome instantiation's `.close` behavior produces.
         derivation_marker_ext_closure,
+        /// (ii) design.md "Row Union Normalization": a row part whose every
+        /// label also occurs further along its extension chain denotes that
+        /// extension once the repeated occurrences are related.
+        row_union_normalization,
     };
 
     /// Set a type variable to redirect to the provided variables.
