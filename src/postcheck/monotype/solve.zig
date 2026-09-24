@@ -1045,18 +1045,36 @@ const NominalBackingKey = struct {
 /// Bucket selector only: `NominalBackingKeyContext.eql` compares the
 /// declaration bytes and every argument, so a collision costs a probe.
 fn hashNominalBackingKey(declaration: NominalBackingDeclaration, args: []const NodeId) u64 {
-    var hasher = std.hash.Wyhash.init(0);
-    hasher.update(&declaration.module_bytes);
-    var declaration_id = std.mem.nativeToLittle(u32, declaration.declaration_id);
-    hasher.update(std.mem.asBytes(&declaration_id));
-    var arity = std.mem.nativeToLittle(u64, @intCast(args.len));
-    hasher.update(std.mem.asBytes(&arity));
-    for (args) |arg| {
-        var node_id = std.mem.nativeToLittle(u32, @intFromEnum(arg));
-        hasher.update(std.mem.asBytes(&node_id));
-    }
-    return hasher.final();
+    var hasher = NominalBackingKeyHasher.init(declaration, args.len);
+    for (args) |arg| hasher.add(arg);
+    return hasher.state;
 }
+
+/// The module bytes are a cryptographic digest, so one of their words already
+/// selects buckets uniformly; declaration and argument ids are mixed into it.
+const NominalBackingKeyHasher = struct {
+    state: u64,
+
+    fn init(declaration: NominalBackingDeclaration, arity: usize) NominalBackingKeyHasher {
+        const module_word = std.mem.readInt(u64, declaration.module_bytes[0..8], .little);
+        const declaration_word = (@as(u64, declaration.declaration_id) << 32) | @as(u64, @as(u32, @truncate(arity)));
+        return .{ .state = mix(module_word ^ declaration_word) };
+    }
+
+    fn add(self: *NominalBackingKeyHasher, arg: NodeId) void {
+        self.state = mix(self.state ^ @intFromEnum(arg));
+    }
+
+    fn mix(value: u64) u64 {
+        var mixed = value;
+        mixed ^= mixed >> 33;
+        mixed *%= 0xff51afd7ed558ccd;
+        mixed ^= mixed >> 33;
+        mixed *%= 0xc4ceb9fe1a85ec53;
+        mixed ^= mixed >> 33;
+        return mixed;
+    }
+};
 
 fn nominalBackingDeclarationsEqual(left: NominalBackingDeclaration, right: NominalBackingDeclaration) bool {
     return std.mem.eql(u8, left.module_bytes[0..], right.module_bytes[0..]) and
@@ -1093,17 +1111,9 @@ const NominalBackingLookupContext = struct {
     graph: *InstGraph,
 
     pub fn hash(self: NominalBackingLookupContext, lookup: NominalBackingLookup) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        hasher.update(&lookup.declaration.module_bytes);
-        var declaration_id = std.mem.nativeToLittle(u32, lookup.declaration.declaration_id);
-        hasher.update(std.mem.asBytes(&declaration_id));
-        var arity = std.mem.nativeToLittle(u64, @intCast(lookup.args.len));
-        hasher.update(std.mem.asBytes(&arity));
-        for (lookup.args) |arg| {
-            var node_id = std.mem.nativeToLittle(u32, @intFromEnum(self.graph.find(arg)));
-            hasher.update(std.mem.asBytes(&node_id));
-        }
-        return hasher.final();
+        var hasher = NominalBackingKeyHasher.init(lookup.declaration, lookup.args.len);
+        for (lookup.args) |arg| hasher.add(self.graph.find(arg));
+        return hasher.state;
     }
 
     pub fn eql(self: NominalBackingLookupContext, lookup: NominalBackingLookup, stored: NominalBackingKey) bool {
