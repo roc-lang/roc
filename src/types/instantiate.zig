@@ -366,6 +366,13 @@ pub const Instantiator = struct {
     /// An entry learns the tags of the union it extends when that union's
     /// copy is finished (`OpenedMarkerExt.listed_tags`).
     opened_marker_exts: ?*std.ArrayListUnmanaged(OpenedMarkerExt) = null,
+    /// When set, the reach of every polarity var this instantiation resolves
+    /// CLOSED (`.close`) in a positive position is appended here. A
+    /// host-boundary annotation generates its rows as written, so an alias it
+    /// names contributes each row closed; the caller reads these reaches to
+    /// learn which of those closed rows stands at the result row the Monotype
+    /// result-row widening adapter re-tags (`Check.recordClosedMarkerReaches`).
+    closed_marker_reaches: ?*std.ArrayListUnmanaged(AdapterReachPosition) = null,
     /// How to resolve polarity vars (see `PolarityVarBehavior`). `.close`
     /// reproduces the written (closed) row and is the safe default.
     polarity_var_behavior: PolarityVarBehavior = .close,
@@ -817,6 +824,9 @@ pub const Instantiator = struct {
                                 .ext = marker_var,
                                 .reach = self.current_reach,
                             });
+                        }
+                        if (self.polarity_var_behavior == .close and self.current_polarity == .pos) {
+                            if (self.closed_marker_reaches) |sink| try sink.append(self.store.gpa, self.current_reach);
                         }
                         try self.var_map.put(resolved_var, marker_var);
                         try machine.value_stack.append(self.store.gpa, marker_var);

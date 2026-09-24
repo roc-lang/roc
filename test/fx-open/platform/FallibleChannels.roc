@@ -5,8 +5,8 @@ import FallibleHost
 # and its host always returns Ok("ok"), so every channel here must deliver that
 # Ok: the extern stays at the declared row (design.md "Host Symbol ABI"), which
 # Monotype lowering enforces while building this module.
-# platform/FallibleWiden.roc is the rejected counterpart, where the same
-# channels ask for a row wider than the declared one.
+# platform/FallibleWiden.roc is the wider counterpart, where the same channels
+# ask for a row wider than the declared one.
 FallibleChannels := [].{
 	# Channel: an annotated binding.
 	via_annotation! : {} => Try(Str, [HostErr(Str)])
@@ -31,10 +31,10 @@ FallibleChannels := [].{
 		holder.result
 	}
 
-	# Channel: `?` into a closed row wider than the declared one. The Hosted
-	# Try Question Widening rule accepts this the same way it accepts an open
-	# enclosing row, and lowering bridges it with an adapter, so the boundary
-	# is still called at the declared row.
+	# Channel: `?` into a closed row wider than the declared one. Row
+	# subsumption re-opens the hosted error row at this use, and lowering
+	# bridges it with an adapter, so the boundary is still called at the
+	# declared row.
 	via_question_closed_wider! : {} => Try(Str, [HostErr(Str), Widened(I32)])
 	via_question_closed_wider! = |{}| Ok(FallibleHost.str_ok!({})?)
 

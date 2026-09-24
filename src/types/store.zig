@@ -798,11 +798,6 @@ pub const Store = struct {
     /// or add a member (and the design.md declaration it cites) in the same
     /// change. "It makes a test pass" is not a rule.
     pub const RedirectRule = enum {
-        /// (ii) design.md "Hosted Try Question Widening": `?` on a direct call
-        /// of a hosted function widens the condition's closed error row to the
-        /// enclosing annotated return's error row when every visible error is
-        /// included, keeping the hosted callee's declared closed row intact.
-        hosted_try_question_widening,
         /// (ii) design.md "Polarity" / Rewrite Inventory
         /// `closeTagRowsForDerivation`: a polarity marker rigid in tag-ext
         /// position (the alias-declaration-body deferral, which stands for
@@ -2117,7 +2112,7 @@ test "declared redirects preserve destination checked identity and structural ba
     try store.union_(a, b, .{ .content = .err, .rank = Rank.outermost });
 
     const destination = try store.freshFromContent(.{ .structure = .empty_record });
-    try store.dangerousSetVarRedirect(.hosted_try_question_widening, b, destination);
+    try store.dangerousSetVarRedirect(.derivation_marker_ext_closure, b, destination);
 
     const storage = store.resolveStorageRoot(a);
     try std.testing.expectEqual(@as(u8, 1), store.getUnionRank(storage.storage_var));

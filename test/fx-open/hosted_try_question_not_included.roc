@@ -1,11 +1,10 @@
 app [main!] { pf: platform "./platform/fallible_reject_main.roc" }
 
-# Rejected side of the hosted-try-question-widening rule (design.md "Hosted
-# Try Question Widening"), paired with issue_9963_hosted_try_question_mark.roc
-# (the accepted side): a hosted callee's `?` widens only when its visible
-# errors are included in the enclosing annotated return row. FallibleReject's
-# annotation omits HostErr, so checking this app must fail with a type
-# mismatch in that platform module.
+# Rejected counterpart of issue_9963_hosted_try_question_mark.roc: `?` on a
+# hosted call re-raises the hosted error row into the enclosing function's
+# return row, whose annotation still bounds what that function may produce
+# (design.md "Row Subsumption"). FallibleReject's annotation omits HostErr, so
+# checking this app must fail with a type mismatch in that platform module.
 
 import pf.FallibleReject
 import pf.Stdout

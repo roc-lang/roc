@@ -9172,6 +9172,29 @@ test "row subsumption coerces a forwarder whose signature is a function alias" {
     , 1);
 }
 
+test "row subsumption coerces a forwarder named through an alias of its owner" {
+    // `Named.fwd` is an associated lookup through an alias of the nominal that
+    // owns `fwd`, a use of the same definition a direct lookup names, so it
+    // re-opens the same coerced row and is served by one adapter.
+    try expectRowSubsumptionProgram(
+        \\Owner := [].{
+        \\    fwd : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]
+        \\    fwd = |s| s
+        \\}
+        \\
+        \\Named : Owner
+        \\
+        \\wider : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str), Extra]
+        \\wider = |s| Named.fwd(s)
+        \\
+        \\show : [Ok(Str), Err(Str), Extra] -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Ok("a"))) == "Ok(a)" and show(wider(Err("b"))) == "Err(b)"
+    , 1);
+}
+
 test "row subsumption coerces a generic forwarder" {
     // A coerced definition that is also generalized over a type variable takes
     // the checker's generalized instantiation branch rather than the

@@ -618,6 +618,19 @@ host_boundary_annotations: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, void),
 /// audit (`auditImplicitOpenExts`).
 implicit_open_exts: std.ArrayListUnmanaged(ImplicitOpenExt),
 annotation_implicit_open_exts: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, ImplicitOpenExtRange),
+/// The result-row site of every adapter-reachable row the annotation currently
+/// being generated closed AS WRITTEN (`OpeningBehavior.as_written`), whether
+/// written inline or contributed by an alias it names. Scratch for one
+/// `generateAnnotationType` call.
+written_result_rows: std.ArrayListUnmanaged(ResultRowSite),
+/// Per host-boundary annotation: the one adapter-reachable result row its
+/// generation closed as written, or `.none`. A hosted function's row is closed
+/// by declaration rather than by a body, so this is the whole producer answer
+/// row subsumption needs for it (`hostedResultRowCoercedSite`). The value names
+/// a position, not a type variable, so a speculative generation that is
+/// rolled back cannot leave it dangling; generating the annotation again
+/// writes the same answer.
+host_annotation_result_rows: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, ResultRowSite),
 /// The `implicit_open_exts` ranges of VALUE bindings whose rows were minted
 /// but NOT quantified—the residue of the syntactic pre-test that decides
 /// value generalization (`annotationOpensValueRow`; design.md "Three
@@ -2963,6 +2976,8 @@ fn initAssumePrepared(
         .host_boundary_annotations = .empty,
         .implicit_open_exts = .empty,
         .annotation_implicit_open_exts = .empty,
+        .written_result_rows = .empty,
+        .host_annotation_result_rows = .empty,
         .unquantified_value_implicit_open_ext_ranges = .empty,
         .late_implicit_open_ext_audits = .empty,
         .erroneous_value_patterns = .empty,
@@ -3102,6 +3117,8 @@ pub fn deinit(self: *Self) void {
     self.host_boundary_annotations.deinit(self.gpa);
     self.implicit_open_exts.deinit(self.gpa);
     self.annotation_implicit_open_exts.deinit(self.gpa);
+    self.written_result_rows.deinit(self.gpa);
+    self.host_annotation_result_rows.deinit(self.gpa);
     self.unquantified_value_implicit_open_ext_ranges.deinit(self.gpa);
     self.late_implicit_open_ext_audits.deinit(self.gpa);
     self.codec_row_demands.deinit(self.gpa);
@@ -7487,6 +7504,7 @@ fn instantiateVarPolarized(
     polarity_behavior: PolarityVarBehavior,
     polarity: Polarity,
     reach: Instantiator.AdapterReach,
+    written_rows: WrittenResultRows,
     evidence: InstantiationEvidence,
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
@@ -7494,6 +7512,8 @@ fn instantiateVarPolarized(
 
     var opened_marker_exts: std.ArrayListUnmanaged(Instantiator.OpenedMarkerExt) = .empty;
     defer opened_marker_exts.deinit(self.gpa);
+    var closed_marker_reaches: std.ArrayListUnmanaged(Instantiator.AdapterReach) = .empty;
+    defer closed_marker_reaches.deinit(self.gpa);
     var instantiate_ctx = Instantiator{
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
@@ -7508,9 +7528,14 @@ fn instantiateVarPolarized(
         .current_reach = reach,
         .try_nominal = self.tryNominalIdent(),
         .opened_marker_exts = &opened_marker_exts,
+        .closed_marker_reaches = switch (written_rows) {
+            .record => &closed_marker_reaches,
+            .ignore => null,
+        },
     };
     const instantiated = try self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false, evidence);
     try self.recordOpenedMarkerExts(opened_marker_exts.items, region_behavior);
+    try self.recordClosedMarkerReaches(closed_marker_reaches.items);
     return instantiated;
 }
 
@@ -7539,6 +7564,21 @@ fn recordOpenedMarkerExts(self: *Self, opened: []const Instantiator.OpenedMarker
                 .signature, .nested => .none,
             },
         });
+    }
+}
+
+/// Record the reaches of alias markers a host-boundary annotation's
+/// instantiation closed as written, so a row that annotation names through an
+/// alias reports the same result-row site the inline spelling reports
+/// (`written_result_rows`).
+fn recordClosedMarkerReaches(self: *Self, reaches: []const Instantiator.AdapterReach) std.mem.Allocator.Error!void {
+    for (reaches) |reach| {
+        const site: ResultRowSite = switch (reach) {
+            .result => .direct,
+            .try_row => .try_error_row,
+            .signature, .nested => .none,
+        };
+        if (site != .none) try self.written_result_rows.append(self.gpa, site);
     }
 }
 
@@ -7727,7 +7767,7 @@ fn instantiateVarWithSubs(
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
-    return self.instantiateVarWithSubsPolarized(var_to_instantiate, subs, env, region_behavior, .close, .pos, .nested);
+    return self.instantiateVarWithSubsPolarized(var_to_instantiate, subs, env, region_behavior, .close, .pos, .nested, .ignore);
 }
 
 /// `instantiateVarWithSubs` with explicit polarity var handling; see
@@ -7741,12 +7781,15 @@ fn instantiateVarWithSubsPolarized(
     polarity_behavior: PolarityVarBehavior,
     polarity: Polarity,
     reach: Instantiator.AdapterReach,
+    written_rows: WrittenResultRows,
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     var opened_marker_exts: std.ArrayListUnmanaged(Instantiator.OpenedMarkerExt) = .empty;
     defer opened_marker_exts.deinit(self.gpa);
+    var closed_marker_reaches: std.ArrayListUnmanaged(Instantiator.AdapterReach) = .empty;
+    defer closed_marker_reaches.deinit(self.gpa);
     var instantiate_ctx = Instantiator{
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
@@ -7761,9 +7804,14 @@ fn instantiateVarWithSubsPolarized(
         .current_reach = reach,
         .try_nominal = self.tryNominalIdent(),
         .opened_marker_exts = &opened_marker_exts,
+        .closed_marker_reaches = switch (written_rows) {
+            .record => &closed_marker_reaches,
+            .ignore => null,
+        },
     };
     const instantiated = try self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false, .none);
     try self.recordOpenedMarkerExts(opened_marker_exts.items, region_behavior);
+    try self.recordClosedMarkerReaches(closed_marker_reaches.items);
     return instantiated;
 }
 
@@ -14649,8 +14697,15 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         // `lower.zig`), and that specialization is defined as a widening
         // adapter in the caller's draft when its use widened the row
         // (`lower.completeCallerOwnedResultRowWideningAdapter`).
+        //
+        // A hosted function has no body; its row is closed by declaration,
+        // so its producer answer comes from the annotation alone
+        // (`hostedResultRowCoercedSite`).
         if (def_is_function) {
-            const site = self.annotationResultRowCoercedSite(annotation_idx);
+            const site = if (def_expr == .e_hosted_lambda)
+                self.hostedResultRowCoercedSite(annotation_idx)
+            else
+                self.annotationResultRowCoercedSite(annotation_idx);
             if (site != .none) {
                 try self.cir.recordResultRowCoercion(ModuleEnv.nodeIdxFrom(def_idx), site == .try_error_row);
             }
@@ -16907,6 +16962,20 @@ const GenTypeAnnoCtx = union(enum) {
         };
     }
 
+    /// Whether a declaration this ctx instantiates reports the adapter-reachable
+    /// rows it closes as written (`Check.written_result_rows`). Only an
+    /// as-written annotation closes a row by declaration; every other
+    /// annotation's rows are decided by opening or deferral instead.
+    fn writtenResultRows(self: GenTypeAnnoCtx) WrittenResultRows {
+        return switch (self) {
+            .annotation => |anno_ctx| switch (anno_ctx.opening) {
+                .as_written => .record,
+                .implicit_open, .per_use => .ignore,
+            },
+            .type_decl => .ignore,
+        };
+    }
+
     /// How polarity vars in referenced type declarations should be
     /// instantiated when this ctx generates a lookup/apply of a declaration.
     fn polarityVarBehavior(self: GenTypeAnnoCtx) PolarityVarBehavior {
@@ -16976,6 +17045,11 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
     // the post-body audit (`auditImplicitOpenExts`); the range is committed
     // at the end of this function.
     const implicit_open_exts_start: u32 = @intCast(self.implicit_open_exts.items.len);
+    // Every adapter-reachable row this generation closes as written (only a
+    // host-boundary annotation records any); folded into
+    // `host_annotation_result_rows` below and truncated on the way out.
+    const written_result_rows_start = self.written_result_rows.items.len;
+    defer self.written_result_rows.shrinkRetainingCapacity(written_result_rows_start);
 
     // Reset seen type annos
     self.seen_annos.unsetAll();
@@ -17006,6 +17080,15 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
         .adapter_reach = .signature,
     } };
     try self.generateAnnoTypeInPlace(annotation.anno, env, ctx, .pos);
+    // Read before the where clause is generated: a where-method signature's
+    // rows are its own, not this signature's result.
+    if (opening == .as_written) {
+        try self.host_annotation_result_rows.put(
+            self.gpa,
+            annotation_idx,
+            singleResultRowSite(self.written_result_rows.items[written_result_rows_start..]),
+        );
+    }
     if (annotation.where) |where_span| {
         if (try self.generateRemainingWhereConstraintOwners(where_span, env, ctx)) {
             try self.markErroneous(ModuleEnv.varFrom(annotation.anno));
@@ -17079,6 +17162,36 @@ const ResultRowSite = enum {
     /// The error row of a `Try` standing as the signature's result.
     try_error_row,
 };
+
+/// Whether an annotation-position instantiation reports the adapter-reachable
+/// rows it closes as written (`GenTypeAnnoCtx.writtenResultRows`).
+const WrittenResultRows = enum { record, ignore };
+
+/// The one site in `sites`, or `.none` when there is none or more than one.
+/// More than one is not a coercion site for the reason `coercibleResultRowExt`
+/// gives: lowering re-tags exactly one row per template.
+fn singleResultRowSite(sites: []const ResultRowSite) ResultRowSite {
+    return if (sites.len == 1) sites[0] else .none;
+}
+
+/// Row subsumption for a HOSTED function (design.md "Row Subsumption"): the
+/// `Try` error row its annotation closed as written. A hosted row is closed by
+/// declaration—`..` is rejected at a host boundary—not by a body, so it is
+/// coerced whenever the annotation reports one, and every use re-opens its own
+/// copy exactly as a use of a forwarding Roc function does.
+///
+/// Only the `Try` error row. A widened hosted request is served by the hosted
+/// adapter, which calls the extern at its declared type and re-tags the error
+/// row of its `Try` result (`lower.hostedTryReturnInjectionExpr`); a hosted
+/// function's DIRECT result row has no such adapter, so widening it would
+/// emit the extern at a type the host never compiled against. That row keeps
+/// its declared closed row, and a widening use is an ordinary mismatch.
+fn hostedResultRowCoercedSite(self: *const Self, annotation_idx: CIR.Annotation.Idx) ResultRowSite {
+    return switch (self.host_annotation_result_rows.get(annotation_idx) orelse .none) {
+        .try_error_row => .try_error_row,
+        .direct, .none => .none,
+    };
+}
 
 /// The one implicitly opened extension of `annotation_idx` that row subsumption
 /// may coerce, or null when the annotation opened no adapter-reachable result
@@ -19027,6 +19140,7 @@ fn unifyAnnoWithExternalType(
         ctx.polarityVarBehavior(),
         polarity,
         ctx.instantiationReach(),
+        ctx.writtenResultRows(),
         .none,
     );
     _ = try self.unify(anno_var, ext_instantiated_var, env);
@@ -19205,7 +19319,7 @@ fn instantiateWhereAliasConstraint(
         // A faithful copy: the declaration's where-method signatures keep
         // their polarity markers, which the referencing annotation's own body
         // uses and obligations resolve.
-        .fn_var = try self.instantiateVarWithSubsPolarized(constraint.fn_var, subs, env, .{ .explicit = region }, .preserve, .pos, .nested),
+        .fn_var = try self.instantiateVarWithSubsPolarized(constraint.fn_var, subs, env, .{ .explicit = region }, .preserve, .pos, .nested, .ignore),
         .origin = .{ .where_clause = .{} },
     };
 }
@@ -19635,6 +19749,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             ctx.polarityVarBehavior(),
                             polarity,
                             ctx.instantiationReach(),
+                            ctx.writtenResultRows(),
                             .none,
                         );
                         _ = try self.unify(anno_var, instantiated_var, env);
@@ -19891,6 +20006,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         ctx.polarityVarBehavior(),
                         polarity,
                         ctx.instantiationReach(),
+                        ctx.writtenResultRows(),
                     );
                     if (decl_is_alias and !try self.validateAliasRows(instantiated_var, env, anno_region)) {
                         try self.markErroneous(anno_var);
@@ -19975,6 +20091,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             ctx.polarityVarBehavior(),
                             polarity,
                             ctx.instantiationReach(),
+                            ctx.writtenResultRows(),
                         );
                         if (ext_is_alias and !try self.validateAliasRows(instantiated_var, env, anno_region)) {
                             try self.markErroneous(anno_var);
@@ -20136,6 +20253,20 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 // and everything else is out of the adapter's reach.
                 .signature, .nested => .none,
             };
+            // A host-boundary annotation closes this row as written. When it
+            // stands at the adapter-reachable result row, that site is the
+            // producer answer row subsumption reads for a hosted function
+            // (`hostedResultRowCoercedSite`). Only a row the walk itself
+            // closes: an explicit extension (`..`, `..others`) is not closed,
+            // and `[]` is never opened.
+            if (output_opening == .as_written and tag_union.ext == null) {
+                const written_site: ResultRowSite = switch (ctx.annotation.adapter_reach) {
+                    .result => .direct,
+                    .try_row => .try_error_row,
+                    .signature, .nested => .none,
+                };
+                if (written_site != .none) try self.written_result_rows.append(self.gpa, written_site);
+            }
             const ext_var = inner_blk: {
                 if (tag_union.ext) |ext_anno_idx| {
                     if ((implicitly_open or deferred_open) and self.annoIsAnonymousOpenExt(ext_anno_idx)) {
@@ -26236,230 +26367,6 @@ fn tryArgsFromVar(self: *Self, try_var: Var) ?TryArgs {
     }
 }
 
-/// Whether a `?` condition is a direct call of a hosted function—the only
-/// shape the hosted-try-question-widening rule (design.md "Hosted Try Question
-/// Widening") applies to. The callee is statically resolved from the call's
-/// function expression (the local or external lookup canonicalization
-/// produced); dispatch calls and value-carried functions are never direct
-/// hosted calls, so `?` on them gets no widening.
-fn tryConditionIsDirectHostedCall(self: *Self, cond_idx: CIR.Expr.Idx) bool {
-    const expr = self.cir.store.getExpr(cond_idx);
-    if (expr != .e_call) return false;
-    const call = expr.e_call;
-    const callable_def = self.hoistedCallableDefForExpr(self.cir, call.func) orelse return false;
-    const def = callable_def.module.store.getDef(callable_def.def);
-    return callable_def.module.store.getExpr(def.expr) == .e_hosted_lambda;
-}
-
-/// The hosted-try-question-widening rule (design.md "Hosted Try Question
-/// Widening"): `?` on a direct call of a hosted function widens the condition
-/// to a fresh `Try` at the enclosing annotated return's error row when every
-/// visible error in the callee's row is included in it. The redirect targets
-/// the fresh `Try`, so the hosted callee's declared closed row—the host
-/// ABI's shape—is what checking outputs for the callee itself. For every
-/// other callee, a closed error row meeting an open annotated row stays a
-/// type error (issue #9798's program is rejected by design); the caller gates
-/// on `tryConditionIsDirectHostedCall`.
-///
-/// This is a typing mechanism, not the host ABI's protection. What a hosted
-/// extern is emitted at is decided at the producer: Monotype lowering admits
-/// only the hosted declaration's own type at an extern boundary and stops the
-/// build otherwise (`requireHostedExternAtDeclaredAbi`,
-/// src/postcheck/monotype/lower.zig, and design.md "Host Symbol ABI"). Widening
-/// the condition here therefore changes which programs typecheck and which
-/// caller-side adapter lowering generates; it cannot change the boundary. Judge
-/// changes to this rewrite as type-semantics choices on that basis.
-fn widenTryConditionForExpectedReturn(
-    self: *Self,
-    cond_var: Var,
-    expected_return: Var,
-    env: *Env,
-    region: Region,
-) std.mem.Allocator.Error!void {
-    const actual_try = self.tryArgsFromVar(cond_var) orelse return;
-    const expected_try = self.tryArgsFromVar(expected_return) orelse return;
-
-    if (!try self.tryErrorRowNeedsUseSiteWidening(actual_try.err, expected_try.err)) {
-        return;
-    }
-
-    // Ordinary tag-union unification rejects closed-vs-open rigid rows; this
-    // use-site rewrite runs only after proving the callee's visible errors are
-    // included in the expected row.
-    const widened_try_var = try self.freshFromContent(
-        try self.mkTryContent(actual_try.ok, expected_try.err),
-        env,
-        region,
-    );
-    const cond_root = self.types.resolveVar(cond_var).var_;
-    if (cond_root != widened_try_var) {
-        try self.types.dangerousSetVarRedirect(.hosted_try_question_widening, cond_root, widened_try_var);
-    }
-}
-
-fn tryErrorRowNeedsUseSiteWidening(self: *Self, actual_err: Var, expected_err: Var) std.mem.Allocator.Error!bool {
-    // The shortcut below declines the rule when ordinary unification already
-    // relates the pair. That is sound only when taking it is observationally
-    // the same as applying the rule, and it is not when the relation is bought
-    // by GROUNDING the expected row's still-open extension: rolling the probe
-    // back and then performing that same binding for real publishes a CLOSED
-    // row from an annotation that reads open, so two definitions with
-    // byte-identical annotations stop being interchangeable for their callers
-    // (design.md "Polarity"). So when the expected row still ends open, the
-    // declared condition—every visible error in the callee's row is included
-    // in the expected row—decides on its own. Widening then targets the
-    // annotated row itself, which leaves the extension unbound and hands
-    // lowering the same adapter request an annotation listing strictly more
-    // tags already produces.
-    if (!self.tryErrorRowEndsOpen(expected_err) and
-        try self.probeCanUseAs(expected_err, actual_err))
-    {
-        return false;
-    }
-
-    var visited_actual = std.AutoHashMap(Var, void).init(self.gpa);
-    defer visited_actual.deinit();
-    return try self.actualTagRowIsIncludedInExpected(actual_err, expected_err, &visited_actual);
-}
-
-/// Whether an error row's extension chain still ends in an unbound extension.
-/// The expected row here is always an annotated return's error row
-/// (`expected_result` is set only for an annotated lambda), so an unbound tail
-/// is the annotation's implicitly opened extension (design.md "Polarity") and
-/// unifying a closed row into it would ground it rather than flow through it.
-/// A rigid tail (a written `..others`) and an already-closed row are both
-/// bound, so both read as not-open. This walks explicit row topology produced
-/// by checking; it inspects no source syntax.
-fn tryErrorRowEndsOpen(self: *Self, err_var: Var) bool {
-    var current = err_var;
-    var guard = types_mod.debug.IterationGuard.init("tryErrorRowEndsOpen");
-    while (true) {
-        guard.tick();
-        const resolved = self.types.resolveVar(current);
-        switch (resolved.desc.content) {
-            .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            .structure => |flat| switch (flat) {
-                .tag_union => |tag_union| current = tag_union.ext,
-                .empty_tag_union => return false,
-                .record,
-                .tuple,
-                .nominal_type,
-                .fn_pure,
-                .fn_effectful,
-                .fn_unbound,
-                .empty_record,
-                => return false,
-            },
-            .flex => return true,
-            .rigid, .field_presence, .err => return false,
-        }
-    }
-}
-
-fn probeCanUseAs(self: *Self, expected_var: Var, actual_var: Var) std.mem.Allocator.Error!bool {
-    var probe = try self.beginProbe(null);
-    defer probe.rollback();
-    return try self.probeUnifyWithoutRecordingProblems(expected_var, actual_var);
-}
-
-fn actualTagRowIsIncludedInExpected(
-    self: *Self,
-    actual_var: Var,
-    expected_var: Var,
-    visited_actual: *std.AutoHashMap(Var, void),
-) std.mem.Allocator.Error!bool {
-    const actual_resolved = self.types.resolveVar(actual_var);
-    if (visited_actual.contains(actual_resolved.var_)) return true;
-    try visited_actual.put(actual_resolved.var_, {});
-
-    switch (actual_resolved.desc.content) {
-        .alias => |alias| return try self.actualTagRowIsIncludedInExpected(
-            self.types.getAliasBackingVar(alias),
-            expected_var,
-            visited_actual,
-        ),
-        .structure => |flat| switch (flat) {
-            .empty_tag_union => return true,
-            .tag_union => |tag_union| {
-                const tags = self.types.getTagsSlice(tag_union.tags);
-                const names = tags.items(.name);
-                const args_ranges = tags.items(.args);
-                for (names, args_ranges) |name, args| {
-                    const actual_tag = types_mod.Tag{ .name = name, .args = args };
-                    if (!try self.expectedTagRowContainsTag(expected_var, actual_tag)) {
-                        return false;
-                    }
-                }
-                return try self.actualTagRowIsIncludedInExpected(tag_union.ext, expected_var, visited_actual);
-            },
-            .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return false,
-        },
-        .err => return true,
-        .flex, .rigid, .field_presence => return false,
-    }
-}
-
-fn expectedTagRowContainsTag(
-    self: *Self,
-    expected_var: Var,
-    actual_tag: types_mod.Tag,
-) std.mem.Allocator.Error!bool {
-    var visited_expected = std.AutoHashMap(Var, void).init(self.gpa);
-    defer visited_expected.deinit();
-
-    const expected_tag = try self.findVisibleTagInRow(expected_var, actual_tag.name, &visited_expected) orelse return false;
-    return try self.tagsCanUseSamePayloads(expected_tag, actual_tag);
-}
-
-fn findVisibleTagInRow(
-    self: *Self,
-    row_var: Var,
-    tag_name: Ident.Idx,
-    visited: *std.AutoHashMap(Var, void),
-) std.mem.Allocator.Error!?types_mod.Tag {
-    const row_resolved = self.types.resolveVar(row_var);
-    if (visited.contains(row_resolved.var_)) return null;
-    try visited.put(row_resolved.var_, {});
-
-    switch (row_resolved.desc.content) {
-        .alias => |alias| return try self.findVisibleTagInRow(
-            self.types.getAliasBackingVar(alias),
-            tag_name,
-            visited,
-        ),
-        .structure => |flat| switch (flat) {
-            .tag_union => |tag_union| {
-                const tags = self.types.getTagsSlice(tag_union.tags);
-                const names = tags.items(.name);
-                const args_ranges = tags.items(.args);
-                for (names, args_ranges) |name, args| {
-                    if (name.eql(tag_name)) {
-                        return types_mod.Tag{ .name = name, .args = args };
-                    }
-                }
-                return try self.findVisibleTagInRow(tag_union.ext, tag_name, visited);
-            },
-            .empty_tag_union => return null,
-            .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return null,
-        },
-        .err, .flex, .rigid, .field_presence => return null,
-    }
-}
-
-fn tagsCanUseSamePayloads(self: *Self, expected_tag: types_mod.Tag, actual_tag: types_mod.Tag) std.mem.Allocator.Error!bool {
-    if (expected_tag.args.len() != actual_tag.args.len()) return false;
-
-    var expected_args = self.types.iterVars(expected_tag.args);
-    var actual_args = self.types.iterVars(actual_tag.args);
-    while (expected_args.next()) |expected_arg| {
-        const actual_arg = actual_args.next().?;
-        if (!try self.probeCanUseAs(expected_arg, actual_arg)) {
-            return false;
-        }
-    }
-    return true;
-}
-
 // if-else //
 
 const IfCheckPhase = enum {
@@ -27036,10 +26943,6 @@ fn checkMatchExpr(
         if (!try_result.isEstablished()) {
             has_invalid_try = true;
             had_type_error = true;
-        } else if (self.currentExpectedReturnResult()) |expected_return| {
-            if (self.tryConditionIsDirectHostedCall(match.cond)) {
-                try self.widenTryConditionForExpectedReturn(cond_var, expected_return, env, expr_region);
-            }
         }
     }
     if (!match.is_try_suffix and !match.skip_exhaustiveness) {
@@ -28995,7 +28898,17 @@ fn checkResolvedAssociatedTarget(
         region,
         .{ .value_use = expr_idx },
     );
-    _ = try self.unify(expr_var, target_var, env);
+    // Row subsumption: an associated item named through an alias of its
+    // owner is a use of that definition exactly like a local or external
+    // lookup of it, so it reads the producing module's coercion record the
+    // same way (design.md "Row Subsumption").
+    const use_var = try self.reopenCoercedResultRow(
+        target_var,
+        coercedResultRowSite(target_env, ModuleEnv.nodeIdxFrom(target_def_idx)),
+        env,
+        region,
+    );
+    _ = try self.unify(expr_var, use_var, env);
 }
 
 fn failAssociatedLookup(
@@ -34138,11 +34051,6 @@ fn pushReturnConstraintFrame(
         .body_result = body_result,
         .expected_result = expected_result,
     });
-}
-
-fn currentExpectedReturnResult(self: *const Self) ?Var {
-    if (self.return_constraint_frames.items.len == 0) return null;
-    return self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1].expected_result;
 }
 
 fn expectedReturnResultFor(self: *const Self, lambda_idx: CIR.Expr.Idx) ?Var {

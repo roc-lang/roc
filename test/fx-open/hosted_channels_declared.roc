@@ -6,7 +6,7 @@ app [main!] { pf: platform "./platform/main.roc" }
 # returns Ok("ok"), so each line must print "ok". An extern emitted at anything
 # other than the declared row would read those same bytes as Err, which is why
 # each line prints what it actually received (design.md "Host Symbol ABI").
-# hosted_widening_channels.roc is the rejected counterpart.
+# hosted_widening_channels.roc is the counterpart at a wider row.
 
 import pf.FallibleChannels
 import pf.Stdout

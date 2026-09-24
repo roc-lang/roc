@@ -247,7 +247,10 @@ pub const Constants = struct {
     ///      through an alias records its adapter-reachable site; a signature
     ///      with a `where` clause publishes no row coercion; and a value
     ///      binding's unquantified implicitly opened rows are grounded by rank.
-    pub const CACHE_VERSION = 110;
+    /// 111: A hosted function records a row coercion for the `Try` error row
+    ///      its annotation closes as written, so every use re-opens its copy;
+    ///      a signature with a `where` clause records one like any other.
+    pub const CACHE_VERSION = 111;
 };
 
 /// Configuration for the Roc cache system.
