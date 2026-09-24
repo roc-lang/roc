@@ -65,6 +65,8 @@ pub const Counters = struct {
     interface_replay_digest_root_requests: u64 = 0,
     interface_replay_digest_node_misses: u64 = 0,
     interface_summary_hits: u64 = 0,
+    /// Summary hits whose expansion contributed no constraint beyond its input.
+    interface_summary_unchanged_hits: u64 = 0,
     interface_summary_expansions: u64 = 0,
     interface_summary_verifications: u64 = 0,
     interface_relation_requests: u64 = 0,

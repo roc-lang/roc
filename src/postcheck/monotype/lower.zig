@@ -4115,11 +4115,15 @@ const Builder = struct {
         defer roots.deinit(self.allocator);
         for (entries) |entry| {
             try roots.appendSlice(self.allocator, entry.request.leaves);
-            for (entry.summary.nodes) |node| switch (node) {
+            const summary = switch (entry.summary) {
+                .unchanged => continue,
+                .constraints => |constraints| constraints,
+            };
+            for (summary.nodes) |node| switch (node) {
                 .mono => |ty| try roots.append(self.allocator, ty),
                 .open => {},
             };
-            for (entry.summary.open_nodes) |node| {
+            for (summary.open_nodes) |node| {
                 if (node.finished) |ty| try roots.append(self.allocator, ty);
             }
         }
@@ -18132,7 +18136,36 @@ const InterfaceSummaryEntry = struct {
     address: InterfaceReplayAddress,
     evidence: StoredConstFnEvidence,
     request: InterfaceConstraints.Identity,
-    summary: InterfaceConstraints,
+    summary: InterfaceSummary,
+};
+
+/// A completed expansion's contribution to its request roots. An expansion
+/// whose captured roots equal its captured input added no constraint, so
+/// replaying it relates nothing and instantiates nothing.
+const InterfaceSummary = union(enum) {
+    unchanged,
+    constraints: InterfaceConstraints,
+
+    fn copy(self: InterfaceSummary, allocator: Allocator, context: anytype) Allocator.Error!InterfaceSummary {
+        return switch (self) {
+            .unchanged => .unchanged,
+            .constraints => |constraints| .{ .constraints = try constraints.copy(allocator, context) },
+        };
+    }
+
+    fn eql(self: InterfaceSummary, other: InterfaceSummary, graph: *InstGraph, allocator: Allocator, types_: *Type.Store, name_store: *const names.NameStore) Allocator.Error!bool {
+        return switch (self) {
+            .unchanged => other == .unchanged,
+            .constraints => |constraints| switch (other) {
+                .unchanged => false,
+                .constraints => |other_constraints| try (try constraints.identityInto(graph, allocator)).eql(
+                    try other_constraints.identityInto(graph, allocator),
+                    types_,
+                    name_store,
+                ),
+            },
+        };
+    }
 };
 
 const InterfaceSummaryCopy = struct {
@@ -18187,7 +18220,7 @@ const InterfaceSummaryCache = struct {
         self.evidence_arena.deinit();
     }
 
-    fn insert(self: *InterfaceSummaryCache, types_: *Type.Store, name_store: *const names.NameStore, entry: InterfaceSummaryEntry) Allocator.Error!InterfaceConstraints {
+    fn insert(self: *InterfaceSummaryCache, types_: *Type.Store, name_store: *const names.NameStore, entry: InterfaceSummaryEntry) Allocator.Error!InterfaceSummary {
         const bucket = try self.buckets.getOrPut(entry.address);
         if (!bucket.found_existing) bucket.value_ptr.* = .empty;
         for (bucket.value_ptr.items) |index| {
@@ -18215,10 +18248,13 @@ const InterfaceSummaryCache = struct {
 const InterfaceReplayEntry = struct {
     address: InterfaceReplayAddress,
     evidence: StoredConstFnEvidence,
+    /// `request.bytes[0..input_len]` identifies the captured input interface;
+    /// the remaining bytes mark the checked-error substitution slots.
     request: InterfaceConstraints.Identity,
+    input_len: usize,
     roots: []const NodeId,
-    summary: ?InterfaceConstraints = null,
-    verify_summary: ?InterfaceConstraints = null,
+    summary: ?InterfaceSummary = null,
+    verify_summary: ?InterfaceSummary = null,
     status: InterfaceReplayStatus = .expanding,
     lowlink: usize,
 };
@@ -22921,7 +22957,7 @@ const BodyContext = struct {
         return .{ .cache = &workspace.interface_summaries, .types_are_durable = false };
     }
 
-    fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, request: InterfaceConstraints.Identity) Allocator.Error!?InterfaceConstraints {
+    fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, request: InterfaceConstraints.Identity) Allocator.Error!?InterfaceSummary {
         const local = self.interfaceSummaryCache().cache;
         if (local.buckets.get(address)) |candidates| for (candidates.items) |index| {
             const entry = local.entries.items[index];
@@ -22945,7 +22981,7 @@ const BodyContext = struct {
         return null;
     }
 
-    fn importInterfaceSummary(self: *BodyContext, entry: InterfaceSummaryEntry, request: InterfaceConstraints.Identity) Allocator.Error!?InterfaceConstraints {
+    fn importInterfaceSummary(self: *BodyContext, entry: InterfaceSummaryEntry, request: InterfaceConstraints.Identity) Allocator.Error!?InterfaceSummary {
         const relocation = InterfaceSummaryRelocation{
             .source_names = &self.builder.program.names,
             .destination_names = self.nameStoreMut(),
@@ -22959,7 +22995,7 @@ const BodyContext = struct {
         return try self.insertInterfaceSummary(.{ .address = entry.address, .evidence = entry.evidence, .request = imported_request, .summary = summary });
     }
 
-    fn insertInterfaceSummary(self: *BodyContext, entry: InterfaceSummaryEntry) Allocator.Error!InterfaceConstraints {
+    fn insertInterfaceSummary(self: *BodyContext, entry: InterfaceSummaryEntry) Allocator.Error!InterfaceSummary {
         const binding = self.interfaceSummaryCache();
         if (binding.types_are_durable) {
             // Coordinator leaves already belong to permanent program storage.
@@ -23066,7 +23102,7 @@ const BodyContext = struct {
             .input_digest = TypeDigestHasher.hash(request.bytes),
         };
 
-        var cached: ?InterfaceConstraints = null;
+        var cached: ?InterfaceSummary = null;
         if (replay_state.buckets.get(address)) |candidates| for (candidates.items) |raw_entry| {
             const entry = replay_state.entries.items[raw_entry];
             if (!storedConstFnEvidenceEql(entry.evidence, stored_evidence) or !try entry.request.eql(request, self.typeStore(), self.nameStore())) continue;
@@ -23087,7 +23123,7 @@ const BodyContext = struct {
             }
         };
         if (cached == null and replay_state.use_finished_summaries) cached = try self.findInterfaceSummary(address, stored_evidence, request);
-        var verify_summary: ?InterfaceConstraints = null;
+        var verify_summary: ?InterfaceSummary = null;
         const saved_use_summaries = replay_state.use_finished_summaries;
         defer replay_state.use_finished_summaries = saved_use_summaries;
         if (cached) |summary| {
@@ -23097,9 +23133,15 @@ const BodyContext = struct {
                 self.builder.count("interface_summary_verifications");
                 verify_summary = summary;
                 replay_state.use_finished_summaries = false;
-            } else {
-                try self.relateInterfaceRoots(try summary.instantiate(self.graph), request_roots.items);
-                return;
+            } else switch (summary) {
+                .unchanged => {
+                    self.builder.count("interface_summary_unchanged_hits");
+                    return;
+                },
+                .constraints => |constraints| {
+                    try self.relateInterfaceRoots(try constraints.instantiate(self.graph), request_roots.items);
+                    return;
+                },
             }
         }
         self.builder.count("interface_summary_expansions");
@@ -23118,6 +23160,7 @@ const BodyContext = struct {
             .address = address,
             .evidence = stored_evidence,
             .request = try request.copy(self.graph.arena(), InterfaceSummaryCopy{}),
+            .input_len = shape.bytes.len,
             .roots = roots,
             .lowlink = replay_index,
             .verify_summary = verify_summary,
@@ -23196,12 +23239,15 @@ const BodyContext = struct {
                 const entry = &replay_state.entries.items[index];
                 var scratch = std.heap.ArenaAllocator.init(self.allocator);
                 defer scratch.deinit();
-                const summary = try InterfaceConstraints.capture(self.graph, scratch.allocator(), entry.roots);
+                const constraints = try InterfaceConstraints.capture(self.graph, scratch.allocator(), entry.roots);
+                const entry_input: InterfaceConstraints.Identity = .{ .bytes = entry.request.bytes[0..entry.input_len], .leaves = entry.request.leaves };
+                const summary: InterfaceSummary = if (try (try constraints.identityInto(self.graph, scratch.allocator())).eql(entry_input, self.typeStore(), self.nameStore()))
+                    .unchanged
+                else
+                    .{ .constraints = constraints };
                 entry.status = .ready;
                 if (entry.verify_summary) |expected| {
-                    const expected_identity = try expected.identityInto(self.graph, scratch.allocator());
-                    const actual_identity = try summary.identityInto(self.graph, scratch.allocator());
-                    if (!try expected_identity.eql(actual_identity, self.typeStore(), self.nameStore())) {
+                    if (!try expected.eql(summary, self.graph, scratch.allocator(), self.typeStore(), self.nameStore())) {
                         Common.compilerBug("cached interface constraints disagreed with fresh checked relation expansion");
                     }
                 }

@@ -19,6 +19,7 @@ test "interface summaries replay independent generic inputs with fresh-expansion
         \\}
     , .{ .monotype_only = true, .monotype_diagnostics_out = &diagnostics });
     try std.testing.expect(diagnostics.specialization.interface_summary_hits > 0);
+    try std.testing.expect(diagnostics.specialization.interface_summary_unchanged_hits > 0);
     try std.testing.expect(diagnostics.specialization.interface_summary_verifications > 0);
 }
 
