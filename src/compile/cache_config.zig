@@ -228,7 +228,9 @@ pub const Constants = struct {
     ///      against the binding's own scheme, never the predeclared copy.
     /// 104: Generated-codec calls carry no conditional flag; a derived record
     ///      parser always adds `MissingRequiredField(Str)` to its error row.
-    pub const CACHE_VERSION = 104;
+    /// 105: A generated-codec call for a derived nominal application the walk
+    ///      already covers names the derivation that covers it.
+    pub const CACHE_VERSION = 105;
 };
 
 /// Configuration for the Roc cache system.

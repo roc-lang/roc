@@ -4632,6 +4632,18 @@ covers all type roots, including cross-root sharing. Cycles are compared as
 finite proof graphs. Source contracts remain intact for replay; specialization
 equality uses the shared identity rather than the per-use derivation index.
 
+The checker's derived-codec walk records each nominal application whose
+backing it walks together with the generated derivation that walks it. A later
+occurrence of an equal application in the same walk (a sibling field, a list
+element, or a recursive occurrence inside the application's own backing)
+records its codec call against that derivation rather than walking the backing
+again, so every structural call names a checked derivation and a recursive
+nominal's call names its own. Repeated occurrences of one subject in a body
+share a method role. The debug audit requires every call in a role to be
+proof-equivalent to the role's first call under the specialization identity's
+equality, with types compared modulo transparent aliases like the role itself;
+each occurrence's evidence nodes are distinct allocations with equal content.
+
 Monotype instantiates a generated-codec contract once at the codec boundary.
 Queued specialization contexts retain both the constructor and the explicit
 public value shape. Both participate in specialization identity. A constructor
@@ -4677,7 +4689,8 @@ call edges therefore share one specialization, while the ordinary request type
 and checked evidence still distinguish genuinely different targets. The
 grounding call index remains only activation and debug metadata. A structural
 edge that resolves to a nested derivation (a derived nominal inside a derived
-shape) activates that derivation's own contract inside the enclosing boundary,
+shape) is selected through the same role slots as every other generated call,
+and activates that derivation's own contract inside the enclosing boundary,
 and its calls keep their own checker roles and anchors, because a callee such as
 `parse_tag_union` prepares its payload calls from its anchored contract. Phase B
 emits the whole boundary through one shape-addressed plan, so the root and a
@@ -4688,6 +4701,20 @@ specialization identity for such a request is its request type, checked
 evidence, lexical context, and codec kind, not the contract or derivation that
 supplied the edges. These audits and their consumption bits are absent from
 release compiler builds.
+
+A recursive nominal's contract names its own derivation from inside its
+backing. At the active contract's own anchor shape that call is the nominal's
+reference to itself rather than a nested boundary, so preparation walks the
+backing once and a recursive occurrence it reaches again is already being
+prepared. Phase B structural helper definitions for a parser or encoder are
+addressed by the exact content of their result type: each nesting level builds
+its result from its parent's, so a recursive shape reaches the helper already
+reserved for it through a distinct but equal result type and calls it. The
+structural support checks answer a type already on their current path from
+the rest of the cycle, and the precomputed-plan walks visit each type once. A
+generated tag-union spec with no record shapes
+precomputes nothing and passes that empty plan to its payloads, whose nested
+tag unions build their own specs from it.
 
 Backed named applications keep independent main union-find classes so each
 request retains its own representation witness. An explicit checked/request or
@@ -15133,7 +15160,11 @@ nothing; on a list proven unique and owned at the read it is stamped like
 any other check, and every backend then answers it with a constant, which
 lets the loop's copy version fall away.
 
-Several definitions do not by themselves lose a value's origin. A join
+Several definitions do not by themselves lose a value's origin. An alias
+target whose every definition aliases one source keeps that source's origin,
+each definition being its own transfer edge: emission unshares a statement
+suffix that several paths reach into one copy per path, so the procedure the
+certifier reads binds such a target once on each path. A join
 result cell—the parameter a conditional's arms assign directly before
 jumping to the join, often declared by several nested joins—keeps a
 tracked origin when every definition is a birth, a join declaration, or an

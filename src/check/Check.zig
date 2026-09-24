@@ -39030,7 +39030,7 @@ fn satisfyImplicitParserConstraint(
     // A dispatcher that derives its own codec is validated against the shape
     // that codec is generated from, not against the name in front of it, and
     // everything below is inside that shape for the rest of this constraint.
-    const validation_var = (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.parser_for, .parser, &walk, env, region)) orelse dispatcher_var;
+    const validation_var = (try self.generatedStructuralCodecBackingVar(dispatcher_var, constraint_fn_var, self.cir.idents.parser_for, .parser, &walk, env, region)) orelse dispatcher_var;
     const owner_region_before = self.active_codec_owner_region;
     self.active_codec_owner_region = self.codecRelationOwnerRegion(constraint, failure_expr);
     defer self.active_codec_owner_region = owner_region_before;
@@ -39122,7 +39122,7 @@ fn satisfyImplicitEncoderForConstraint(
     // A dispatcher that derives its own codec is validated against the shape
     // that codec is generated from, not against the name in front of it, and
     // everything below is inside that shape for the rest of this constraint.
-    const validation_var = (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.encoder_for, .encoder, &walk, env, region)) orelse dispatcher_var;
+    const validation_var = (try self.generatedStructuralCodecBackingVar(dispatcher_var, constraint_fn_var, self.cir.idents.encoder_for, .encoder, &walk, env, region)) orelse dispatcher_var;
     const owner_region_before = self.active_codec_owner_region;
     self.active_codec_owner_region = self.codecRelationOwnerRegion(constraint, owner_expr);
     defer self.active_codec_owner_region = owner_region_before;
@@ -39344,11 +39344,13 @@ fn isGeneratedStructuralCodecMethodBinding(method: StaticDispatchMethodBinding, 
 /// The shape a derived codec's obligations belong to, or null when the
 /// dispatcher owns them itself. `method_ident` keys the method registry;
 /// `kind` is what the declaration asked the compiler to derive. The
-/// application is recorded on the walk, so a backing that reaches the
-/// dispatcher again finds it already accounted for.
+/// application is recorded on the walk as owned by `constraint_fn_var`'s
+/// derivation, so a backing that reaches the dispatcher again resolves its
+/// codec call to that derivation.
 fn generatedStructuralCodecBackingVar(
     self: *Self,
     dispatcher_var: Var,
+    constraint_fn_var: Var,
     method_ident: Ident.Idx,
     kind: CIR.DerivedMethodKind,
     walk: *DerivedCodecWalk,
@@ -39376,7 +39378,7 @@ fn generatedStructuralCodecBackingVar(
     // validation this falls back to has to see an unrecorded application to
     // report that rejection.
     const backing_var = (try self.openNominalBackingForApp(nominal, env, region)) orelse return null;
-    if (try self.takeDerivedCodecBackingWalk(walk, nominal) != .walk_backing) return null;
+    if (try self.takeDerivedCodecBackingWalk(walk, nominal, constraint_fn_var) != .walk_backing) return null;
     // The rest of this constraint is spent inside this backing.
     walk.nominal_backing_depth += 1;
     return backing_var;
@@ -40552,6 +40554,10 @@ const DerivedCodecWalk = struct {
         decl: types_mod.NominalDecl.Idx,
         args_start: u32,
         args_len: u32,
+        /// Source constraint of the generated derivation that walks this
+        /// application's backing. Every later occurrence of the application
+        /// in the walk resolves its codec call to that derivation.
+        derivation_source: Var,
     };
 
     fn init(gpa: std.mem.Allocator, generated_calls_start: usize) DerivedCodecWalk {
@@ -40575,6 +40581,7 @@ const DerivedCodecWalk = struct {
         self: *DerivedCodecWalk,
         decl: types_mod.NominalDecl.Idx,
         args: []const Var,
+        derivation_source: Var,
     ) Allocator.Error!void {
         const args_start: u32 = @intCast(self.walked_app_args.items.len);
         try self.walked_app_args.appendSlice(self.gpa, args);
@@ -40582,6 +40589,7 @@ const DerivedCodecWalk = struct {
             .decl = decl,
             .args_start = args_start,
             .args_len = @intCast(args.len),
+            .derivation_source = derivation_source,
         });
     }
 
@@ -40828,11 +40836,12 @@ fn takeDerivedCodecBackingWalk(
     self: *Self,
     walk: *DerivedCodecWalk,
     nominal: types_mod.NominalType,
+    derivation_source: Var,
 ) Allocator.Error!DerivedCodecBackingWalk {
     // Builtin codecs are the format protocol itself, validated against the
     // format's own methods rather than by walking a backing shape. Monotype
     // draws the same line when it looks for a custom codec target.
-    if (nominal.originIsBuiltin()) return .accounted_for;
+    if (nominal.originIsBuiltin()) return .builtin;
     const decl_idx = self.types.lookupNominalDecl(nominal) orelse return .walk_backing;
     // The argument list points into the types store, which the comparison and
     // the walk both read through.
@@ -40849,7 +40858,7 @@ fn takeDerivedCodecBackingWalk(
         seen_decl = true;
         if (app.args_len != args.len) continue;
         assumed.clearRetainingCapacity();
-        if (try self.derivedCodecVarsEql(walk.appArgs(app), args, &assumed)) return .accounted_for;
+        if (try self.derivedCodecVarsEql(walk.appArgs(app), args, &assumed)) return .{ .reuse = app.derivation_source };
     }
 
     // Reaching one declaration again at a shape the walk has not accounted for
@@ -40858,16 +40867,20 @@ fn takeDerivedCodecBackingWalk(
     // obligations to check and none to lower either.
     if (seen_decl and try self.derivedCodecDeclGrowsItsFormals(decl_idx)) return .unbounded;
 
-    try walk.recordApp(decl_idx, args);
+    try walk.recordApp(decl_idx, args, derivation_source);
     return .walk_backing;
 }
 
 /// What the walk should do with a nominal application whose codec the compiler
 /// derives.
-const DerivedCodecBackingWalk = enum {
-    /// Nothing to do: an application of this shape is already accounted for,
-    /// or the type is a builtin whose codec is the format protocol.
-    accounted_for,
+const DerivedCodecBackingWalk = union(enum) {
+    /// Nothing to do: the type is a builtin whose codec is the format protocol.
+    builtin,
+    /// An application of this shape is already accounted for by the generated
+    /// derivation whose source constraint this names. That derivation covers
+    /// every occurrence of the application in the walk, including a recursive
+    /// occurrence inside its own backing.
+    reuse: Var,
     /// The declaration grows its own formals, so its derived codec can never
     /// be monomorphized.
     unbounded,
@@ -41357,9 +41370,13 @@ fn validateDerivedParseNominal(
             .method_name = constraint.fn_name,
         },
     });
+    // The generated derivation this call resolves to: the one validated below,
+    // or the one already covering this application elsewhere in the walk.
+    var derivation_source = expected_fn;
     if (result.isEstablished() and generated_parser) {
-        switch (try self.takeDerivedCodecBackingWalk(walk, nominal)) {
-            .accounted_for => {},
+        switch (try self.takeDerivedCodecBackingWalk(walk, nominal, expected_fn)) {
+            .builtin => {},
+            .reuse => |owner| derivation_source = owner,
             .unbounded => return .unsupported,
             .walk_backing => {
                 walk.nominal_backing_depth += 1;
@@ -41405,7 +41422,7 @@ fn validateDerivedParseNominal(
         self.cir.idents.parser_for,
         nominal_var,
         expected_fn,
-        expected_fn,
+        derivation_source,
         nominal_var,
     )) {
         .ok => {},
@@ -42046,9 +42063,13 @@ fn validateDerivedEncodeNominal(
             .method_name = constraint.fn_name,
         },
     });
+    // The generated derivation this call resolves to: the one validated below,
+    // or the one already covering this application elsewhere in the walk.
+    var derivation_source = expected_fn;
     if (result.isEstablished() and isGeneratedStructuralCodecMethodBinding(method_lookup, .encoder)) {
-        switch (try self.takeDerivedCodecBackingWalk(walk, nominal)) {
-            .accounted_for => {},
+        switch (try self.takeDerivedCodecBackingWalk(walk, nominal, expected_fn)) {
+            .builtin => {},
+            .reuse => |owner| derivation_source = owner,
             .unbounded => return .unsupported,
             .walk_backing => {
                 walk.nominal_backing_depth += 1;
@@ -42092,7 +42113,7 @@ fn validateDerivedEncodeNominal(
         self.cir.idents.encoder_for,
         nominal_var,
         expected_fn,
-        expected_fn,
+        derivation_source,
         nominal_var,
     );
 }

@@ -18370,6 +18370,34 @@ const EvidencePass = struct {
         self.plan_table.site_substitutions = try self.site_substitutions.toOwnedSlice(self.allocator);
         self.plan_table.template_root_evidence = try self.allocator.dupe(?artifact_serialize.Span, self.template_root_evidence);
         try @import("codec_identity.zig").intern(self.allocator, self.checked_types.store.view(), self.plan_table);
+        if (builtin.mode == .Debug) try self.debugVerifyGeneratedCodecRoleAgreement();
+    }
+
+    /// A generated body records one checked edge per source occurrence.
+    /// Repeated fields whose subjects denote one type share a role, and so one
+    /// prepared target, which is sound only when every edge in the role agrees
+    /// on its complete callable relation and proof. Runs once the evidence
+    /// graph is published, since that proof spans the plan table.
+    fn debugVerifyGeneratedCodecRoleAgreement(self: *EvidencePass) Allocator.Error!void {
+        if (builtin.mode != .Debug) return;
+        const type_view = self.checked_types.store.view();
+        for (self.plan_table.generated_codec_derivations) |derivation| {
+            const calls = derivation.callsSlice(self.plan_table);
+            for (calls, 0..) |call, index| {
+                for (calls[0..index]) |previous| {
+                    if (previous.method != call.method or previous.method_role != call.method_role) continue;
+                    if (!try @import("codec_identity.zig").callsEquivalent(self.allocator, type_view, self.plan_table, previous, call)) {
+                        checkedArtifactInvariant(
+                            "checked generated codec method role contained ambiguous calls",
+                            .{},
+                        );
+                    }
+                    // Every call in a role agrees with its first, so the rest
+                    // of the role needs no further comparison.
+                    break;
+                }
+            }
+        }
     }
 
     /// The solver root of the scheme a compile-time root evaluates: the
@@ -18786,32 +18814,6 @@ const EvidencePass = struct {
                             );
                         }
                     }
-                    // A generated body records one checked edge per source
-                    // occurrence. Repeated fields whose subjects denote one
-                    // type share a role, and may share one prepared target,
-                    // only when the complete callable relation agrees modulo
-                    // transparent aliases and the fresh variable names
-                    // allocated for each method instantiation.
-                    const call_types_equal = if (call.subject_ty) |subject_ty|
-                        try type_view.rootsAliasTransparentAlphaEql(
-                            self.allocator,
-                            &.{ previous.subject_ty.?, previous.dispatcher_ty, previous.callable_ty },
-                            &.{ subject_ty, call.dispatcher_ty, call.callable_ty },
-                        )
-                    else
-                        try type_view.rootsAliasTransparentAlphaEql(
-                            self.allocator,
-                            &.{ previous.dispatcher_ty, previous.callable_ty },
-                            &.{ call.dispatcher_ty, call.callable_ty },
-                        );
-                    if (!call_types_equal or
-                        !self.generatedCodecCallResolutionsEql(previous.resolution, call.resolution))
-                    {
-                        checkedArtifactInvariant(
-                            "checked generated codec method role contained ambiguous calls",
-                            .{},
-                        );
-                    }
                 }
                 if (!has_previous_role) {
                     checkedArtifactInvariant(
@@ -18821,48 +18823,6 @@ const EvidencePass = struct {
                 }
             }
         }
-    }
-
-    fn generatedCodecCallResolutionsEql(
-        self: *const EvidencePass,
-        left: static_dispatch.GeneratedCodecCallResolution,
-        right: static_dispatch.GeneratedCodecCallResolution,
-    ) bool {
-        return switch (left) {
-            .pending => right == .pending,
-            .checked_error => right == .checked_error,
-            .structural => |left_id| switch (right) {
-                .structural => |right_id| left_id == right_id,
-                .pending, .checked_error, .callable => false,
-            },
-            .callable => |left_id| switch (right) {
-                .callable => |right_id| blk: {
-                    const left_node = self.evidence_nodes.items[@intFromEnum(left_id)];
-                    const right_node = self.evidence_nodes.items[@intFromEnum(right_id)];
-                    if (!std.meta.eql(left_node.target, right_node.target) or
-                        left_node.generated_codec_derivation != right_node.generated_codec_derivation)
-                    {
-                        break :blk false;
-                    }
-                    break :blk switch (left_node.nested) {
-                        .from_callable => right_node.nested == .from_callable,
-                        .resolved => |left_span| switch (right_node.nested) {
-                            .from_callable => false,
-                            .resolved => |right_span| refs: {
-                                const left_refs = self.evidence_refs.items[left_span.start .. left_span.start + left_span.len];
-                                const right_refs = self.evidence_refs.items[right_span.start .. right_span.start + right_span.len];
-                                if (left_refs.len != right_refs.len) break :refs false;
-                                for (left_refs, right_refs) |left_ref, right_ref| {
-                                    if (!std.meta.eql(left_ref, right_ref)) break :refs false;
-                                }
-                                break :refs true;
-                            },
-                        },
-                    };
-                },
-                .pending, .checked_error, .structural => false,
-            },
-        };
     }
 
     fn schemeSchema(self: *EvidencePass, root: Var) Allocator.Error!SchemeSchema {

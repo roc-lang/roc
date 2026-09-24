@@ -813,7 +813,8 @@ pub const GeneratedCodecCall = extern struct {
     dispatcher_var: u32,
     callable_var: u32,
     /// Exact generated callable relation whose dispatch-target record owns the
-    /// selected method scheme's nested evidence.
+    /// selected method scheme's nested evidence. A call that resolves to a
+    /// nested generated derivation names that derivation's source constraint.
     evidence_var: u32,
     /// The value shape this call handles, or `no_subject_var` when the method
     /// has no shape-specific call contract.
