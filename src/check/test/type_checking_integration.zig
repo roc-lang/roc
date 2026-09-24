@@ -9144,6 +9144,71 @@ test "check type - polarity - coercion through an alias does not reach a nested 
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
+test "check type - polarity - a forwarder whose signature is a function alias coerces" {
+    // A signature that NAMES a whole function type must behave exactly like
+    // the same function written inline (`fwd : Status -> Status` coerces,
+    // above). The alias's result row is the signature's direct result, so the
+    // walk through the alias opens it at the same result-row site.
+    const source =
+        \\Status : [Ok(Str), Err(Str)]
+        \\
+        \\Fwd : Status -> Status
+        \\
+        \\fwd : Fwd
+        \\fwd = |s| s
+        \\
+        \\wider : Status -> [Ok(Str), Err(Str), Extra]
+        \\wider = |s| fwd(s)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Status -> [Err(Str), Extra, Ok(Str)]");
+}
+
+test "check type - polarity - a function alias signature's Try error row coerces" {
+    // The `Try` error-row cell through a function alias: `FwdTry`'s result is
+    // `Try(Str, [NotFound])`, whose error row is the adapter-reachable one.
+    const source =
+        \\FwdTry : Try(Str, [NotFound]) -> Try(Str, [NotFound])
+        \\
+        \\fwd : FwdTry
+        \\fwd = |t| t
+        \\
+        \\wider : Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])");
+}
+
+test "check type - polarity - a function alias signature does not reach a nested row" {
+    // The rejected side: through a function alias only the direct result (or
+    // a `Try` error row standing there) is adapter-reachable. A row inside a
+    // `List` in that result keeps closing by body, exactly as it does when the
+    // function is written inline.
+    const source =
+        \\Wrap : [A, B] -> List([A, B])
+        \\
+        \\wrap : Wrap
+        \\wrap = |x| [x]
+        \\
+        \\wider : [A, B] -> List([A, B, C])
+        \\wider = |x| wrap(x)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - a function alias signature does not open its input row" {
+    // Re-aiming the alias's return at the result row leaves its arguments
+    // nested: the input row stays closed as written.
+    const source =
+        \\Fwd : [A, B] -> [A, B]
+        \\
+        \\fwd : Fwd
+        \\fwd = |x| x
+        \\
+        \\bad = fwd(C)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
 test "check type - polarity - annotated input union stays closed" {
     const source =
         \\handle : [Known] -> Str

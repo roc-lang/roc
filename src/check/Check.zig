@@ -7534,7 +7534,9 @@ fn recordOpenedMarkerExts(self: *Self, opened: []const Instantiator.OpenedMarker
             .result_row = switch (marker.reach) {
                 .result => .direct,
                 .try_row => .try_error_row,
-                .nested => .none,
+                // A row standing as the whole signature is a bare value
+                // annotation's row: the inline walk's `.signature => .none`.
+                .signature, .nested => .none,
             },
         });
     }
@@ -16889,15 +16891,16 @@ const GenTypeAnnoCtx = union(enum) {
     fn instantiationReach(self: GenTypeAnnoCtx) Instantiator.AdapterReach {
         return switch (self) {
             .annotation => |anno_ctx| switch (anno_ctx.adapter_reach) {
-                // A declaration standing as the whole where-method signature
-                // is walked by the instantiator from its direct result. A bare
-                // VALUE annotation has no call boundary to adapt at, so the
-                // declaration it names contributes no result row; this is the
-                // `.signature => .none` of the inline walk's `ResultRowSite`.
-                .signature => switch (anno_ctx.opening) {
-                    .per_use => .result,
-                    .implicit_open, .as_written => .nested,
-                },
+                // A declaration standing as the whole signature—an annotated
+                // definition's or a where-method's—is walked by the
+                // instantiator exactly as the `.@"fn"` arm walks a function
+                // written there: a function re-aims its return to `.result`
+                // and its arguments to `.nested`. A declaration that is not a
+                // function stands as a bare VALUE annotation, which has no
+                // call boundary to adapt at and so contributes no result row
+                // (the `.signature => .none` of the inline walk's
+                // `ResultRowSite`).
+                .signature => .signature,
                 .result => .result,
                 .try_row => .try_row,
                 .nested => .nested,

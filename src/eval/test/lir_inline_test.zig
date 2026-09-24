@@ -9102,6 +9102,46 @@ test "row subsumption coerces a forwarded Try error row spelled through an alias
     , 1);
 }
 
+test "row subsumption coerces a forwarder whose signature is a function alias" {
+    // The signature NAMES a whole function type. Its result row is the direct
+    // result exactly as in `fwd : Status -> Status`, so the widened use is
+    // served by one adapter. `Extra` sorts between `Err` and `Ok`, and the
+    // `Try` cell's `Gone` sorts before `NotFound`, so a wrong re-tag shows up
+    // as a wrong discriminant in either cell.
+    try expectRowSubsumptionProgram(
+        \\Status : [Ok(Str), Err(Str)]
+        \\
+        \\Fwd : Status -> Status
+        \\
+        \\fwd : Fwd
+        \\fwd = |s| s
+        \\
+        \\wider : Status -> [Ok(Str), Err(Str), Extra]
+        \\wider = |s| fwd(s)
+        \\
+        \\show : [Ok(Str), Err(Str), Extra] -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Ok("a"))) == "Ok(a)" and show(wider(Err("b"))) == "Err(b)"
+    , 1);
+    try expectRowSubsumptionProgram(
+        \\FwdTry : Try(Str, [NotFound]) -> Try(Str, [NotFound])
+        \\
+        \\fwd : FwdTry
+        \\fwd = |t| t
+        \\
+        \\wider : Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])
+        \\wider = |t| fwd(t)
+        \\
+        \\show : Try(Str, [Gone, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(NotFound) => "NotFound" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Err(NotFound))) == "NotFound" and show(wider(Ok("x"))) == "Ok(x)"
+    , 1);
+}
+
 test "row subsumption coerces a generic forwarder" {
     // A coerced definition that is also generalized over a type variable takes
     // the checker's generalized instantiation branch rather than the

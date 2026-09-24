@@ -7076,11 +7076,16 @@ there), whether the signature writes it inline or names it through an alias:
 an alias's markers record the same site the inline walk does, because lowering
 crosses alias layers when it adapts a result row, and a checker that opened
 fewer spellings than lowering adapts would make identical signatures behave
-differently.
+differently. That includes an alias naming the WHOLE function type
+(`fwd : Fwd` with `Fwd : Status -> Status`): the instantiator walks a
+declaration standing as the signature (`AdapterReachPosition.signature`)
+exactly as the annotation walk walks a function written there, re-aiming the
+function's return to the result and its arguments out of reach. A declaration
+standing as the signature that is not a function is a bare value annotation,
+which opens no result row.
 
 What remains: deleting the CHECKER half of Hosted Try Question Widening
-(below), the `test/cli` fixture this section asks for, the residue for
-annotated VALUE bindings, whose rows are grounded rather than coerced, and
+(below), the residue for annotated VALUE bindings, whose rows are grounded rather than coerced, and
 signatures with a `where` clause. Those are not coerced: a use whose `where`
 evidence resolves to a local procedure is lowered as a caller-owned
 specialization, completed inline at its declared interface with no adapter,
@@ -7176,9 +7181,10 @@ open the INPUT row.
 
 The acceptance bar is that a program this design says should typecheck must
 typecheck as written. The hosted instance meets it
-(`test/fx-open/issue_9963_hosted_try_question_mark.roc`). No corpus program
-spells a NON-hosted closed forwarder, so subsumption needs a fixture of its
-own. The widening fixtures are a separate matter: they need a CLOSED value to
+(`test/fx-open/issue_9963_hosted_try_question_mark.roc`), and the NON-hosted
+instance has a fixture of its own (`test/cli/RowSubsumptionForwarder.roc`: a
+direct row, a `Try` error row, and a function-alias signature, each forwarded
+closed and widened by a caller). The widening fixtures are a separate matter: they need a CLOSED value to
 widen, and neither an annotated value (its row is quantified) nor a top-level
 forwarder (its row is coerced) produces one any more, so they read it out of a
 nominal field, whose body closes its rows as written.
@@ -7468,9 +7474,10 @@ That withholding is by POSITION, not by declaration. A type declaration
 defers every extensionless tag union it writes, at any depth, because the
 declaration cannot know where its references will stand; a reference resolves
 those deferrals by where the reference itself sits. A marker on the referenced
-declaration's own row—reached only through alias backings, and through the
-ERROR argument of a `Try` standing in the signature's direct result—stays
-deferred; a marker reached under any other constructor is closed as written.
+declaration's own row—reached only through alias backings, through the
+return of a function the declaration supplies as the whole signature, and
+through the ERROR argument of a `Try` standing in the signature's direct
+result—stays deferred; a marker reached under any other constructor is closed as written.
 So `Statuses : List([Ok(Str), Err(Str)])` named as a where-method's result
 contributes a closed row, exactly as the same type written inline there does.
 

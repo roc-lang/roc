@@ -42,6 +42,16 @@ const try_error_type_arg_index: u32 = 1;
 /// declaration contributes, so the set of positions a use may WIDEN stays equal
 /// to the set lowering can ADAPT no matter how the row was spelled.
 pub const AdapterReachPosition = enum {
+    /// The instantiation root is a whole signature: the referencing annotation
+    /// names this declaration as an annotated definition's (or a where-method's)
+    /// entire type. A function standing here re-aims its return to `.result`
+    /// and its arguments to `.nested`, exactly as the checker's inline walk
+    /// re-aims a function written in the signature, so `Fwd : S -> S` named as
+    /// a signature opens the same result row `S -> S` written inline does. A
+    /// row standing here directly (a bare value annotation) has no call
+    /// boundary to adapt at, and every other constructor puts its children out
+    /// of reach.
+    signature,
     /// The instantiation root's own row: the position the referencing
     /// annotation put this declaration in, when that is the signature's direct
     /// result.
@@ -250,6 +260,11 @@ const FuncFrame = struct {
     /// the return (and effect-dep) positions restore it. Re-asserted before
     /// every child request so suspension cannot leave a stale value.
     saved_polarity: Polarity,
+    /// The adapter reach surrounding this function. Only a function standing
+    /// as the whole signature (`.signature`) puts its return within the
+    /// adapter's reach; its arguments, and every position of any other
+    /// function, are nested.
+    saved_reach: AdapterReachPosition,
 };
 
 /// Source runs are held as whole ranges, never as an unpacked start index:
@@ -790,7 +805,7 @@ pub const Instantiator = struct {
                             },
                             .defer_open => switch (self.current_polarity) {
                                 .pos => switch (self.current_reach) {
-                                    .result, .try_row => Content{ .rigid = Rigid.init(rigid.name) },
+                                    .signature, .result, .try_row => Content{ .rigid = Rigid.init(rigid.name) },
                                     .nested => Content{ .structure = .empty_tag_union },
                                 },
                                 .neg => .{ .structure = .empty_tag_union },
@@ -1004,6 +1019,7 @@ pub const Instantiator = struct {
                             .kind = .pure,
                             .vars_base = @intCast(machine.value_stack.items.len),
                             .saved_polarity = self.current_polarity,
+                            .saved_reach = self.current_reach,
                         } });
                         return false;
                     },
@@ -1017,6 +1033,7 @@ pub const Instantiator = struct {
                             .kind = .effectful,
                             .vars_base = @intCast(machine.value_stack.items.len),
                             .saved_polarity = self.current_polarity,
+                            .saved_reach = self.current_reach,
                         } });
                         return false;
                     },
@@ -1030,6 +1047,7 @@ pub const Instantiator = struct {
                             .kind = .unbound,
                             .vars_base = @intCast(machine.value_stack.items.len),
                             .saved_polarity = self.current_polarity,
+                            .saved_reach = self.current_reach,
                         } });
                         return false;
                     },
@@ -1257,6 +1275,10 @@ pub const Instantiator = struct {
                         // The signature's direct result: the adapter re-tags
                         // this `Try`'s error row.
                         .result => true,
+                        // A `Try` standing as the whole signature is not a
+                        // call's result; the checker's inline walk admits no
+                        // error row there either.
+                        .signature => false,
                         // A `Try` standing IN another `Try`'s error row. The
                         // relation re-tags that row and relates everything
                         // below it EXACTLY (`resultRowWideningOrNull`,
@@ -1293,9 +1315,8 @@ pub const Instantiator = struct {
             if (arrived < args_count) {
                 const arg_var = self.store.vars.items.items[@intFromEnum(frame.func.args.start) + arrived];
                 // Argument positions negate the surrounding polarity. No
-                // position inside a function is adapter-reachable: the adapter
-                // re-tags the result it is generated for, never a row inside a
-                // function that result contains.
+                // argument is adapter-reachable: the adapter re-tags the
+                // result it is generated for, and only that result.
                 self.current_polarity = frame.saved_polarity.flip();
                 self.current_reach = .nested;
                 if (!try self.requestVar(arg_var, false)) return false;
@@ -1304,7 +1325,12 @@ pub const Instantiator = struct {
             if (arrived == args_count) {
                 // The return position preserves the surrounding polarity.
                 self.current_polarity = frame.saved_polarity;
-                self.current_reach = .nested;
+                // The signature's OWN function puts its direct result within
+                // the adapter's reach; a function anywhere deeper does not.
+                self.current_reach = switch (frame.saved_reach) {
+                    .signature => .result,
+                    .result, .try_row, .nested => .nested,
+                };
                 if (!try self.requestVar(frame.func.ret, false)) return false;
                 continue;
             }
