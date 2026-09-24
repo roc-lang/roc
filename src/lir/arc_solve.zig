@@ -7518,7 +7518,7 @@ fn aliasBornUniqueAfterRepeatedDefinitions(sequential: bool) SolveError!bool {
     var sigs = [_]arc_sig.RcSig{.all_owned};
     var borrowed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, rc.len);
     defer borrowed.deinit(allocator);
-    var uniqueness = try computeUniquenessDetailed(allocator, &f.store, &rc, .{ .sigs = &sigs }, null, null, null, null, true, &f.layouts, .none, &borrowed, null);
+    var uniqueness = try computeUniquenessDetailed(allocator, &f.store, &rc, .{ .sigs = &sigs }, null, null, null, null, true, &f.layouts, .none, &borrowed, null, null);
     defer uniqueness.deinit(allocator);
     return uniqueness.born_unique.isSet(@intFromEnum(alias));
 }
