@@ -7256,10 +7256,17 @@ field.
 
 An open row simply gains the tag, so a program that never mentions it still
 sees `MissingRequiredField(field_name)`. A row the program closed without the
-tag rejects it: a closed row reports an ordinary type mismatch at the
-unification, and an annotated output row, whose extension is implicitly open,
-reports that the definition can produce a tag its annotation does not list
-(Polarity). The failure is never mapped onto a format error.
+tag rejects it. When the closed row belongs to an annotated value or
+function, the report is the annotation mismatch: the definition can produce a
+tag its annotation does not list (Polarity). When the closed row belongs to a
+where-clause parser contract, the report is the dedicated
+`derived_parser_error_row` problem instead of a generic row mismatch: it is
+located at the expression that instantiated the codec relation (the call that
+fixes the record type, where the user can act), and names the record type,
+the tag, the closed row, and the required fields. A nested custom parser whose
+error tag the enclosing row lacks reports the same problem; a payload conflict
+on a tag the row already lists remains an ordinary row mismatch (issue 11246).
+The failure is never mapped onto a format error.
 
 A custom nominal parser nested inside a derived shape keeps its own minimal
 error row. During checking, `constrainDerivedParserErrorRowIncludes` closes an
