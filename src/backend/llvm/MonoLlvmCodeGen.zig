@@ -375,9 +375,14 @@ pub const MonoLlvmCodeGen = struct {
     /// Synthetic default-platform apps preserve source proc names and local
     /// debug locations for crash and stack-overflow diagnostics.
     enable_default_platform_diagnostics: bool = false,
-    /// DW_AT_producer for the compile unit. Carries the compiler version so
-    /// debugger formatters can detect when a binary was built by a different
-    /// roc than the formatter was written for.
+    /// Translates to DW_AT_producer for the compile unit (in DWARF). Users of
+    /// this module for codegen should set the value (with the following format)
+    /// so that it carries the compiler version:
+    /// roc <version>
+    /// (see compileLlvmAppObject in cli/main.zig as an example) Embedding the
+    /// version of the compiler that generated the binary into the producer
+    /// value will help debugger formatters detect binaries that were
+    /// built by a range of versions of the roc compiler.
     debug_producer: []const u8 = "roc",
     debug_compile_unit: LlvmBuilder.Metadata.Optional = .none,
     debug_enums_fwd_ref: LlvmBuilder.Metadata.Optional = .none,
