@@ -21909,7 +21909,7 @@ const BodyScan = struct {
     }
 };
 
-const ScanError = error{ OutOfMemory, UnsupportedOpcode, TruncatedBody };
+const ScanError = error{ OutOfMemory, UnsupportedOpcode, TruncatedBody, OverlongImmediate };
 
 /// Decode one emitted function body.
 ///
@@ -21948,7 +21948,7 @@ fn scanBody(allocator: Allocator, body: []const u8, literal: i64) ScanError!Body
             .@"else", .end, .drop, .@"return", .i32_eqz => {},
             .br, .br_if => _ = try readUleb(body, &cursor),
             .local_get, .local_set, .local_tee => {
-                const idx: u32 = @intCast(try readUleb(body, &cursor));
+                const idx = try readUleb(body, &cursor);
                 const kind: LocalOpKind = if (op == .local_get)
                     .get
                 else if (op == .local_set)
@@ -21972,17 +21972,17 @@ fn scanBody(allocator: Allocator, body: []const u8, literal: i64) ScanError!Body
     return scan;
 }
 
-fn readUleb(bytes: []const u8, cursor: *usize) ScanError!usize {
-    var result: usize = 0;
-    var shift: u6 = 0;
-    while (true) {
-        if (cursor.* >= bytes.len) return error.TruncatedBody;
-        const byte = bytes[cursor.*];
-        cursor.* += 1;
-        result |= @as(usize, byte & 0x7f) << shift;
-        if (byte & 0x80 == 0) return result;
-        shift += 7;
-    }
+/// Every unsigned immediate these fixtures emit (lengths, counts, local
+/// indices, branch depths) is a wasm `u32`.
+fn readUleb(bytes: []const u8, cursor: *usize) ScanError!u32 {
+    var reader: std.Io.Reader = .fixed(bytes[cursor.*..]);
+    const value = reader.takeLeb128(u32) catch |err| switch (err) {
+        error.EndOfStream => return error.TruncatedBody,
+        error.Overflow => return error.OverlongImmediate,
+        error.ReadFailed => unreachable, // a fixed reader never fails a read
+    };
+    cursor.* += reader.seek;
+    return value;
 }
 
 fn readSleb(bytes: []const u8, cursor: *usize) ScanError!i64 {

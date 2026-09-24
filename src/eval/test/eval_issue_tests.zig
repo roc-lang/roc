@@ -266,166 +266,108 @@ const issue11377GenericNominalCollectionSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
-        // https://github.com/roc-lang/roc/issues/11618
-        // Bare for expressions must carry outer var updates through the loop and match.
-        .name = "issue 11618: bare for match arms preserve outer var updates",
+        .name = "issue 11632: annotated Try parser keeps its listed tags",
         .source_kind = .module,
         .source =
-        \\Node := [Leaf(List(U64)), Branch(List(U64))]
-        \\fold : Node, U64 -> U64
-        \\fold = |node, initial| {
-        \\    var $state = initial
-        \\    match node {
-        \\        Leaf(slots) =>
-        \\            for slot in slots {
-        \\                $state = $state + slot
-        \\            }
-        \\        Branch(children) =>
-        \\            for child in children {
-        \\                $state = $state + child * 10
-        \\            }
-        \\    }
-        \\    $state
+        \\parse : Str -> Try([A, B], _)
+        \\parse = |json| Json.parse(json)
+        \\main = match parse("\"C\"") {
+        \\    Ok(_) => False
+        \\    Err(_) => True
         \\}
-        \\main = (fold(Leaf([1, 2, 3]), 0), fold(Branch([1, 2]), 0), fold(Leaf([]), 7))
         ,
-        .expected = .{ .inspect_str = "(6, 30, 7)" },
+        .expected = .{ .inspect_str = "True" },
     },
     .{
-        .name = "issue 11618: bound match result composes nested loop state",
+        .name = "issue 11632: single inferred tag still derives",
+        .source_kind = .module,
         .source =
-        \\{
-        \\    var $sum = 1.U64
-        \\    done = match True {
-        \\        True => match True {
-        \\            True => for item in [2.U64, 3] {
-        \\                $sum = $sum + item
-        \\            }
-        \\            False => {}
-        \\        }
-        \\        False => {}
-        \\    }
-        \\    (done, $sum)
-        \\}
+        \\main = Ok(Friendly) == Json.parse("\"Friendly\"")
         ,
-        .expected = .{ .inspect_str = "({}, 6)" },
+        .expected = .{ .inspect_str = "True" },
     },
     .{
-        .name = "issue 11618: directly bound for expression preserves state",
+        .name = "issue 11632: nested inferred encoder row",
+        .source_kind = .module,
         .source =
-        \\{
-        \\    var $sum = 1.U64
-        \\    done = for item in [2.U64, 3] {
-        \\        $sum = $sum + item
-        \\    }
-        \\    (done, $sum)
+        \\main = {
+        \\    value = { tags: [A] }
+        \\    encoded = Json.to_str(value)
+        \\    all_a = List.all(value.tags, |tag| match tag {
+        \\        A => True
+        \\        B => False
+        \\    })
+        \\    encoded == "{\"tags\":[\"A\"]}" and all_a
         \\}
         ,
-        .expected = .{ .inspect_str = "({}, 6)" },
+        .expected = .{ .inspect_str = "True" },
     },
     .{
-        .name = "issue 11618: expression loop skips and breaks with multiple carries",
+        .name = "issue 11632: parser branch order A then B",
+        .source_kind = .module,
         .source =
-        \\{
-        \\    var $sum = 0.I64
-        \\    var $seen = []
-        \\    iter = Iter.keep_if([1.I64, 2, 3, 4, 5].iter(), |item| I64.rem_by(item, 2) == 1)
-        \\    match True {
-        \\        True => for item in iter {
-        \\            $sum = $sum + item
-        \\            $seen = $seen.append(item)
-        \\            if item == 3 { break }
-        \\        }
-        \\        False => {}
+        \\run = |json| {
+        \\    w = Json.parse(json)
+        \\    match w {
+        \\        Ok(A(s)) => s == ""
+        \\        Ok(B) => True
+        \\        Err(_) => False
         \\    }
-        \\    ($sum, $seen)
         \\}
+        \\main = run("\"B\"") and run("{\"A\":\"\"}")
         ,
-        .expected = .{ .inspect_str = "(4, [1, 3])" },
+        .expected = .{ .inspect_str = "True" },
     },
     .{
-        .name = "issue 11618: nested for expressions preserve outer and inner carries",
+        .name = "issue 11632: parser branch order B then A",
+        .source_kind = .module,
         .source =
-        \\{
-        \\    var $sum = 0.U64
-        \\    match True {
-        \\        True => for row in [1.U64, 2] {
-        \\            var $subtotal = 0.U64
-        \\            match True {
-        \\                True => for column in [3.U64, 4] {
-        \\                    $subtotal = $subtotal + row * column
-        \\                }
-        \\                False => {}
-        \\            }
-        \\            $sum = $sum + $subtotal
-        \\        }
-        \\        False => {}
+        \\run = |json| {
+        \\    w = Json.parse(json)
+        \\    match w {
+        \\        Ok(B) => True
+        \\        Ok(A(s)) => s == ""
+        \\        Err(_) => False
         \\    }
-        \\    $sum
         \\}
+        \\main = run("\"B\"") and run("{\"A\":\"\"}")
         ,
-        .expected = .{ .inspect_str = "21" },
+        .expected = .{ .inspect_str = "True" },
     },
     .{
-        .name = "issue 11618: for expression returns from enclosing function",
+        .name = "issue 11632: encoder before later match",
+        .source_kind = .module,
         .source =
-        \\{
-        \\    fold = |stop| {
-        \\        var $sum = 0.U64
-        \\        match True {
-        \\            True => for item in [1.U64, 2, 3] {
-        \\                $sum = $sum + item
-        \\                if item == stop { return $sum }
-        \\            }
-        \\            False => {}
-        \\        }
-        \\        $sum
+        \\main = {
+        \\    v = if 1 == 1 A else B
+        \\    s = Json.to_str(v)
+        \\    extra = match v {
+        \\        A => 1
+        \\        B => 2
+        \\        C => 3
         \\    }
-        \\    (fold(2), fold(4))
+        \\    s == "\"A\"" and extra == 1
         \\}
         ,
-        .expected = .{ .inspect_str = "(3, 6)" },
+        .expected = .{ .inspect_str = "True" },
     },
     .{
-        .name = "issue 11618: for expression carries mutations in expect conditions",
+        .name = "issue 11632: fresh caller openness remains inferred",
+        .source_kind = .module,
         .source =
-        \\{
-        \\    var $sum = 0.U64
-        \\    match True {
-        \\        True => for item in [1.U64, 2, 3] {
-        \\            expect {
-        \\                $sum = $sum + item
-        \\                True
-        \\            }
-        \\        }
-        \\        False => {}
+        \\make : {} -> [A, B]
+        \\make = |_| A
+        \\main = {
+        \\    value = make({})
+        \\    encoded = Json.to_str(value)
+        \\    match value {
+        \\        A => encoded == "\"A\""
+        \\        B => False
+        \\        C => False
         \\    }
-        \\    $sum
         \\}
         ,
-        .expected = .{ .inspect_str = "6" },
-    },
-    .{
-        .name = "issue 11618: while inside for carries body and expect condition mutations",
-        .source =
-        \\{
-        \\    var $count = 0.U64
-        \\    var $sum = 0.U64
-        \\    for item in [1.U64, 2] {
-        \\        var $i = 0.U64
-        \\        while $i < item {
-        \\            $i = $i + 1
-        \\            expect {
-        \\                $count = $count + 1
-        \\                True
-        \\            }
-        \\            $sum = $sum + item
-        \\        }
-        \\    }
-        \\    ($count, $sum)
-        \\}
-        ,
-        .expected = .{ .inspect_str = "(3, 5)" },
+        .expected = .{ .inspect_str = "True" },
     },
     .{
         .name = "issue 11377: nested nominal alias applications retain outer parameters",

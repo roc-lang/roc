@@ -2406,7 +2406,9 @@ pub const InstGraph = struct {
     /// applied. Immutable Type-shaped snapshots of resolved nodes are used
     /// here; they remain graph-owned and never enter completed Monotype output.
     /// All digests are computed before any node is stamped, so dependency
-    /// order cannot affect identity.
+    /// order cannot affect identity. `typeEql` compares the stamped digest, so
+    /// it digests the equivalence `typeEql` implements: requests that are
+    /// equal under it mint equal iterator types.
     pub fn finalizeGeneratedIteratorIdentities(self: *InstGraph) Allocator.Error!void {
         self.requireRelationProduction();
         if (self.generated_iterator_nodes == 0) return;
@@ -2435,12 +2437,12 @@ pub const InstGraph = struct {
                     Common.invariant("forced-dynamic iterator identity did not have exactly one item argument");
                 }
                 const item = try current_shape.sealNode(named.args[0]);
-                const item_digest = self.types.typeDigest(self.name_store, peelAliasBacking(self.types, item));
+                const item_digest = self.types.equalityDigest(self.name_store, peelAliasBacking(self.types, item));
                 hasher.update("roc.generated_iterator.forced_dynamic_identity");
                 hasher.update(&item_digest.bytes);
             } else {
                 const final = try current_shape.sealNode(node);
-                const shape = self.types.typeDigest(self.name_store, peelAliasBacking(self.types, final));
+                const shape = self.types.equalityDigest(self.name_store, peelAliasBacking(self.types, final));
                 hasher.update("roc.generated_iterator.final_identity");
                 hasher.update(&shape.bytes);
                 if (provenance.callable_evidence) |evidence| {
@@ -10279,6 +10281,64 @@ test "generated iterator identity uses current graph content rather than an impo
     }
     try std.testing.expectEqual(identities[0], identities[1]);
     try std.testing.expectEqual(identities[0], identities[2]);
+}
+
+test "generated iterator identity ignores checked provenance that type equality ignores" {
+    // Two requests equal under `typeEql` must mint equal iterator types. The
+    // item's checked type id is provenance: `typeEql` and specialization
+    // identity ignore it, so producer identity must ignore it too.
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const module = try name_store.internModuleIdentity(&([_]u8{0x83} ** 32));
+    const iter_name = try name_store.internTypeName("Iter");
+    const item_name = try name_store.internTypeName("ByteRange");
+    for ([_]Type.IteratorRepresentation{ .minted, .forced_dynamic }) |representation| {
+        var identities: [2]names.TypeDigest = undefined;
+        var items: [2]Type.TypeId = undefined;
+        const provenances = [_]checked.CheckedTypeId{ testCheckedTypeId(10), testCheckedTypeId(11) };
+        for (&identities, &items, provenances) |*identity, *item_ty, provenance| {
+            const graph = try InstGraph.create(gpa, &type_store, &name_store);
+            defer graph.destroy();
+            const field = try graph.newNode(.{ .primitive = .u64 });
+            const item = try graph.newNode(.{ .named = .{
+                .named_type = .{ .module = .{}, .ty = provenance },
+                .def = .{ .module = module, .type_name = item_name, .source_decl = 1 },
+                .kind = .@"opaque",
+                .builtin_owner = null,
+                .args = &.{},
+                .backing = .{ .node = field, .use = .runtime_layout_only },
+            } });
+            const backing = try graph.newNode(.empty_record);
+            const node = try graph.newNode(.{ .named = .{
+                .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1) },
+                .def = .{ .module = module, .type_name = iter_name, .iterator_representation = representation, .iterator_kind = .custom, .iterator_depth = 1 },
+                .kind = .@"opaque",
+                .builtin_owner = .iter,
+                .args = try graph.arena().dupe(NodeId, &.{item}),
+                .backing = .{ .node = backing, .use = .runtime_layout_only, .authority = .generated_private },
+                .generated_iterator = .{ .callable_evidence = null, .public_source = .{
+                    .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1) },
+                    .def = .{ .module = module, .type_name = iter_name },
+                    .kind = .@"opaque",
+                    .builtin_owner = .iter,
+                    .backing = .{ .node = backing, .use = .runtime_layout_only },
+                    .declared_order = &.{},
+                } },
+            } });
+            try graph.finalizeGeneratedIteratorIdentities();
+            identity.* = graph.content(node).named.def.generated.?;
+            var finals = GraphTypeFinals.initProvisionalSnapshot(graph);
+            defer finals.deinit();
+            item_ty.* = try finals.sealNode(item);
+        }
+        // The items differ only in provenance that equality ignores.
+        try std.testing.expect(try type_store.typeEql(&name_store, items[0], items[1]));
+        try std.testing.expect(!std.meta.eql(type_store.typeDigest(&name_store, items[0]), type_store.typeDigest(&name_store, items[1])));
+        try std.testing.expectEqual(identities[0], identities[1]);
+    }
 }
 
 test "recursive join keeps graph-owned iterator provenance over a finished Monotype" {

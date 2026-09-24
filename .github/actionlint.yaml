@@ -1,0 +1,5 @@
+# actionlint configuration (https://github.com/rhysd/actionlint).
+self-hosted-runner:
+  # GitHub-hosted labels that the pinned actionlint release does not know yet.
+  labels:
+    - ubuntu-26.04-arm

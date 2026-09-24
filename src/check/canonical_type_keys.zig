@@ -250,6 +250,23 @@ pub const TypeWriter = struct {
         self.inspector.deinit();
     }
 
+    /// Whether requests report rows that repeat a label (see
+    /// `takeDuplicateRow`) instead of treating them as an invariant violation.
+    pub fn setReportDuplicateRows(self: *TypeWriter, report: bool) void {
+        self.builder.report_duplicate_rows = report;
+        self.inspector.report_duplicate_rows = report;
+    }
+
+    /// The row found repeating a label during the last request, if any. Its
+    /// result reflected only each label's first occurrence, so a caller that
+    /// receives a row must normalize it and ask again.
+    pub fn takeDuplicateRow(self: *TypeWriter) ?Var {
+        const row = self.builder.duplicate_row orelse self.inspector.duplicate_row;
+        self.builder.duplicate_row = null;
+        self.inspector.duplicate_row = null;
+        return row;
+    }
+
     pub fn fromVar(self: *TypeWriter, var_: Var) Allocator.Error!TypeKeyInfo {
         self.builder.resetDigest();
         try self.builder.writeVar(var_);
@@ -465,6 +482,14 @@ fn Walk(comptime digest: bool) type {
         /// Structural scheme-interface walks stop at an identity so attached
         /// requirements do not become externally visible anchors.
         walk_identity_constraints: bool = true,
+        /// Whether a row that repeats a label along its extension chain is
+        /// reported to the caller (the checker, which normalizes the row and
+        /// asks again) instead of violating the settled-row invariant.
+        report_duplicate_rows: bool = false,
+        /// The first row found repeating a label since the last reset.
+        duplicate_row: ?Var = null,
+        /// The root whose content is being written; rows report themselves by it.
+        writing_root: Var = undefined,
 
         fn init(allocator: Allocator, store: *const TypeStore, env: *const ModuleEnv) Self {
             return .{
@@ -510,6 +535,7 @@ fn Walk(comptime digest: bool) type {
             self.ext_seen.clearRetainingCapacity();
             self.contains_identity_variables = false;
             self.contains_error = false;
+            self.duplicate_row = null;
         }
 
         /// Digest the type reachable from `var_`, driving the walk to completion on
@@ -612,6 +638,7 @@ fn Walk(comptime digest: bool) type {
                 return true;
             }
 
+            self.writing_root = root;
             if (try self.writeContent(resolved.desc.content)) return false;
             self.popActive();
             return true;
@@ -940,6 +967,23 @@ fn Walk(comptime digest: bool) type {
             return tail;
         }
 
+        /// Keep the first of each run of equal labels in a sorted row and return
+        /// the number kept. A settled row never repeats a label; the checker
+        /// asks to be told about a repeated one so it can normalize the row.
+        fn dropRepeatedLabels(self: *Self, comptime Item: type, items: []Item, comptime message: []const u8) usize {
+            var kept: usize = 1;
+            for (items[1..]) |item| {
+                if (self.idents.idxTextEql(items[kept - 1].name, item.name)) {
+                    if (!self.report_duplicate_rows) invariantViolation(message);
+                    if (self.duplicate_row == null) self.duplicate_row = self.writing_root;
+                    continue;
+                }
+                items[kept] = item;
+                kept += 1;
+            }
+            return kept;
+        }
+
         fn writeNormalizedRecordPayload(
             self: *Self,
             head: types.RecordField.SafeMultiList.Range,
@@ -948,10 +992,13 @@ fn Walk(comptime digest: bool) type {
             const fields_base: u32 = @intCast(self.pending_fields.items.len);
             const tail = try self.collectRecordRow(head, ext);
 
-            const fields = self.pending_fields.items[fields_base..];
+            var fields = self.pending_fields.items[fields_base..];
             if (fields.len > 1) {
                 self.text_ranks = try self.idents.textRanks(&self.rank_scratch);
                 try base.TextRankCache.sortByRank(RecordFieldForKey, fields, &self.field_sort_scratch, self.allocator, self, recordFieldForKeyRank);
+                const unique = self.dropRepeatedLabels(RecordFieldForKey, fields, "canonical type key row normalization found duplicate record fields");
+                self.pending_fields.items.len = fields_base + unique;
+                fields = fields[0..unique];
             }
             if (tail == null and fields.len == 0) {
                 self.pending_fields.items.len = fields_base;
@@ -976,9 +1023,6 @@ fn Walk(comptime digest: bool) type {
                         if (frame.idx < frame.fields_count) {
                             const index = frame.fields_base + frame.idx;
                             const field = self.pending_fields.items[index];
-                            if (frame.idx > 0 and self.idents.idxTextEql(self.pending_fields.items[index - 1].name, field.name)) {
-                                invariantViolation("canonical type key row normalization found duplicate record fields");
-                            }
                             self.writeIdent(field.name);
                             const type_var = switch (field.presence.decode()) {
                                 .required => |var_| blk: {
@@ -1091,10 +1135,13 @@ fn Walk(comptime digest: bool) type {
                 break;
             }
 
-            const tags = self.pending_tags.items[tags_base..];
+            var tags = self.pending_tags.items[tags_base..];
             if (tags.len > 1) {
                 self.text_ranks = try self.idents.textRanks(&self.rank_scratch);
                 try base.TextRankCache.sortByRank(TagForKey, tags, &self.tag_sort_scratch, self.allocator, self, tagForKeyRank);
+                const unique = self.dropRepeatedLabels(TagForKey, tags, "canonical type key row normalization found duplicate tags");
+                self.pending_tags.items.len = tags_base + unique;
+                tags = tags[0..unique];
             }
             if (tail == null and tags.len == 0) {
                 self.pending_tags.items.len = tags_base;
@@ -1123,9 +1170,6 @@ fn Walk(comptime digest: bool) type {
                         }
                         const index = frame.tags_base + frame.tag_idx;
                         const tag = self.pending_tags.items[index];
-                        if (frame.tag_idx > 0 and self.idents.idxTextEql(self.pending_tags.items[index - 1].name, tag.name)) {
-                            invariantViolation("canonical type key row normalization found duplicate tags");
-                        }
                         self.writeIdent(tag.name);
                         frame.args = self.store.sliceVars(tag.args);
                         self.writeU32(@intCast(frame.args.len));
