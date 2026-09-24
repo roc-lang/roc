@@ -16408,13 +16408,20 @@ pub const ResolvedValueRefTable = struct {
                 &local_pattern_roles,
                 checked_bodies,
             );
-            const checked_type_key = (try key_writer.fromVar(module.exprType(expr_idx))).key;
             const checked_ty = checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
                 if (builtin.mode == .Debug) {
                     std.debug.panic("checked artifact invariant violated: resolved value ref type root was not published", .{});
                 }
                 unreachable;
             };
+            // Publication keys every source root by this same writer.
+            const checked_type_key = checked_types.store.view().rootKey(checked_ty);
+            if (builtin.mode == .Debug) {
+                const written = (try key_writer.fromVar(module.exprType(expr_idx))).key;
+                if (!std.mem.eql(u8, &written.bytes, &checked_type_key.bytes)) {
+                    std.debug.panic("checked artifact invariant violated: resolved value ref type key differs from its published root", .{});
+                }
+            }
             try attachUseTypePayload(&resolved_ref, checked_type_key, checked_ty);
 
             const id: ResolvedValueRefId = @enumFromInt(@as(u32, @intCast(records.items.len)));
