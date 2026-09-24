@@ -10248,11 +10248,18 @@ const Lowerer = struct {
         source_ty: Type.TypeId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
+        const source_runtime_ty = self.runtimeBackingType(source_ty);
+        const source_runtime_content = self.types.get(source_runtime_ty);
+        // The sealed empty row is uninhabited. A boundary may mention it in
+        // an impossible variant such as Err in Try(Str, []), but there is no
+        // payload to copy or convert, regardless of its zero-sized layout.
+        if (source_runtime_content == .tag_union and source_runtime_content.tag_union.len == 0) {
+            return try self.result.store.addCFStmt(.{ .runtime_error = {} });
+        }
         if (target == source) return next;
         if (try self.maybeAssignDirectLayoutBoundary(target, source, next)) |stmt| return stmt;
 
         const target_runtime_ty = self.runtimeBackingType(target_ty);
-        const source_runtime_ty = self.runtimeBackingType(source_ty);
         if (target_runtime_ty != target_ty or source_runtime_ty != source_ty) {
             return try self.assignTypedBoundary(target, target_runtime_ty, source, source_runtime_ty, next);
         }
@@ -13309,4 +13316,21 @@ fn rootRunsAtCompileTime(request: check.CheckedModule.RootRequest) bool {
         .compile_time_constant, .compile_time_callable => true,
         .runtime_entrypoint, .provided_export, .platform_required_binding, .hosted_export, .test_expect, .repl_expr, .dev_expr => false,
     };
+}
+
+test "typed boundaries from empty rows are terminal even with matching layouts" {
+    const allocator = std.testing.allocator;
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+    var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+    defer lowerer.deinit();
+    const empty = try lowerer.types.add(.{ .tag_union = .empty() });
+    const u64_ty = try lowerer.types.add(.{ .primitive = .u64 });
+    const source = try lowerer.result.store.addLocal(.{ .layout_idx = .zst });
+    for ([_]Type.TypeId{ empty, u64_ty }, [_]layout.Idx{ .zst, .u64 }) |target_ty, target_layout| {
+        const target = try lowerer.result.store.addLocal(.{ .layout_idx = target_layout });
+        const next = try lowerer.result.store.addCFStmt(.{ .ret = .{ .value = target } });
+        const boundary = try lowerer.assignTypedBoundary(target, target_ty, source, empty, next);
+        try std.testing.expect(lowerer.result.store.getCFStmt(boundary) == .runtime_error);
+    }
 }
