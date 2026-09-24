@@ -4635,7 +4635,7 @@ equality uses the shared identity rather than the per-use derivation index.
 The checker's derived-codec walk records each nominal application whose
 backing it walks together with the generated derivation that walks it. A later
 occurrence of an equal application in the same walk (a sibling field, a list
-element, or a recursive occurrence inside the application's own backing)
+item, or a recursive occurrence inside the application's own backing)
 records its codec call against that derivation rather than walking the backing
 again, so every structural call names a checked derivation and a recursive
 nominal's call names its own. Repeated occurrences of one subject in a body

@@ -64,7 +64,6 @@ pub fn callsEquivalent(
 ) Allocator.Error!bool {
     var comparer = Comparer{ .allocator = allocator, .types = types, .table = table, .types_eql = .alias_transparent };
     defer comparer.deinit();
-    comparer.reset();
     if (left.method != right.method or std.meta.activeTag(left.resolution) != std.meta.activeTag(right.resolution)) return false;
     try comparer.typesPair(left.dispatcher_ty, right.dispatcher_ty);
     try comparer.typesPair(left.callable_ty, right.callable_ty);

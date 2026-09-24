@@ -18,6 +18,21 @@ Inner := [Leaf(Str), Stop].{ parser_for : _ }
 
 Outer := [Wrap(List(Inner))].{ parser_for : _ }
 
+PlainAlias : Plain
+
+Holder(a) := { x : a }.{
+	parser_for : _
+	encoder_for : _
+}
+
+Left := { right : List(Right) }.{ parser_for : _ }
+
+Right := { left : List(Left), name : Str }.{ parser_for : _ }
+
+right_names : Left -> Str
+right_names = |Left.({ right })|
+	List.fold(right, "", |acc, Right.({ left, name })| Str.concat(Str.concat(acc, name), Str.join_with(List.map(left, right_names), "")))
+
 name_of : Plain -> Str
 name_of = |Plain.({ name })| name
 
@@ -107,6 +122,38 @@ expect {
 	v = Json.parse("[{\"Leaf\":\"a\"},\"Stop\"]")
 	match v {
 		Ok(items) => Str.join_with(List.map(items, describe_inner), "") == "a."
+		Err(_) => False
+	}
+}
+
+# Two fields of one derived nominal, one spelled through an alias.
+expect {
+	v : Try({ c : Plain, d : PlainAlias }, [InvalidJson(Str), MissingRequiredField(Str)])
+	v = Json.parse("{\"c\":{\"name\":\"a\"},\"d\":{\"name\":\"b\"}}")
+	match v {
+		Ok({ c, d }) => Str.concat(name_of(c), name_of(d)) == "ab"
+		Err(_) => False
+	}
+}
+
+# A generic derived nominal at one argument twice and at another once.
+expect {
+	v : Try({ c : Holder(Str), d : Holder(Str), e : Holder(U8) }, [InvalidJson(Str), MissingRequiredField(Str)])
+	v = Json.parse("{\"c\":{\"x\":\"a\"},\"d\":{\"x\":\"b\"},\"e\":{\"x\":7}}")
+	match v {
+		Ok({ c: Holder.({ x: c }), d: Holder.({ x: d }), e: Holder.({ x: e }) }) => c == "a" and d == "b" and e == 7
+		Err(_) => False
+	}
+}
+
+expect Json.to_str({ c: Holder.({ x: "a" }), d: Holder.({ x: "b" }), e: Holder.({ x: 7.U8 }) }) == "{\"c\":{\"x\":\"a\"},\"d\":{\"x\":\"b\"},\"e\":{\"x\":7}}"
+
+# Mutually recursive derived parsers.
+expect {
+	v : Try(Left, [InvalidJson(Str), MissingRequiredField(Str)])
+	v = Json.parse("{\"right\":[{\"left\":[{\"right\":[{\"left\":[],\"name\":\"y\"}]}],\"name\":\"x\"}]}")
+	match v {
+		Ok(left) => right_names(left) == "xy"
 		Err(_) => False
 	}
 }
