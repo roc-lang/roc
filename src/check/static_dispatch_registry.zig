@@ -1667,9 +1667,6 @@ pub const GeneratedCodecCallResolution = union(enum(u8)) {
 /// One exact method edge inside a compiler-generated parser or encoder.
 pub const GeneratedCodecCall = struct {
     method: canonical.MethodNameId,
-    /// This checked edge is consumed only by a specialization whose boundary
-    /// selects the corresponding generated-code path.
-    conditional: bool = false,
     /// Dense producer role among distinct subject obligations for `method`.
     /// This is the post-check selection key; subject types remain validation
     /// metadata and are never rediscovered from a Monotype graph.
@@ -2133,7 +2130,6 @@ pub const StaticDispatchPlanTable = struct {
                 }
                 try generated_codec_calls.append(allocator, .{
                     .method = method,
-                    .conditional = call.conditional != 0,
                     .method_role = method_role.?,
                     .dispatcher_ty = dispatcher_ty,
                     .callable_ty = callable_ty,

@@ -10376,7 +10376,6 @@ const Builder = struct {
         return try ctx.prepareParseTagUnionPayloadCodecCalls(
             boundary.expr,
             result.value,
-            result.err,
             constructor_node,
         );
     }
@@ -29396,8 +29395,6 @@ const BodyContext = struct {
         );
         const finish_body = try self.lowerParseRecordFinish(
             shape_ty,
-            encoding_expr,
-            encoding_ty,
             state_ty,
             ret_ty,
             record_slots,
@@ -30039,8 +30036,6 @@ const BodyContext = struct {
     fn lowerParseRecordFinish(
         self: *BodyContext,
         shape_ty: Type.TypeId,
-        encoding_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
         record_slots: ParseRecordSlots,
@@ -30054,10 +30049,6 @@ const BodyContext = struct {
             record_slots,
             shape_ty,
             record_try_ty,
-            encoding_expr,
-            encoding_ty,
-            rest_expr,
-            state_ty,
             renamed_field_locals,
             error_join,
         );
@@ -32108,10 +32099,6 @@ const BodyContext = struct {
         record_slots: ParseRecordSlots,
         record_ty: Type.TypeId,
         ret_ty: Type.TypeId,
-        encoding_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
-        rest_value: DraftExprId,
-        state_ty: Type.TypeId,
         renamed_field_locals: []const DraftLocalId,
         error_join: DraftExprId,
     ) Allocator.Error!DraftExprId {
@@ -32126,9 +32113,6 @@ const BodyContext = struct {
         defer self.allocator.free(record_fields);
         if (record_fields.len != record_slots.fieldCount()) Common.invariant("record parse state arity did not match finish record field count");
         if (record_fields.len != renamed_field_locals.len) Common.invariant("record parse renamed field arity did not match finish record field count");
-
-        const rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        const rest_expr = try self.localExpr(rest_local, state_ty);
 
         const out_fields = try self.allocator.alloc(DraftFieldExpr, record_fields.len);
         defer self.allocator.free(out_fields);
@@ -32198,10 +32182,6 @@ const BodyContext = struct {
             const renamed_field_ty = try self.localType(renamed_field_locals[field_index]);
             const missing_error = try self.missingRequiredFieldError(
                 try self.localExpr(renamed_field_locals[field_index], renamed_field_ty),
-                encoding_expr,
-                rest_expr,
-                encoding_ty,
-                state_ty,
                 ret_info.err_ty,
             );
             const missing_body = try self.jumpToGeneratedJoin(
@@ -32221,7 +32201,7 @@ const BodyContext = struct {
                 .uninitialized = missing_body,
             } } });
         }
-        return try self.wrapLet(rest_local, state_ty, rest_value, body, ret_ty);
+        return body;
     }
 
     const ParseShapeSelection = struct {
@@ -32481,36 +32461,15 @@ const BodyContext = struct {
         const payload_ty = payload_tys[payload_index];
         const payload_ok_ty = try self.parseResultOkType(payload_ty, state_ty);
         const payload_try_ty = try self.tryTypeLike(ret_ty, payload_ok_ty, ret_info.err_ty);
-        const payload_try = payload_try: {
-            // A payload whose parse can report a missing required field is
-            // only decodable when the spec's checked error row carries that
-            // report. A closed row without it is checker-authored proof this
-            // payload is converter-fed and never parsed from source text, so
-            // the impossible parse lowers to the failure mapping instead of
-            // generating helpers over unparsable internals.
-            var required_visited = collections.DenseMap(Type.TypeId, void).init(self.allocator);
-            defer required_visited.deinit();
-            if (try self.parserShapeNeedsRequiredFieldError(payload_ty, &required_visited) and
-                self.monoTagByTextOptional(ret_info.err_ty, "MissingRequiredField") == null)
-            {
-                break :payload_try try self.invalidValueParseResult(
-                    try self.localExpr(encoding_local, encoding_ty),
-                    state_expr,
-                    encoding_ty,
-                    state_ty,
-                    payload_try_ty,
-                );
-            }
-            break :payload_try try self.lowerParseShapeHelperCall(
-                payload_ty,
-                try self.localExpr(encoding_local, encoding_ty),
-                encoding_ty,
-                state_expr,
-                state_ty,
-                payload_try_ty,
-                precomputed_plan,
-            );
-        };
+        const payload_try = try self.lowerParseShapeHelperCall(
+            payload_ty,
+            try self.localExpr(encoding_local, encoding_ty),
+            encoding_ty,
+            state_expr,
+            state_ty,
+            payload_try_ty,
+            precomputed_plan,
+        );
         const rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
         const rest_expr = try self.localExpr(rest_local, state_ty);
         const next_body = if (payload_index + 1 < payload_tys.len) blk: {
@@ -43618,9 +43577,10 @@ const BodyContext = struct {
         // any receiver is judged open. A checked instantiation record already
         // binds every slot, hidden ones included, so its edge relates no
         // target callable; nor does a requirement the site recorded as
-        // structural, unreachable, or rejected, since a structural
-        // derivation's callable mentions only its receiver. The context is
-        // created by the first relation.
+        // structural, unreachable, or rejected. A forwarded structural codec
+        // carries its checked callable, which can reach variables its receiver
+        // does not (a parser's error row), so it is related like a target.
+        // The context is created by the first relation.
         const relate_targets = site_refs == null;
         var scheme_ctx: ?BodyContext = null;
         defer if (scheme_ctx) |*ctx| ctx.deinit();
@@ -43640,6 +43600,24 @@ const BodyContext = struct {
                         out[k] = forwarded;
                         derived[k] = true;
                         progress = true;
+                        if (relate_targets) switch (forwarded) {
+                            .structural => |structural| if (structural.checked) |checked_structural| {
+                                if (scheme_ctx == null) {
+                                    scheme_ctx = try BodyContext.initWithMethodScope(
+                                        self.allocator,
+                                        self.builder,
+                                        schema.view,
+                                        self.method_scope,
+                                        self.owner_template,
+                                        self.graph,
+                                        self.draft,
+                                    );
+                                    try scheme_ctx.?.seedSubstitution(schema, subst);
+                                }
+                                try self.relateStructuralEvidenceToConstraint(checked_structural, &scheme_ctx.?, param);
+                            },
+                            .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+                        };
                         continue;
                     },
                     .target => {},
@@ -43722,6 +43700,32 @@ const BodyContext = struct {
         const root_view = if (target.instantiation) |instantiation| instantiation.view else target.view;
         const root_fn_ty = if (target.instantiation) |instantiation| instantiation.callable_ty else target.target.callable_ty;
         try self.relateEvidenceTargetRootToRequest(root_view, root_fn_ty, target_node, constraint_node, dispatchTargetAdapterReachability(target.target));
+    }
+
+    /// Relate a checked structural codec's callable to the scheme constraint
+    /// it discharges. The checker validated the derivation at exactly this
+    /// callable, so relating it binds every quantified variable the
+    /// constraint reaches, including those absent from the scheme root: a
+    /// parser's error row, for one, is reachable only through its constraint.
+    fn relateStructuralEvidenceToConstraint(
+        self: *BodyContext,
+        structural: CheckedSpecStructuralEvidence,
+        scheme_ctx: *BodyContext,
+        param: static_dispatch.EvidenceParamRecord,
+    ) Allocator.Error!void {
+        var evidence_ctx = try BodyContext.initWithMethodScope(
+            self.allocator,
+            self.builder,
+            structural.view,
+            self.method_scope,
+            self.owner_template,
+            self.graph,
+            self.draft,
+        );
+        defer evidence_ctx.deinit();
+        const evidence_node = try evidence_ctx.instNode(structural.evidence.callable_ty);
+        const constraint_node = try scheme_ctx.instNode(param.callable_ty);
+        try relateRequestComponent(self.graph, evidence_node, constraint_node);
     }
 
     /// Parameters that retain the checked target's exact callable instantiation
@@ -44824,7 +44828,10 @@ const BodyContext = struct {
                     // selection itself needs no graph-driven fixpoint here.
                     switch (entry) {
                         .target => |target| try self.relateTargetToConstraint(target, target_ctx, param),
-                        .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+                        .structural => |structural| if (structural.checked) |checked_structural| {
+                            try self.relateStructuralEvidenceToConstraint(checked_structural, target_ctx, param);
+                        },
+                        .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
                     }
                 }
                 // Reuse is authorized by the checked dispatch plan. Independent
@@ -48089,33 +48096,14 @@ const BodyContext = struct {
 
         var added_relation = false;
         if (kind == .parser) {
-            var required_error_seen = collections.DenseMap(NodeId, void).init(self.allocator);
-            defer required_error_seen.deinit();
-            const needs_missing_required_field = try self.graphParserShapeNeedsRequiredFieldError(shape_node, &required_error_seen);
-            const missing_required_field_ready = if (needs_missing_required_field) blk: {
-                const added_missing = try self.ensureGraphParserMissingRequiredFieldError(boundary_callable_node);
-                added_relation = added_missing;
-                const has_missing = try self.graphRowHasTag(
-                    (try self.graphParserResultNodes((try self.graph.functionNodes((try self.graph.functionNodes(boundary_callable_node)).ret)).ret)).err,
-                    "MissingRequiredField",
-                );
-                break :blk added_missing or has_missing;
-            } else true;
-            const runtime = try self.graph.functionNodes((try self.graph.functionNodes(boundary_callable_node)).ret);
-            const outer_result = try self.graphParserResultNodes(runtime.ret);
             var invalid_value_seen = collections.DenseMap(NodeId, void).init(self.allocator);
             defer invalid_value_seen.deinit();
-            if (try self.graphParserShapeNeedsInvalidValue(
-                shape_node,
-                outer_result.err,
-                missing_required_field_ready,
-                &invalid_value_seen,
-            )) {
+            if (try self.graphParserShapeNeedsInvalidValue(shape_node, &invalid_value_seen)) {
                 added_relation = try self.prepareParserInvalidValueCodecCall(
                     boundary_expr,
                     shape_node,
                     boundary_callable_node,
-                ) or added_relation;
+                );
             }
         }
         var seen = collections.DenseMap(NodeId, void).init(self.allocator);
@@ -48139,14 +48127,10 @@ const BodyContext = struct {
         self: *BodyContext,
         boundary_expr: DraftExprId,
         union_node: NodeId,
-        err_node: NodeId,
         boundary_callable_node: NodeId,
     ) Allocator.Error!bool {
         var added_relation = false;
-        var missing_required_field_ready = false;
 
-        var required_error_seen = collections.DenseMap(NodeId, void).init(self.allocator);
-        defer required_error_seen.deinit();
         var invalid_value_seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer invalid_value_seen.deinit();
         var seen = collections.DenseMap(NodeId, void).init(self.allocator);
@@ -48154,20 +48138,7 @@ const BodyContext = struct {
 
         for ((try self.graph.tagRowNodes(union_node)).tags) |tag| {
             for (tag.payloads) |payload| {
-                if (try self.graphParserShapeNeedsRequiredFieldError(payload, &required_error_seen)) {
-                    if (!missing_required_field_ready) {
-                        const added_missing = try self.ensureGraphParserMissingRequiredFieldError(boundary_callable_node);
-                        added_relation = added_missing or added_relation;
-                        const has_missing = try self.graphRowHasTag(err_node, "MissingRequiredField");
-                        missing_required_field_ready = added_missing or has_missing;
-                    }
-                }
-                if (try self.graphParserShapeNeedsInvalidValue(
-                    payload,
-                    err_node,
-                    missing_required_field_ready,
-                    &invalid_value_seen,
-                )) {
+                if (try self.graphParserShapeNeedsInvalidValue(payload, &invalid_value_seen)) {
                     added_relation = try self.prepareParserInvalidValueCodecCall(
                         boundary_expr,
                         payload,
@@ -48392,12 +48363,9 @@ const BodyContext = struct {
         };
 
         // The source and frozen producer roles together are the codec
-        // contract's complete substitution interface. Most calls were
-        // validated against the frozen snapshot; a conditional parser
-        // `invalid_value` edge is validated later against the settled source
-        // boundary. Binding both sets here gives every checker-authored edge
-        // the same authoritative boundary nodes without rediscovering or
-        // widening a type in Monotype.
+        // contract's complete substitution interface. Binding both sets here
+        // gives every checker-authored edge the same authoritative boundary
+        // nodes without rediscovering or widening a type in Monotype.
         try self.bindCheckedCodecContractType(contract_ctx, derivation.source_constructor_ty, callable_node);
         try self.bindCheckedCodecContractType(contract_ctx, derivation.source_runtime_ty, constructor.ret);
         try self.relateCheckedCodecContractType(contract_ctx, derivation.source_shape_ty, shape_node);
@@ -48701,7 +48669,7 @@ const BodyContext = struct {
             Common.invariant("generated codec consumption audit received an invalid call span");
         }
         for (self.instantiated_codec_calls.items[active.calls_start..][0..active.calls_len]) |call| {
-            if (!call.debug_consumed and !call.checked.conditional) {
+            if (!call.debug_consumed) {
                 std.debug.panic(
                     "postcheck invariant violated: Monotype did not consume checker-required generated codec call {s} role {} (subject: {s})",
                     .{
@@ -50298,91 +50266,9 @@ const BodyContext = struct {
         };
     }
 
-    /// Decide the derived parser's required-field error relation from the live
-    /// specialization graph. This is deliberately graph-native: unresolved
-    /// rows remain producer-owned evidence until the single sealing boundary.
-    fn graphParserShapeNeedsRequiredFieldError(
-        self: *BodyContext,
-        raw_node: NodeId,
-        seen: *collections.DenseMap(NodeId, void),
-    ) Allocator.Error!bool {
-        const node = raw_node;
-        const entry = try seen.getOrPut(node);
-        if (entry.found_existing) return false;
-
-        if (self.graphNodeHasJsonScalarParser(node)) return false;
-        if (self.generatedCodecBoundaryCall(.parser, node) != null) return false;
-        if (self.graphNodeIsBuiltinTry(node)) {
-            const payloads = try self.graphTryPayloads(node);
-            if (try self.graphErrorIsExactUnitTag(payloads.err, "Missing") or
-                try self.graphErrorIsExactUnitTag(payloads.err, "Null"))
-            {
-                return try self.graphParserShapeNeedsRequiredFieldError(payloads.ok, seen);
-            }
-            return false;
-        }
-
-        return switch (self.graph.content(node)) {
-            .list, .box => |payload| try self.graphParserShapeNeedsRequiredFieldError(payload, seen),
-            .tuple => |items| blk: {
-                for (items) |item| {
-                    if (try self.graphParserShapeNeedsRequiredFieldError(item, seen)) break :blk true;
-                }
-                break :blk false;
-            },
-            .record => blk: {
-                for ((try self.graph.recordNodes(node)).fields) |field| {
-                    const value_node = self.graph.codecFieldValueNode(field);
-                    if (try self.graphMissingTryOkNode(value_node)) |payload| {
-                        if (try self.graphParserShapeNeedsRequiredFieldError(payload, seen)) break :blk true;
-                        continue;
-                    }
-                    switch (self.graph.codecFieldKind(field)) {
-                        .optional, .defaulted => {
-                            if (try self.graphParserShapeNeedsRequiredFieldError(value_node, seen)) break :blk true;
-                        },
-                        .required => break :blk true,
-                    }
-                }
-                break :blk false;
-            },
-            .tag_union => blk: {
-                for ((try self.graph.tagRowNodes(node)).tags) |tag| {
-                    for (tag.payloads) |payload| {
-                        if (try self.graphParserShapeNeedsRequiredFieldError(payload, seen)) break :blk true;
-                    }
-                }
-                break :blk false;
-            },
-            .named => |named| blk: {
-                if (named.builtin_owner == .set and named.args.len == 1) {
-                    break :blk try self.graphParserShapeNeedsRequiredFieldError(named.args[0], seen);
-                }
-                if (named.builtin_owner == .dict and named.args.len == 2) {
-                    break :blk try self.graphParserShapeNeedsRequiredFieldError(named.args[1], seen);
-                }
-                if (named.backing) |backing| {
-                    break :blk try self.graphParserShapeNeedsRequiredFieldError(backing.node, seen);
-                }
-                break :blk false;
-            },
-            .redirect => unreachable,
-            .unresolved,
-            .primitive,
-            .empty_tag_union,
-            .empty_record,
-            .func,
-            .erased,
-            .zst,
-            => false,
-        };
-    }
-
     fn graphParserShapeNeedsInvalidValue(
         self: *BodyContext,
         raw_node: NodeId,
-        err_node: NodeId,
-        missing_required_field_ready: bool,
         seen: *collections.DenseMap(NodeId, void),
     ) Allocator.Error!bool {
         const node = raw_node;
@@ -50396,29 +50282,24 @@ const BodyContext = struct {
             if (try self.graphErrorIsExactUnitTag(payloads.err, "Missing") or
                 try self.graphErrorIsExactUnitTag(payloads.err, "Null"))
             {
-                return try self.graphParserShapeNeedsInvalidValue(payloads.ok, err_node, missing_required_field_ready, seen);
+                return try self.graphParserShapeNeedsInvalidValue(payloads.ok, seen);
             }
             return false;
         }
 
         return switch (self.graph.content(node)) {
-            .list, .box => |payload| try self.graphParserShapeNeedsInvalidValue(payload, err_node, missing_required_field_ready, seen),
+            .list, .box => |payload| try self.graphParserShapeNeedsInvalidValue(payload, seen),
             .tuple => true,
             .record => blk: {
-                const has_missing_required_field = try self.graphRowHasTag(err_node, "MissingRequiredField");
                 for ((try self.graph.recordNodes(node)).fields) |field| {
                     const value_node = self.graph.codecFieldValueNode(field);
                     if (try self.graphMissingTryOkNode(value_node)) |payload| {
-                        if (try self.graphParserShapeNeedsInvalidValue(payload, err_node, missing_required_field_ready, seen)) break :blk true;
+                        if (try self.graphParserShapeNeedsInvalidValue(payload, seen)) break :blk true;
                         continue;
                     }
                     switch (self.graph.codecFieldKind(field)) {
-                        .optional, .defaulted => {
-                            if (try self.graphParserShapeNeedsInvalidValue(value_node, err_node, missing_required_field_ready, seen)) break :blk true;
-                        },
-                        .required => {
-                            if (!missing_required_field_ready and !has_missing_required_field) break :blk true;
-                            if (try self.graphParserShapeNeedsInvalidValue(value_node, err_node, missing_required_field_ready, seen)) break :blk true;
+                        .optional, .defaulted, .required => {
+                            if (try self.graphParserShapeNeedsInvalidValue(value_node, seen)) break :blk true;
                         },
                     }
                 }
@@ -50427,14 +50308,14 @@ const BodyContext = struct {
             .tag_union => blk: {
                 for ((try self.graph.tagRowNodes(node)).tags) |tag| {
                     for (tag.payloads) |payload| {
-                        if (try self.graphParserShapeNeedsInvalidValue(payload, err_node, missing_required_field_ready, seen)) break :blk true;
+                        if (try self.graphParserShapeNeedsInvalidValue(payload, seen)) break :blk true;
                     }
                 }
                 break :blk false;
             },
             .named => |named| blk: {
                 if (named.builtin_owner == .set and named.args.len == 1) {
-                    break :blk try self.graphParserShapeNeedsInvalidValue(named.args[0], err_node, missing_required_field_ready, seen);
+                    break :blk try self.graphParserShapeNeedsInvalidValue(named.args[0], seen);
                 }
                 if (named.builtin_owner == .dict and named.args.len == 2) {
                     if (self.graphJsonParseObjectKeyMethodName(named.args[0]) != null) {
@@ -50442,16 +50323,11 @@ const BodyContext = struct {
                         // exact `parse_key_*` method.
                     } else if (self.graphNodeIsStringRenderedDictKey(named.args[0])) {
                         if (try self.graphNodeIsUnitTagUnion(named.args[0])) break :blk true;
-                    } else if (try self.graphParserShapeNeedsInvalidValue(
-                        named.args[0],
-                        err_node,
-                        missing_required_field_ready,
-                        seen,
-                    )) break :blk true;
-                    break :blk try self.graphParserShapeNeedsInvalidValue(named.args[1], err_node, missing_required_field_ready, seen);
+                    } else if (try self.graphParserShapeNeedsInvalidValue(named.args[0], seen)) break :blk true;
+                    break :blk try self.graphParserShapeNeedsInvalidValue(named.args[1], seen);
                 }
                 if (named.backing) |backing| {
-                    break :blk try self.graphParserShapeNeedsInvalidValue(backing.node, err_node, missing_required_field_ready, seen);
+                    break :blk try self.graphParserShapeNeedsInvalidValue(backing.node, seen);
                 }
                 break :blk false;
             },
@@ -50480,82 +50356,6 @@ const BodyContext = struct {
             if (tag.payloads.len != 0) return false;
         }
         return true;
-    }
-
-    /// Add the parser producer's explicit error evidence before graph sealing.
-    /// Finished Monotypes never participate in this relation and therefore
-    /// cannot be reopened or widened by codec emission.
-    fn ensureGraphParserMissingRequiredFieldError(
-        self: *BodyContext,
-        boundary_callable_node: NodeId,
-    ) Allocator.Error!bool {
-        const callable = try self.graph.functionNodes(boundary_callable_node);
-        if (callable.args.len != 1) Common.invariant("structural parser constructor did not have one encoding argument");
-        const runtime = try self.graph.functionNodes(callable.ret);
-        if (runtime.args.len != 1) Common.invariant("structural parser runtime did not have one state argument");
-        const outer_result = try self.graphParserResultNodes(runtime.ret);
-        const tag_name = try self.nameStoreMut().internTagLabel("MissingRequiredField");
-
-        switch (self.graph.content(outer_result.err)) {
-            .tag_union, .named => {
-                for ((try self.graph.tagRowNodes(outer_result.err)).tags) |tag| {
-                    if (!Ident.textEql(self.nameStore().tagLabelText(tag.name), "MissingRequiredField")) continue;
-                    if (tag.payloads.len != 1) {
-                        Common.invariant("MissingRequiredField graph evidence did not carry one Str payload");
-                    }
-                    switch (self.graph.content(tag.payloads[0])) {
-                        .primitive => |primitive| if (primitive != .str) {
-                            Common.invariant("MissingRequiredField graph evidence payload was not Str");
-                        },
-                        .named => |named| if (named.builtin_owner != .str) {
-                            Common.invariant("MissingRequiredField graph evidence payload was not Str");
-                        },
-                        .redirect, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("MissingRequiredField graph evidence payload was not resolved to Str"),
-                    }
-                    return false;
-                }
-            },
-            .unresolved, .empty_tag_union => {},
-            .redirect, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .erased, .zst => Common.invariant("structural parser error evidence was not a tag-union row"),
-        }
-        // A row whose extension chain already terminated in a concrete empty
-        // union is checker-closed; the generated body maps the missing-field
-        // path through its checker-validated `invalid_value` slot instead of
-        // widening checked output.
-        var row_probe = outer_result.err;
-        probe: while (true) {
-            switch (self.graph.content(row_probe)) {
-                .tag_union => |row| row_probe = row.ext,
-                .empty_tag_union => return false,
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst => break :probe,
-            }
-        }
-
-        const str_node = try self.graph.newNode(.{ .primitive = .str });
-        const tags = try self.graph.arena().alloc(InstTag, 1);
-        tags[0] = .{
-            .name = tag_name,
-            .checked_name = tag_name,
-            .payloads = try self.graph.arena().dupe(NodeId, &.{str_node}),
-        };
-        const evidence = try self.graph.newNode(.{ .tag_union = .{
-            .tags = tags,
-            .ext = try self.graph.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) }),
-        } });
-        try relateRequestComponent(self.graph, outer_result.err, evidence);
-        return true;
-    }
-
-    fn graphRowHasTag(self: *BodyContext, row_node: NodeId, text: []const u8) Allocator.Error!bool {
-        switch (self.graph.content(row_node)) {
-            .tag_union, .named => {
-                for ((try self.graph.tagRowNodes(row_node)).tags) |tag| {
-                    if (Ident.textEql(self.nameStore().tagLabelText(tag.name), text)) return true;
-                }
-            },
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
-        }
-        return false;
     }
 
     fn prepareCustomCodecCallsAtNode(
@@ -51007,98 +50807,20 @@ const BodyContext = struct {
         return try self.wrapLet(field_local, field_ty, field_value, next_body, ret_ty);
     }
 
-    /// Whether parsing `ty` from source text can report a missing required
-    /// record field. Mirrors the checker's derived-parse analysis over the
-    /// materialized monotype.
-    fn parserShapeNeedsRequiredFieldError(
-        self: *BodyContext,
-        ty: Type.TypeId,
-        visited: *collections.DenseMap(Type.TypeId, void),
-    ) Allocator.Error!bool {
-        if (visited.contains(ty)) return false;
-        try visited.put(ty, {});
-
-        if (self.parseScalarMethodName(ty) != null) return false;
-        if (try self.missingTryInfo(ty)) |info| {
-            return try self.parserShapeNeedsRequiredFieldError(info.ok_ty, visited);
-        }
-        if (self.tryNullInfo(ty)) |info| {
-            return try self.parserShapeNeedsRequiredFieldError(info.ok_payload_ty, visited);
-        }
-        if (self.frozenCustomCodecCallForShape(.parser, ty) != null) return false;
-        if (self.setPayloadType(ty)) |payload_ty| {
-            return try self.parserShapeNeedsRequiredFieldError(payload_ty, visited);
-        }
-        if (self.dictEntryShape(ty)) |dict| {
-            var dict_buf: [2]Type.TypeId = undefined;
-            for (self.dictCodecShapes(dict, &dict_buf)) |dict_shape| {
-                if (try self.parserShapeNeedsRequiredFieldError(dict_shape, visited)) return true;
-            }
-            return false;
-        }
-
-        return switch (self.shapeContent(ty)) {
-            .list => |payload_ty| try self.parserShapeNeedsRequiredFieldError(payload_ty, visited),
-            .box => |payload_ty| try self.parserShapeNeedsRequiredFieldError(payload_ty, visited),
-            .tuple => |span| blk: {
-                const elems = self.typeStore().span(span);
-                for (0..GuardedList.borrowLen(elems)) |index| {
-                    if (try self.parserShapeNeedsRequiredFieldError(GuardedList.at(elems, index), visited)) break :blk true;
-                }
-                break :blk false;
-            },
-            .record => |span| blk: {
-                const fields = self.typeStore().fieldSpan(span);
-                for (0..GuardedList.borrowLen(fields)) |index| {
-                    const field = GuardedList.at(fields, index);
-                    if (try self.missingTryInfo(field.ty)) |optional| {
-                        if (try self.parserShapeNeedsRequiredFieldError(optional.ok_ty, visited)) break :blk true;
-                    } else if (self.optionalFieldSlot(field.ty)) |slot| {
-                        // `?:` slot: an absent key parses to `#Missing`, so the
-                        // field itself never demands MissingRequiredField.
-                        if (try self.parserShapeNeedsRequiredFieldError(slot.payload_ty, visited)) break :blk true;
-                    } else if (field.default != null) {
-                        // `??` field: an absent key fills the archived default.
-                        if (try self.parserShapeNeedsRequiredFieldError(field.ty, visited)) break :blk true;
-                    } else {
-                        break :blk true;
-                    }
-                }
-                break :blk false;
-            },
-            .tag_union => |span| blk: {
-                const tags = self.typeStore().tagSpan(span);
-                for (0..GuardedList.borrowLen(tags)) |tag_index| {
-                    const payloads = self.typeStore().span(GuardedList.at(tags, tag_index).payloads);
-                    for (0..GuardedList.borrowLen(payloads)) |payload_index| {
-                        if (try self.parserShapeNeedsRequiredFieldError(GuardedList.at(payloads, payload_index), visited)) break :blk true;
-                    }
-                }
-                break :blk false;
-            },
-            .zst => false,
-            .primitive, .named, .func, .erased => false,
-        };
-    }
-
     fn missingRequiredFieldError(
         self: *BodyContext,
         field_name_expr: DraftExprId,
-        encoding_expr: DraftExprId,
-        state_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
-        state_ty: Type.TypeId,
         err_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const str_ty = try self.primitiveType(.str);
         if (!self.sameType(try self.exprType(field_name_expr), str_ty)) {
             Common.invariant("generated missing required field name was not Str");
         }
-        // Generic structural parsers may hide field-level details behind the
-        // format's public error row. Keep the precise generated tag when the row
-        // includes it; otherwise use the checked format failure boundary.
+        // The checker adds `MissingRequiredField(Str)` to the error row of every
+        // derived parser that owns a required field, so the checked row always
+        // carries it here.
         const missing_tag = self.monoTagByTextOptional(err_ty, "MissingRequiredField") orelse
-            return try self.invalidValueError(encoding_expr, state_expr, encoding_ty, state_ty, err_ty);
+            Common.invariant("derived parser with a required field had no MissingRequiredField in its checked error row");
         const payload_tys = self.typeStore().span(missing_tag.payloads);
         if (payload_tys.len != 1 or !self.sameType(GuardedList.at(payload_tys, 0), str_ty)) {
             Common.invariant("MissingRequiredField in parser error row did not carry one Str payload");
@@ -51110,21 +50832,6 @@ const BodyContext = struct {
                 .payloads = try self.addExprSpan(&[_]DraftExprId{field_name_expr}),
             } },
         });
-    }
-
-    fn invalidValueParseResult(
-        self: *BodyContext,
-        encoding_expr: DraftExprId,
-        state_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
-        state_ty: Type.TypeId,
-        ret_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        const ret_info = self.tryInfo(ret_ty);
-        return try self.tryErr(
-            ret_ty,
-            try self.invalidValueError(encoding_expr, state_expr, encoding_ty, state_ty, ret_info.err_ty),
-        );
     }
 
     fn invalidValueError(
