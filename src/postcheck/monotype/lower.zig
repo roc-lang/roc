@@ -20049,13 +20049,13 @@ const BodyContext = struct {
                 if (named.kind == .alias) Common.invariant("constructor witness retained a transparent alias node");
                 const backing = named.backing orelse
                     Common.invariant("named constructor witness had no explicit backing");
-                var witness = raw_named;
+                var witness = raw_named.*;
                 witness.backing = .{
                     .node = try self.constructorWitnessWithStructuralNode(backing.node, structural_node),
                     .use = backing.use,
                     .authority = backing.authority,
                 };
-                break :blk try self.graph.newNode(.{ .named = witness });
+                break :blk try self.graph.newNode(try self.graph.namedContent(witness));
             },
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => try self.constructorWitnessAliasLayers(node, structural_node),
         };
@@ -20076,13 +20076,13 @@ const BodyContext = struct {
                 if (named.kind != .alias) break :blk structural_node;
                 const backing = named.backing orelse
                     Common.invariant("transparent alias graph node had no explicit backing");
-                var witness = raw_named;
+                var witness = raw_named.*;
                 witness.backing = .{
                     .node = try self.constructorWitnessAliasLayers(backing.node, structural_node),
                     .use = backing.use,
                     .authority = backing.authority,
                 };
-                break :blk try self.graph.newNode(.{ .named = witness });
+                break :blk try self.graph.newNode(try self.graph.namedContent(witness));
             },
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => structural_node,
         };
@@ -22452,7 +22452,7 @@ const BodyContext = struct {
         } else null;
         const def = try self.typeDef(self.view, nominal.origin_module, nominal.name, nominal.source_decl);
         self.builder.noteBuiltinTryDef(nominal.builtin, self.nameStore(), def);
-        return try self.graph.newNode(.{ .named = .{
+        return try self.graph.newNode(try self.graph.namedContent(.{
             .named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = checked_ty },
             .def = def,
             .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
@@ -22460,7 +22460,7 @@ const BodyContext = struct {
             .args = args,
             .backing = backing,
             .declared_order = try self.instDeclaredOrderForNominal(nominal),
-        } });
+        }));
     }
 
     fn instDeclaredOrderForNominal(
@@ -23727,13 +23727,13 @@ const BodyContext = struct {
                         visiting,
                     );
                     if (self.graph.sameClass(backing, produced_backing.node)) return produced_node;
-                    var witness = produced_named;
+                    var witness = produced_named.*;
                     witness.backing = .{
                         .node = backing,
                         .use = produced_backing.use,
                         .authority = produced_backing.authority,
                     };
-                    return try self.graph.newNode(.{ .named = witness });
+                    return try self.graph.newNode(try self.graph.namedContent(witness));
                 },
                 .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
             },
@@ -27487,7 +27487,7 @@ const BodyContext = struct {
                 def.iterator_kind = ctx.kind;
                 def.iterator_depth = ctx.mint_depth;
                 def.iterator_topology = try ctx.body.iteratorRepresentationNames();
-                return .{ .named = .{
+                return try ctx.body.graph.namedContent(.{
                     .named_type = ctx.public_source.named_type,
                     .def = def,
                     .kind = ctx.public_source.kind,
@@ -27507,7 +27507,7 @@ const BodyContext = struct {
                         .public_source = ctx.public_source,
                     },
                     .declared_order = ctx.public_source.declared_order,
-                } };
+                });
             }
         };
         return try self.graph.addRecursiveNode(Context{
@@ -27583,7 +27583,7 @@ const BodyContext = struct {
                 def.iterator_kind = .forced_dynamic;
                 def.iterator_depth = 0;
                 def.iterator_topology = try ctx.body.iteratorRepresentationNames();
-                return .{ .named = .{
+                return try ctx.body.graph.namedContent(.{
                     .named_type = ctx.public_source.named_type,
                     .def = def,
                     .kind = ctx.public_source.kind,
@@ -27603,7 +27603,7 @@ const BodyContext = struct {
                         .public_source = ctx.public_source,
                     },
                     .declared_order = ctx.public_source.declared_order,
-                } };
+                });
             }
         };
         return try self.graph.addRecursiveNode(Context{
@@ -49345,7 +49345,7 @@ const BodyContext = struct {
             .named => |named| named,
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated codec protocol template was not a named graph node"),
         };
-        return try self.graph.newNode(.{ .named = .{
+        return try self.graph.newNode(try self.graph.namedContent(.{
             .named_type = template.named_type,
             .def = template.def,
             .kind = template.kind,
@@ -49357,7 +49357,7 @@ const BodyContext = struct {
                 .authority = authority,
             },
             .declared_order = template.declared_order,
-        } });
+        }));
     }
 
     fn cloneGraphNamedWithGeneratedBacking(
@@ -58816,30 +58816,30 @@ test "graph constructor representation follows aliases and preserves nominal lay
     const nominal_name = try name_store.internTypeName("Nominal");
     const outer_alias_name = try name_store.internTypeName("OuterAlias");
     const structural = try graph.newNode(.empty_tag_union);
-    const alias = try graph.newNode(.{ .named = .{
+    const alias = try graph.newNode(try graph.namedContent(.{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
         .def = .{ .module = module_identity, .type_name = alias_name },
         .kind = .alias,
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = structural, .use = .inspectable },
-    } });
-    const nominal = try graph.newNode(.{ .named = .{
+    }));
+    const nominal = try graph.newNode(try graph.namedContent(.{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
         .def = .{ .module = module_identity, .type_name = nominal_name },
         .kind = .nominal,
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = alias, .use = .inspectable },
-    } });
-    const outer_alias = try graph.newNode(.{ .named = .{
+    }));
+    const outer_alias = try graph.newNode(try graph.namedContent(.{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(3) },
         .def = .{ .module = module_identity, .type_name = outer_alias_name },
         .kind = .alias,
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = nominal, .use = .inspectable },
-    } });
+    }));
 
     var ctx: BodyContext = undefined;
     ctx.graph = graph;
@@ -60636,30 +60636,30 @@ test "hosted Try graph walk crosses transparent alias layers to the Try nominal"
 
     const ok_node = try graph.newNode(.{ .primitive = .str });
     const err_node = try graph.newNode(.empty_tag_union);
-    const try_node = try graph.newNode(.{ .named = .{
+    const try_node = try graph.newNode(try graph.namedContent(.{
         .named_type = try_named,
         .def = try_def,
         .kind = .nominal,
         .builtin_owner = null,
         .args = try graph.arena().dupe(NodeId, &.{ ok_node, err_node }),
         .backing = .{ .node = try graph.newNode(.empty_tag_union), .use = .inspectable },
-    } });
-    const alias_node = try graph.newNode(.{ .named = .{
+    }));
+    const alias_node = try graph.newNode(try graph.namedContent(.{
         .named_type = alias_named,
         .def = alias_def,
         .kind = .alias,
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = try_node, .use = .inspectable },
-    } });
-    const outer_alias_node = try graph.newNode(.{ .named = .{
+    }));
+    const outer_alias_node = try graph.newNode(try graph.namedContent(.{
         .named_type = outer_alias_named,
         .def = outer_alias_def,
         .kind = .alias,
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = alias_node, .use = .inspectable },
-    } });
+    }));
 
     const capability = HostedTryAdapterCapability{
         .def = try_def,
@@ -60683,14 +60683,14 @@ test "hosted Try graph walk crosses transparent alias layers to the Try nominal"
 
     // A nominal that is not the capability's `Try` is not crossed into: only a
     // transparent alias layer is followed.
-    const impostor_node = try graph.newNode(.{ .named = .{
+    const impostor_node = try graph.newNode(try graph.namedContent(.{
         .named_type = alias_named,
         .def = impostor_def,
         .kind = .nominal,
         .builtin_owner = null,
         .args = try graph.arena().dupe(NodeId, &.{ ok_node, err_node }),
         .backing = .{ .node = try_node, .use = .inspectable },
-    } });
+    }));
     try std.testing.expect(graphHostedTryInfoOrNull(graph, capability, impostor_node) == null);
 }
 
@@ -60858,7 +60858,7 @@ test "request component relation follows root authority before nested private ev
     const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(9) };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const inner_def: Type.TypeDef = .{ .module = module_identity, .type_name = inner_type_name };
-    const private_arg = try graph.newNode(.{ .named = .{
+    const private_arg = try graph.newNode(try graph.namedContent(.{
         .named_type = inner_named_type,
         .def = inner_def,
         .kind = .@"opaque",
@@ -60869,16 +60869,16 @@ test "request component relation follows root authority before nested private ev
             .use = .runtime_layout_only,
             .authority = .generated_private,
         },
-    } });
-    const public = try graph.newNode(.{ .named = .{
+    }));
+    const public = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = .fields,
         .args = try graph.arena().dupe(NodeId, &.{private_arg}),
         .backing = .{ .node = try graph.newNode(.empty_record), .use = .runtime_layout_only },
-    } });
-    const private = try graph.newNode(.{ .named = .{
+    }));
+    const private = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
@@ -60889,7 +60889,7 @@ test "request component relation follows root authority before nested private ev
             .use = .runtime_layout_only,
             .authority = .generated_private,
         },
-    } });
+    }));
 
     try relateRequestComponent(graph, public, private);
 
@@ -60917,7 +60917,7 @@ test "request component relation descends through matching private-bearing conta
     const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(11) };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const inner_def: Type.TypeDef = .{ .module = module_identity, .type_name = inner_type_name };
-    const shared_private_arg = try graph.newNode(.{ .named = .{
+    const shared_private_arg = try graph.newNode(try graph.namedContent(.{
         .named_type = inner_named_type,
         .def = inner_def,
         .kind = .@"opaque",
@@ -60928,16 +60928,16 @@ test "request component relation descends through matching private-bearing conta
             .use = .runtime_layout_only,
             .authority = .generated_private,
         },
-    } });
-    const public_elem = try graph.newNode(.{ .named = .{
+    }));
+    const public_elem = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = .fields,
         .args = try graph.arena().dupe(NodeId, &.{shared_private_arg}),
         .backing = .{ .node = try graph.newNode(.empty_record), .use = .runtime_layout_only },
-    } });
-    const private_elem = try graph.newNode(.{ .named = .{
+    }));
+    const private_elem = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
@@ -60948,7 +60948,7 @@ test "request component relation descends through matching private-bearing conta
             .use = .runtime_layout_only,
             .authority = .generated_private,
         },
-    } });
+    }));
     const public_list = try graph.newNode(.{ .list = public_elem });
     const private_list = try graph.newNode(.{ .list = private_elem });
 
@@ -60982,15 +60982,15 @@ test "checked-to-mono relation preserves generated-private evidence inside a com
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const checked_backing = try graph.newNode(.empty_record);
     const mono_backing = try graph.newNode(.empty_record);
-    const checked_opaque = try graph.newNode(.{ .named = .{
+    const checked_opaque = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = .fields,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = checked_backing, .use = .runtime_layout_only },
-    } });
-    const mono_opaque = try graph.newNode(.{ .named = .{
+    }));
+    const mono_opaque = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
@@ -61001,7 +61001,7 @@ test "checked-to-mono relation preserves generated-private evidence inside a com
             .use = .runtime_layout_only,
             .authority = .generated_private,
         },
-    } });
+    }));
     const checked_composite = try graph.newNode(.{ .list = checked_opaque });
     const mono_composite = try graph.newNode(.{ .list = mono_opaque });
 
@@ -61035,22 +61035,22 @@ test "checked-to-mono relation joins exact tag request roots without collapsing 
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const checked_backing = try graph.newNode(.empty_record);
     const mono_backing = try graph.newNode(.empty_record);
-    const checked_payload = try graph.newNode(.{ .named = .{
+    const checked_payload = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = .fields,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = checked_backing, .use = .runtime_layout_only },
-    } });
-    const mono_payload = try graph.newNode(.{ .named = .{
+    }));
+    const mono_payload = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = .fields,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = mono_backing, .use = .runtime_layout_only },
-    } });
+    }));
     const checked_row = try graph.newNode(.{ .tag_union = .{
         .tags = try graph.arena().dupe(InstTag, &.{.{
             .name = tag_name,
@@ -61129,22 +61129,22 @@ test "direct call request preserves generated-private return provenance" {
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
-    const public_opaque = try graph.newNode(.{ .named = .{
+    const public_opaque = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = public_backing, .use = .runtime_layout_only },
-    } });
-    const private_opaque = try graph.newNode(.{ .named = .{
+    }));
+    const private_opaque = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = private_backing, .use = .runtime_layout_only, .authority = .generated_private },
-    } });
+    }));
     const public_ret = try graph.newNode(.{ .list = public_opaque });
     const private_ret = try graph.newNode(.{ .list = private_opaque });
     const args = try graph.arena().alloc(NodeId, 0);
@@ -61176,22 +61176,22 @@ test "dispatch call target relation preserves generated-private return provenanc
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
-    const public_opaque = try graph.newNode(.{ .named = .{
+    const public_opaque = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = public_backing, .use = .runtime_layout_only },
-    } });
-    const private_opaque = try graph.newNode(.{ .named = .{
+    }));
+    const private_opaque = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = private_backing, .use = .runtime_layout_only, .authority = .generated_private },
-    } });
+    }));
     const public_ret = try graph.newNode(.{ .box = public_opaque });
     const private_ret = try graph.newNode(.{ .box = private_opaque });
     const args = try graph.arena().alloc(NodeId, 0);
@@ -61226,15 +61226,15 @@ test "iterator request nodes preserve generated-private operand and result prove
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
-    const public_opaque = try graph.newNode(.{ .named = .{
+    const public_opaque = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = public_backing, .use = .runtime_layout_only },
-    } });
-    const private_opaque = try graph.newNode(.{ .named = .{
+    }));
+    const private_opaque = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
@@ -61245,7 +61245,7 @@ test "iterator request nodes preserve generated-private operand and result prove
             .use = .runtime_layout_only,
             .authority = .generated_private,
         },
-    } });
+    }));
     const public_operand = try graph.newNode(.{ .list = public_opaque });
     const private_operand = try graph.newNode(.{ .list = private_opaque });
     const public_result = try graph.newNode(.{ .tuple = try graph.arena().dupe(NodeId, &.{public_opaque}) });
@@ -61280,15 +61280,15 @@ test "partial synthetic request nodes preserve generated-private argument and re
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
-    const public_opaque = try graph.newNode(.{ .named = .{
+    const public_opaque = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = public_backing, .use = .runtime_layout_only },
-    } });
-    const private_opaque = try graph.newNode(.{ .named = .{
+    }));
+    const private_opaque = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
@@ -61299,7 +61299,7 @@ test "partial synthetic request nodes preserve generated-private argument and re
             .use = .runtime_layout_only,
             .authority = .generated_private,
         },
-    } });
+    }));
     const public_arg = try graph.newNode(.{ .box = public_opaque });
     const private_arg = try graph.newNode(.{ .box = private_opaque });
     const public_ret = try graph.newNode(.{ .list = public_opaque });
