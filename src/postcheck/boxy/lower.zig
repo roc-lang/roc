@@ -2661,14 +2661,6 @@ const ProcedureBuilder = struct {
                     continue;
                 }
             }
-            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(requirement_children, worker_child)) |requirement_child| {
-                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
-                continue;
-            }
-            if (try self.repQuery().findMatchingChildBySourceType(requirement_children, worker_child)) |requirement_child| {
-                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
-                continue;
-            }
             if (!has_call_supplied_desc) continue;
             if (try self.workerChildCanMatchUnwrappedSourceRep(worker_rep_id, worker_child)) {
                 try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_rep_id, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
@@ -2694,14 +2686,6 @@ const ProcedureBuilder = struct {
                     try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                     continue;
                 }
-            }
-            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(worker_children, requirement_child)) |worker_child| {
-                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
-                continue;
-            }
-            if (try self.repQuery().findMatchingChildBySourceType(worker_children, requirement_child)) |worker_child| {
-                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
-                continue;
             }
             if (try self.workerChildCanMatchUnwrappedSourceRep(requirement_rep_id, requirement_child)) {
                 try self.collectStaticMethodCallDescSourcesForRep(worker_rep_id, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
@@ -2905,14 +2889,6 @@ const ProcedureBuilder = struct {
                     continue;
                 }
             }
-            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(requirement_children, worker_child)) |requirement_child| {
-                try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(worker_child.rep, requirement_child.rep, owner_requirement_rep_id, source_rep_id, params, binding_scope, sources, seen);
-                continue;
-            }
-            if (try self.repQuery().findMatchingChildBySourceType(requirement_children, worker_child)) |requirement_child| {
-                try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(worker_child.rep, requirement_child.rep, owner_requirement_rep_id, source_rep_id, params, binding_scope, sources, seen);
-                continue;
-            }
             if (try self.workerChildCanMatchUnwrappedSourceRep(worker_rep_id, worker_child)) {
                 try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(worker_child.rep, requirement_rep_id, owner_requirement_rep_id, source_rep_id, params, binding_scope, sources, seen);
                 continue;
@@ -2976,14 +2952,6 @@ const ProcedureBuilder = struct {
                     try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, source_child.rep, params, binding_scope, sources, seen);
                     continue;
                 }
-            }
-            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(source_children, worker_child)) |source_child| {
-                try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, source_child.rep, params, binding_scope, sources, seen);
-                continue;
-            }
-            if (try self.repQuery().findMatchingChildBySourceType(source_children, worker_child)) |source_child| {
-                try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, source_child.rep, params, binding_scope, sources, seen);
-                continue;
             }
             if (try self.workerChildCanMatchUnwrappedSourceRep(identity_worker, worker_child)) {
                 try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, identity_source, params, binding_scope, sources, seen);
@@ -3532,8 +3500,6 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!?Plan.TypeRepId {
         if (source_children.len == 0) return null;
         if (self.namedQuery().findMatchingChildByRole(source_children, worker_child)) |source_child| return source_child.rep;
-        if (try self.namedQuery().findMatchingTagPayloadInRowExtension(source_children, worker_child)) |source_child| return source_child.rep;
-        if (try self.repQuery().findMatchingChildBySourceType(source_children, worker_child)) |source_child| return source_child.rep;
         return null;
     }
 
@@ -6392,9 +6358,9 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const worker = self.plan.workers.items[@intFromEnum(worker_id)];
         const captures = self.plan.erasedCaptureSlice(worker.erased_captures);
-        var capture_initializers = std.ArrayList(ProcBodyBuilder.DescriptorArgLocal).empty;
-        defer capture_initializers.deinit(self.allocator);
-        const all_capture_values = try self.generatedCodecCaptureValues(proc, captures, capture_values, &capture_initializers);
+        var descriptor_initializers = std.ArrayList(ProcBodyBuilder.DescriptorArgLocal).empty;
+        defer descriptor_initializers.deinit(self.allocator);
+        const all_capture_values = try self.generatedCodecCaptureValues(proc, captures, capture_values, &descriptor_initializers);
         defer self.allocator.free(all_capture_values);
         const function = proc.functionChildrenForRep(worker.rep) orelse
             boxyLowerInvariant("generated interpolation step worker was not callable");
@@ -6414,7 +6380,7 @@ const ProcedureBuilder = struct {
             boundary.next,
         );
         try self.finishGeneratedCallablePackBoundary(proc, boundary);
-        return try proc.prependDescriptorArgMaterializations(capture_initializers.items, entry);
+        return try proc.prependDescriptorArgMaterializations(descriptor_initializers.items, entry);
     }
 
     fn lowerGeneratedInterpolationStepInto(
@@ -7646,9 +7612,9 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const worker = self.plan.workers.items[@intFromEnum(worker_id)];
         const captures = self.plan.erasedCaptureSlice(worker.erased_captures);
-        var capture_initializers = std.ArrayList(ProcBodyBuilder.DescriptorArgLocal).empty;
-        defer capture_initializers.deinit(self.allocator);
-        const all_capture_values = try self.generatedCodecCaptureValues(proc, captures, capture_values, &capture_initializers);
+        var descriptor_initializers = std.ArrayList(ProcBodyBuilder.DescriptorArgLocal).empty;
+        defer descriptor_initializers.deinit(self.allocator);
+        const all_capture_values = try self.generatedCodecCaptureValues(proc, captures, capture_values, &descriptor_initializers);
         defer self.allocator.free(all_capture_values);
         const function = proc.functionChildrenForRep(worker.rep) orelse
             boxyLowerInvariant("generated codec callback worker was not callable");
@@ -7668,7 +7634,7 @@ const ProcedureBuilder = struct {
             boundary.next,
         );
         try self.finishGeneratedCallablePackBoundary(proc, boundary);
-        return try proc.prependDescriptorArgMaterializations(capture_initializers.items, entry);
+        return try proc.prependDescriptorArgMaterializations(descriptor_initializers.items, entry);
     }
 
     const GeneratedCallableAdapterBoundary = struct {
@@ -7736,7 +7702,7 @@ const ProcedureBuilder = struct {
         proc: *ProcBodyBuilder,
         captures: []const Plan.ErasedCapture,
         captured_values: []const LIR.LocalId,
-        initializers: *std.ArrayList(ProcBodyBuilder.DescriptorArgLocal),
+        descriptor_initializers: *std.ArrayList(ProcBodyBuilder.DescriptorArgLocal),
     ) Allocator.Error![]LIR.LocalId {
         const values = try self.allocator.alloc(LIR.LocalId, captures.len);
         errdefer self.allocator.free(values);
@@ -7757,19 +7723,19 @@ const ProcedureBuilder = struct {
                 .hidden_desc => {
                     const desc = capture.desc orelse
                         boxyLowerInvariant("generated codec callable descriptor capture had no requirement");
-                    if (proc.descriptorLocalForRequirementAndRepOrNull(desc, capture.rep)) |bound| {
-                        value.* = bound;
-                        continue;
-                    }
-                    // A descriptor this frame does not receive is fully
-                    // determined by its representation.
-                    value.* = try proc.addFrameLocal(.opaque_ptr);
-                    const materialization = try proc.descriptorMaterializationForSourceRep(capture.rep);
-                    try initializers.append(self.allocator, .{
-                        .local = value.*,
-                        .materialize = materialization.desc,
-                        .captures = materialization.captures,
-                    });
+                    // A generated callback is instantiated at the enclosing
+                    // frame's types, so the frame describes each of its
+                    // descriptor captures.
+                    value.* = proc.descriptorLocalForRequirementAndRepOrNull(desc, capture.rep) orelse materialized: {
+                        const materialization = try proc.descriptorMaterializationForSourceRep(capture.rep);
+                        const local = try proc.addFrameLocal(.opaque_ptr);
+                        try descriptor_initializers.append(self.allocator, .{
+                            .local = local,
+                            .materialize = materialization.desc,
+                            .captures = materialization.captures,
+                        });
+                        break :materialized local;
+                    };
                 },
                 .hidden_dict => boxyLowerInvariant("generated codec callable unexpectedly required a dictionary capture"),
             }
@@ -11597,9 +11563,9 @@ const ProcedureBuilder = struct {
         if (field_capture_index != captured_values.len) {
             boxyLowerInvariant("generated parser capture plan did not fill runtime capture layout");
         }
-        var capture_initializers = std.ArrayList(ProcBodyBuilder.DescriptorArgLocal).empty;
-        defer capture_initializers.deinit(self.allocator);
-        const capture_fields = try self.generatedCodecCaptureValues(proc, captures, captured_values, &capture_initializers);
+        var descriptor_initializers = std.ArrayList(ProcBodyBuilder.DescriptorArgLocal).empty;
+        defer descriptor_initializers.deinit(self.allocator);
+        const capture_fields = try self.generatedCodecCaptureValues(proc, captures, captured_values, &descriptor_initializers);
         defer self.allocator.free(capture_fields);
 
         const boundary = try self.generatedCallablePackBoundary(
@@ -11621,7 +11587,6 @@ const ProcedureBuilder = struct {
             boundary.next,
         );
         try self.finishGeneratedCallablePackBoundary(proc, boundary);
-        continuation = try proc.prependDescriptorArgMaterializations(capture_initializers.items, continuation);
         var planned_capture_index = captured_values.len;
         var plan_index = self.plan.generated_parser_field_captures.items.len;
         while (plan_index > 0) {
@@ -11659,7 +11624,7 @@ const ProcedureBuilder = struct {
         if (planned_capture_index != 1) {
             boxyLowerInvariant("generated parser capture emission did not consume all renamed fields");
         }
-        return continuation;
+        return try proc.prependDescriptorArgMaterializations(descriptor_initializers.items, continuation);
     }
 
     fn lowerHostedWorkerBodyInto(
@@ -12607,11 +12572,6 @@ const ProcBodyBuilder = struct {
         bindings_len: usize,
         scoped_locals_start: usize,
         outer_scoped_locals_start: usize,
-    };
-
-    const LocalDescriptorSnapshot = struct {
-        local: LIR.LocalId,
-        desc: ?LIR.BoxyDescRef,
     };
 
     const AggregateDescriptorField = struct {
@@ -17032,8 +16992,6 @@ const ProcBodyBuilder = struct {
 
         var descriptor_initializers = std.ArrayList(DescriptorArgLocal).empty;
         defer descriptor_initializers.deinit(self.parent.allocator);
-        const local_desc_snapshot = try self.snapshotErasedCapturedValueLocalDescriptors(captures, field_locals);
-        defer self.parent.allocator.free(local_desc_snapshot);
         const field_desc_overrides = try self.parent.allocator.alloc(?LIR.BoxyDescRef, captures.len);
         defer self.parent.allocator.free(field_desc_overrides);
         @memset(field_desc_overrides, null);
@@ -17044,30 +17002,14 @@ const ProcBodyBuilder = struct {
         const hidden_desc_initializers = try self.parent.allocator.alloc(?DescriptorArgLocal, captures.len);
         defer self.parent.allocator.free(hidden_desc_initializers);
         @memset(hidden_desc_initializers, null);
+        // Each planned source is described by the enclosing frame.
         for (captures, field_locals, capture_desc_sources, hidden_desc_initializers) |capture, field_local, desc_source, *hidden_desc_initializer| {
             if (capture.kind != .hidden_desc) continue;
-            hidden_desc_initializer.* = if (try self.erasedCaptureHiddenDescriptorFromCapturedValue(
-                captures,
-                field_locals,
-                local_desc_snapshot,
-                field_local,
-                desc_source.rep,
-            )) |from_captured_value|
-                from_captured_value
-            else if (try self.erasedCaptureHiddenDescriptorFromCapturedDictionary(
-                captures,
-                field_locals,
-                capture,
-                field_local,
-            )) |from_captured_dictionary|
-                from_captured_dictionary
-            else blk: {
-                const materialization = try self.descriptorMaterializationForSourceRep(desc_source.rep);
-                break :blk .{
-                    .local = field_local,
-                    .materialize = materialization.desc,
-                    .captures = materialization.captures,
-                };
+            const materialization = try self.descriptorMaterializationForSourceRep(desc_source.rep);
+            hidden_desc_initializer.* = .{
+                .local = field_local,
+                .materialize = materialization.desc,
+                .captures = materialization.captures,
             };
         }
 
@@ -17278,142 +17220,6 @@ const ProcBodyBuilder = struct {
             try self.setDescriptorRequirementLocalForRep(desc, capture.rep, local);
             try self.setDescriptorRequirementLocalForRep(desc, source.rep, local);
         }
-    }
-
-    fn snapshotErasedCapturedValueLocalDescriptors(
-        self: *ProcBodyBuilder,
-        captures: []const Plan.ErasedCapture,
-        field_locals: []const LIR.LocalId,
-    ) Allocator.Error![]LocalDescriptorSnapshot {
-        if (captures.len != field_locals.len) {
-            boxyLowerInvariant("boxy erased capture descriptor snapshot saw mismatched capture fields");
-        }
-
-        var snapshot = std.ArrayList(LocalDescriptorSnapshot).empty;
-        errdefer snapshot.deinit(self.parent.allocator);
-        for (captures, field_locals) |capture, field_local| {
-            if (capture.kind != .captured_value) continue;
-            try snapshot.append(self.parent.allocator, .{
-                .local = field_local,
-                .desc = self.parent.result.store.getLocal(field_local).boxy_desc,
-            });
-        }
-        return try snapshot.toOwnedSlice(self.parent.allocator);
-    }
-
-    fn erasedCaptureHiddenDescriptorFromCapturedValue(
-        self: *ProcBodyBuilder,
-        captures: []const Plan.ErasedCapture,
-        field_locals: []const LIR.LocalId,
-        snapshot: []const LocalDescriptorSnapshot,
-        target: LIR.LocalId,
-        hidden_rep: Plan.TypeRepId,
-    ) Allocator.Error!?DescriptorArgLocal {
-        if (captures.len != field_locals.len) {
-            boxyLowerInvariant("boxy erased capture hidden descriptor source saw mismatched capture fields");
-        }
-
-        const identity_hidden_rep = self.descriptorStorageRep(hidden_rep);
-        var found: ?DescriptorArgLocal = null;
-        var found_source_rep: ?Plan.TypeRepId = null;
-        var snapshot_index: usize = 0;
-        for (captures, field_locals) |capture, source| {
-            if (capture.kind != .captured_value) continue;
-            if (snapshot_index >= snapshot.len) {
-                boxyLowerInvariant("boxy erased capture hidden descriptor source exhausted captured value descriptors");
-            }
-            const source_snapshot = snapshot[snapshot_index];
-            snapshot_index += 1;
-            if (source_snapshot.local != source) {
-                boxyLowerInvariant("boxy erased capture hidden descriptor source snapshot disagreed with capture order");
-            }
-
-            const source_desc = source_snapshot.desc orelse continue;
-            const source_layout = self.parent.result.store.getLocal(source).layout_idx;
-            const source_desc_rep = self.parent.tagPayloadStorageDescRepForLayout(capture.rep, source_layout, true) orelse
-                boxyLowerInvariant("boxy erased captured value descriptor did not match its field layout");
-            const identity_source_rep = self.descriptorStorageRep(source_desc_rep);
-            const candidate = if (identity_source_rep == identity_hidden_rep)
-                DescriptorArgLocal{
-                    .local = target,
-                    .materialize = source_desc,
-                    .from_source_value = true,
-                }
-            else if (self.immediateNestedDescriptorIndexForRep(identity_source_rep, identity_hidden_rep)) |nested_index| blk: {
-                break :blk DescriptorArgLocal{
-                    .local = target,
-                    .materialize = source_desc,
-                    .nested_index = nested_index,
-                    .from_source_value = true,
-                };
-            } else continue;
-
-            if (found) |existing| {
-                // Repeated captures of one checked type variable must name one
-                // descriptor source. Accept a duplicate only when its
-                // representation id and nested descriptor index both match.
-                if (found_source_rep.? != identity_source_rep or existing.nested_index != candidate.nested_index) {
-                    boxyLowerInvariant("boxy erased capture hidden descriptor had conflicting captured value sources");
-                }
-                continue;
-            }
-            found = candidate;
-            found_source_rep = identity_source_rep;
-        }
-        if (snapshot_index != snapshot.len) {
-            boxyLowerInvariant("boxy erased capture hidden descriptor source did not visit every captured value snapshot");
-        }
-        return found;
-    }
-
-    fn erasedCaptureHiddenDescriptorFromCapturedDictionary(
-        self: *ProcBodyBuilder,
-        captures: []const Plan.ErasedCapture,
-        field_locals: []const LIR.LocalId,
-        hidden_capture: Plan.ErasedCapture,
-        target: LIR.LocalId,
-    ) Allocator.Error!?DescriptorArgLocal {
-        if (captures.len != field_locals.len) {
-            boxyLowerInvariant("boxy erased capture dictionary descriptor source saw mismatched capture fields");
-        }
-        const hidden_desc = hidden_capture.desc orelse
-            boxyLowerInvariant("boxy hidden descriptor capture had no descriptor requirement");
-        const hidden_rep = self.parent.plan.representations.items[@intFromEnum(hidden_capture.rep)];
-        if (hidden_rep.dictionaries.len == 0) return null;
-
-        var dictionary_local: ?LIR.LocalId = null;
-        for (captures, field_locals) |capture, field_local| {
-            if (capture.kind != .hidden_dict or !std.meta.eql(capture.dictionaries, hidden_rep.dictionaries)) continue;
-            if (dictionary_local != null) {
-                boxyLowerInvariant("boxy hidden descriptor capture had multiple matching dictionary captures");
-            }
-            dictionary_local = field_local;
-        }
-        const dict = dictionary_local orelse return null;
-
-        for (self.parent.plan.dictionarySlice(hidden_rep.dictionaries)) |requirement| {
-            const requirement_rep = self.parent.plan.repForSourceType(requirement.fn_ty) orelse
-                boxyLowerInvariant("boxy captured dictionary requirement function was not analyzed");
-            const requirement_function = self.functionChildrenForRep(requirement_rep) orelse
-                boxyLowerInvariant("boxy captured dictionary requirement was not callable");
-            var params = std.ArrayList(Plan.HiddenDescriptorParam).empty;
-            defer params.deinit(self.parent.allocator);
-            try self.collectHiddenDescriptorParamsForFunction(requirement_function, &params);
-            for (params.items, 0..) |param, hidden_index| {
-                if (param.desc != hidden_desc) continue;
-                return .{
-                    .local = target,
-                    .materialize = .{ .dict_method_hidden = .{
-                        .dict = dict,
-                        .method = requirement.fn_name,
-                        .method_slot = requirement.slot,
-                        .hidden_index = @intCast(hidden_index),
-                        .shape = .requirement,
-                    } },
-                };
-            }
-        }
-        return null;
     }
 
     fn prepareErasedPackedCapturedValueFieldDescriptors(
@@ -26565,14 +26371,6 @@ const ProcBodyBuilder = struct {
                     try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
                     continue;
                 }
-            }
-            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(call_children, worker_child)) |call_child| {
-                try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
-                continue;
-            }
-            if (try self.repQuery().findMatchingChildBySourceType(call_children, worker_child)) |call_child| {
-                try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
-                continue;
             }
             if (try self.repQuery().workerChildCanMatchUnwrappedCallRep(worker_rep_id, worker_child)) {
                 try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, call_rep_id, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
@@ -36797,14 +36595,6 @@ const ProcBodyBuilder = struct {
                     try self.collectErasedCaptureDictionaryReps(worker_child.rep, value_child.rep, mapped, seen_rep_pairs);
                     continue;
                 }
-            }
-            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(value_children, worker_child)) |value_child| {
-                try self.collectErasedCaptureDictionaryReps(worker_child.rep, value_child.rep, mapped, seen_rep_pairs);
-                continue;
-            }
-            if (try self.repQuery().findMatchingDictionaryChildBySourceType(value_children, worker_child)) |value_child| {
-                try self.collectErasedCaptureDictionaryReps(worker_child.rep, value_child.rep, mapped, seen_rep_pairs);
-                continue;
             }
             if (try self.repQuery().workerChildCanMatchUnwrappedCallRepForDictionaries(worker_rep_id, worker_child)) {
                 try self.collectErasedCaptureDictionaryReps(worker_child.rep, effective_value_rep_id, mapped, seen_rep_pairs);

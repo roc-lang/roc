@@ -3021,7 +3021,6 @@ const Builder = struct {
                         .constructor = worker_id,
                         .runtime = runtime_worker,
                     });
-                    try self.alignConstructorReturnWithRuntimeWorker(function, runtime_worker);
                 },
                 .parser_runtime,
                 => {
@@ -3102,25 +3101,6 @@ const Builder = struct {
     /// its own signature, and lowering satisfies each of the packed runtime
     /// callable's descriptor captures from those inputs, so the constructor's
     /// result must be the same representation the runtime worker declares.
-    fn alignConstructorReturnWithRuntimeWorker(
-        self: *Builder,
-        function: FunctionChildren,
-        runtime_worker: WorkerPlanId,
-    ) Allocator.Error!void {
-        const runtime_rep = self.plan.workers.items[@intFromEnum(runtime_worker)].rep;
-        if (runtime_rep == function.ret or runtime_rep == function.rep) return;
-
-        const children = self.plan.representations.items[@intFromEnum(function.rep)].children;
-        var index: u32 = children.start;
-        const end = children.start + children.len;
-        while (index < end) : (index += 1) {
-            if (self.plan.children.items[index].role != .function_ret) continue;
-            self.plan.children.items[index].rep = runtime_rep;
-            return;
-        }
-        boxyPlanInvariant("generated codec constructor representation had no return child");
-    }
-
     fn ensureGeneratedCodecCall(
         self: *Builder,
         caller: WorkerPlanId,
@@ -8052,8 +8032,6 @@ const Builder = struct {
                 try self.propagateInspectDemand(child.rep, row, seen);
             } else if (self.namedQuery().findMatchingChildByRole(call_children, child)) |call_child| {
                 try self.propagateInspectDemand(child.rep, call_child.rep, seen);
-            } else if (try self.namedQuery().findMatchingTagPayloadInRowExtension(call_children, child)) |call_child| {
-                try self.propagateInspectDemand(child.rep, call_child.rep, seen);
             }
         }
     }
@@ -8689,6 +8667,7 @@ const Builder = struct {
             ret_type,
             evidence_view,
             evidence,
+            substitutions.entries.items[0..substitutions.scheme_entries_len],
             &pending,
         );
         if (pending.items.len != params.len) {
@@ -8712,6 +8691,7 @@ const Builder = struct {
         ret_type: CheckedTypeIdentity,
         maybe_view: ?ModuleView,
         maybe_evidence: ?[]const static_dispatch.CheckedEvidence,
+        scheme_substitution: []const CallDescriptorRepSubstitution,
         pending: *std.ArrayList(DirectCallHiddenDescriptorArg),
     ) Allocator.Error!void {
         const mappings = self.plan.workerEvidenceDescriptorParamSlice(worker.evidence_descs);
@@ -8725,6 +8705,9 @@ const Builder = struct {
             if (mapping.hidden_desc_index >= params.len) {
                 boxyPlanInvariant("worker literal-evidence descriptor mapping exceeded its checked vectors");
             }
+            // The checked call-site substitution names the evidence variable's
+            // instantiation exactly.
+            if (self.schemeSubstitutedRep(scheme_substitution, params[mapping.hidden_desc_index].rep) != null) continue;
             const source = try self.workerEvidenceDescriptorCallSource(
                 worker,
                 mapping.evidence_index,
@@ -8751,7 +8734,13 @@ const Builder = struct {
             var source_arg_index: ?u32 = null;
             var source_value_rep: ?TypeRepId = null;
             var whole_operand = false;
+            const substituted = self.schemeSubstitutedRep(scheme_substitution, params[hidden_index].rep);
+            if (substituted) |rep| {
+                source_type = self.plan.representations.items[@intFromEnum(rep)].source_type;
+                source_rep = rep;
+            }
             for (mappings) |mapping| {
+                if (substituted != null) break;
                 if (mapping.hidden_desc_index != hidden_index) continue;
                 const source = try self.workerEvidenceDescriptorCallSource(
                     worker,
@@ -9626,14 +9615,6 @@ const Builder = struct {
                     continue;
                 }
             }
-            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(call_children, worker_child)) |call_child| {
-                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
-                continue;
-            }
-            if (try self.repQuery().findMatchingChildBySourceType(call_children, worker_child)) |call_child| {
-                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
-                continue;
-            }
             if (self.workerPresenceSlotPayloadMatchesUnwrappedCallRep(worker_rep_id, aligned_call_rep_id, worker_child)) {
                 try self.collectCallHiddenDescriptorArgs(worker_child.rep, aligned_call_rep_id, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
                 continue;
@@ -9703,6 +9684,20 @@ const Builder = struct {
             path.items.len -= 1;
         }
         return false;
+    }
+
+    /// The call representation the checked call-site substitution names for
+    /// one worker scheme variable.
+    fn schemeSubstitutedRep(
+        self: *Builder,
+        scheme_substitution: []const CallDescriptorRepSubstitution,
+        worker_rep: TypeRepId,
+    ) ?TypeRepId {
+        const identity = self.repQuery().descriptorArgumentIdentityRep(worker_rep);
+        for (scheme_substitution) |entry| {
+            if (self.repQuery().descriptorArgumentIdentityRep(entry.worker_rep) == identity) return entry.call_rep;
+        }
+        return null;
     }
 
     const CallDescriptorRepSubstitution = struct {
@@ -10066,14 +10061,6 @@ const Builder = struct {
                     try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_child.rep, substitutions, seen);
                     continue;
                 }
-            }
-            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(call_children, worker_child)) |call_child| {
-                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_child.rep, substitutions, seen);
-                continue;
-            }
-            if (try self.repQuery().findMatchingDictionaryChildBySourceType(call_children, worker_child)) |call_child| {
-                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_child.rep, substitutions, seen);
-                continue;
             }
             if (self.workerPresenceSlotPayloadMatchesUnwrappedCallRep(worker_rep_id, call_rep_id, worker_child)) {
                 try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_rep_id, substitutions, seen);
@@ -13618,39 +13605,6 @@ pub const RepQuery = struct {
             .ret = ret orelse boxyPlanInvariant("function representation had no return child"),
         };
     }
-
-    /// The single child of `children` whose checked source type matches
-    /// `target` and whose subtree carries a descriptor.
-    pub fn findMatchingChildBySourceType(
-        self: RepQuery,
-        children: []const RepChild,
-        target: RepChild,
-    ) Allocator.Error!?RepChild {
-        var found: ?RepChild = null;
-        for (children) |child| {
-            if (!typeRefEql(child.source_type, target.source_type)) continue;
-            if (!try self.repSubtreeHasDescriptor(child.rep)) continue;
-            if (found != null) boxyPlanInvariant("boxy direct call descriptor mapping found ambiguous checked-type children");
-            found = child;
-        }
-        return found;
-    }
-
-    /// The dictionary counterpart of `findMatchingChildBySourceType`.
-    pub fn findMatchingDictionaryChildBySourceType(
-        self: RepQuery,
-        children: []const RepChild,
-        target: RepChild,
-    ) Allocator.Error!?RepChild {
-        var found: ?RepChild = null;
-        for (children) |child| {
-            if (!typeRefEql(child.source_type, target.source_type)) continue;
-            if (!try self.repSubtreeHasDictionary(child.rep)) continue;
-            if (found != null) boxyPlanInvariant("boxy direct call dictionary mapping found ambiguous checked-type children");
-            found = child;
-        }
-        return found;
-    }
 };
 
 fn repIsTagRow(rep: TypeRepresentation) bool {
@@ -13833,56 +13787,6 @@ pub fn NamedRepQuery(comptime Modules: type) type {
                 if (self.childRolesMatch(target, child)) return child;
             }
             return null;
-        }
-
-        /// The tag payload matching `target` reachable through the tag-row
-        /// extensions of `children`.
-        pub fn findMatchingTagPayloadInRowExtension(
-            self: Self,
-            children: []const RepChild,
-            target: RepChild,
-        ) Allocator.Error!?RepChild {
-            if (target.role != .tag_payload) return null;
-
-            var seen = collections.DenseMap(TypeRepId, void).init(self.query.allocator);
-            defer seen.deinit();
-            return try self.findMatchingTagPayloadInRowExtensionInner(children, target, &seen);
-        }
-
-        fn findMatchingTagPayloadInRowExtensionInner(
-            self: Self,
-            children: []const RepChild,
-            target: RepChild,
-            seen: *collections.DenseMap(TypeRepId, void),
-        ) Allocator.Error!?RepChild {
-            for (children) |child| {
-                if (child.role != .tag_ext) continue;
-                if (try self.findMatchingTagPayloadInRep(child.rep, target, seen)) |match| return match;
-            }
-            return null;
-        }
-
-        /// The tag payload matching `target` inside `rep_id`, following
-        /// structural wrappers and tag-row extensions.
-        pub fn findMatchingTagPayloadInRep(
-            self: Self,
-            rep_id: TypeRepId,
-            target: RepChild,
-            seen: *collections.DenseMap(TypeRepId, void),
-        ) Allocator.Error!?RepChild {
-            const entry = try seen.getOrPut(rep_id);
-            if (entry.found_existing) return null;
-
-            const children = self.query.plan.childSlice(self.query.rep(rep_id).children);
-            if (self.findMatchingChildByRole(children, target)) |match| return match;
-
-            if (self.query.structuralWrapperBackingRep(rep_id)) |backing_rep| {
-                const backing_children = self.query.plan.childSlice(self.query.rep(backing_rep).children);
-                if (self.findMatchingChildByRole(backing_children, target)) |match| return match;
-                if (try self.findMatchingTagPayloadInRowExtensionInner(backing_children, target, seen)) |match| return match;
-            }
-
-            return try self.findMatchingTagPayloadInRowExtensionInner(children, target, seen);
         }
     };
 }
