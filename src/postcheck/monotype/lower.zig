@@ -961,6 +961,22 @@ const SealedSubstSlot = union(enum) {
 
 const SealedSubstitution = []const SealedSubstSlot;
 
+/// Whether a procedure template's checked function type is its complete
+/// specialization interface. With no type variables in that root, none
+/// quantified by its scheme (hidden requirement receivers included), and no
+/// evidence supplied by its callers, a request is exactly the checked root:
+/// the template's relation table relates only cells private to its own body,
+/// so requesters never replay it.
+fn templateInterfaceIsClosed(view: ModuleView, template: *const checked.CheckedProcedureTemplate) bool {
+    const raw = @intFromEnum(template.checked_fn_root);
+    if (raw >= view.types.roots.len) {
+        Common.invariant("procedure template interface query referenced a missing checked root");
+    }
+    return template.scheme_vars.len == 0 and
+        template.evidence_params.len == 0 and
+        !view.types.roots[raw].contains_identity_variables;
+}
+
 /// The requirement schema of a procedure template's scheme.
 fn templateSchemaIn(view: ModuleView, template: *const checked.CheckedProcedureTemplate) SchemeRequirements {
     return .{
@@ -7465,11 +7481,17 @@ const Builder = struct {
                 contract.shape_node,
             );
         }
-        try body_ctx.instantiateTemplateDispatchRelations(template, null);
-        try body_ctx.applyCheckedTemplateInterfaceRelations(template, root_node);
         if (!local_context_dependent) {
+            // A deferred body lowers in its own specialization, so only an
+            // open interface needs the template's relations replayed here.
+            if (!templateInterfaceIsClosed(view, &template)) {
+                try body_ctx.instantiateTemplateDispatchRelations(template, null);
+                try body_ctx.applyCheckedTemplateInterfaceRelations(template, root_node);
+            }
             return .{ .local = .{ .draft = fn_id } };
         }
+        try body_ctx.instantiateTemplateDispatchRelations(template, null);
+        try body_ctx.applyCheckedTemplateInterfaceRelations(template, root_node);
         if (template.target == .hosted) {
             Common.invariant("hosted template specialization depended on a local procedure context");
         }
@@ -23144,17 +23166,23 @@ const BodyContext = struct {
         )) {
             try relateConstructionFunctionRequestInterface(self.graph, root_node, roots[0]);
         }
-        try callee_ctx.instantiateTemplateDispatchRelations(template, null);
+        if (templateInterfaceIsClosed(callee_view, &template)) {
+            // A closed interface is complete once the request is related to
+            // its checked root; its relation table never enters this graph.
+            self.builder.count("interface_closed_expansions");
+        } else {
+            try callee_ctx.instantiateTemplateDispatchRelations(template, null);
 
-        var active_local_scopes = collections.DenseMap(checked.DispatchScopeId, NodeId).init(self.allocator);
-        defer active_local_scopes.deinit();
-        try callee_ctx.applyCheckedTemplateInterfaceScopeRelations(
-            template,
-            null,
-            root_node,
-            &active_local_scopes,
-            replay_state,
-        );
+            var active_local_scopes = collections.DenseMap(checked.DispatchScopeId, NodeId).init(self.allocator);
+            defer active_local_scopes.deinit();
+            try callee_ctx.applyCheckedTemplateInterfaceScopeRelations(
+                template,
+                null,
+                root_node,
+                &active_local_scopes,
+                replay_state,
+            );
+        }
         try self.relateInterfaceRoots(roots, request_roots.items);
         replay_state.entries.items[replay_index].status = .expanded;
         const lowlink = replay_state.entries.items[replay_index].lowlink;
