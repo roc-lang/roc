@@ -1985,11 +1985,11 @@ fn requestRowIncludesClosedRow(
 /// silently passing a request no adapter will serve.
 fn resultRowWideningOrNull(
     graph: *InstGraph,
-    declared_row: ClosedResultRow,
+    behind_try: bool,
     public_ret: NodeId,
     request_ret: NodeId,
 ) Allocator.Error!?ResultRowWidening {
-    if (!declared_row.behind_try) {
+    if (!behind_try) {
         if (!try requestRowIncludesClosedRow(graph, public_ret, request_ret)) return null;
         return .{ .exact = &.{}, .widened = .{ .public = public_ret, .request = request_ret } };
     }
@@ -2076,7 +2076,7 @@ fn resultRowWideningRequestOrNull(
     if (public.args.len != request.args.len) {
         Common.compilerBug("result-row widening request changed arity from its checked interface");
     }
-    return try resultRowWideningOrNull(graph, declared_row, public.ret, request.ret);
+    return try resultRowWideningOrNull(graph, declared_row.behind_try, public.ret, request.ret);
 }
 
 /// Relate a recognized result-row widening. Arguments and every non-row
@@ -36611,6 +36611,10 @@ const BodyContext = struct {
             Common.invariant("checked const use reached Monotype without a requested checked type");
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
         const template = store_view.const_templates.get(const_use.const_ref);
+        // A use that re-opened a coerced row may be wider than every
+        // representation the constant has; the restore re-tags it, so type
+        // selection contributes only the request's own type.
+        if (coercedConstUseRow(template, const_use) != null) return try self.lowerTypeView(requested_ty);
         return switch (template.state) {
             // A sealed-row template answers only a settled request, which
             // this site cannot see, so it selects the request's own type here
@@ -36635,7 +36639,10 @@ const BodyContext = struct {
             Common.invariant("checked const use reached Monotype without a requested checked type");
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
         const template = store_view.const_templates.get(const_use.const_ref);
-        const requested_node = switch (template.state) {
+        const requested_node = if (coercedConstUseRow(template, const_use) != null)
+            // See `constUseMonoType`: the restore relates and re-tags.
+            try self.instNode(requested_ty)
+        else switch (template.state) {
             // Relating an open request to a sealed-row constant's stored
             // representation would force the request narrow rather than
             // observe that it already is, so this site contributes only the
@@ -36664,6 +36671,9 @@ const BodyContext = struct {
 
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
         const template = store_view.const_templates.get(const_use.const_ref);
+        if (coercedConstUseRow(template, const_use)) |row| {
+            return try self.restoreCoercedConstUseAtNode(store_view, template, row, const_use, try self.activeNodeFromType(ty));
+        }
         return switch (template.state) {
             .stored_const => |stored| blk: {
                 if (stored.other_row_template) |row_template| {
@@ -36731,6 +36741,10 @@ const BodyContext = struct {
 
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
         const template = store_view.const_templates.get(const_use.const_ref);
+        if (coercedConstUseRow(template, const_use)) |row| {
+            try self.graph.unify(try self.instNode(requested_ty), request_node);
+            return try self.restoreCoercedConstUseAtNode(store_view, template, row, const_use, request_node);
+        }
         return switch (template.state) {
             .stored_const => |stored| blk: {
                 if (stored.other_row_template) |row_template| {
@@ -36794,6 +36808,135 @@ const BodyContext = struct {
                     Common.unimplemented_declaration_crash,
                 );
             },
+        };
+    }
+
+    /// The constant's coerced row when THIS use re-opened it (design.md "Row
+    /// Subsumption"), or null. Both halves are the checker's own records: the
+    /// constant's (`ConstTemplate.coerced_row`) and the use's
+    /// (`ConstUseTemplate.coerced_result_row`); they must name the same cell.
+    fn coercedConstUseRow(template: checked.ConstTemplate, const_use: checked.ConstUseTemplate) ?checked.CoercedConstRow {
+        switch (const_use.coerced_result_row) {
+            .none => return null,
+            .direct => if (template.coerced_row != .direct) {
+                Common.invariant("a const use re-opened a direct row its constant does not coerce");
+            },
+            .try_error_row => if (template.coerced_row != .try_error_row) {
+                Common.invariant("a const use re-opened a Try error row its constant does not coerce");
+            },
+        }
+        return template.coerced_row;
+    }
+
+    /// Restore a coerced constant for a use that re-opened its row: the value
+    /// is produced at the constant's DECLARED row—its stored value, or its
+    /// eval template lowered at its own type—and re-tagged into the row the
+    /// use asks for. The request is never unified with the declared row, which
+    /// would narrow a request that already includes more tags.
+    fn restoreCoercedConstUseAtNode(
+        self: *BodyContext,
+        store_view: ModuleView,
+        template: checked.ConstTemplate,
+        row: checked.CoercedConstRow,
+        const_use: checked.ConstUseTemplate,
+        request_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        return switch (template.state) {
+            .stored_const => |stored| blk: {
+                // A sealed-row constant answers only a request that has
+                // settled on exactly its stored representation; any other
+                // request lowers the retained eval template, as for an
+                // uncoerced sealed-row constant.
+                if (stored.other_row_template) |row_template| {
+                    if (!try self.storedConstRepresentationMatchesNode(store_view, stored, request_node)) {
+                        break :blk try self.lowerConstEvalTemplateBodyAtNode(
+                            store_view,
+                            row_template,
+                            const_use.const_ref,
+                            request_node,
+                            null,
+                            null,
+                            row,
+                        );
+                    }
+                }
+                const stored_node = try self.graph.importMonoIndependent(
+                    try self.lowerConstCaptureType(store_view, stored.root_type),
+                );
+                var active_const_scope: ActiveConstBindingScope = .{};
+                const has_active_const_binding = try self.enterActiveConstBindingAtCell(
+                    store_view,
+                    const_use.const_ref,
+                    DraftTypeCell.fromGraphNode(stored_node),
+                    &active_const_scope,
+                );
+                defer self.leaveActiveConstBinding(&active_const_scope);
+                // The static-data candidate path keys its request by the
+                // use's checked type, which is not the stored row's here, so
+                // a coerced use restores the node directly.
+                const restored = try self.restoreConstNodeAtNodeWithStaticRoot(
+                    store_view,
+                    self.view,
+                    stored.node,
+                    stored_node,
+                    const_use.const_ref,
+                );
+                const finished = if (has_active_const_binding)
+                    try self.finishActiveConstBinding(active_const_scope.active, restored)
+                else
+                    restored;
+                break :blk try self.coerceConstRowAtNodes(store_view, row, finished, stored_node, request_node);
+            },
+            .eval_template => |eval| try self.lowerConstEvalTemplateBodyAtNode(
+                store_view,
+                eval,
+                const_use.const_ref,
+                request_node,
+                null,
+                null,
+                row,
+            ),
+            .reserved => Common.invariant("reserved checked const template reached Monotype"),
+            .unimplemented => Common.invariant("a declaration with no implementation recorded a row coercion"),
+        };
+    }
+
+    /// Serve `request_node` from `expr`, a value of a coerced constant at its
+    /// declared type `declared_node`. When the request's coerced row lists
+    /// more tags than the declared one, the two relate component-wise without
+    /// unifying that row (`resultRowWideningOrNull`, the relation the
+    /// Result-Row Widening Adapter uses) and the value is re-tagged into the
+    /// request's row; otherwise the two are the same type and relate exactly.
+    fn coerceConstRowAtNodes(
+        self: *BodyContext,
+        store_view: ModuleView,
+        row: checked.CoercedConstRow,
+        expr: DraftExprId,
+        declared_node: NodeId,
+        request_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const behind_try = switch (row) {
+            .none => Common.invariant("an uncoerced constant reached the coerced restore"),
+            .direct => false,
+            .try_error_row => true,
+        };
+        const widening = (try resultRowWideningOrNull(self.graph, behind_try, declared_node, request_node)) orelse {
+            try relateRequestComponent(self.graph, request_node, declared_node);
+            return expr;
+        };
+        for (widening.exact) |pair| {
+            try relateRequestComponent(self.graph, pair.public, pair.request);
+        }
+        try relateIncludedRowPayloads(self.graph, widening.widened.public, widening.widened.request);
+        return switch (row) {
+            .none => unreachable,
+            .direct => try self.injectTagRowAtNodes(expr, declared_node, request_node),
+            .try_error_row => |capability| try self.injectTryErrorRowAtNodes(
+                (try self.builder.hostedTryAdapterCapability(store_view, capability)) orelse unreachable,
+                expr,
+                declared_node,
+                request_node,
+            ),
         };
     }
 
@@ -36949,6 +37092,33 @@ const BodyContext = struct {
         if (self.constRootReadDeclared(store_view, body.root)) {
             return self.declaredComptimeValueRead(store_view, body.root, DraftTypeCell.fromGraphNode(request_node), const_use);
         }
+        return try self.lowerConstEvalTemplateBodyAtNode(
+            store_view,
+            eval,
+            const_use,
+            request_node,
+            source_region_override,
+            current_entry_root,
+            null,
+        );
+    }
+
+    /// Lower a const eval template's body for one use. With `coerced`, the
+    /// use re-opened the constant's coerced row (design.md "Row
+    /// Subsumption"): the body is lowered at its OWN declared type, never
+    /// unified with the request, and its result is re-tagged into the
+    /// request's row (`coerceConstRowAtNodes`).
+    fn lowerConstEvalTemplateBodyAtNode(
+        self: *BodyContext,
+        store_view: ModuleView,
+        eval: checked.ConstEvalTemplate,
+        const_use: checked.ConstLocator,
+        request_node: NodeId,
+        source_region_override: ?base.Region,
+        current_entry_root: ?EntryRoot,
+        coerced: ?checked.CoercedConstRow,
+    ) Allocator.Error!DraftExprId {
+        const body = store_view.checked_const_bodies.get(eval.body);
         const entry_template = store_view.templates.get(eval.entry_template.template);
 
         var body_ctx = try BodyContext.initWithMethodScope(
@@ -36978,11 +37148,22 @@ const BodyContext = struct {
             .root = body.root,
         };
 
+        // The node the body is lowered at: the request itself, or—for a use
+        // that re-opened a coerced row—the body's declared type, which the
+        // request only INCLUDES at that row.
+        const body_node = if (coerced != null) try body_ctx.instNode(body.checked_type) else request_node;
+        if (coerced) |row| {
+            if (self.constRootReadDeclared(store_view, body.root)) {
+                const read = try self.declaredComptimeValueRead(store_view, body.root, DraftTypeCell.fromGraphNode(body_node), const_use);
+                return try self.coerceConstRowAtNodes(store_view, row, read, body_node, request_node);
+            }
+        }
+
         var active_const_scope: ActiveConstBindingScope = .{};
         const has_active_const_binding = try body_ctx.enterActiveConstBindingAtCell(
             store_view,
             const_use,
-            DraftTypeCell.fromGraphNode(request_node),
+            DraftTypeCell.fromGraphNode(body_node),
             &active_const_scope,
         );
         defer body_ctx.leaveActiveConstBinding(&active_const_scope);
@@ -36995,19 +37176,23 @@ const BodyContext = struct {
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
 
-        const wrapper_fn_node = try body_ctx.graphFunctionNode(&.{}, request_node);
+        const wrapper_fn_node = try body_ctx.graphFunctionNode(&.{}, body_node);
         try self.graph.unify(
             try body_ctx.instNode(entry_template.checked_fn_root),
             wrapper_fn_node,
         );
-        try self.graph.unify(try body_ctx.instNode(body.checked_type), request_node);
+        if (coerced == null) try self.graph.unify(try body_ctx.instNode(body.checked_type), request_node);
 
-        const restored = try body_ctx.lowerComptimeRootExprAtCell(
+        const lowered = try body_ctx.lowerComptimeRootExprAtCell(
             body.body_expr,
-            DraftTypeCell.fromGraphNode(request_node),
+            DraftTypeCell.fromGraphNode(body_node),
         );
-        if (has_active_const_binding) return try body_ctx.finishActiveConstBinding(active_const_scope.active, restored);
-        return restored;
+        const restored = if (has_active_const_binding)
+            try body_ctx.finishActiveConstBinding(active_const_scope.active, lowered)
+        else
+            lowered;
+        const row = coerced orelse return restored;
+        return try self.coerceConstRowAtNodes(store_view, row, restored, body_node, request_node);
     }
 
     fn restoreConstNode(

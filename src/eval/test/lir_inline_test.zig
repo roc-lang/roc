@@ -9808,6 +9808,170 @@ test "row subsumption coerces a forwarder passed as a value" {
     , 1);
 }
 
+/// Compile `source` (with `imports`), require it to check cleanly, and
+/// require `main` to be `True`. A coerced VALUE has no adapter to count—its
+/// uses are re-tagged where they restore the constant—so running is the
+/// witness: an unserved widened use stops Monotype ("instantiation widened a
+/// closed tag union"), and a misordered re-tag answers wrong. `main` is a
+/// constant, so its body (and every coerced use in it) is lowered by Monotype
+/// when it is evaluated at compile time; the `.boxy` restore of a coerced use
+/// is exercised at run time by `test/cli/RowSubsumptionValue.roc`.
+fn expectRowSubsumptionValueProgram(
+    source: []const u8,
+    imports: []const helpers.ModuleSource,
+) TestError!void {
+    const allocator = std.testing.allocator;
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        imports,
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
+}
+
+test "row subsumption - value re-tags a stored constant's direct row" {
+    // `vd` forwards a closed nominal field, so its row is coerced and every
+    // use restores the stored `[B(Str), D]` and re-tags it: `B` is 0 there and
+    // 1 in `[A, B(Str), C, D]`, `D` is 1 there and 3 here.
+    try expectRowSubsumptionValueProgram(
+        \\Closed := { d : [B(Str), D], e : [B(Str), D] }
+        \\
+        \\source : Closed
+        \\source = { d: B("x"), e: D }
+        \\
+        \\vd : [B(Str), D]
+        \\vd = source.d
+        \\
+        \\ve : [B(Str), D]
+        \\ve = source.e
+        \\
+        \\show : [A, B(Str), C, D] -> Str
+        \\show = |v| match v { A => "A", B(s) => "B(${s})", C => "C", D => "D" }
+        \\
+        \\main : Bool
+        \\main = show(vd) == "B(x)" and show(ve) == "D"
+    , &.{});
+}
+
+test "row subsumption - value re-tags a stored constant's Try error row" {
+    try expectRowSubsumptionValueProgram(
+        \\Closed := { r : Try(Str, [NotFound]), o : Try(Str, [NotFound]) }
+        \\
+        \\source : Closed
+        \\source = { r: Err(NotFound), o: Ok("y") }
+        \\
+        \\vr : Try(Str, [NotFound])
+        \\vr = source.r
+        \\
+        \\vo : Try(Str, [NotFound])
+        \\vo = source.o
+        \\
+        \\show : Try(Str, [Gone, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(NotFound) => "NotFound" }
+        \\
+        \\main : Bool
+        \\main = show(vr) == "NotFound" and show(vo) == "Ok(y)"
+    , &.{});
+}
+
+test "row subsumption - value serves a use at its declared row unchanged" {
+    // The use that re-opened the row but settled on exactly the declared
+    // row relates it exactly: no re-tag.
+    try expectRowSubsumptionValueProgram(
+        \\Closed := { d : [B(Str), D] }
+        \\
+        \\vd : [B(Str), D]
+        \\vd = Closed.{ d: D }.d
+        \\
+        \\show : [B(Str), D] -> Str
+        \\show = |v| match v { B(s) => "B(${s})", D => "D" }
+        \\
+        \\main : Bool
+        \\main = show(vd) == "D"
+    , &.{});
+}
+
+test "row subsumption - value re-tags through a compile-time finalizer" {
+    // `w = vd` is itself a constant: its body's use of `vd` is lowered while
+    // `w` is evaluated at compile time, and `w` stores the 4-tag value.
+    try expectRowSubsumptionValueProgram(
+        \\Closed := { d : [B(Str), D] }
+        \\
+        \\vd : [B(Str), D]
+        \\vd = Closed.{ d: D }.d
+        \\
+        \\w : [A, B(Str), C, D]
+        \\w = vd
+        \\
+        \\show : [A, B(Str), C, D] -> Str
+        \\show = |v| match v { A => "A", B(s) => "B(${s})", C => "C", D => "D" }
+        \\
+        \\main : Bool
+        \\main = show(w) == "D"
+    , &.{});
+}
+
+test "row subsumption - value whose error row is coerced and ok row sealed" {
+    // `Ok(X)` constructs, so the ok row is quantified (a sealed-row
+    // constant); `Err(e)` forwards, so the error row is coerced. A use wider
+    // at either row lowers the retained eval template at the declared type
+    // and re-tags; a use at exactly the stored row reads the stored value.
+    try expectRowSubsumptionValueProgram(
+        \\Closed := { r : Try(Str, [E]) }
+        \\
+        \\pick : Closed
+        \\pick = { r: Err(E) }
+        \\
+        \\v : Try([X], [E])
+        \\v = match pick.r {
+        \\    Ok(_) => Ok(X)
+        \\    Err(e) => Err(e)
+        \\}
+        \\
+        \\wide_err : Try([X], [D, E]) -> Str
+        \\wide_err = |t| match t { Ok(X) => "X", Err(D) => "D", Err(E) => "E" }
+        \\
+        \\wide_ok : Try([W, X], [E]) -> Str
+        \\wide_ok = |t| match t { Ok(W) => "W", Ok(X) => "X", Err(E) => "E" }
+        \\
+        \\exact : Try([X], [E]) -> Str
+        \\exact = |t| match t { Ok(X) => "X", Err(E) => "E" }
+        \\
+        \\main : Bool
+        \\main = wide_err(v) == "E" and wide_ok(v) == "E" and exact(v) == "E"
+    , &.{});
+}
+
+test "row subsumption - value imported from another module is re-tagged at the use" {
+    try expectRowSubsumptionValueProgram(
+        \\import Lib
+        \\
+        \\show : [A, B(Str), C, D] -> Str
+        \\show = |v| match v { A => "A", B(s) => "B(${s})", C => "C", D => "D" }
+        \\
+        \\main : Bool
+        \\main = show(Lib.vd) == "B(lib)"
+    , &.{.{ .name = "Lib", .source =
+        \\Lib := [].{
+        \\    Closed := { d : [B(Str), D] }
+        \\
+        \\    vd : [B(Str), D]
+        \\    vd = Closed.{ d: B("lib") }.d
+        \\}
+    }});
+}
+
 test "W6b widened closed where-method impl is reached through a generated adapter" {
     const allocator = std.testing.allocator;
     // `status` is published at the closed row `[Ok(Str), Err(Str)]` while

@@ -12215,8 +12215,19 @@ const Builder = struct {
                 self.checkedTypeForTemplate(eval.entry_template),
                 null,
             );
-            if (const_use.requested_source_ty_payload) |requested_ty| {
-                const ret_type = typeRef(view, requested_ty);
+            // A use that re-opened the constant's coerced row
+            // (`ConstUseTemplate.coerced_result_row`) evaluates the body at
+            // the type the constant was produced at, and `lower.zig` re-tags
+            // the result into the use's own row; every other use evaluates it
+            // at its requested type.
+            const call: ?struct { view: ModuleView, ty: checked.CheckedTypeId } = if (const_use.coerced_result_row != .none)
+                .{ .view = store_view, .ty = constProducerCheckedType(store_view.compile_time_roots, const_use.const_ref) }
+            else if (const_use.requested_source_ty_payload) |requested_ty|
+                .{ .view = view, .ty = requested_ty }
+            else
+                null;
+            if (call) |call_type| {
+                const ret_type = typeRef(call_type.view, call_type.ty);
                 if (self.plan.constEvalCallFor(worker, ret_type) == null) {
                     const worker_plan = self.plan.workers.items[@intFromEnum(worker)];
                     const worker_function = (self.repQuery().functionChildren(worker_plan.rep)) orelse
@@ -12224,7 +12235,7 @@ const Builder = struct {
                     if (worker_function.arg_count != 0) {
                         boxyPlanInvariant("boxy const-eval worker had explicit arguments");
                     }
-                    const call_rep = try self.analyzeType(view, requested_ty);
+                    const call_rep = try self.analyzeType(call_type.view, call_type.ty);
                     try self.plan.const_eval_calls.append(self.allocator, .{
                         .worker = worker,
                         .ret_type = ret_type,
@@ -12240,7 +12251,7 @@ const Builder = struct {
             }
         }
         if (stored_template) |stored| {
-            const producer_ty = self.constProducerCheckedType(store_view, const_use.const_ref);
+            const producer_ty = constProducerCheckedType(store_view.compile_time_roots, const_use.const_ref);
             const producer_rep = try self.analyzeStoredType(
                 store_view,
                 stored.root_type,
@@ -12250,33 +12261,6 @@ const Builder = struct {
             defer visited.deinit();
             try self.analyzeStaticConstNode(store_view, stored.node, producer_rep, stored.root_type, &visited);
         }
-    }
-
-    fn constProducerCheckedType(
-        _: *Builder,
-        store_view: ModuleView,
-        const_ref: checked.ConstRef,
-    ) checked.CheckedTypeId {
-        const root = switch (const_ref.owner) {
-            .top_level_binding => |owner| blk: {
-                const root_id = store_view.compile_time_roots.lookupIdByPattern(owner.pattern) orelse
-                    boxyPlanInvariant("stored top-level constant had no compile-time root");
-                const root = store_view.compile_time_roots.root(root_id);
-                if (root.kind != .constant or root.module_idx != owner.module_idx or root.pattern != owner.pattern) {
-                    boxyPlanInvariant("stored top-level constant owner disagreed with its compile-time root");
-                }
-                break :blk root;
-            },
-            .hoisted_expr => |owner| blk: {
-                const root = store_view.compile_time_roots.lookupHoistedRootByExpr(owner.expr) orelse
-                    boxyPlanInvariant("stored hoisted constant had no compile-time root");
-                if (root.module_idx != owner.module_idx) {
-                    boxyPlanInvariant("stored hoisted constant owner disagreed with its compile-time root");
-                }
-                break :blk root;
-            },
-        };
-        return root.checked_type;
     }
 
     fn ensureNestedCallableWorker(
@@ -14397,6 +14381,36 @@ const CheckedTryPayloads = struct {
     ok: checked.CheckedTypeId,
     err: checked.CheckedTypeId,
 };
+
+/// The checked type a constant was produced at: its compile-time root's.
+/// Its stored value, or its evaluated body, is at exactly this type, so a use
+/// that re-opened the constant's coerced row (`ConstUseTemplate
+/// .coerced_result_row`) restores it here and re-tags it into its own row.
+pub fn constProducerCheckedType(
+    compile_time_roots: *const checked.CompileTimeRootTable,
+    const_ref: checked.ConstRef,
+) checked.CheckedTypeId {
+    const root = switch (const_ref.owner) {
+        .top_level_binding => |owner| blk: {
+            const root_id = compile_time_roots.lookupIdByPattern(owner.pattern) orelse
+                boxyPlanInvariant("stored top-level constant had no compile-time root");
+            const root = compile_time_roots.root(root_id);
+            if (root.kind != .constant or root.module_idx != owner.module_idx or root.pattern != owner.pattern) {
+                boxyPlanInvariant("stored top-level constant owner disagreed with its compile-time root");
+            }
+            break :blk root;
+        },
+        .hoisted_expr => |owner| blk: {
+            const root = compile_time_roots.lookupHoistedRootByExpr(owner.expr) orelse
+                boxyPlanInvariant("stored hoisted constant had no compile-time root");
+            if (root.module_idx != owner.module_idx) {
+                boxyPlanInvariant("stored hoisted constant owner disagreed with its compile-time root");
+            }
+            break :blk root;
+        },
+    };
+    return root.checked_type;
+}
 
 const CheckedTryErrorKinds = struct {
     missing: bool = false,

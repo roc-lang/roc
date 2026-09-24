@@ -48,9 +48,11 @@ pub const AdapterReachPosition = enum {
     /// and its arguments to `.nested`, exactly as the checker's inline walk
     /// re-aims a function written in the signature, so `Fwd : S -> S` named as
     /// a signature opens the same result row `S -> S` written inline does. A
-    /// row standing here directly (a bare value annotation) has no call
-    /// boundary to adapt at, and every other constructor puts its children out
-    /// of reach.
+    /// row standing here directly is a bare VALUE annotation's root row, which
+    /// row subsumption coerces for a top-level value (design.md "Row
+    /// Subsumption"); a `Try` standing here passes `.value_try_row` to its
+    /// error argument, and every other constructor puts its children out of
+    /// reach.
     signature,
     /// The instantiation root's own row: the position the referencing
     /// annotation put this declaration in, when that is the signature's direct
@@ -58,6 +60,12 @@ pub const AdapterReachPosition = enum {
     result,
     /// The ERROR argument of a `Try` standing in that direct result.
     try_row,
+    /// The ERROR argument of a `Try` standing as a bare VALUE annotation's
+    /// whole type. Row subsumption coerces it for a top-level value exactly
+    /// as it coerces `.try_row` for a function; nothing else treats it as
+    /// reachable (a where-method signature's marker there closes, as at
+    /// `.nested`), because no procedure boundary stands above it.
+    value_try_row,
     /// Every other position: inside a `List`, a record field, a tuple, a tag
     /// payload, a function, or a non-`Try` nominal.
     nested,
@@ -876,7 +884,12 @@ pub const Instantiator = struct {
             if (self.resultRowTwinIndex(resolved.desc.content.rigid.name)) |index| {
                 const at_result_row = self.current_polarity == .pos and switch (self.current_reach) {
                     .result, .try_row => true,
-                    .signature, .nested => false,
+                    // A bare value annotation's root row and root `Try` error
+                    // row: coerced only where the annotation opens its rows
+                    // implicitly (a top-level value), never for a
+                    // where-method or a host boundary.
+                    .signature, .value_try_row => self.polarity_var_behavior == .resolve_by_polarity,
+                    .nested => false,
                 };
                 if (at_result_row) {
                     self.result_row_twins[index].consumed_at = self.current_reach;
@@ -919,7 +932,7 @@ pub const Instantiator = struct {
                             .defer_open => switch (self.current_polarity) {
                                 .pos => switch (self.current_reach) {
                                     .signature, .result, .try_row => Content{ .rigid = Rigid.init(rigid.name) },
-                                    .nested => Content{ .structure = .empty_tag_union },
+                                    .value_try_row, .nested => Content{ .structure = .empty_tag_union },
                                 },
                                 .neg => .{ .structure = .empty_tag_union },
                             },
@@ -1454,20 +1467,26 @@ pub const Instantiator = struct {
                         // The signature's direct result: the adapter re-tags
                         // this `Try`'s error row.
                         .result => true,
-                        // A `Try` standing as the whole signature is not a
-                        // call's result; the checker's inline walk admits no
-                        // error row there either.
-                        .signature => false,
+                        // A `Try` standing as the whole signature is a bare
+                        // value's type: its error row is `.value_try_row`
+                        // (below), exactly as the checker's inline walk
+                        // re-aims it.
+                        .signature => true,
                         // A `Try` standing IN another `Try`'s error row. The
                         // relation re-tags that row and relates everything
                         // below it EXACTLY (`resultRowWideningOrNull`,
                         // src/postcheck/monotype/lower.zig:1806-1812), so a
                         // second descent would open a row lowering will not
                         // adapt.
-                        .try_row => false,
+                        .try_row, .value_try_row => false,
                         .nested => false,
                     };
-                self.current_reach = if (try_error_row_reachable) .try_row else .nested;
+                self.current_reach = if (!try_error_row_reachable)
+                    .nested
+                else if (frame.saved_reach == .signature)
+                    .value_try_row
+                else
+                    .try_row;
                 if (!try self.requestVar(arg_var, false)) return false;
                 continue;
             }
@@ -1508,7 +1527,7 @@ pub const Instantiator = struct {
                 // the adapter's reach; a function anywhere deeper does not.
                 self.current_reach = switch (frame.saved_reach) {
                     .signature => .result,
-                    .result, .try_row, .nested => .nested,
+                    .result, .try_row, .value_try_row, .nested => .nested,
                 };
                 if (!try self.requestVar(frame.func.ret, false)) return false;
                 continue;

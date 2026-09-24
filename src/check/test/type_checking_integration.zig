@@ -10755,6 +10755,268 @@ test "check type - polarity - an imported nominal on a value stays closed" {
     try main_env.assertOneTypeError("Type Mismatch");
 }
 
+test "check type - polarity - a forwarded closed value binding coerces at its uses" {
+    // Row subsumption for a top-level VALUE: `v` forwards a closed row out of
+    // a nominal field, so its annotated row is coerced rather than closed, and
+    // a use may widen its own copy exactly as it may widen a constructing
+    // value's quantified row (design.md "Row Subsumption").
+    const source =
+        \\Closed := { v : [A, B] }
+        \\
+        \\v : [A, B]
+        \\v = Closed.{ v: A }.v
+        \\
+        \\wide : [A, B, C]
+        \\wide = v
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A, B, C]");
+}
+
+test "check type - polarity - a forwarded closed value binding's Try error row coerces" {
+    const source =
+        \\Closed := { r : Try(Str, [NotFound]) }
+        \\
+        \\v : Try(Str, [NotFound])
+        \\v = Closed.{ r: Err(NotFound) }.r
+        \\
+        \\wide : Try(Str, [Gone, NotFound])
+        \\wide = v
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(Str, [Gone, NotFound])");
+}
+
+test "check type - polarity - a constructed and a forwarded value with one annotation are used identically" {
+    // Interchangeability: `made` constructs its tags, so its row is
+    // quantified; `forwarded` forwards a closed field, so its row is coerced.
+    // The two annotations are identical, and so is every use.
+    const source =
+        \\Closed := { v : [A, B] }
+        \\
+        \\made : [A, B]
+        \\made = A
+        \\
+        \\forwarded : [A, B]
+        \\forwarded = Closed.{ v: A }.v
+        \\
+        \\wide_made : [A, B, C]
+        \\wide_made = made
+        \\
+        \\wide_forwarded : [A, B, C]
+        \\wide_forwarded = forwarded
+        \\
+        \\narrow_forwarded : [A, B]
+        \\narrow_forwarded = forwarded
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "wide_made", .expected = "[A, B, C]" },
+        .{ .def = "wide_forwarded", .expected = "[A, B, C]" },
+        .{ .def = "narrow_forwarded", .expected = "[A, B]" },
+    });
+}
+
+test "check type - polarity - a value alias of a closed value coerces" {
+    // `v = u` is a value alias, which generalizes regardless of its
+    // annotation; its row is still closed by forwarding `u`'s closed row, and
+    // still coerced.
+    const source =
+        \\Closed := { v : [A, B] }
+        \\
+        \\u = Closed.{ v: A }.v
+        \\
+        \\v : [A, B]
+        \\v = u
+        \\
+        \\wide : [A, B, C]
+        \\wide = v
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A, B, C]");
+}
+
+test "check type - polarity - a value's coerced error row and quantified ok row compose" {
+    // `Err(e)` forwards a closed error row, so the root `Try`'s error row is
+    // coerced; `Ok(X)` constructs, so the ok row is quantified. Each widens
+    // by its own rule.
+    const source =
+        \\Closed := { r : Try(Str, [E]) }
+        \\
+        \\v : Try([X], [E])
+        \\v = match Closed.{ r: Ok("s") }.r {
+        \\    Ok(_) => Ok(X)
+        \\    Err(e) => Err(e)
+        \\}
+        \\
+        \\wide_err : Try([X], [E, F])
+        \\wide_err = v
+        \\
+        \\wide_ok : Try([X, Y], [E])
+        \\wide_ok = v
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "wide_err", .expected = "Try([X], [E, F])" },
+        .{ .def = "wide_ok", .expected = "Try([X, Y], [E])" },
+    });
+}
+
+test "check type - polarity - a forwarding value is still bounded by its annotation" {
+    const source =
+        \\Closed := { v : [A, B] }
+        \\
+        \\v : [A]
+        \\v = Closed.{ v: A }.v
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - value coercion does not reach a nested row" {
+    // Only the value's root row (or its root `Try`'s error row) coerces; a
+    // row inside a `List` keeps closing by body.
+    const source =
+        \\Closed := { l : List([A, B]) }
+        \\
+        \\v : List([A, B])
+        \\v = Closed.{ l: [A] }.l
+        \\
+        \\wide : List([A, B, C])
+        \\wide = v
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - value coercion does not reach a Try ok row" {
+    const source =
+        \\Closed := { r : Try([A], [E]) }
+        \\
+        \\v : Try([A], [E])
+        \\v = Closed.{ r: Ok(A) }.r
+        \\
+        \\wide : Try([A, B], [E])
+        \\wide = v
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - value coercion does not reach a local value" {
+    // A local value is lowered inline, with no stored constant to restore
+    // and re-tag, so its row keeps closing by body.
+    const source =
+        \\Closed := { v : [A, B] }
+        \\
+        \\outer : {} -> [A, B, C]
+        \\outer = |_| {
+        \\    v : [A, B]
+        \\    v = Closed.{ v: A }.v
+        \\
+        \\    w : [A, B, C]
+        \\    w = v
+        \\
+        \\    w
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - a function-typed value binding does not coerce" {
+    // `f`'s annotation is a function, but `f` is a value binding with no
+    // procedure template of its own for an adapter to complete, so its
+    // result row keeps closing by body.
+    const source =
+        \\Closed := { f : Str -> [A, B] }
+        \\
+        \\f : Str -> [A, B]
+        \\f = Closed.{ f: |_| A }.f
+        \\
+        \\wider : Str -> [A, B, C]
+        \\wider = |s| f(s)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - an imported forwarded value's row coerces at the use" {
+    const source_lib =
+        \\module [v]
+        \\
+        \\Closed := { v : [A, B] }
+        \\
+        \\v : [A, B]
+        \\v = Closed.{ v: A }.v
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\wide : [A, B, C]
+        \\wide = Lib.v
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertLastDefType("[A, B, C]");
+}
+
+test "check type - polarity - every lookup that re-opens a coerced row is recorded with its subject" {
+    // Post-check stages read WHICH uses re-opened a coerced row from the
+    // checker's per-use record (`ModuleEnv.ResultRowReopen`), never from the
+    // definition's record: one record per re-opening lookup, naming the cell
+    // and whether the row is a value's or a function result's.
+    const source =
+        \\Closed := { v : [A, B], r : Try(Str, [E]) }
+        \\
+        \\c : Closed
+        \\c = { v: A, r: Err(E) }
+        \\
+        \\v : [A, B]
+        \\v = c.v
+        \\
+        \\r : Try(Str, [E])
+        \\r = c.r
+        \\
+        \\f : [A, B] -> [A, B]
+        \\f = |x| x
+        \\
+        \\wide_v : [A, B, C]
+        \\wide_v = v
+        \\
+        \\wide_r : Try(Str, [D, E])
+        \\wide_r = r
+        \\
+        \\wide_f : [A, B] -> [A, B, C]
+        \\wide_f = |x| f(x)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    var value_direct: usize = 0;
+    var value_try: usize = 0;
+    var function_direct: usize = 0;
+    for (test_env.module_env.result_row_reopens.items.items) |reopen| {
+        if (reopen.is_value != 0 and reopen.behind_try == 0) value_direct += 1;
+        if (reopen.is_value != 0 and reopen.behind_try != 0) value_try += 1;
+        if (reopen.is_value == 0 and reopen.behind_try == 0) function_direct += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), value_direct);
+    try std.testing.expectEqual(@as(usize, 1), value_try);
+    try std.testing.expectEqual(@as(usize, 1), function_direct);
+    try std.testing.expectEqual(@as(u64, 3), test_env.module_env.result_row_reopens.len());
+}
+
+test "check type - polarity - a lookup of an uncoerced definition records no re-open" {
+    // `made` constructs its row, so it is quantified, not coerced: its uses
+    // instantiate a scheme and no use re-opens anything.
+    const source =
+        \\made : [A, B]
+        \\made = A
+        \\
+        \\wide : [A, B, C]
+        \\wide = made
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(u64, 0), test_env.module_env.result_row_reopens.len());
+}
+
 test "check type - polarity - a value row the body tied to a weak row is grounded, not left open" {
     // The syntactic pre-test approves `x`'s annotation for generalization, but
     // the body unifies `x`'s implicitly opened row with `e`'s top-level weak

@@ -15799,9 +15799,14 @@ const ProcBodyBuilder = struct {
 
         const store_module = procedureModuleByKey(self.parent.modules, checked.constModuleId(const_use.const_ref));
         const template = store_module.const_templates.get(const_use.const_ref);
+        if (const_use.coerced_result_row != .none) {
+            return try self.restoreCoercedConstUseInto(target, checked_ty, store_module, template, const_use, next);
+        }
+        const use_type = Plan.CheckedTypeIdentity{ .module = self.module.key, .ty = checked_ty };
+        const requested_type = Plan.CheckedTypeIdentity{ .module = self.module.key, .ty = requested_ty };
         switch (template.state) {
             .reserved => boxyLowerInvariant("reserved checked const template reached runtime boxy lowering"),
-            .eval_template => |eval| return try self.lowerConstEvalTemplateUseInto(target, checked_ty, requested_ty, eval, next),
+            .eval_template => |eval| return try self.lowerConstEvalTemplateUseInto(target, use_type, requested_type, eval, next),
             .unimplemented => return try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString(Common.unimplemented_declaration_crash) },
             } }, self.scaffoldOrigin()),
@@ -15816,7 +15821,7 @@ const ProcBodyBuilder = struct {
             // a stored tag into a wider row. `plan.zig` makes the same choice
             // so the planned worker and the emitted call agree.
             .stored_const => |stored| if (stored.other_row_template) |eval| {
-                return try self.lowerConstEvalTemplateUseInto(target, checked_ty, requested_ty, eval, next);
+                return try self.lowerConstEvalTemplateUseInto(target, use_type, requested_type, eval, next);
             },
         }
         const stored = template.state.stored_const;
@@ -15879,8 +15884,8 @@ const ProcBodyBuilder = struct {
     fn lowerConstEvalTemplateUseInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        checked_ty: checked.CheckedTypeId,
-        requested_ty: checked.CheckedTypeId,
+        target_type: Plan.CheckedTypeIdentity,
+        call_type: Plan.CheckedTypeIdentity,
         eval: checked.ConstEvalTemplate,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
@@ -15889,14 +15894,14 @@ const ProcBodyBuilder = struct {
         const fn_ty_ref = Plan.CheckedTypeIdentity{ .module = entry_view.key, .ty = entry_template.checked_fn_root };
         const worker_id = self.parent.plan.workerForSourceType(.{ .procedure_template = eval.entry_template }, fn_ty_ref) orelse
             boxyLowerInvariant("const eval template use reached boxy lowering without a planned entry-wrapper worker");
-        const call_plan = self.parent.plan.constEvalCallFor(worker_id, .{ .module = self.module.key, .ty = requested_ty }) orelse
+        const call_plan = self.parent.plan.constEvalCallFor(worker_id, call_type) orelse
             boxyLowerInvariant("const eval template use reached boxy lowering without a planned call");
 
         const hidden_desc_args = self.parent.plan.directCallHiddenDescriptorArgSlice(call_plan.hidden_desc_args);
         const hidden_dict_args = self.parent.plan.directCallHiddenDictionaryArgSlice(call_plan.hidden_dict_args);
         return try self.lowerWorkerCallLocalsInto(
             target,
-            .{ .module = self.module.key, .ty = checked_ty },
+            target_type,
             &.{},
             &.{},
             &.{},
@@ -15908,6 +15913,80 @@ const ProcBodyBuilder = struct {
             hidden_dict_args,
             next,
         );
+    }
+
+    /// Restore a constant for a use that re-opened its coerced row (design.md
+    /// "Row Subsumption"; `ConstUseTemplate.coerced_result_row`). The use's
+    /// type may list more tags at that row than any representation the
+    /// constant has, so the value is produced at the constant's OWN type—its
+    /// stored value at the stored representation, or its body evaluated at the
+    /// type it was produced at—and re-tagged into the use's row
+    /// (`assignCoercedResultRow`). `plan.zig` plans the evaluation at that same
+    /// type.
+    fn restoreCoercedConstUseInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        checked_ty: checked.CheckedTypeId,
+        store_module: ProcedureModuleView,
+        template: checked.ConstTemplate,
+        const_use: checked.ConstUseTemplate,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (template.coerced_row == .none) {
+            boxyLowerInvariant("a const use re-opened a row its constant does not coerce");
+        }
+        const target_rep = self.repForType(checked_ty);
+        const eval = switch (template.state) {
+            .reserved => boxyLowerInvariant("reserved checked const template reached runtime boxy lowering"),
+            .unimplemented => boxyLowerInvariant("a declaration with no implementation recorded a row coercion"),
+            .eval_template => |eval| eval,
+            // A sealed-row constant takes its retained eval template, exactly
+            // as an uncoerced one does (`restoreConstUseInto`).
+            .stored_const => |stored| stored.other_row_template orelse {
+                const stored_rep = self.parent.plan.repForStoredType(.{
+                    .module = store_module.key,
+                    .ty = stored.root_type,
+                }) orelse boxyLowerInvariant("stored constant type was missing from the boxy representation plan");
+                const declared = try self.addFrameLocalForRep(stored_rep);
+                const retag = try self.assignCoercedResultRow(target, declared, target_rep, stored_rep, next);
+                return try self.restoreStoredConstNodeInto(
+                    declared,
+                    store_module,
+                    stored.node,
+                    stored.root_type,
+                    stored_rep,
+                    retag,
+                );
+            },
+        };
+        const producer_type = Plan.CheckedTypeIdentity{
+            .module = store_module.key,
+            .ty = Plan.constProducerCheckedType(store_module.compile_time_roots, const_use.const_ref),
+        };
+        const declared_rep = self.repForTypeRef(producer_type);
+        const declared = try self.addFrameLocalForRep(declared_rep);
+        const retag = try self.assignCoercedResultRow(target, declared, target_rep, declared_rep, next);
+        return try self.lowerConstEvalTemplateUseInto(declared, producer_type, producer_type, eval, retag);
+    }
+
+    /// Re-tag `source`, a value at a coerced definition's DECLARED row
+    /// (`declared_rep`), into `target` at the row its use asked for
+    /// (`target_rep`), which includes the declared one (design.md "Row
+    /// Subsumption"). This is the boundary a direct call's result crosses
+    /// (`lowerDirectCallReturnAdaptation`): a descriptor-driven runtime
+    /// adaptation that rebuilds each tag by name at the target's
+    /// representation, payloads converted, and passes a `Try`'s `Ok` through
+    /// while re-tagging its error row. Every coerced use a boxy program
+    /// serves—a direct call, a restored constant—goes through it.
+    fn assignCoercedResultRow(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+        declared_rep: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        return try self.assignPlannedCallBoundary(target, source, target_rep, declared_rep, next);
     }
 
     fn restoreConstNodeInto(
@@ -39054,6 +39133,7 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind) (Allocator.Error || 
         0,
         @enumFromInt(fixtureTableIndex(0)),
         typeSchemeKey(7),
+        .none,
     );
     const const_node = try checked_module.const_store.append(.{ .scalar = .{ .u64 = 5 } });
     const root_type = try checked_module.const_store.type_store.append(.{ .primitive = .u64 });

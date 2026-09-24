@@ -7556,13 +7556,7 @@ fn recordOpenedMarkerExts(self: *Self, opened: []const Instantiator.OpenedMarker
             .region = region,
             .listed_tags = marker.listed_tags,
             .union_var = marker.union_var,
-            .result_row = switch (marker.reach) {
-                .result => .direct,
-                .try_row => .try_error_row,
-                // A row standing as the whole signature is a bare value
-                // annotation's row: the inline walk's `.signature => .none`.
-                .signature, .nested => .none,
-            },
+            .result_row = CoercibleRow.forReach(marker.reach),
         });
     }
 }
@@ -7635,7 +7629,7 @@ fn addResultRowTwin(
         .type_decl => return,
     };
     switch (anno_ctx.adapter_reach) {
-        .signature, .result, .try_row => {},
+        .signature, .result, .try_row, .value_try_row => {},
         .nested => return,
     }
     if (arg_reached or polarity != .pos) return;
@@ -7776,11 +7770,7 @@ fn recordConsumedResultRowTwins(self: *Self, twins: *const ResultRowTwins, ctx: 
             .region = row.region,
             .listed_tags = row.source.innermost_tags,
             .union_var = row.union_var,
-            .result_row = switch (reach) {
-                .result => .direct,
-                .try_row => .try_error_row,
-                .signature, .nested => .none,
-            },
+            .result_row = CoercibleRow.forReach(reach),
         });
     }
 }
@@ -7794,7 +7784,8 @@ fn recordClosedMarkerReaches(self: *Self, reaches: []const Instantiator.AdapterR
         const site: ResultRowSite = switch (reach) {
             .result => .direct,
             .try_row => .try_error_row,
-            .signature, .nested => .none,
+            // No hosted definition is a value.
+            .signature, .value_try_row, .nested => .none,
         };
         if (site != .none) try self.written_result_rows.append(self.gpa, site);
     }
@@ -14906,30 +14897,44 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         // importing modules—re-opens its own copy of that row
         // (`reopenCoercedResultRow`).
         //
-        // Restricted to top-level FUNCTION definitions. A value binding has no
-        // call boundary at which a narrow value could be converted, and a local
-        // binding's callee is a `.local_proc` dispatch target with no procedure
-        // template (`lower.AdapterReachability.no_adapter`), so neither can
-        // reach the widening adapter that serves a widened use.
+        // Restricted to TOP-LEVEL definitions (this is the only place one is
+        // checked). A local definition has no procedure template or stored
+        // constant for lowering to adapt at: a local function's callee is a
+        // `.local_proc` dispatch target (`lower.AdapterReachability
+        // .no_adapter`), and a local value is lowered inline.
         //
-        // A signature with a `where` clause coerces too. A use whose
-        // static-dispatch evidence resolves to a local procedure is lowered as
-        // a caller-owned specialization (`local_context_dependent` in
-        // `lower.zig`), and that specialization is defined as a widening
-        // adapter in the caller's draft when its use widened the row
-        // (`lower.completeCallerOwnedResultRowWideningAdapter`).
-        //
-        // A hosted function has no body; its row is closed by declaration,
-        // so its producer answer comes from the annotation alone
+        // A FUNCTION coerces the result row of its signature. A signature
+        // with a `where` clause coerces too: a use whose static-dispatch
+        // evidence resolves to a local procedure is lowered as a caller-owned
+        // specialization (`local_context_dependent` in `lower.zig`), and that
+        // specialization is defined as a widening adapter in the caller's
+        // draft when its use widened the row
+        // (`lower.completeCallerOwnedResultRowWideningAdapter`). A hosted
+        // function has no body; its row is closed by declaration, so its
+        // producer answer comes from the annotation alone
         // (`hostedResultRowCoercedSite`).
-        if (def_is_function) {
-            const site = if (def_expr == .e_hosted_lambda)
-                self.hostedResultRowCoercedSite(annotation_idx)
-            else
-                self.annotationResultRowCoercedSite(annotation_idx);
-            if (site != .none) {
-                try self.cir.recordResultRowCoercion(ModuleEnv.nodeIdxFrom(def_idx), site == .try_error_row);
-            }
+        //
+        // A VALUE coerces its root row, or the error row of the `Try` that is
+        // its root: every use restores the value at its declared row and
+        // re-tags it into the row the use asks for (`lower
+        // .restoreCoercedConstUseAtNode`). The row's subject must match the
+        // definition's: a value binding whose annotation is a function type
+        // (`f : S -> [A]; f = g`) has no procedure template of its own for an
+        // adapter to complete, so its result row is not coerced.
+        const coerced: CoercibleRow = if (def_expr == .e_hosted_lambda)
+            .{ .site = self.hostedResultRowCoercedSite(annotation_idx) }
+        else
+            self.annotationResultRowCoercedSite(annotation_idx);
+        const subject_matches = switch (coerced.subject) {
+            .function_result => def_is_function,
+            .value => !def_is_function,
+        };
+        if (coerced.site != .none and subject_matches) {
+            try self.cir.recordResultRowCoercion(
+                ModuleEnv.nodeIdxFrom(def_idx),
+                coerced.site == .try_error_row,
+                coerced.subject == .value,
+            );
         }
     }
     if (def.annotation != null) {
@@ -17119,6 +17124,12 @@ const GenTypeAnnoCtx = union(enum) {
             /// A type argument of a `Try` result. The adapter re-tags a row
             /// written here, but nothing below it.
             try_row,
+            /// The error argument of a `Try` standing as a bare VALUE
+            /// annotation's whole type (`Instantiator.AdapterReach
+            /// .value_try_row`). Row subsumption coerces a row written here
+            /// for a top-level value; a where-method row here is generated
+            /// as written, as at `.nested`.
+            value_try_row,
             /// Every other position: inside a `List`, a record field, a
             /// tuple, a tag payload, a function, or a non-`Try` nominal.
             nested,
@@ -17176,6 +17187,7 @@ const GenTypeAnnoCtx = union(enum) {
                 .signature => .signature,
                 .result => .result,
                 .try_row => .try_row,
+                .value_try_row => .value_try_row,
                 .nested => .nested,
             },
             // A declaration body has no use-site result position to reach.
@@ -17216,7 +17228,7 @@ const GenTypeAnnoCtx = union(enum) {
                 // position's own row stay deferred.
                 .per_use => switch (anno_ctx.adapter_reach) {
                     .signature, .result, .try_row => .defer_open,
-                    .nested => .close,
+                    .value_try_row, .nested => .close,
                 },
                 .as_written => .close,
             },
@@ -17355,8 +17367,9 @@ const ImplicitOpenExt = struct {
     /// (`AdapterReach.result` / `.try_row`). That is the only position row
     /// subsumption coerces at (design.md "Row Subsumption"), because
     /// it is the only position whose closed body value lowering can adapt
-    /// rather than widen.
-    result_row: ResultRowSite = .none,
+    /// rather than widen. For a bare value annotation it is the value's
+    /// root row or root `Try` error row (`CoercibleRow.subject`).
+    result_row: CoercibleRow = .{},
 };
 
 /// The slice of `implicit_open_exts` one annotation's generation minted.
@@ -17382,6 +17395,45 @@ const ResultRowSite = enum {
     direct,
     /// The error row of a `Try` standing as the signature's result.
     try_error_row,
+};
+
+/// What a coerced row belongs to. A FUNCTION's is the result row of its
+/// signature, re-opened at every use by copying the function's spine down to
+/// its return; a top-level VALUE's is the value's own root row (or the error
+/// row of the `Try` that is its root), re-opened by copying from the root.
+/// The annotation walk decides which, by where the row sits: a row reached
+/// through the signature's own function is a function result, a row standing
+/// as the annotation's root (`.signature` / `.value_try_row`) is a value's.
+const ResultRowSubject = enum(u1) { function_result, value };
+
+/// One annotation's coercible row: which cell (`ResultRowSite`) and whose
+/// (`ResultRowSubject`). `.site == .none` means the annotation opened no
+/// coercible row at this position.
+const CoercibleRow = struct {
+    site: ResultRowSite = .none,
+    subject: ResultRowSubject = .function_result,
+
+    /// The row an instantiated declaration's marker or twin stands on.
+    fn forReach(reach: Instantiator.AdapterReach) CoercibleRow {
+        return switch (reach) {
+            .result => .{ .site = .direct },
+            .try_row => .{ .site = .try_error_row },
+            .signature => .{ .site = .direct, .subject = .value },
+            .value_try_row => .{ .site = .try_error_row, .subject = .value },
+            .nested => .{},
+        };
+    }
+
+    /// The row an inline annotation position stands on.
+    fn forAnnotationReach(reach: GenTypeAnnoCtx.AnnotationGenCtx.AdapterReach) CoercibleRow {
+        return switch (reach) {
+            .result => .{ .site = .direct },
+            .try_row => .{ .site = .try_error_row },
+            .signature => .{ .site = .direct, .subject = .value },
+            .value_try_row => .{ .site = .try_error_row, .subject = .value },
+            .nested => .{},
+        };
+    }
 };
 
 /// Whether an annotation-position instantiation reports the adapter-reachable
@@ -17428,7 +17480,7 @@ fn coercibleResultRowExt(self: *const Self, annotation_idx: CIR.Annotation.Idx) 
     const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return null;
     var found: ?ImplicitOpenExt = null;
     for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
-        if (entry.result_row == .none) continue;
+        if (entry.result_row.site == .none) continue;
         if (found != null) return null;
         found = entry;
     }
@@ -17446,11 +17498,11 @@ fn coercibleResultRowExt(self: *const Self, annotation_idx: CIR.Annotation.Idx) 
 /// touch the row leaves a flex (it produced an open row, or never touched it) or
 /// a row carrying tags (it extended the row, which the audit reports and
 /// poisons). So a ground extension means exactly "forwarded, did not construct".
-fn annotationResultRowCoercedSite(self: *const Self, annotation_idx: CIR.Annotation.Idx) ResultRowSite {
-    const entry = self.coercibleResultRowExt(annotation_idx) orelse return .none;
+fn annotationResultRowCoercedSite(self: *const Self, annotation_idx: CIR.Annotation.Idx) CoercibleRow {
+    const entry = self.coercibleResultRowExt(annotation_idx) orelse return .{};
     const resolved = self.types.resolveVar(entry.var_);
-    if (resolved.desc.content != .structure) return .none;
-    if (resolved.desc.content.structure != .empty_tag_union) return .none;
+    if (resolved.desc.content != .structure) return .{};
+    if (resolved.desc.content.structure != .empty_tag_union) return .{};
     return entry.result_row;
 }
 
@@ -17458,9 +17510,12 @@ fn annotationResultRowCoercedSite(self: *const Self, annotation_idx: CIR.Annotat
 /// closed its annotated result row by FORWARDING a closed value, and which cell
 /// that row is. Read from the module that checked the body, whether that is
 /// this one or an imported one.
-fn coercedResultRowSite(env: *const ModuleEnv, node_idx: CIR.Node.Idx) ResultRowSite {
-    const record = env.resultRowCoercionForNode(@intFromEnum(node_idx)) orelse return .none;
-    return if (record.behind_try != 0) .try_error_row else .direct;
+fn coercedResultRowSite(env: *const ModuleEnv, node_idx: CIR.Node.Idx) CoercibleRow {
+    const record = env.resultRowCoercionForNode(@intFromEnum(node_idx)) orelse return .{};
+    return .{
+        .site = if (record.behind_try != 0) .try_error_row else .direct,
+        .subject = if (record.is_value != 0) .value else .function_result,
+    };
 }
 
 /// Re-open the result row of `use_var`, one use's view of a COERCED binding
@@ -17490,12 +17545,38 @@ fn coercedResultRowSite(env: *const ModuleEnv, node_idx: CIR.Node.Idx) ResultRow
 fn reopenCoercedResultRow(
     self: *Self,
     use_var: Var,
-    site: ResultRowSite,
+    row: CoercibleRow,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!?Var {
+    if (row.site == .none) return null;
+    return switch (row.subject) {
+        .function_result => try self.reopenCoercedSignature(use_var, row.site, env, region),
+        // A value's row stands at its root: the copy starts at the cell.
+        .value => try self.reopenCoercedResultCell(use_var, row.site, env, region),
+    };
+}
+
+/// `reopenCoercedResultRow` at a lookup expression: the use's own type, and a
+/// per-use record of the re-open (`ModuleEnv.ResultRowReopen`) when one was
+/// made, so post-check stages read which uses re-opened rather than inferring
+/// it from the definition. A use left as instantiated—a definition in flight,
+/// an error tail—records nothing.
+fn reopenCoercedLookup(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    use_var: Var,
+    row: CoercibleRow,
     env: *Env,
     region: Region,
 ) std.mem.Allocator.Error!Var {
-    if (site == .none) return use_var;
-    return (try self.reopenCoercedSignature(use_var, site, env, region)) orelse use_var;
+    const reopened = (try self.reopenCoercedResultRow(use_var, row, env, region)) orelse return use_var;
+    try self.cir.recordResultRowReopen(
+        ModuleEnv.nodeIdxFrom(expr_idx),
+        row.site == .try_error_row,
+        row.subject == .value,
+    );
+    return reopened;
 }
 
 /// The signature layer of `reopenCoercedResultRow`: alias layers are
@@ -20087,28 +20168,33 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             // design.md "Result-Row Widening Adapter".
             // Exhaustive by construction: adding an `AdapterReach` variant is a
             // compile error here rather than a silent `false`.
-            const reach_admits_try_error_row = switch (ctx) {
+            const try_error_reach: ?GenTypeAnnoCtx.AnnotationGenCtx.AdapterReach = switch (ctx) {
                 .annotation => |anno_ctx| switch (anno_ctx.adapter_reach) {
                     // The signature's direct result is the only position whose
                     // `Try` the adapter re-tags.
-                    .result => true,
-                    // In practice a where-method signature is a function, so
+                    .result => .try_row,
+                    // A `Try` standing as a bare VALUE annotation's whole
+                    // type: its error row is the one row subsumption coerces
+                    // for a top-level value (design.md "Row Subsumption").
+                    // A where-method signature is a function in practice, so
                     // the `.@"fn"` arm re-aims `.signature` to `.result`
-                    // before any apply is reached; answering `false` here is
-                    // what the old `== .result` did either way. `.try_row`
-                    // reaches nothing below itself. `.nested` is out of reach.
-                    .signature, .try_row, .nested => false,
+                    // before any apply is reached, and a `.value_try_row`
+                    // row is generated as written there anyway.
+                    .signature => .value_try_row,
+                    // `.try_row` reaches nothing below itself. `.nested` is
+                    // out of reach.
+                    .try_row, .value_try_row, .nested => null,
                 },
-                .type_decl => false,
+                .type_decl => null,
             };
             // `applyTryErrorArgIndex`, not `annoApplyIsBuiltinTry`: the error
             // cell is found across transparent alias layers, the same ones
             // lowering crosses, so an alias whose FORMAL is the error row opens
             // exactly like a `Try` written directly.
             const try_error_arg_index = self.applyTryErrorArgIndex(a);
-            const try_error_row_reachable = try_error_arg_index != null and reach_admits_try_error_row;
+            const try_error_row_reachable = try_error_arg_index != null and try_error_reach != null;
             const nested_arg_ctx = ctx.withReach(.nested);
-            const try_error_arg_ctx = ctx.withReach(.try_row);
+            const try_error_arg_ctx = ctx.withReach(try_error_reach orelse .nested);
             const anno_args = self.cir.store.sliceTypeAnnos(a.args);
             var formal_variances: [max_tracked_alias_formals]FormalVariance = undefined;
             const formal_variances_len = self.applyFormalVariances(a, &formal_variances);
@@ -20446,7 +20532,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     .signature => ctx.withReach(.result),
                     // A function nested inside a result row, inside a `Try`
                     // row, or anywhere else is out of the adapter's reach.
-                    .result, .try_row, .nested => ctx.withReach(.nested),
+                    .result, .try_row, .value_try_row, .nested => ctx.withReach(.nested),
                 },
                 // A declaration body has no use-site result position to reach;
                 // `withReach` is a no-op on `.type_decl` (see `withReach`).
@@ -20554,21 +20640,14 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 // Out of reach: generated as written, so a body use that widens
                 // it is an ordinary mismatch instead of a widening no lowering
                 // can express.
-                .nested => false,
+                .value_try_row, .nested => false,
             };
             // The one implicitly opened row per signature that lowering can
             // ADAPT instead of widening, and therefore the only row row
             // subsumption coerces at (design.md "Row Subsumption").
             // Read only for `.implicit_open`; a `.per_use` row already defers
             // its whole open/closed decision through `deferred_open` above.
-            const result_row_site: ResultRowSite = if (!implicitly_open) .none else switch (ctx.annotation.adapter_reach) {
-                .result => .direct,
-                .try_row => .try_error_row,
-                // A bare value annotation (`.signature` with no function
-                // between it and the row) has no call boundary to adapt at,
-                // and everything else is out of the adapter's reach.
-                .signature, .nested => .none,
-            };
+            const result_row_site: CoercibleRow = if (!implicitly_open) .{} else CoercibleRow.forAnnotationReach(ctx.annotation.adapter_reach);
             // A host-boundary annotation closes this row as written. When it
             // stands at the adapter-reachable result row, that site is the
             // producer answer row subsumption reads for a hosted function
@@ -20579,7 +20658,8 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 const written_site: ResultRowSite = switch (ctx.annotation.adapter_reach) {
                     .result => .direct,
                     .try_row => .try_error_row,
-                    .signature, .nested => .none,
+                    // No hosted definition is a value.
+                    .signature, .value_try_row, .nested => .none,
                 };
                 if (written_site != .none) try self.written_result_rows.append(self.gpa, written_site);
             }
@@ -23784,15 +23864,15 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             // every use re-opens its own copy of it (design.md "Deferred: Row
             // Subsumption"). Read here, where the definition this lookup names
             // is known.
-            const coerced_result_row: ResultRowSite = if (mb_processing_def) |processing_def|
+            const coerced_result_row: CoercibleRow = if (mb_processing_def) |processing_def|
                 coercedResultRowSite(self.cir, ModuleEnv.nodeIdxFrom(processing_def.def_idx))
             else
-                .none;
+                .{};
 
             const resolved_pat = self.types.resolveVar(pat_var);
             if (resolved_pat.desc.rank == Rank.generalized or self.isBindingSchemeVar(pat_var)) {
                 const instantiated = try self.instantiateBindingVar(pat_var, env, .use_last_var, .{ .value_use = expr_idx });
-                const use_var = try self.reopenCoercedResultRow(instantiated, coerced_result_row, env, expr_region);
+                const use_var = try self.reopenCoercedLookup(expr_idx, instantiated, coerced_result_row, env, expr_region);
                 _ = try self.unify(expr_var, use_var, env);
             } else {
                 // A fully checked top-level definition whose type is ground
@@ -23816,7 +23896,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 // a forwarder's argument and result rows are ONE class even in
                 // a full copy, so writing through the extension would open the
                 // input row too (see `reopenCoercedResultRow`).
-                const use_var = try self.reopenCoercedResultRow(copied_var, coerced_result_row, env, expr_region);
+                const use_var = try self.reopenCoercedLookup(expr_idx, copied_var, coerced_result_row, env, expr_region);
                 _ = try self.unify(expr_var, use_var, env);
                 if (mb_processing_def) |processing_def| {
                     try self.recordSharedSchemeUse(
@@ -23859,7 +23939,8 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                     // The producing module's own answer for its definition,
                     // read here exactly as a local use reads it (design.md
                     // "Row Subsumption").
-                    const ext_use_var = try self.reopenCoercedResultRow(
+                    const ext_use_var = try self.reopenCoercedLookup(
+                        expr_idx,
                         ext_instantiated_var,
                         coercedResultRowSite(ext_ref.other_cir, ext_ref.other_cir_node_idx),
                         env,
@@ -29218,7 +29299,8 @@ fn checkResolvedAssociatedTarget(
     // owner is a use of that definition exactly like a local or external
     // lookup of it, so it reads the producing module's coercion record the
     // same way (design.md "Row Subsumption").
-    const use_var = try self.reopenCoercedResultRow(
+    const use_var = try self.reopenCoercedLookup(
+        expr_idx,
         target_var,
         coercedResultRowSite(target_env, ModuleEnv.nodeIdxFrom(target_def_idx)),
         env,
@@ -36473,12 +36555,12 @@ fn reopenCoercedDispatchTarget(
     env: *Env,
     region: Region,
 ) Allocator.Error!Var {
-    return try self.reopenCoercedResultRow(
+    return (try self.reopenCoercedResultRow(
         method_var,
         coercedResultRowSite(method_lookup.env, ModuleEnv.nodeIdxFrom(method_lookup.binding.def_idx)),
         env,
         region,
-    );
+    )) orelse method_var;
 }
 
 /// Resolve one selected dispatch target. Revisiting an edge is the common

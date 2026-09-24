@@ -16167,6 +16167,12 @@ pub const ConstUseTemplate = struct {
     const_ref: ConstRef,
     requested_source_ty_template: canonical.CanonicalTypeKey,
     requested_source_ty_payload: ?CheckedTypeId = null,
+    /// This use re-opened the constant's coerced row
+    /// (`ResolvedValueRefRecord.coerced_result_row`), so its requested type
+    /// may list more tags there than the constant's representation: lowering
+    /// restores the constant at its declared row and re-tags it
+    /// (`ConstTemplate.coerced_row`).
+    coerced_result_row: CoercedResultRow = .none,
 };
 
 /// Public `ArtifactTopLevelProcedureBindingRef` declaration.
@@ -16560,6 +16566,11 @@ pub const ResolvedValueRefRecord = struct {
     /// in-progress specialization only when its recorded scheme substitution
     /// is the active specialization's substitution.
     recursive_reference: bool = false,
+    /// This lookup's own type re-opened a coerced definition's result row
+    /// (`ModuleEnv.ResultRowReopen`, design.md "Row Subsumption"), and which
+    /// cell. A post-check stage that serves the use at a row wider than the
+    /// definition's reads this rather than comparing types.
+    coerced_result_row: CoercedResultRow = .none,
 };
 
 /// Public `ResolvedValueRefTable` declaration.
@@ -16661,7 +16672,11 @@ pub const ResolvedValueRefTable = struct {
                     std.debug.panic("checked artifact invariant violated: resolved value ref type key differs from its published root", .{});
                 }
             }
-            try attachUseTypePayload(&resolved_ref, checked_type_key, checked_ty);
+            const coerced_result_row: CoercedResultRow = if (module.moduleEnvConst().resultRowReopenForNode(node_idx)) |reopen|
+                if (reopen.behind_try != 0) .try_error_row else .direct
+            else
+                .none;
+            try attachUseTypePayload(&resolved_ref, checked_type_key, checked_ty, coerced_result_row);
 
             const id: ResolvedValueRefId = @enumFromInt(@as(u32, @intCast(records.items.len)));
             try records.append(allocator, .{
@@ -16670,6 +16685,7 @@ pub const ResolvedValueRefTable = struct {
                 .checked_ty = checked_ty,
                 .scope_depth = 0,
                 .recursive_reference = recursive_reference_nodes.contains(node_idx),
+                .coerced_result_row = coerced_result_row,
             });
             by_checked_expr[@intFromEnum(checked_expr)] = id;
             if (resolved_ref == .local_proc and resolved_ref.local_proc.is_alias) {
@@ -17027,15 +17043,18 @@ fn attachUseTypePayload(
     ref: *ResolvedValueRef,
     key: canonical.CanonicalTypeKey,
     checked_ty: CheckedTypeId,
+    coerced_result_row: CoercedResultRow,
 ) Allocator.Error!void {
     switch (ref.*) {
         .top_level_const => |*use| {
             use.requested_source_ty_template = key;
             use.requested_source_ty_payload = checked_ty;
+            use.coerced_result_row = coerced_result_row;
         },
         .imported_const => |*use| {
             use.requested_source_ty_template = key;
             use.requested_source_ty_payload = checked_ty;
+            use.coerced_result_row = coerced_result_row;
         },
         .selected_hoisted_const => |*selected| {
             selected.const_use.requested_source_ty_template = key;
@@ -21657,8 +21676,19 @@ fn hostedTryAdapterCapabilityForCheckedRoot(
         }
         remaining -= 1;
     };
-    remaining = checked_types.payloads.items.len;
-    current = function.ret;
+    return try tryAdapterCapabilityForResultCell(names, checked_types, function.ret);
+}
+
+/// The `Try` constructor information for a result cell whose `Try` error row
+/// is closed: a function's return (`hostedTryAdapterCapabilityForCheckedRoot`)
+/// or a coerced top-level value's root (`ConstTemplate.coerced_row`).
+fn tryAdapterCapabilityForResultCell(
+    names: *canonical.CanonicalNameStore,
+    checked_types: *const CheckedTypeStore,
+    cell: CheckedTypeId,
+) Allocator.Error!?HostedTryAdapterCapability {
+    var remaining = checked_types.payloads.items.len;
+    var current = cell;
     const nominal = while (true) {
         switch (checked_types.payload(current)) {
             .alias => |alias| current = alias.backing,
@@ -29209,6 +29239,7 @@ pub const TopLevelValueTable = struct {
                 module.moduleIndex(),
                 checked_pattern,
                 source_scheme,
+                try coercedConstRowForDef(module, names, checked_type_publication, def_idx, source_ty),
             ) };
 
             const entry_idx: u32 = @intCast(entries.items.len);
@@ -32225,7 +32256,55 @@ pub const ConstTemplate = struct {
     owner: ConstOwner,
     source_scheme: canonical.CanonicalTypeSchemeKey,
     state: ConstTemplateState,
+    /// The checker's row-subsumption record for this top-level value
+    /// (`ModuleEnv.ResultRowCoercion` with `is_value`): which of its rows a
+    /// use may ask for wider than the value was produced at. Every stored or
+    /// evaluated representation of the constant stays at its declared row, and
+    /// a use that re-opened the row (`ResolvedValueRefRecord
+    /// .coerced_result_row`) restores it there and re-tags it into its own.
+    coerced_row: CoercedConstRow = .none,
 };
+
+/// Which row of a top-level value row subsumption coerces (design.md "Row
+/// Subsumption"): none, the value's own root tag row, or the error row of the
+/// `Try` that is its root—with the `Try` constructor information the re-tag
+/// needs, recorded exactly as a closed-result procedure template records it.
+pub const CoercedConstRow = union(enum) {
+    none,
+    direct,
+    try_error_row: HostedTryAdapterCapability,
+};
+
+/// The cell of a use's re-opened result row (`ModuleEnv.ResultRowReopen`).
+pub const CoercedResultRow = enum(u8) {
+    none,
+    direct,
+    try_error_row,
+};
+
+/// The checker's row-subsumption record for the top-level value `def_idx`, as
+/// the constant's `CoercedConstRow`. A value's record is always a VALUE's
+/// (`is_value`): the checker records a function-result coercion only for a
+/// function definition, and a function definition is never a constant.
+fn coercedConstRowForDef(
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    checked_type_publication: *const CheckedTypePublication,
+    def_idx: CIR.Def.Idx,
+    source_ty: Var,
+) Allocator.Error!CoercedConstRow {
+    const record = module.moduleEnvConst().resultRowCoercionForNode(@intFromEnum(ModuleEnv.nodeIdxFrom(def_idx))) orelse
+        return .none;
+    if (record.is_value == 0) {
+        checkedArtifactInvariant("a top-level constant carried a function-result row coercion", .{});
+    }
+    if (record.behind_try == 0) return .direct;
+    const root = checked_type_publication.rootForSourceVar(module, source_ty) orelse
+        checkedArtifactInvariant("a coerced top-level value's type root was not published", .{});
+    const capability = (try tryAdapterCapabilityForResultCell(names, &checked_type_publication.store, root)) orelse
+        checkedArtifactInvariant("a value coerced at its Try error row was not a Try with a closed error row", .{});
+    return .{ .try_error_row = capability };
+}
 
 /// Public `ConstTemplateTable` declaration.
 pub const ConstTemplateTable = struct {
@@ -32245,8 +32324,11 @@ pub const ConstTemplateTable = struct {
         module_idx: u32,
         pattern: CheckedPatternId,
         source_scheme: canonical.CanonicalTypeSchemeKey,
+        coerced_row: CoercedConstRow,
     ) Allocator.Error!ConstRef {
-        return self.appendTopLevel(allocator, artifact_key, module_idx, pattern, source_scheme, .reserved);
+        const ref = try self.appendTopLevel(allocator, artifact_key, module_idx, pattern, source_scheme, .reserved);
+        self.templates.items[@intFromEnum(ref.template)].coerced_row = coerced_row;
+        return ref;
     }
 
     /// Record a top-level constant whose declaration never received a value.
@@ -40085,8 +40167,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // constant evaluated at its sealed row can say so and keep the eval
     // template a use at another row lowers instead.
     const golden: [32]u8 = .{
-        0xD1, 0xCF, 0xC2, 0x96, 0xE2, 0xA8, 0x66, 0x65, 0xA6, 0x26, 0x13, 0x4C, 0x69, 0x3B, 0xFA, 0x2D,
-        0x6B, 0x1E, 0x5A, 0xF4, 0xCE, 0x14, 0x22, 0xAD, 0x32, 0x34, 0xA4, 0x4F, 0x2C, 0xB5, 0xA7, 0x2A,
+        0xEE, 0x5A, 0x6C, 0x1B, 0xEF, 0x43, 0x1D, 0x2C, 0xAC, 0x55, 0xC2, 0x46, 0x81, 0x26, 0x10, 0x77,
+        0x3A, 0x2C, 0x88, 0xB5, 0xD1, 0x85, 0x2D, 0x1A, 0x68, 0xEC, 0xB2, 0xD1, 0xD0, 0xED, 0x7A, 0xA6,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

@@ -947,6 +947,29 @@ pub const ResultRowCoercion = extern struct {
     /// annotation walk decides this, so a use never has to work out for itself
     /// whether a nominal in the result is `Try`.
     behind_try: u32,
+    /// What the row belongs to: 0 for a FUNCTION (the row is its signature's
+    /// result, and a use copies the function's spine down to it), 1 for a
+    /// top-level VALUE (the row is the value's own root row, or its root
+    /// `Try`'s error row, and a use copies from the root).
+    is_value: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// One USE that re-opened a coerced definition's result row (design.md "Row
+/// Subsumption"): a local, external or associated lookup whose own type is
+/// the re-opened copy. Checker-authored, keyed by the lookup expression's
+/// node, and read by post-check stages to decide which uses a coercion
+/// reaches—never inferred from the definition's record, because a use can be
+/// left as instantiated (a definition still in flight, an error tail).
+///
+/// Sorted by source node, like `result_row_coercions`.
+pub const ResultRowReopen = extern struct {
+    node_idx: u32,
+    /// Which cell was re-opened, as in `ResultRowCoercion.behind_try`.
+    behind_try: u32,
+    /// What the re-opened row belongs to, as in `ResultRowCoercion.is_value`.
+    is_value: u32,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -1201,6 +1224,8 @@ binding_schemes: BindingScheme.SafeList,
 /// Definitions whose annotated result row row subsumption coerces at each use.
 /// Sorted by source node for allocation-free lookup, like `binding_schemes`.
 result_row_coercions: ResultRowCoercion.SafeList,
+/// Lookups that re-opened such a row (`ResultRowReopen`). Sorted by node.
+result_row_reopens: ResultRowReopen.SafeList,
 /// Generated-codec relations carried by those schemes. Sorted by source node;
 /// multiple requirements for one binding occupy one contiguous run.
 binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList,
@@ -1555,6 +1580,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.scheme_use_pairs.relocate(offset);
     self.binding_schemes.relocate(offset);
     self.result_row_coercions.relocate(offset);
+    self.result_row_reopens.relocate(offset);
     self.binding_scheme_codec_requirements.relocate(offset);
     self.rejected_static_dispatches.relocate(offset);
     self.record_omitted_defaults.relocate(offset);
@@ -1661,6 +1687,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
         .binding_schemes = try BindingScheme.SafeList.initCapacity(gpa, 8),
         .result_row_coercions = try ResultRowCoercion.SafeList.initCapacity(gpa, 8),
+        .result_row_reopens = try ResultRowReopen.SafeList.initCapacity(gpa, 8),
         .binding_scheme_codec_requirements = try BindingSchemeCodecRequirement.SafeList.initCapacity(gpa, 4),
         .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
@@ -1697,6 +1724,7 @@ pub fn deinit(self: *Self) void {
     self.scheme_use_pairs.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
     self.result_row_coercions.deinit(self.gpa);
+    self.result_row_reopens.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
@@ -1803,6 +1831,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.scheme_use_pairs.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
     self.result_row_coercions.deinit(self.gpa);
+    self.result_row_reopens.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
@@ -4448,6 +4477,7 @@ pub const Serialized = extern struct {
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
     binding_schemes: BindingScheme.SafeList.Serialized,
     result_row_coercions: ResultRowCoercion.SafeList.Serialized,
+    result_row_reopens: ResultRowReopen.SafeList.Serialized,
     binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList.Serialized,
     generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
@@ -4568,6 +4598,7 @@ pub const Serialized = extern struct {
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
         try self.binding_schemes.serialize(&env.binding_schemes, allocator, writer);
         try self.result_row_coercions.serialize(&env.result_row_coercions, allocator, writer);
+        try self.result_row_reopens.serialize(&env.result_row_reopens, allocator, writer);
         try self.binding_scheme_codec_requirements.serialize(&env.binding_scheme_codec_requirements, allocator, writer);
         try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
@@ -4643,6 +4674,7 @@ pub const Serialized = extern struct {
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
             .result_row_coercions = self.result_row_coercions.deserializeInto(base_addr),
+            .result_row_reopens = self.result_row_reopens.deserializeInto(base_addr),
             .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
@@ -4720,6 +4752,7 @@ pub const Serialized = extern struct {
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
             .result_row_coercions = self.result_row_coercions.deserializeInto(base_addr),
+            .result_row_reopens = self.result_row_reopens.deserializeInto(base_addr),
             .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
@@ -4800,6 +4833,7 @@ pub const Serialized = extern struct {
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
             .result_row_coercions = try self.result_row_coercions.deserializeWithCopy(base_addr, gpa),
+            .result_row_reopens = try self.result_row_reopens.deserializeWithCopy(base_addr, gpa),
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
@@ -4892,6 +4926,7 @@ pub const Serialized = extern struct {
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
             .result_row_coercions = try self.result_row_coercions.deserializeWithCopy(base_addr, gpa),
+            .result_row_reopens = try self.result_row_reopens.deserializeWithCopy(base_addr, gpa),
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
@@ -5107,12 +5142,32 @@ pub fn nodeIsBindingScheme(self: *const Self, node_idx: Node.Idx) bool {
 /// FORWARDING a closed value rather than by construction, so every use re-opens
 /// its own copy of that row. Producer-authored by the checker; see
 /// `ResultRowCoercion`.
-pub fn recordResultRowCoercion(self: *Self, node_idx: Node.Idx, behind_try: bool) std.mem.Allocator.Error!void {
+pub fn recordResultRowCoercion(self: *Self, node_idx: Node.Idx, behind_try: bool, is_value: bool) std.mem.Allocator.Error!void {
     try upsertSortedByNode(
         ResultRowCoercion,
         &self.result_row_coercions,
         self.gpa,
-        .{ .node_idx = @intFromEnum(node_idx), .behind_try = @intFromBool(behind_try) },
+        .{ .node_idx = @intFromEnum(node_idx), .behind_try = @intFromBool(behind_try), .is_value = @intFromBool(is_value) },
+    );
+}
+
+/// Record that the lookup at `node_idx` re-opened a coerced definition's
+/// result row. Producer-authored by the checker; see `ResultRowReopen`.
+pub fn recordResultRowReopen(self: *Self, node_idx: Node.Idx, behind_try: bool, is_value: bool) std.mem.Allocator.Error!void {
+    try upsertSortedByNode(
+        ResultRowReopen,
+        &self.result_row_reopens,
+        self.gpa,
+        .{ .node_idx = @intFromEnum(node_idx), .behind_try = @intFromBool(behind_try), .is_value = @intFromBool(is_value) },
+    );
+}
+
+/// The re-open the lookup at `raw_node` made, or null when it made none.
+pub fn resultRowReopenForNode(self: *const Self, raw_node: u32) ?ResultRowReopen {
+    return findSortedByNode(
+        ResultRowReopen,
+        self.result_row_reopens.items.items,
+        raw_node,
     );
 }
 

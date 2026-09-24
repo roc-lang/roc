@@ -262,7 +262,11 @@ pub const Constants = struct {
     ///      an alias whose formal took a twin presents the twin as that
     ///      argument, or is presented as its backing when it also used the
     ///      shared argument.
-    pub const CACHE_VERSION = 114;
+    /// 115: An annotated top-level VALUE whose root row, or its root `Try`'s
+    ///      error row, was closed by forwarding records a row coercion marked
+    ///      as a value's, and every lookup that re-opens a coerced row records
+    ///      that it did (`ResultRowReopen`), which post-check stages read.
+    pub const CACHE_VERSION = 115;
 };
 
 /// Configuration for the Roc cache system.

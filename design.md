@@ -3834,6 +3834,16 @@ the cost needs boxy to compare a use's requested checked type against the
 stored root type structurally, in both its plan and its lowering, and take the
 stored value on a match.
 
+A COERCED constant (Row Subsumption) is different because its use says so: a
+use that re-opened its row carries the checker's record, so boxy restores the
+stored value at its own stored representation and crosses the
+descriptor-driven boundary a direct call's result crosses, which re-tags by
+name, rather than the representation boundary. The two properties compose on
+one root: `v : Try([X], [E])` whose `Ok` is constructed and whose `Err` is
+forwarded is a `sealed_row` root with a coerced error row, and a coerced use
+of it lowers the eval template exactly as above—at the type the constant was
+produced at—and re-tags the result.
+
 One constant per instantiation is not expressible: the decision is made for one
 module with no importer in view, and `copy_import` stamps every imported
 descriptor generalized, so a defining module can never bound the set of rows
@@ -6690,9 +6700,9 @@ is never bound, and the function's row stays open. The second forwards the
 hosted error with `?`. The host's row is closed by declaration, but a hosted
 function's `Try` error row is coerced (Row Subsumption), so the `?` meets this
 use's own re-opened copy of it, the annotation's extension stays unbound, and
-the two definitions stay interchangeable. A NON-hosted forwarder still binds
-its extension to `[]`; row subsumption records that instead and re-opens the
-row at each of the forwarder's own uses.
+the two definitions stay interchangeable. A NON-hosted forwarder, function or
+top-level value, still binds its extension to `[]`; row subsumption records
+that instead and re-opens the row at each of the forwarder's own uses.
 
 An anonymous `..` in a positive position of an opening annotation means
 exactly what absence means there and is generated the same way (a recorded
@@ -6848,7 +6858,12 @@ arguments lands in the builtin `Try`'s ERROR cell. It crosses transparent
 alias declarations (`Res(e) : Try(Str, e)`) because lowering crosses the same
 ones: `closedResultRowOrNull` reads the return through `resolvedPayload`,
 which walks alias backings, and `hostedTryNamedOrNull` crosses them by
-design. `Check.applyFormalVariances` answers the polarity an argument is
+design. It answers for a `Try` standing as a bare VALUE annotation's whole
+type too: that `Try`'s error argument is generated at
+`AdapterReach.value_try_row` (the instantiator re-aims an alias's `Try` the
+same way), which row subsumption coerces for a top-level value and every other
+consumer treats as `.nested`, so a where-method row there closes as written.
+`Check.applyFormalVariances` answers the polarity an argument is
 generated at, by reading the VARIANCE of the formal it is substituted for out
 of the referenced declaration's own annotation, so `Handler([A, B])` composes
 instead of inheriting.
@@ -6914,7 +6929,9 @@ filter. Every value binding's extensions are recorded and the solved rank
 decides, because an extension the walk approved can still fail to quantify:
 `x : [Boom]` whose body joins its row to a top-level weak value's row
 (`x = if c e else Boom` with `e = Boom`) is pinned at that value's rank, and
-left bare it would reach importers open and be quantified per use there.
+left bare it would reach importers open and be quantified per use there. Such
+a row is not a coerced one either (Row Subsumption): its extension is a flex,
+not `[]`, when the coercion probe reads it.
 
 Imported aliases are no longer such a case: every alias and nominal
 declaration records whether its body opens a row at a positive or a negative
@@ -7028,9 +7045,9 @@ always rendered (a marker, which is written closed, is rendered closed).
 
 Row subsumption—a closed row COERCING into an implicitly open one where the
 two meet, instead of binding the open row's extension shut—is the end state
-Polarity is written against. Its first stage is IMPLEMENTED for function
-signatures; the rest of this section states the rule, what it replaces, what
-it deletes, and what remains.
+Polarity is written against. Its first stage is IMPLEMENTED for top-level
+function signatures and annotated top-level values; the rest of this section
+states the rule, what it replaces, what it deletes, and what remains.
 
 The coercion is applied at the USE, not at the definition. A definition whose
 result row was closed by its body records that it was coerced
@@ -7217,8 +7234,70 @@ whose accepted programs are also lowered under both specialization strategies,
 and by `test/fx-open/hosted_widening_channels.roc`, which runs every channel
 against a host.
 
-What remains: the residue for annotated VALUE bindings, whose rows are grounded
-rather than coerced.
+An annotated top-level VALUE coerces too, at its ROOT row or the error row of
+the `Try` standing as its root (`v : [A, B]`, `v : Try(Str, [NotFound])`),
+and nowhere else: not a row nested inside the value, not a `Try`'s ok row.
+The annotation walk marks whose row it opened (`ResultRowSubject`): a row at
+the signature's function result belongs to a FUNCTION, and a row standing as
+the annotation's root, or a `Try` error argument at
+`AdapterReach.value_try_row` (a `Try` standing as the whole annotation),
+belongs to a VALUE. A definition records a coercion only when that subject
+matches it (`ModuleEnv.ResultRowCoercion.is_value`): a function result for a
+lambda, a value row for any other non-hosted definition. So a value binding
+whose annotation is a function type (`f : S -> [A, B]` with `f = r.f`)
+records nothing: it has no procedure template of its own for an adapter to
+complete, and its result row keeps closing by body. A value alias (`v = u`)
+coerces like any forwarding value, although it generalizes whatever its
+annotation. A use re-opens a value's copy from its root
+(`reopenCoercedResultCell`), not down a function's spine.
+
+A value has no call boundary, so a widened use is served where the constant
+is restored rather than by an adapter, and that needs to know WHICH uses
+re-opened. Every lookup that re-opened a coerced row records so
+(`ModuleEnv.ResultRowReopen`, keyed by the lookup; a lookup the re-open left
+unchanged, at an error tail, records nothing), and the checked module data
+carries that record onto the use's resolved value reference and constant use
+(`coerced_result_row`) beside the constant's own
+(`ConstTemplate.coerced_row`, which also carries the `Try` constructor
+information a re-tag of the error row needs). A use's record without the
+constant's matching one is an invariant violation. No post-check stage
+compares types to decide whether a use is widened. Monotype restores the
+constant at its DECLARED type—its stored value, or its eval template lowered
+at the body's own type, never unified with the request—and relates the
+request to it component-wise without unifying the coerced row, re-tagging the
+value into the request's row when the request lists more tags
+(`BodyContext.restoreCoercedConstUseAtNode`, `coerceConstRowAtNodes`: the
+relation and injections the Result-Row Widening Adapter uses). A coerced use
+of a `sealed_row` constant (its ok row constructed, so quantified, and its
+error row forwarded, so coerced) selects between the stored value and the
+eval template exactly as an uncoerced use does, and re-tags either. Boxy
+restores the stored value at its stored representation, or calls the eval
+template at the type the constant was produced at, and crosses the
+descriptor-driven boundary a direct call's result crosses
+(`assignCoercedResultRow`), which rebuilds each tag by name. The compile-time
+finalizer of a constant whose body is a widened use (`w = v`) goes through the
+same restore and stores the wider value. Pinned by the "row subsumption -
+value ..." tests in src/eval/test/lir_inline_test.zig and by
+`test/cli/RowSubsumptionValue.roc` (a direct row, a `Try` error row, a value
+alias, a sealed-row value, and an imported value, on every backend and both
+specialization strategies).
+
+A LOCAL binding is not coerced: a local value is lowered inline, with no
+stored constant to restore, and a local function's callee is a local
+procedure with no procedure template to adapt.
+
+A value row the body PINNED to a weak row is not coerced either, and is its
+own rule: `x : [Boom]` with `x = if c e else Boom` and `e = Boom` unifies the
+annotation's extension with `e`'s unquantified row, so after the body the
+extension is a flex at `e`'s rank rather than `[]`, and the probe records
+nothing. `Check.groundUnquantifiedValueImplicitOpenExts` then grounds it to
+`[]` once the module solves (Three Syntactic Walks), so the row is closed for
+every use, importers included. Re-opening it per use instead would widen a row
+`x` shares with every use of `e`, which is the order-dependent weak row
+Polarity removed.
+
+What remains: local bindings, rows nested below the coerced row, and the
+weak-pinned value row above, each of which stays closed rather than coerced.
 
 The argument for it is interchangeability. A signature is the whole of what a
 caller reads, so two definitions carrying identical annotations must be usable
@@ -7248,10 +7327,10 @@ use, as described above: the body still binds its own row, the definition
 records that it did, and each use re-opens its copy. That is what keeps one
 narrow representation per definition, so the Result-Row Widening Adapter, which
 specializes a template at its declared row and re-tags the result at the
-requested row, serves every widened use. A value coerced inside an ordinary
-body is not a case: value bindings are quantified or grounded rather than
-coerced, and a local definition has no procedure template for an adapter to
-complete.
+requested row, serves every widened use of a function; a widened use of a
+top-level value is re-tagged where the constant is restored (above). A local
+definition is not coerced, having neither a procedure template nor a stored
+constant.
 
 Subsumption replaced the CHECKER half of Hosted Try Question Widening: the
 use-site redirect that widened a `?` condition on a direct hosted call, and the
@@ -7297,10 +7376,12 @@ typecheck as written. The hosted instance meets it
 `test/fx-open/hosted_widening_channels.roc`), and the NON-hosted
 instance has a fixture of its own (`test/cli/RowSubsumptionForwarder.roc`: a
 direct row, a `Try` error row, and a function-alias signature, each forwarded
-closed and widened by a caller). The widening fixtures are a separate matter: they need a CLOSED value to
-widen, and neither an annotated value (its row is quantified) nor a top-level
-forwarder (its row is coerced) produces one any more, so they read it out of a
-nominal field, whose body closes its rows as written.
+closed and widened by a caller), and so does the value instance
+(`test/cli/RowSubsumptionValue.roc`). The widening fixtures are a separate
+matter: they need a CLOSED value to widen, and no annotated top-level
+definition produces one any more—a constructing one's row is quantified and a
+forwarding one's is coerced—so they read it out of a nominal field, whose
+body closes its rows as written.
 
 ### Hosted Try Question Widening
 
@@ -9423,7 +9504,24 @@ Other solved-graph mutations:
   in this module and in importers, re-open its own copy of that one row.
   Scoped to a top-level function, with or without a `where` clause, at the
   one adapter-reachable result row (`ResultRowSite`), whether written inline
-  or through an alias. Pinned in src/check/test/type_checking_integration.zig:
+  or through an alias, and to an annotated top-level value at its root row or
+  root `Try` error row; the record says which (`ResultRowSubject`), and a row
+  whose subject does not match the definition records nothing. Every lookup
+  that re-opens records so (`ModuleEnv.ResultRowReopen`), which is the only
+  thing post-check stages read to find a widened use of a value. Pinned in
+  src/check/test/type_checking_integration.zig for values: accepted—"a
+  forwarded closed value binding coerces at its uses", "a forwarded closed
+  value binding's Try error row coerces", "a constructed and a forwarded value
+  with one annotation are used identically", "a value alias of a closed value
+  coerces", "a value's coerced error row and quantified ok row compose", "an
+  imported forwarded value's row coerces at the use", "every lookup that
+  re-opens a coerced row is recorded with its subject"; rejected—"a
+  forwarding value is still bounded by its annotation", "value coercion does
+  not reach a nested row", "value coercion does not reach a Try ok row",
+  "value coercion does not reach a local value", "a function-typed value
+  binding does not coerce", "a value row the body tied to a weak row is
+  grounded, not left open", and "a lookup of an uncoerced definition records
+  no re-open". Pinned in src/check/test/type_checking_integration.zig:
   accepted—"a forwarded closed value still exposes an open row", "a
   forwarded closed Try error row coerces", the two "... spelled through an
   alias coerces" tests, "an imported forwarder's result row coerces at the
