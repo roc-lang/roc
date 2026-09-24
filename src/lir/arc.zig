@@ -796,6 +796,7 @@ const EmissionOwner = struct {
     source: *SourceCache,
     job: QueuedVariant,
     arena: ?std.heap.ArenaAllocator = null,
+    plan_steps_allocator: ?Allocator = null,
     shard: ?LirStore = null,
     domain: ProcArcDomain = undefined,
     death_scratch: std.ArrayList(ReleaseDecision) = .empty,
@@ -815,6 +816,9 @@ const EmissionOwner = struct {
 
     fn deinit(self: *EmissionOwner) void {
         if (self.shard) |*shard| shard.deinit();
+        if (self.plan_steps_allocator) |steps_allocator| {
+            for (self.arc_plans.plans.items) |*arc_plan| arc_plan.steps.deinit(steps_allocator);
+        }
         if (self.arena) |*arena| arena.deinit();
     }
 
@@ -848,6 +852,8 @@ const EmissionOwner = struct {
         const domain = &self.domain;
         inserter.current_domain = domain;
         inserter.solve_allocator = inserter.emission_allocator;
+        inserter.plan_steps_allocator = allocator;
+        self.plan_steps_allocator = allocator;
         inserter.place_query_seen = .{};
         inserter.place_query_visited = .empty;
         inserter.place_query_stack = .empty;
@@ -1727,6 +1733,10 @@ const Inserter = struct {
     switch_summaries: []?*SwitchSummary = &.{},
     /// Arena backing one emission's solver structures.
     solve_allocator: Allocator = undefined,
+    /// Structured plans grow their step lists across fixed-point visits. An
+    /// arena would retain every outgrown list, so steps use a freeing
+    /// allocator and the owning emission releases them.
+    plan_steps_allocator: Allocator = undefined,
     /// Per-emission scratch for `ownershipPlaceUsedInPath`: the visited
     /// statement set plus the indices to clear afterwards, so one query
     /// costs the statements it visits rather than a store-wide reset.
@@ -3310,7 +3320,7 @@ const Inserter = struct {
         const step_index = plan.step_count;
         plan.step_count += 1;
         if (step_index == plan.steps.items.len) {
-            try plan.steps.append(self.solve_allocator, .{});
+            try plan.steps.append(self.plan_steps_allocator, .{});
         } else if (step_index > plan.steps.items.len) {
             arcInvariant("ARC plan step cursor skipped a stable slot");
         }
