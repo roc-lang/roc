@@ -13,11 +13,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # One macOS host leg only: macOS runners are the scarce, shared
-        # resource that PR CI queues on. Intel macOS stays covered by
-        # ci_zig.yml's zig-tests (macos-15-intel) leg.
         host: [
             ubuntu-24.04, # Linux x64 host
+            macos-15-intel, # macOS x64 host
             macos-15, # macOS ARM64 host
             windows-2022, # Windows x64 host
           ]
