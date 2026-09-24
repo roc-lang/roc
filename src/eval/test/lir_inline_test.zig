@@ -11455,6 +11455,10 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
     // contract machinery, which the eager restore no longer exists to be
     // compared against, so the reference is this compiler itself:
     //   fns=10 defs=11 exprs=597 locals=121 template_misses=14 nested_misses=0
+    // and again once a missing required field always constructs
+    // `MissingRequiredField` directly, with no remaining-state binding for an
+    // `invalid_value` call:
+    //   fns=10 defs=11 exprs=593 locals=119 template_misses=14 nested_misses=0
     // Every count is exact, including expressions and locals. The reserve-
     // and-copy that Phase-B emission ends in is the same reserve-and-copy the
     // eager restore already performed (it too filled a reservation with a
@@ -11467,8 +11471,8 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_gate_source);
     try std.testing.expectEqual(@as(usize, 10), stats.functions);
     try std.testing.expectEqual(@as(usize, 11), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 597), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 121), stats.locals);
+    try std.testing.expectEqual(@as(usize, 593), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 119), stats.locals);
     try std.testing.expect(stats.template_misses <= 14);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
 }
@@ -11591,13 +11595,15 @@ test "stored parser restore lowers a shape with an optional field" {
     // silently drops or duplicates part of the generated optional-field
     // parser is caught. That it lowers at all is the primary assertion.
     // Re-measured after the 2026-09-15 rebase onto upstream's codec contract
-    // machinery (exprs 669 -> 731, locals 127 -> 140).
+    // machinery (exprs 669 -> 731, locals 127 -> 140), and again once a
+    // missing required field always constructs `MissingRequiredField`
+    // directly (exprs 731 -> 727, locals 140 -> 138).
     const allocator = std.testing.allocator;
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_optional_gate_source);
     try std.testing.expectEqual(@as(usize, 10), stats.functions);
     try std.testing.expectEqual(@as(usize, 11), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 731), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 140), stats.locals);
+    try std.testing.expectEqual(@as(usize, 727), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 138), stats.locals);
     try std.testing.expectEqual(@as(u64, 14), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
 }
