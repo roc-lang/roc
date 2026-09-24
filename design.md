@@ -4433,6 +4433,18 @@ names an inline required field), the constructor's pack boundary adapts the
 runtime worker to the checked return. Planning never rewrites the
 constructor's representation to match its runtime worker.
 
+A generated parser or encoder runtime walks its contract's body shape: for a
+declaration-backed nominal that is the checker's own snapshot of the backing,
+and every call subject in the contract names that snapshot. A nominal reached
+inside the body, whether its `parser_for`/`encoder_for` is declared or
+compiler-generated, is reached through the contract's own call edge for that
+method; a generated one resolves to the checked nested derivation, so a
+recursive nominal's body calls its own constructor. A generated codec call
+whose target is a procedure carries the checked evidence edge that selected
+it, and that edge's call-site substitution binds the target scheme's
+variables when its hidden dictionaries and descriptors are planned, exactly as
+for a direct call.
+
 Generated workers follow the same descriptor-production contract as source
 workers. Planning assigns the exact descriptor source for every descriptor-
 bearing output, including branch results, parser result tags, record fields,

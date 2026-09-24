@@ -18,6 +18,47 @@ Inner := [Leaf(Str), Stop].{ parser_for : _ }
 
 Outer := [Wrap(List(Inner))].{ parser_for : _ }
 
+# A nominal with a hand-written parser that needs its payload's parser.
+Opt(a) := [
+	None,
+	Has(a),
+].{
+	map : Opt(a), (a -> b) -> Opt(b)
+	map = |o, f|
+		match o {
+			Has(a) => Has(f(a))
+			None => None
+		}
+
+	with_default : Opt(a), a -> a
+	with_default = |o, default|
+		match o {
+			Has(a) => a
+			None => default
+		}
+
+	parser_for : encoding -> (state -> Try({ value : Opt(a), rest : state }, [InvalidJson(Str), MissingRequiredField(Str)]))
+		where [
+			a.parser_for : encoding -> (state -> Try({ value : a, rest : state }, [InvalidJson(Str), MissingRequiredField(Str)])),
+			encoding.parse_null : encoding, state -> Try(state, [InvalidJson(Str)]),
+		]
+	parser_for = |encoding| {
+		Elem : a
+		parse_elem = Elem.parser_for(encoding)
+
+		|state|
+			match encoding.parse_null(state) {
+				Ok(rest) => Ok({ value: None, rest })
+				Err(InvalidJson(_)) =>
+					match parse_elem(state) {
+						Ok(parsed) => Ok({ value: Has(parsed.value), rest: parsed.rest })
+						Err(InvalidJson(e)) => Err(InvalidJson(e))
+						Err(MissingRequiredField(f)) => Err(MissingRequiredField(f))
+					}
+			}
+	}
+}
+
 PlainAlias : Plain
 
 Holder(a) := { x : a }.{
@@ -154,6 +195,16 @@ expect {
 	v = Json.parse("{\"right\":[{\"left\":[{\"right\":[{\"left\":[],\"name\":\"y\"}]}],\"name\":\"x\"}]}")
 	match v {
 		Ok(left) => right_names(left) == "xy"
+		Err(_) => False
+	}
+}
+
+# Two fields of one nominal with a hand-written parser.
+expect {
+	v : Try({ a : Opt(Str), b : Opt(Str) }, [InvalidJson(Str), MissingRequiredField(Str)])
+	v = Json.parse("{\"a\":\"x\",\"b\":null}")
+	match v {
+		Ok({ a, b }) => Opt.with_default(a, "none") == "x" and Opt.with_default(b, "none") == "none"
 		Err(_) => False
 	}
 }

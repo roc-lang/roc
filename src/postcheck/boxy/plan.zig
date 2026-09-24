@@ -566,6 +566,10 @@ pub const GeneratedCodecCallPlan = struct {
     arg_types: Span,
     ret_type: CheckedTypeIdentity,
     checked_evidence: Span = .{},
+    /// The checked evidence edge a callable resolution selected. Its
+    /// substitution binds the target scheme's variables at this call, which
+    /// its hidden dictionaries and descriptors are planned from.
+    evidence_edge: ?DictionaryMethodEvidence.EvidenceEdge = null,
     hidden_desc_args: Span = .{},
     hidden_dict_args: Span = .{},
 };
@@ -580,6 +584,14 @@ pub const GeneratedCodecRuntimeLink = struct {
 pub const GeneratedParserRuntimePlan = struct {
     worker: WorkerPlanId,
     schema_type: CheckedTypeIdentity,
+};
+
+/// The checked body shape a generated encoder runtime encodes: the contract's
+/// body shape, which for a declaration-backed nominal is the checker's own
+/// snapshot of its backing, and which every call subject in the contract names.
+pub const GeneratedEncoderRuntimePlan = struct {
+    worker: WorkerPlanId,
+    body_type: CheckedTypeIdentity,
 };
 
 /// Exact checked parse_tag_union subject selected for a parser-visible checked
@@ -928,6 +940,7 @@ pub const ProgramPlan = struct {
     generated_codec_call_types: std.ArrayList(CheckedTypeIdentity),
     generated_codec_runtime_links: std.ArrayList(GeneratedCodecRuntimeLink),
     generated_parser_runtime_plans: std.ArrayList(GeneratedParserRuntimePlan),
+    generated_encoder_runtime_plans: std.ArrayList(GeneratedEncoderRuntimePlan),
     generated_parser_tag_call_links: std.ArrayList(GeneratedParserTagCallLink),
     generated_parser_tag_union_plans: std.ArrayList(GeneratedParserTagUnionPlan),
     generated_parser_tag_union_record_types: std.ArrayList(CheckedTypeIdentity),
@@ -986,6 +999,7 @@ pub const ProgramPlan = struct {
             .generated_codec_call_types = .empty,
             .generated_codec_runtime_links = .empty,
             .generated_parser_runtime_plans = .empty,
+            .generated_encoder_runtime_plans = .empty,
             .generated_parser_tag_call_links = .empty,
             .generated_parser_tag_union_plans = .empty,
             .generated_parser_tag_union_record_types = .empty,
@@ -1058,6 +1072,7 @@ pub const ProgramPlan = struct {
         self.generated_codec_call_types.deinit(self.allocator);
         self.generated_codec_runtime_links.deinit(self.allocator);
         self.generated_parser_runtime_plans.deinit(self.allocator);
+        self.generated_encoder_runtime_plans.deinit(self.allocator);
         self.generated_parser_tag_call_links.deinit(self.allocator);
         self.generated_parser_tag_union_plans.deinit(self.allocator);
         self.generated_parser_tag_union_record_types.deinit(self.allocator);
@@ -1470,6 +1485,13 @@ pub const ProgramPlan = struct {
     pub fn generatedParserRuntimeSchema(self: *const ProgramPlan, worker: WorkerPlanId) ?CheckedTypeIdentity {
         for (self.generated_parser_runtime_plans.items) |runtime| {
             if (runtime.worker == worker) return runtime.schema_type;
+        }
+        return null;
+    }
+
+    pub fn generatedEncoderRuntimeBody(self: *const ProgramPlan, worker: WorkerPlanId) ?CheckedTypeIdentity {
+        for (self.generated_encoder_runtime_plans.items) |runtime| {
+            if (runtime.worker == worker) return runtime.body_type;
         }
         return null;
     }
@@ -3042,9 +3064,17 @@ const Builder = struct {
                     if (function.arg_count != 2) {
                         boxyPlanInvariant("generated encoder runtime did not have value and state arguments");
                     }
-                    const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
-                    const value_type = children[function.args_start].source_type;
-                    try self.planGeneratedEncoderShape(worker_id, worker_id, value_type, value_type, encoding_type);
+                    // As for parsers, the checker validated the generated body
+                    // against the contract's body shape, and every call
+                    // subject in the contract names that snapshot.
+                    const contract = self.generatedCodecContractForWorker(worker_id);
+                    const body_shape = typeRef(contract.view, contract.derivation.body_shape_ty);
+                    _ = try self.analyzeType(contract.view, body_shape.ty);
+                    try self.planGeneratedEncoderShape(worker_id, worker_id, body_shape, body_shape, encoding_type);
+                    try self.plan.generated_encoder_runtime_plans.append(self.allocator, .{
+                        .worker = worker_id,
+                        .body_type = body_shape,
+                    });
                 },
                 .encoder_record_fields,
                 .encoder_dict_fields,
@@ -3143,6 +3173,7 @@ const Builder = struct {
         var source: WorkerSource = undefined;
         var source_fn_type: CheckedTypeIdentity = undefined;
         var checked_evidence: Span = .{};
+        var evidence_edge: ?DictionaryMethodEvidence.EvidenceEdge = null;
         switch (exact_call.resolution) {
             .callable => |node_id| blk: {
                 const node = contract.view.static_dispatch_plans.evidenceNode(node_id);
@@ -3163,6 +3194,9 @@ const Builder = struct {
                 source = self.workerSourceForMethodTarget(lookup, dispatch_type, null);
                 source_fn_type = .{ .module = target_view.key, .ty = node.target.callable_ty };
                 checked_evidence = .{ .start = nested.start, .len = nested.len };
+                const edge: DictionaryMethodEvidence.EvidenceEdge = .{ .module = contract.view.key, .node = node_id };
+                try self.analyzeEvidenceEdgeSchemeSubstitution(edge);
+                evidence_edge = edge;
                 break :blk;
             },
             .structural => |derivation_id| blk: {
@@ -3201,6 +3235,7 @@ const Builder = struct {
             .arg_types = .{ .start = arg_start, .len = function.arg_count },
             .ret_type = self.plan.representations.items[@intFromEnum(function.ret)].source_type,
             .checked_evidence = checked_evidence,
+            .evidence_edge = evidence_edge,
         };
         try self.plan.generated_codec_calls.append(self.allocator, planned);
         return planned;
@@ -4039,12 +4074,20 @@ const Builder = struct {
                     if (view.canonical_names.?.lookupMethodName("encoder_for")) |encoder_for| {
                         if (self.lookupMethodTarget(view, owner, view, encoder_for)) |lookup| {
                             switch (lookup.target.kind) {
+                                // A declared encoder, or the compiler-generated
+                                // structural encoder, whose body the checker
+                                // validated as a nested derivation of its own
+                                // (reached through the contract's `encoder_for`
+                                // edge).
                                 .procedure, .local_proc => {
                                     _ = try self.ensureGeneratedCodecCall(worker, shape, "encoder_for", shape);
                                     return;
                                 },
                                 .structural => |kind| switch (kind) {
-                                    .encoder => {},
+                                    .encoder => {
+                                        _ = try self.ensureGeneratedCodecCall(worker, shape, "encoder_for", shape);
+                                        return;
+                                    },
                                     .parser => boxyPlanInvariant("encoder planning resolved to generated parser target"),
                                     .equality, .hash, .map, .map_effectful => boxyPlanInvariant("encoder planning resolved to a non-encoder structural target"),
                                 },
@@ -8303,12 +8346,17 @@ const Builder = struct {
         while (index < self.plan.generated_codec_calls.items.len) : (index += 1) {
             const call = self.plan.generated_codec_calls.items[index];
             const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
+            const call_view = self.moduleForId(call.method_module);
+            const checked_evidence = call_view.static_dispatch_plans.evidence_refs[call.checked_evidence.start .. call.checked_evidence.start + call.checked_evidence.len];
             self.plan.generated_codec_calls.items[index].hidden_desc_args =
-                try self.materializeWorkerCallHiddenDescriptorArgs(
+                try self.materializeWorkerCallHiddenDescriptorArgsWithSubstitution(
                     call.worker,
                     arg_types,
                     arg_types,
                     call.ret_type,
+                    call_view,
+                    checked_evidence,
+                    if (call.evidence_edge) |edge| self.evidenceEdgeSchemeSubstitution(call.worker, edge) else null,
                 );
         }
     }
@@ -8429,7 +8477,7 @@ const Builder = struct {
                     call.ret_type,
                     call_view,
                     checked_evidence,
-                    null,
+                    if (call.evidence_edge) |edge| self.evidenceEdgeSchemeSubstitution(call.worker, edge) else null,
                 );
         }
     }

@@ -6940,12 +6940,12 @@ const ProcedureBuilder = struct {
         if (function.arg_count != 2 or proc.arg_locals.items.len < 2 or proc.erased_capture_locals.items.len == 0) {
             boxyLowerInvariant("generated encoder runtime did not bind encoding, value, and state");
         }
-        const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
-        const value_type = children[function.args_start].source_type;
+        const body_shape = self.plan.generatedEncoderRuntimeBody(proc.worker_layout.worker) orelse
+            boxyLowerInvariant("generated encoder runtime had no planned body shape");
         return try self.lowerGeneratedEncoderShapeInto(
             proc,
             source,
-            value_type,
+            body_shape,
             proc.arg_locals.items[0],
             proc.arg_locals.items[1],
             target,
