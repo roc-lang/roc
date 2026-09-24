@@ -1978,10 +1978,10 @@ const ProcedureBuilder = struct {
         const requirement_args = requirement_children[requirement_function.args_start..][0..requirement_function.arg_count];
 
         var needs_adapter = worker_ret_layout.layoutIdx() != proc.workerRuntimeLayoutForRep(requirement_function.ret).layoutIdx() or
-            !proc.representationBoundaryIsDirect(requirement_function.ret, worker_function.ret);
+            !try proc.callableValueBoundaryIsDirect(requirement_function.ret, worker_function.ret);
         for (worker_args, worker_arg_layouts, requirement_args) |worker_arg, worker_arg_layout, requirement_arg| {
             if (worker_arg_layout.layoutIdx() != proc.workerRuntimeLayoutForRep(requirement_arg.rep).layoutIdx() or
-                !try proc.callableArgumentBoundaryIsDirect(worker_arg.rep, requirement_arg.rep))
+                !try proc.callableValueBoundaryIsDirect(worker_arg.rep, requirement_arg.rep))
             {
                 needs_adapter = true;
                 break;
@@ -2054,7 +2054,7 @@ const ProcedureBuilder = struct {
         defer self.allocator.free(worker_call_args);
         for (worker_args, worker_arg_layouts, requirement_args, 0..) |worker_arg, worker_arg_layout, requirement_arg, arg_index| {
             worker_call_args[arg_index] = if (worker_arg_layout.layoutIdx() == self.result.store.getLocal(proc.arg_locals.items[arg_index]).layout_idx and
-                try proc.callableArgumentBoundaryIsDirect(worker_arg.rep, requirement_arg.rep))
+                try proc.callableValueBoundaryIsDirect(worker_arg.rep, requirement_arg.rep))
                 proc.arg_locals.items[arg_index]
             else
                 try proc.addFrameLocalForRuntimeRep(worker_arg_layout, worker_arg.rep);
@@ -6337,7 +6337,9 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const worker = self.plan.workers.items[@intFromEnum(worker_id)];
         const captures = self.plan.erasedCaptureSlice(worker.erased_captures);
-        const all_capture_values = try self.generatedCodecCaptureValues(proc, captures, capture_values);
+        var capture_initializers = std.ArrayList(ProcBodyBuilder.DescriptorArgLocal).empty;
+        defer capture_initializers.deinit(self.allocator);
+        const all_capture_values = try self.generatedCodecCaptureValues(proc, captures, capture_values, &capture_initializers);
         defer self.allocator.free(all_capture_values);
         const function = proc.functionChildrenForRep(worker.rep) orelse
             boxyLowerInvariant("generated interpolation step worker was not callable");
@@ -6357,7 +6359,7 @@ const ProcedureBuilder = struct {
             boundary.next,
         );
         try self.finishGeneratedCallablePackBoundary(proc, boundary);
-        return entry;
+        return try proc.prependDescriptorArgMaterializations(capture_initializers.items, entry);
     }
 
     fn lowerGeneratedInterpolationStepInto(
@@ -7589,7 +7591,9 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const worker = self.plan.workers.items[@intFromEnum(worker_id)];
         const captures = self.plan.erasedCaptureSlice(worker.erased_captures);
-        const all_capture_values = try self.generatedCodecCaptureValues(proc, captures, capture_values);
+        var capture_initializers = std.ArrayList(ProcBodyBuilder.DescriptorArgLocal).empty;
+        defer capture_initializers.deinit(self.allocator);
+        const all_capture_values = try self.generatedCodecCaptureValues(proc, captures, capture_values, &capture_initializers);
         defer self.allocator.free(all_capture_values);
         const function = proc.functionChildrenForRep(worker.rep) orelse
             boxyLowerInvariant("generated codec callback worker was not callable");
@@ -7609,7 +7613,7 @@ const ProcedureBuilder = struct {
             boundary.next,
         );
         try self.finishGeneratedCallablePackBoundary(proc, boundary);
-        return entry;
+        return try proc.prependDescriptorArgMaterializations(capture_initializers.items, entry);
     }
 
     const GeneratedCallableAdapterBoundary = struct {
@@ -7677,6 +7681,7 @@ const ProcedureBuilder = struct {
         proc: *ProcBodyBuilder,
         captures: []const Plan.ErasedCapture,
         captured_values: []const LIR.LocalId,
+        initializers: *std.ArrayList(ProcBodyBuilder.DescriptorArgLocal),
     ) Allocator.Error![]LIR.LocalId {
         const values = try self.allocator.alloc(LIR.LocalId, captures.len);
         errdefer self.allocator.free(values);
@@ -7697,8 +7702,19 @@ const ProcedureBuilder = struct {
                 .hidden_desc => {
                     const desc = capture.desc orelse
                         boxyLowerInvariant("generated codec callable descriptor capture had no requirement");
-                    value.* = proc.descriptorLocalForRequirementAndRepOrNull(desc, capture.rep) orelse
-                        boxyLowerInvariant("generated codec callable descriptor capture had no bound input");
+                    if (proc.descriptorLocalForRequirementAndRepOrNull(desc, capture.rep)) |bound| {
+                        value.* = bound;
+                        continue;
+                    }
+                    // A descriptor this frame does not receive is fully
+                    // determined by its representation.
+                    value.* = try proc.addFrameLocal(.opaque_ptr);
+                    const materialization = try proc.descriptorMaterializationForSourceRep(capture.rep);
+                    try initializers.append(self.allocator, .{
+                        .local = value.*,
+                        .materialize = materialization.desc,
+                        .captures = materialization.captures,
+                    });
                 },
                 .hidden_dict => boxyLowerInvariant("generated codec callable unexpectedly required a dictionary capture"),
             }
@@ -7787,7 +7803,13 @@ const ProcedureBuilder = struct {
         };
         const thunk_worker = self.plan.workerForSourceType(.{ .generated_codec = thunk_source }, thunk_type) orelse
             boxyLowerInvariant("generated encoder field had no planned value thunk");
-        const field_value = try proc.addFrameLocalForRep(field.rep);
+        // A still-undetermined field's storage is its presence slot; the
+        // encoder writes the Present payload and skips a Missing field.
+        const presence = proc.presenceSlotVariants(field.rep);
+        const field_slot = try proc.addFrameLocalForRep(field.rep);
+        const present_payload = if (presence) |slot| try proc.generatedParserSingleTagPayloadLocal(slot.present) else null;
+        const field_value = if (present_payload) |payload| payload.local else field_slot;
+        const field_value_rep = if (present_payload) |payload| payload.child.rep else field.rep;
         const thunk_rep = proc.repForTypeRef(thunk_type);
         const thunk = try proc.addFrameLocalForRep(thunk_rep);
         const result = try proc.addFrameLocalForRepWithRequiredFreshDescriptor(target_rep);
@@ -7830,8 +7852,8 @@ const ProcedureBuilder = struct {
         capture_values[1] = field_value;
         @memcpy(capture_values[2..], name_captures);
         continuation = try self.packGeneratedCodecCallable(proc, thunk, thunk_rep, thunk_worker, capture_values, continuation);
-        if (field.optional_missing) {
-            const skipped = try self.lowerGeneratedEncoderRecordFieldsFrom(
+        const skipped = if (field.optional_missing or presence != null)
+            try self.lowerGeneratedEncoderRecordFieldsFrom(
                 proc,
                 source,
                 fields,
@@ -7844,15 +7866,18 @@ const ProcedureBuilder = struct {
                 target_rep,
                 target,
                 next,
-            );
-            const field_ok = proc.generatedParserTagVariant(field.rep, "Ok");
-            const field_err = proc.generatedParserTagVariant(field.rep, "Err");
+            )
+        else
+            null;
+        if (field.optional_missing) {
+            const field_ok = proc.generatedParserTagVariant(field_value_rep, "Ok");
+            const field_err = proc.generatedParserTagVariant(field_value_rep, "Err");
             const err_payload = try proc.generatedParserSingleTagPayloadLocal(field_err);
             const missing = proc.generatedParserTagVariant(err_payload.child.rep, "Missing");
             const err_dispatch = if (field.optional_null) blk: {
                 const null_variant = proc.generatedParserTagVariant(err_payload.child.rep, "Null");
                 const error_variants = [_]GeneratedParserTagVariant{ missing, null_variant };
-                const error_bodies = [_]LIR.CFStmtId{ skipped, continuation };
+                const error_bodies = [_]LIR.CFStmtId{ skipped.?, continuation };
                 const impossible = try self.result.store.addCFStmt(.runtime_error);
                 break :blk try proc.generatedParserTagDispatch(
                     err_payload.local,
@@ -7861,21 +7886,34 @@ const ProcedureBuilder = struct {
                     &error_bodies,
                     impossible,
                 );
-            } else skipped;
+            } else skipped.?;
             const err_body = try proc.generatedParserReadTagPayload(field_value, field_err, err_payload, err_dispatch);
             const optional_variants = [_]GeneratedParserTagVariant{ field_ok, field_err };
             const optional_bodies = [_]LIR.CFStmtId{ continuation, err_body };
             const impossible = try self.result.store.addCFStmt(.runtime_error);
             continuation = try proc.generatedParserTagDispatch(
                 field_value,
-                field.rep,
+                field_value_rep,
                 &optional_variants,
                 &optional_bodies,
                 impossible,
             );
         }
+        if (presence) |slot| {
+            const present_body = try proc.generatedParserReadTagPayload(field_slot, slot.present, present_payload.?, continuation);
+            const slot_variants = [_]GeneratedParserTagVariant{ slot.present, slot.missing };
+            const slot_bodies = [_]LIR.CFStmtId{ present_body, skipped.? };
+            const impossible = try self.result.store.addCFStmt(.runtime_error);
+            continuation = try proc.generatedParserTagDispatch(
+                field_slot,
+                field.rep,
+                &slot_variants,
+                &slot_bodies,
+                impossible,
+            );
+        }
         return try self.result.store.addCFStmt(.{ .assign_ref = .{
-            .target = field_value,
+            .target = field_slot,
             .op = .{ .field = .{ .source = record_value, .field_idx = @intCast(field.index) } },
             .next = continuation,
         } });
@@ -11504,7 +11542,9 @@ const ProcedureBuilder = struct {
         if (field_capture_index != captured_values.len) {
             boxyLowerInvariant("generated parser capture plan did not fill runtime capture layout");
         }
-        const capture_fields = try self.generatedCodecCaptureValues(proc, captures, captured_values);
+        var capture_initializers = std.ArrayList(ProcBodyBuilder.DescriptorArgLocal).empty;
+        defer capture_initializers.deinit(self.allocator);
+        const capture_fields = try self.generatedCodecCaptureValues(proc, captures, captured_values, &capture_initializers);
         defer self.allocator.free(capture_fields);
 
         const boundary = try self.generatedCallablePackBoundary(
@@ -11526,6 +11566,7 @@ const ProcedureBuilder = struct {
             boundary.next,
         );
         try self.finishGeneratedCallablePackBoundary(proc, boundary);
+        continuation = try proc.prependDescriptorArgMaterializations(capture_initializers.items, continuation);
         var planned_capture_index = captured_values.len;
         var plan_index = self.plan.generated_parser_field_captures.items.len;
         while (plan_index > 0) {
@@ -11692,7 +11733,7 @@ const ProcedureBuilder = struct {
             if (function.arg_count != worker_fn.arg_count) boxyLowerInvariant("host wrapper argument arity mismatch");
             for (host_children[function.args_start..][0..function.arg_count], worker_children[worker_fn.args_start..][0..worker_fn.arg_count], 0..) |host_arg, worker_arg, index| {
                 const arg = try proc.addArgLocalForRep(host_arg.rep);
-                call_locals[index] = if (try proc.callableArgumentBoundaryIsDirect(worker_arg.rep, host_arg.rep)) arg else try proc.addFrameLocalForRep(worker_arg.rep);
+                call_locals[index] = if (try proc.callableValueBoundaryIsDirect(worker_arg.rep, host_arg.rep)) arg else try proc.addFrameLocalForRep(worker_arg.rep);
             }
         }
         for (call_locals[host_args.len..]) |*local| local.* = try proc.addFrameLocal(.opaque_ptr);
@@ -14452,6 +14493,28 @@ const ProcBodyBuilder = struct {
             found = call;
         }
         return found orelse boxyLowerInvariant("generated codec body referenced an unplanned method call");
+    }
+
+    const PresenceSlotVariants = struct {
+        present: ProcedureBuilder.GeneratedParserTagVariant,
+        missing: ProcedureBuilder.GeneratedParserTagVariant,
+    };
+
+    /// The Present and Missing variants of a record field's presence slot,
+    /// selected by the slot's explicit Present discriminant.
+    fn presenceSlotVariants(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?PresenceSlotVariants {
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        const present: u16 = rep.presence_slot_present_discriminant orelse return null;
+        const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
+        if (variants.len != 2 or present >= variants.len) {
+            boxyLowerInvariant("presence slot did not have exactly two variants");
+        }
+        const missing: u16 = if (present == 0) 1 else 0;
+        if (variants[missing].payloads.len != 0) boxyLowerInvariant("presence slot Missing variant carried a payload");
+        return .{
+            .present = .{ .boundary_rep = rep_id, .tag_rep = rep_id, .owner_rep = rep_id, .index = present, .variant = variants[present] },
+            .missing = .{ .boundary_rep = rep_id, .tag_rep = rep_id, .owner_rep = rep_id, .index = missing, .variant = variants[missing] },
+        };
     }
 
     fn generatedParserTagVariant(
@@ -31611,10 +31674,10 @@ const ProcBodyBuilder = struct {
         const target_args = self.functionArgChildren(target_function);
         const source_args = self.functionArgChildren(source_function);
         for (target_args, source_args) |target_arg, source_arg| {
-            if (!try self.callableArgumentBoundaryIsDirect(target_arg.rep, source_arg.rep)) return true;
+            if (!try self.callableValueBoundaryIsDirect(target_arg.rep, source_arg.rep)) return true;
         }
 
-        return !self.representationBoundaryIsDirect(target_function.ret, source_function.ret);
+        return !try self.callableValueBoundaryIsDirect(target_function.ret, source_function.ret);
     }
 
     fn repsUseSameDynamicBoxStorage(
@@ -31663,7 +31726,12 @@ const ProcBodyBuilder = struct {
             self.descriptorStorageRep(target_rep) == self.descriptorStorageRep(source_rep);
     }
 
-    fn callableArgumentBoundaryIsDirect(
+    /// Whether a value crossing between a callable's two sides needs no
+    /// conversion. An argument, or a function-typed result that is itself
+    /// called later, reaches an erased call, which passes each argument's
+    /// descriptors keyed by that argument's descriptor positions, so the two
+    /// sides must agree on them.
+    fn callableValueBoundaryIsDirect(
         self: *ProcBodyBuilder,
         target_rep: Plan.TypeRepId,
         source_rep: Plan.TypeRepId,
@@ -31671,8 +31739,6 @@ const ProcBodyBuilder = struct {
         if (!self.representationBoundaryIsDirect(target_rep, source_rep)) return false;
         if (target_rep == source_rep) return true;
         if (!self.repIsFullyConcrete(target_rep) or !self.repIsFullyConcrete(source_rep)) return false;
-        // An erased call passes each argument's descriptors keyed by that
-        // argument's descriptor positions, so the two sides must agree on them.
         return !try self.repHasHiddenDescriptorParams(target_rep) and
             !try self.repHasHiddenDescriptorParams(source_rep);
     }
@@ -31792,7 +31858,7 @@ const ProcBodyBuilder = struct {
         const call_args = try self.parent.allocator.alloc(LIR.LocalId, source_function.arg_count);
         defer self.parent.allocator.free(call_args);
         for (source_args, target_args, target_arg_locals, call_args) |source_arg, target_arg, target_arg_local, *call_arg| {
-            call_arg.* = if (try adapter_proc.callableArgumentBoundaryIsDirect(source_arg.rep, target_arg.rep))
+            call_arg.* = if (try adapter_proc.callableValueBoundaryIsDirect(source_arg.rep, target_arg.rep))
                 target_arg_local
             else
                 try adapter_proc.addFrameBoundaryTargetLocalForRep(source_arg.rep);
