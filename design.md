@@ -10179,6 +10179,13 @@ have signature variables reachable only through its method constraint, so
 restoration relates selected target and checked structural signatures before
 those variables may be sealed. Receiver reachability controls which checked
 instantiation payload is retained, not whether its signature relation applies.
+A checked instantiation supplies the identities of every substitution slot;
+it does not necessarily constrain signature-only variables to the selected
+method's complete result. In particular, taking a constrained function as a
+value preserves its open method-result rows until specialization. After
+materializing a checked edge's complete evidence vector, Monotype relates its
+target and checked structural signatures over that exact substitution before
+specialization identity or interface replay can freeze it.
 Descendant contexts then use ordinary live bindings; decoding stored evidence
 never attaches graph cells to durable data.
 An initializer template with no requirements derives no method evidence. A use

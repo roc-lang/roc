@@ -43746,10 +43746,10 @@ const BodyContext = struct {
         // selected target to its constraint binds every quantified variable
         // only that callable reaches. Each such binding can resolve another
         // requirement's receiver, so the derivation runs to a fixpoint before
-        // any receiver is judged open. A checked instantiation record already
-        // binds every slot, hidden ones included, so its edge relates no
-        // target callable; nor does a requirement the site recorded as
-        // structural, unreachable, or rejected. A forwarded structural codec
+        // any receiver is judged open. A checked instantiation record binds
+        // slot identities, hidden ones included. Its complete checked evidence
+        // contract is related below after materialization, rather than using
+        // these intermediate target selections. A forwarded structural codec
         // carries its checked callable, which can reach variables its receiver
         // does not (a parser's error row), so it is related like a target.
         // The context is created by the first relation.
@@ -43834,6 +43834,12 @@ const BodyContext = struct {
                 },
                 .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
             };
+        }
+        if (site_refs != null) {
+            var checked_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, schema.view, self.method_scope, self.owner_template, self.graph, self.draft);
+            defer checked_ctx.deinit();
+            try checked_ctx.seedSubstitution(schema, subst);
+            try self.relateMaterializedEvidenceConstraints(&checked_ctx, schema, out);
         }
         return out;
     }
@@ -44965,6 +44971,30 @@ const BodyContext = struct {
         };
     }
 
+    fn relateMaterializedEvidenceConstraints(
+        self: *BodyContext,
+        target_ctx: *BodyContext,
+        schema: SchemeRequirements,
+        contract: []const SpecEvidence,
+    ) Allocator.Error!void {
+        if (contract.len != schema.params.len) {
+            Common.invariant("materialized target contract length differed from its scheme requirements");
+        }
+        for (schema.params, contract) |param, entry| {
+            // Even a callable-root receiver's method can bind variables
+            // reached only through its constraint signature. Every
+            // selected target supplies that relation exactly once;
+            // selection itself needs no graph-driven fixpoint here.
+            switch (entry) {
+                .target => |target| try self.relateTargetToConstraint(target, target_ctx, param),
+                .structural => |structural| if (structural.checked) |checked_structural| {
+                    try self.relateStructuralEvidenceToConstraint(checked_structural, target_ctx, param);
+                },
+                .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+            }
+        }
+    }
+
     /// The substitution and evidence a target scheme receives from a request
     /// its root was related to in `target_ctx`.
     fn deriveTargetEdge(
@@ -44990,22 +45020,7 @@ const BodyContext = struct {
                 .body_lowering,
             ),
             .materialized_contract => |contract| blk: {
-                if (contract.len != schema.params.len) {
-                    Common.invariant("materialized target contract length differed from its scheme requirements");
-                }
-                for (schema.params, contract) |param, entry| {
-                    // Even a callable-root receiver's method can bind variables
-                    // reached only through its constraint signature. Every
-                    // selected target supplies that relation exactly once;
-                    // selection itself needs no graph-driven fixpoint here.
-                    switch (entry) {
-                        .target => |target| try self.relateTargetToConstraint(target, target_ctx, param),
-                        .structural => |structural| if (structural.checked) |checked_structural| {
-                            try self.relateStructuralEvidenceToConstraint(checked_structural, target_ctx, param);
-                        },
-                        .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
-                    }
-                }
+                try self.relateMaterializedEvidenceConstraints(target_ctx, schema, contract);
                 // Reuse is authorized by the checked dispatch plan. Independent
                 // callables without that proof use .derive instead. This contract
                 // already supplies every target and terminal verdict, including
