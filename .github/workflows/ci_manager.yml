@@ -45,6 +45,10 @@ jobs:
     outputs:
       heavy: ${{ steps.classify.outputs.heavy }}
     steps:
+      # Needed to find the Markdown files that Roc sources import (see below).
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+
       # The MiniCI lanes run unless every changed path is on the docs-only
       # allowlist below. An allowlist of what is safe to skip fails safe: a new
       # code path, script, or config file runs the lanes until someone decides
@@ -60,6 +64,19 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Markdown files that Roc sources import (`import "x.md" as x : Str`)
+          # are test inputs, not prose: e.g. test/echo/all_syntax_test.roc
+          # imports the root README.md. Paths are relative to the repo root.
+          # `git grep` exits 1 when nothing matches, which is not an error here.
+          consumed_md="$({ git grep -l -E '^[[:space:]]*import "[^"]+\.md"' -- '*.roc' || [ "$?" -eq 1 ]; } |
+            while IFS= read -r roc; do
+              sed -nE 's/^[[:space:]]*import "([^"]+\.md)".*/\1/p' "$roc" |
+                while IFS= read -r rel; do
+                  realpath -m --relative-to=. "$(dirname "$roc")/$rel"
+                done
+            done | sort -u)"
+          echo "Markdown imported by Roc sources: ${consumed_md:-none}"
+
           # Paths whose content no MiniCI lane builds, runs, or reads.
           # `static-checks` (tidy, actionlint, ...) still runs on every PR, so
           # these files are checked there.
@@ -67,10 +84,10 @@ jobs:
             case "$1" in
               # Snapshot `.md` files are test inputs and expected outputs.
               test/*) return 1 ;;
-              # Prose. Nothing embeds or tests Markdown outside test/ (the
-              # langref under docs/ is read only by `roc docs --with-lang-ref`,
-              # which no test runs).
-              *.md) return 0 ;;
+              # Prose, unless a Roc source imports it. Nothing else embeds or
+              # tests Markdown outside test/ (the langref under docs/ is read
+              # only by `roc docs --with-lang-ref`, which no test runs).
+              *.md) ! grep -Fxq -- "$1" <<< "$consumed_md" ;;
               LICENSE | authors | .reuse | .rules) return 0 ;;
               # Configs read only by alwayscheck.yml / markdown_link_check.yml.
               typos.toml | mlc_config.json) return 0 ;;
