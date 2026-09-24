@@ -4418,6 +4418,21 @@ as a fallback. Stored generated callables retain their generated worker kind
 and compiler-assigned capture identities so restoration rebuilds the same
 ordinary Boxy callable from `ConstStore` data.
 
+Boxy generated encoders call the same format methods, with the same callback
+protocols, as the checked derivation contract names. A tag union of any
+variant arity calls `encode_tag` with a payload-items callback. `Dict`
+calls `encode_dict`; its entry writer receives the container state and two
+thunks, and the key thunk calls the format's key protocol (`encode_key_start`,
+`encode_key_str`, or the scalar's `encode_key_<scalar>`). `Set` calls
+`encode_list` with `Set` as the call subject. A record field stored in a
+presence slot is written from its `Present` payload, and a `Missing` slot is
+skipped. A generated codec constructor keeps its checked callable
+representation. When the runtime worker it returns has a different
+representation (for example, a presence slot where the constructor's return
+names an inline required field), the constructor's pack boundary adapts the
+runtime worker to the checked return. Planning never rewrites the
+constructor's representation to match its runtime worker.
+
 Generated workers follow the same descriptor-production contract as source
 workers. Planning assigns the exact descriptor source for every descriptor-
 bearing output, including branch results, parser result tags, record fields,
@@ -12211,7 +12226,7 @@ instantiation describes only one call's boundary.
 For an ordinary instantiated lookup, the checked call-site substitution names
 its callee scheme's exact type-variable instantiations. A generalized
 expression-position function stored into a containing value (a record, tuple,
-list, tag, or nominal) is instantiated there as well: its site publishes the
+list, tag, or nominal) is instantiated there as well: its site records the
 same substitution for the function's own scheme together with the checked type
 of the instance the containing value stores, and Boxy plans that use at the
 instance. These bindings take
@@ -12326,6 +12341,38 @@ argument descriptor, a result descriptor, or another explicitly named planned
 value. The lowerer does not recursively compare worker and call representation
 trees, match children by source type or display name, or search row extensions
 to reconstruct these sources.
+
+A hidden descriptor whose worker parameter is a bare formal takes its source
+from the planned worker position. When that position is the whole operand, the
+source is the operand's own descriptor. When it is a position inside the
+operand, the source is a descriptor read at the planned `source_operand_rep`
+path. Otherwise the source is the caller frame's descriptor for the call
+representation. A compound parameter's descriptor is its worker representation
+described under the call's bindings. Evidence-only descriptors (worker scheme
+variables absent from the signature) take the checked call-site substitution
+wherever it names their variable. Hidden descriptors are materialized before
+argument adaptation, and the adaptation is lowered with those bindings active.
+
+An erased callable's hidden-descriptor captures come only from the use's
+planned hidden descriptor arguments. Each capture initializer is materialized
+from its planned source before the capture field locals are bound, and capture
+field locals are never registered in the enclosing frame's descriptor table.
+A callable adapter materializes its captures at the call boundary's
+substitution: while argument adaptation or a dictionary-argument adapter is
+lowered, the boundary's hidden descriptor arguments map each worker
+representation to its call representation. A callable value boundary between
+two distinct representations is direct only when neither side takes hidden
+descriptor parameters. Otherwise an adapter makes both sides agree on the
+erased-call descriptor keys, for arguments and function-typed results alike.
+A generated codec callable whose enclosing frame does not receive one of its
+descriptor captures materializes that capture from its representation.
+
+A custom `to_inspect` slot reached through a descriptor takes its hidden
+descriptors and argument descriptors from the inspected descriptor's own
+`inspect_hidden_descs` and `inspect_arg_descs` spans. The inspected
+representation itself maps to the descriptor being built. Descriptor template
+capture sets include both spans, so every local an inspect span names is
+supplied to the materialization.
 
 Every non-identity representation boundary also has a planned adapter request.
 After layouts are committed, the adapter builder resolves each request to an

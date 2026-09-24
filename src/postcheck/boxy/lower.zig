@@ -26734,41 +26734,6 @@ const ProcBodyBuilder = struct {
         return self.parent.tagPayloadStorageDescRepForLayout(rep_id, storage_layout, force);
     }
 
-    fn descriptorLocalForMatchingSourceArg(
-        self: *ProcBodyBuilder,
-        hidden_arg: Plan.DirectCallHiddenDescriptorArg,
-        arg_types: []const Plan.CheckedTypeIdentity,
-        source_args: []const LIR.LocalId,
-        pre_arg_descriptor_initializers: *std.ArrayList(DescriptorArgLocal),
-    ) Allocator.Error!?DescriptorArgLocal {
-        if (!self.directCallHiddenDescriptorUsesCallShape(hidden_arg)) return null;
-        for (arg_types, source_args) |arg_type, source| {
-            if (!planTypeRefEql(arg_type, hidden_arg.source_type)) continue;
-            const arg_rep = self.repForTypeRef(arg_type);
-            const identity_arg_rep = self.descriptorStorageRep(arg_rep);
-            const identity_hidden_rep = self.descriptorStorageRep(hidden_arg.rep);
-            if (identity_arg_rep != identity_hidden_rep) continue;
-            const desc_ref = self.parent.result.store.getLocal(source).boxy_desc orelse continue;
-            if (desc_ref.localOrNull()) |desc_local| {
-                if (!self.localIsReadOnlyDescriptorInput(desc_local)) {
-                    const materialization = try self.descriptorMaterializationForSourceRep(identity_arg_rep);
-                    try pre_arg_descriptor_initializers.append(self.parent.allocator, .{
-                        .local = desc_local,
-                        .materialize = materialization.desc,
-                        .captures = materialization.captures,
-                    });
-                }
-                return .{ .local = desc_local, .from_source_value = true };
-            }
-            return .{
-                .local = try self.addFrameLocal(.opaque_ptr),
-                .materialize = desc_ref,
-                .from_source_value = true,
-            };
-        }
-        return null;
-    }
-
     fn directCallResultDescriptorRef(
         self: *ProcBodyBuilder,
         result_rep: Plan.TypeRepId,
