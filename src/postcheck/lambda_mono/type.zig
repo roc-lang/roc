@@ -510,7 +510,7 @@ test "Lambda Mono digest terminates recursive erased captures independent of all
         store.set(callable, .{ .erased_fn = .{
             .source_fn_ty = .{ .bytes = @splat(13) },
             .members = try store.addFnVariants(&.{.{
-                .id = @enumFromInt(0),
+                .id = undefined, // Assigned by addFnVariants.
                 .source = @enumFromInt(8),
                 .target = @enumFromInt(9),
                 .capture_ty = capture,
@@ -540,7 +540,7 @@ test "Lambda Mono digest distinguishes recursive edges and callable targets" {
     var digests: [2]names.TypeDigest = undefined;
     for (&digests, 0..) |*digest, i| {
         store.set(root, .{ .callable = try store.addFnVariants(&.{.{
-            .id = @enumFromInt(0),
+            .id = undefined, // Assigned by addFnVariants.
             .source = @enumFromInt(1),
             .target = @enumFromInt(i),
             .capture_ty = root,
