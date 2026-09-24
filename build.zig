@@ -3579,32 +3579,16 @@ pub fn build(b: *std.Build) void {
     wasm32_builtins_obj.root_module.addImport("shim_io", b.addModule("shim_io_wasm32_eval", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
-    wasm32_builtins_obj.bundle_compiler_rt = false;
+    // The eval/REPL wasm pipeline links this one relocatable object, so it
+    // carries compiler-rt. The compiler merges it (`-fcompiler-rt` on an
+    // object output), which keeps the step's cache identity independent of
+    // where the Zig toolchain is installed; a `zig wasm-ld -r` Run step would
+    // hash the absolute `zig` path and miss in every CI job.
+    wasm32_builtins_obj.bundle_compiler_rt = true;
     configureBackend(wasm32_builtins_obj, wasm32_resolved_target);
 
-    const zig_lib_path = b.fmt("{f}", .{b.graph.zig_lib_directory});
-    const wasm32_compiler_rt_obj = b.addObject(.{
-        .name = "compiler_rt_wasm32_eval",
-        .root_module = b.createModule(.{
-            .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ zig_lib_path, "compiler_rt.zig" }) },
-            .target = wasm32_resolved_target,
-            .optimize = optimize,
-            .strip = strip,
-            .omit_frame_pointer = omit_frame_pointer,
-            .pic = true,
-        }),
-    });
-    wasm32_compiler_rt_obj.bundle_compiler_rt = false;
-    configureBackend(wasm32_compiler_rt_obj, wasm32_resolved_target);
-
-    const link_wasm32_builtins = b.addSystemCommand(&.{ b.graph.zig_exe, "wasm-ld", "-r" });
-    link_wasm32_builtins.addArg("-o");
-    const merged_wasm32_builtins = link_wasm32_builtins.addOutputFileArg("roc_builtins.o");
-    link_wasm32_builtins.addFileArg(wasm32_builtins_obj.getEmittedBin());
-    link_wasm32_builtins.addFileArg(wasm32_compiler_rt_obj.getEmittedBin());
-
     const wasm32_builtins_files = b.addWriteFiles();
-    _ = wasm32_builtins_files.addCopyFile(merged_wasm32_builtins, "roc_builtins.o");
+    _ = wasm32_builtins_files.addCopyFile(wasm32_builtins_obj.getEmittedBin(), "roc_builtins.o");
     const wasm32_builtins_module = b.createModule(.{
         .root_source_file = wasm32_builtins_files.add("wasm32_builtins.zig",
             \\pub const bytes = @embedFile("roc_builtins.o");
@@ -8237,8 +8221,10 @@ fn addMainExe(
             .{ .root_source_file = b.path("src/shim_io.zig") },
         ));
         // Non-extern (RocOps-ABI) object is not linked into executables; only
-        // wasm32 merges compiler-rt below for the eval/REPL pipeline.
-        cross_builtins_obj.bundle_compiler_rt = false;
+        // wasm32 carries compiler-rt, for the eval/REPL pipeline. The compiler
+        // merges it into the object output, so this step's cache identity does
+        // not depend on where the Zig toolchain is installed.
+        cross_builtins_obj.bundle_compiler_rt = cross_is_wasm;
         configureBackend(cross_builtins_obj, cross_resolved_target);
 
         const cross_wasm32_compiler_rt_obj: ?*Step.Compile = if (cross_is_wasm) blk: {
@@ -8259,14 +8245,7 @@ fn addMainExe(
             break :blk compiler_rt_obj;
         } else null;
 
-        const cross_builtins_bin = if (cross_wasm32_compiler_rt_obj) |compiler_rt_obj| blk: {
-            const link_cross_wasm32_builtins = b.addSystemCommand(&.{ b.graph.zig_exe, "wasm-ld", "-r" });
-            link_cross_wasm32_builtins.addArg("-o");
-            const merged_cross_wasm32_builtins = link_cross_wasm32_builtins.addOutputFileArg("roc_builtins.o");
-            link_cross_wasm32_builtins.addFileArg(cross_builtins_obj.getEmittedBin());
-            link_cross_wasm32_builtins.addFileArg(compiler_rt_obj.getEmittedBin());
-            break :blk merged_cross_wasm32_builtins;
-        } else cross_builtins_obj.getEmittedBin();
+        const cross_builtins_bin = cross_builtins_obj.getEmittedBin();
 
         // Copy builtins object for this target for embedding into CLI
         // Used by `roc build --opt=dev --target=X` to link the app object with builtins
