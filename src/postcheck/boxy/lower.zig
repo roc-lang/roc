@@ -3392,8 +3392,6 @@ const ProcedureBuilder = struct {
         return desc_id;
     }
 
-
-
     fn effectiveStaticDescriptorSource(
         self: *const ProcedureBuilder,
         worker_rep_id: Plan.TypeRepId,
@@ -28029,7 +28027,6 @@ const ProcBodyBuilder = struct {
             .materialize = target_desc_info.materialize,
         };
     }
-
 
     fn prepareConstructedFieldDescriptorLocal(
         self: *ProcBodyBuilder,
