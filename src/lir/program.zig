@@ -375,8 +375,9 @@ pub const BoxyMethodSlot = struct {
 pub const BoxyDict = struct {
     debug_dispatch_plan: ?dispatch.StaticDispatchPlanId = null,
     method_slots: BoxySpan = .{},
-    hidden_descs: BoxySpan = .{},
-    nested_dicts: BoxySpan = .{},
+    /// The method slots name frame locals (`.local` descriptor and dictionary
+    /// references); an `assign_boxy_dict_ref` with captures materializes it.
+    template: bool = false,
 };
 
 /// Tag variant in a constant storage plan.

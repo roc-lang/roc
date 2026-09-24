@@ -82,6 +82,47 @@ pub fn makeRuntimeBoxySpan(start: usize, len: usize) LIR.BoxySpan {
     return .{ .start = runtimeBoxySpanTag | @as(u32, @intCast(start)), .len = @intCast(len) };
 }
 
+/// One template dictionary together with the frame values its captures had
+/// when it was materialized.
+const DictCopyKey = struct {
+    dict_id: u32,
+    capture_values: []const usize,
+};
+
+const DictCopyKeyContext = struct {
+    pub fn hash(_: DictCopyKeyContext, key: DictCopyKey) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, key.dict_id);
+        std.hash.autoHash(&hasher, key.capture_values.len);
+        for (key.capture_values) |value| std.hash.autoHash(&hasher, value);
+        return hasher.final();
+    }
+
+    pub fn eql(_: DictCopyKeyContext, a: DictCopyKey, b: DictCopyKey) bool {
+        return a.dict_id == b.dict_id and std.mem.eql(usize, a.capture_values, b.capture_values);
+    }
+};
+
+/// Dictionaries materialized from templates, and the method slots and nested
+/// dictionary references they own. Owned by the embedding execution engine.
+pub const RuntimeBoxyDicts = struct {
+    dicts: std.ArrayList(*const LirProgram.BoxyDict) = .empty,
+    /// The runtime id published for each dictionary pointer.
+    ids: std.AutoHashMapUnmanaged(usize, u32) = .empty,
+    method_slots: std.ArrayList(LirProgram.BoxyMethodSlot) = .empty,
+    dict_refs: std.ArrayList(LIR.BoxyDictRef) = .empty,
+    /// A template materialized with the same capture values is one dictionary.
+    copies: std.HashMapUnmanaged(DictCopyKey, u32, DictCopyKeyContext, 80) = .empty,
+
+    pub fn deinit(self: *RuntimeBoxyDicts, allocator: Allocator) void {
+        self.dicts.deinit(allocator);
+        self.ids.deinit(allocator);
+        self.method_slots.deinit(allocator);
+        self.dict_refs.deinit(allocator);
+        self.copies.deinit(allocator);
+    }
+};
+
 /// Identifies one source/target descriptor pair while merging an adapter graph.
 pub const AdapterDescMergeKey = struct {
     source: usize,
@@ -374,6 +415,7 @@ pub const BoxyRuntime = struct {
     runtime_boxy_tag_variants: *std.ArrayList(LirProgram.BoxyTagVariant),
     runtime_boxy_tag_payload_descs: *std.ArrayList(LirProgram.BoxyTagPayloadDesc),
     runtime_boxy_payload_steps: *std.ArrayList(LirProgram.BoxyPayloadStep),
+    runtime_boxy_dicts: *RuntimeBoxyDicts,
     roc_ops: *RocOps,
     /// Backs the runtime descriptor tables' storage.
     scratch: Allocator,
@@ -5896,11 +5938,16 @@ pub const BoxyRuntime = struct {
     }
 
     pub fn requireBoxyMethodSlots(self: *const BoxyRuntime, span: LIR.BoxySpan) []const LirProgram.BoxyMethodSlot {
-        if (runtimeBoxySpanStart(span)) |_| {
-            self.invariantFailed(
-                "LIR/interpreter invariant violated: runtime boxy method slot spans are not supported",
-                .{},
-            );
+        if (runtimeBoxySpanStart(span)) |start| {
+            const end = start + span.len;
+            const slots = self.runtime_boxy_dicts.method_slots.items;
+            if (end > slots.len) {
+                self.invariantFailed(
+                    "LIR/interpreter invariant violated: runtime boxy method slot span [{d}, {d}) exceeded runtime slot table length {d}",
+                    .{ start, end, slots.len },
+                );
+            }
+            return slots[start..end];
         }
         const start: usize = span.start;
         const end = start + span.len;
@@ -5911,6 +5958,126 @@ pub const BoxyRuntime = struct {
             );
         }
         return self.boxy_tables.method_slots[start..end];
+    }
+
+    /// The dictionary a runtime dictionary reference names.
+    pub fn requireRuntimeBoxyDict(self: *const BoxyRuntime, runtime_id: u32) Error!*const LirProgram.BoxyDict {
+        const dicts = self.runtime_boxy_dicts.dicts.items;
+        if (runtime_id >= dicts.len) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: runtime boxy dictionary id {d} exceeded runtime table length {d}",
+                .{ runtime_id, dicts.len },
+            );
+        }
+        return dicts[runtime_id];
+    }
+
+    /// Materialize template dictionary `dict_id`, whose method slots name
+    /// frame locals that `hooks` resolves. `capture_values` are those locals'
+    /// values in capture order; equal values yield the same dictionary.
+    pub fn materializeBoxyDictTemplate(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        dict_id: LIR.BoxyDictId,
+        capture_values: []const usize,
+    ) Error!*const LirProgram.BoxyDict {
+        const key = DictCopyKey{ .dict_id = @intFromEnum(dict_id), .capture_values = capture_values };
+        if (self.runtime_boxy_dicts.copies.get(key)) |runtime_id| return try self.requireRuntimeBoxyDict(runtime_id);
+
+        var copied_dicts = std.AutoHashMapUnmanaged(u32, u32){};
+        defer copied_dicts.deinit(self.scratch);
+        var copied_descs = std.AutoHashMapUnmanaged(usize, u32){};
+        defer copied_descs.deinit(self.scratch);
+        const runtime_id = try self.copyBoxyDictToRuntime(hooks, dict_id, &copied_dicts, &copied_descs);
+        const owned_values = try self.descriptor_arena.dupe(usize, capture_values);
+        try self.runtime_boxy_dicts.copies.put(self.scratch, .{
+            .dict_id = key.dict_id,
+            .capture_values = owned_values,
+        }, runtime_id);
+        return try self.requireRuntimeBoxyDict(runtime_id);
+    }
+
+    fn publishRuntimeBoxyDict(self: *const BoxyRuntime, dict: *const LirProgram.BoxyDict) Error!u32 {
+        const key = @intFromPtr(dict);
+        if (self.runtime_boxy_dicts.ids.get(key)) |existing| return existing;
+        const id: u32 = @intCast(self.runtime_boxy_dicts.dicts.items.len);
+        try self.runtime_boxy_dicts.dicts.append(self.scratch, dict);
+        try self.runtime_boxy_dicts.ids.put(self.scratch, key, id);
+        return id;
+    }
+
+    fn copyBoxyDictToRuntime(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        dict_id: LIR.BoxyDictId,
+        copied_dicts: *std.AutoHashMapUnmanaged(u32, u32),
+        copied_descs: *std.AutoHashMapUnmanaged(usize, u32),
+    ) Error!u32 {
+        if (copied_dicts.get(@intFromEnum(dict_id))) |runtime_id| return runtime_id;
+        const source = self.requireBoxyDict(dict_id);
+        const target = try self.descriptor_arena.create(LirProgram.BoxyDict);
+        target.* = .{ .debug_dispatch_plan = source.debug_dispatch_plan };
+        const runtime_id = try self.publishRuntimeBoxyDict(target);
+        try copied_dicts.put(self.scratch, @intFromEnum(dict_id), runtime_id);
+
+        const source_slots = self.requireBoxyMethodSlots(source.method_slots);
+        const start = self.runtime_boxy_dicts.method_slots.items.len;
+        // Every reserved entry is replaced by the loop below before the span is published.
+        try self.runtime_boxy_dicts.method_slots.appendNTimes(self.scratch, undefined, source_slots.len);
+        for (source_slots, 0..) |source_slot, index| {
+            var slot = source_slot;
+            // Copy before indexing the destination: nested copies append to
+            // and can reallocate the runtime tables.
+            slot.hidden_descs = try self.copyBoxyDescRefSpanToRuntime(hooks, source_slot.hidden_descs, copied_descs, false);
+            slot.nested_dicts = try self.copyBoxyDictRefSpanToRuntime(hooks, source_slot.nested_dicts, copied_dicts, copied_descs);
+            slot.adapter.arg_descs = try self.copyBoxyDescRefSpanToRuntime(hooks, source_slot.adapter.arg_descs, copied_descs, false);
+            slot.adapter.call_descs = try self.copyBoxyDescRefSpanToRuntime(hooks, source_slot.adapter.call_descs, copied_descs, false);
+            slot.adapter.ret_desc = if (source_slot.adapter.ret_desc) |ret_desc|
+                try self.copyBoxyDescRefToRuntime(hooks, ret_desc, copied_descs, false)
+            else
+                null;
+            slot.adapter.nested_dicts = try self.copyBoxyDictRefSpanToRuntime(hooks, source_slot.adapter.nested_dicts, copied_dicts, copied_descs);
+            self.runtime_boxy_dicts.method_slots.items[start + index] = slot;
+        }
+        target.method_slots = makeRuntimeBoxySpan(start, source_slots.len);
+        return runtime_id;
+    }
+
+    fn copyBoxyDictRefToRuntime(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        dict_ref: LIR.BoxyDictRef,
+        copied_dicts: *std.AutoHashMapUnmanaged(u32, u32),
+        copied_descs: *std.AutoHashMapUnmanaged(usize, u32),
+    ) Error!LIR.BoxyDictRef {
+        return switch (dict_ref) {
+            .static => |dict_id| if (self.requireBoxyDict(dict_id).template)
+                .{ .runtime = try self.copyBoxyDictToRuntime(hooks, dict_id, copied_dicts, copied_descs) }
+            else
+                dict_ref,
+            .local => .{ .runtime = try self.publishRuntimeBoxyDict(try hooks.resolveDictRef(dict_ref)) },
+            .runtime => dict_ref,
+        };
+    }
+
+    fn copyBoxyDictRefSpanToRuntime(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        span: LIR.BoxySpan,
+        copied_dicts: *std.AutoHashMapUnmanaged(u32, u32),
+        copied_descs: *std.AutoHashMapUnmanaged(usize, u32),
+    ) Error!LIR.BoxySpan {
+        if (runtimeBoxySpanStart(span) != null) return span;
+        const source_refs = self.requireBoxyDictRefs(span);
+        if (source_refs.len == 0) return .{};
+        const start = self.runtime_boxy_dicts.dict_refs.items.len;
+        // Every reserved entry is replaced by the loop below before the span is published.
+        try self.runtime_boxy_dicts.dict_refs.appendNTimes(self.scratch, undefined, source_refs.len);
+        for (source_refs, 0..) |source_ref, index| {
+            const copied_ref = try self.copyBoxyDictRefToRuntime(hooks, source_ref, copied_dicts, copied_descs);
+            self.runtime_boxy_dicts.dict_refs.items[start + index] = copied_ref;
+        }
+        return makeRuntimeBoxySpan(start, source_refs.len);
     }
 
     pub fn requireBoxyMethodSlot(
@@ -5928,11 +6095,16 @@ pub const BoxyRuntime = struct {
     }
 
     pub fn requireBoxyDictRefs(self: *const BoxyRuntime, span: LIR.BoxySpan) []const LIR.BoxyDictRef {
-        if (runtimeBoxySpanStart(span) != null) {
-            self.invariantFailed(
-                "LIR/interpreter invariant violated: runtime boxy dictionary-ref spans are not supported",
-                .{},
-            );
+        if (runtimeBoxySpanStart(span)) |start| {
+            const end = start + span.len;
+            const refs = self.runtime_boxy_dicts.dict_refs.items;
+            if (end > refs.len) {
+                self.invariantFailed(
+                    "LIR/interpreter invariant violated: runtime boxy dictionary-ref span [{d}, {d}) exceeded runtime table length {d}",
+                    .{ start, end, refs.len },
+                );
+            }
+            return refs[start..end];
         }
 
         const start: usize = span.start;

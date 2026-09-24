@@ -3416,6 +3416,7 @@ pub const MonoLlvmCodeGen = struct {
                 try self.materializeLocalIfDeferred(local);
                 break :blk try self.loadPointer(self.slot(local).ptr);
             },
+            .runtime => error.CompilationFailed,
         };
     }
 
@@ -3506,7 +3507,40 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitBoxyDictRef(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
         try self.prepareLocalWrite(assign.target);
-        try self.storePointer(self.slot(assign.target).ptr, try self.resolveBoxyDict(assign.dict));
+        const captures = self.store.getLocalSpan(assign.captures);
+        if (captures.len == 0) {
+            try self.storePointer(self.slot(assign.target).ptr, try self.resolveBoxyDict(assign.dict));
+            return;
+        }
+        // A template dictionary is materialized with the values of the frame
+        // locals its method slots name.
+        const dict_id = switch (assign.dict) {
+            .static => |id| id,
+            .local, .runtime => return error.CompilationFailed,
+        };
+        const ptr_ty = try self.ptrType();
+        const wip = self.wip orelse return error.CompilationFailed;
+        const ids = try self.allocEntryBlockSlot(.i32, @intCast(captures.len), LlvmBuilder.Alignment.fromByteUnits(4), "boxy_dict_capture_ids");
+        const values = try self.allocEntryBlockSlot(ptr_ty, @intCast(captures.len), self.targetPointerAlignment(), "boxy_dict_capture_values");
+        for (0..captures.len) |i| {
+            const capture = GuardedList.at(captures, i);
+            const id_ptr = try self.offsetPtr(ids, @intCast(i * 4));
+            _ = wip.store(.normal, try self.boxyInt(.i32, @intFromEnum(capture)), id_ptr, LlvmBuilder.Alignment.fromByteUnits(4)) catch return error.OutOfMemory;
+            try self.materializeLocalIfDeferred(capture);
+            try self.storePointer(try self.offsetPtr(values, @intCast(i * self.targetWordSize())), try self.loadPointer(self.slot(capture).ptr));
+        }
+        const dict = try self.callBoxy(
+            "roc_boxy_dict_copy",
+            ptr_ty,
+            &.{ .i32, ptr_ty, ptr_ty, self.ptrSizedIntType() },
+            &.{
+                try self.boxyInt(.i32, @intFromEnum(dict_id)),
+                ids,
+                values,
+                try self.boxyInt(self.ptrSizedIntType(), captures.len),
+            },
+        );
+        try self.storePointer(self.slot(assign.target).ptr, dict);
     }
 
     fn boxyOutDescPtr(self: *MonoLlvmCodeGen, name: []const u8) Error!LlvmBuilder.Value {

@@ -9302,6 +9302,7 @@ const Builder = struct {
                 &next_evidence,
                 param.dictionaries,
                 requirement_substitution,
+                caller_id,
             );
             if (evidence_source.bound_evidence) |bound| {
                 const caller = caller_id orelse boxyPlanInvariant("forwarded checked dictionary had no calling worker");
@@ -10112,6 +10113,7 @@ const Builder = struct {
         next_evidence: *usize,
         dictionaries: Span,
         requirement_substitution: Span,
+        caller_id: ?WorkerPlanId,
     ) Allocator.Error!CallableEvidenceSource {
         const entries = maybe_entries orelse return .{};
         const view = maybe_view orelse
@@ -10182,6 +10184,7 @@ const Builder = struct {
                             view,
                             view.static_dispatch_plans.nestedEvidence(node),
                             evidence_edge,
+                            caller_id,
                         ),
                     };
                 },
@@ -10266,6 +10269,7 @@ const Builder = struct {
         evidence_view: ModuleView,
         evidence: []const static_dispatch.CheckedEvidence,
         evidence_edge: DictionaryMethodEvidence.EvidenceEdge,
+        caller_id: ?WorkerPlanId,
     ) Allocator.Error!Span {
         const worker = self.plan.workers.items[@intFromEnum(worker_id)];
         if (worker.hidden_dicts.len == 0) return .{};
@@ -10282,9 +10286,11 @@ const Builder = struct {
             arg_type.* = self.plan.representations.items[@intFromEnum(child.rep)].source_type;
         }
         const ret_type = self.plan.representations.items[@intFromEnum(function.ret)].source_type;
+        // A nested dictionary the checker forwards from a scheme requirement
+        // is the dictionary the frame building this one holds for it.
         return try self.materializeWorkerCallHiddenDictionaryArgsWithEvidence(
             worker_id,
-            null,
+            caller_id,
             arg_types,
             ret_type,
             evidence_view,

@@ -178,10 +178,13 @@ pub const BoxyDescRef = union(enum) {
 pub const BoxyDictRef = union(enum) {
     static: BoxyDictId,
     local: LocalId,
+    /// A dictionary the runtime materialized from a template; only runtime
+    /// tables hold it.
+    runtime: u32,
 
     pub fn localOrNull(self: BoxyDictRef) ?LocalId {
         return switch (self) {
-            .static => null,
+            .static, .runtime => null,
             .local => |local| local,
         };
     }
@@ -912,6 +915,9 @@ pub const CFStmt = union(enum) {
     assign_boxy_dict_ref: struct {
         target: LocalId,
         dict: BoxyDictRef,
+        /// The frame locals a template dictionary's method slots name; the
+        /// assignment materializes the template with their values.
+        captures: LocalSpan = .{ .start = 0, .len = 0 },
         next: CFStmtId,
     },
     assign_boxy_box: struct {
