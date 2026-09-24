@@ -189,9 +189,12 @@ jobs:
         shell: bash
         run: '"$RUNNER_TEMP/actionlint" -color'
 
-  # Checks that used to run only nightly. Kept out of `static-checks` because
-  # they compile the whole compiler, which would delay the macOS and Windows
-  # lanes that wait on `static-checks`.
+  # Keeps the fuzz and Tracy build configurations compiling on every PR (this
+  # used to run only nightly). Kept out of `static-checks` because it analyses
+  # the whole compiler, which would delay the macOS and Windows lanes that wait
+  # on `static-checks`. The 32-bit `-Dno-bin` checks stay nightly-only
+  # (ci_zig.yml `zig-cross-compile`): analysing `roc` for a 32-bit target peaks
+  # around 15 GB, too close to a standard runner's 16 GB to gate PRs on.
   linux-extra-checks:
     needs: check-changes
     if: needs.check-changes.outputs.heavy == 'true'
@@ -215,18 +218,7 @@ jobs:
           restore-keys: |
             zig-deps-${{ runner.os }}-${{ runner.arch }}-
 
-      # Semantic analysis of the whole compiler for the 32-bit targets, so a
-      # usize/u64 mismatch fails the PR instead of the nightly.
-      - name: Check the compiler for x86-linux-musl
-        run: zig build -Dno-bin -Dtarget=x86-linux-musl
-
-      # Each step below also runs when an earlier one failed.
-      - name: Check the compiler for arm-linux-musleabihf
-        if: ${{ !cancelled() }}
-        run: zig build -Dno-bin -Dtarget=arm-linux-musleabihf
-
       - name: Checkout Tracy
-        if: ${{ !cancelled() }}
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
         with:
           path: tracy
@@ -235,16 +227,7 @@ jobs:
 
       # Keeps the fuzz and Tracy build configurations compiling.
       - name: Check the fuzz and Tracy configurations
-        if: ${{ !cancelled() }}
         run: zig build -Dno-bin -Dfuzz -Dtracy=./tracy
-
-      - name: Run dedicated REPL WebAssembly tests
-        if: ${{ !cancelled() }}
-        run: zig build run-test-repl-wasm
-
-      - name: Run echo.wasm integration test
-        if: ${{ !cancelled() }}
-        run: zig build run-test-echo-wasm
 
   # One build job per OS, so each OS's shards need only that OS's build and a
   # slow or queued runner on one OS never delays another OS's tests. The three
@@ -412,14 +395,17 @@ jobs:
             valgrind: true
             shim_archive: true
             llvm_float_bits: false
+            web_wasm: false
           - minici_shard: linux-eval
             valgrind: false
             shim_archive: false
             llvm_float_bits: true
+            web_wasm: true
           - minici_shard: linux-harness
             valgrind: false
             shim_archive: false
             llvm_float_bits: false
+            web_wasm: false
     steps: &minici_shard_steps
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
@@ -484,6 +470,17 @@ jobs:
       - name: Check exact float bits with LLVM
         if: matrix.llvm_float_bits
         run: zig build run-test-eval -- --llvm --threads 1 --filter "exact bits agree across backends"
+
+      # The REPL and echo WebAssembly modules are built by `build-ci` (its web
+      # step), so these reuse the artifact instead of compiling cold. Used to
+      # run only nightly.
+      - name: Run dedicated REPL WebAssembly tests
+        if: matrix.web_wasm
+        run: zig build run-test-repl-wasm
+
+      - name: Run echo.wasm integration test
+        if: matrix.web_wasm
+        run: zig build run-test-echo-wasm
 
       # `.zig-cache` doubles as Zig's global cache, its local cache, and the
       # build temp dir. It is restored from the MiniCI build artifact, so the
@@ -577,10 +574,12 @@ jobs:
             valgrind: false
             shim_archive: false
             llvm_float_bits: true
+            web_wasm: false
           - minici_shard: macos-harness
             valgrind: false
             shim_archive: false
             llvm_float_bits: false
+            web_wasm: false
     steps: *minici_shard_steps
 
   minici-windows:
@@ -598,14 +597,17 @@ jobs:
             valgrind: false
             shim_archive: false
             llvm_float_bits: false
+            web_wasm: false
           - minici_shard: windows-zig
             valgrind: false
             shim_archive: false
             llvm_float_bits: true
+            web_wasm: false
           - minici_shard: windows-harness
             valgrind: false
             shim_archive: false
             llvm_float_bits: false
+            web_wasm: false
     steps: *minici_shard_steps
 
   # No arm64 Linux lane: hosted arm64 runners lose network mid-`build-ci` at
