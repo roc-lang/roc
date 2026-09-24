@@ -8764,6 +8764,25 @@ const Builder = struct {
                 }
             }
             const param = params[hidden_index];
+            if (source_rep == null) {
+                // A descriptor collected inside an evidence dispatcher's
+                // representation sits at the same position of that
+                // dispatcher's call source.
+                if (pending.items.len != hidden_index) {
+                    boxyPlanInvariant("evidence-only worker descriptors were not planned in parameter order");
+                }
+                for (mappings) |mapping| {
+                    if (mapping.hidden_desc_index >= hidden_index) continue;
+                    const root = pending.items[mapping.hidden_desc_index];
+                    const rep = try self.operandRepAtWorkerPosition(params[mapping.hidden_desc_index].rep, param.rep, root.rep) orelse continue;
+                    if (source_rep) |existing| {
+                        if (existing != rep) boxyPlanInvariant("one evidence-only worker descriptor sat inside two evidence sources");
+                        continue;
+                    }
+                    source_type = self.plan.representations.items[@intFromEnum(rep)].source_type;
+                    source_rep = rep;
+                }
+            }
             try pending.append(self.allocator, .{
                 .worker_desc = param.desc,
                 .worker_rep = param.rep,

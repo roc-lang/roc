@@ -226,6 +226,8 @@ pub const Constants = struct {
     ///      of one type share a role.
     /// 103: A use of an annotated binding's predeclared scheme is recorded
     ///      against the binding's own scheme, never the predeclared copy.
+    /// 104: A stored nested-function use records its scheme substitution and
+    ///      the checked instance its containing value stores.
     pub const CACHE_VERSION = 104;
 };
 
