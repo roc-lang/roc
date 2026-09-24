@@ -1976,6 +1976,8 @@ pub fn compute(
             },
             .assign_boxy_dict_ref => |stmt| {
                 if (stmt.dict.localOrNull()) |local| try analysis.useWhole(current, local);
+                const captures = store.getLocalSpan(stmt.captures);
+                for (0..GuardedList.borrowLen(captures)) |i| try analysis.useWhole(current, GuardedList.at(captures, i));
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);

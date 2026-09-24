@@ -920,7 +920,8 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
         .assign_boxy_desc_ref => |a| a.target == needle or boxyDescRefReadsLocal(a.desc, needle) or
             (a.tag_residual_for != null and boxyDescRefReadsLocal(a.tag_residual_for.?, needle)) or
             spanHasLocal(store, a.captures, needle),
-        .assign_boxy_dict_ref => |a| a.target == needle or boxyDictRefReadsLocal(a.dict, needle),
+        .assign_boxy_dict_ref => |a| a.target == needle or boxyDictRefReadsLocal(a.dict, needle) or
+            spanHasLocal(store, a.captures, needle),
         .assign_boxy_box => |a| a.target == needle or a.payload == needle or
             (a.source_desc != null and boxyDescRefReadsLocal(a.source_desc.?, needle)) or
             (a.payload_desc != null and boxyDescRefReadsLocal(a.payload_desc.?, needle)),
@@ -3545,6 +3546,7 @@ const Certifier = struct {
                 .assign_boxy_dict_ref => |assign| {
                     try self.noteProcLocal(assign.target);
                     if (assign.dict.localOrNull()) |local| try self.noteProcLocal(local);
+                    try self.noteProcLocalSpan(assign.captures);
                     try stack.append(self.allocator, assign.next);
                 },
                 .assign_boxy_box => |assign| {
@@ -4081,6 +4083,10 @@ const Certifier = struct {
                 },
                 .assign_boxy_dict_ref => |assign| {
                     if (assign.dict.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    const captures = self.store.getLocalSpan(assign.captures);
+                    for (0..GuardedList.borrowLen(captures)) |index| {
+                        self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, GuardedList.at(captures, index));
+                    }
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -5094,6 +5100,10 @@ const Certifier = struct {
                 },
                 .assign_boxy_dict_ref => |assign| {
                     try self.requireBoxyDictRef(&state, assign.dict);
+                    const captures = self.store.getLocalSpan(assign.captures);
+                    for (0..GuardedList.borrowLen(captures)) |index| {
+                        _ = try self.requireLive(&state, GuardedList.at(captures, index));
+                    }
                     _ = try self.bindBoxyOwnedTarget(&state, assign.target);
                     cursor = assign.next;
                 },

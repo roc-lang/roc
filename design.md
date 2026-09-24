@@ -4418,6 +4418,33 @@ as a fallback. Stored generated callables retain their generated worker kind
 and compiler-assigned capture identities so restoration rebuilds the same
 ordinary Boxy callable from `ConstStore` data.
 
+Boxy generated encoders call the same format methods, with the same callback
+protocols, as the checked derivation contract names. A tag union of any
+variant arity calls `encode_tag` with a payload-items callback. `Dict`
+calls `encode_dict`; its entry writer receives the container state and two
+thunks, and the key thunk calls the format's key protocol (`encode_key_start`,
+`encode_key_str`, or the scalar's `encode_key_<scalar>`). `Set` calls
+`encode_list` with `Set` as the call subject. A record field stored in a
+presence slot is written from its `Present` payload, and a `Missing` slot is
+skipped. A generated codec constructor keeps its checked callable
+representation. When the runtime worker it returns has a different
+representation (for example, a presence slot where the constructor's return
+names an inline required field), the constructor's pack boundary adapts the
+runtime worker to the checked return. Planning never rewrites the
+constructor's representation to match its runtime worker.
+
+A generated parser or encoder runtime walks its contract's body shape: for a
+declaration-backed nominal that is the checker's own snapshot of the backing,
+and every call subject in the contract names that snapshot. A nominal reached
+inside the body, whether its `parser_for`/`encoder_for` is declared or
+compiler-generated, is reached through the contract's own call edge for that
+method; a generated one resolves to the checked nested derivation, so a
+recursive nominal's body calls its own constructor. A generated codec call
+whose target is a procedure carries the checked evidence edge that selected
+it, and that edge's call-site substitution binds the target scheme's
+variables when its hidden dictionaries and descriptors are planned, exactly as
+for a direct call.
+
 Generated workers follow the same descriptor-production contract as source
 workers. Planning assigns the exact descriptor source for every descriptor-
 bearing output, including branch results, parser result tags, record fields,
@@ -4632,6 +4659,18 @@ covers all type roots, including cross-root sharing. Cycles are compared as
 finite proof graphs. Source contracts remain intact for replay; specialization
 equality uses the shared identity rather than the per-use derivation index.
 
+The checker's derived-codec walk records each nominal application whose
+backing it walks together with the generated derivation that walks it. A later
+occurrence of an equal application in the same walk (a sibling field, a list
+item, or a recursive occurrence inside the application's own backing)
+records its codec call against that derivation rather than walking the backing
+again, so every structural call names a checked derivation and a recursive
+nominal's call names its own. Repeated occurrences of one subject in a body
+share a method role. The debug audit requires every call in a role to be
+proof-equivalent to the role's first call under the specialization identity's
+equality, with types compared modulo transparent aliases like the role itself;
+each occurrence's evidence nodes are distinct allocations with equal content.
+
 Monotype instantiates a generated-codec contract once at the codec boundary.
 Queued specialization contexts retain both the constructor and the explicit
 public value shape. Both participate in specialization identity. A constructor
@@ -4677,7 +4716,8 @@ call edges therefore share one specialization, while the ordinary request type
 and checked evidence still distinguish genuinely different targets. The
 grounding call index remains only activation and debug metadata. A structural
 edge that resolves to a nested derivation (a derived nominal inside a derived
-shape) activates that derivation's own contract inside the enclosing boundary,
+shape) is selected through the same role slots as every other generated call,
+and activates that derivation's own contract inside the enclosing boundary,
 and its calls keep their own checker roles and anchors, because a callee such as
 `parse_tag_union` prepares its payload calls from its anchored contract. Phase B
 emits the whole boundary through one shape-addressed plan, so the root and a
@@ -4688,6 +4728,20 @@ specialization identity for such a request is its request type, checked
 evidence, lexical context, and codec kind, not the contract or derivation that
 supplied the edges. These audits and their consumption bits are absent from
 release compiler builds.
+
+A recursive nominal's contract names its own derivation from inside its
+backing. At the active contract's own anchor shape that call is the nominal's
+reference to itself rather than a nested boundary, so preparation walks the
+backing once and a recursive occurrence it reaches again is already being
+prepared. Phase B structural helper definitions for a parser or encoder are
+addressed by the exact content of their result type: each nesting level builds
+its result from its parent's, so a recursive shape reaches the helper already
+reserved for it through a distinct but equal result type and calls it. The
+structural support checks answer a type already on their current path from
+the rest of the cycle, and the precomputed-plan walks visit each type once. A
+generated tag-union spec with no record shapes
+precomputes nothing and passes that empty plan to its payloads, whose nested
+tag unions build their own specs from it.
 
 Backed named applications keep independent main union-find classes so each
 request retains its own representation witness. An explicit checked/request or
@@ -9035,7 +9089,11 @@ applies in `lowerCheckedTypeVariable`: its numeric default when it carries a
 numeric default phase, otherwise its row default (`{}` or `[]`), otherwise the
 empty tag union. Planning records that sealed representation as explicit
 `sealed_default` data on the flex representation, so lowering reads it rather
-than re-deriving a default from the checked type. A flex variable carrying
+than re-deriving a default from the checked type. A literal's numeric default
+applies only when nothing resolves the variable, so a numeric-literal variable
+that a scheme quantifies has no sealed default: every instantiation supplies its
+type through the descriptor the scheme's uses pass, exactly as for any other
+quantified variable. A flex variable carrying
 static-dispatch constraints that a quantifying scheme would have to own has no
 sealed default, because each of those needs a dictionary only a quantifying
 scheme can supply; reaching it without a bound descriptor, like reaching an
@@ -9690,7 +9748,7 @@ Cross-job interface summaries are shared through an append-only exact-key hash
 index with atomic links. Fully initialized entries become visible with release
 stores; workers acquire links and filter by their captured entry boundary,
 which matches the type/name snapshot. Patricia branches preserve all prior
-keys when splitting; full keys and existing exact evidence/type comparisons
+keys when splitting; full keys and exact evidence/constraint comparisons
 resolve collisions. Entries and their evidence remain alive until workers have
 joined. This keeps memo reuse concurrent without exposing mutable hash-table
 storage or making results depend on completion order. Global identities are still
@@ -9874,47 +9932,64 @@ available before any dependency identity is chosen. Transitive replay reaches
 a fixed point across arbitrary wrapper depth and recursive call graphs without
 making source syntax or body-lowering order part of type meaning.
 
-Repeated open dependency requests are memoized by the complete procedure
-family (template, method scope, and checked source-function key), exact evidence
-topology, and an immutable provisional Monotype view of the function request
-after the caller-owned relations have been applied. Digests select an expected
-O(1) bucket only; exact evidence equality and exact structural type equality are
-the collision authorities. The first request computes the transitive relation
-closure. Equivalent requests retain independent graph cells while relations
-are still being produced, then independently consume the representative's
-final interface after the whole closure is known. A representative interface
-whose checked field-presence cell is still undetermined retains that explicit
-state in the provisional view; each duplicate instantiates it into fresh
-field-kind, source-value, and runtime-slot graph cells rather than sharing the
-representative or committing a slot encoding. An active exact memo entry is
-a recursive edge and joins the active representative. Requests with different
-concrete interfaces, checked source identities, method scopes, or evidence can
-never share an entry. Work is therefore proportional to relation sites plus
-unique exact provisional requests, rather than to the number of duplicate call
-paths through the same interface problem.
+Repeated dependency requests are memoized by the complete procedure family
+(template, method scope, and checked source-function key), exact evidence
+topology, and the complete open input interface. Inputs include the function
+request and the scheme substitution cells, with their sharing and checked-error
+slots. An input identity is captured when its dependency is consumed, after the
+preceding explicit relations. Applying defaults is never part of cache identity.
+Digests select buckets; exact input constraints and evidence are the collision
+authorities.
 
-Completed interface summaries are retained across bodies by that same exact
-address. The coordinator owns interned request and summary types in the
-program store; each executor lane owns a private cumulative table in its
-workspace. Frozen task inputs borrow the coordinator table read-only. Shards
-carry newly retained entries with their immutable type/name epochs, and ordered
-commit relocates both type roots before retaining the entries. Evidence is
-owned checked content. Only completed summaries cross this boundary; active
-recursive entries remain graph-local. Every hit checks exact evidence and type
-equality and instantiates fresh graph cells. Safety builds with detailed timing
-diagnostics independently expand the first sixteen coordinator hits per builder
-and compare their summaries.
+Interface summaries are immutable constraints over explicit input roots. They
+preserve unresolved variables and their defaults, row tails, variable and
+field-presence sharing, recursive topology, and producer-owned representation
+authority. Private backing producers mark their representation witness roots;
+those identities stay request-local even when the backing is empty.
+Named-instance groups retain both their backing relation and their declaration
+identity. Shared backing witnesses can connect distinct declarations in the live
+graph; capture partitions those groups by the declaration checks used by nominal
+identity queries so replay never asserts equality between distinct declarations.
+Imported finished-type witnesses remain finished after replay, preserving the prohibition
+on rewriting a finalized representation. Settled
+structure without mutable field-presence or representation evidence is interned
+directly as Monotype content, without retaining intermediate active snapshots.
+This capture does not finalize the surrounding graph or apply variable defaults.
+Settled leaves retain only their interned identities; storage for open structure
+and producer evidence is proportional to the open portion of the interface.
+Open constraints use local indices, never graph identities
+or defaulted Monotype views. Expansion
+uses an independent instantiation of the inputs so incidental caller state
+cannot enter the summary. Replaying a summary instantiates its open cells once
+per request and relates all its input roots, preserving relationships through
+scheme variables that are not reachable from the function shape.
+
+Recursive dependency components store summaries only after every member has
+contributed its relations. An active exact request joins its active interface;
+completed independent requests instantiate fresh cells. Returning from a child
+alone is not evidence that a recursive component's constraints are complete.
+
+Completed summaries are retained across bodies. The coordinator and each
+executor lane own cumulative tables. Frozen inputs borrow the coordinator table
+read-only; ordered commit relocates interned type leaves and interned names.
+Settled leaves across each completed batch share one type import and interning
+transaction. Cache insertion retains worker leaves before their transaction ends;
+coordinator leaves already belong to permanent storage and need no extra sealing.
+All open constraints and input identities are immutable owned content. Completed
+graph-local replay entries borrow their owning cache’s immutable summaries;
+temporary capture and replay mappings do not live as long as the graph. Active
+recursive entries remain graph-local. Replay must agree with fresh checked
+relation expansion, including unresolved state and relationships between roots.
 
 Digest discovery encodes each uncached node's scalar bytes once and retains
 ordered child offsets. Acyclic resolution and cyclic-group reduction replay
 those bytes with finalized child digests or group references. All scalar and
 child encodings remain byte-for-byte identical to the versioned digest format.
 
-Retaining a provisional view interns its immutable content, including explicit
-undetermined field kinds, without reading its former live graph cells. It does
-not freeze relations or replace a request's graph. Provisional and specialization
-views reuse active snapshots for resolved subtrees within the current relation
-production epoch; unresolved fringes remain independently materialized.
+Read-only provisional views remain available for finalization probes, but their
+application of defaults makes them unsuitable for interface cache keys or
+replay. Retaining interface constraints neither freezes the live graph nor
+changes its unresolved evidence.
 
 Those constraints are not a fallback mechanism and are not best-effort
 inference after checking. They are the Monotype-stage representation of checked
@@ -10135,11 +10210,12 @@ inspection clears it once before performing any lookup. Multiple mutations with
 no intervening inspection therefore do not repeatedly clear the same cache, and
 no inspection may consume an entry produced before the most recent mutation.
 
-Interface-replay memo lookup has one narrower inspection operation. It may
-materialize an unresolved request as an immutable provisional scratch view,
-applying defaults in that view only. The digest is only a bucket index; exact
-structural equality is collision authority, the scratch type is never emitted,
-and subsequent relations still act on the original graph node.
+Interface-replay memo lookup captures unresolved requests as immutable
+constraints, preserving every variable, default, and row tail. Applying defaults
+would conflate different inputs and make replay add constraints that checking
+never produced. Digests index candidates; exact constraint identity resolves
+collisions. A cached summary cannot become completed Monotype output until its
+fresh graph instantiation has completed relation production and final sealing.
 
 The only time an unresolved checked variable with an empty-tag-union row
 default may become durable `tag_union []` is final graph sealing, after every
@@ -12187,7 +12263,12 @@ declaration whose body is shared by every edge that selects it, while the edge
 instantiation describes only one call's boundary.
 
 For an ordinary instantiated lookup, the checked call-site substitution names
-its callee scheme's exact type-variable instantiations. These bindings take
+its callee scheme's exact type-variable instantiations. A generalized
+expression-position function stored into a containing value (a record, tuple,
+list, tag, or nominal) is instantiated there as well: its site records the
+same substitution for the function's own scheme together with the checked type
+of the instance the containing value stores, and Boxy plans that use at the
+instance. These bindings take
 precedence over argument pairs obtained while traversing wrappers. A wrapper
 must not replace an explicit scheme binding with a distinct checked row from
 its own callable type. Nominal declaration bindings still shadow enclosing
@@ -12299,6 +12380,53 @@ argument descriptor, a result descriptor, or another explicitly named planned
 value. The lowerer does not recursively compare worker and call representation
 trees, match children by source type or display name, or search row extensions
 to reconstruct these sources.
+
+A hidden descriptor whose worker parameter is a bare formal takes its source
+from the planned worker position. When that position is the whole operand, the
+source is the operand's own descriptor. When it is a position inside the
+operand, the source is a descriptor read at the planned `source_operand_rep`
+path. Otherwise the source is the caller frame's descriptor for the call
+representation. A compound parameter's descriptor is its worker representation
+described under the call's bindings. Evidence-only descriptors (worker scheme
+variables absent from the signature) take the checked call-site substitution
+wherever it names their variable. Hidden descriptors are materialized before
+argument adaptation, and the adaptation is lowered with those bindings active.
+
+An erased callable's hidden-descriptor captures come only from the use's
+planned hidden descriptor arguments. Each capture initializer is materialized
+from its planned source before the capture field locals are bound, and capture
+field locals are never registered in the enclosing frame's descriptor table.
+A callable adapter materializes its captures at the call boundary's
+substitution: while argument adaptation or a dictionary-argument adapter is
+lowered, the boundary's hidden descriptor arguments map each worker
+representation to its call representation. A callable value boundary between
+two distinct representations is direct only when neither side takes hidden
+descriptor parameters. Otherwise an adapter makes both sides agree on the
+erased-call descriptor keys, for arguments and function-typed results alike.
+A generated codec callable whose enclosing frame does not receive one of its
+descriptor captures materializes that capture from its representation.
+
+An erased procedure's argument descriptor parameters are keyed by their
+pre-order position under the argument, but a caller's view of the argument can
+be more generic than the callee's. A dictionary slot is called through the
+consumer's declared requirement, for example a bare `val`. So every argument
+descriptor that an earlier parameter's descriptor holds is read from that
+parent rather than from its own key: a nested descriptor read for aggregate,
+list and box positions, and a tag payload read
+(`ErasedArgDescRead.tag_payload`) for a variant payload such as a presence
+slot's `Present` value. Only a descriptor no earlier parameter holds is read
+from its call-site key.
+
+An evidence-only descriptor collected inside an evidence dispatcher's
+representation, such as a presence slot of a record dispatcher, takes the
+representation at the same position of that dispatcher's call source.
+
+A custom `to_inspect` slot reached through a descriptor takes its hidden
+descriptors and argument descriptors from the inspected descriptor's own
+`inspect_hidden_descs` and `inspect_arg_descs` spans. The inspected
+representation itself maps to the descriptor being built. Descriptor template
+capture sets include both spans, so every local an inspect span names is
+supplied to the materialization.
 
 Every non-identity representation boundary also has a planned adapter request.
 After layouts are committed, the adapter builder resolves each request to an
@@ -12454,7 +12582,13 @@ binding or using the value. No consumer reconstructs capture descriptors from
 capture bytes, layouts, or the worker's contextual types.
 
 Every callable-value use edge records the exact hidden descriptor arguments for
-that use. Descriptors required only by the callable body are captured from
+that use. Planning determines the descriptors a body requires from the checked
+expression and pattern types it analyzes for that body: each unsealed type
+variable those types reach, and each one a callable the body creates or calls
+needs beyond its own scheme variables, unless the signature or checked evidence
+already supplies it. A variable a generalized local scope quantifies belongs to
+the outermost scope listing it and is required only by that scope and the
+bodies it encloses. Descriptors required only by the callable body are captured from
 those planned use-site arguments; descriptors represented structurally in the
 callable signature remain ordinary callable boundary descriptors. An
 uninstantiated declaration use may share a descriptor source only when the plan
@@ -12557,6 +12691,44 @@ and conflicting mappings are invariant failures. Once two tag variants have
 been matched by checked tag identity, their payload descriptors align by the
 checked payload index. The adapter does not search ambient descriptor locals or
 reconstruct a nested source from layout shape.
+
+A dictionary requirement's type is written in the scheme variables of the
+worker receiving the dictionary, and a variable can appear there only inside a
+function-typed argument, or only in a where-clause and never in the worker's
+signature. The checked substitution of the call, callable use, or dispatch
+evidence edge that supplies a static dictionary names the type each of those
+variables took, so the plan records it as representation pairs on every
+dictionary method it builds. The adapter describes requirement positions that
+the call descriptors do not cover with those pairs. A dictionary method's own
+worker is likewise instantiated by its evidence edge's recorded substitution
+(`EvidenceNode.subst`); its enclosing descriptors take their types from that
+substitution.
+
+When a worker passes a dictionary to its own recursive instantiation (such as
+`List.encoder_for` over `List(List(Str))`), the requirement type and the method
+worker are written in the same scheme, so one descriptor requirement names two
+instantiations. The static method adapter then converts through the checked
+callable type at the evidence edge: worker-side boundaries read the worker's
+bound descriptors, and requirement-side boundaries are lowered in a detached
+descriptor scope that sees none of the frame's bindings and materializes its
+descriptors only from the requirement substitution. Adapters whose two sides
+share no descriptor requirement convert directly.
+
+Nested dictionary evidence resolves against the worker that lowers the call,
+so a nested dictionary the checker forwards from a scheme requirement is that
+frame's own bound dictionary (`to_json = |a| Json.to_str([a])` needs
+`List(a)`'s encoder, whose `item` dictionary is `to_json`'s dictionary for
+`a`). A dictionary whose method evidence names such a frame value, directly or
+through its nested dictionaries or method descriptors, is a template: its
+method slots name the frame's dictionary and descriptor locals, it is marked
+`template`, and the `assign_boxy_dict_ref` that produces it lists those locals
+as captures. The runtime materializes the template into runtime dictionary
+tables with the captured values (interning equal copies); every other read of
+a template is an invariant failure. A template slot also carries, after the
+worker's hidden descriptors, the requirement-side descriptors and the frame's
+own type variables that its method adapter needs; the adapter binds them
+(requirement descriptors only where the requirement side is lowered) and
+describes representations naming them through those bindings.
 
 Boxy box/unbox/adapt operations are explicit LIR statements or explicit helper
 calls selected by the lowerer:
@@ -15134,7 +15306,11 @@ nothing; on a list proven unique and owned at the read it is stamped like
 any other check, and every backend then answers it with a constant, which
 lets the loop's copy version fall away.
 
-Several definitions do not by themselves lose a value's origin. A join
+Several definitions do not by themselves lose a value's origin. An alias
+target whose every definition aliases one source keeps that source's origin,
+each definition being its own transfer edge: emission unshares a statement
+suffix that several paths reach into one copy per path, so the procedure the
+certifier reads binds such a target once on each path. A join
 result cell—the parameter a conditional's arms assign directly before
 jumping to the join, often declared by several nested joins—keeps a
 tracked origin when every definition is a birth, a join declaration, or an

@@ -8678,6 +8678,7 @@ pub fn registerBoxySymbolTargets(self: *Self) HostedSymbolError!void {
     try self.registerBoxySymbol("roc_boxy_tag_ext_desc", &.{.i32}, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_tag_residual_desc", &.{ .i32, .i32 }, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_desc_copy", &.{ .i32, .i32, .i32, .i32 }, &.{.i32});
+    try self.registerBoxySymbol("roc_boxy_dict_copy", &.{ .i32, .i32, .i32, .i32 }, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_box", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_unbox", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_adapt", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
@@ -8803,6 +8804,7 @@ fn resolveBoxyDict(self: *Self, dict: LIR.BoxyDictRef) Allocator.Error!void {
             try self.emitBoxyCall("roc_boxy_static_dict");
         },
         .local => |local| try self.emitProcLocal(local),
+        .runtime => wasmInvariantFmt("WASM/codegen invariant violated: a runtime dictionary reference reached codegen", .{}),
     }
 }
 
@@ -8900,7 +8902,37 @@ fn generateBoxyDescRef(self: *Self, assign: anytype) Allocator.Error!void {
 }
 
 fn generateBoxyDictRef(self: *Self, assign: anytype) Allocator.Error!void {
-    try self.resolveBoxyDict(assign.dict);
+    const captures = self.store.getLocalSpan(assign.captures);
+    if (captures.len == 0) return try self.resolveBoxyDict(assign.dict);
+    // A template dictionary is materialized with the values of the frame
+    // locals its method slots name.
+    const dict_id = switch (assign.dict) {
+        .static => |id| id,
+        .local, .runtime => wasmInvariantFmt(
+            "WASM/codegen invariant violated: captured dictionary copy did not name a static dictionary",
+            .{},
+        ),
+    };
+    const ids_offset = try self.allocStackMemory(@intCast(captures.len * 4), 4);
+    const values_offset = try self.allocStackMemory(@intCast(captures.len * 4), 4);
+    const ids_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const values_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitFpOffset(ids_offset);
+    try self.emitLocalSet(ids_ptr);
+    try self.emitFpOffset(values_offset);
+    try self.emitLocalSet(values_ptr);
+    for (0..captures.len) |i| {
+        const capture = GuardedList.at(captures, i);
+        try self.emitI32Const(@intCast(@intFromEnum(capture)));
+        try self.emitStoreToMemSized(ids_ptr, @intCast(i * 4), .i32, 4);
+        try self.emitProcLocal(capture);
+        try self.emitStoreToMemSized(values_ptr, @intCast(i * 4), .i32, 4);
+    }
+    try self.emitI32Const(@intCast(@intFromEnum(dict_id)));
+    try self.emitLocalGet(ids_ptr);
+    try self.emitLocalGet(values_ptr);
+    try self.emitI32Const(@intCast(captures.len));
+    try self.emitBoxyCall("roc_boxy_dict_copy");
 }
 
 fn generateBoxyBox(self: *Self, assign: anytype) Allocator.Error!void {
@@ -9381,7 +9413,7 @@ fn bindErasedCallableAdapterParams(
             try self.emitLocalGet(capture_ptr_local);
             try self.emitLoadOpSized(.i32, @sizeOf(u32), offset);
         } else {
-            if (param.source_nested_index == std.math.maxInt(u16)) {
+            if (param.read == .call_key) {
                 wasmInvariantFmt(
                     "WASM/codegen invariant violated: exact erased descriptor parameter had no capture offset",
                     .{},
@@ -9401,8 +9433,17 @@ fn bindErasedCallableAdapterParams(
                 .{},
             );
             try self.emitProcLocal(source);
-            try self.emitI32Const(@intCast(param.source_nested_index));
-            try self.emitBoxyCall("roc_boxy_nested_desc");
+            switch (param.read) {
+                .call_key, .nested => {
+                    try self.emitI32Const(@intCast(param.source_nested_index));
+                    try self.emitBoxyCall("roc_boxy_nested_desc");
+                },
+                .tag_payload => {
+                    try self.emitI32Const(@bitCast(@intFromEnum(param.source_tag_name)));
+                    try self.emitI32Const(@intCast(param.source_nested_index));
+                    try self.emitBoxyCall("roc_boxy_tag_payload_desc");
+                },
+            }
         }
         try self.emitLocalSet(desc_local);
     }
