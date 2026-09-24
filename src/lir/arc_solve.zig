@@ -4762,8 +4762,13 @@ fn settleUniqueOrigins(
             queued.set(local);
             try work.append(allocator, local);
         }
-        const has_fields = store_inputs.row(local).len != 0 or mask_alias_inputs.row(local).len != 0 or
-            seed_inputs.row(local).len != 0 or call_inputs.row(local).len != 0;
+        // A container keeps per-field origins only when every definition of
+        // it is accounted for, as its own birth is: a definition that feeds
+        // no field inputs (a procedure parameter that is also a tail loop's
+        // join parameter, or a replaced value) brings fields of unknown origin.
+        const all_defs_tracked = !multi_def.isSet(local) or multi_ok.isSet(local);
+        const has_fields = all_defs_tracked and (store_inputs.row(local).len != 0 or mask_alias_inputs.row(local).len != 0 or
+            seed_inputs.row(local).len != 0 or call_inputs.row(local).len != 0);
         if (has_fields) {
             masks[local] = std.math.maxInt(u64);
             field_conds.base[local] = container_count * 64;
@@ -4804,6 +4809,8 @@ fn settleUniqueOrigins(
     while (work.items.len != 0 or mask_work.items.len != 0) {
         while (mask_work.pop()) |container| {
             mask_queued.unset(container);
+            // Containers without tracked field origins keep an empty mask.
+            if (field_conds.base[container] == no_local) continue;
             var meets: [64]Meet = @splat(Meet{});
             var dead: u64 = dead_masks[container];
             for (store_inputs.row(container)) |edge_index| {
@@ -7585,4 +7592,71 @@ test "component uniqueness inventories join parameters incoming transfers and no
     try std.testing.expectEqual(@as(u64, 3), metrics.local_visits);
     try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), solution.unique_seed_masks[@intFromEnum(proc)]);
     try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), solution.unique_conds[@intFromEnum(joined)]);
+}
+
+test "uniqueness gives a tail loop parameter no field origins from its back edge alone" {
+    const allocator = std.testing.allocator;
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    // A tail-recursive procedure's parameter doubles as its loop's join
+    // parameter: the entry edge carries the caller's value implicitly, and
+    // only the back edge stores fresh fields into it.
+    const param = try f.local(f.pair);
+    const flag = try f.local(.u8);
+    const taken = try f.local(f.list);
+    const fresh = try f.local(f.list);
+    const other = try f.local(f.list);
+    const next = try f.local(f.pair);
+    var join_ids = body_clone.JoinParamIndex.init(allocator);
+    defer join_ids.deinit();
+    const join_id = join_ids.freshJoinPoint();
+    const read = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = taken,
+        .op = .{ .field = .{ .source = param, .field_idx = 0 } },
+        .next = try f.ret(taken),
+    } });
+    const back_edge = try f.store.addCFStmt(.{ .set_local = .{
+        .target = param,
+        .value = next,
+        .mode = .initialize_join_param,
+        .next = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }),
+    } });
+    const rebuild = try f.store.addCFStmt(.{ .assign_list = .{
+        .target = fresh,
+        .elems = try f.store.addLocalSpan(&.{}),
+        .next = try f.store.addCFStmt(.{ .assign_list = .{
+            .target = other,
+            .elems = try f.store.addLocalSpan(&.{}),
+            .next = try f.store.addCFStmt(.{ .assign_struct = .{
+                .target = next,
+                .fields = try f.store.addLocalSpan(&.{ fresh, other }),
+                .next = back_edge,
+            } }),
+        } }),
+    } });
+    const body = try f.store.addCFStmt(.{ .switch_stmt = .{
+        .cond = flag,
+        .branches = try f.store.addCFSwitchBranches(&.{.{ .value = 1, .body = read }}),
+        .default_branch = rebuild,
+        .continuation = null,
+    } });
+    const loop = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.store.addLocalSpan(&.{param}),
+        .body = body,
+        .remainder = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }),
+    } });
+    _ = try f.proc(&.{ param, flag }, loop, f.list);
+    const rc = [_]bool{ true, false, true, true, true, true };
+    var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    defer solution.deinit();
+    UniquenessOracleState.resetCapabilities(&solution);
+    var takes = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, f.store.cfStmtCount());
+    defer takes.deinit(allocator);
+    takes.set(@intFromEnum(read));
+    var metrics: UniquenessMetrics = .{};
+    try UniquenessOracleState.compare(&f, &rc, &solution, .{ .set = &takes }, &metrics);
+    // On the first iteration the field is whatever the caller stored, so a
+    // take of it is not a unique birth under any seed.
+    try std.testing.expect(!solution.unique_born.isSet(@intFromEnum(taken)));
 }
