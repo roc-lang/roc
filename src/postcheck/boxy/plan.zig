@@ -2864,7 +2864,9 @@ const Builder = struct {
     ) GeneratedCodecSource {
         const selected = self.generatedCodecContractForRuntimeExpr(view, expr_id, derivation_kind);
         const derivation = selected.derivation;
-        if (derivation.source_runtime_ty != stored_runtime_ty or
+        // By `rootKey`, for the reason given at
+        // `storedGeneratedCodecSourceAtEncodingType`.
+        if (!std.meta.eql(view.checked_types.rootKey(derivation.source_runtime_ty), view.checked_types.rootKey(stored_runtime_ty)) or
             checkedFunctionPayload(view, derivation.source_constructor_ty).args.len != 1)
         {
             boxyPlanInvariant("stored generated codec runtime disagreed with its checked contract");
@@ -12115,7 +12117,12 @@ const Builder = struct {
     ) Allocator.Error!GeneratedCodecSource {
         const selected = self.generatedCodecContractForRuntimeExpr(view, expr_id, derivation_kind);
         const derivation = selected.derivation;
-        if (derivation.source_runtime_ty != requested_runtime_type or
+        // Compared by `rootKey`, not by id: a checked type holding a
+        // quantified row is not hash-consed, so the derivation's source type
+        // and the stored value's requested type can be the same type under two
+        // ids (the constructor check in `generatedCodecContractForConstructor`
+        // compares these roles the same way).
+        if (!std.meta.eql(view.checked_types.rootKey(derivation.source_runtime_ty), view.checked_types.rootKey(requested_runtime_type)) or
             !try self.storedTypeMatchesCheckedType(store_view, stored_encoding_type, view, derivation.encoding_ty))
         {
             boxyPlanInvariant("stored generated codec encoding disagreed with its checked contract");
