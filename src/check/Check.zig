@@ -5617,8 +5617,9 @@ const RowLabelOccurrence = struct {
 /// the row's meaning. Occurrences whose relation fails, or would make an
 /// acyclic row anonymously recursive, conflict. Relations can bind other
 /// tails and expose further repeats, so the chain is rescanned until none
-/// remain; each pass removes at least one label. A conflicting pair is
-/// returned for the caller to report.
+/// remain; each pass removes at least one label. The repeated pairs of a pass
+/// relate together or not at all, so a conflicting pair is returned for the
+/// caller to report with nothing related.
 fn normalizeRowUnion(self: *Self, row: Var, env: *Env) Allocator.Error!?RowLabelConflict {
     std.debug.assert(self.probe_depth == 0 or self.commit_probe_active);
     var parts: std.ArrayListUnmanaged(Var) = .empty;
@@ -5631,6 +5632,8 @@ fn normalizeRowUnion(self: *Self, row: Var, env: *Env) Allocator.Error!?RowLabel
     defer latest.deinit(self.gpa);
     var omitted: std.ArrayListUnmanaged(RowLabelOccurrence) = .empty;
     defer omitted.deinit(self.gpa);
+    var pairs: std.ArrayListUnmanaged(RowLabelConflict) = .empty;
+    defer pairs.deinit(self.gpa);
 
     while (true) {
         parts.clearRetainingCapacity();
@@ -5679,18 +5682,21 @@ fn normalizeRowUnion(self: *Self, row: Var, env: *Env) Allocator.Error!?RowLabel
             }
         }
 
-        var row_acyclic: ?bool = null;
+        pairs.clearRetainingCapacity();
         for (labels.items) |label| {
             const outer = (try latest.fetchPut(self.gpa, label.name, label.occurrence)) orelse continue;
-            const conflict: RowLabelConflict = .{ .name = label.name, .outer = outer.value, .inner = label.occurrence };
-            const acyclic = row_acyclic orelse ((try occurs.occurs(self.types, &self.occurs_scratch, row)) == .valid);
-            row_acyclic = acyclic;
-            if (!try self.repeatedRowLabelRelates(row, acyclic, outer.value, label.occurrence)) return conflict;
-            if (!try self.relateRepeatedRowLabel(outer.value, label.occurrence, env)) return conflict;
-            try omitted.append(self.gpa, outer.value);
+            try pairs.append(self.gpa, .{ .name = label.name, .outer = outer.value, .inner = label.occurrence });
+        }
+        if (pairs.items.len == 0) return null;
+
+        // The whole set relates or none of it does: a rejected row leaves no
+        // relation behind on the types it shares.
+        if (try self.firstRowLabelConflict(row, pairs.items)) |conflict| return conflict;
+        for (pairs.items) |pair| {
+            if (!try self.relateRepeatedRowLabel(pair.outer, pair.inner, env)) return pair;
+            try omitted.append(self.gpa, pair.outer);
         }
 
-        if (omitted.items.len == 0) return null;
         // Occurrences are positions in the parts as scanned; if a relation
         // changed any part, scan again rather than rewrite a changed part.
         const unchanged = for (parts.items, part_labels.items) |part_var, content| {
@@ -5703,14 +5709,23 @@ fn normalizeRowUnion(self: *Self, row: Var, env: *Env) Allocator.Error!?RowLabel
     }
 }
 
-/// Whether relating a repeated occurrence to the one outside it succeeds and,
-/// when `row` was acyclic, leaves it free of anonymous recursion. The relation
-/// is probed against throwaway problem stores and always rolled back, so it
-/// records nothing and needs no checker bookkeeping; only a relation known to
-/// hold is then made for real.
-fn repeatedRowLabelRelates(self: *Self, row: Var, row_acyclic: bool, outer: RowLabelOccurrence, inner: RowLabelOccurrence) Allocator.Error!bool {
+/// The first repeated occurrence pair, in order, whose relation fails or makes
+/// an acyclic `row` anonymously recursive once every earlier pair is related.
+/// The relations are probed together against throwaway problem stores and
+/// always rolled back, so this records nothing and needs no checker
+/// bookkeeping; only a set known to hold is then related for real.
+fn firstRowLabelConflict(self: *Self, row: Var, pairs: []const RowLabelConflict) Allocator.Error!?RowLabelConflict {
+    const row_acyclic = (try occurs.occurs(self.types, &self.occurs_scratch, row)) == .valid;
     var savepoint = try self.types.createSavepoint();
     defer self.types.rollbackToSavepoint(&savepoint);
+    for (pairs) |pair| {
+        if (!try self.probeRepeatedRowLabel(pair.outer, pair.inner)) return pair;
+        if (row_acyclic and (try occurs.occurs(self.types, &self.occurs_scratch, row)) != .valid) return pair;
+    }
+    return null;
+}
+
+fn probeRepeatedRowLabel(self: *Self, outer: RowLabelOccurrence, inner: RowLabelOccurrence) Allocator.Error!bool {
     switch (outer.payload) {
         .tag => |outer_args| {
             const inner_args = inner.payload.tag;
@@ -5730,7 +5745,7 @@ fn repeatedRowLabelRelates(self: *Self, row: Var, row_acyclic: bool, outer: RowL
             }
         },
     }
-    return !row_acyclic or (try occurs.occurs(self.types, &self.occurs_scratch, row)) == .valid;
+    return true;
 }
 
 /// A field's value type and, unless it is required, its kind variable.
@@ -30443,6 +30458,25 @@ test "row union normalization relates repeated labels and omits outer copies" {
         try std.testing.expectEqualSlices(Ident.Idx, &.{b}, store.getTagsSlice(outer_row.tags).items(.name));
         try std.testing.expectEqual(store.resolveVar(inner).var_, store.resolveVar(outer_row.ext).var_);
         try std.testing.expectEqual(@as(usize, 1), store.getTagsSlice(store.resolveVar(inner).desc.content.structure.tag_union.tags).len);
+    }
+
+    // A rejected row relates none of its repeated pairs, including the
+    // compatible ones scanned before the conflict.
+    {
+        const outer_payload = try store.fresh();
+        const inner_payload = try store.fresh();
+        const inner = try store.freshFromContent(try store.mkTagUnion(&.{
+            .{ .name = a, .args = try store.appendVars(&.{inner_payload}) },
+            .{ .name = b, .args = try store.appendVars(&.{try store.freshFromContent(.{ .structure = .empty_tag_union })}) },
+        }, try store.fresh()));
+        const row = try store.freshFromContent(try store.mkTagUnion(&.{
+            .{ .name = a, .args = try store.appendVars(&.{outer_payload}) },
+            .{ .name = b, .args = try store.appendVars(&.{try store.freshFromContent(.{ .structure = .empty_record })}) },
+        }, inner));
+        try checker.fillInRegionsThrough(row);
+        const conflict = (try checker.normalizeRowUnion(row, &env)) orelse return error.TestExpectedConflict;
+        try std.testing.expect(conflict.name.eql(b));
+        try std.testing.expect(store.resolveVar(outer_payload).var_ != store.resolveVar(inner_payload).var_);
     }
 
     // Occurrences that cannot be one tag are returned for the caller to report.
