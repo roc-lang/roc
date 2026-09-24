@@ -36,7 +36,7 @@ OPTIONS:
 PREREQUISITES:
     - hyperfine (benchmark tool)
     - jq (JSON processor)
-    - zig (0.15.2) - only needed if not using --main-dir and --pr-dir
+    - zig (0.16.0) - only needed if not using --main-dir and --pr-dir
 
 EXAMPLES:
     $(basename "$0")                    # Compare current branch vs main

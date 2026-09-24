@@ -304,8 +304,8 @@ scratch_record_field_vars: base.Scratch(Var),
 scratch_static_dispatch_constraints: base.Scratch(ScratchStaticDispatchConstraint),
 /// scratch deferred static dispatch constraints
 scratch_deferred_static_dispatch_constraints: base.Scratch(DeferredConstraintCheck),
-/// Concrete generated-codec obligations parked until the module's single type
-/// finalization point. Their receiver can still gain nominal layers while
+/// Generated-codec obligations with known structure parked until the module's
+/// finalization point. Their receiver can still gain tags or nominal layers while
 /// later definitions are checked, so validating them earlier would publish a
 /// derivation for a shape that is no longer the call's final type.
 final_codec_dispatch_constraints: std.ArrayListUnmanaged(FinalCodecDispatchConstraint) = .empty,
@@ -581,25 +581,28 @@ annotation_implicit_open_exts: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, Impl
 /// against—is the closed row the annotation produced before polarity.
 weak_value_implicit_open_ext_ranges: std.ArrayListUnmanaged(ImplicitOpenExtRange),
 /// Every implicitly opened extension the post-body audit
-/// (`auditImplicitOpenExts`) visited and did not report, in visit order.
-/// The audit is a single read of a mutable var, and an extension can still
-/// learn tags afterwards—so this list is narrowed and replayed once the
-/// module's types settle (`dropSettledLateImplicitOpenExtAudits` and
-/// `runLateImplicitOpenExtAudit`). Entries are copied rather than sliced out
-/// of `implicit_open_exts` by range so a later re-generation of the same
-/// annotation cannot move the range out from under the replay.
+/// (`auditImplicitOpenExts`) visited and did not report, in visit order, with
+/// the binding that owns it. A generated codec validated after that audit can
+/// still require tags in the row, so `runLateImplicitOpenExtAudit` checks the
+/// recorded `codec_row_demands` against these once the module's types settle.
+/// Entries are copied rather than sliced out of `implicit_open_exts` by range
+/// so a later re-generation of the same annotation cannot move the range out
+/// from under the late audit.
 late_implicit_open_ext_audits: std.ArrayListUnmanaged(LateImplicitOpenExtAudit),
-/// Every dispatch relation punted into the window the replay reads—the window
-/// between the last narrowing and `runLateImplicitOpenExtAudit`—recorded with
-/// both the expression that introduced it and the types it can write through.
-/// The replay blames a binding for one of its rows only when a writer lies
-/// inside that binding's own right-hand side AND that writer's type graph
-/// reaches that row, which is what separates a definition widening its own row
-/// from a caller widening it. The queues that carry these relations are drained
-/// before the replay runs (`checkFinalGeneratedCodecConstraints` clears them),
-/// so the replay cannot re-derive them and they are recorded here at deferral
-/// time instead.
-late_self_widening_writers: std.ArrayListUnmanaged(LateSelfWideningWriter) = .empty,
+/// Every error tag a generated codec's validation requires in a parser or
+/// encoder error row, recorded with the source region of the expression that
+/// introduced the codec relation. The derived body produces each of these tags
+/// on behalf of the definition containing that expression, so the late audit
+/// reports any of them that lands in that definition's own implicitly opened
+/// annotated row, whoever else also widened the row.
+codec_row_demands: std.ArrayListUnmanaged(CodecRowDemand) = .empty,
+/// Tag names referenced by `codec_row_demands`.
+codec_row_demand_tags: std.ArrayListUnmanaged(Ident.Idx) = .empty,
+/// Source region of the expression that introduced the generated-codec
+/// relation being validated right now; null outside codec validation or when
+/// the relation names no local expression. Demands recorded during validation
+/// are owned by this region.
+active_codec_owner_region: ?Region = null,
 /// Tracks bindings whose defining expression is known erroneous and whose
 /// subsequent local lookups must therefore become explicit runtime errors.
 erroneous_value_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
@@ -801,12 +804,6 @@ scratch_evidence_pair_set: std.AutoHashMapUnmanaged(ModuleEnv.SchemeUsePair, voi
 /// parser or encoder. Successful validation publishes this scratch range to
 /// `ModuleEnv`; failed validation discards it.
 scratch_generated_codec_calls: std.ArrayListUnmanaged(ModuleEnv.GeneratedCodecCall) = .empty,
-/// Parser derivations whose generated body can construct
-/// `MissingRequiredField`. Their source-facing error row can still change
-/// after validation (notably when a generalized wrapper consumes every
-/// parser error), so the exact `invalid_value` mapping capability is selected
-/// only once those source types have settled at finalization.
-pending_generated_parser_error_mappings: std.ArrayListUnmanaged(PendingGeneratedParserErrorMapping) = .empty,
 /// Worklist of flex vars created by literal conversions (`from_numeral`,
 /// `from_quote`, or `from_interpolation`)—open literals that may still need
 /// defaulting. Checker bookkeeping, not type data:
@@ -2752,7 +2749,6 @@ fn initAssumePrepared(
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .checked_interpolation_part_constraints = std.AutoHashMap(InterpolationPartsIdx, void).init(gpa),
         .scratch_generated_codec_calls = .empty,
-        .pending_generated_parser_error_mappings = .empty,
         .int_unbound_vars = std.AutoHashMap(Var, void).init(gpa),
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
         .expect_effect_slots = .empty,
@@ -2907,7 +2903,8 @@ pub fn deinit(self: *Self) void {
     self.annotation_implicit_open_exts.deinit(self.gpa);
     self.weak_value_implicit_open_ext_ranges.deinit(self.gpa);
     self.late_implicit_open_ext_audits.deinit(self.gpa);
-    self.late_self_widening_writers.deinit(self.gpa);
+    self.codec_row_demands.deinit(self.gpa);
+    self.codec_row_demand_tags.deinit(self.gpa);
     self.erroneous_value_patterns.deinit(self.gpa);
     self.rejected_default_exprs.deinit(self.gpa);
     self.accepted_nominal_constructor_backings.deinit(self.gpa);
@@ -2972,7 +2969,6 @@ pub fn deinit(self: *Self) void {
     self.scheme_deferred_codec_constraint_fns.deinit(self.gpa);
     self.scratch_default_param_vars.deinit();
     self.scratch_generated_codec_calls.deinit(self.gpa);
-    self.pending_generated_parser_error_mappings.deinit(self.gpa);
     self.imported_schemes.deinit(self.gpa);
     self.imported_scheme_by_source.deinit(self.gpa);
     self.associated_lookup_cache.deinit(self.gpa);
@@ -7136,6 +7132,7 @@ fn recordOpenedMarkerExts(self: *Self, opened: []const Instantiator.OpenedMarker
         .use_root_instantiated, .use_last_var => Region.zero(),
     };
     for (opened) |marker| {
+        try self.types.markAnnotationTagExt(marker.ext);
         try self.implicit_open_exts.append(self.gpa, .{
             .var_ = marker.ext,
             .region = region,
@@ -7243,6 +7240,7 @@ fn instantiateOrphanCopy(
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
+    instantiate_ctx.preserve_annotation_tag_ext = true;
     const saved_instantiation_source_expr = self.instantiation_source_expr;
     self.instantiation_source_expr = null;
     defer {
@@ -7558,7 +7556,7 @@ fn instantiateVarHelp(
             const slot: ModuleEnv.SchemeUseRecord.Slot, const node_idx: u32, const slot_data: u32 = switch (evidence) {
                 .none => unreachable,
                 .value_use => |expr| .{ .value_use, @intFromEnum(expr), 0 },
-                .nested_function_use => |expr| .{ .nested_function_use, @intFromEnum(expr), 0 },
+                .nested_function_use => |expr| .{ .nested_function_use, @intFromEnum(expr), @intFromEnum(instantiated_var) },
                 .dispatch_target => |site| .{ .dispatch_target, site.node_idx, @intFromEnum(site.constraint_fn_var) },
             };
             try self.cir.recordSchemeUse(node_idx, slot, slot_data, var_to_instantiate, self.scratch_evidence_pairs.items);
@@ -9291,18 +9289,11 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         }
     }
 
-    // Every definition and top-level statement has had its say, so any
-    // implicitly opened extension still carrying no tags was not extended by
-    // its own definition and was not widened by a caller either. Those are the
-    // only ones the post-finalize replay below may still blame a definition for.
-    self.dropSettledLateImplicitOpenExtAudits();
-
     try self.finalizeTypes(&env, .{ .module = .{ .skip_numeric_defaults = skip_numeric_defaults } });
 
-    // Replay the implicit-open-ext audit now that nothing further unifies: a
-    // definition's own deferred constraint (a generated codec's error row) can
-    // widen its annotated row during finalize, long after the post-body audit
-    // read it.
+    // Check generated-codec error demands against their owners' annotated
+    // rows now that nothing further unifies: a codec can be validated during
+    // finalize, long after the post-body audit read the row.
     try self.runLateImplicitOpenExtAudit(&env);
 
     try self.validateSettledValueRows(&env);
@@ -13916,9 +13907,9 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.reportPolymorphicConstrainedExpr(expr_idx);
 
     // Polarity's two settled-state steps, in the one order they may run in
-    // (see `runLateImplicitOpenExtAudit`): replay the implicit-open-ext audit
-    // while the rows still carry the tags it reads, then—after every pass that
-    // can still widen one—ground the survivors. `checkFile` runs the same two
+    // (see `runLateImplicitOpenExtAudit`): run the late audit while the rows
+    // still carry the tags it reads, then—after every pass that can still
+    // widen one—ground the survivors. `checkFile` runs the same two
     // steps at the matching points in its own sequence.
     try self.runLateImplicitOpenExtAudit(&env);
 
@@ -16214,8 +16205,7 @@ const ImplicitOpenExt = struct {
     /// writes the joined row into the union and leaves `ext` holding the
     /// leftover tags off to one side—so the union is the only handle on this
     /// row that can still be found in a solved type. Null where the minting
-    /// site did not see the union, which is also where the late replay
-    /// declines to blame (see `lateWriterWidenedOwnerRow`).
+    /// site did not see the union.
     union_var: ?Var = null,
 };
 
@@ -16225,7 +16215,7 @@ const ImplicitOpenExtRange = struct {
     len: u32,
 };
 
-/// One extension the post-body audit cleared, kept for the late replay, with
+/// One extension the post-body audit cleared, kept for the late audit, with
 /// the binding that owns it named by source region.
 ///
 /// The owner is stamped HERE—at the audit—rather than where the extension is
@@ -16236,30 +16226,19 @@ const LateImplicitOpenExtAudit = struct {
     ext: ImplicitOpenExt,
     /// Source region of the right-hand side of the binding whose annotation
     /// minted `ext`. `Region.zero()` when the audit's caller could not name
-    /// one: the replay then never blames this entry (see
-    /// `lateWriterWidenedOwnerRow`).
+    /// one: no codec relation is then inside it.
     owner_rhs: Region,
 };
 
-/// One dispatch relation punted to the final type boundary, as the late replay
-/// needs to read it: WHERE it was introduced, and WHICH types it can write
-/// through.
-///
-/// The region alone answers only "was this relation introduced inside the
-/// binding the replay is about to blame". That is one binding's worth of
-/// resolution, and a binding routinely holds more than one implicitly opened
-/// row: a value whose right-hand side derives a codec owns a writer, yet the
-/// row a caller widened may be one that writer never touches. The two vars are
-/// the relation's own type graph—the receiver it dispatches on and the method
-/// type it resolved to—so the replay can ask the finer question of each row
-/// separately (`lateWriterWidenedOwnerRow`).
-const LateSelfWideningWriter = struct {
-    region: Region,
-    /// The receiver var the relation dispatches on.
-    dispatcher_var: Var,
-    /// The var of the method type the relation resolves. The composed row a
-    /// generated codec decides at finalization lives in here.
-    fn_var: Var,
+/// Error tags one generated-codec relation requires in one error row. `row`
+/// is any var of that row; rows related by unification share their terminal
+/// extension, which is how the late audit matches a demand to an annotated
+/// row.
+const CodecRowDemand = struct {
+    owner: Region,
+    row: Var,
+    tags_start: u32,
+    tags_len: u32,
 };
 
 /// After a binding's right-hand side has been checked against its annotation,
@@ -16277,11 +16256,12 @@ const LateSelfWideningWriter = struct {
 /// binding `..` is the opt-in to a quantified row, so it never warns there.
 ///
 /// This is a single READ of a mutable var, and it is not always the last word:
-/// a body can still widen its own row after this point, through a constraint
-/// the definition deferred (see `runLateImplicitOpenExtAudit`). Every
-/// extension this pass clears is therefore kept for that replay. The `..`
-/// warning is NOT replayed—it is a property of the annotation's own text,
-/// fully decided here.
+/// a generated codec the definition's body introduced can be validated after
+/// this point and still require tags in the row (see
+/// `runLateImplicitOpenExtAudit`). Every extension this pass clears is
+/// therefore kept, with its owner, for that audit. The `..` warning is NOT
+/// repeated—it is a property of the annotation's own text, fully decided
+/// here.
 fn auditImplicitOpenExts(
     self: *Self,
     annotation_idx: CIR.Annotation.Idx,
@@ -16305,13 +16285,14 @@ fn auditImplicitOpenExts(
             });
             continue;
         }
-        try self.reportImplicitOpenExtExtension(entry, env, .report_and_poison);
+        const first_tag = self.types.tags.get(self.types.resolveVar(entry.var_).desc.content.structure.tag_union.tags.start);
+        try self.reportImplicitOpenExtExtension(entry, first_tag.name, env);
     }
 }
 
 /// Whether this implicitly opened extension currently carries a tag—the one
 /// question `auditImplicitOpenExts` asks of it, factored out so the late
-/// replay asks it the same way.
+/// audit asks it the same way.
 fn implicitOpenExtCarriesTags(self: *const Self, entry: ImplicitOpenExt) bool {
     const resolved = self.types.resolveVar(entry.var_);
     if (resolved.desc.content != .structure) return false;
@@ -16319,217 +16300,193 @@ fn implicitOpenExtCarriesTags(self: *const Self, entry: ImplicitOpenExt) bool {
     return resolved.desc.content.structure.tag_union.tags.count != 0;
 }
 
-/// Forget every extension that has picked up a tag since its binding's
-/// post-body audit cleared it. Run after every definition and top-level
-/// statement is checked, and BEFORE `finalizeTypes`; then again inside
-/// `finalizeTypes` after `checkPendingDefaults`, the one finalize pass that
-/// still runs `checkExpr` over user source and so can widen a row from a use
-/// site.
+/// Report every generated-codec error tag that lands in the implicitly opened
+/// row of the definition whose body introduced the codec (design.md "Derived
+/// Parser Required-Field Error Composition"). A derived parser or encoder
+/// produces its demanded tags on behalf of that definition, and the annotation
+/// bounds what the definition may produce, exactly as for a tag its body
+/// constructs directly. Callers may still widen the row; a tag a caller added
+/// that the codec does not demand is never reported.
 ///
-/// A tag that lands in this window came from a CALLER: an output-position row
-/// is implicitly open precisely so a caller may use the result at a wider
-/// union, and the annotation still bounds only the definition itself. Dropping
-/// those entries is what keeps the late replay from mistaking legal use-site
-/// widening for a definition extending its own row.
-fn dropSettledLateImplicitOpenExtAudits(self: *Self) void {
-    var kept: usize = 0;
-    for (self.late_implicit_open_ext_audits.items) |entry| {
-        if (self.implicitOpenExtCarriesTags(entry.ext)) continue;
-        self.late_implicit_open_ext_audits.items[kept] = entry;
-        kept += 1;
-    }
-    self.late_implicit_open_ext_audits.shrinkRetainingCapacity(kept);
-}
-
-/// Replay the audit over the extensions that were STILL unconstrained after
-/// the whole module was checked. The case that motivates it is a constraint
-/// the definition itself deferred: a generated codec's composed error row
-/// reaching the annotated row through
-/// `finalizeGeneratedCodecConstraintsToQuiescence` (issue 11246). Nothing
-/// unifies after finalize, so this is the last point at which the question can
-/// be asked, and it must run before `closeWeakValueImplicitOpenExts` grounds
-/// the survivors to `[]`: a grounded extension carries no tags and the audit
-/// would skip it.
-///
-/// The window is NOT exclusive to the definition. A use site whose unification
-/// is deferred into the same window widens the same row on the same pass, so
-/// timing alone cannot tell the two apart and the narrowings above cannot
-/// separate them. The replay therefore asks a SECOND question, about
-/// provenance rather than timing: is this row reachable from some relation
-/// punted into this window by an expression inside the binding's own right-hand
-/// side (`lateWriterWidenedOwnerRow`)? Only then is the widening the
-/// definition's own.
-///
-/// The replay still reports rather than poisons: the answer is an attribution,
-/// not a proof that the solved row is wrong. See `ImplicitOpenExtReportKind`.
+/// Codec relations can be validated after the post-body audit read the row,
+/// so this runs once nothing further unifies, before
+/// `closeWeakValueImplicitOpenExts` grounds the remaining extensions to `[]`.
+/// Provenance is exact: each demand names its owning expression and the tags
+/// it requires, so neither timing nor type-graph reachability decides who
+/// widened a row.
 fn runLateImplicitOpenExtAudit(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    // The direct audit's `markErroneous` doubles as its no-double-report
-    // guard. The replay does not poison, so it carries its own: one report per
-    // row CLASS, since two entries can share a resolved root.
-    var reported: std.AutoHashMapUnmanaged(Var, void) = .empty;
-    defer reported.deinit(self.gpa);
-    // Scratch for the reachability walks, reused across entries: one walk
-    // clears them, so nothing carries between writers.
-    var reach_seen: std.AutoHashMapUnmanaged(Var, void) = .empty;
-    defer reach_seen.deinit(self.gpa);
-    var reach_stack: std.ArrayListUnmanaged(Var) = .empty;
-    defer reach_stack.deinit(self.gpa);
-    for (self.late_implicit_open_ext_audits.items) |entry| {
+    if (self.codec_row_demands.items.len == 0) return;
+
+    // Only extensions that carry tags can hold an unlisted demanded tag.
+    var carrying = std.ArrayListUnmanaged(struct { entry: u32, tail: Var }).empty;
+    defer carrying.deinit(self.gpa);
+    for (self.late_implicit_open_ext_audits.items, 0..) |entry, index| {
+        if (entry.owner_rhs.isEmpty()) continue;
         if (!self.implicitOpenExtCarriesTags(entry.ext)) continue;
-        // The row is what a writer can be shown to have reached; the extension
-        // usually cannot be, because solving leaves it holding the tags the
-        // join added while the union it opened holds the joined row. Both are
-        // accepted so an extension the solver did leave in place still counts,
-        // and so an entry minted without a union (`union_var == null`) keeps
-        // the extension as its only handle.
-        const row_root = self.types.resolveVar(entry.ext.union_var orelse entry.ext.var_).var_;
-        const ext_root = self.types.resolveVar(entry.ext.var_).var_;
-        if (!try self.lateWriterWidenedOwnerRow(
-            entry.owner_rhs,
-            &.{ row_root, ext_root },
-            &reach_seen,
-            &reach_stack,
-        )) continue;
-        if ((try reported.getOrPut(self.gpa, row_root)).found_existing) continue;
-        try self.reportImplicitOpenExtExtension(entry.ext, env, .report_only);
+        try carrying.append(self.gpa, .{ .entry = @intCast(index), .tail = self.tagRowTail(entry.ext.var_) });
+    }
+    if (carrying.items.len == 0) return;
+
+    var reported = try std.DynamicBitSetUnmanaged.initEmpty(self.gpa, self.late_implicit_open_ext_audits.items.len);
+    defer reported.deinit(self.gpa);
+    for (self.codec_row_demands.items) |demand| {
+        const demand_tail = self.tagRowTail(demand.row);
+        const tags = self.codec_row_demand_tags.items[demand.tags_start..][0..demand.tags_len];
+        for (carrying.items) |candidate| {
+            if (candidate.tail != demand_tail) continue;
+            if (reported.isSet(candidate.entry)) continue;
+            const entry = self.late_implicit_open_ext_audits.items[candidate.entry];
+            if (demand.owner.start.offset < entry.owner_rhs.start.offset) continue;
+            if (demand.owner.end.offset > entry.owner_rhs.end.offset) continue;
+            for (tags) |tag_name| {
+                if (!self.tagRowHasTag(entry.ext.var_, tag_name)) continue;
+                reported.set(candidate.entry);
+                try self.reportImplicitOpenExtExtension(entry.ext, tag_name, env);
+                break;
+            }
+        }
     }
 }
 
-/// Whether the definition itself is responsible for THIS row's widening: does
-/// some relation deferred into the late window come from an expression lying
-/// inside this binding's right-hand side, and can that relation's own types
-/// reach this row.
-///
-/// The region test is CONTAINMENT, not equality. The relation that widens a row
-/// is routinely introduced by a nested local binding inside the annotated
-/// definition's body (`parse_ = T.parser_for(...)` inside an annotated
-/// `parse`), which is still the definition widening its own row. Conversely a
-/// caller's widening is introduced somewhere else in the module entirely, and a
-/// caller widening an output-position row is exactly what implicit openness is
-/// for.
-///
-/// Containment alone is too coarse, because a binding is not one row. A value
-/// whose right-hand side derives a codec owns a writer AND exposes other
-/// implicitly opened rows that writer never touches; a caller widening one of
-/// those would be blamed on the strength of an unrelated relation in the same
-/// right-hand side. Reachability is what makes the answer per-row: the widening
-/// a deferred relation performs travels through that relation's own type graph,
-/// so a row outside it was written by something else.
-///
-/// The conjunction over-approximates in one direction only—a writer whose graph
-/// reaches a row it did not itself widen—and that requires the definition's own
-/// body to have already unified the two, which is the definition widening its
-/// own row and is correctly blamed.
-///
-/// Every unknown answers "not the definition's": an owner whose right-hand side
-/// has no region, a writer set with nothing inside it, and a row no contained
-/// writer reaches. Blaming a binding is only ever correct on evidence, so where
-/// provenance is missing this stays silent.
-fn lateWriterWidenedOwnerRow(
-    self: *const Self,
-    owner_rhs: Region,
-    targets: []const Var,
-    seen: *std.AutoHashMapUnmanaged(Var, void),
-    stack: *std.ArrayListUnmanaged(Var),
-) std.mem.Allocator.Error!bool {
-    if (owner_rhs.isEmpty()) return false;
-    for (self.late_self_widening_writers.items) |writer| {
-        if (writer.region.start.offset < owner_rhs.start.offset) continue;
-        if (writer.region.end.offset > owner_rhs.end.offset) continue;
-        if (try self.typeGraphReaches(
-            &.{ writer.dispatcher_var, writer.fn_var },
-            targets,
-            seen,
-            stack,
-        )) return true;
-    }
-    return false;
-}
-
-/// Whether any of `targets` (already resolved) lies anywhere in the type graph
-/// rooted at `starts`. The descent is the one `validateSettledValueRows`
-/// uses—alias backings and arguments, structure arguments, function arguments,
-/// effect dependencies and result, record fields and extension, tag payloads
-/// and extension—and terminates the same way, by refusing to expand a resolved
-/// var twice. `seen` and `stack` are caller-owned scratch so a sweep over many
-/// starts does not reallocate per walk.
-fn typeGraphReaches(
-    self: *const Self,
-    starts: []const Var,
-    targets: []const Var,
-    seen: *std.AutoHashMapUnmanaged(Var, void),
-    stack: *std.ArrayListUnmanaged(Var),
-) std.mem.Allocator.Error!bool {
-    seen.clearRetainingCapacity();
-    stack.clearRetainingCapacity();
-    try stack.appendSlice(self.gpa, starts);
-    while (stack.pop()) |current| {
+/// The resolved extension a tag row ends in, through aliases and extension
+/// chains. Rows related by unification share it.
+fn tagRowTail(self: *const Self, row: Var) Var {
+    var current = row;
+    while (true) {
         const resolved = self.types.resolveVar(current);
-        for (targets) |target| {
-            if (resolved.var_ == target) return true;
-        }
-        if ((try seen.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
-
         switch (resolved.desc.content) {
-            .alias => |alias| {
-                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
-                try stack.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |structure| switch (structure) {
+                .tag_union => |tag_union| current = tag_union.ext,
+                .record,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .empty_record,
+                .empty_tag_union,
+                => return resolved.var_,
             },
-            .structure => |flat_type| switch (flat_type) {
-                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
-                .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
-                .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    try stack.append(self.gpa, func.ret);
-                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
-                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
-                },
-                .record => |record| {
-                    try stack.append(self.gpa, record.ext);
-                    try self.appendRecordFieldVars(stack, record.fields);
-                },
+            .flex, .rigid, .field_presence, .err => return resolved.var_,
+        }
+    }
+}
+
+/// Whether the row starting at `row` lists `tag_name` anywhere along its
+/// extension chain.
+fn tagRowHasTag(self: *const Self, row: Var, tag_name: Ident.Idx) bool {
+    var current = row;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |structure| switch (structure) {
                 .tag_union => |tag_union| {
-                    try stack.append(self.gpa, tag_union.ext);
-                    const tags = self.types.getTagsSlice(tag_union.tags);
-                    for (tags.items(.args)) |args| {
-                        try stack.appendSlice(self.gpa, self.types.sliceVars(args));
+                    for (self.types.getTagsSlice(tag_union.tags).items(.name)) |name| {
+                        if (name.eql(tag_name)) return true;
                     }
+                    current = tag_union.ext;
                 },
-                .empty_record, .empty_tag_union => {},
+                .record,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .empty_record,
+                .empty_tag_union,
+                => return false,
             },
-            .flex, .rigid, .field_presence, .err => {},
+            .flex, .rigid, .field_presence, .err => return false,
         }
     }
-    return false;
 }
 
-fn appendRecordFieldVars(
+/// Record the error tags the generated codec being validated requires in
+/// `row` (see `codec_row_demands`).
+fn recordCodecRowDemand(self: *Self, row: Var, tags: []const Ident.Idx) Allocator.Error!void {
+    if (self.active_codec_owner_region == null) return;
+    const names_start = self.codec_row_demand_tags.items.len;
+    try self.codec_row_demand_tags.appendSlice(self.gpa, tags);
+    try self.recordCodecRowDemandRange(row, names_start);
+}
+
+/// Record a demand whose tag names were just appended to
+/// `codec_row_demand_tags` from `names_start` on.
+fn recordCodecRowDemandRange(self: *Self, row: Var, names_start: usize) Allocator.Error!void {
+    const owner = self.active_codec_owner_region orelse unreachable;
+    const tags_len = self.codec_row_demand_tags.items.len - names_start;
+    if (tags_len == 0) return;
+    try self.codec_row_demands.append(self.gpa, .{
+        .owner = owner,
+        .row = row,
+        .tags_start = @intCast(names_start),
+        .tags_len = @intCast(tags_len),
+    });
+}
+
+/// Source region of the expression that introduced a generated-codec
+/// relation, which names the definition its derived body works for.
+fn codecRelationOwnerRegion(
     self: *const Self,
-    stack: *std.ArrayListUnmanaged(Var),
-    fields: types_mod.RecordField.SafeMultiList.Range,
-) std.mem.Allocator.Error!void {
-    const slice = self.types.getRecordFieldsSlice(fields);
-    for (slice.items(.presence)) |presence| {
-        try stack.append(self.gpa, presence.typeVar());
-        if (presence.presenceVar()) |presence_var| {
-            try stack.append(self.gpa, presence_var);
+    constraint: StaticDispatchConstraint,
+    failure_expr: ?CIR.Expr.Idx,
+) ?Region {
+    const expr_idx = constraintIntroExpr(constraint) orelse failure_expr orelse return null;
+    const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    if (@intFromEnum(node_idx) >= self.cir.store.nodes.len()) return null;
+    if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) return null;
+    const region = self.cir.store.getExprRegion(expr_idx);
+    if (region.isEmpty()) return null;
+    return region;
+}
+
+/// Demand every tag the codec validation just finished added to its root
+/// error row, given the row's tag names from before validation began. This
+/// covers relations that widen the row by plain equality with a format
+/// method's own error row.
+fn recordCodecRowGrowth(self: *Self, row: Var, before: []const Ident.Idx) Allocator.Error!void {
+    if (self.active_codec_owner_region == null) return;
+    var after = std.ArrayListUnmanaged(Ident.Idx).empty;
+    defer after.deinit(self.gpa);
+    try self.appendTagRowNames(row, &after);
+    const names_start = self.codec_row_demand_tags.items.len;
+    next_tag: for (after.items) |name| {
+        for (before) |existing| {
+            if (existing.eql(name)) continue :next_tag;
+        }
+        try self.codec_row_demand_tags.append(self.gpa, name);
+    }
+    try self.recordCodecRowDemandRange(row, names_start);
+}
+
+/// Append the names of every tag along `row`'s extension chain.
+fn appendTagRowNames(self: *Self, row: Var, out: *std.ArrayListUnmanaged(Ident.Idx)) Allocator.Error!void {
+    var current = row;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |structure| switch (structure) {
+                .tag_union => |tag_union| {
+                    try out.appendSlice(self.gpa, self.types.getTagsSlice(tag_union.tags).items(.name));
+                    current = tag_union.ext;
+                },
+                .record,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .empty_record,
+                .empty_tag_union,
+                => return,
+            },
+            .flex, .rigid, .field_presence, .err => return,
         }
     }
 }
-
-/// Whether a report also marks the extension it reports erroneous.
-///
-/// The post-body audit proves what it reports: the binding's own body is the
-/// only thing that has run against that row, so the tag is the definition's
-/// and `.err` is the right content for a row the annotation rejects. The
-/// REPLAY establishes no such thing. It reads WHEN a tag landed—inside
-/// `finalizeTypes`, after the narrowing—and treats that timing as provenance,
-/// which it is not: a use site whose unification is deferred into the same
-/// window (a stored dispatch requirement, a generated codec's composed error
-/// row reaching a value binding through an ordinary use) lands there too, and
-/// the replay cannot tell the two apart. Writing `.err` on that reading turns
-/// a possibly-wrong message into a definitely wrong type, so the replay
-/// reports and leaves the solved row as the module solved it.
-const ImplicitOpenExtReportKind = enum { report_and_poison, report_only };
 
 /// Report one implicitly opened extension that its definition EXTENDED.
 /// Callers have already established that it carries at least one tag
@@ -16537,12 +16494,9 @@ const ImplicitOpenExtReportKind = enum { report_and_poison, report_only };
 fn reportImplicitOpenExtExtension(
     self: *Self,
     entry: ImplicitOpenExt,
+    tag_name: Ident.Idx,
     env: *Env,
-    report_kind: ImplicitOpenExtReportKind,
 ) std.mem.Allocator.Error!void {
-    const resolved = self.types.resolveVar(entry.var_);
-    const extension = resolved.desc.content.structure.tag_union;
-    const first_tag = self.types.tags.get(extension.tags.start);
     // Report this as an ordinary Type Mismatch carrying two rows, so the
     // reader sees both types and the tag-typo hint comes from the shared
     // snapshot diff. Neither row is a var the solver owns: the annotated
@@ -16581,13 +16535,10 @@ fn reportImplicitOpenExtExtension(
         },
         .context = .{ .tag_not_in_annotation = .{
             .region = entry.region,
-            .tag_name = first_tag.name,
+            .tag_name = tag_name,
         } },
     } });
-    switch (report_kind) {
-        .report_and_poison => try self.markErroneous(entry.var_),
-        .report_only => {},
-    }
+    try self.markErroneous(entry.var_);
 }
 
 /// After the module solves, ground every still-open implicitly opened
@@ -16600,8 +16551,8 @@ fn reportImplicitOpenExtExtension(
 /// been instantiated would desync the scheme from its uses.
 ///
 /// Every entry point runs this AFTER `runLateImplicitOpenExtAudit`, for the
-/// reason stated there: grounding an extension empties it, and the replay only
-/// reads extensions that still carry tags.
+/// reason stated there: grounding an extension empties it, and the late audit
+/// only reads extensions that still carry tags.
 fn closeWeakValueImplicitOpenExts(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     for (self.weak_value_implicit_open_ext_ranges.items) |range| {
         for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
@@ -18466,6 +18417,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         } else {
                             try self.unifyWith(open_ext_var, .{ .flex = Flex.init() }, env);
                         }
+                        if (!deferred_open) try self.types.markAnnotationTagExt(open_ext_var);
                         try self.implicit_open_exts.append(self.gpa, .{
                             .var_ = open_ext_var,
                             .region = anno_region,
@@ -18485,6 +18437,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
                 if (implicitly_open) {
                     const open_ext_var = try self.fresh(env, anno_region);
+                    try self.types.markAnnotationTagExt(open_ext_var);
                     try self.implicit_open_exts.append(self.gpa, .{
                         .var_ = open_ext_var,
                         .region = anno_region,
@@ -20196,6 +20149,7 @@ fn copyExpectedShape(self: *Self, source: Var, env: *Env) Allocator.Error!Var {
         .rigid_behavior = .fresh_flex,
         .rank_behavior = .ignore_rank,
         .purpose = .expected_shape,
+        .preserve_annotation_tag_ext = true,
     };
     self.var_map.clearRetainingCapacity();
     const fresh_start = self.types.len();
@@ -27763,7 +27717,8 @@ const Probe = struct {
     waiting_predeclared_dispatch_uses_len: usize,
     generated_codec_derivations_len: usize,
     generated_codec_calls_len: usize,
-    pending_generated_parser_error_mappings_len: usize,
+    codec_row_demands_len: usize,
+    codec_row_demand_tags_len: usize,
     rejected_static_dispatches_len: usize,
     record_omitted_defaults_len: usize,
     record_constructions_len: usize,
@@ -27817,7 +27772,8 @@ const Probe = struct {
         self.check.waiting_predeclared_dispatch_uses.shrinkRetainingCapacity(self.waiting_predeclared_dispatch_uses_len);
         self.check.cir.generated_codec_derivations.items.shrinkRetainingCapacity(self.generated_codec_derivations_len);
         self.check.cir.generated_codec_calls.items.shrinkRetainingCapacity(self.generated_codec_calls_len);
-        self.check.pending_generated_parser_error_mappings.shrinkRetainingCapacity(self.pending_generated_parser_error_mappings_len);
+        self.check.codec_row_demands.shrinkRetainingCapacity(self.codec_row_demands_len);
+        self.check.codec_row_demand_tags.shrinkRetainingCapacity(self.codec_row_demand_tags_len);
         // The durable records drop here; the rejection markers they mirror live
         // on descriptors the savepoint rollback above already restored.
         self.check.cir.rejected_static_dispatches.items.shrinkRetainingCapacity(self.rejected_static_dispatches_len);
@@ -27872,7 +27828,8 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const waiting_predeclared_dispatch_uses_len = self.waiting_predeclared_dispatch_uses.items.len;
     const generated_codec_derivations_len = self.cir.generated_codec_derivations.items.items.len;
     const generated_codec_calls_len = self.cir.generated_codec_calls.items.items.len;
-    const pending_generated_parser_error_mappings_len = self.pending_generated_parser_error_mappings.items.len;
+    const codec_row_demands_len = self.codec_row_demands.items.len;
+    const codec_row_demand_tags_len = self.codec_row_demand_tags.items.len;
     const rejected_static_dispatches_len = self.cir.rejected_static_dispatches.items.items.len;
     const record_omitted_defaults_len = self.cir.record_omitted_defaults.items.items.len;
     const accepted_nominal_constructor_backings_len = self.accepted_nominal_constructor_backings.items.len;
@@ -27903,7 +27860,8 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .waiting_predeclared_dispatch_uses_len = waiting_predeclared_dispatch_uses_len,
         .generated_codec_derivations_len = generated_codec_derivations_len,
         .generated_codec_calls_len = generated_codec_calls_len,
-        .pending_generated_parser_error_mappings_len = pending_generated_parser_error_mappings_len,
+        .codec_row_demands_len = codec_row_demands_len,
+        .codec_row_demand_tags_len = codec_row_demand_tags_len,
         .rejected_static_dispatches_len = rejected_static_dispatches_len,
         .record_omitted_defaults_len = record_omitted_defaults_len,
         .record_constructions_len = self.record_constructions.items.len,
@@ -29408,19 +29366,6 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     // the defaulting rounds and constraint validation below (design.md
     // "Defaulted Fields").
     try self.checkPendingDefaults(env);
-    // `checkPendingDefaults` is the last pass to run `checkExpr` over user
-    // source. A default expression is an ordinary USE SITE, so a tag it adds
-    // to a binding's implicitly opened row is caller widening—exactly like
-    // every use checked before `dropSettledLateImplicitOpenExtAudits` ran at
-    // the module call site, and legal there. Narrow again so the
-    // post-finalize replay (`runLateImplicitOpenExtAudit`) cannot mistake it
-    // for the definition extending its own row. Any later pass that starts
-    // checking user expressions must re-narrow the same way.
-    //
-    // 11246's own widening is unaffected: it lands in
-    // `finalizeGeneratedCodecConstraintsToQuiescence`, which runs after this
-    // point, so that entry is still in the list when the replay reads it.
-    self.dropSettledLateImplicitOpenExtAudits();
     try self.judgeFieldKindsAtBoundary(env);
 
     try self.checkAllConstraints(env);
@@ -34165,8 +34110,8 @@ fn recordSettledDeferredDispatchRelation(
     self.retireResolvedTypeSchemeRequirements();
 }
 
-/// Move one currently-concrete generated codec obligation out of the hot
-/// deferred queue. Later source checking can still add nominal layers inside
+/// Move one structurally known generated codec obligation out of the hot
+/// deferred queue. Later source checking can still add tags or nominal layers inside
 /// its receiver, so the derivation is selected exactly once at the final type
 /// boundary instead of being repeatedly rechecked after every expression.
 fn deferGeneratedCodecConstraintToFinalization(
@@ -34185,44 +34130,7 @@ fn deferGeneratedCodecConstraintToFinalization(
         .constraint = constraint,
         .failure_expr = deferred.failure_expr,
     });
-    try self.recordLateSelfWideningWriter(deferred, constraint);
     return true;
-}
-
-/// Remember WHERE a relation punted to the final type boundary came from and
-/// WHAT it can write through, for the late implicit-open-ext replay. A relation
-/// parked here is decided inside
-/// `finalizeGeneratedCodecConstraintsToQuiescence`, which is after both
-/// narrowing passes, so the replay sees its widening and must decide whether
-/// the row it is about to blame a binding for is one this relation could have
-/// written.
-///
-/// The region is resolved now, not at the replay: `Provenance.intro_expr` is
-/// module-local, and reinterpreting an index that arrived with an imported
-/// type as a local expression could name an unrelated region and blame a
-/// binding that did nothing wrong. Here we are in this module's checker with
-/// this module's CIR, so the index is this module's—guarded below regardless.
-///
-/// The two vars are recorded raw, not resolved: the relation has not been
-/// decided yet, and the replay resolves them itself once everything has
-/// settled.
-fn recordLateSelfWideningWriter(
-    self: *Self,
-    deferred: DeferredConstraintCheck,
-    constraint: StaticDispatchConstraint,
-) Allocator.Error!void {
-    const expr_idx = constraintIntroExpr(constraint) orelse
-        self.deferredConstraintFailureExpr(deferred) orelse return;
-    const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-    if (@intFromEnum(node_idx) >= self.cir.store.nodes.len()) return;
-    if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) return;
-    const region = self.cir.store.getExprRegion(expr_idx);
-    if (region.isEmpty()) return;
-    try self.late_self_widening_writers.append(self.gpa, .{
-        .region = region,
-        .dispatcher_var = deferred.var_,
-        .fn_var = constraint.fn_var,
-    });
 }
 
 fn checkFinalGeneratedCodecConstraints(self: *Self, env: *Env) Allocator.Error!void {
@@ -34569,7 +34477,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             // implicit output-position openness collapses first—including
                             // rows inside the nominal's args (eg a Dict
                             // key union). See closeTagRowsForDerivation.
-                            try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
+                            if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
                             switch (try self.nominalSupportsDerivedParseShape(nominal_type, env, region)) {
                                 .supported => if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
                                     try self.satisfyImplicitParserConstraint(
@@ -34613,7 +34521,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             // implicit output-position openness collapses first—including
                             // rows inside the nominal's args (see
                             // closeTagRowsForDerivation).
-                            try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
+                            if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
                             switch (try self.nominalSupportsDerivedEncodeShape(nominal_type, encoding_var, env, region)) {
                                 .supported => if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
                                     try self.satisfyImplicitEncoderForConstraint(
@@ -34911,7 +34819,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             // Collapse implicit output-position openness before
                             // deriving against the alias backing (see
                             // closeTagRowsForDerivation).
-                            try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
+                            if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
                             switch (try self.varSupportsDerivedParseShape(backing_var, env, region)) {
                                 .supported => {
                                     if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
@@ -34960,7 +34868,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             // Collapse implicit output-position openness before
                             // deriving against the alias backing (see
                             // closeTagRowsForDerivation).
-                            try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
+                            if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
                             switch (try self.varSupportsDerivedEncodeShape(backing_var, encoding_var, env, region)) {
                                 .supported => {
                                     if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
@@ -35190,7 +35098,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // A derived parser determines each tag row exactly, so
                         // implicit output-position openness collapses first
                         // (see closeTagRowsForDerivation).
-                        try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
+                        if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
                         switch (try self.typeSupportsDerivedParse(dispatcher_content.structure, env, region)) {
                             .supported => {
                                 if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
@@ -35248,7 +35156,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // A derived encoder determines each tag row exactly, so
                         // implicit output-position openness collapses first
                         // (see closeTagRowsForDerivation).
-                        try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
+                        if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
                         const encoding_var = self.encoderForConstraintEncodingVar(constraint) orelse {
                             try self.reportConstraintError(
                                 deferred_constraint.var_,
@@ -36577,32 +36485,39 @@ fn nominalIsBuiltinBoolType(self: *const Self, nominal_type: types_mod.NominalTy
     return ident.eql(self.cir.idents.bool) or ident.eql(self.cir.idents.bool_type);
 }
 
-/// Close every reachable tag-union row whose extension is an unbound flex var
-/// before deriving a structural parser, encoder, or `map`/`map!` for `var_`
-/// (design.md "Polarity"; Rewrite Inventory `closeTagRowsForDerivation`).
-///
-/// Under polarity, annotated tag unions in output positions carry an implicit
-/// flex extension. A derived implementation determines each row exactly (a
-/// parser or encoder handles precisely the listed tags; derived map
-/// additionally selects its payload, which an open payload row would defeat
-/// by reading as a type variable), so the openness collapses here: each flex
-/// ext unifies with `[]`, exactly like an exhaustive match closing an
-/// inferred row. Downstream shape checks (closed-row requirements, the
-/// `[Missing]`/`[Null]` optional-field conventions, key-string dict keys)
-/// then see the closed rows.
-///
-/// Only the ext of an existing tag union structure is closed. A bare flex var
-/// elsewhere (eg the unbound err row of `Try(ok, _)`, which parse derivation
-/// pins to `[Missing]` separately) is left untouched, and so is a rigid ext:
-/// a polymorphic open row may hold tags no derivation was checked for, so it
-/// stays rejected. The one rigid that does close is the alias-declaration
-/// polarity MARKER (the helper's marker arm). The walk follows structure
-/// only—never a variable's static-dispatch constraints—so a where-method
-/// signature reachable through a constrained rigid keeps the markers its
-/// per-use instantiation resolves.
-fn closeTagRowsForDerivation(self: *Self, var_: Var, env: *Env) Allocator.Error!void {
+/// Codec inference owns a boundary event, not an expression-by-expression
+/// retry: once an inferred tag tail is encountered, park the obligation in
+/// the existing final codec queue. Annotation-bounded tails close eagerly.
+fn deferCodecWithInferredTagRows(
+    self: *Self,
+    deferred: DeferredConstraintCheck,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+) Allocator.Error!bool {
+    const settled = self.checking_final_codec_dispatch_constraints and
+        !(if (constraint.fn_name.eql(self.cir.idents.parser_for))
+            try self.deferredParseHasPendingOpenLiteral(deferred, env)
+        else
+            try self.deferredEncodeHasPendingOpenLiteral(deferred, env));
+    const inferred_open = try self.closeTagRowsForDerivation(
+        deferred.var_,
+        env,
+        if (settled) .all_tag_rows else .annotation_rows,
+    );
+    return inferred_open and try self.deferGeneratedCodecConstraintToFinalization(deferred, constraint);
+}
+
+const DerivationRowClosure = enum { annotation_rows, all_tag_rows };
+
+/// Close annotation-owned tag tails, or all settled inferred tag tails at
+/// the codec boundary. Derived map retains its exact-row selection rule.
+/// Returns whether an inferred flexible tail remains, so its codec can wait
+/// for the finalization boundary without repeatedly traversing the shape.
+fn closeTagRowsForDerivation(self: *Self, var_: Var, env: *Env, mode: DerivationRowClosure) Allocator.Error!bool {
     self.var_set.clearRetainingCapacity();
-    try self.closeTagRowsForDerivationHelp(var_, env, &self.var_set);
+    var inferred_open = false;
+    try self.closeTagRowsForDerivationHelp(var_, env, &self.var_set, mode, &inferred_open);
+    return inferred_open;
 }
 
 fn closeTagRowsForDerivationHelp(
@@ -36610,6 +36525,8 @@ fn closeTagRowsForDerivationHelp(
     var_: Var,
     env: *Env,
     visited: *std.AutoHashMap(Var, void),
+    mode: DerivationRowClosure,
+    inferred_open: *bool,
 ) Allocator.Error!void {
     const resolved = self.types.resolveVar(var_);
     if (visited.contains(resolved.var_)) return;
@@ -36625,9 +36542,9 @@ fn closeTagRowsForDerivationHelp(
             var i: usize = 0;
             while (i < arg_span.count) : (i += 1) {
                 const arg_var = self.types.vars.items.items[@intFromEnum(arg_span.start) + i];
-                try self.closeTagRowsForDerivationHelp(arg_var, env, visited);
+                try self.closeTagRowsForDerivationHelp(arg_var, env, visited, mode, inferred_open);
             }
-            try self.closeTagRowsForDerivationHelp(self.types.getAliasBackingVar(alias), env, visited);
+            try self.closeTagRowsForDerivationHelp(self.types.getAliasBackingVar(alias), env, visited, mode, inferred_open);
         },
         .structure => |flat_type| switch (flat_type) {
             .record => |record| {
@@ -36636,15 +36553,15 @@ fn closeTagRowsForDerivationHelp(
                 while (i < fields_range.count) : (i += 1) {
                     // Re-fetch per iteration: recursion can grow the store.
                     const field = self.types.record_fields.get(@enumFromInt(@intFromEnum(fields_range.start) + i));
-                    try self.closeTagRowsForDerivationHelp(field.presence.typeVar(), env, visited);
+                    try self.closeTagRowsForDerivationHelp(field.presence.typeVar(), env, visited, mode, inferred_open);
                 }
-                try self.closeTagRowsForDerivationHelp(record.ext, env, visited);
+                try self.closeTagRowsForDerivationHelp(record.ext, env, visited, mode, inferred_open);
             },
             .tuple => |tuple| {
                 var i: usize = 0;
                 while (i < tuple.elems.count) : (i += 1) {
                     const elem_var = self.types.vars.items.items[@intFromEnum(tuple.elems.start) + i];
-                    try self.closeTagRowsForDerivationHelp(elem_var, env, visited);
+                    try self.closeTagRowsForDerivationHelp(elem_var, env, visited, mode, inferred_open);
                 }
             },
             .nominal_type => |nominal| {
@@ -36652,7 +36569,7 @@ fn closeTagRowsForDerivationHelp(
                 var i: usize = 0;
                 while (i < args_range.count) : (i += 1) {
                     const arg_var = self.types.vars.items.items[@intFromEnum(args_range.start) + i];
-                    try self.closeTagRowsForDerivationHelp(arg_var, env, visited);
+                    try self.closeTagRowsForDerivationHelp(arg_var, env, visited, mode, inferred_open);
                 }
             },
             .tag_union => |tag_union| {
@@ -36663,13 +36580,19 @@ fn closeTagRowsForDerivationHelp(
                     var arg_i: usize = 0;
                     while (arg_i < tag_args.count) : (arg_i += 1) {
                         const arg_var = self.types.vars.items.items[@intFromEnum(tag_args.start) + arg_i];
-                        try self.closeTagRowsForDerivationHelp(arg_var, env, visited);
+                        try self.closeTagRowsForDerivationHelp(arg_var, env, visited, mode, inferred_open);
                     }
                 }
 
                 const ext_resolved = self.types.resolveVar(tag_union.ext);
                 switch (ext_resolved.desc.content) {
-                    .flex => {
+                    .flex => |flex| {
+                        if (flex.constraints.len() != 0 or
+                            (mode == .annotation_rows and !ext_resolved.desc.flags.annotation_tag_ext))
+                        {
+                            inferred_open.* = true;
+                            return;
+                        }
                         const ext_region = self.getRegionAt(ext_resolved.var_);
                         const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, ext_region);
                         _ = try self.unify(tag_union.ext, empty_tu_var, env);
@@ -36693,7 +36616,7 @@ fn closeTagRowsForDerivationHelp(
                     .field_presence,
                     .structure,
                     .err,
-                    => try self.closeTagRowsForDerivationHelp(tag_union.ext, env, visited),
+                    => try self.closeTagRowsForDerivationHelp(tag_union.ext, env, visited, mode, inferred_open),
                 }
             },
             .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => {},
@@ -37167,7 +37090,7 @@ fn varSupportsDerivedEncodeTagExt(
         },
         .alias => |alias| try self.varSupportsDerivedEncodeTagExt(self.types.getAliasBackingVar(alias), encoding_var, env, region),
         .err => .supported,
-        .flex => .supported,
+        .flex => .unresolved,
         .rigid, .field_presence => .unsupported,
     };
 }
@@ -39323,7 +39246,7 @@ fn satisfyDerivedMapConstraint(
     // dispatcher's own row and on payload rows, whose flex extensions would
     // otherwise read as type variables and defeat the unambiguous-payload
     // judgment (design.md: closeTagRowsForDerivation).
-    try self.closeTagRowsForDerivation(dispatcher_var, env);
+    _ = try self.closeTagRowsForDerivation(dispatcher_var, env, .all_tag_rows);
     var tags = std.ArrayList(types_mod.Tag).empty;
     defer tags.deinit(self.gpa);
     const analysis = (try self.analyzeDerivedMap(dispatcher_var, env, region, &tags)) orelse return .unsupported;
@@ -39523,8 +39446,16 @@ fn satisfyImplicitParserConstraint(
     // A dispatcher that derives its own codec is validated against the shape
     // that codec is generated from, not against the name in front of it, and
     // everything below is inside that shape for the rest of this constraint.
-    const validation_var = (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.parser_for, .parser, &walk, env, region)) orelse dispatcher_var;
-    switch (try self.validateDerivedParseVar(validation_var, encoding_var, state_var, err_var, constraint, env, region, &walk, .shape, failure_expr)) {
+    const validation_var = (try self.generatedStructuralCodecBackingVar(dispatcher_var, constraint_fn_var, self.cir.idents.parser_for, .parser, &walk, env, region)) orelse dispatcher_var;
+    const owner_region_before = self.active_codec_owner_region;
+    self.active_codec_owner_region = self.codecRelationOwnerRegion(constraint, failure_expr);
+    defer self.active_codec_owner_region = owner_region_before;
+    var err_tags_before = std.ArrayListUnmanaged(Ident.Idx).empty;
+    defer err_tags_before.deinit(self.gpa);
+    try self.appendTagRowNames(err_var, &err_tags_before);
+    const validation = try self.validateDerivedParseVar(validation_var, encoding_var, state_var, err_var, constraint, env, region, &walk, .shape, failure_expr);
+    if (validation == .ok) try self.recordCodecRowGrowth(err_var, err_tags_before.items);
+    switch (validation) {
         .ok => try self.recordGeneratedCodecDerivationSnapshot(
             .parser,
             constraint_fn_var,
@@ -39537,13 +39468,6 @@ fn satisfyImplicitParserConstraint(
             self.scratch_generated_codec_calls.items[generated_calls_start..],
             env,
             region,
-            .{
-                .source_constraint_fn_var = constraint_fn_var,
-                .constraint = constraint,
-                .failure_expr = failure_expr,
-                .region = region,
-                .owns_required_field_path = walk.needs_required_field_error,
-            },
         ),
         .reported_error => {
             // The derived-method requirement is erroneous, not the value whose
@@ -39614,8 +39538,16 @@ fn satisfyImplicitEncoderForConstraint(
     // A dispatcher that derives its own codec is validated against the shape
     // that codec is generated from, not against the name in front of it, and
     // everything below is inside that shape for the rest of this constraint.
-    const validation_var = (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.encoder_for, .encoder, &walk, env, region)) orelse dispatcher_var;
-    switch (try self.validateDerivedEncodeVar(validation_var, encoding_var, state_var, err_var, constraint, env, region, &walk)) {
+    const validation_var = (try self.generatedStructuralCodecBackingVar(dispatcher_var, constraint_fn_var, self.cir.idents.encoder_for, .encoder, &walk, env, region)) orelse dispatcher_var;
+    const owner_region_before = self.active_codec_owner_region;
+    self.active_codec_owner_region = self.codecRelationOwnerRegion(constraint, owner_expr);
+    defer self.active_codec_owner_region = owner_region_before;
+    var err_tags_before = std.ArrayListUnmanaged(Ident.Idx).empty;
+    defer err_tags_before.deinit(self.gpa);
+    try self.appendTagRowNames(err_var, &err_tags_before);
+    const validation = try self.validateDerivedEncodeVar(validation_var, encoding_var, state_var, err_var, constraint, env, region, &walk);
+    if (validation == .ok) try self.recordCodecRowGrowth(err_var, err_tags_before.items);
+    switch (validation) {
         .ok => try self.recordGeneratedCodecDerivationSnapshot(
             .encoder,
             constraint_fn_var,
@@ -39628,7 +39560,6 @@ fn satisfyImplicitEncoderForConstraint(
             self.scratch_generated_codec_calls.items[generated_calls_start..],
             env,
             region,
-            null,
         ),
         .reported_error => {
             // Keep the checked value shape intact. The failed encoder_for
@@ -39658,7 +39589,6 @@ fn recordGeneratedCodecDerivationSnapshot(
     calls: []const ModuleEnv.GeneratedCodecCall,
     env: *Env,
     region: Region,
-    parser_error_mapping: ?PendingGeneratedParserErrorMapping,
 ) Allocator.Error!void {
     const fixed_vars = [_]Var{
         constraint_fn_var,
@@ -39727,7 +39657,6 @@ fn recordGeneratedCodecDerivationSnapshot(
         };
         copied_calls.appendAssumeCapacity(.{
             .method_ident = call.method_ident,
-            .conditional = call.conditional,
             .dispatcher_var = @intFromEnum(copied_dispatcher),
             .callable_var = @intFromEnum(copied_callable),
             .evidence_var = call.evidence_var,
@@ -39754,199 +39683,12 @@ fn recordGeneratedCodecDerivationSnapshot(
         copied_vars[6],
         copied_calls.items,
     );
-    if (parser_error_mapping) |pending| {
-        for (self.pending_generated_parser_error_mappings.items, 0..) |existing, index| {
-            if (existing.source_constraint_fn_var != pending.source_constraint_fn_var) continue;
-            if (pending.owns_required_field_path) {
-                self.pending_generated_parser_error_mappings.items[index] = pending;
-            } else {
-                _ = self.pending_generated_parser_error_mappings.swapRemove(index);
-            }
-            return;
-        }
-        if (pending.owns_required_field_path) {
-            try self.pending_generated_parser_error_mappings.append(self.gpa, pending);
-        }
-    }
 }
 
-/// Whether the finalized source-facing parser error row explicitly retains a
-/// tag constructed by the generated parser. This reads only solved checker
-/// data: it never opens, closes, or otherwise mutates the row.
-fn parserErrorRowHasTag(
-    self: *Self,
-    error_var: Var,
-    tag_name: Ident.Idx,
-) bool {
-    var current = error_var;
-    var guard = types_mod.debug.IterationGuard.init("parserErrorRowHasTag");
-    while (true) {
-        guard.tick();
-        switch (self.types.resolveVar(current).desc.content) {
-            .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            .structure => |structure| switch (structure) {
-                .tag_union => |tag_union| {
-                    for (self.types.getTagsSlice(tag_union.tags).items(.name)) |name| {
-                        if (name.eql(tag_name)) return true;
-                    }
-                    current = tag_union.ext;
-                },
-                .empty_tag_union => return false,
-                .record,
-                .tuple,
-                .nominal_type,
-                .fn_pure,
-                .fn_effectful,
-                .fn_unbound,
-                .empty_record,
-                => return false,
-            },
-            // An open or generalized row has not retained this concrete tag.
-            // The selected `invalid_value` method is what closes that exact
-            // capability at the generated parser's public boundary.
-            .flex, .rigid, .field_presence => return false,
-            // A prior type error already owns the diagnostic and prevents this
-            // structural dispatch from reaching post-check compilation.
-            .err => return true,
-        }
-    }
-}
-
-fn generatedParserDerivationForSource(
-    self: *Self,
-    source_constraint_fn_var: Var,
-) ?ModuleEnv.GeneratedCodecDerivation {
-    for (self.cir.generated_codec_derivations.items.items) |derivation| {
-        if (derivation.kind == @intFromEnum(ModuleEnv.GeneratedCodecDerivation.Kind.parser) and
-            derivation.source_constraint_fn_var == @intFromEnum(source_constraint_fn_var))
-        {
-            return derivation;
-        }
-    }
-    return null;
-}
-
-/// Complete the conditional part of each generated parser contract after its
-/// source types have settled. A required record field can report the precise
-/// `MissingRequiredField` tag when the public row retains it; otherwise the
-/// generated body must map that path through the format's exact
-/// `invalid_value` method. Whichever edge is selected here is the sole
-/// authority consumed by checked publication and Monotype.
-fn finalizeGeneratedParserErrorMappings(
-    self: *Self,
-    env: *Env,
-) Allocator.Error!void {
-    const missing_required_field = try @constCast(self.cir).insertIdent(base.Ident.for_text("MissingRequiredField"));
-    const invalid_value = try self.protocolMethodName("invalid_value");
-
-    while (self.pending_generated_parser_error_mappings.pop()) |pending| {
-        const initial = self.generatedParserDerivationForSource(pending.source_constraint_fn_var) orelse
-            unreachable;
-        const source_error_var: Var = @enumFromInt(initial.source_error_var);
-        const retains_missing_required_field = self.parserErrorRowHasTag(source_error_var, missing_required_field);
-
-        const initial_calls = self.cir.generated_codec_calls.items.items[initial.calls_start..][0..initial.calls_len];
-        var already_validated = false;
-        for (initial_calls) |call| {
-            if ((@as(Ident.Idx, @bitCast(call.method_ident))).eql(invalid_value)) {
-                already_validated = true;
-                break;
-            }
-        }
-        if (already_validated) continue;
-
-        const scratch_start = self.scratch_generated_codec_calls.items.len;
-        defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(scratch_start);
-        const encoding_var: Var = @enumFromInt(initial.source_encoding_var);
-        const state_var: Var = @enumFromInt(initial.source_state_var);
-        const optional_capability = try self.tryValidateOptionalInvalidValueMethod(
-            encoding_var,
-            state_var,
-            source_error_var,
-            env,
-            pending.region,
-        );
-        const validation: DerivedParseValidation = if (optional_capability)
-            .ok
-        else if (retains_missing_required_field)
-            continue
-        else
-            try self.validateInvalidValueMethod(
-                encoding_var,
-                state_var,
-                source_error_var,
-                pending.constraint,
-                env,
-                pending.region,
-                pending.failure_expr,
-                null,
-            );
-        switch (validation) {
-            .ok => {
-                if (self.scratch_generated_codec_calls.items.len != scratch_start + 1) unreachable;
-                const late_call = self.scratch_generated_codec_calls.items[scratch_start];
-
-                // Method instantiation can grow checker-owned tables, so
-                // reacquire the derivation and its call slice afterwards.
-                const current = self.generatedParserDerivationForSource(pending.source_constraint_fn_var) orelse
-                    unreachable;
-                const current_calls = self.cir.generated_codec_calls.items.items[current.calls_start..][0..current.calls_len];
-                var completed_calls = std.ArrayList(ModuleEnv.GeneratedCodecCall).empty;
-                defer completed_calls.deinit(self.gpa);
-                try completed_calls.appendSlice(self.gpa, current_calls);
-                try completed_calls.append(self.gpa, late_call);
-
-                try self.cir.recordGeneratedCodecDerivation(
-                    .parser,
-                    @enumFromInt(current.source_constraint_fn_var),
-                    @enumFromInt(current.source_runtime_fn_var),
-                    @enumFromInt(current.source_shape_var),
-                    @enumFromInt(current.source_body_shape_var),
-                    @enumFromInt(current.source_encoding_var),
-                    @enumFromInt(current.source_state_var),
-                    @enumFromInt(current.source_error_var),
-                    @enumFromInt(current.constraint_fn_var),
-                    @enumFromInt(current.runtime_fn_var),
-                    @enumFromInt(current.shape_var),
-                    @enumFromInt(current.body_shape_var),
-                    @enumFromInt(current.encoding_var),
-                    @enumFromInt(current.state_var),
-                    @enumFromInt(current.error_var),
-                    completed_calls.items,
-                );
-            },
-            .reported_error => {
-                const source_shape_var: Var = @enumFromInt(initial.source_shape_var);
-                try self.poisonConstraintFailure(source_shape_var, pending.constraint, env, pending.failure_expr);
-                try self.markStaticDispatchFnRejected(pending.source_constraint_fn_var);
-                try self.markStaticDispatchRejected(pending.constraint);
-            },
-            .unsupported => unreachable,
-        }
-    }
-}
-
-/// Drain late parser capabilities together with the ordinary/static
-/// constraints their checked method instantiations can create. Each parser
-/// derivation enters this queue only when its generated body is validated, and
-/// each static-dispatch edge settles or rejects monotonically, so the joint
-/// loop reaches quiescence without rescanning settled contracts.
-fn finalizeGeneratedParserErrorMappingsToQuiescence(
-    self: *Self,
-    env: *Env,
-) Allocator.Error!void {
-    while (self.pending_generated_parser_error_mappings.items.len > 0) {
-        try self.finalizeGeneratedParserErrorMappings(env);
-        try self.checkAllConstraints(env);
-    }
-}
-
-/// Drain every checker-authored generated-codec worklist to one fixpoint.
-/// Final shape validation can create a parser error-mapping capability, while
-/// that capability's method instantiation can create scheme requirements whose
-/// concrete receiver adds another final codec obligation. Each queue is
-/// monotone, so an iteration that consumes neither queue is the exact stopping
-/// condition.
+/// Drain the final generated-codec worklist together with the scheme
+/// requirements its method instantiations can create, whose concrete receivers
+/// can add another final codec obligation. The queue is monotone, so an
+/// iteration that finds it empty is the exact stopping condition.
 fn finalizeGeneratedCodecConstraintsToQuiescence(
     self: *Self,
     env: *Env,
@@ -39958,17 +39700,8 @@ fn finalizeGeneratedCodecConstraintsToQuiescence(
             try self.checkGroundedStoredTypeSchemeRequirementsAtFinalization(env, true);
         }
 
-        const had_final_codec_constraints = self.final_codec_dispatch_constraints.items.len > 0;
-        if (had_final_codec_constraints) {
-            try self.checkFinalGeneratedCodecConstraints(env);
-        }
-
-        const had_parser_error_mappings = self.pending_generated_parser_error_mappings.items.len > 0;
-        if (had_parser_error_mappings) {
-            try self.finalizeGeneratedParserErrorMappingsToQuiescence(env);
-        }
-
-        if (!had_final_codec_constraints and !had_parser_error_mappings) break;
+        if (self.final_codec_dispatch_constraints.items.len == 0) break;
+        try self.checkFinalGeneratedCodecConstraints(env);
     }
 }
 
@@ -40027,11 +39760,13 @@ fn isGeneratedStructuralCodecMethodBinding(method: StaticDispatchMethodBinding, 
 /// The shape a derived codec's obligations belong to, or null when the
 /// dispatcher owns them itself. `method_ident` keys the method registry;
 /// `kind` is what the declaration asked the compiler to derive. The
-/// application is recorded on the walk, so a backing that reaches the
-/// dispatcher again finds it already accounted for.
+/// application is recorded on the walk as owned by `constraint_fn_var`'s
+/// derivation, so a backing that reaches the dispatcher again resolves its
+/// codec call to that derivation.
 fn generatedStructuralCodecBackingVar(
     self: *Self,
     dispatcher_var: Var,
+    constraint_fn_var: Var,
     method_ident: Ident.Idx,
     kind: CIR.DerivedMethodKind,
     walk: *DerivedCodecWalk,
@@ -40059,7 +39794,7 @@ fn generatedStructuralCodecBackingVar(
     // validation this falls back to has to see an unrecorded application to
     // report that rejection.
     const backing_var = (try self.openNominalBackingForApp(nominal, env, region)) orelse return null;
-    if (try self.takeDerivedCodecBackingWalk(walk, nominal) != .walk_backing) return null;
+    if (try self.takeDerivedCodecBackingWalk(walk, nominal, constraint_fn_var) != .walk_backing) return null;
     // The rest of this constraint is spent inside this backing.
     walk.nominal_backing_depth += 1;
     return backing_var;
@@ -40250,14 +39985,6 @@ const DerivedParseValidation = enum {
     reported_error,
 };
 
-const PendingGeneratedParserErrorMapping = struct {
-    source_constraint_fn_var: Var,
-    constraint: StaticDispatchConstraint,
-    failure_expr: ?CIR.Expr.Idx,
-    region: Region,
-    owns_required_field_path: bool,
-};
-
 fn recordGeneratedCodecCall(
     self: *Self,
     method_name: Ident.Idx,
@@ -40265,11 +39992,9 @@ fn recordGeneratedCodecCall(
     callable_var: Var,
     evidence_var: Var,
     subject_var: ?Var,
-    conditional: bool,
 ) Allocator.Error!void {
     try self.scratch_generated_codec_calls.append(self.gpa, .{
         .method_ident = @bitCast(method_name),
-        .conditional = @intFromBool(conditional),
         .dispatcher_var = @intFromEnum(dispatcher_var),
         .callable_var = @intFromEnum(callable_var),
         .evidence_var = @intFromEnum(evidence_var),
@@ -40287,7 +40012,7 @@ fn finishGeneratedCodecMethodValidation(
     subject_var: ?Var,
 ) Allocator.Error!DerivedParseValidation {
     if (!result.isEstablished()) return .reported_error;
-    try self.recordGeneratedCodecCall(method_name, dispatcher_var, callable_var, evidence_var, subject_var, false);
+    try self.recordGeneratedCodecCall(method_name, dispatcher_var, callable_var, evidence_var, subject_var);
     return .ok;
 }
 
@@ -41023,7 +40748,9 @@ fn constrainDerivedParserRequiredFieldError(
     const ext_var = try self.fresh(env, region);
     const required_err_var = try self.freshFromContent(try self.types.mkTagUnion(&.{tag}, ext_var), env, region);
     const result = try self.unify(err_var, required_err_var, env);
-    return if (result.isEstablished()) .ok else .reported_error;
+    if (!result.isEstablished()) return .reported_error;
+    try self.recordCodecRowDemand(err_var, &.{tag_name});
+    return .ok;
 }
 
 /// Format errors need not be tag rows (for example a format may return Str).
@@ -41112,7 +40839,13 @@ fn constrainDerivedParserErrorRowIncludes(
     const parent_ext = try self.fresh(env, region);
     const required_parent = try self.freshFromContent(try self.types.mkTagUnion(tags, parent_ext), env, region);
     const result = try self.unify(parent_err_var, required_parent, env);
-    return if (result.isEstablished()) .ok else .reported_error;
+    if (!result.isEstablished()) return .reported_error;
+    if (self.active_codec_owner_region != null) {
+        const names_start = self.codec_row_demand_tags.items.len;
+        for (tags) |tag| try self.codec_row_demand_tags.append(self.gpa, tag.name);
+        try self.recordCodecRowDemandRange(parent_err_var, names_start);
+    }
+    return .ok;
 }
 
 fn validateInvalidValueMethod(
@@ -41142,43 +40875,6 @@ fn validateInvalidValueMethod(
         },
     });
     return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, null);
-}
-
-/// Record `invalid_value` as a conditional generated-parser capability when
-/// the format declares it at the exact settled boundary type. Absence or an
-/// incompatible declaration is not itself an error: a parser whose public row
-/// retains `MissingRequiredField` never calls this method. The commit probe
-/// makes the successful method instantiation durable while leaving the failed
-/// optional branch completely unobservable.
-fn tryValidateOptionalInvalidValueMethod(
-    self: *Self,
-    encoding_var: Var,
-    state_var: Var,
-    err_var: Var,
-    env: *Env,
-    region: Region,
-) Allocator.Error!bool {
-    var probe = try self.beginCommitProbe(env);
-    var committed = false;
-    defer if (!committed) probe.rollback();
-
-    const method_name = try self.protocolMethodName("invalid_value");
-    const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse
-        return false;
-    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, err_var), env, region);
-    const result = try probe.unifyInContext(method.var_, expected_fn, .{
-        .method_type = .{
-            .constraint_var = encoding_var,
-            .dispatcher_name = method.dispatcher_name,
-            .method_name = method_name,
-        },
-    });
-    if (!result.isEstablished()) return false;
-
-    committed = true;
-    probe.commit();
-    try self.recordGeneratedCodecCall(method_name, encoding_var, expected_fn, method.var_, null, true);
-    return true;
 }
 
 fn validateSkipRecordFieldMethod(
@@ -41268,15 +40964,16 @@ const DerivedCodecWalk = struct {
     /// nominal codecs temporarily move this boundary so reusable format calls
     /// are shared only within the body that owns them.
     generated_calls_start: usize,
-    /// Set by record validation when this generated body, excluding nested
-    /// generated-codec boundaries, owns a required-field failure path.
-    needs_required_field_error: bool,
     gpa: std.mem.Allocator,
 
     const WalkedApp = struct {
         decl: types_mod.NominalDecl.Idx,
         args_start: u32,
         args_len: u32,
+        /// Source constraint of the generated derivation that walks this
+        /// application's backing. Every later occurrence of the application
+        /// in the walk resolves its codec call to that derivation.
+        derivation_source: Var,
     };
 
     fn init(gpa: std.mem.Allocator, generated_calls_start: usize) DerivedCodecWalk {
@@ -41286,7 +40983,6 @@ const DerivedCodecWalk = struct {
             .walked_app_args = .empty,
             .nominal_backing_depth = 0,
             .generated_calls_start = generated_calls_start,
-            .needs_required_field_error = false,
             .gpa = gpa,
         };
     }
@@ -41301,6 +40997,7 @@ const DerivedCodecWalk = struct {
         self: *DerivedCodecWalk,
         decl: types_mod.NominalDecl.Idx,
         args: []const Var,
+        derivation_source: Var,
     ) Allocator.Error!void {
         const args_start: u32 = @intCast(self.walked_app_args.items.len);
         try self.walked_app_args.appendSlice(self.gpa, args);
@@ -41308,6 +41005,7 @@ const DerivedCodecWalk = struct {
             .decl = decl,
             .args_start = args_start,
             .args_len = @intCast(args.len),
+            .derivation_source = derivation_source,
         });
     }
 
@@ -41554,11 +41252,12 @@ fn takeDerivedCodecBackingWalk(
     self: *Self,
     walk: *DerivedCodecWalk,
     nominal: types_mod.NominalType,
+    derivation_source: Var,
 ) Allocator.Error!DerivedCodecBackingWalk {
     // Builtin codecs are the format protocol itself, validated against the
     // format's own methods rather than by walking a backing shape. Monotype
     // draws the same line when it looks for a custom codec target.
-    if (nominal.originIsBuiltin()) return .accounted_for;
+    if (nominal.originIsBuiltin()) return .builtin;
     const decl_idx = self.types.lookupNominalDecl(nominal) orelse return .walk_backing;
     // The argument list points into the types store, which the comparison and
     // the walk both read through.
@@ -41575,7 +41274,7 @@ fn takeDerivedCodecBackingWalk(
         seen_decl = true;
         if (app.args_len != args.len) continue;
         assumed.clearRetainingCapacity();
-        if (try self.derivedCodecVarsEql(walk.appArgs(app), args, &assumed)) return .accounted_for;
+        if (try self.derivedCodecVarsEql(walk.appArgs(app), args, &assumed)) return .{ .reuse = app.derivation_source };
     }
 
     // Reaching one declaration again at a shape the walk has not accounted for
@@ -41584,16 +41283,20 @@ fn takeDerivedCodecBackingWalk(
     // obligations to check and none to lower either.
     if (seen_decl and try self.derivedCodecDeclGrowsItsFormals(decl_idx)) return .unbounded;
 
-    try walk.recordApp(decl_idx, args);
+    try walk.recordApp(decl_idx, args, derivation_source);
     return .walk_backing;
 }
 
 /// What the walk should do with a nominal application whose codec the compiler
 /// derives.
-const DerivedCodecBackingWalk = enum {
-    /// Nothing to do: an application of this shape is already accounted for,
-    /// or the type is a builtin whose codec is the format protocol.
-    accounted_for,
+const DerivedCodecBackingWalk = union(enum) {
+    /// Nothing to do: the type is a builtin whose codec is the format protocol.
+    builtin,
+    /// An application of this shape is already accounted for by the generated
+    /// derivation whose source constraint this names. That derivation covers
+    /// every occurrence of the application in the walk, including a recursive
+    /// occurrence inside its own backing.
+    reuse: Var,
     /// The declaration grows its own formals, so its derived codec can never
     /// be monomorphized.
     unbounded,
@@ -41697,7 +41400,6 @@ fn validateDerivedParseRecord(
         }
     }
     if (try self.recordParseNeedsRequiredFieldError(field_presences.items)) {
-        walk.needs_required_field_error = true;
         switch (try self.constrainDerivedParserRequiredFieldError(err_var, env, region)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
@@ -41928,15 +41630,8 @@ fn validateDerivedParseTagExt(
         },
         .alias => |alias| try self.validateDerivedParseTagExt(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, walk, failure_expr),
         .err => .ok,
-        // A flex ext that reaches validation is an inferred row (implicit
-        // output-position openness was already collapsed by
-        // closeTagRowsForDerivation): a derived parser produces exactly the
-        // listed tags, so it closes here, exactly as derived encoding does.
-        .flex => blk: {
-            const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
-            const result = try self.unify(ext_var, empty_tu_var, env);
-            break :blk if (result.isEstablished()) .ok else .reported_error;
-        },
+        // Eligibility requires the complete settled row.
+        .flex => .unsupported,
         .rigid, .field_presence => .unsupported,
     };
 }
@@ -42084,16 +41779,17 @@ fn validateDerivedParseNominal(
             .method_name = constraint.fn_name,
         },
     });
+    // The generated derivation this call resolves to: the one validated below,
+    // or the one already covering this application elsewhere in the walk.
+    var derivation_source = expected_fn;
     if (result.isEstablished() and generated_parser) {
-        switch (try self.takeDerivedCodecBackingWalk(walk, nominal)) {
-            .accounted_for => {},
+        switch (try self.takeDerivedCodecBackingWalk(walk, nominal, expected_fn)) {
+            .builtin => {},
+            .reuse => |owner| derivation_source = owner,
             .unbounded => return .unsupported,
             .walk_backing => {
                 walk.nominal_backing_depth += 1;
                 defer walk.nominal_backing_depth -= 1;
-                const parent_needs_required_field_error = walk.needs_required_field_error;
-                walk.needs_required_field_error = false;
-                defer walk.needs_required_field_error = parent_needs_required_field_error;
                 const nested_calls_start = self.scratch_generated_codec_calls.items.len;
                 defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(nested_calls_start);
                 const parent_generated_calls_start = walk.generated_calls_start;
@@ -42124,13 +41820,6 @@ fn validateDerivedParseNominal(
                         self.scratch_generated_codec_calls.items[nested_calls_start..],
                         env,
                         region,
-                        .{
-                            .source_constraint_fn_var = expected_fn,
-                            .constraint = constraint,
-                            .failure_expr = failure_expr,
-                            .region = region,
-                            .owns_required_field_path = walk.needs_required_field_error,
-                        },
                     ),
                     .unsupported, .reported_error => |validation| return validation,
                 }
@@ -42142,7 +41831,7 @@ fn validateDerivedParseNominal(
         self.cir.idents.parser_for,
         nominal_var,
         expected_fn,
-        expected_fn,
+        derivation_source,
         nominal_var,
     )) {
         .ok => {},
@@ -42504,11 +42193,7 @@ fn validateDerivedEncodeTagExt(
         },
         .alias => |alias| try self.validateDerivedEncodeTagExt(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, walk),
         .err => .ok,
-        .flex => blk: {
-            const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
-            const result = try self.unify(ext_var, empty_tu_var, env);
-            break :blk if (result.isEstablished()) .ok else .reported_error;
-        },
+        .flex => .unsupported,
         .rigid, .field_presence => .unsupported,
     };
 }
@@ -42783,9 +42468,13 @@ fn validateDerivedEncodeNominal(
             .method_name = constraint.fn_name,
         },
     });
+    // The generated derivation this call resolves to: the one validated below,
+    // or the one already covering this application elsewhere in the walk.
+    var derivation_source = expected_fn;
     if (result.isEstablished() and isGeneratedStructuralCodecMethodBinding(method_lookup, .encoder)) {
-        switch (try self.takeDerivedCodecBackingWalk(walk, nominal)) {
-            .accounted_for => {},
+        switch (try self.takeDerivedCodecBackingWalk(walk, nominal, expected_fn)) {
+            .builtin => {},
+            .reuse => |owner| derivation_source = owner,
             .unbounded => return .unsupported,
             .walk_backing => {
                 walk.nominal_backing_depth += 1;
@@ -42818,7 +42507,6 @@ fn validateDerivedEncodeNominal(
                         self.scratch_generated_codec_calls.items[nested_calls_start..],
                         env,
                         region,
-                        null,
                     ),
                     .unsupported, .reported_error => |validation| return validation,
                 }
@@ -42830,7 +42518,7 @@ fn validateDerivedEncodeNominal(
         self.cir.idents.encoder_for,
         nominal_var,
         expected_fn,
-        expected_fn,
+        derivation_source,
         nominal_var,
     );
 }

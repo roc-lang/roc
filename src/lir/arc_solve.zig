@@ -2860,6 +2860,12 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 try solver.binding_facts.append(allocator, .{ .demand = local });
                 try solver.unique_facts.append(allocator, .{ .read = local });
             }
+            const captures = store.getLocalSpan(assign.captures);
+            for (0..GuardedList.borrowLen(captures)) |index| {
+                const local = GuardedList.at(captures, index);
+                try solver.binding_facts.append(allocator, .{ .demand = local });
+                try solver.unique_facts.append(allocator, .{ .read = local });
+            }
         },
         .assign_boxy_box => |assign| {
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
@@ -6724,10 +6730,18 @@ fn computeUniquenessDetailed(
     // An alias assigned into a join result cell is one of the cell's
     // incoming edges, alongside its explicit initializations; any other
     // alias target inherits from a single source, and distinct alias
-    // definitions binding different sources never inherit.
+    // definitions binding different sources never inherit. Several
+    // definitions aliasing one source bind the same value whichever runs --
+    // emission unshares a statement suffix that several paths reach into one
+    // copy per path -- so each is its own transfer edge from that source.
     const cell_edge_counts = try allocator.alloc(u32, local_count);
     defer allocator.free(cell_edge_counts);
     @memset(cell_edge_counts, 0);
+    const same_source_alias_counts = try allocator.alloc(u32, local_count);
+    defer allocator.free(same_source_alias_counts);
+    @memset(same_source_alias_counts, 0);
+    var repeated_alias_edges = std.ArrayList(AliasDef).empty;
+    defer repeated_alias_edges.deinit(allocator);
     for (alias_defs.items) |def| {
         if (join_targets.isSet(def.target)) {
             try join_incoming.append(allocator, .{ .target = def.target, .source = def.source });
@@ -6739,8 +6753,12 @@ fn computeUniquenessDetailed(
             alias_source[def.target] = def.source;
             alias_stmt[def.target] = def.stmt;
             try alias_targets.append(allocator, def.target);
+            same_source_alias_counts[def.target] = 1;
         } else if (alias_source[def.target] != def.source) {
             foreign_def.set(def.target);
+        } else {
+            same_source_alias_counts[def.target] += 1;
+            try repeated_alias_edges.append(allocator, def);
         }
     }
     // A local with several definitions keeps a tracked origin only when
@@ -6752,7 +6770,11 @@ fn computeUniquenessDetailed(
     defer multi_ok.deinit(allocator);
     var multi_ok_iter = multi_def.iterator(.{});
     while (multi_ok_iter.next()) |index| {
-        if (birth_counts[index] + join_decl_counts[index] + cell_edge_counts[index] == def_counts[index]) multi_ok.set(index);
+        if (birth_counts[index] + join_decl_counts[index] + cell_edge_counts[index] == def_counts[index] or
+            same_source_alias_counts[index] == def_counts[index])
+        {
+            multi_ok.set(index);
+        }
     }
 
     // A read-only view's holder-adding occurrences belong to the value it
@@ -6791,10 +6813,10 @@ fn computeUniquenessDetailed(
     // An alias target's origin derives from its source, so a birth bit set
     // by another of its definitions must not stand on its own (the alias
     // definition may bind a non-unique value); and a multi-bound alias
-    // target never inherits.
+    // target inherits only when every definition aliases its one source.
     for (alias_targets.items) |target| {
         born.unset(target);
-        if (multi_def.isSet(target)) destroyed.set(target);
+        if (multi_def.isSet(target) and !multi_ok.isSet(target)) destroyed.set(target);
     }
 
     // Dense index back to the local it names, for the ordered-use queries.
@@ -6845,6 +6867,9 @@ fn computeUniquenessDetailed(
         defer checks.deinit(allocator);
         for (alias_targets.items) |target| {
             try checks.append(allocator, .{ .source = @enumFromInt(index_to_local[alias_source[target]]), .stmt = alias_stmt[target], .target = target });
+        }
+        for (repeated_alias_edges.items) |def| {
+            try checks.append(allocator, .{ .source = @enumFromInt(index_to_local[def.source]), .stmt = def.stmt, .target = def.target });
         }
         for (join_incoming.items, join_incoming_stmts.items) |incoming, stmt| {
             try checks.append(allocator, .{ .source = @enumFromInt(index_to_local[incoming.source]), .stmt = stmt, .target = incoming.target });
@@ -7459,6 +7484,54 @@ test "uniqueness workspace reanalyzes read-only signatures through borrowed view
     try testing.expectEqual(@as(usize, 4), workspace.consumption.rebuilds);
     try testing.expect(owned.consumed.isSet(@intFromEnum(view)));
     try testing.expect(!owned.unique.isSet(@intFromEnum(source)));
+}
+
+/// Builds `list = []` followed by `alias = list` on each of two exclusive
+/// arms, or, with `sequential`, twice on one path, and returns whether
+/// `alias` keeps `list`'s unique birth.
+fn aliasBornUniqueAfterRepeatedDefinitions(sequential: bool) SolveError!bool {
+    const allocator = std.testing.allocator;
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    const flag = try f.local(.u64);
+    const list = try f.local(f.list);
+    const alias = try f.local(f.list);
+    const ret = try f.ret(alias);
+    const body = if (sequential) blk: {
+        const second = try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .{ .local = list }, .next = ret } });
+        break :blk try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .{ .local = list }, .next = second } });
+    } else blk: {
+        const first = try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .{ .local = list }, .next = ret } });
+        const second = try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .{ .local = list }, .next = try f.ret(alias) } });
+        const branches = try f.store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{.{ .value = 1, .body = first }});
+        break :blk try f.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = flag,
+            .branches = branches,
+            .default_branch = second,
+            .default_is_cold = false,
+            .continuation = null,
+        } });
+    };
+    const entry = try f.store.addCFStmt(.{ .assign_list = .{ .target = list, .elems = LIR.LocalSpan.empty(), .next = body } });
+    _ = try f.proc(&.{flag}, entry, f.list);
+    const rc = [_]bool{ false, true, true };
+    var sigs = [_]arc_sig.RcSig{.all_owned};
+    var borrowed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, rc.len);
+    defer borrowed.deinit(allocator);
+    var uniqueness = try computeUniquenessDetailed(allocator, &f.store, &rc, .{ .sigs = &sigs }, null, null, null, null, true, &f.layouts, .none, &borrowed, null);
+    defer uniqueness.deinit(allocator);
+    return uniqueness.born_unique.isSet(@intFromEnum(alias));
+}
+
+test "uniqueness: identical alias definitions on exclusive paths keep their source's birth" {
+    // Emission unshares a suffix two paths reach into one copy per path, so
+    // the emitted procedure binds one alias target on each arm.
+    try std.testing.expect(try aliasBornUniqueAfterRepeatedDefinitions(false));
+}
+
+test "uniqueness: identical alias definitions on one path lose their source's birth" {
+    // The second definition reads the source after the first moved its unit.
+    try std.testing.expect(!try aliasBornUniqueAfterRepeatedDefinitions(true));
 }
 
 test "uniqueness fixed point propagates fresh returns through a call diamond and chain" {

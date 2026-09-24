@@ -65,7 +65,7 @@ const DW_FORM_data8 = 0x07;
 const DW_FORM_string = 0x08;
 const DW_FORM_udata = 0x0f;
 const DW_FORM_sec_offset = 0x17;
-const DW_LANG_C99 = 0x000c;
+const DW_LANG_Roc = 0x0049;
 
 /// Serializes the three DWARF sections. `source_files` supplies the file
 /// table (entries match `SourceLoc.file` indices), `line_entries` must be in
@@ -296,7 +296,7 @@ fn buildInfoSection(
     try appendUleb(&buf, gpa, 1);
     try buf.appendSlice(gpa, producer);
     try buf.append(gpa, 0);
-    try appendInt(&buf, gpa, u16, DW_LANG_C99);
+    try appendInt(&buf, gpa, u16, DW_LANG_Roc);
     try buf.appendSlice(gpa, cu_name);
     try buf.append(gpa, 0);
     try relocs.append(gpa, .{

@@ -219,6 +219,7 @@ comptime {
         "roc_boxy_drop",
         "roc_boxy_tag_match",
         "roc_boxy_desc_copy",
+        "roc_boxy_dict_copy",
         "roc_boxy_dynamic_num_literal",
         "roc_boxy_dynamic_num_literal_ref",
         "roc_boxy_dynamic_frac_literal_ref",

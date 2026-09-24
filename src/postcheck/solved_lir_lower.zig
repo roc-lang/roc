@@ -3608,7 +3608,7 @@ const Lowerer = struct {
                 break :blk proc;
             } else null;
             try self.result.requested_layouts.append(self.allocator, .{
-                .ty = self.types.typeDigest(&self.solved.lifted.names, request.ty),
+                .ty = try self.types.typeDigest(&self.solved.lifted.names, request.ty),
                 .checked_type = request.checked_type,
                 .const_locator = request.const_locator,
                 .layout_idx = try self.layoutOfType(request.ty),
@@ -4548,7 +4548,7 @@ const Lowerer = struct {
         const key = ComptimeRootKey{
             .module = value_root.module,
             .root = value_root.root,
-            .ty = self.types.typeDigest(&self.solved.lifted.names, ty),
+            .ty = try self.types.typeDigest(&self.solved.lifted.names, ty),
         };
         if (self.comptime_root_slots.get(key)) |existing| {
             // The digest selects the candidate; equivalence decides. Sharing

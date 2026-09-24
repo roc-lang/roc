@@ -27,12 +27,99 @@ const JobKind = enum {
     harness,
 };
 
+/// Which hosts a MiniCI job has to run on for its signal to be complete. CI
+/// runs MiniCI as several lanes (see `Lane`), and each lane selects jobs by
+/// placement, so every job's placement is stated here rather than inferred.
+const Placement = enum {
+    /// Reads only tracked source files and builds nothing beyond its own small
+    /// host check tool, so its result is the same on every host. It runs once,
+    /// in the `source` lane, which does not need `build-ci`.
+    source,
+    /// Needs `build-ci` outputs, but its result does not depend on the host
+    /// OS or architecture, so it runs only in the primary (Linux x86_64) lane.
+    primary_host,
+    /// Exercises host-specific behavior (linking, codegen, paths, process
+    /// handling, ...), so it runs on every host.
+    every_host,
+};
+
 const Job = struct {
     name: []const u8,
     kind: JobKind = .single,
     args: []const []const u8 = &.{},
     skip_reason: ?[]const u8 = null,
+    placement: Placement = .every_host,
 };
+
+/// A group of CI jobs that together run each MiniCI job exactly once per host
+/// (see `shards` and the "MiniCI shards cover" tests).
+const Lane = enum {
+    /// Source-only checks. Runs once, on Linux, before anything is built.
+    source,
+    /// The Linux x86_64 lane: every job that needs `build-ci` outputs.
+    primary,
+    /// The macOS and Windows lanes: only the jobs whose result can differ by
+    /// host. Source and primary-host jobs already ran on Linux.
+    secondary,
+
+    fn runs(self: Lane, placement: Placement) bool {
+        return switch (self) {
+            .source => placement == .source,
+            .primary => placement == .primary_host or placement == .every_host,
+            .secondary => placement == .every_host,
+        };
+    }
+
+    /// The source lane runs only source checks, and those build their own
+    /// small host tools, so running `build-ci` first would be pure waste.
+    fn needsBuildCi(self: Lane) bool {
+        return self != .source;
+    }
+
+    /// Other lanes stop at the first failing check so no test time is spent
+    /// on a change that is already red. The source lane contains nothing but
+    /// checks, so it runs all of them and reports every failure at once.
+    fn stopsAtFailingCheck(self: Lane) bool {
+        return self != .source;
+    }
+};
+
+/// The host family a CI shard runs on. Used only to prove shard coverage.
+const Host = enum { linux, macos, windows };
+
+/// One CI job's slice of MiniCI: the jobs in `selection` that `lane` runs.
+/// `.github/workflows/ci_manager.yml` names every shard exactly once through
+/// its `minici_shard:` matrix keys, and `--minici-verify-workflow` checks that.
+const Shard = struct {
+    name: []const u8,
+    host: Host,
+    lane: Lane,
+    selection: Selection = .{},
+};
+
+/// Shard boundaries are balanced from measured per-job CI timings. The
+/// "MiniCI shards cover" tests prove that, for each host, the shards run every
+/// job exactly once: the `source` shard and the Linux shards together run every
+/// job, and each of the macOS and Windows shard sets runs every `every_host`
+/// job.
+const shards = [_]Shard{
+    .{ .name = "source", .host = .linux, .lane = .source },
+    .{ .name = "linux-core", .host = .linux, .lane = .primary, .selection = .{ .before = "run-test-eval" } },
+    .{ .name = "linux-eval", .host = .linux, .lane = .primary, .selection = .{ .from = "run-test-eval", .to = "run-test-eval-host-effects" } },
+    .{ .name = "linux-harness", .host = .linux, .lane = .primary, .selection = .{ .after = "run-test-eval-host-effects" } },
+    .{ .name = "macos-core", .host = .macos, .lane = .secondary, .selection = .{ .to = "run-test-eval" } },
+    .{ .name = "macos-harness", .host = .macos, .lane = .secondary, .selection = .{ .after = "run-test-eval" } },
+    .{ .name = "windows-core", .host = .windows, .lane = .secondary, .selection = .{ .to = "run-test-zig-module-roc_target" } },
+    .{ .name = "windows-zig", .host = .windows, .lane = .secondary, .selection = .{ .after = "run-test-zig-module-roc_target", .to = "run-test-eval" } },
+    .{ .name = "windows-harness", .host = .windows, .lane = .secondary, .selection = .{ .after = "run-test-eval" } },
+};
+
+fn shardByName(name: []const u8) ?Shard {
+    for (shards) |shard| {
+        if (std.mem.eql(u8, shard.name, name)) return shard;
+    }
+    return null;
+}
 
 const Selection = struct {
     from: ?[]const u8 = null,
@@ -63,33 +150,39 @@ const ParsedArgs = struct {
     build_args: []const []const u8,
     selection: Selection,
     skip_build: bool,
+    shard: ?Shard = null,
+    verify_workflow: ?[]const u8 = null,
 };
 
 const jobs = [_]Job{
     // MiniCI trusts `build.zig` to keep build work behind `build-ci`. Keep this
     // list to leaf `run-*` steps. Do not add aliases or aggregate steps that
     // hide useful reporting boundaries.
-    .{ .name = "run-check-zig-format" },
-    .{ .name = "run-check-zig-lints" },
-    .{ .name = "run-check-tidy" },
-    .{ .name = "run-check-git-lints" },
-    .{ .name = "run-check-type-checker-patterns" },
-    .{ .name = "run-check-enum-from-int-zero" },
-    .{ .name = "run-check-unused-suppression" },
-    .{ .name = "run-check-semantic-audit" },
-    .{ .name = "run-check-postcheck-architecture" },
-    .{ .name = "run-check-wasm-builtin-routing" },
-    .{ .name = "run-check-panic" },
-    .{ .name = "run-check-cli-global-stdio" },
+    //
+    // A new job defaults to `.every_host`. Mark it `.source` only when it reads
+    // nothing but tracked sources, and `.primary_host` only when its result
+    // cannot depend on the host (see `Placement`).
+    .{ .name = "run-check-zig-format", .placement = .source },
+    .{ .name = "run-check-zig-lints", .placement = .source },
+    .{ .name = "run-check-tidy", .placement = .source },
+    .{ .name = "run-check-git-lints", .placement = .source },
+    .{ .name = "run-check-type-checker-patterns", .placement = .source },
+    .{ .name = "run-check-enum-from-int-zero", .placement = .source },
+    .{ .name = "run-check-unused-suppression", .placement = .source },
+    .{ .name = "run-check-semantic-audit", .placement = .source },
+    .{ .name = "run-check-postcheck-architecture", .placement = .source },
+    .{ .name = "run-check-wasm-builtin-routing", .placement = .source },
+    .{ .name = "run-check-panic", .placement = .source },
+    .{ .name = "run-check-cli-global-stdio", .placement = .source },
     .{ .name = "run-check-test-wiring" },
-    .{ .name = "run-check-builtin-format" },
+    .{ .name = "run-check-builtin-format", .placement = .primary_host },
     .{ .name = "run-check-glue-abi" },
     .{ .name = "run-check-simd-codegen" },
     .{ .name = "run-check-baseline-codegen" },
     .{ .name = "run-check-match-extension-codegen" },
     .{ .name = "run-check-str-eq-same-allocation" },
     .{ .name = "run-check-snapshots" },
-    .{ .name = "run-check-test-asset-coverage" },
+    .{ .name = "run-check-test-asset-coverage", .placement = .source },
     .{ .name = "run-test-zig-module-collections" },
     .{ .name = "run-test-zig-module-base" },
     .{ .name = "run-test-zig-module-types" },
@@ -160,7 +253,10 @@ fn printSelectionUsage() void {
         \\  --minici-after <job>  execute MiniCI run jobs after this job
         \\  --minici-before <job> execute MiniCI run jobs before this job
         \\  --minici-only <job>   execute exactly one MiniCI run job
+        \\  --minici-shard <name> execute one CI shard (see `shards` in src/build/minici.zig)
         \\  --minici-skip-build   assume `build-ci` already ran and run selected jobs only
+        \\  --minici-verify-workflow <path>
+        \\                        check that <path> names every CI shard exactly once, then exit
         \\
         \\Other arguments are forwarded to child `zig build` commands.
         \\
@@ -202,6 +298,28 @@ fn setSelectionBefore(selection: *Selection, value: []const u8, arg: []const u8)
         return error.InvalidMiniCiArgument;
     }
     selection.before = value;
+}
+
+fn setShard(parsed_shard: *?Shard, selection: Selection, value: []const u8, arg: []const u8) !void {
+    if (parsed_shard.* != null) {
+        printSelectionConflict("conflicting shard option `{s}`; use --minici-shard once", arg);
+        return error.InvalidMiniCiArgument;
+    }
+    if (selection.from != null or selection.to != null or selection.after != null or selection.before != null) {
+        printSelectionConflict("conflicting selection option `{s}`; --minici-shard cannot be combined with range options", arg);
+        return error.InvalidMiniCiArgument;
+    }
+    parsed_shard.* = shardByName(value) orelse {
+        printUsageError("unknown MiniCI shard `{s}`", value);
+        return error.InvalidMiniCiArgument;
+    };
+}
+
+fn rejectRangeWithShard(parsed_shard: ?Shard, arg: []const u8) !void {
+    if (parsed_shard != null) {
+        printSelectionConflict("conflicting selection option `{s}`; --minici-shard cannot be combined with range options", arg);
+        return error.InvalidMiniCiArgument;
+    }
 }
 
 fn setSelectionOnly(selection: *Selection, value: []const u8, arg: []const u8) !void {
@@ -257,6 +375,8 @@ fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
     errdefer build_args.deinit(allocator);
     var selection = Selection{};
     var skip_build = false;
+    var shard: ?Shard = null;
+    var verify_workflow: ?[]const u8 = null;
 
     var i: usize = 2;
     while (i < args.len) : (i += 1) {
@@ -269,6 +389,7 @@ fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
                 return error.InvalidMiniCiArgument;
             }
             i += 1;
+            try rejectRangeWithShard(shard, arg);
             try setSelectionFrom(&selection, args[i], arg);
         } else if (std.mem.startsWith(u8, arg, "--minici-from=")) {
             const value = arg["--minici-from=".len..];
@@ -276,6 +397,7 @@ fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
                 printUsageError("missing value after `{s}`", arg);
                 return error.InvalidMiniCiArgument;
             }
+            try rejectRangeWithShard(shard, arg);
             try setSelectionFrom(&selection, value, arg);
         } else if (std.mem.eql(u8, arg, "--minici-to")) {
             if (i + 1 >= args.len) {
@@ -283,6 +405,7 @@ fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
                 return error.InvalidMiniCiArgument;
             }
             i += 1;
+            try rejectRangeWithShard(shard, arg);
             try setSelectionTo(&selection, args[i], arg);
         } else if (std.mem.startsWith(u8, arg, "--minici-to=")) {
             const value = arg["--minici-to=".len..];
@@ -290,6 +413,7 @@ fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
                 printUsageError("missing value after `{s}`", arg);
                 return error.InvalidMiniCiArgument;
             }
+            try rejectRangeWithShard(shard, arg);
             try setSelectionTo(&selection, value, arg);
         } else if (std.mem.eql(u8, arg, "--minici-after")) {
             if (i + 1 >= args.len) {
@@ -297,6 +421,7 @@ fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
                 return error.InvalidMiniCiArgument;
             }
             i += 1;
+            try rejectRangeWithShard(shard, arg);
             try setSelectionAfter(&selection, args[i], arg);
         } else if (std.mem.startsWith(u8, arg, "--minici-after=")) {
             const value = arg["--minici-after=".len..];
@@ -304,6 +429,7 @@ fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
                 printUsageError("missing value after `{s}`", arg);
                 return error.InvalidMiniCiArgument;
             }
+            try rejectRangeWithShard(shard, arg);
             try setSelectionAfter(&selection, value, arg);
         } else if (std.mem.eql(u8, arg, "--minici-before")) {
             if (i + 1 >= args.len) {
@@ -311,6 +437,7 @@ fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
                 return error.InvalidMiniCiArgument;
             }
             i += 1;
+            try rejectRangeWithShard(shard, arg);
             try setSelectionBefore(&selection, args[i], arg);
         } else if (std.mem.startsWith(u8, arg, "--minici-before=")) {
             const value = arg["--minici-before=".len..];
@@ -318,6 +445,7 @@ fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
                 printUsageError("missing value after `{s}`", arg);
                 return error.InvalidMiniCiArgument;
             }
+            try rejectRangeWithShard(shard, arg);
             try setSelectionBefore(&selection, value, arg);
         } else if (std.mem.eql(u8, arg, "--minici-only")) {
             if (i + 1 >= args.len) {
@@ -325,6 +453,7 @@ fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
                 return error.InvalidMiniCiArgument;
             }
             i += 1;
+            try rejectRangeWithShard(shard, arg);
             try setSelectionOnly(&selection, args[i], arg);
         } else if (std.mem.startsWith(u8, arg, "--minici-only=")) {
             const value = arg["--minici-only=".len..];
@@ -332,7 +461,36 @@ fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
                 printUsageError("missing value after `{s}`", arg);
                 return error.InvalidMiniCiArgument;
             }
+            try rejectRangeWithShard(shard, arg);
             try setSelectionOnly(&selection, value, arg);
+        } else if (std.mem.eql(u8, arg, "--minici-shard")) {
+            if (i + 1 >= args.len) {
+                printUsageError("missing value after `{s}`", arg);
+                return error.InvalidMiniCiArgument;
+            }
+            i += 1;
+            try setShard(&shard, selection, args[i], arg);
+        } else if (std.mem.startsWith(u8, arg, "--minici-shard=")) {
+            const value = arg["--minici-shard=".len..];
+            if (value.len == 0) {
+                printUsageError("missing value after `{s}`", arg);
+                return error.InvalidMiniCiArgument;
+            }
+            try setShard(&shard, selection, value, arg);
+        } else if (std.mem.eql(u8, arg, "--minici-verify-workflow")) {
+            if (i + 1 >= args.len) {
+                printUsageError("missing value after `{s}`", arg);
+                return error.InvalidMiniCiArgument;
+            }
+            i += 1;
+            verify_workflow = args[i];
+        } else if (std.mem.startsWith(u8, arg, "--minici-verify-workflow=")) {
+            const value = arg["--minici-verify-workflow=".len..];
+            if (value.len == 0) {
+                printUsageError("missing value after `{s}`", arg);
+                return error.InvalidMiniCiArgument;
+            }
+            verify_workflow = value;
         } else {
             try build_args.append(allocator, arg);
         }
@@ -341,8 +499,10 @@ fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
     return .{
         .zig_exe = zig_exe,
         .build_args = try build_args.toOwnedSlice(allocator),
-        .selection = selection,
+        .selection = if (shard) |chosen| chosen.selection else selection,
         .skip_build = skip_build,
+        .shard = shard,
+        .verify_workflow = verify_workflow,
     };
 }
 
@@ -1470,7 +1630,62 @@ fn memoryAwareBuildJobs(_: std.Io, _: std.mem.Allocator, env: *const std.process
     return budget;
 }
 
-/// Entry point: build the CI artifacts, then run each `run-*` job in order,
+const workflow_shard_key = "minici_shard:";
+
+/// Returns one message per problem with the `minici_shard:` keys in `text`: a
+/// name that is not in `shards`, a shard named more than once, or a shard not
+/// named at all. An empty result means the workflow runs every shard exactly
+/// once, which together with the "MiniCI shards cover" tests means CI runs
+/// every MiniCI job on every host it belongs on.
+fn workflowShardProblems(allocator: std.mem.Allocator, text: []const u8) ![]const []const u8 {
+    var problems = std.ArrayList([]const u8).empty;
+    errdefer problems.deinit(allocator);
+    var counts = [_]usize{0} ** shards.len;
+
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |raw_line| {
+        var line = std.mem.trim(u8, raw_line, " \t\r");
+        if (std.mem.startsWith(u8, line, "- ")) line = std.mem.trimStart(u8, line[2..], " ");
+        if (!std.mem.startsWith(u8, line, workflow_shard_key)) continue;
+        var value = line[workflow_shard_key.len..];
+        if (std.mem.findScalar(u8, value, '#')) |comment_start| value = value[0..comment_start];
+        value = std.mem.trim(u8, value, " \t\"'");
+
+        const index = for (shards, 0..) |shard, i| {
+            if (std.mem.eql(u8, shard.name, value)) break i;
+        } else {
+            try problems.append(allocator, try std.fmt.allocPrint(allocator, "unknown MiniCI shard `{s}`", .{value}));
+            continue;
+        };
+        counts[index] += 1;
+    }
+
+    for (shards, counts) |shard, count| {
+        if (count == 1) continue;
+        try problems.append(allocator, try std.fmt.allocPrint(
+            allocator,
+            "MiniCI shard `{s}` is named {d} times (expected exactly once)",
+            .{ shard.name, count },
+        ));
+    }
+    return problems.toOwnedSlice(allocator);
+}
+
+fn verifyWorkflow(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !void {
+    const text = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(4 * 1024 * 1024)) catch |err| {
+        std.debug.print("MiniCI: cannot read workflow `{s}`: {s}\n", .{ path, @errorName(err) });
+        std.process.exit(1);
+    };
+    const problems = try workflowShardProblems(allocator, text);
+    if (problems.len == 0) {
+        std.debug.print("MiniCI: `{s}` runs each of the {d} MiniCI shards exactly once\n", .{ path, shards.len });
+        return;
+    }
+    for (problems) |problem| std.debug.print("MiniCI workflow error in `{s}`: {s}\n", .{ path, problem });
+    std.process.exit(1);
+}
+
+/// Entry point: build the CI artifacts, then run each selected `run-*` job in order,
 /// streaming heartbeats and a machine-readable report. Limits only build graph
 /// parallelism on memory-constrained hosts (see `memoryAwareBuildJobs`).
 pub fn main(init: std.process.Init) !void {
@@ -1490,6 +1705,11 @@ pub fn main(init: std.process.Init) !void {
         error.OutOfMemory => return err,
         error.InvalidMiniCiArgument => std.process.exit(2),
     };
+    if (parsed_args.verify_workflow) |workflow_path| {
+        try verifyWorkflow(allocator, io, workflow_path);
+        return;
+    }
+    const lane: ?Lane = if (parsed_args.shard) |shard| shard.lane else null;
     const selected_jobs = resolveSelection(parsed_args.selection) catch |err| {
         printSelectionError(parsed_args.selection, err);
         printSelectionUsage();
@@ -1508,6 +1728,9 @@ pub fn main(init: std.process.Init) !void {
     const run_started_ns = nowNs(io);
     const run_started_unix_ms = unixMs(io);
     const total_phases = jobs.len + 1;
+    if (parsed_args.shard) |shard| {
+        std.debug.print("MiniCI shard: `{s}` ({s} lane)\n", .{ shard.name, @tagName(shard.lane) });
+    }
     if (selected_jobs.first != 0 or selected_jobs.last != jobs.len - 1) {
         std.debug.print("MiniCI selection: `{s}` through `{s}`\n", .{
             jobs[selected_jobs.first].name,
@@ -1521,6 +1744,8 @@ pub fn main(init: std.process.Init) !void {
     printBuildStart(build_progress);
     const build_result = if (parsed_args.skip_build)
         try skipCommand(io, build_argv, build_log, "skipped by --minici-skip-build\n", run_started_ns)
+    else if (lane != null and !lane.?.needsBuildCi())
+        try skipCommand(io, build_argv, build_log, "skipped: the source lane runs only source checks, which build their own tools\n", run_started_ns)
     else
         try runCommand(allocator, io, build_argv, build_log, heartbeat_interval_ms, run_started_ns, build_progress);
     if (build_result.heartbeat_printed) printBuildStart(build_progress);
@@ -1547,10 +1772,12 @@ pub fn main(init: std.process.Init) !void {
         const argv = try buildCommand(allocator, zig_exe, build_args, job.name, null, stats_path, job.args);
         const progress = Progress{ .current = job_index + 2, .total = total_phases };
         printRunStart(progress, job.name);
-        const skip_reason: ?[]const u8 = if (selected_jobs.includes(job_index))
-            job.skip_reason
+        const skip_reason: ?[]const u8 = if (!selected_jobs.includes(job_index))
+            "excluded by MiniCI selection\n"
+        else if (lane != null and !lane.?.runs(job.placement))
+            try std.fmt.allocPrint(allocator, "not run in the {s} lane ({s} job)\n", .{ @tagName(lane.?), @tagName(job.placement) })
         else
-            "excluded by MiniCI selection\n";
+            job.skip_reason;
         var result = if (skip_reason) |reason|
             try skipCommand(io, argv, log_path, reason, run_started_ns)
         else
@@ -1565,7 +1792,8 @@ pub fn main(init: std.process.Init) !void {
             printRerunHint(result);
         }
 
-        if (isCheckJob(job.name) and !isSuccessful(result)) {
+        const stops_at_failing_check = if (lane) |l| l.stopsAtFailingCheck() else true;
+        if (stops_at_failing_check and isCheckJob(job.name) and !isSuccessful(result)) {
             try writeReportJson(allocator, io, run_started_unix_ms, build_result, results.items);
             try writeHtml(allocator, io, run_started_unix_ms, build_result, results.items);
             try printSummary(allocator, total_phases, build_result, results.items, durationSince(io, run_started_ns));
@@ -1726,6 +1954,130 @@ test "resolveSelection supports exhaustive adjacent MiniCI shards" {
     try std.testing.expect(!middle.includes(core_boundary));
     try std.testing.expect(!middle.includes(harness_boundary));
     try std.testing.expect(last.includes(harness_boundary));
+}
+
+/// How many of `host`'s shards run job `job_index`. The `source` shard runs on
+/// Linux, but its jobs are host-independent, so it counts for every host.
+fn shardRunsForHost(host: Host, job_index: usize) !usize {
+    var count: usize = 0;
+    for (shards) |shard| {
+        if (shard.host != host and shard.lane != .source) continue;
+        const selected = try resolveSelection(shard.selection);
+        if (selected.includes(job_index) and shard.lane.runs(jobs[job_index].placement)) count += 1;
+    }
+    return count;
+}
+
+test "MiniCI shards cover every job exactly once on Linux" {
+    for (jobs, 0..) |job, i| {
+        const count = try shardRunsForHost(.linux, i);
+        if (count != 1) std.debug.print("job `{s}` runs {d} times on Linux\n", .{ job.name, count });
+        try std.testing.expectEqual(@as(usize, 1), count);
+    }
+}
+
+test "MiniCI shards cover every host-specific job exactly once on macOS and Windows" {
+    for ([_]Host{ .macos, .windows }) |host| {
+        for (jobs, 0..) |job, i| {
+            const expected: usize = switch (job.placement) {
+                // Source jobs run once, in the source lane, for every host.
+                .source => 1,
+                // Primary-host jobs run only on Linux.
+                .primary_host => 0,
+                .every_host => 1,
+            };
+            const count = try shardRunsForHost(host, i);
+            if (count != expected) std.debug.print("job `{s}` runs {d} times on {s}\n", .{ job.name, count, @tagName(host) });
+            try std.testing.expectEqual(expected, count);
+        }
+    }
+}
+
+test "MiniCI shard names are unique and their selections resolve" {
+    for (shards, 0..) |shard, i| {
+        _ = try resolveSelection(shard.selection);
+        for (shards[i + 1 ..]) |other| {
+            try std.testing.expect(!std.mem.eql(u8, shard.name, other.name));
+        }
+    }
+}
+
+test "MiniCI source lane holds only checks and needs no build" {
+    try std.testing.expect(!Lane.source.needsBuildCi());
+    try std.testing.expect(!Lane.source.stopsAtFailingCheck());
+    try std.testing.expect(Lane.primary.stopsAtFailingCheck());
+    for (jobs) |job| {
+        if (job.placement == .source) try std.testing.expect(isCheckJob(job.name));
+    }
+}
+
+test "parseMiniArgs selects a CI shard by name" {
+    const parsed = try parseMiniArgs(std.testing.allocator, &.{ "minici", "zig", "--minici-skip-build", "--minici-shard", "macos-harness" });
+    defer std.testing.allocator.free(parsed.build_args);
+
+    const shard = parsed.shard orelse return error.MissingShard;
+    try std.testing.expectEqualStrings("macos-harness", shard.name);
+    try std.testing.expectEqual(Lane.secondary, shard.lane);
+    try std.testing.expectEqualStrings("run-test-eval", parsed.selection.after orelse return error.MissingAfter);
+    try std.testing.expect(parsed.skip_build);
+}
+
+test "parseMiniArgs rejects unknown shards and shards combined with ranges" {
+    try std.testing.expectError(
+        error.InvalidMiniCiArgument,
+        parseMiniArgs(std.testing.allocator, &.{ "minici", "zig", "--minici-shard", "missing-shard" }),
+    );
+    try std.testing.expectError(
+        error.InvalidMiniCiArgument,
+        parseMiniArgs(std.testing.allocator, &.{ "minici", "zig", "--minici-shard", "source", "--minici-to", "run-check-tidy" }),
+    );
+    try std.testing.expectError(
+        error.InvalidMiniCiArgument,
+        parseMiniArgs(std.testing.allocator, &.{ "minici", "zig", "--minici-from", "run-check-tidy", "--minici-shard=source" }),
+    );
+    try std.testing.expectError(
+        error.InvalidMiniCiArgument,
+        parseMiniArgs(std.testing.allocator, &.{ "minici", "zig", "--minici-shard", "source", "--minici-shard", "linux-core" }),
+    );
+}
+
+fn expectWorkflowProblems(text: []const u8, expected: usize) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const problems = try workflowShardProblems(arena.allocator(), text);
+    try std.testing.expectEqual(expected, problems.len);
+}
+
+test "workflowShardProblems accepts a workflow naming every shard once" {
+    var text = std.ArrayList(u8).empty;
+    defer text.deinit(std.testing.allocator);
+    for (shards, 0..) |shard, i| {
+        // Exercise the list-item, quoted and trailing-comment spellings.
+        const line = switch (i % 3) {
+            0 => try std.fmt.allocPrint(std.testing.allocator, "          - minici_shard: {s}\n", .{shard.name}),
+            1 => try std.fmt.allocPrint(std.testing.allocator, "            minici_shard: '{s}'\n", .{shard.name}),
+            else => try std.fmt.allocPrint(std.testing.allocator, "            minici_shard: \"{s}\" # note\n", .{shard.name}),
+        };
+        defer std.testing.allocator.free(line);
+        try text.appendSlice(std.testing.allocator, line);
+    }
+    try expectWorkflowProblems(text.items, 0);
+}
+
+test "workflowShardProblems reports missing, duplicate and unknown shards" {
+    // Every shard missing.
+    try expectWorkflowProblems("jobs: {}\n", shards.len);
+
+    var text = std.ArrayList(u8).empty;
+    defer text.deinit(std.testing.allocator);
+    for (shards) |shard| {
+        const line = try std.fmt.allocPrint(std.testing.allocator, "minici_shard: {s}\n", .{shard.name});
+        defer std.testing.allocator.free(line);
+        try text.appendSlice(std.testing.allocator, line);
+    }
+    try text.appendSlice(std.testing.allocator, "minici_shard: linux-core\nminici_shard: ubuntu-full\n");
+    // One duplicate plus one unknown name.
+    try expectWorkflowProblems(text.items, 2);
 }
 
 test "MiniCI runs the exhaustive SIMD differential after ordinary eval" {
