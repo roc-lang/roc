@@ -312,6 +312,17 @@ Exhaustion therefore retains the ordinary exact IR; it is never cached as
 `disproven` and never selects a guessed runtime
 representation.
 
+Lambda Mono type digests consume the explicit capture-type graph, including
+erased callable members. Iterative discovery encodes each reachable node once;
+acyclic nodes combine their scalar data with completed child digests. Cyclic
+components are reduced by bisimulation and encode their positions in label order,
+never store-local type ids. Sharing, duplication, and recursive unrolling do
+not change type identity. The store owns reusable discovery, component, and
+partition buffers. Every request discards its graph and results on success or
+allocation failure while retaining capacity: no identity survives mutation of
+the source store. Allocation failure propagates to the caller. The versioned
+Lambda Mono digest domain separates this encoding from the former flat walk.
+
 Representation finiteness is different from proof-query termination. Monotype
 bounds minted iterator identities at the single graph-owned construction choke
 point (`generatedIteratorNode` plus graph finalization); crossing that declared
