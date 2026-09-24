@@ -1085,6 +1085,90 @@ fn fieldObservedAfter(
     return false;
 }
 
+/// Index one procedure's structural CFG. Jump targets use procedure-local
+/// identities, so a field-use walk must never resolve them through another
+/// procedure's join declaration.
+fn collectProcJoinBodies(
+    gpa: Allocator,
+    store: *const LirStore,
+    root: LIR.CFStmtId,
+    joins: *std.AutoHashMapUnmanaged(u32, LIR.CFStmtId),
+    epochs: []u32,
+    epoch: u32,
+    stack: *std.ArrayList(LIR.CFStmtId),
+) Error!void {
+    try stack.append(gpa, root);
+    while (stack.pop()) |stmt_id| {
+        const stmt_index = @intFromEnum(stmt_id);
+        if (epochs[stmt_index] == epoch) continue;
+        epochs[stmt_index] = epoch;
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt == .join) {
+            const entry = try joins.getOrPut(gpa, @intFromEnum(stmt.join.id));
+            if (entry.found_existing) {
+                if (entry.value_ptr.* != stmt.join.body) dismantleInvariant("procedure contains two bodies for one join identity");
+            } else {
+                entry.value_ptr.* = stmt.join.body;
+            }
+        }
+        try body_clone.appendSuccessorsWithAllocator(store, stack, stmt_id, gpa);
+    }
+}
+
+test "future field uses resolve joins in their procedure" {
+    const gpa = std.testing.allocator;
+    var store = LirStore.init(gpa);
+    defer store.deinit();
+    const container = try store.addLocal(.{ .layout_idx = .str });
+    const field = try store.addLocal(.{ .layout_idx = .str });
+    var join_ids = body_clone.JoinParamIndex.init(gpa);
+    defer join_ids.deinit();
+    const join_id = join_ids.freshJoinPoint();
+    const exit = try store.addCFStmt(.{ .ret = .{ .value = field } }, .test_fixture);
+    const back_edge = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const read = try store.addCFStmt(.{ .assign_ref = .{
+        .target = field,
+        .op = .{ .field = .{ .source = container, .field_idx = 0 } },
+        .next = back_edge,
+    } }, .test_fixture);
+    const loop_proc = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = .empty(),
+        .body = read,
+        .remainder = back_edge,
+    } }, .test_fixture);
+    const other_proc = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = .empty(),
+        .body = exit,
+        .remainder = back_edge,
+    } }, .test_fixture);
+    var loop_joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
+    defer loop_joins.deinit(gpa);
+    var other_joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
+    defer other_joins.deinit(gpa);
+    const epochs = try gpa.alloc(u32, store.cfStmtCount());
+    defer gpa.free(epochs);
+    @memset(epochs, 0);
+    var stack = std.ArrayList(LIR.CFStmtId).empty;
+    defer stack.deinit(gpa);
+    try collectProcJoinBodies(gpa, &store, loop_proc, &loop_joins, epochs, 1, &stack);
+    try collectProcJoinBodies(gpa, &store, other_proc, &other_joins, epochs, 2, &stack);
+    try std.testing.expectEqual(read, loop_joins.get(0).?);
+    try std.testing.expectEqual(exit, other_joins.get(0).?);
+
+    var reads = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
+    defer reads.deinit(gpa);
+    try reads.put(gpa, read, .{ .bit = 1, .consuming = true });
+    const solution: arc_solve.Solution = undefined;
+    var future = FutureFields.init(gpa);
+    defer future.deinit(gpa);
+    try future.compute(gpa, &store, &solution, container, &reads, &loop_joins, &.{}, null);
+    try std.testing.expect(future.observed(back_edge) & 1 != 0);
+    try future.compute(gpa, &store, &solution, container, &reads, &other_joins, &.{}, null);
+    try std.testing.expect(future.observed(back_edge) & 1 == 0);
+}
+
 test "future field observations agree with per-read traversal across joins rebinds loops and outcomes" {
     const gpa = std.testing.allocator;
     var store = LirStore.init(gpa);
@@ -1892,6 +1976,8 @@ pub fn compute(
             },
             .assign_boxy_dict_ref => |stmt| {
                 if (stmt.dict.localOrNull()) |local| try analysis.useWhole(current, local);
+                const captures = store.getLocalSpan(stmt.captures);
+                for (0..GuardedList.borrowLen(captures)) |i| try analysis.useWhole(current, GuardedList.at(captures, i));
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
@@ -2142,14 +2228,45 @@ pub fn compute(
 
     var read_kinds = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
     defer read_kinds.deinit(gpa);
-    var join_bodies = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
-    defer join_bodies.deinit(gpa);
-    // Candidate solving does not mutate CFG edges. The later alias
-    // materialization changes assign_ref.op only, never join ownership.
-    for (0..store.cfStmtCount()) |stmt_index| {
-        if (!visited.isSet(stmt_index)) continue;
-        const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-        if (stmt == .join) try join_bodies.put(gpa, @intFromEnum(stmt.join.id), stmt.join.body);
+    const proc_joins = try gpa.alloc(std.AutoHashMapUnmanaged(u32, LIR.CFStmtId), store.procSpecCount());
+    defer {
+        for (proc_joins) |*joins| joins.deinit(gpa);
+        gpa.free(proc_joins);
+    }
+    @memset(proc_joins, .empty);
+    const joins_ready = try gpa.alloc(bool, store.procSpecCount());
+    defer gpa.free(joins_ready);
+    @memset(joins_ready, false);
+    const join_scan_epochs = try gpa.alloc(u32, store.cfStmtCount());
+    defer gpa.free(join_scan_epochs);
+    @memset(join_scan_epochs, 0);
+    var join_scan_stack = std.ArrayList(LIR.CFStmtId).empty;
+    defer join_scan_stack.deinit(gpa);
+    var join_scan_epoch: u32 = 0;
+    // Join identities belong to a procedure. The candidate's defining CFG
+    // statement identifies that procedure explicitly, including dismantle
+    // temporaries that are deliberately absent from a specialization frame.
+    const stmt_proc = try gpa.alloc(u32, store.cfStmtCount());
+    defer gpa.free(stmt_proc);
+    @memset(stmt_proc, no_index);
+    const ambiguous_proc = no_index - 1;
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+        if (proc.body == null) continue;
+        join_scan_epoch += 1;
+        try join_scan_stack.append(gpa, proc.body.?);
+        while (join_scan_stack.pop()) |stmt_id| {
+            const stmt_index = @intFromEnum(stmt_id);
+            if (join_scan_epochs[stmt_index] == join_scan_epoch) continue;
+            join_scan_epochs[stmt_index] = join_scan_epoch;
+            const owner = &stmt_proc[stmt_index];
+            if (owner.* == no_index) {
+                owner.* = @intCast(proc_index);
+            } else if (owner.* != @as(u32, @intCast(proc_index))) {
+                owner.* = ambiguous_proc;
+            }
+            try body_clone.appendSuccessorsWithAllocator(store, &join_scan_stack, stmt_id, gpa);
+        }
     }
     var future_fields = FutureFields.init(gpa);
     defer future_fields.deinit(gpa);
@@ -2431,9 +2548,20 @@ pub fn compute(
         candidate_mask &= rc_mask;
         if (candidate_mask == 0) continue;
 
+        if (candidate.reads.items.len == 0) dismantleInvariant("field-take candidate had no field projection");
+        const owner = stmt_proc[@intFromEnum(candidate.reads.items[0].stmt)];
+        if (owner == no_index or owner == ambiguous_proc) continue;
+        if (!joins_ready[owner]) {
+            joins_ready[owner] = true;
+            join_scan_epoch += 1;
+            const proc = store.getProcSpec(@enumFromInt(owner));
+            try collectProcJoinBodies(gpa, store, proc.body.?, &proc_joins[owner], join_scan_epochs, join_scan_epoch, &join_scan_stack);
+        }
+        const join_bodies = &proc_joins[owner];
+
         var poison: u64 = 0;
         const redefinition: ?LIR.CFStmtId = if (candidate.join_starts.items.len == 0) candidate.def_stmt else null;
-        try future_fields.compute(gpa, store, solution, local, &read_kinds, &join_bodies, field_restitutions.items, redefinition);
+        try future_fields.compute(gpa, store, solution, local, &read_kinds, join_bodies, field_restitutions.items, redefinition);
         for (candidate.reads.items) |read| {
             const kind = read_kinds.getPtr(read.stmt) orelse continue;
             if (!kind.consuming) continue;

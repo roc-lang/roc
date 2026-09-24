@@ -161,6 +161,12 @@ pub const CheckedModuleArtifactKey = extern struct {
     direct_import_artifact_keys_hash: [32]u8 = [_]u8{0} ** 32,
     bytes: [32]u8 = [_]u8{0} ** 32,
 
+    /// Integer equality over the key's identity bytes, which name the key
+    /// wholly: a single 256-bit compare, never a byte-wise comparison.
+    pub fn eql(a: CheckedModuleArtifactKey, b: CheckedModuleArtifactKey) bool {
+        return @as(u256, @bitCast(a.bytes)) == @as(u256, @bitCast(b.bytes));
+    }
+
     pub fn compute(
         source: []const u8,
         module_identity: ModuleIdentity,
@@ -4889,7 +4895,8 @@ pub const CheckedTypeStore = struct {
         for (module_env.scheme_uses.items.items) |record| {
             if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.dispatch_target) or
                 record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.recursive_dispatch_target) or
-                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use))
+                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
+                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.nested_function_use))
             {
                 _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @enumFromInt(record.slot_data));
             }
@@ -10636,6 +10643,19 @@ pub const CheckedFieldBackingAccess = enum(u8) {
     opaque_definition_private,
 };
 
+/// Checker-authored plan for equality against one payload-free tag.
+pub const CheckedTagDiscriminantEquality = struct {
+    value: CheckedExprId,
+    tag: canonical.TagLabelId,
+};
+
+fn zeroPayloadTagIdent(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
+    const data = module.expr(expr_idx).data;
+    if (data == .e_zero_argument_tag) return data.e_zero_argument_tag.name;
+    if (data == .e_tag and data.e_tag.args.span.len == 0) return data.e_tag.name;
+    return null;
+}
+
 /// Public `CheckedExprData` declaration.
 pub const CheckedExprData = union(enum) {
     pending,
@@ -10728,6 +10748,9 @@ pub const CheckedExprData = union(enum) {
         lhs: CheckedExprId,
         rhs: CheckedExprId,
         negated: bool,
+        /// Explicit checker decision that this equality only compares a tag
+        /// discriminant. Null means ordinary structural equality.
+        discriminant: ?CheckedTagDiscriminantEquality = null,
     },
     structural_hash: struct {
         value: CheckedExprId,
@@ -10890,6 +10913,7 @@ pub const StoredCheckedExprData = union(enum) {
         lhs: CheckedExprId,
         rhs: CheckedExprId,
         negated: bool,
+        discriminant: ?CheckedTagDiscriminantEquality = null,
     },
     structural_hash: struct {
         value: CheckedExprId,
@@ -11130,7 +11154,7 @@ fn reconstructCheckedExprData(pool_owner: anytype, stored: StoredCheckedExprData
             .parts = pool_owner.interpolationPartPool()[i.parts.start .. i.parts.start + i.parts.len],
             .step_fn_ty = i.step_fn_ty,
         } },
-        .structural_eq => |e| .{ .structural_eq = .{ .lhs = e.lhs, .rhs = e.rhs, .negated = e.negated } },
+        .structural_eq => |e| .{ .structural_eq = .{ .lhs = e.lhs, .rhs = e.rhs, .negated = e.negated, .discriminant = e.discriminant } },
         .structural_hash => |h| .{ .structural_hash = .{ .value = h.value, .hasher = h.hasher } },
         .method_eq => |p| .{ .method_eq = p },
         .type_dispatch_call => |p| .{ .type_dispatch_call = p },
@@ -12660,7 +12684,7 @@ pub const CheckedBodyStore = struct {
                 .parts = try self.appendInterpolationParts(allocator, i.parts),
                 .step_fn_ty = i.step_fn_ty,
             } },
-            .structural_eq => |e| .{ .structural_eq = .{ .lhs = e.lhs, .rhs = e.rhs, .negated = e.negated } },
+            .structural_eq => |e| .{ .structural_eq = .{ .lhs = e.lhs, .rhs = e.rhs, .negated = e.negated, .discriminant = e.discriminant } },
             .structural_hash => |h| .{ .structural_hash = .{ .value = h.value, .hasher = h.hasher } },
             .method_eq => |p| .{ .method_eq = p },
             .type_dispatch_call => |p| .{ .type_dispatch_call = p },
@@ -14602,6 +14626,7 @@ const CheckedBodyPayloadCopier = struct {
                 .lhs = self.checkedExpr(eq.lhs),
                 .rhs = self.checkedExpr(eq.rhs),
                 .negated = eq.negated,
+                .discriminant = try self.checkedTagDiscriminantEquality(eq.lhs, eq.rhs),
             } },
             .e_structural_hash => |h| .{ .structural_hash = .{
                 .value = self.checkedExpr(h.value),
@@ -15416,6 +15441,26 @@ const CheckedBodyPayloadCopier = struct {
             std.debug.panic("checked artifact invariant violated: expression {d} was not copied into checked body store", .{raw});
         }
         unreachable;
+    }
+
+    fn checkedTagDiscriminantEquality(
+        self: *@This(),
+        lhs: CIR.Expr.Idx,
+        rhs: CIR.Expr.Idx,
+    ) Allocator.Error!?CheckedTagDiscriminantEquality {
+        if (zeroPayloadTagIdent(self.module, rhs)) |tag| {
+            return .{
+                .value = self.checkedExpr(lhs),
+                .tag = try self.names.internTagIdent(self.module.identStoreConst(), tag),
+            };
+        }
+        if (zeroPayloadTagIdent(self.module, lhs)) |tag| {
+            return .{
+                .value = self.checkedExpr(rhs),
+                .tag = try self.names.internTagIdent(self.module.identStoreConst(), tag),
+            };
+        }
+        return null;
     }
 
     fn checkedTypeForRequiredVar(
@@ -18302,6 +18347,7 @@ const EvidencePass = struct {
                     .len = spans.refs.len,
                     .subst_start = spans.subst.start,
                     .subst_len = spans.subst.len,
+                    .instance_ty = self.siteInstanceType(deferred.record_idx),
                 });
             }
         }
@@ -18326,6 +18372,34 @@ const EvidencePass = struct {
         self.plan_table.site_substitutions = try self.site_substitutions.toOwnedSlice(self.allocator);
         self.plan_table.template_root_evidence = try self.allocator.dupe(?artifact_serialize.Span, self.template_root_evidence);
         try @import("codec_identity.zig").intern(self.allocator, self.checked_types.store.view(), self.plan_table);
+        if (builtin.mode == .Debug) try self.debugVerifyGeneratedCodecRoleAgreement();
+    }
+
+    /// A generated body records one checked edge per source occurrence.
+    /// Repeated fields whose subjects denote one type share a role, and so one
+    /// prepared target, which is sound only when every edge in the role agrees
+    /// on its complete callable relation and proof. Runs once the evidence
+    /// graph is published, since that proof spans the plan table.
+    fn debugVerifyGeneratedCodecRoleAgreement(self: *EvidencePass) Allocator.Error!void {
+        if (builtin.mode != .Debug) return;
+        const type_view = self.checked_types.store.view();
+        for (self.plan_table.generated_codec_derivations) |derivation| {
+            const calls = derivation.callsSlice(self.plan_table);
+            for (calls, 0..) |call, index| {
+                for (calls[0..index]) |previous| {
+                    if (previous.method != call.method or previous.method_role != call.method_role) continue;
+                    if (!try @import("codec_identity.zig").callsEquivalent(self.allocator, type_view, self.plan_table, previous, call)) {
+                        checkedArtifactInvariant(
+                            "checked generated codec method role contained ambiguous calls",
+                            .{},
+                        );
+                    }
+                    // Every call in a role agrees with its first, so the rest
+                    // of the role needs no further comparison.
+                    break;
+                }
+            }
+        }
     }
 
     /// The solver root of the scheme a compile-time root evaluates: the
@@ -18742,33 +18816,6 @@ const EvidencePass = struct {
                             );
                         }
                     }
-                    // A generated body records one checked edge per source
-                    // occurrence. Repeated fields whose subjects denote one
-                    // type share a role, and may share one prepared target,
-                    // only when the complete callable relation agrees modulo
-                    // transparent aliases and the fresh variable names
-                    // allocated for each method instantiation.
-                    const call_types_equal = if (call.subject_ty) |subject_ty|
-                        try type_view.rootsAliasTransparentAlphaEql(
-                            self.allocator,
-                            &.{ previous.subject_ty.?, previous.dispatcher_ty, previous.callable_ty },
-                            &.{ subject_ty, call.dispatcher_ty, call.callable_ty },
-                        )
-                    else
-                        try type_view.rootsAliasTransparentAlphaEql(
-                            self.allocator,
-                            &.{ previous.dispatcher_ty, previous.callable_ty },
-                            &.{ call.dispatcher_ty, call.callable_ty },
-                        );
-                    if (previous.conditional != call.conditional or
-                        !call_types_equal or
-                        !self.generatedCodecCallResolutionsEql(previous.resolution, call.resolution))
-                    {
-                        checkedArtifactInvariant(
-                            "checked generated codec method role contained ambiguous calls",
-                            .{},
-                        );
-                    }
                 }
                 if (!has_previous_role) {
                     checkedArtifactInvariant(
@@ -18778,48 +18825,6 @@ const EvidencePass = struct {
                 }
             }
         }
-    }
-
-    fn generatedCodecCallResolutionsEql(
-        self: *const EvidencePass,
-        left: static_dispatch.GeneratedCodecCallResolution,
-        right: static_dispatch.GeneratedCodecCallResolution,
-    ) bool {
-        return switch (left) {
-            .pending => right == .pending,
-            .checked_error => right == .checked_error,
-            .structural => |left_id| switch (right) {
-                .structural => |right_id| left_id == right_id,
-                .pending, .checked_error, .callable => false,
-            },
-            .callable => |left_id| switch (right) {
-                .callable => |right_id| blk: {
-                    const left_node = self.evidence_nodes.items[@intFromEnum(left_id)];
-                    const right_node = self.evidence_nodes.items[@intFromEnum(right_id)];
-                    if (!std.meta.eql(left_node.target, right_node.target) or
-                        left_node.generated_codec_derivation != right_node.generated_codec_derivation)
-                    {
-                        break :blk false;
-                    }
-                    break :blk switch (left_node.nested) {
-                        .from_callable => right_node.nested == .from_callable,
-                        .resolved => |left_span| switch (right_node.nested) {
-                            .from_callable => false,
-                            .resolved => |right_span| refs: {
-                                const left_refs = self.evidence_refs.items[left_span.start .. left_span.start + left_span.len];
-                                const right_refs = self.evidence_refs.items[right_span.start .. right_span.start + right_span.len];
-                                if (left_refs.len != right_refs.len) break :refs false;
-                                for (left_refs, right_refs) |left_ref, right_ref| {
-                                    if (!std.meta.eql(left_ref, right_ref)) break :refs false;
-                                }
-                                break :refs true;
-                            },
-                        },
-                    };
-                },
-                .pending, .checked_error, .structural => false,
-            },
-        };
     }
 
     fn schemeSchema(self: *EvidencePass, root: Var) Allocator.Error!SchemeSchema {
@@ -19824,13 +19829,12 @@ const EvidencePass = struct {
             entries.appendAssumeCapacity(evidence);
         }
 
-        // A nested-function-use record's scheme root is the stored
-        // expression's own type; only a value use instantiates a referenced
-        // scheme, so only value uses carry a substitution for one.
-        const nested = record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.nested_function_use);
+        // A value use instantiates the referenced scheme; a nested-function use
+        // instantiates the stored expression's own scheme for the value that
+        // stores it. Either way the pairs name each quantified variable's copy.
         return .{
             .refs = try self.appendEvidenceRefs(entries.items),
-            .subst = if (nested) .{} else try self.appendSiteSubstitution(@enumFromInt(record.scheme_root), pairs),
+            .subst = try self.appendSiteSubstitution(@enumFromInt(record.scheme_root), pairs),
         };
     }
 
@@ -20127,7 +20131,20 @@ const EvidencePass = struct {
             .len = spans.refs.len,
             .subst_start = spans.subst.start,
             .subst_len = spans.subst.len,
+            .instance_ty = self.siteInstanceType(record_idx),
         });
+    }
+
+    /// The instance a stored nested-function use places into its containing
+    /// value, as a `SiteEvidenceEntry.instance_ty`.
+    fn siteInstanceType(self: *EvidencePass, record_idx: u32) u32 {
+        const record = self.module.moduleEnvConst().scheme_uses.items.items[record_idx];
+        if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.nested_function_use)) {
+            return static_dispatch.SiteEvidenceEntry.no_site_instance;
+        }
+        const instance = self.checked_types.rootForSourceVar(self.module, @enumFromInt(record.slot_data)) orelse
+            checkedArtifactInvariant("stored nested function instance type was not published", .{});
+        return @intFromEnum(instance);
     }
 
     /// Publish the complete construction recipe for a generalized nested
@@ -32294,6 +32311,7 @@ pub const DispatchEvidenceFailure = struct {
         site_evidence_key_out_of_bounds,
         site_evidence_refs_out_of_bounds,
         site_substitution_out_of_bounds,
+        site_instance_type_out_of_bounds,
         scheme_vars_out_of_bounds,
         evidence_param_slot_out_of_bounds,
         site_evidence_keys_unsorted,
@@ -33657,6 +33675,11 @@ pub const CheckedModuleArtifact = struct {
             }
             if (@as(u64, entry.subst_start) + entry.subst_len > table.site_substitutions.len) {
                 return .{ .kind = .site_substitution_out_of_bounds, .index = @intCast(i) };
+            }
+            if (entry.instance_ty != static_dispatch.SiteEvidenceEntry.no_site_instance and
+                entry.instance_ty >= self.checked_types.payloadCount())
+            {
+                return .{ .kind = .site_instance_type_out_of_bounds, .index = @intCast(i) };
             }
             if (i > 0 and table.site_evidence[i - 1].key >= entry.key) {
                 return .{ .kind = .site_evidence_keys_unsorted, .index = @intCast(i) };
@@ -39596,8 +39619,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x64, 0xD0, 0x16, 0xC7, 0x59, 0xDA, 0x77, 0xD7, 0xF3, 0xF1, 0xD0, 0xDE, 0x5C, 0x0E, 0xBA, 0xA8,
-        0xE5, 0x23, 0x29, 0x25, 0xBE, 0x89, 0xA9, 0x3D, 0x66, 0xBB, 0xFE, 0xF0, 0xAD, 0x9E, 0xD8, 0xE8,
+        0x34, 0xB6, 0xC5, 0x7C, 0x80, 0x64, 0xC2, 0xA8, 0x8D, 0x94, 0xC9, 0xE2, 0xE5, 0xD9, 0x58, 0x0D,
+        0xBA, 0x88, 0x6C, 0x91, 0x83, 0x90, 0xA3, 0xF8, 0xED, 0xFA, 0x4E, 0x20, 0x18, 0x94, 0x3C, 0x5B,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

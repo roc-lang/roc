@@ -1302,8 +1302,6 @@ test "LIR image views empty and populated boxy tables" {
     });
     try lowered.boxy_dicts.append(allocator, .{
         .method_slots = .{ .start = 0, .len = 1 },
-        .hidden_descs = .{ .start = 0, .len = 1 },
-        .nested_dicts = .{ .start = 0, .len = 1 },
     });
     try lowered.boxy_adapt_steps.append(allocator, .{ .copy_bytes = .{
         .source_offset = 0,

@@ -206,6 +206,11 @@ const Printer = struct {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.writeAll("boxy_dict_ref ");
                     try writeBoxyDictRef(s.dict, writer);
+                    if (s.captures.len != 0) {
+                        try writer.writeAll(" captures=[");
+                        try self.writeLocals(s.captures, writer);
+                        try writer.writeAll("]");
+                    }
                     try writer.writeAll("\n");
                     current = s.next;
                 },
@@ -680,6 +685,7 @@ fn writeBoxyDictRef(dict: LIR.BoxyDictRef, writer: *std.Io.Writer) Error!void {
     switch (dict) {
         .static => |id| try writer.print("dict#{d}", .{@intFromEnum(id)}),
         .local => |local| try writer.print("dict=l{d}", .{@intFromEnum(local)}),
+        .runtime => |id| try writer.print("dict=runtime#{d}", .{id}),
     }
 }
 

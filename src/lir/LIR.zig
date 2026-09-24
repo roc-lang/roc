@@ -117,6 +117,8 @@ pub const ProcIdentity = struct {
 
 /// Identifier of a lowered LIR proc specification.
 pub const LirProcSpecId = enum(u32) {
+    /// The first procedure specification a store holds.
+    first = 0,
     _,
 };
 
@@ -176,10 +178,13 @@ pub const BoxyDescRef = union(enum) {
 pub const BoxyDictRef = union(enum) {
     static: BoxyDictId,
     local: LocalId,
+    /// A dictionary the runtime materialized from a template; only runtime
+    /// tables hold it.
+    runtime: u32,
 
     pub fn localOrNull(self: BoxyDictRef) ?LocalId {
         return switch (self) {
-            .static => null,
+            .static, .runtime => null,
             .local => |local| local,
         };
     }
@@ -421,6 +426,29 @@ pub const ExpectSite = struct {
 
 pub const CheckedExhaustivenessSiteId = check.CheckedModule.CheckedExhaustivenessSiteId;
 
+/// Dense id of one checked module inside a single lowering's module set.
+///
+/// `check.CheckedModule.ModuleId` is a large structural key, and the
+/// module-local checked ids a post-check IR retains (compile-time roots,
+/// exhaustiveness sites) name nothing without their owner. Monotype lowering
+/// therefore publishes the lowering's checked modules once, as the
+/// program-local `lowering_modules` table carried through to
+/// `Program.Result`, and every row that keeps a module-local checked id
+/// carries this dense id beside it. Consumers resolve an owner by indexing
+/// that table. Row order, source location, and procedure membership are not
+/// owners, and reading one as an owner is wrong as soon as a program contains
+/// more than one module's code.
+///
+/// This domain is separate from a program's source-file table even though
+/// both enumerate the same modules: source-file ordinals are remapped when
+/// LIR images from different programs are packed together, while a lowering
+/// module id is valid only inside its own program and never outlives it.
+pub const LoweringModuleId = enum(u32) {
+    /// The first row of a lowering's module table.
+    first = 0,
+    _,
+};
+
 /// Source control-flow construct observed during compile-time finalization.
 pub const ComptimeSiteKind = enum {
     match,
@@ -431,6 +459,11 @@ pub const ComptimeSiteKind = enum {
 /// Metadata for one compile-time-observed control-flow site.
 pub const ComptimeSite = struct {
     kind: ComptimeSiteKind,
+    /// Checked module whose `checked_site` id and source regions this site
+    /// names. One lowered program contains procedures from several checked
+    /// modules, so the site's owner is neither the program's root module nor
+    /// the module of whichever compile-time root happens to execute it.
+    owner: LoweringModuleId,
     region: base.Region,
     checked_site: ?CheckedExhaustivenessSiteId = null,
     proc: LirProcSpecId,
@@ -513,17 +546,31 @@ pub const ErasedArgDescOffset = extern struct {
     offset: u32,
 };
 
+/// How an erased-procedure descriptor parameter is initialized.
+pub const ErasedArgDescRead = enum(u8) {
+    /// The parameter consumes its exact call-site key.
+    call_key,
+    /// The parameter reads nested descriptor `source_nested_index` of its
+    /// parent.
+    nested,
+    /// The parameter reads payload `source_nested_index` of tag
+    /// `source_tag_name` in its parent's tag variants.
+    tag_payload,
+};
+
 /// Hidden erased-procedure parameter initialized from one keyed call-site
 /// descriptor operand.
 pub const ErasedArgDescParam = extern struct {
     key: ErasedArgDescKey,
     local: LocalId,
-    /// For a projected parameter, the descriptor index of its already-bound
-    /// parent within the same explicit argument.
+    /// For a parameter read from its parent, the descriptor index of that
+    /// already-bound parent within the same explicit argument.
     source_descriptor_index: u16,
-    /// Nested descriptor slot read from the parent. `maxInt(u16)` means the
-    /// parameter consumes its exact call-site key directly.
+    /// Nested descriptor slot or tag payload position read from the parent.
     source_nested_index: u16,
+    /// Tag whose payload a `tag_payload` read names.
+    source_tag_name: BoxyNameId,
+    read: ErasedArgDescRead,
 };
 
 /// How a boxy operation observes or transfers its source value.
@@ -1079,6 +1126,9 @@ pub const CFStmt = union(enum) {
     assign_boxy_dict_ref: struct {
         target: LocalId,
         dict: BoxyDictRef,
+        /// The frame locals a template dictionary's method slots name; the
+        /// assignment materializes the template with their values.
+        captures: LocalSpan = .{ .start = 0, .len = 0 },
         next: CFStmtId,
     },
     assign_boxy_box: struct {

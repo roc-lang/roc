@@ -1095,7 +1095,9 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
     const PackFile = @import("PackFile.zig");
     const text = "immutable runtime data survives its producer";
     const identity = lir.ProcIdentity.forTest(717);
-    inline for (.{ RocTarget.x64linux, RocTarget.arm64linux, comptime RocTarget.detectNative() }) |target| {
+    // The native target joins the fixed ones only where native LIR codegen exists.
+    const native_targets = if (LirCodeGenMod.host_lir_codegen_available) .{comptime RocTarget.detectNative()} else .{};
+    inline for (.{ RocTarget.x64linux, RocTarget.arm64linux } ++ native_targets) |target| {
         var result = producer: {
             var arena = std.heap.ArenaAllocator.init(allocator);
             defer arena.deinit();
@@ -1200,7 +1202,7 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
         defer data.deinit(allocator);
         try ProcArtifact.splice(CG, allocator, &receiver, &pack.set, &.{0}, &procs, &placed, &data);
         try receiver.finishImage();
-        if (comptime target == RocTarget.detectNative() and LirCodeGenMod.host_lir_codegen_available) {
+        if (comptime target == RocTarget.detectNative()) {
             var splice = @import("HostSplice.zig").HostSplice.init(allocator);
             defer splice.deinit();
             try splice.addDataItems(data.items);

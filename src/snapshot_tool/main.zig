@@ -1297,7 +1297,7 @@ fn processSnapshotContent(
 
     // Lambda lifting and lambda set inference are now handled during CIR→MIR and MIR→LIR lowering
 
-    // TODO: Run constant folding for mono tests once ComptimeEvaluator is available in zig-16 branch.
+    // TODO: Run constant folding for mono tests once a compile-time evaluator is available.
     // if (content.meta.node_type == .mono) { ... }
 
     // Buffer all output in memory before writing files

@@ -870,7 +870,7 @@ const Detection = struct {
             .assign_boxy_desc_ref => |s| self.descRefTouchesChain(s.desc, c) or
                 (s.tag_residual_for != null and self.descRefTouchesChain(s.tag_residual_for.?, c)) or
                 self.spanTouchesChain(s.captures, c),
-            .assign_boxy_dict_ref => |s| self.dictRefTouchesChain(s.dict, c),
+            .assign_boxy_dict_ref => |s| self.dictRefTouchesChain(s.dict, c) or self.spanTouchesChain(s.captures, c),
             .assign_boxy_box => |s| c.chainContains(s.payload) or if (s.payload_desc) |desc| self.descRefTouchesChain(desc, c) else false,
             .assign_boxy_reuse_box => |s| c.chainContains(s.source) or self.descRefTouchesChain(s.desc, c),
             .assign_boxy_unbox => |s| c.chainContains(s.source) or

@@ -434,6 +434,8 @@ const Pass = struct {
             },
             .assign_boxy_dict_ref => |s| {
                 if (s.dict.localOrNull()) |local| self.noteUse(local);
+                const captures = self.store.getLocalSpan(s.captures);
+                for (0..captures.len) |index| self.noteUse(GuardedList.at(captures, index));
             },
             .assign_boxy_box => |s| {
                 self.noteUse(s.payload);
