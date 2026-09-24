@@ -304,8 +304,8 @@ scratch_record_field_vars: base.Scratch(Var),
 scratch_static_dispatch_constraints: base.Scratch(ScratchStaticDispatchConstraint),
 /// scratch deferred static dispatch constraints
 scratch_deferred_static_dispatch_constraints: base.Scratch(DeferredConstraintCheck),
-/// Concrete generated-codec obligations parked until the module's single type
-/// finalization point. Their receiver can still gain nominal layers while
+/// Generated-codec obligations with known structure parked until the module's
+/// finalization point. Their receiver can still gain tags or nominal layers while
 /// later definitions are checked, so validating them earlier would publish a
 /// derivation for a shape that is no longer the call's final type.
 final_codec_dispatch_constraints: std.ArrayListUnmanaged(FinalCodecDispatchConstraint) = .empty,
@@ -6832,6 +6832,7 @@ fn recordOpenedMarkerExts(self: *Self, opened: []const Instantiator.OpenedMarker
         .use_root_instantiated, .use_last_var => Region.zero(),
     };
     for (opened) |marker| {
+        try self.types.markAnnotationTagExt(marker.ext);
         try self.implicit_open_exts.append(self.gpa, .{
             .var_ = marker.ext,
             .region = region,
@@ -6939,6 +6940,7 @@ fn instantiateOrphanCopy(
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
+    instantiate_ctx.preserve_annotation_tag_ext = true;
     const saved_instantiation_source_expr = self.instantiation_source_expr;
     self.instantiation_source_expr = null;
     defer {
@@ -18115,6 +18117,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         } else {
                             try self.unifyWith(open_ext_var, .{ .flex = Flex.init() }, env);
                         }
+                        if (!deferred_open) try self.types.markAnnotationTagExt(open_ext_var);
                         try self.implicit_open_exts.append(self.gpa, .{
                             .var_ = open_ext_var,
                             .region = anno_region,
@@ -18134,6 +18137,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
                 if (implicitly_open) {
                     const open_ext_var = try self.fresh(env, anno_region);
+                    try self.types.markAnnotationTagExt(open_ext_var);
                     try self.implicit_open_exts.append(self.gpa, .{
                         .var_ = open_ext_var,
                         .region = anno_region,
@@ -19845,6 +19849,7 @@ fn copyExpectedShape(self: *Self, source: Var, env: *Env) Allocator.Error!Var {
         .rigid_behavior = .fresh_flex,
         .rank_behavior = .ignore_rank,
         .purpose = .expected_shape,
+        .preserve_annotation_tag_ext = true,
     };
     self.var_map.clearRetainingCapacity();
     const fresh_start = self.types.len();
@@ -33707,8 +33712,8 @@ fn recordSettledDeferredDispatchRelation(
     self.retireResolvedTypeSchemeRequirements();
 }
 
-/// Move one currently-concrete generated codec obligation out of the hot
-/// deferred queue. Later source checking can still add nominal layers inside
+/// Move one structurally known generated codec obligation out of the hot
+/// deferred queue. Later source checking can still add tags or nominal layers inside
 /// its receiver, so the derivation is selected exactly once at the final type
 /// boundary instead of being repeatedly rechecked after every expression.
 fn deferGeneratedCodecConstraintToFinalization(
@@ -34074,7 +34079,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             // implicit output-position openness collapses first—including
                             // rows inside the nominal's args (eg a Dict
                             // key union). See closeTagRowsForDerivation.
-                            try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
+                            if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
                             switch (try self.nominalSupportsDerivedParseShape(nominal_type, env, region)) {
                                 .supported => if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
                                     try self.satisfyImplicitParserConstraint(
@@ -34118,7 +34123,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             // implicit output-position openness collapses first—including
                             // rows inside the nominal's args (see
                             // closeTagRowsForDerivation).
-                            try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
+                            if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
                             switch (try self.nominalSupportsDerivedEncodeShape(nominal_type, encoding_var, env, region)) {
                                 .supported => if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
                                     try self.satisfyImplicitEncoderForConstraint(
@@ -34416,7 +34421,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             // Collapse implicit output-position openness before
                             // deriving against the alias backing (see
                             // closeTagRowsForDerivation).
-                            try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
+                            if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
                             switch (try self.varSupportsDerivedParseShape(backing_var, env, region)) {
                                 .supported => {
                                     if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
@@ -34465,7 +34470,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             // Collapse implicit output-position openness before
                             // deriving against the alias backing (see
                             // closeTagRowsForDerivation).
-                            try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
+                            if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
                             switch (try self.varSupportsDerivedEncodeShape(backing_var, encoding_var, env, region)) {
                                 .supported => {
                                     if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
@@ -34695,7 +34700,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // A derived parser determines each tag row exactly, so
                         // implicit output-position openness collapses first
                         // (see closeTagRowsForDerivation).
-                        try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
+                        if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
                         switch (try self.typeSupportsDerivedParse(dispatcher_content.structure, env, region)) {
                             .supported => {
                                 if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
@@ -34753,7 +34758,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // A derived encoder determines each tag row exactly, so
                         // implicit output-position openness collapses first
                         // (see closeTagRowsForDerivation).
-                        try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
+                        if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
                         const encoding_var = self.encoderForConstraintEncodingVar(constraint) orelse {
                             try self.reportConstraintError(
                                 deferred_constraint.var_,
@@ -36082,32 +36087,39 @@ fn nominalIsBuiltinBoolType(self: *const Self, nominal_type: types_mod.NominalTy
     return ident.eql(self.cir.idents.bool) or ident.eql(self.cir.idents.bool_type);
 }
 
-/// Close every reachable tag-union row whose extension is an unbound flex var
-/// before deriving a structural parser, encoder, or `map`/`map!` for `var_`
-/// (design.md "Polarity"; Rewrite Inventory `closeTagRowsForDerivation`).
-///
-/// Under polarity, annotated tag unions in output positions carry an implicit
-/// flex extension. A derived implementation determines each row exactly (a
-/// parser or encoder handles precisely the listed tags; derived map
-/// additionally selects its payload, which an open payload row would defeat
-/// by reading as a type variable), so the openness collapses here: each flex
-/// ext unifies with `[]`, exactly like an exhaustive match closing an
-/// inferred row. Downstream shape checks (closed-row requirements, the
-/// `[Missing]`/`[Null]` optional-field conventions, key-string dict keys)
-/// then see the closed rows.
-///
-/// Only the ext of an existing tag union structure is closed. A bare flex var
-/// elsewhere (eg the unbound err row of `Try(ok, _)`, which parse derivation
-/// pins to `[Missing]` separately) is left untouched, and so is a rigid ext:
-/// a polymorphic open row may hold tags no derivation was checked for, so it
-/// stays rejected. The one rigid that does close is the alias-declaration
-/// polarity MARKER (the helper's marker arm). The walk follows structure
-/// only—never a variable's static-dispatch constraints—so a where-method
-/// signature reachable through a constrained rigid keeps the markers its
-/// per-use instantiation resolves.
-fn closeTagRowsForDerivation(self: *Self, var_: Var, env: *Env) Allocator.Error!void {
+/// Codec inference owns a boundary event, not an expression-by-expression
+/// retry: once an inferred tag tail is encountered, park the obligation in
+/// the existing final codec queue. Annotation-bounded tails close eagerly.
+fn deferCodecWithInferredTagRows(
+    self: *Self,
+    deferred: DeferredConstraintCheck,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+) Allocator.Error!bool {
+    const settled = self.checking_final_codec_dispatch_constraints and
+        !(if (constraint.fn_name.eql(self.cir.idents.parser_for))
+            try self.deferredParseHasPendingOpenLiteral(deferred, env)
+        else
+            try self.deferredEncodeHasPendingOpenLiteral(deferred, env));
+    const inferred_open = try self.closeTagRowsForDerivation(
+        deferred.var_,
+        env,
+        if (settled) .all_tag_rows else .annotation_rows,
+    );
+    return inferred_open and try self.deferGeneratedCodecConstraintToFinalization(deferred, constraint);
+}
+
+const DerivationRowClosure = enum { annotation_rows, all_tag_rows };
+
+/// Close annotation-owned tag tails, or all settled inferred tag tails at
+/// the codec boundary. Derived map retains its exact-row selection rule.
+/// Returns whether an inferred flexible tail remains, so its codec can wait
+/// for the finalization boundary without repeatedly traversing the shape.
+fn closeTagRowsForDerivation(self: *Self, var_: Var, env: *Env, mode: DerivationRowClosure) Allocator.Error!bool {
     self.var_set.clearRetainingCapacity();
-    try self.closeTagRowsForDerivationHelp(var_, env, &self.var_set);
+    var inferred_open = false;
+    try self.closeTagRowsForDerivationHelp(var_, env, &self.var_set, mode, &inferred_open);
+    return inferred_open;
 }
 
 fn closeTagRowsForDerivationHelp(
@@ -36115,6 +36127,8 @@ fn closeTagRowsForDerivationHelp(
     var_: Var,
     env: *Env,
     visited: *std.AutoHashMap(Var, void),
+    mode: DerivationRowClosure,
+    inferred_open: *bool,
 ) Allocator.Error!void {
     const resolved = self.types.resolveVar(var_);
     if (visited.contains(resolved.var_)) return;
@@ -36130,9 +36144,9 @@ fn closeTagRowsForDerivationHelp(
             var i: usize = 0;
             while (i < arg_span.count) : (i += 1) {
                 const arg_var = self.types.vars.items.items[@intFromEnum(arg_span.start) + i];
-                try self.closeTagRowsForDerivationHelp(arg_var, env, visited);
+                try self.closeTagRowsForDerivationHelp(arg_var, env, visited, mode, inferred_open);
             }
-            try self.closeTagRowsForDerivationHelp(self.types.getAliasBackingVar(alias), env, visited);
+            try self.closeTagRowsForDerivationHelp(self.types.getAliasBackingVar(alias), env, visited, mode, inferred_open);
         },
         .structure => |flat_type| switch (flat_type) {
             .record => |record| {
@@ -36141,15 +36155,15 @@ fn closeTagRowsForDerivationHelp(
                 while (i < fields_range.count) : (i += 1) {
                     // Re-fetch per iteration: recursion can grow the store.
                     const field = self.types.record_fields.get(@enumFromInt(@intFromEnum(fields_range.start) + i));
-                    try self.closeTagRowsForDerivationHelp(field.presence.typeVar(), env, visited);
+                    try self.closeTagRowsForDerivationHelp(field.presence.typeVar(), env, visited, mode, inferred_open);
                 }
-                try self.closeTagRowsForDerivationHelp(record.ext, env, visited);
+                try self.closeTagRowsForDerivationHelp(record.ext, env, visited, mode, inferred_open);
             },
             .tuple => |tuple| {
                 var i: usize = 0;
                 while (i < tuple.elems.count) : (i += 1) {
                     const elem_var = self.types.vars.items.items[@intFromEnum(tuple.elems.start) + i];
-                    try self.closeTagRowsForDerivationHelp(elem_var, env, visited);
+                    try self.closeTagRowsForDerivationHelp(elem_var, env, visited, mode, inferred_open);
                 }
             },
             .nominal_type => |nominal| {
@@ -36157,7 +36171,7 @@ fn closeTagRowsForDerivationHelp(
                 var i: usize = 0;
                 while (i < args_range.count) : (i += 1) {
                     const arg_var = self.types.vars.items.items[@intFromEnum(args_range.start) + i];
-                    try self.closeTagRowsForDerivationHelp(arg_var, env, visited);
+                    try self.closeTagRowsForDerivationHelp(arg_var, env, visited, mode, inferred_open);
                 }
             },
             .tag_union => |tag_union| {
@@ -36168,13 +36182,19 @@ fn closeTagRowsForDerivationHelp(
                     var arg_i: usize = 0;
                     while (arg_i < tag_args.count) : (arg_i += 1) {
                         const arg_var = self.types.vars.items.items[@intFromEnum(tag_args.start) + arg_i];
-                        try self.closeTagRowsForDerivationHelp(arg_var, env, visited);
+                        try self.closeTagRowsForDerivationHelp(arg_var, env, visited, mode, inferred_open);
                     }
                 }
 
                 const ext_resolved = self.types.resolveVar(tag_union.ext);
                 switch (ext_resolved.desc.content) {
-                    .flex => {
+                    .flex => |flex| {
+                        if (flex.constraints.len() != 0 or
+                            (mode == .annotation_rows and !ext_resolved.desc.flags.annotation_tag_ext))
+                        {
+                            inferred_open.* = true;
+                            return;
+                        }
                         const ext_region = self.getRegionAt(ext_resolved.var_);
                         const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, ext_region);
                         _ = try self.unify(tag_union.ext, empty_tu_var, env);
@@ -36198,7 +36218,7 @@ fn closeTagRowsForDerivationHelp(
                     .field_presence,
                     .structure,
                     .err,
-                    => try self.closeTagRowsForDerivationHelp(tag_union.ext, env, visited),
+                    => try self.closeTagRowsForDerivationHelp(tag_union.ext, env, visited, mode, inferred_open),
                 }
             },
             .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => {},
@@ -36672,7 +36692,7 @@ fn varSupportsDerivedEncodeTagExt(
         },
         .alias => |alias| try self.varSupportsDerivedEncodeTagExt(self.types.getAliasBackingVar(alias), encoding_var, env, region),
         .err => .supported,
-        .flex => .supported,
+        .flex => .unresolved,
         .rigid, .field_presence => .unsupported,
     };
 }
@@ -38830,7 +38850,7 @@ fn satisfyDerivedMapConstraint(
     // dispatcher's own row and on payload rows, whose flex extensions would
     // otherwise read as type variables and defeat the unambiguous-payload
     // judgment (design.md: closeTagRowsForDerivation).
-    try self.closeTagRowsForDerivation(dispatcher_var, env);
+    _ = try self.closeTagRowsForDerivation(dispatcher_var, env, .all_tag_rows);
     var tags = std.ArrayList(types_mod.Tag).empty;
     defer tags.deinit(self.gpa);
     const analysis = (try self.analyzeDerivedMap(dispatcher_var, env, region, &tags)) orelse return .unsupported;
@@ -41214,15 +41234,8 @@ fn validateDerivedParseTagExt(
         },
         .alias => |alias| try self.validateDerivedParseTagExt(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, walk, failure_expr),
         .err => .ok,
-        // A flex ext that reaches validation is an inferred row (implicit
-        // output-position openness was already collapsed by
-        // closeTagRowsForDerivation): a derived parser produces exactly the
-        // listed tags, so it closes here, exactly as derived encoding does.
-        .flex => blk: {
-            const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
-            const result = try self.unify(ext_var, empty_tu_var, env);
-            break :blk if (result.isEstablished()) .ok else .reported_error;
-        },
+        // Eligibility requires the complete settled row.
+        .flex => .unsupported,
         .rigid, .field_presence => .unsupported,
     };
 }
@@ -41784,11 +41797,7 @@ fn validateDerivedEncodeTagExt(
         },
         .alias => |alias| try self.validateDerivedEncodeTagExt(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, walk),
         .err => .ok,
-        .flex => blk: {
-            const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
-            const result = try self.unify(ext_var, empty_tu_var, env);
-            break :blk if (result.isEstablished()) .ok else .reported_error;
-        },
+        .flex => .unsupported,
         .rigid, .field_presence => .unsupported,
     };
 }

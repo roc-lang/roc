@@ -6691,13 +6691,13 @@ unchanged; it does not when the platform's own `provides` annotation narrows
 the row away first.
 
 Derived structural implementations—parsers, encoders, and derived
-`map`/`map!`—are consumers that determine each tag row exactly (and, for
-map, its payload selection, which an open payload row would defeat by
-reading as a type variable), so before one is derived for a type every
-reachable tag-union extension that is an unbound flex collapses to `[]`
-(`Check.closeTagRowsForDerivation`), like an exhaustive match closing an
-inferred row. A polarity MARKER that reaches a derivation directly closes the
-same way (`RedirectRule.derivation_marker_ext_closure`): a block-local alias
+`map`/`map!`—determine each tag row exactly. Codec dispatch closes
+annotation-bounded openness eagerly, using explicit descriptor provenance;
+ordinary inferred tag tails wait for the final codec boundary, after source
+uses have contributed their tags (see Derived Parser Tag-Row Closure).
+Derived map retains exact-row closure before selecting its payload, which an
+open payload row would defeat by reading as a type variable.
+A polarity MARKER that reaches a derivation directly closes the same way (`RedirectRule.derivation_marker_ext_closure`): a block-local alias
 such as `Shape : { kind : [A, B] }` used as `Shape.parser_for(...)` consumes
 the declaration var without instantiation, so nothing else ever resolves its
 marker, and the derivation decides its "flex or `[]`, per use" as `[]`. That
@@ -7070,22 +7070,33 @@ by construction: the declared row supplies only the set of labels.
 
 ### Derived Parser Tag-Row Closure
 
-A compiler-derived structural parser owns the exact set of tags it can
-construct. When parser dispatch reaches a tag union with at least one known tag,
-an unconstrained flexible extension is therefore closed to the empty tag union
-while validating that derived parser. The closure uses ordinary unification and
-applies recursively to tag unions in payloads and container components. It does
-not close a bare flexible shape before a tag union exists, and it does not close
-a rigid extension: a polymorphic open row may contain tags for which no parser
-was checked, so that parser dispatch is rejected.
+A compiler-derived structural codec owns the exact set of tags it reads or
+constructs. An inferred tag row remains open while source expressions can add
+tags. Codec eligibility defers such a row, and only the final codec boundary,
+after source checking and literal defaulting, may close its unconstrained
+flexible tail through ordinary unification. This applies recursively to payloads
+and container components. Bare flexible shapes and named rigid extensions never
+close under this rule.
 
-This is the parser counterpart of derived encoder validation, which already
-closes an unconstrained flexible tag extension once the encoder's exact
-structural shape is selected. Implicit output-position openness is already
-collapsed by `Check.closeTagRowsForDerivation` before eligibility runs, so a
-flexible extension that survives to the eligibility probe is a genuinely
-unresolved row and defers rather than qualifying; a bare flexible shape or
-payload likewise remains unsupported until earlier constraints resolve it.
+Annotation-bounded openness is different: a parser defined against an annotation
+must select the annotation's listed tags before generalization, so caller
+widening cannot expand that parser's input language. Annotation generation stamps
+its implicit extensions with `annotation_tag_ext` descriptor provenance. Flex
+class merges preserve this bit; faithful and expected-shape copies preserve it,
+while fresh scheme uses do not inherit definition-site closure authority.
+Alias polarity markers retain their existing explicit closure rule.
+`closeTagRowsForDerivation` uses this provenance to close annotation rows eagerly
+without closing unfinished inferred rows. Parser and encoder eligibility both
+report inferred flexible tag tails as unresolved.
+
+An erased requirement waiting for inferred tag-row settlement joins the existing
+`final_codec_dispatch_constraints` queue, deduplicated by its callable variable.
+It is not retried after unrelated expressions: its next legal settlement event
+is the final codec boundary. Scheme capture continues to own relations escaping
+through a generic interface. At finalization, codec row closure precedes
+eligibility and validation; validators consume settled tag rows and do not
+independently commit flexible tails. No per-module annotation scans or separate
+mutation-watcher graph are needed for boundary-owned settlement.
 
 For a dictionary key whose known row contains only zero-payload tags, parser
 and encoder derivation apply their corresponding closure before selecting the
@@ -7093,11 +7104,13 @@ dictionary-key protocol. The resulting closed row uses the lossless key-string
 path; validation must not first select the general nested-codec path and then
 close the row into a different runtime category.
 
-Both sides are pinned by tests: accepted—
-test/cli/JsonTagUnionProtocol.roc (issue #10418's unannotated
-`Ok(Friendly) == Json.parse(...)` comparison closes the inferred parser row);
-rejected—test/cli/ParserOpenTagUnion.roc (a parser whose result annotation
-has a named rigid extension remains a missing-method error).
+Both sides are pinned by the issue #11632 checker and evaluator tests:
+both parser branch orders, encoding before later match tags, nested inferred
+rows, fresh caller openness, and an annotated parser rejecting unlisted input
+tags. The polarity and issue #11632 checker tests reject named rigid rows.
+`test/cli/JsonTagUnionProtocol.roc` and the single-tag evaluator case retain
+issue #10418's unannotated `Ok(Friendly) == Json.parse(...)` behavior;
+`test/cli/ParserOpenTagUnion.roc` retains its missing-method diagnostic.
 
 ### Derived Structural Codec Record-Row Closure
 
@@ -8731,29 +8744,17 @@ Other solved-graph mutations:
   every recorded return operand as well; `?` desugars to one of those returns,
   and its `Err` is what keeps an inferred error row open (see Try Return-Row
   Composition above, whose contributions are composed only after this point).
-- `closeTagRowsForDerivation`—policy: Polarity (above). Before a structural
-  parser, encoder, or derived `map`/`map!` is derived for a type, every
-  reachable tag-union extension that is an unbound flex var (implicit
-  output-position openness) unifies with the empty tag union: a derived
-  implementation determines each row exactly—and derived map additionally
-  determines its payload selection, which an open payload row would defeat
-  by reading as a type variable—so the openness collapses like an
-  exhaustive match closing an inferred row. A polarity MARKER rigid in
-  tag-ext position (the alias-declaration-body deferral) collapses the same
-  way via `RedirectRule.derivation_marker_ext_closure` (above): a
-  directly-used local alias declaration's marker meets no resolving
-  instantiation, and the derivation decides its "flex or `[]`" as `[]`.
-  Both sides are pinned by the "check type - polarity - derivation ..." and
-  "... derived map/parser/encoder ..." tests in
-  src/check/test/type_checking_integration.zig: accepted—open payload rows
-  under a derived map, `Try(Str, [Missing])` fields under a derived parser
-  and encoder, a Dict key union inside a nominal arg, and a block-local
-  alias marker consumed by `Shape.parser_for`; rejected—a named rigid
-  extension, which no derivation closes.
-- `validateDerivedParseTagExt`—policy: Derived Parser Tag-Row Closure
-  (above). Once structural parser eligibility has selected a known tag union,
-  its unconstrained flexible extension closes to the empty tag union through
-  ordinary unification; rigid extensions remain rejected.
+- `closeTagRowsForDerivation`—policy: Polarity and Derived Parser Tag-Row
+  Closure (above). Codec dispatch eagerly closes only annotation-proven flexible
+  extensions and alias polarity markers; inferred tag tails close at the final
+  codec boundary. Annotation provenance is minted by annotation generation via
+  `Store.markAnnotationTagExt`, preserved by flex class merges and faithful
+  copies, and cleared on fresh scheme instantiation. Derived `map`/`map!`
+  retain their existing exact-row closure before payload selection. Marker
+  redirects cite `RedirectRule.derivation_marker_ext_closure`.
+  Accepted and rejected codec cases are pinned by
+  `src/check/test/issue_11632_test.zig` and the polarity derivation tests in
+  `src/check/test/type_checking_integration.zig`.
 - `closeRecordRowForDerivedParse` / `closeRecordRowForDerivedEncode`—policy:
   Derived Structural Codec Record-Row Closure (above). After derived codec
   dispatch reaches quiescence, a record inferred from use sites closes its
