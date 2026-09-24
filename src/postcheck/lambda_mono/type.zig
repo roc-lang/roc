@@ -507,15 +507,17 @@ test "Lambda Mono digest terminates recursive erased captures independent of all
             .ty = callable,
             .default = null,
         }}) });
-        store.set(callable, .{ .erased_fn = .{
-            .source_fn_ty = .{ .bytes = @splat(13) },
-            .members = try store.addFnVariants(&.{.{
-                .id = undefined, // Assigned by addFnVariants.
-                .source = @enumFromInt(8),
-                .target = @enumFromInt(9),
-                .capture_ty = capture,
-            }}),
-        } });
+        store.set(callable, .{
+            .erased_fn = .{
+                .source_fn_ty = .{ .bytes = @splat(13) },
+                .members = try store.addFnVariants(&.{.{
+                    .id = undefined, // Assigned by addFnVariants.
+                    .source = @enumFromInt(8),
+                    .target = @enumFromInt(9),
+                    .capture_ty = capture,
+                }}),
+            },
+        });
         root.* = capture;
     }
     const expected = try store.typeDigest(&name_store, roots[0]);
@@ -539,12 +541,14 @@ test "Lambda Mono digest distinguishes recursive edges and callable targets" {
     try std.testing.expect(!std.meta.eql(outer_cycle, try store.typeDigest(&name_store, root)));
     var digests: [2]names.TypeDigest = undefined;
     for (&digests, 0..) |*digest, i| {
-        store.set(root, .{ .callable = try store.addFnVariants(&.{.{
-            .id = undefined, // Assigned by addFnVariants.
-            .source = @enumFromInt(1),
-            .target = @enumFromInt(i),
-            .capture_ty = root,
-        }}) });
+        store.set(root, .{
+            .callable = try store.addFnVariants(&.{.{
+                .id = undefined, // Assigned by addFnVariants.
+                .source = @enumFromInt(1),
+                .target = @enumFromInt(i),
+                .capture_ty = root,
+            }}),
+        });
         digest.* = try store.typeDigest(&name_store, root);
     }
     try std.testing.expect(!std.meta.eql(digests[0], digests[1]));
