@@ -15704,6 +15704,25 @@ parallel insertion paths at any point:
    specialization demand vector, check-free helper plans, and the certifier
    rule.
 
+## Native aggregate copy emission
+
+Native dev copies emit at most 32 bytes as straight-line chunks. Larger copies
+use a counted word loop with source and destination addresses materialized once,
+followed by an exact-width tail. Code size is bounded independently of the
+aggregate byte size and frame displacement. Zero and debug-poison initialization
+use the same bounded-loop policy. Copies preserve both base registers
+and never access bytes outside the declared extent. They introduce no runtime
+calls, ownership decisions, or new representation rules.
+
+Ordinary emission owns the loop's three scratch registers. Parameter binding
+reserves incoming argument registers until every parameter has been captured;
+argument and result copies allocate their data temporary explicitly. Independent
+entrypoint wrappers and dictionary thunks begin with fresh register availability
+and restore their enclosing emitter's reservations when finished. AArch64 entrypoint
+stack-argument copies emitted after frame finalization instead explicitly use
+X9-X11, which are volatile and carry no incoming C-ABI arguments. They preserve
+all argument registers and introduce no new callee-save or frame requirements.
+
 ## Dev Backend Register Lifetimes
 
 `LirCodeGen` is the sole authority for LIR local locations. Every assigned
