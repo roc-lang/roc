@@ -960,6 +960,19 @@ const SealedSubstSlot = union(enum) {
 
 const SealedSubstitution = []const SealedSubstSlot;
 
+/// Whether a procedure template's checked function type is its complete
+/// specialization interface. With no type variables in that root and none
+/// quantified by its scheme (hidden requirement receivers included), a request
+/// is exactly the checked root: the template's relation table relates only
+/// cells private to its own body, so requesters never replay it.
+fn templateInterfaceIsClosed(view: ModuleView, template: *const checked.CheckedProcedureTemplate) bool {
+    const raw = @intFromEnum(template.checked_fn_root);
+    if (raw >= view.types.roots.len) {
+        Common.invariant("procedure template interface query referenced a missing checked root");
+    }
+    return template.scheme_vars.len == 0 and !view.types.roots[raw].contains_identity_variables;
+}
+
 /// The requirement schema of a procedure template's scheme.
 fn templateSchemaIn(view: ModuleView, template: *const checked.CheckedProcedureTemplate) SchemeRequirements {
     return .{
@@ -7444,11 +7457,17 @@ const Builder = struct {
                 contract.shape_node,
             );
         }
-        try body_ctx.instantiateTemplateDispatchRelations(template, null);
-        try body_ctx.applyCheckedTemplateInterfaceRelations(template, root_node);
         if (!local_context_dependent) {
+            // A deferred body lowers in its own specialization, so only an
+            // open interface needs the template's relations replayed here.
+            if (!templateInterfaceIsClosed(view, &template)) {
+                try body_ctx.instantiateTemplateDispatchRelations(template, null);
+                try body_ctx.applyCheckedTemplateInterfaceRelations(template, root_node);
+            }
             return .{ .local = .{ .draft = fn_id } };
         }
+        try body_ctx.instantiateTemplateDispatchRelations(template, null);
+        try body_ctx.applyCheckedTemplateInterfaceRelations(template, root_node);
         if (template.target == .hosted) {
             Common.invariant("hosted template specialization depended on a local procedure context");
         }
@@ -22879,6 +22898,38 @@ const BodyContext = struct {
         return null;
     }
 
+    /// Relate a direct-call dependency's request to its callee's instantiated
+    /// checked root.
+    fn relateDependencyRequestToCalleeRoot(
+        self: *BodyContext,
+        callee_view: ModuleView,
+        template: checked.CheckedProcedureTemplate,
+        root_node: NodeId,
+        request_fn_node: NodeId,
+    ) Allocator.Error!void {
+        if (template.target == .hosted) {
+            // The replayed summary shapes the request; the specialization this
+            // request later reaches records the widening for completion.
+            _ = try relateHostedFunctionRequestInterface(
+                self.graph,
+                try self.builder.hostedTryAdapterCapability(callee_view, template.hosted_try_adapter),
+                root_node,
+                request_fn_node,
+            );
+        } else if (!try relateClosedResultRowRequestInterface(
+            self.graph,
+            callee_view,
+            template.checked_fn_root,
+            root_node,
+            request_fn_node,
+            // Dependencies never target a `.local_proc`, so this request is
+            // always served by a procedure template specialization.
+            .adapter_reachable,
+        )) {
+            try relateConstructionFunctionRequestInterface(self.graph, root_node, request_fn_node);
+        }
+    }
+
     fn applyDirectCalleeInterfaceRelations(
         self: *BodyContext,
         target: checked.ResolvedValueId,
@@ -22912,6 +22963,28 @@ const BodyContext = struct {
         const template_ref = self.builder.templateRefForProcedureUse(procedure);
         const callee_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = callee_view.templates.get(template_ref.template);
+        if (templateInterfaceIsClosed(callee_view, &template)) {
+            // A closed interface is complete: relating the request to the
+            // checked root is the entire dependency, and its relation table
+            // never enters the requester's graph.
+            self.builder.count("interface_closed_dependencies");
+            var callee_ctx = try BodyContext.initWithMethodScope(
+                self.allocator,
+                self.builder,
+                callee_view,
+                self.method_scope,
+                template_ref,
+                self.graph,
+                self.draft,
+            );
+            defer callee_ctx.deinit();
+            callee_ctx.owner_context_fn_key = self.owner_context_fn_key;
+            callee_ctx.current_fn_key = self.current_fn_key;
+            callee_ctx.evidence = rootEvidence(template_ref, &.{});
+            const root_node = try callee_ctx.instNode(template.checked_fn_root);
+            try self.relateDependencyRequestToCalleeRoot(callee_view, template, root_node, request_fn_node);
+            return;
+        }
         const partial_edge = try self.evidenceForProcedureUseAtNode(procedure, record.expr, root_evidence, request_fn_node, .specialization_interface);
         var edge = if (partial_edge.vector.len == template.evidence_params.len)
             partial_edge
@@ -23026,27 +23099,7 @@ const BodyContext = struct {
         callee_ctx.evidence = rootEvidenceWithSubstitution(template_ref, templateSchemaIn(callee_view, &template), edge);
         try callee_ctx.seedSubstitution(callee_ctx.evidence.schema.?, edge.subst);
         const root_node = try callee_ctx.instNode(template.checked_fn_root);
-        if (template.target == .hosted) {
-            // The replayed summary shapes the request; the specialization this
-            // request later reaches records the widening for completion.
-            _ = try relateHostedFunctionRequestInterface(
-                self.graph,
-                try self.builder.hostedTryAdapterCapability(callee_view, template.hosted_try_adapter),
-                root_node,
-                request_fn_node,
-            );
-        } else if (!try relateClosedResultRowRequestInterface(
-            self.graph,
-            callee_view,
-            template.checked_fn_root,
-            root_node,
-            request_fn_node,
-            // A `.local_proc` target returned above, so this request is always
-            // served by a procedure template specialization.
-            .adapter_reachable,
-        )) {
-            try relateConstructionFunctionRequestInterface(self.graph, root_node, request_fn_node);
-        }
+        try self.relateDependencyRequestToCalleeRoot(callee_view, template, root_node, request_fn_node);
         try callee_ctx.instantiateTemplateDispatchRelations(template, null);
 
         var active_local_scopes = collections.DenseMap(checked.DispatchScopeId, NodeId).init(self.allocator);

@@ -9873,6 +9873,18 @@ available before any dependency identity is chosen. Transitive replay reaches
 a fixed point across arbitrary wrapper depth and recursive call graphs without
 making source syntax or body-lowering order part of type meaning.
 
+A procedure template whose checked function root contains no type variables
+and whose scheme quantifies none (hidden requirement receivers included) has a
+closed interface: its checked root is the complete answer to every request for
+it, and its relation table relates only cells private to its own body.
+Requesters relate the request to that root and stop. Neither a dependency edge
+nor a deferred request replays a closed template's relations, so a caller's
+specialization work never grows with the bodies of its closed callees, and
+transitive replay is bounded by the open templates it actually reaches. A
+request that lowers the callee body in the caller's own draft (a caller-owned
+lexical specialization or an eager iterator completion) still replays them,
+because that replay is the body's own relation production.
+
 Repeated open dependency requests are memoized by the complete procedure
 family (template, method scope, and checked source-function key), exact evidence
 topology, and an immutable provisional Monotype view of the function request
@@ -10558,7 +10570,7 @@ Creating a specialization performs root instantiation before body lowering:
 ```text
 create fresh instantiation context
 constrain checked source function type to requested Monotype function type
-replay the complete checked specialization-interface relation closure
+replay the checked specialization-interface relation closure of an open template
 seal and look up the exact specialization identity
 lower arguments and body through that context
 emit a closed Monotype definition
