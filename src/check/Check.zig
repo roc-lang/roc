@@ -14119,7 +14119,7 @@ fn predeclareAnnotationSchemeHelp(
 
     if (hole_rank) |hr| {
         // The reset gave each live hole a fresh unbound class at the outermost
-        // rank; lower it to `hr` so a use unifying into the hole before the
+        // rank; set it to `hr` so a use unifying into the hole before the
         // body pass re-ranks it cannot pull the class below the group's
         // generalization boundary, which would freeze the hole monomorphic
         // into the published scheme instead of quantifying it there.
