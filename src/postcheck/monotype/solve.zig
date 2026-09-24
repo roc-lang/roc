@@ -171,7 +171,7 @@ const InstNamed = struct {
     /// computed only when this graph is sealed, from the final component
     /// types. Imported finished Monotypes have this null and already carry
     /// their producer digest in `def.generated`.
-    generated_iterator: ?InstGeneratedIterator = null,
+    generated_iterator: ?*const InstGeneratedIterator = null,
     /// Declared fields for a nominal/opaque record backing (empty otherwise).
     /// Padding field types are graph nodes so sealing maps them to immutable
     /// type ids with the rest of the named type.
@@ -1553,6 +1553,13 @@ pub const InstGraph = struct {
         return self.arena_impl.allocator();
     }
 
+    /// Generated-iterator provenance, which lives in the graph arena.
+    pub fn generatedIterator(self: *InstGraph, provenance: InstGeneratedIterator) Allocator.Error!*const InstGeneratedIterator {
+        const stored = try self.arena().create(InstGeneratedIterator);
+        stored.* = provenance;
+        return stored;
+    }
+
     /// Node content for a named payload, which lives in the graph arena.
     pub fn namedContent(self: *InstGraph, named: InstNamed) Allocator.Error!InstNode {
         const stored = try self.arena().create(InstNamed);
@@ -2203,10 +2210,10 @@ pub const InstGraph = struct {
                 .use = provenance.public_source.backing.use,
                 .authority = .generated_private,
             },
-            .generated_iterator = .{
+            .generated_iterator = try self.generatedIterator(.{
                 .callable_evidence = null,
                 .public_source = provenance.public_source,
-            },
+            }),
             .declared_order = provenance.public_source.declared_order,
         }));
     }
@@ -7259,7 +7266,7 @@ const OpenFunctionInterfaceShapeWriter = struct {
 
     fn writeOptionalGeneratedIterator(
         self: *OpenFunctionInterfaceShapeWriter,
-        generated_iterator: ?InstGeneratedIterator,
+        generated_iterator: ?*const InstGeneratedIterator,
     ) Allocator.Error!void {
         const generated = generated_iterator orelse {
             self.writeU8(0);
@@ -7504,7 +7511,7 @@ fn instFieldDefaultEql(left: ?Type.FieldDefault, right: ?Type.FieldDefault) bool
     return left_default.module == right_default.module and left_default.expr_node == right_default.expr_node;
 }
 
-fn instGeneratedIteratorEql(left: ?InstGeneratedIterator, right: ?InstGeneratedIterator) bool {
+fn instGeneratedIteratorEql(left: ?*const InstGeneratedIterator, right: ?*const InstGeneratedIterator) bool {
     const a = left orelse return right == null;
     const b = right orelse return false;
     return optionalInstDigestEql(a.callable_evidence, b.callable_evidence) and
@@ -7697,7 +7704,7 @@ fn testGeneratedIteratorMigration(gpa: Allocator) (Allocator.Error || error{ Tes
     var named = graph.content(public).named.*;
     named.def.iterator_kind = .list;
     named.def.iterator_representation = .minted;
-    named.generated_iterator = .{ .public_source = source, .callable_evidence = null };
+    named.generated_iterator = try graph.generatedIterator(.{ .public_source = source, .callable_evidence = null });
     // Repeated component roots exercise deduplication of reverse dependencies.
     named.args = try graph.arena().dupe(NodeId, &.{ item, component, component });
     const first = try graph.newNode(try graph.namedContent(named));
@@ -7709,14 +7716,14 @@ fn testGeneratedIteratorMigration(gpa: Allocator) (Allocator.Error || error{ Tes
     try std.testing.expect(!graph.sameClass(first, duplicate));
     // The representative key must not keep borrowing the removed node's roots.
     var changed = named;
-    changed.generated_iterator.?.callable_evidence = .{ .bytes = @splat(0xA1) };
+    changed.generated_iterator = try graph.generatedIterator(.{ .callable_evidence = .{ .bytes = @splat(0xA1) }, .public_source = changed.generated_iterator.?.public_source });
     try graph.setContent(first, try graph.namedContent(changed));
     try std.testing.expectEqual(duplicate, graph.findGeneratedIterator(public, .list, &.{ component, component }, null).?);
     try std.testing.expectEqual(first, graph.findGeneratedIterator(public, .list, &.{ component, component }, changed.generated_iterator.?.callable_evidence).?);
     // Replacements can attach provenance to a reserved recursive node.
     const reserved = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
     changed.def.iterator_kind = .forced_dynamic;
-    changed.generated_iterator.?.callable_evidence = null;
+    changed.generated_iterator = try graph.generatedIterator(.{ .callable_evidence = null, .public_source = changed.generated_iterator.?.public_source });
     changed.args = try graph.arena().dupe(NodeId, &.{item});
     try graph.setContent(reserved, try graph.namedContent(changed));
     try std.testing.expectEqual(reserved, graph.findGeneratedIterator(public, .forced_dynamic, &.{}, null).?);
@@ -9936,10 +9943,10 @@ test "opaque iterator relation materializes unresolved public interface from pro
             .use = .runtime_layout_only,
             .authority = .generated_private,
         },
-        .generated_iterator = .{
+        .generated_iterator = try graph.generatedIterator(.{
             .callable_evidence = null,
             .public_source = public_source,
-        },
+        }),
     }));
 
     try graph.relateOpaqueInterface(public, private);
@@ -10117,10 +10124,10 @@ test "opaque relation materializes unresolved public named shell from request" {
             .use = .runtime_layout_only,
             .authority = .generated_private,
         },
-        .generated_iterator = .{
+        .generated_iterator = try graph.generatedIterator(.{
             .callable_evidence = null,
             .public_source = public_source,
-        },
+        }),
     }));
     const request = try graph.newNode(try graph.namedContent(.{
         .named_type = shell_named_type,
@@ -10170,7 +10177,7 @@ test "generated iterator index reset discards replaced and rekeyed producers" {
     minted.def.iterator_representation = .minted;
     minted.args = try graph.arena().dupe(NodeId, &.{ item, component });
     minted.backing.?.authority = .generated_private;
-    minted.generated_iterator = .{
+    minted.generated_iterator = try graph.generatedIterator(.{
         .callable_evidence = null,
         .public_source = .{
             .named_type = public_named.named_type,
@@ -10180,7 +10187,7 @@ test "generated iterator index reset discards replaced and rekeyed producers" {
             .backing = public_named.backing.?,
             .declared_order = &.{},
         },
-    };
+    });
     const first = try graph.newNode(try graph.namedContent(minted));
     const RecursiveMinted = struct { graph: *InstGraph, named: InstNamed };
     const second = try graph.addRecursiveNode(RecursiveMinted{ .graph = graph, .named = minted }, struct {
@@ -10202,7 +10209,7 @@ test "generated iterator index reset discards replaced and rekeyed producers" {
     try std.testing.expectEqual(second, graph.findGeneratedIterator(public, .list, &.{component}, null).?);
 
     // Changing callable evidence moves the live node to a different bucket.
-    minted.generated_iterator.?.callable_evidence = .{ .bytes = @splat(0x62) };
+    minted.generated_iterator = try graph.generatedIterator(.{ .callable_evidence = .{ .bytes = @splat(0x62) }, .public_source = minted.generated_iterator.?.public_source });
     try graph.setContent(second, try graph.namedContent(minted));
     try std.testing.expectEqual(@as(?NodeId, null), graph.findGeneratedIterator(public, .list, &.{component}, null));
     try std.testing.expectEqual(second, graph.findGeneratedIterator(public, .list, &.{component}, minted.generated_iterator.?.callable_evidence).?);
@@ -10279,10 +10286,10 @@ test "generated iterator depth visits wide graphs without a size cutoff" {
             .use = .runtime_layout_only,
             .authority = .generated_private,
         },
-        .generated_iterator = .{
+        .generated_iterator = try graph.generatedIterator(.{
             .callable_evidence = null,
             .public_source = public_source,
-        },
+        }),
     }));
 
     // Put the only iterator-bearing child after the former 64-node walk
@@ -10308,10 +10315,10 @@ test "generated iterator depth visits wide graphs without a size cutoff" {
             .use = .runtime_layout_only,
             .authority = .generated_private,
         },
-        .generated_iterator = .{
+        .generated_iterator = try graph.generatedIterator(.{
             .callable_evidence = null,
             .public_source = public_source,
-        },
+        }),
     }));
 
     try graph.finalizeGeneratedIteratorRepresentations();
@@ -10353,14 +10360,14 @@ test "generated iterator identity uses current graph content rather than an impo
             .builtin_owner = .iter,
             .args = try graph.arena().dupe(NodeId, &.{item}),
             .backing = .{ .node = backing, .use = .runtime_layout_only, .authority = .generated_private },
-            .generated_iterator = .{ .callable_evidence = null, .public_source = .{
+            .generated_iterator = try graph.generatedIterator(.{ .callable_evidence = null, .public_source = .{
                 .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1) },
                 .def = public_def,
                 .kind = .@"opaque",
                 .builtin_owner = .iter,
                 .backing = .{ .node = backing, .use = .runtime_layout_only },
                 .declared_order = &.{},
-            } },
+            } }),
         });
         const node = if (index == 0) try graph.newNode(owned) else blk: {
             const imported = try graph.importMono(source_ty);
@@ -10421,14 +10428,14 @@ test "generated iterator identity ignores checked provenance that type equality 
                 .builtin_owner = .iter,
                 .args = try graph.arena().dupe(NodeId, &.{item}),
                 .backing = .{ .node = backing, .use = .runtime_layout_only, .authority = .generated_private },
-                .generated_iterator = .{ .callable_evidence = null, .public_source = .{
+                .generated_iterator = try graph.generatedIterator(.{ .callable_evidence = null, .public_source = .{
                     .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1) },
                     .def = .{ .module = module, .type_name = iter_name },
                     .kind = .@"opaque",
                     .builtin_owner = .iter,
                     .backing = .{ .node = backing, .use = .runtime_layout_only },
                     .declared_order = &.{},
-                } },
+                } }),
             }));
             try graph.finalizeGeneratedIteratorIdentities();
             identity.* = graph.content(node).named.def.generated.?;
@@ -10517,10 +10524,10 @@ test "recursive join keeps graph-owned iterator provenance over a finished Monot
             .use = .runtime_layout_only,
             .authority = .generated_private,
         },
-        .generated_iterator = .{
+        .generated_iterator = try graph.generatedIterator(.{
             .callable_evidence = null,
             .public_source = public_source,
-        },
+        }),
     }));
 
     // This order is significant: the finished type is the left side of the
@@ -11256,7 +11263,7 @@ fn testGeneratedIteratorIndex(gpa: Allocator) (Allocator.Error || error{ TestUne
     named.def.iterator_kind = .list;
     named.def.iterator_representation = .minted;
     named.def.iterator_depth = 1;
-    named.generated_iterator = .{ .callable_evidence = null, .public_source = source };
+    named.generated_iterator = try graph.generatedIterator(.{ .callable_evidence = null, .public_source = source });
     named.args = try graph.arena().dupe(NodeId, &.{ item, component, component });
     const first = try graph.newNode(try graph.namedContent(named));
     named.args = try graph.arena().dupe(NodeId, &.{ item, other, other });
@@ -11269,7 +11276,7 @@ fn testGeneratedIteratorIndex(gpa: Allocator) (Allocator.Error || error{ TestUne
     // candidate, without joining their classes merely because keys coincide.
     const evidence: names.TypeDigest = .{ .bytes = @splat(7) };
     var changed = graph.content(first).named.*;
-    changed.generated_iterator.?.callable_evidence = evidence;
+    changed.generated_iterator = try graph.generatedIterator(.{ .callable_evidence = evidence, .public_source = changed.generated_iterator.?.public_source });
     try graph.setContent(first, try graph.namedContent(changed));
     try std.testing.expect(!graph.sameClass(first, second));
     try std.testing.expectEqual(second, graph.findGeneratedIterator(public, .list, &.{ component, other }, null).?);
@@ -11277,7 +11284,7 @@ fn testGeneratedIteratorIndex(gpa: Allocator) (Allocator.Error || error{ TestUne
     // Content replacement changes the exact construction key, including tier.
     changed.def.iterator_kind = .forced_dynamic;
     changed.def.iterator_representation = .forced_dynamic;
-    changed.generated_iterator.?.callable_evidence = null;
+    changed.generated_iterator = try graph.generatedIterator(.{ .callable_evidence = null, .public_source = changed.generated_iterator.?.public_source });
     changed.args = try graph.arena().dupe(NodeId, &.{item});
     try graph.setContent(first, try graph.namedContent(changed));
     try std.testing.expectEqual(first, graph.findGeneratedIterator(public, .forced_dynamic, &.{}, null).?);
@@ -11336,7 +11343,7 @@ test "issue 11362: generated iterator index follows root unions and producer rep
     minted.def.iterator_representation = .minted;
     minted.args = try graph.arena().dupe(NodeId, &.{ item, component });
     minted.backing.?.authority = .generated_private;
-    minted.generated_iterator = .{
+    minted.generated_iterator = try graph.generatedIterator(.{
         .callable_evidence = null,
         .public_source = .{
             .named_type = public_named.named_type,
@@ -11346,7 +11353,7 @@ test "issue 11362: generated iterator index follows root unions and producer rep
             .backing = public_named.backing.?,
             .declared_order = &.{},
         },
-    };
+    });
     const first = try graph.newNode(try graph.namedContent(minted));
     const RecursiveMinted = struct { graph: *InstGraph, named: InstNamed };
     const second = try graph.addRecursiveNode(RecursiveMinted{ .graph = graph, .named = minted }, struct {
@@ -11368,7 +11375,7 @@ test "issue 11362: generated iterator index follows root unions and producer rep
     try std.testing.expectEqual(second, graph.findGeneratedIterator(public, .list, &.{component}, null).?);
 
     // Changing callable evidence moves the live node to a different bucket.
-    minted.generated_iterator.?.callable_evidence = .{ .bytes = @splat(0x62) };
+    minted.generated_iterator = try graph.generatedIterator(.{ .callable_evidence = .{ .bytes = @splat(0x62) }, .public_source = minted.generated_iterator.?.public_source });
     try graph.setContent(second, try graph.namedContent(minted));
     try std.testing.expectEqual(@as(?NodeId, null), graph.findGeneratedIterator(public, .list, &.{component}, null));
     try std.testing.expectEqual(second, graph.findGeneratedIterator(public, .list, &.{component}, minted.generated_iterator.?.callable_evidence).?);
@@ -11436,7 +11443,7 @@ test "generated iterator index preserves evidence, argument classes, unions and 
             generated.def.iterator_depth = 1;
             generated.args = try graph.arena().dupe(NodeId, &.{ item, component });
             generated.backing.?.authority = .generated_private;
-            generated.generated_iterator = .{ .callable_evidence = null, .public_source = public_source };
+            generated.generated_iterator = try graph.generatedIterator(.{ .callable_evidence = null, .public_source = public_source });
             var without_provenance = generated;
             without_provenance.generated_iterator = null;
             const first = try graph.newNode(try graph.namedContent(without_provenance));
@@ -11449,7 +11456,7 @@ test "generated iterator index preserves evidence, argument classes, unions and 
             try std.testing.expect(graph.findGeneratedIterator(public, .list, &.{other_component}, null) == null);
             const evidence: names.TypeDigest = .{ .bytes = @splat(7) };
             try std.testing.expect(graph.findGeneratedIterator(public, .list, &.{component}, evidence) == null);
-            generated.generated_iterator.?.callable_evidence = evidence;
+            generated.generated_iterator = try graph.generatedIterator(.{ .callable_evidence = evidence, .public_source = generated.generated_iterator.?.public_source });
             const with_evidence = try graph.newNode(try graph.namedContent(generated));
             try std.testing.expectEqual(with_evidence, graph.findGeneratedIterator(public, .list, &.{component}, evidence).?);
             generated.def.source_decl = 17;
@@ -11458,10 +11465,10 @@ test "generated iterator index preserves evidence, argument classes, unions and 
             try std.testing.expectEqual(with_evidence, graph.findGeneratedIterator(public, .list, &.{component}, evidence).?);
 
             var rekeyed = graph.content(first).named.*;
-            rekeyed.generated_iterator.?.callable_evidence = evidence;
+            rekeyed.generated_iterator = try graph.generatedIterator(.{ .callable_evidence = evidence, .public_source = rekeyed.generated_iterator.?.public_source });
             try graph.setContent(first, try graph.namedContent(rekeyed));
             try std.testing.expectEqual(first, graph.findGeneratedIterator(public, .list, &.{component}, evidence).?);
-            rekeyed.generated_iterator.?.callable_evidence = null;
+            rekeyed.generated_iterator = try graph.generatedIterator(.{ .callable_evidence = null, .public_source = rekeyed.generated_iterator.?.public_source });
             try graph.setContent(first, try graph.namedContent(rekeyed));
             try std.testing.expectEqual(first, graph.findGeneratedIterator(public, .list, &.{component}, null).?);
             try std.testing.expectEqual(with_evidence, graph.findGeneratedIterator(public, .list, &.{component}, evidence).?);
@@ -11586,7 +11593,7 @@ test "generated iterator index follows content replacement and argument unions" 
             generated.def.iterator_representation = .minted;
             generated.def.iterator_depth = 1;
             generated.args = try graph.arena().dupe(NodeId, &.{ item, component });
-            generated.generated_iterator = .{ .callable_evidence = null, .public_source = source };
+            generated.generated_iterator = try graph.generatedIterator(.{ .callable_evidence = null, .public_source = source });
             const first = try graph.newNode(try graph.namedContent(generated));
             const second = try graph.newNode(try graph.namedContent(generated));
             try std.testing.expect(graph.findGeneratedIterator(public, .list, &.{other_component}, null) == null);
@@ -11602,7 +11609,7 @@ test "generated iterator index follows content replacement and argument unions" 
             try graph.setContent(root, try graph.namedContent(generated));
             try std.testing.expect(graph.findGeneratedIterator(public, .list, &.{other_component}, null) == null);
             try std.testing.expectEqual(root, graph.findGeneratedIterator(public, .forced_dynamic, &.{}, null).?);
-            generated.generated_iterator.?.callable_evidence = .{ .bytes = @splat(7) };
+            generated.generated_iterator = try graph.generatedIterator(.{ .callable_evidence = .{ .bytes = @splat(7) }, .public_source = generated.generated_iterator.?.public_source });
             try graph.setContent(root, try graph.namedContent(generated));
             try std.testing.expect(graph.findGeneratedIterator(public, .forced_dynamic, &.{}, null) == null);
             try std.testing.expectEqual(root, graph.findGeneratedIterator(public, .forced_dynamic, &.{}, generated.generated_iterator.?.callable_evidence).?);

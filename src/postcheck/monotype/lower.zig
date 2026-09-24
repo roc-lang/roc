@@ -27502,10 +27502,10 @@ const BodyContext = struct {
                         .use = ctx.public_source.backing.use,
                         .authority = .generated_private,
                     },
-                    .generated_iterator = .{
+                    .generated_iterator = try ctx.body.graph.generatedIterator(.{
                         .callable_evidence = ctx.callable_evidence,
                         .public_source = ctx.public_source,
-                    },
+                    }),
                     .declared_order = ctx.public_source.declared_order,
                 });
             }
@@ -27598,10 +27598,10 @@ const BodyContext = struct {
                         .use = ctx.public_source.backing.use,
                         .authority = .generated_private,
                     },
-                    .generated_iterator = .{
+                    .generated_iterator = try ctx.body.graph.generatedIterator(.{
                         .callable_evidence = null,
                         .public_source = ctx.public_source,
-                    },
+                    }),
                     .declared_order = ctx.public_source.declared_order,
                 });
             }
