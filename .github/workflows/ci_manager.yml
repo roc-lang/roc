@@ -243,10 +243,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
 
+      # `use-tool-cache` installs Zig at $RUNNER_TOOL_CACHE/zig/<version>/<arch>,
+      # the same path in this build job and in every shard of its OS. Without
+      # it Zig lands in a random per-job directory, and Run steps that invoke
+      # the zig executable (the wasm32 builtins `zig wasm-ld -r` merge) hash
+      # that absolute path, so every shard would miss the restored cache and
+      # rebuild everything that embeds the wasm32 builtins through eval.
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.16.0
           use-cache: false
+          use-tool-cache: 'true'
 
       - name: Install Rust wasm target
         run: rustup target add wasm32-unknown-unknown
@@ -410,10 +417,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
 
+      # Same deterministic Zig path as the build job (see `use-tool-cache` in
+      # `minici-build-linux`), so the restored cache hits.
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.16.0
           use-cache: false
+          use-tool-cache: 'true'
 
       - name: Download MiniCI build artifact
         uses: actions/download-artifact@v8.0.1 # ratchet:actions/download-artifact@v8.0.1
