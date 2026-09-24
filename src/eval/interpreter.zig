@@ -375,6 +375,7 @@ pub const Interpreter = struct {
     runtime_boxy_tag_variants: std.ArrayList(LirProgram.BoxyTagVariant) = .empty,
     runtime_boxy_tag_payload_descs: std.ArrayList(LirProgram.BoxyTagPayloadDesc) = .empty,
     runtime_boxy_payload_steps: std.ArrayList(LirProgram.BoxyPayloadStep) = .empty,
+    runtime_boxy_dicts: boxy_runtime.RuntimeBoxyDicts = .{},
     /// Descriptor-guided boxy value machinery, bound to this interpreter's live
     /// descriptor tables by `bindBoxyRuntime` before each evaluation.
     boxy_runtime: BoxyRuntime,
@@ -837,6 +838,7 @@ pub const Interpreter = struct {
             .runtime_boxy_tag_variants = .empty,
             .runtime_boxy_tag_payload_descs = .empty,
             .runtime_boxy_payload_steps = .empty,
+            .runtime_boxy_dicts = .{},
             .boxy_runtime = .{
                 .store = store,
                 .layout_store = layout_store,
@@ -849,6 +851,7 @@ pub const Interpreter = struct {
                 .runtime_boxy_tag_variants = undefined,
                 .runtime_boxy_tag_payload_descs = undefined,
                 .runtime_boxy_payload_steps = undefined,
+                .runtime_boxy_dicts = undefined,
                 .roc_ops = undefined,
                 .scratch = allocator,
                 .descriptor_arena = undefined,
@@ -865,6 +868,7 @@ pub const Interpreter = struct {
         self.failed_call_stack.deinit(self.evalAllocator());
         self.call_stack.deinit(self.evalAllocator());
         self.runtime_boxy_payload_steps.deinit(self.allocator);
+        self.runtime_boxy_dicts.deinit(self.allocator);
         self.runtime_boxy_tag_payload_descs.deinit(self.allocator);
         self.runtime_boxy_tag_variants.deinit(self.allocator);
         self.runtime_boxy_desc_refs.deinit(self.allocator);
@@ -1093,6 +1097,7 @@ pub const Interpreter = struct {
         self.boxy_runtime.runtime_boxy_tag_variants = &self.runtime_boxy_tag_variants;
         self.boxy_runtime.runtime_boxy_tag_payload_descs = &self.runtime_boxy_tag_payload_descs;
         self.boxy_runtime.runtime_boxy_payload_steps = &self.runtime_boxy_payload_steps;
+        self.boxy_runtime.runtime_boxy_dicts = &self.runtime_boxy_dicts;
         self.boxy_runtime.roc_ops = &self.roc_ops;
         self.boxy_runtime.descriptor_arena = self.descriptor_arena.allocator();
         self.boxy_runtime.eval_arena = self.evalAllocator();
@@ -2913,7 +2918,7 @@ pub const Interpreter = struct {
                     current = assign.next;
                 },
                 .assign_boxy_dict_ref => |assign| {
-                    try self.setLocalChecked(frame, current, assign.target, try self.evalBoxyDictRefValue(frame, assign.dict), false);
+                    try self.setLocalChecked(frame, current, assign.target, try self.evalBoxyDictRefValue(frame, assign.dict, assign.captures), false);
                     current = assign.next;
                 },
                 .assign_boxy_box => |assign| {
@@ -4497,7 +4502,7 @@ pub const Interpreter = struct {
         const bindings = try self.arena.allocator().alloc(EvalDescriptorBinding, params.len);
 
         for (params, 0..) |param, param_index| {
-            const desc = if (param.source_nested_index == std.math.maxInt(u16)) direct: {
+            const desc = if (param.read == .call_key) direct: {
                 var capture_offset: ?u32 = null;
                 for (offsets) |entry| {
                     if (!std.meta.eql(entry.key, param.key)) continue;
@@ -4531,14 +4536,15 @@ pub const Interpreter = struct {
                         break;
                     }
                 }
-                break :projected try self.boxy_runtime.nestedBoxyDesc(
-                    self.boxyFrameHooks(null),
-                    parent orelse return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: erased descriptor projection parent was not bound",
-                        .{},
-                    ),
-                    param.source_nested_index,
+                const parent_desc = parent orelse return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: erased descriptor projection parent was not bound",
+                    .{},
                 );
+                break :projected switch (param.read) {
+                    .call_key => return self.invariantFailedError("LIR/interpreter invariant violated: erased descriptor parameter read from its call key reached a parent read", .{}),
+                    .nested => try self.boxy_runtime.nestedBoxyDesc(self.boxyFrameHooks(null), parent_desc, param.source_nested_index),
+                    .tag_payload => try self.boxy_runtime.tagPayloadBoxyDesc(self.boxyFrameHooks(null), parent_desc, param.source_tag_name, param.source_nested_index),
+                };
             };
             bindings[param_index] = .{ .local = param.local, .desc = desc };
         }
@@ -4669,7 +4675,7 @@ pub const Interpreter = struct {
             const resolved_descs = try self.arena.allocator().alloc(*const LirProgram.BoxyTypeDesc, desc_params.len);
             const descriptor_bindings = try self.arena.allocator().alloc(EvalDescriptorBinding, desc_params.len);
             for (desc_params, 0..) |param, desc_param_index| {
-                const desc = if (param.source_nested_index == std.math.maxInt(u16)) direct: {
+                const desc = if (param.read == .call_key) direct: {
                     var incoming_desc: ?*const LirProgram.BoxyTypeDesc = null;
                     for (arg_desc_keys, arg_descs) |key, desc| {
                         if (!std.meta.eql(key, param.key)) continue;
@@ -4696,14 +4702,15 @@ pub const Interpreter = struct {
                             break;
                         }
                     }
-                    break :projected try self.boxy_runtime.nestedBoxyDesc(
-                        self.boxyFrameHooks(frame),
-                        parent_desc orelse return self.invariantFailedError(
-                            "LIR/interpreter invariant violated: erased descriptor projection parent was not bound",
-                            .{},
-                        ),
-                        param.source_nested_index,
+                    const parent = parent_desc orelse return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: erased descriptor projection parent was not bound",
+                        .{},
                     );
+                    break :projected switch (param.read) {
+                        .call_key => return self.invariantFailedError("LIR/interpreter invariant violated: erased descriptor parameter read from its call key reached a parent read", .{}),
+                        .nested => try self.boxy_runtime.nestedBoxyDesc(self.boxyFrameHooks(frame), parent, param.source_nested_index),
+                        .tag_payload => try self.boxy_runtime.tagPayloadBoxyDesc(self.boxyFrameHooks(frame), parent, param.source_tag_name, param.source_nested_index),
+                    };
                 };
                 resolved_descs[desc_param_index] = desc;
                 descriptor_bindings[desc_param_index] = .{ .local = param.local, .desc = desc };
@@ -9443,7 +9450,16 @@ pub const Interpreter = struct {
 
     fn resolveBoxyDictRef(self: *LirInterpreter, frame: *const Frame, dict_ref: LIR.BoxyDictRef) Error!*const LirProgram.BoxyDict {
         return switch (dict_ref) {
-            .static => |dict_id| self.requireBoxyDict(dict_id),
+            .static => |dict_id| blk: {
+                const dict = self.requireBoxyDict(dict_id);
+                if (dict.template) {
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: template dictionary {d} was read without materializing its captures",
+                        .{@intFromEnum(dict_id)},
+                    );
+                }
+                break :blk dict;
+            },
             .local => |local| blk: {
                 const value = try self.getLocalChecked(frame, local);
                 const raw_ptr = self.readPointerInt(value);
@@ -9455,6 +9471,7 @@ pub const Interpreter = struct {
                 }
                 break :blk @ptrFromInt(raw_ptr);
             },
+            .runtime => |runtime_id| try self.boxy_runtime.requireRuntimeBoxyDict(runtime_id),
         };
     }
 
@@ -9534,8 +9551,23 @@ pub const Interpreter = struct {
         return try self.boxy_runtime.materializeNestedBoxyDescRefValue(self.boxyFrameHooks(frame), desc_ref, nested_index, captures);
     }
 
-    fn evalBoxyDictRefValue(self: *LirInterpreter, frame: *const Frame, dict_ref: LIR.BoxyDictRef) Error!Value {
-        const dict = try self.resolveBoxyDictRef(frame, dict_ref);
+    fn evalBoxyDictRefValue(
+        self: *LirInterpreter,
+        frame: *const Frame,
+        dict_ref: LIR.BoxyDictRef,
+        captures: LIR.LocalSpan,
+    ) Error!Value {
+        const dict = switch (dict_ref) {
+            .static => |dict_id| if (self.requireBoxyDict(dict_id).template) template: {
+                const capture_locals = self.store.getLocalSpan(captures);
+                const values = try self.arena.allocator().alloc(usize, GuardedList.borrowLen(capture_locals));
+                for (values, 0..) |*value, index| {
+                    value.* = self.readPointerInt(try self.getLocalChecked(frame, GuardedList.at(capture_locals, index)));
+                }
+                break :template try self.boxy_runtime.materializeBoxyDictTemplate(self.boxyFrameHooks(frame), dict_id, values);
+            } else try self.resolveBoxyDictRef(frame, dict_ref),
+            .local, .runtime => try self.resolveBoxyDictRef(frame, dict_ref),
+        };
         return try self.allocPointerIntValue(@intFromPtr(dict));
     }
 

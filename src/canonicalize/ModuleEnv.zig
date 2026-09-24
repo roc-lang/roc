@@ -719,8 +719,9 @@ pub const SchemeUseRecord = extern struct {
     /// discharge instantiated this scheme—unique per constraint
     /// instantiation, so nested evidence chains resolve without ambiguity.
     /// For `where_method_use`, the raw fn `Var` of the body dispatch whose
-    /// callable instantiated the where-method signature. 0 for value and
-    /// nested-function use slots (keyed by `node_idx` instead).
+    /// callable instantiated the where-method signature. For
+    /// `nested_function_use`, the raw `Var` of the instance the containing
+    /// value stores. 0 for value use slots (keyed by `node_idx` instead).
     slot_data: u32,
     /// The scheme root `Var` used at this edge. For imported schemes this is
     /// the pristine local copy; for shared uses it is the in-flight local root.
@@ -813,7 +814,8 @@ pub const GeneratedCodecCall = extern struct {
     dispatcher_var: u32,
     callable_var: u32,
     /// Exact generated callable relation whose dispatch-target record owns the
-    /// selected method scheme's nested evidence.
+    /// selected method scheme's nested evidence. A call that resolves to a
+    /// nested generated derivation names that derivation's source constraint.
     evidence_var: u32,
     /// The value shape this call handles, or `no_subject_var` when the method
     /// has no shape-specific call contract.

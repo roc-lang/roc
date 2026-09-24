@@ -3332,19 +3332,24 @@ const GeneratedHelperDefAddress = struct {
 /// Exact Monotype inputs for one generated structural encoder helper. These
 /// helpers belong to the active body draft: they capture that encoder
 /// construction's encoding value and precomputed field names, while their
-/// value and state are explicit arguments.
+/// value and state are explicit arguments. The result type is addressed by
+/// content: each nesting level builds its result from its parent's, so a
+/// recursive shape reaches its own helper again through a distinct but equal
+/// result type, and must find the helper already reserved for it.
 const GeneratedEncoderDefAddress = struct {
     value_ty: u32,
     encoding_ty: u32,
     state_ty: u32,
-    result_ty: u32,
+    result: names.TypeDigest,
 };
 
+/// Exact Monotype inputs for one generated structural parser helper, with the
+/// result type addressed by content exactly as for encoder helpers.
 const GeneratedParserDefAddress = struct {
     value_ty: u32,
     encoding_ty: u32,
     state_ty: u32,
-    result_ty: u32,
+    result: names.TypeDigest,
 };
 
 /// Exact child identity for a compiler-generated parser success record.
@@ -18437,6 +18442,11 @@ const BodyContext = struct {
     /// Seeing the same type again is a real recursive edge, which lowers to a
     /// reserved generated hash helper instead of recursively expanding AST.
     hash_expansion_stack: collections.DenseMap(Type.TypeId, void),
+    /// Types on the current path of a structural codec support check. A
+    /// recursive nominal reaches its own type again inside its backing; that
+    /// occurrence is the recursive reference, so the check answers for it
+    /// from the rest of the cycle rather than walking the backing again.
+    codec_support_path: collections.DenseMap(Type.TypeId, void),
     inspect_defs: std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry),
     equality_defs: std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry),
     hash_defs: std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry),
@@ -19399,6 +19409,7 @@ const BodyContext = struct {
             .loop_contexts = .empty,
             .pattern_literal_guards = .empty,
             .equality_expansion_stack = collections.DenseMap(Type.TypeId, void).init(allocator),
+            .codec_support_path = collections.DenseMap(Type.TypeId, void).init(allocator),
             .hash_expansion_stack = collections.DenseMap(Type.TypeId, void).init(allocator),
             .inspect_defs = std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry).init(allocator),
             .equality_defs = std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry).init(allocator),
@@ -19427,6 +19438,7 @@ const BodyContext = struct {
         self.inspect_defs.deinit();
         self.hash_expansion_stack.deinit();
         self.equality_expansion_stack.deinit();
+        self.codec_support_path.deinit();
         self.codec_contract_expansion_stack.deinit(self.allocator);
         self.instantiated_codec_calls.deinit(self.allocator);
         self.direct_call_requests.deinit(self.allocator);
@@ -28504,30 +28516,49 @@ const BodyContext = struct {
         encoding_ty: Type.TypeId,
         str_ty: Type.TypeId,
     ) Allocator.Error!void {
+        // A recursive nominal reaches its own shape again inside its backing;
+        // that shape's plan entries are already being recorded.
+        var seen_types = collections.DenseMap(Type.TypeId, void).init(self.allocator);
+        defer seen_types.deinit();
+        try self.buildEncodeConstructionPrecomputedPlanVisit(plan, &seen_types, shape_ty, encoding_expr, encoding_ty, str_ty);
+    }
+
+    fn buildEncodeConstructionPrecomputedPlanVisit(
+        self: *BodyContext,
+        plan: *ParserPrecomputedPlan,
+        seen_types: *collections.DenseMap(Type.TypeId, void),
+        shape_ty: Type.TypeId,
+        encoding_expr: DraftExprId,
+        encoding_ty: Type.TypeId,
+        str_ty: Type.TypeId,
+    ) Allocator.Error!void {
+        if (seen_types.contains(shape_ty)) return;
+        try seen_types.put(shape_ty, {});
+
         if (self.tryNullInfo(shape_ty)) |info| {
-            return try self.buildEncodeConstructionPrecomputedPlan(plan, info.ok_payload_ty, encoding_expr, encoding_ty, str_ty);
+            return try self.buildEncodeConstructionPrecomputedPlanVisit(plan, seen_types, info.ok_payload_ty, encoding_expr, encoding_ty, str_ty);
         }
         if (self.frozenCustomCodecCallForShape(.encoder, shape_ty) != null) return;
         if (self.encodeScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
-            return try self.buildEncodeConstructionPrecomputedPlan(plan, payload_ty, encoding_expr, encoding_ty, str_ty);
+            return try self.buildEncodeConstructionPrecomputedPlanVisit(plan, seen_types, payload_ty, encoding_expr, encoding_ty, str_ty);
         }
         if (self.dictEntryShape(shape_ty)) |dict| {
             var dict_buf: [2]Type.TypeId = undefined;
             for (self.dictCodecShapes(dict, &dict_buf)) |dict_shape| {
-                try self.buildEncodeConstructionPrecomputedPlan(plan, dict_shape, encoding_expr, encoding_ty, str_ty);
+                try self.buildEncodeConstructionPrecomputedPlanVisit(plan, seen_types, dict_shape, encoding_expr, encoding_ty, str_ty);
             }
             return;
         }
 
         switch (self.shapeContent(shape_ty)) {
-            .list => |elem_ty| try self.buildEncodeConstructionPrecomputedPlan(plan, elem_ty, encoding_expr, encoding_ty, str_ty),
-            .box => |payload_ty| try self.buildEncodeConstructionPrecomputedPlan(plan, payload_ty, encoding_expr, encoding_ty, str_ty),
+            .list => |elem_ty| try self.buildEncodeConstructionPrecomputedPlanVisit(plan, seen_types, elem_ty, encoding_expr, encoding_ty, str_ty),
+            .box => |payload_ty| try self.buildEncodeConstructionPrecomputedPlanVisit(plan, seen_types, payload_ty, encoding_expr, encoding_ty, str_ty),
             .tuple => |span| {
                 const item_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(span));
                 defer self.allocator.free(item_tys);
                 for (item_tys) |elem_ty| {
-                    try self.buildEncodeConstructionPrecomputedPlan(plan, elem_ty, encoding_expr, encoding_ty, str_ty);
+                    try self.buildEncodeConstructionPrecomputedPlanVisit(plan, seen_types, elem_ty, encoding_expr, encoding_ty, str_ty);
                 }
             },
             .record, .zst => {
@@ -28535,7 +28566,7 @@ const BodyContext = struct {
                 const fields = try self.dupeRecordFieldsForShape(shape_ty);
                 defer self.allocator.free(fields);
                 for (fields) |field| {
-                    try self.buildEncodeConstructionPrecomputedPlan(plan, try self.encodeRecordFieldPayloadType(field.ty), encoding_expr, encoding_ty, str_ty);
+                    try self.buildEncodeConstructionPrecomputedPlanVisit(plan, seen_types, try self.encodeRecordFieldPayloadType(field.ty), encoding_expr, encoding_ty, str_ty);
                 }
             },
             .tag_union => |span| {
@@ -28545,7 +28576,7 @@ const BodyContext = struct {
                     const payload_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(tag.payloads));
                     defer self.allocator.free(payload_tys);
                     for (payload_tys) |payload_ty| {
-                        try self.buildEncodeConstructionPrecomputedPlan(plan, payload_ty, encoding_expr, encoding_ty, str_ty);
+                        try self.buildEncodeConstructionPrecomputedPlanVisit(plan, seen_types, payload_ty, encoding_expr, encoding_ty, str_ty);
                     }
                 }
             },
@@ -28563,30 +28594,51 @@ const BodyContext = struct {
         encoding_ty: Type.TypeId,
         str_ty: Type.TypeId,
     ) Allocator.Error!void {
+        // A recursive nominal reaches its own shape again inside its backing;
+        // that shape's plan entries are already being recorded.
+        var seen_types = collections.DenseMap(Type.TypeId, void).init(self.allocator);
+        defer seen_types.deinit();
+        try self.buildEncodeRestoredPrecomputedPlanVisit(plan, &seen_types, fn_value, store_view, fn_view, shape_ty, encoding_ty, str_ty);
+    }
+
+    fn buildEncodeRestoredPrecomputedPlanVisit(
+        self: *BodyContext,
+        plan: *ParserPrecomputedPlan,
+        seen_types: *collections.DenseMap(Type.TypeId, void),
+        fn_value: check.ConstStore.ConstFn,
+        store_view: ModuleView,
+        fn_view: ModuleView,
+        shape_ty: Type.TypeId,
+        encoding_ty: Type.TypeId,
+        str_ty: Type.TypeId,
+    ) Allocator.Error!void {
+        if (seen_types.contains(shape_ty)) return;
+        try seen_types.put(shape_ty, {});
+
         if (self.tryNullInfo(shape_ty)) |info| {
-            return try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, info.ok_payload_ty, encoding_ty, str_ty);
+            return try self.buildEncodeRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, info.ok_payload_ty, encoding_ty, str_ty);
         }
         if (self.frozenCustomCodecCallForShape(.encoder, shape_ty) != null) return;
         if (self.encodeScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
-            return try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, payload_ty, encoding_ty, str_ty);
+            return try self.buildEncodeRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, payload_ty, encoding_ty, str_ty);
         }
         if (self.dictEntryShape(shape_ty)) |dict| {
             var dict_buf: [2]Type.TypeId = undefined;
             for (self.dictCodecShapes(dict, &dict_buf)) |dict_shape| {
-                try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, dict_shape, encoding_ty, str_ty);
+                try self.buildEncodeRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, dict_shape, encoding_ty, str_ty);
             }
             return;
         }
 
         switch (self.shapeContent(shape_ty)) {
-            .list => |elem_ty| try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, elem_ty, encoding_ty, str_ty),
-            .box => |payload_ty| try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, payload_ty, encoding_ty, str_ty),
+            .list => |elem_ty| try self.buildEncodeRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, elem_ty, encoding_ty, str_ty),
+            .box => |payload_ty| try self.buildEncodeRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, payload_ty, encoding_ty, str_ty),
             .tuple => |span| {
                 const item_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(span));
                 defer self.allocator.free(item_tys);
                 for (item_tys) |elem_ty| {
-                    try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, elem_ty, encoding_ty, str_ty);
+                    try self.buildEncodeRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, elem_ty, encoding_ty, str_ty);
                 }
             },
             .record, .zst => {
@@ -28594,7 +28646,7 @@ const BodyContext = struct {
                 const fields = try self.dupeRecordFieldsForShape(shape_ty);
                 defer self.allocator.free(fields);
                 for (fields) |field| {
-                    try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, try self.encodeRecordFieldPayloadType(field.ty), encoding_ty, str_ty);
+                    try self.buildEncodeRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, try self.encodeRecordFieldPayloadType(field.ty), encoding_ty, str_ty);
                 }
             },
             .tag_union => |span| {
@@ -28604,7 +28656,7 @@ const BodyContext = struct {
                     const payload_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(tag.payloads));
                     defer self.allocator.free(payload_tys);
                     for (payload_tys) |payload_ty| {
-                        try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, payload_ty, encoding_ty, str_ty);
+                        try self.buildEncodeRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, payload_ty, encoding_ty, str_ty);
                     }
                 }
             },
@@ -30432,7 +30484,7 @@ const BodyContext = struct {
             .value_ty = @intFromEnum(shape_ty),
             .encoding_ty = @intFromEnum(encoding_ty),
             .state_ty = @intFromEnum(state_ty),
-            .result_ty = @intFromEnum(ret_ty),
+            .result = self.typeStore().typeDigestCached(self.nameStore(), ret_ty, null),
         };
         if (self.parser_defs.get(address)) |entry| return entry.id();
 
@@ -32366,7 +32418,10 @@ const BodyContext = struct {
                 next_payload_ty,
                 finish_payloads_local,
                 finish_payloads_ty,
-                if (maybe_spec_backing_ty != null) &precomputed_plan else null,
+                // A spec with no record shapes precomputes nothing, which is an
+                // empty plan: nested tag-union payloads still build their own
+                // specs from it.
+                &precomputed_plan,
             );
             const cond = try self.parseTagExactMatch(key_local, key_ty, tags[index]);
             body = try self.ifExpr(cond, tag_expr, body, ret_ty);
@@ -45975,7 +46030,7 @@ const BodyContext = struct {
             .value_ty = @intFromEnum(value_ty),
             .encoding_ty = @intFromEnum(encoding_ty),
             .state_ty = @intFromEnum(state_ty),
-            .result_ty = @intFromEnum(ret_ty),
+            .result = self.typeStore().typeDigestCached(self.nameStore(), ret_ty, null),
         };
         if (self.encoder_defs.get(address)) |entry| return entry.id();
 
@@ -47901,6 +47956,9 @@ const BodyContext = struct {
     }
 
     fn parseFieldTypeIsSupported(self: *BodyContext, ty: Type.TypeId, allow_missing: bool) Allocator.Error!bool {
+        if (self.codec_support_path.contains(ty)) return true;
+        try self.codec_support_path.put(ty, {});
+        defer _ = self.codec_support_path.remove(ty);
         if (self.parseScalarMethodName(ty) != null) return true;
         if (try self.missingTryInfo(ty)) |info| {
             if (!allow_missing) return false;
@@ -47960,6 +48018,9 @@ const BodyContext = struct {
     }
 
     fn encodeFieldTypeIsSupported(self: *BodyContext, ty: Type.TypeId, encoding_ty: Type.TypeId) Allocator.Error!bool {
+        if (self.codec_support_path.contains(ty)) return true;
+        try self.codec_support_path.put(ty, {});
+        defer _ = self.codec_support_path.remove(ty);
         if (self.encodeScalarMethodName(ty) != null) return true;
         if (self.tryNullInfo(ty)) |info| {
             return try self.encodeFieldTypeIsSupported(info.ok_payload_ty, encoding_ty);
@@ -48757,26 +48818,23 @@ const BodyContext = struct {
         };
         const active = self.active_codec_contract orelse return null;
         if (self.graph.content(shape_node) != .named) return null;
-        var selected: ?InstantiatedGeneratedCodecCall = null;
-        for (self.instantiated_codec_calls.items[active.calls_start..][0..active.calls_len]) |*candidate| {
-            if (!std.mem.eql(u8, candidate.view.names.methodNameText(candidate.checked.method), method_name)) continue;
-            const candidate_subject = candidate.subject_node orelse
-                Common.invariant("checked generated codec boundary call had no nominal subject");
-            if (self.graph.content(candidate_subject) != .named) {
-                Common.invariant("checked generated codec boundary subject was not nominal");
-            }
-            if (!self.sameCodecSubject(candidate_subject, shape_node)) continue;
-            if (selected) |previous| {
-                if (!self.graph.sameFunctionInterface(previous.callable_node, candidate.callable_node) or
-                    !std.meta.eql(previous.checked.resolution, candidate.checked.resolution))
-                {
-                    Common.invariant("checked generated codec contract had ambiguous nominal boundary calls");
-                }
-                if (@import("builtin").mode == .Debug) candidate.debug_consumed = true;
-                continue;
-            }
-            if (@import("builtin").mode == .Debug) candidate.debug_consumed = true;
-            selected = candidate.*;
+        // Repeated occurrences of one nominal subject share the checker's
+        // method role, so the role slot selects the boundary call exactly as it
+        // does for every other generated codec call.
+        const selected = self.generatedCodecCall(method_name, shape_node) orelse return null;
+        const selected_subject = selected.subject_node orelse
+            Common.invariant("checked generated codec boundary call had no nominal subject");
+        if (self.graph.content(selected_subject) != .named) {
+            Common.invariant("checked generated codec boundary subject was not nominal");
+        }
+        // At its own anchor shape the active contract is this nominal's
+        // derivation. A call there that names the same derivation is the
+        // nominal's recursive reference to itself, which the active contract
+        // already covers, so the anchor is not a nested boundary.
+        switch (selected.resolution) {
+            .structural => |nested| if (nested == active.derivation and
+                self.graph.sameClass(active.shape_node, shape_node)) return null,
+            .callable => {},
         }
         return selected;
     }
