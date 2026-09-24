@@ -9269,6 +9269,53 @@ test "row subsumption re-tags a coerced row whose extension chain has an alias l
     , 1);
 }
 
+test "row subsumption re-tags a function alias argument whose row continues through an alias link" {
+    // The argument `Errs` reaches `Fwd`'s result occurrence as a twin copied
+    // down its alias link `Base`. `Aborted` sorts first, so every declared
+    // discriminant shifts in the widened row.
+    try expectRowSubsumptionProgram(
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\Fwd(e) : e -> e
+        \\
+        \\fwd : Fwd(Errs)
+        \\fwd = |t| t
+        \\
+        \\wider : Errs -> [Aborted, HostErr(U64), Other]
+        \\wider = |t| fwd(t)
+        \\
+        \\show : [Aborted, HostErr(U64), Other] -> Str
+        \\show = |v| match v { Aborted => "Aborted", HostErr(_) => "HostErr", Other => "Other" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Other)) == "Other" and show(wider(HostErr(1))) == "HostErr"
+    , 1);
+}
+
+test "row subsumption re-tags an identity alias applied at the result row" {
+    // `Aborted` sorts between `A` and `B`, so `B`'s discriminant shifts in
+    // the widened row.
+    try expectRowSubsumptionProgram(
+        \\Id(a) : a
+        \\
+        \\fwd : [A, B] -> Id([A, B])
+        \\fwd = |x| x
+        \\
+        \\wider : [A, B] -> [A, Aborted, B]
+        \\wider = |x| fwd(x)
+        \\
+        \\show : [A, Aborted, B] -> Str
+        \\show = |v| match v { A => "A", Aborted => "Aborted", B => "B" }
+        \\
+        \\main : Bool
+        \\main = show(wider(A)) == "A" and show(wider(B)) == "B"
+    , 1);
+}
+
 test "row subsumption coerces a forwarder whose signature is a function alias" {
     // The signature NAMES a whole function type. Its result row is the direct
     // result exactly as in `fwd : Status -> Status`, so the widened use is

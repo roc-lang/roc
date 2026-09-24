@@ -7567,22 +7567,27 @@ fn recordOpenedMarkerExts(self: *Self, opened: []const Instantiator.OpenedMarker
     }
 }
 
-/// The per-occurrence result rows one declaration application built
-/// (`Instantiator.ResultRowTwin`), with what the checker needs to record a
-/// consumed one. Stack-held: a declaration has at most
-/// `max_tracked_alias_formals` formals this walk tracks, and an application
-/// past that arity builds no twin, which keeps every argument shared exactly
-/// as before (the conservative answer).
+/// The per-occurrence result rows one declaration application may build
+/// (`Instantiator.ResultRowTwin`), with what the checker needs to build one
+/// when the instantiation first takes it and to record a consumed one.
+/// Stack-held: a declaration has at most `max_tracked_alias_formals` formals
+/// this walk tracks, and an application past that arity builds no twin, which
+/// keeps every argument shared exactly as before (the conservative answer).
 const ResultRowTwins = struct {
     twins: [max_tracked_alias_formals]Instantiator.ResultRowTwin = undefined,
     rows: [max_tracked_alias_formals]Row = undefined,
     len: usize = 0,
 
     const Row = struct {
-        ext: Var,
-        union_var: Var,
-        listed_tags: types_mod.Tag.SafeMultiList.Range,
+        /// The shared argument the twin is a copy of.
+        arg: Var,
         region: Region,
+        /// The argument's row as it qualified (`resultRowTwinRow`).
+        source: TwinRow,
+        /// Set when the twin is built: its extension and the union that
+        /// extension opens (the chain's innermost link).
+        ext: Var = undefined,
+        union_var: Var = undefined,
     };
 
     fn slice(self: *ResultRowTwins) []Instantiator.ResultRowTwin {
@@ -7590,9 +7595,19 @@ const ResultRowTwins = struct {
     }
 };
 
-/// Build the result-row twin of one argument of a declaration standing on
+/// A row an argument qualifies for a twin with: where its extension chain
+/// ends, and the innermost link, whose extension that tail is.
+const TwinRow = struct {
+    tail: Var,
+    innermost_union: Var,
+    innermost_tags: types_mod.Tag.SafeMultiList.Range,
+};
+
+/// Register the result-row twin of one argument of a declaration standing on
 /// the result row (`Instantiator.ResultRowTwin`), when the argument is a row
-/// that the inline spelling would open there.
+/// that the inline spelling would open there. Nothing is built here: the
+/// instantiation builds the twin when an occurrence first takes it
+/// (`buildResultRowTwin`).
 ///
 /// A declaration qualifies when it stands at the whole signature, at the
 /// signature's direct result, or at a result `Try`'s error row: those are the
@@ -7604,18 +7619,7 @@ const ResultRowTwins = struct {
 /// opens there in place and needs no twin; a second opened row would make the
 /// signature decline to coerce.
 ///
-/// A host-boundary annotation keeps its rows as written, so its "twin" is the
-/// argument itself: substituting it changes nothing, and taking it only
-/// reports the site the as-written row stands on (`written_result_rows`),
-/// exactly as a row the declaration's own marker closes there reports it.
-///
-/// The argument qualifies when it is, through transparent alias layers, a row
-/// with at least one tag whose extension this annotation generated: `[]` (the
-/// argument was generated closed for its formal's variance) or the flagged
-/// flex of an implicitly opened row (generated open for a covariant formal).
-/// Any other extension was written (`..r`) and means the same thing at every
-/// occurrence, and `[]` with no tags asserts uninhabitedness; neither is
-/// reopened by position, so neither gets a twin.
+/// The argument qualifies as `resultRowTwinRow` says.
 fn addResultRowTwin(
     self: *Self,
     twins: *ResultRowTwins,
@@ -7625,8 +7629,7 @@ fn addResultRowTwin(
     arg_var: Var,
     region: Region,
     arg_reached: bool,
-    env: *Env,
-) std.mem.Allocator.Error!void {
+) void {
     const anno_ctx = switch (ctx) {
         .annotation => |anno_ctx| anno_ctx,
         .type_decl => return,
@@ -7637,84 +7640,115 @@ fn addResultRowTwin(
     }
     if (arg_reached or polarity != .pos) return;
     if (twins.len == max_tracked_alias_formals) return;
-
-    // The alias layers above the row, outermost first.
-    var layers: [max_result_row_twin_alias_layers]types_mod.Alias = undefined;
-    var layers_len: usize = 0;
-    var current = arg_var;
-    const tag_union = while (true) {
-        const resolved = self.types.resolveVar(current);
-        switch (resolved.desc.content) {
-            .alias => |alias| {
-                if (layers_len == layers.len) return;
-                layers[layers_len] = alias;
-                layers_len += 1;
-                current = self.types.getAliasBackingVar(alias);
-            },
-            .structure => |flat| switch (flat) {
-                .tag_union => |tag_union| break tag_union,
-                .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => return,
-            },
-            .flex, .rigid, .field_presence, .err => return,
-        }
-    };
-    if (tag_union.tags.count == 0) return;
-    const ext_resolved = self.types.resolveVar(tag_union.ext);
-    const generated_ext = switch (ext_resolved.desc.content) {
-        .structure => |flat| flat == .empty_tag_union,
-        .flex => |flex| ext_resolved.desc.flags.annotation_tag_ext and flex.constraints.len() == 0,
-        .alias, .rigid, .field_presence, .err => false,
-    };
-    if (!generated_ext) return;
-
-    if (anno_ctx.opening == .as_written) {
-        twins.twins[twins.len] = .{ .formal = formal, .twin = arg_var };
-        twins.rows[twins.len] = .{
-            .ext = tag_union.ext,
-            .union_var = current,
-            .listed_tags = tag_union.tags,
-            .region = region,
-        };
-        twins.len += 1;
-        return;
-    }
-
-    const ext = switch (anno_ctx.opening) {
-        .implicit_open => blk: {
-            const open_ext = try self.fresh(env, region);
-            try self.types.markAnnotationTagExt(open_ext);
-            break :blk open_ext;
-        },
-        // A where-method signature defers the row's decision to each use,
-        // exactly as a row written at its result does.
-        .per_use => try self.freshFromContent(.{ .rigid = Rigid.init(self.cir.idents.polarity_var) }, env, region),
-        .as_written => unreachable, // handled above
-    };
-    const union_var = try self.freshFromContent(
-        .{ .structure = .{ .tag_union = .{ .tags = tag_union.tags, .ext = ext } } },
-        env,
-        region,
-    );
-    var twin = union_var;
-    var layer_idx = layers_len;
-    while (layer_idx > 0) {
-        layer_idx -= 1;
-        twin = try self.copiedAliasWithBacking(layers[layer_idx], twin, env, region);
-    }
-    twins.twins[twins.len] = .{ .formal = formal, .twin = twin };
-    twins.rows[twins.len] = .{
-        .ext = ext,
-        .union_var = union_var,
-        .listed_tags = tag_union.tags,
-        .region = region,
-    };
+    const source = self.resultRowTwinRow(arg_var) orelse return;
+    twins.twins[twins.len] = .{ .formal = formal };
+    twins.rows[twins.len] = .{ .arg = arg_var, .region = region, .source = source };
     twins.len += 1;
 }
 
-/// How many transparent alias layers `addResultRowTwin` copies around an
-/// argument's row. Deeper is declined (no twin), the conservative answer;
-/// the bound keeps the walk allocation-free.
+/// The row `arg_var` qualifies for a result-row twin with, if it does: through
+/// transparent alias layers, a tag row, read down its whole extension chain
+/// (its `tag_union` links and alias links, as `reopenedTagRow` reads a
+/// coerced row), that lists at least one tag and whose tail this annotation
+/// generated: `[]` (the argument was generated closed for its formal's
+/// variance) or the flagged flex of an implicitly opened row (generated open
+/// for a covariant formal). Any other tail was written (`..r`) and means the
+/// same thing at every occurrence, and a row with no tags asserts
+/// uninhabitedness; neither is reopened by position, so neither gets a twin.
+/// Past `max_result_row_twin_alias_layers` alias layers and links the
+/// argument gets no twin, the conservative answer.
+fn resultRowTwinRow(self: *Self, arg_var: Var) ?TwinRow {
+    var alias_layers: usize = 0;
+    var has_tags = false;
+    var innermost: ?struct { var_: Var, tags: types_mod.Tag.SafeMultiList.Range } = null;
+    var current = arg_var;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                if (alias_layers == max_result_row_twin_alias_layers) return null;
+                alias_layers += 1;
+                current = self.types.getAliasBackingVar(alias);
+                continue;
+            },
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| {
+                    if (tag_union.tags.count > 0) has_tags = true;
+                    innermost = .{ .var_ = resolved.var_, .tags = tag_union.tags };
+                    current = tag_union.ext;
+                    continue;
+                },
+                .empty_tag_union => {},
+                .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record => return null,
+            },
+            .flex => |flex| {
+                if (!resolved.desc.flags.annotation_tag_ext or flex.constraints.len() != 0) return null;
+            },
+            .rigid, .field_presence, .err => return null,
+        }
+        const link = innermost orelse return null;
+        if (!has_tags) return null;
+        return .{ .tail = resolved.var_, .innermost_union = link.var_, .innermost_tags = link.tags };
+    }
+}
+
+/// How many alias layers and extension alias links `resultRowTwinRow` reads
+/// through. Deeper is declined (no twin), the conservative answer.
 const max_result_row_twin_alias_layers: usize = 8;
+
+/// What the instantiator calls to build a twin on its first take.
+const ResultRowTwinBuild = struct {
+    check: *Self,
+    twins: *ResultRowTwins,
+    opening: GenTypeAnnoCtx.AnnotationGenCtx.OpeningBehavior,
+    env: *Env,
+
+    fn build(ctx: *anyopaque, index: usize) std.mem.Allocator.Error!Var {
+        const self: *ResultRowTwinBuild = @ptrCast(@alignCast(ctx));
+        return self.check.buildResultRowTwin(self.twins, index, self.opening, self.env);
+    }
+};
+
+/// Build twin `index`: the argument's row with its own extension, opened the
+/// way a row written at the result is. The row is copied down its whole
+/// extension chain with the tail replaced, keeping every alias layer and
+/// link, so it is presented as the inline spelling's row is; tag payloads
+/// stay shared. A where-method signature's twin takes the deferral marker as
+/// its extension, decided per use rather than audited, exactly as a row
+/// written at its result does.
+///
+/// A host-boundary annotation keeps its rows as written, so its "twin" is the
+/// argument itself: substituting it changes nothing, and taking it only
+/// reports the site the as-written row stands on (`written_result_rows`),
+/// exactly as a row the declaration's own marker closes there reports it.
+fn buildResultRowTwin(
+    self: *Self,
+    twins: *ResultRowTwins,
+    index: usize,
+    opening: GenTypeAnnoCtx.AnnotationGenCtx.OpeningBehavior,
+    env: *Env,
+) std.mem.Allocator.Error!Var {
+    const row = &twins.rows[index];
+    if (opening == .as_written) {
+        row.ext = row.source.tail;
+        row.union_var = row.source.innermost_union;
+        return row.arg;
+    }
+    const ext = switch (opening) {
+        .implicit_open => blk: {
+            const open_ext = try self.fresh(env, row.region);
+            try self.types.markAnnotationTagExt(open_ext);
+            break :blk open_ext;
+        },
+        .per_use => try self.freshFromContent(.{ .rigid = Rigid.init(self.cir.idents.polarity_var) }, env, row.region),
+        .as_written => unreachable, // handled above
+    };
+    var innermost: ?Var = null;
+    const twin = try self.copiedTagRowChain(row.arg, ext, .keep, &innermost, env, row.region);
+    row.ext = ext;
+    row.union_var = innermost.?;
+    return twin;
+}
 
 /// Record each twin the instantiation took as the implicitly opened result
 /// row it now is, at the site its reach names, exactly as a row written
@@ -7740,7 +7774,7 @@ fn recordConsumedResultRowTwins(self: *Self, twins: *const ResultRowTwins, ctx: 
         try self.implicit_open_exts.append(self.gpa, .{
             .var_ = row.ext,
             .region = row.region,
-            .listed_tags = row.listed_tags,
+            .listed_tags = row.source.innermost_tags,
             .union_var = row.union_var,
             .result_row = switch (reach) {
                 .result => .direct,
@@ -7951,7 +7985,7 @@ fn instantiateVarWithSubs(
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
-    return self.instantiateVarWithSubsPolarized(var_to_instantiate, subs, env, region_behavior, .close, .pos, .nested, .ignore, &.{});
+    return self.instantiateVarWithSubsPolarized(var_to_instantiate, subs, env, region_behavior, .close, .pos, .nested, .ignore, null);
 }
 
 /// `instantiateVarWithSubs` with explicit polarity var handling; see
@@ -7966,7 +8000,7 @@ fn instantiateVarWithSubsPolarized(
     polarity: Polarity,
     reach: Instantiator.AdapterReach,
     written_rows: WrittenResultRows,
-    result_row_twins: []Instantiator.ResultRowTwin,
+    twin_build: ?*ResultRowTwinBuild,
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -7993,7 +8027,8 @@ fn instantiateVarWithSubsPolarized(
             .record => &closed_marker_reaches,
             .ignore => null,
         },
-        .result_row_twins = result_row_twins,
+        .result_row_twins = if (twin_build) |build| build.twins.slice() else &.{},
+        .result_row_twin_builder = if (twin_build) |build| .{ .ctx = build, .build = ResultRowTwinBuild.build } else null,
     };
     const instantiated = try self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false, .none);
     try self.recordOpenedMarkerExts(opened_marker_exts.items, region_behavior);
@@ -17450,7 +17485,7 @@ fn coercedResultRowSite(env: *const ModuleEnv, node_idx: CIR.Node.Idx) ResultRow
 ///
 /// Returns `use_var` unchanged when the spine is not the shape the annotation
 /// walk recorded, or when the row carries an already-reported type error (see
-/// `reopenedTagRowExt`, which also states why a row that is not closed is an
+/// `reopenedTagRow`, which also states why a row that is not closed is an
 /// invariant violation rather than a case).
 fn reopenCoercedResultRow(
     self: *Self,
@@ -17616,16 +17651,43 @@ fn reopenCoercedErrorRow(
 /// argument and the result row of a forwarder—so a use that unifies a literal
 /// `[B, ..]` into that row restructures it into a chain for every later use.
 /// Reading only the head would find a `tag_union` where the tail should be and
-/// leave every later use closed. So every `tag_union` link of the chain is
-/// copied with its own tags (their payloads stay shared, as they are off the
-/// spine) and only the tail is replaced.
+/// leave every later use closed. So every link of the chain is copied
+/// (`copiedTagRowChain`) and only the tail is replaced. The tail rule is
+/// explicit:
+/// - `[]` is the closed tail the coercion re-opens: it becomes a fresh flex.
+/// - An error tail means the row already took part in a reported type error;
+///   the use is left unchanged (returns null) so checking recovers without a
+///   second diagnostic.
+/// - Anything else is impossible: the definition recorded its coercion only
+///   because its tail was grounded to `[]` (by the body, or as written at a
+///   host boundary), and unification can restructure a closed row but never
+///   re-open it.
+///
+/// An alias link is read through its backing, and the copy is the backing
+/// alone, exactly as for the alias layers above the row (see
+/// `reopenCoercedSignature`). A row's extension can be an alias the
+/// annotation names: `Errs : Wrap(Base)` with `Wrap(ext) : [HostErr(U64),
+/// ..ext]` continues `Errs`'s row through `Base`, whose own marker is the
+/// row's tail. A hosted annotation closes that tail as written and no body
+/// ever unifies it, so the link survives to every use.
 fn reopenedTagRow(
     self: *Self,
     tag_union: types_mod.TagUnion,
     env: *Env,
     region: Region,
 ) std.mem.Allocator.Error!?Var {
-    const ext = (try self.reopenedTagRowExt(tag_union.ext, env, region)) orelse return null;
+    const tail = self.types.resolveVar(self.tagRowChainTail(tag_union.ext));
+    switch (tail.desc.content) {
+        .structure => |flat| switch (flat) {
+            .empty_tag_union => {},
+            .tag_union, .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record => std.debug.panic("type checker invariant violated: a coerced result row's extension chain did not end in a closed tail", .{}),
+        },
+        .err => return null,
+        .alias, .flex, .rigid, .field_presence => std.debug.panic("type checker invariant violated: a coerced result row's extension chain did not end in a closed tail", .{}),
+    }
+    const fresh_tail = try self.fresh(env, region);
+    var innermost: ?Var = null;
+    const ext = try self.copiedTagRowChain(tag_union.ext, fresh_tail, .drop, &innermost, env, region);
     return try self.freshFromContent(
         .{ .structure = .{ .tag_union = .{ .tags = tag_union.tags, .ext = ext } } },
         env,
@@ -17633,48 +17695,62 @@ fn reopenedTagRow(
     );
 }
 
-/// The extension chain beneath `reopenedTagRow`'s head, copied link by link
-/// down to its tail. The tail rule is explicit:
-/// - `[]` is the closed tail the coercion re-opens: it becomes a fresh flex.
-/// - An error tail means the row already took part in a reported type error;
-///   the use is left unchanged (returns null) so checking recovers without a
-///   second diagnostic.
-/// - An alias link is re-opened through its backing, and the copy is the
-///   backing alone, exactly as for the alias layers above the row (see
-///   `reopenCoercedSignature`). A row's extension can be an alias the
-///   annotation names: `Errs : Wrap(Base)` with `Wrap(ext) : [HostErr(U64),
-///   ..ext]` continues `Errs`'s row through `Base`, whose own marker is the
-///   row's tail. A hosted annotation closes that tail as written and no body
-///   ever unifies it, so the link survives to every use.
-/// - Anything else is impossible: the definition recorded its coercion only
-///   because its tail was grounded to `[]` (by the body, or as written at a
-///   host boundary), and unification can restructure a closed row but never
-///   re-open it.
-fn reopenedTagRowExt(
+/// The var a tag row's extension chain ends in: `var_` followed through
+/// alias layers, alias links and `tag_union` links.
+fn tagRowChainTail(self: *Self, var_: Var) Var {
+    var current = var_;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |link| current = link.ext,
+                .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => return resolved.var_,
+            },
+            .flex, .rigid, .field_presence, .err => return resolved.var_,
+        }
+    }
+}
+
+/// A copy of the tag row `var_` down its whole extension chain with `tail` in
+/// place of the chain's tail (`tagRowChainTail`). Every `tag_union` link is
+/// copied with its own tags, whose payloads stay shared, as they are off the
+/// spine. Alias layers and links are copied around their copied backing
+/// (`.keep`) or replaced by it (`.drop`). `innermost` receives the copy of
+/// the chain's last `tag_union` link, the one `tail` extends.
+fn copiedTagRowChain(
     self: *Self,
-    ext_var: Var,
+    var_: Var,
+    tail: Var,
+    alias_links: enum { keep, drop },
+    innermost: *?Var,
     env: *Env,
     region: Region,
-) std.mem.Allocator.Error!?Var {
-    const resolved = self.types.resolveVar(ext_var);
+) std.mem.Allocator.Error!Var {
+    const resolved = self.types.resolveVar(var_);
     switch (resolved.desc.content) {
-        .structure => |flat| switch (flat) {
-            .empty_tag_union => return try self.fresh(env, region),
-            .tag_union => |link| return try self.reopenedTagRow(link, env, region),
-            .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record => {},
-        },
         .alias => |alias| {
-            const backing = (try self.reopenedTagRowExt(
-                self.types.getAliasBackingVar(alias),
-                env,
-                region,
-            )) orelse return null;
-            return backing;
+            const backing = try self.copiedTagRowChain(self.types.getAliasBackingVar(alias), tail, alias_links, innermost, env, region);
+            return switch (alias_links) {
+                .keep => try self.copiedAliasWithBacking(alias, backing, env, region),
+                .drop => backing,
+            };
         },
-        .err => return null,
-        .flex, .rigid, .field_presence => {},
+        .structure => |flat| switch (flat) {
+            .tag_union => |link| {
+                const ext = try self.copiedTagRowChain(link.ext, tail, alias_links, innermost, env, region);
+                const copy = try self.freshFromContent(
+                    .{ .structure = .{ .tag_union = .{ .tags = link.tags, .ext = ext } } },
+                    env,
+                    region,
+                );
+                if (innermost.* == null) innermost.* = copy;
+                return copy;
+            },
+            .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => return tail,
+        },
+        .flex, .rigid, .field_presence, .err => return tail,
     }
-    std.debug.panic("type checker invariant violated: a coerced result row's extension chain did not end in a closed tail", .{});
 }
 
 /// `alias` with a copied backing and its own arguments, every identity bit
@@ -19525,7 +19601,7 @@ fn instantiateWhereAliasConstraint(
         // A faithful copy: the declaration's where-method signatures keep
         // their polarity markers, which the referencing annotation's own body
         // uses and obligations resolve.
-        .fn_var = try self.instantiateVarWithSubsPolarized(constraint.fn_var, subs, env, .{ .explicit = region }, .preserve, .pos, .nested, .ignore, &.{}),
+        .fn_var = try self.instantiateVarWithSubsPolarized(constraint.fn_var, subs, env, .{ .explicit = region }, .preserve, .pos, .nested, .ignore, null),
         .origin = .{ .where_clause = .{} },
     };
 }
@@ -20189,6 +20265,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     // Then, built the map of applied variables
                     self.rigid_var_substitutions.clearRetainingCapacity();
                     var result_row_twins: ResultRowTwins = .{};
+                    var twin_build: ResultRowTwinBuild = undefined;
                     for (decl_arg_vars, anno_arg_vars, 0..) |decl_arg_var, anno_arg_var, arg_index| {
                         const decl_arg_resolved = self.types.resolveVar(decl_arg_var).desc.content;
 
@@ -20200,7 +20277,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         const decl_arg_rigid = decl_arg_resolved.rigid;
 
                         try self.rigid_var_substitutions.put(self.gpa, decl_arg_rigid.name, anno_arg_var);
-                        if (decl_is_alias) try self.addResultRowTwin(
+                        if (decl_is_alias) self.addResultRowTwin(
                             &result_row_twins,
                             ctx,
                             polarity,
@@ -20208,7 +20285,6 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             anno_arg_var,
                             self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(anno_args[arg_index])),
                             try_error_row_reachable and arg_index == try_error_arg_index.?,
-                            env,
                         );
                     }
 
@@ -20224,7 +20300,11 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         polarity,
                         ctx.instantiationReach(),
                         ctx.writtenResultRows(),
-                        result_row_twins.slice(),
+                        twin_blk: {
+                            if (result_row_twins.len == 0) break :twin_blk null;
+                            twin_build = .{ .check = self, .twins = &result_row_twins, .opening = ctx.annotation.opening, .env = env };
+                            break :twin_blk &twin_build;
+                        },
                     );
                     try self.recordConsumedResultRowTwins(&result_row_twins, ctx);
                     if (decl_is_alias and !try self.validateAliasRows(instantiated_var, env, anno_region)) {
@@ -20287,6 +20367,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         // Then, built the map of applied variables
                         self.rigid_var_substitutions.clearRetainingCapacity();
                         var result_row_twins: ResultRowTwins = .{};
+                        var twin_build: ResultRowTwinBuild = undefined;
                         for (ext_arg_vars, anno_arg_vars, 0..) |decl_arg_var, anno_arg_var, arg_index| {
                             const decl_arg_resolved = self.types.resolveVar(decl_arg_var).desc.content;
 
@@ -20298,7 +20379,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             const decl_arg_rigid = decl_arg_resolved.rigid;
 
                             try self.rigid_var_substitutions.put(self.gpa, decl_arg_rigid.name, anno_arg_var);
-                            if (ext_is_alias) try self.addResultRowTwin(
+                            if (ext_is_alias) self.addResultRowTwin(
                                 &result_row_twins,
                                 ctx,
                                 polarity,
@@ -20306,7 +20387,6 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                 anno_arg_var,
                                 self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(anno_args[arg_index])),
                                 try_error_row_reachable and arg_index == try_error_arg_index.?,
-                                env,
                             );
                         }
 
@@ -20322,7 +20402,11 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             polarity,
                             ctx.instantiationReach(),
                             ctx.writtenResultRows(),
-                            result_row_twins.slice(),
+                            twin_blk: {
+                                if (result_row_twins.len == 0) break :twin_blk null;
+                                twin_build = .{ .check = self, .twins = &result_row_twins, .opening = ctx.annotation.opening, .env = env };
+                                break :twin_blk &twin_build;
+                            },
                         );
                         try self.recordConsumedResultRowTwins(&result_row_twins, ctx);
                         if (ext_is_alias and !try self.validateAliasRows(instantiated_var, env, anno_region)) {

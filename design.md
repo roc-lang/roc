@@ -7129,11 +7129,16 @@ the signature's direct result, or at a result `Try`'s error row, the
 annotation walk builds a twin of each argument that is a row it generated—the
 same tags behind a fresh extension, opened exactly as a row written at the
 result is—and the instantiator substitutes the twin at the occurrence it
-reaches as `.result` or `.try_row`, and the shared argument everywhere else,
-including the alias's own argument list (`Instantiator.ResultRowTwin`). The
-instantiator finds that occurrence by the same reach it already computes while
-walking the declaration's type, so an imported alias is answered exactly as a
-local one, with no recorded axis. A where-method signature's twin carries the
+reaches as `.result` or `.try_row`, and the shared argument everywhere else
+(`Instantiator.ResultRowTwin`). The twin is built when an occurrence first
+takes it, so a signature whose formal never reaches the result row mints
+nothing. The instantiator finds that occurrence by the same reach it already
+computes while walking the declaration's type, so an imported alias is
+answered exactly as a local one, with no recorded axis. An argument's row is
+read down its whole extension chain, as a re-open reads a coerced row, so an
+argument whose row continues through an alias link (`Fwd(Errs)` with
+`Errs : Wrap(Base)`) gets a twin copied down that link, exactly as
+`Errs -> Errs` opens `Base`'s row. A where-method signature's twin carries the
 deferral marker instead, decided per use like the inline row. The twin shares
 the argument's payloads, so a row nested inside it keeps the argument's
 generation (fail-closed where the inline spelling would open a payload row); a
@@ -7146,18 +7151,41 @@ a reachable position (a result `Try`'s error argument) opens there in place and
 gets no twin, since a second opened row would make the signature decline. A
 host-boundary annotation's twin is the argument itself, still closed as
 written: taking it only reports the site its row stands on, so a hosted
-`Try(U64, Wrap(Base))` records the same coercion as `Try(U64, Errs)`.
+`Try(U64, Wrap(Base))` records the same coercion as `Try(U64, Errs)`. The walk
+tracks at most `max_tracked_alias_formals` (8) formals of one declaration and
+reads at most `max_result_row_twin_alias_layers` (8) alias layers and links of
+one argument's row; beyond either bound the argument gets no twin and its
+result occurrence stays closed, the conservative answer.
+
+An alias's argument list must stay the substitution its backing uses:
+unifying two applications of one alias relates their arguments, and a
+disagreement of their backings is not reported. So where every occurrence of
+a twinned formal in an alias took the twin (`Id([A, B])` at the result, or
+`Res(e)` standing on a function alias's result), the alias presents the twin
+as that argument. Where the alias also used the shared argument
+(`Fwd(e) : e -> e` with `fwd : Fwd([NotFound])`, closed at the input and open
+at the result), no one argument list is its substitution, and the
+instantiation presents the alias as its backing—`[NotFound] -> [NotFound]`,
+the inline spelling—exactly as the re-open drops the alias layers of a copy
+wider than the alias declares.
 
 Every use of a coerced definition re-opens its row, however it names it: a
 local or external lookup, an associated lookup (`Type.item`, including through
 an alias of the owner), and a static-dispatch method call, whose selected
 target reads its definition's record in `instantiateDispatchTargetMethodVar`
-exactly as a lookup does. A use cannot precede the record: top-level
+exactly as a lookup does. A lookup cannot precede the record: top-level
 definitions are checked in dependency order, and a reference to an unchecked
 definition outside the current recursive group is an invariant violation.
 Inside the group a use instantiates the predeclared annotation, whose result
 row is still the annotation's implicitly open row, so an in-group widening
 use is accepted and served by the same adapter once the body's record lands.
+A static-dispatch use CAN precede the record, since canonicalization records
+no dispatch edges and a method's definition may not be checked yet when a
+call selects it. Such a use instantiates the predeclared annotation too
+(`predeclared_scheme_for_method`, recorded by
+`recordPredeclaredDispatchUse`), so it is answered exactly as an in-group
+use: its row is the annotation's open row, and the adapter serves a widened
+use once the body's record lands.
 
 A signature with a `where` clause coerces as well. A use whose `where`
 evidence resolves to a local procedure is lowered as a caller-owned
@@ -9429,10 +9457,16 @@ Other solved-graph mutations:
   direct row whose extension is an alias coerces", "a result-row twin
   standing as a row's extension coerces", "an alias applied at the result
   row whose formal is the row's extension coerces", "an identity alias
-  applied at the result row coerces";
+  applied at the result row coerces", "a function alias argument whose row
+  continues through an alias link coerces" (and its Try error variant), "an
+  alias whose formal stands only on the result row presents its twin as its
+  argument", "an alias using its formal at the input and the result is
+  presented as its backing";
   rejected—"a parameterised function alias keeps its input occurrence
   closed", "... does not reach a nested occurrence", "an alias argument
-  nested through a function alias stays closed", "a method call does not
+  nested through a function alias stays closed", "a function alias argument
+  continuing through an alias link keeps its input closed", "an alias whose
+  formal stands only on the result row still bounds its row", "a method call does not
   re-open a coerced method's input row", "a method call does not reach a
   nested row of a coerced method", "a curried function alias signature does
   not reach the inner return", "an alias extension of a coerced row keeps

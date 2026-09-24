@@ -258,7 +258,11 @@ pub const Constants = struct {
     /// 113: A coerced row's re-open crosses alias links in its extension
     ///      chain and keeps no alias layer on its spine; an alias whose formal
     ///      is the result row's extension opens it however it is spelled.
-    pub const CACHE_VERSION = 113;
+    /// 114: A result-row twin crosses alias links in its argument's row, and
+    ///      an alias whose formal took a twin presents the twin as that
+    ///      argument, or is presented as its backing when it also used the
+    ///      shared argument.
+    pub const CACHE_VERSION = 114;
 };
 
 /// Configuration for the Roc cache system.

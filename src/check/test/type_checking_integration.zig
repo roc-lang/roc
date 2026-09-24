@@ -9808,6 +9808,145 @@ test "check type - polarity - an identity alias applied at the result row coerce
     try checkTypesModule(source, .{ .pass = .last_def }, "[A, B] -> [A, B, C]");
 }
 
+test "check type - polarity - a function alias argument whose row continues through an alias link coerces" {
+    // `Errs`'s row continues through the alias `Base`, so the argument's
+    // result-row twin is copied down that link: `fwd : Fwd(Errs)` coerces
+    // exactly as `fwd : Errs -> Errs` does.
+    const source =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\Fwd(e) : e -> e
+        \\
+        \\fwd : Fwd(Errs)
+        \\fwd = |t| t
+        \\
+        \\wider : Errs -> [Aborted, HostErr(U64), Other]
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Errs -> [Aborted, HostErr(U64), Other]");
+}
+
+test "check type - polarity - a function alias Try error argument whose row continues through an alias link coerces" {
+    const source =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\Fwd(e) : Try(U64, e) -> Try(U64, e)
+        \\
+        \\fwd : Fwd(Errs)
+        \\fwd = |t| t
+        \\
+        \\wider : Try(U64, Errs) -> Try(U64, [Aborted, HostErr(U64), Other])
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, Errs) -> Try(U64, [Aborted, HostErr(U64), Other])");
+}
+
+test "check type - polarity - a function alias argument continuing through an alias link keeps its input closed" {
+    const source =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\Fwd(e) : e -> e
+        \\
+        \\fwd : Fwd(Errs)
+        \\fwd = |t| t
+        \\
+        \\bad = fwd(Aborted)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - an alias whose formal stands only on the result row presents its twin as its argument" {
+    // Unifying two applications of one alias decides by their arguments, so
+    // `Id([A, B])` at the result must carry the row its backing uses—the
+    // twin, which the forwarding body closed—not a second copy of the
+    // argument that nothing constrains.
+    const source =
+        \\Id(a) : a
+        \\
+        \\fwd : [A, B] -> Id([A, B])
+        \\fwd = |x| x
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A, B] -> Id([A, B])");
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try expectResultAliasArgIsItsBacking(&test_env, "fwd");
+}
+
+/// Assert that `def_name`'s type is a function whose result is a
+/// one-argument alias application whose argument IS its backing (one
+/// variable), as it is for an alias like `Id(a) : a`.
+fn expectResultAliasArgIsItsBacking(test_env: *TestEnv, def_name: []const u8) error{TestUnexpectedResult}!void {
+    const types_store = &test_env.module_env.types;
+    const idents = test_env.module_env.getIdentStoreConst();
+    for (test_env.module_env.store.sliceDefs(test_env.module_env.all_defs)) |def_idx| {
+        const def = test_env.module_env.store.getDef(def_idx);
+        const ptrn = test_env.module_env.store.getPattern(def.pattern);
+        if (ptrn != .assign) continue;
+        if (!std.mem.eql(u8, def_name, idents.getText(ptrn.assign.ident))) continue;
+        const content = types_store.resolveVar(ModuleEnv.varFrom(def_idx)).desc.content;
+        if (content != .structure) return error.TestUnexpectedResult;
+        const flat = content.structure;
+        const func = if (flat == .fn_pure)
+            flat.fn_pure
+        else if (flat == .fn_effectful)
+            flat.fn_effectful
+        else if (flat == .fn_unbound)
+            flat.fn_unbound
+        else
+            return error.TestUnexpectedResult;
+        const ret_content = types_store.resolveVar(func.ret).desc.content;
+        if (ret_content != .alias) return error.TestUnexpectedResult;
+        const alias = ret_content.alias;
+        const args = types_store.sliceAliasArgs(alias);
+        if (args.len != 1) return error.TestUnexpectedResult;
+        const arg_root = types_store.resolveVar(args[0]).var_;
+        const backing_root = types_store.resolveVar(types_store.getAliasBackingVar(alias)).var_;
+        if (arg_root != backing_root) return error.TestUnexpectedResult;
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "check type - polarity - an alias whose formal stands only on the result row still bounds its row" {
+    const source =
+        \\Id(a) : a
+        \\
+        \\mk : Str -> Id([A, B])
+        \\mk = |_| A
+        \\
+        \\h : Str -> Id([A])
+        \\h = mk
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - an alias using its formal at the input and the result is presented as its backing" {
+    // The input occurrence of `e` keeps the shared closed argument and the
+    // result occurrence takes the opened twin, so no one argument list is
+    // `Fwd`'s substitution: the type is presented as its backing, as the
+    // inline spelling `[NotFound] -> [NotFound]` is.
+    const source =
+        \\Fwd(e) : e -> e
+        \\
+        \\fwd : Fwd([NotFound])
+        \\fwd = |t| t
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[NotFound] -> [NotFound]");
+}
+
 test "check type - polarity - a result-row twin standing as a row's extension coerces" {
     // `e` is the EXTENSION of the result's error row, so its result-row twin
     // is an alias link (`Base`) in that row's chain.
