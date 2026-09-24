@@ -9480,7 +9480,7 @@ test "wasm platform exports are exactly the header declaration" {
 
 fn writeDevWasmObject(
     ctx: *CliCtx,
-    build_cache_dir: []const u8,
+    artifact_dir: []const u8,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
     static_data_exports: []const backend.StaticDataExport,
@@ -9565,7 +9565,7 @@ fn writeDevWasmObject(
     try mergeBoxySidecarWasm(ctx, &codegen.module, &lowered.lir_result, .relocatable_object);
     return writeSealedWasmObject(
         ctx,
-        build_cache_dir,
+        artifact_dir,
         "roc_app_wasm32.o",
         &codegen.module,
         &lowered.lir_result,
@@ -9580,7 +9580,6 @@ fn rocBuildWasm(
     target: RocTarget,
     link_type: roc_target.OutputKind,
     final_output_path: []const u8,
-    build_cache_dir: []const u8,
     platform_dir: []const u8,
     targets_config: roc_target.TargetsConfig,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
@@ -9596,10 +9595,17 @@ fn rocBuildWasm(
 
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
 
+    // The intermediate objects have fixed names, so concurrent builds sharing
+    // one directory would link each other's half-written files.
+    const scratch_dir = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+    defer if (!args.keep_temp) compile.CacheCleanup.deleteTempDir(ctx.io.std_io, scratch_dir);
+
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints, static_data_exports, target.cpuLevel());
+        const obj_path = try writeDevWasmObject(ctx, scratch_dir, lowered, entrypoints, static_data_exports, target.cpuLevel());
         try writeArchiveOutput(ctx, .wasm32, final_output_path, link_inputs, &.{obj_path});
         return;
     }
@@ -9614,7 +9620,7 @@ fn rocBuildWasm(
     // global definitions are the platform's `provides` symbols.
     const obj_path = try writeDevWasmObject(
         ctx,
-        build_cache_dir,
+        scratch_dir,
         lowered,
         entrypoints,
         static_data_exports,
@@ -9647,7 +9653,7 @@ fn rocBuildWasm(
         .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
         .wasm_exports = wasm_exports,
         .platform_files_dir = link_inputs.platform_files_dir,
-        .scratch_dir = build_cache_dir,
+        .scratch_dir = scratch_dir,
     };
     linker.link(ctx, link_config) catch |err| {
         return ctx.fail(.{ .linker_failed = .{
@@ -9845,16 +9851,29 @@ fn llvmFeatureStringForTarget(allocator: Allocator, std_target: std.Target) Allo
     return roc_target.llvmFeatureString(allocator, std_target);
 }
 
-fn llvmObjectUsesPic(link_type: roc_target.OutputKind, fuzz: bool) bool {
+fn llvmObjectUsesPic(target: RocTarget, link_type: roc_target.OutputKind, fuzz: bool) bool {
+    // Every wasm32 output starts as a relocatable object that some linker
+    // consumes afterwards, and a shared link (`wasm-ld -shared`, emscripten
+    // SIDE_MODULE) rejects absolute data relocations. Emitting one flavour of
+    // wasm object keeps `output: Archive` linkable by a foreign linker; the
+    // final-link path resolves the PIC base globals to zero, so the wasm it
+    // produces still addresses data absolutely.
+    if (target.toCpuArch() == .wasm32) return true;
     return link_type == .shared or fuzz;
 }
 
 test "LLVM fuzz output uses position-independent code" {
-    try std.testing.expect(llvmObjectUsesPic(.archive, true));
-    try std.testing.expect(llvmObjectUsesPic(.exe, true));
-    try std.testing.expect(llvmObjectUsesPic(.shared, false));
-    try std.testing.expect(!llvmObjectUsesPic(.archive, false));
-    try std.testing.expect(!llvmObjectUsesPic(.exe, false));
+    try std.testing.expect(llvmObjectUsesPic(.x64musl, .archive, true));
+    try std.testing.expect(llvmObjectUsesPic(.x64musl, .exe, true));
+    try std.testing.expect(llvmObjectUsesPic(.x64musl, .shared, false));
+    try std.testing.expect(!llvmObjectUsesPic(.x64musl, .archive, false));
+    try std.testing.expect(!llvmObjectUsesPic(.x64musl, .exe, false));
+}
+
+test "wasm32 LLVM objects are always position-independent" {
+    try std.testing.expect(llvmObjectUsesPic(.wasm32, .archive, false));
+    try std.testing.expect(llvmObjectUsesPic(.wasm32, .exe, false));
+    try std.testing.expect(llvmObjectUsesPic(.wasm32, .shared, false));
 }
 
 fn compileLlvmAppObject(
@@ -9922,9 +9941,10 @@ fn compileLlvmAppObject(
 
     const target_name = @tagName(target);
     const opt_name = @tagName(args.opt);
-    // Shared libraries and fuzz hosts need position-independent code; keep
-    // their objects separate from ordinary exe/archive objects.
-    const pic = llvmObjectUsesPic(link_type, args.fuzz);
+    // Shared libraries, fuzz hosts and every wasm32 object need
+    // position-independent code; keep their objects separate from ordinary
+    // exe/archive objects.
+    const pic = llvmObjectUsesPic(target, link_type, args.fuzz);
     const kind_suffix: []const u8 = if (pic) "_pic" else "";
     const debug_suffix: []const u8 = if (emit_debug_info) "_debug" else "";
     var tuning_hash = std.hash.Crc32.init();
@@ -10748,7 +10768,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             target,
             link_type,
             final_output_path,
-            build_cache_dir,
             platform_dir,
             resolved_targets_config,
             &lowered,

@@ -413,7 +413,10 @@ pub fn forEachStmtRead(
             if (s.tag_residual_for) |desc| emitDesc(ctx, note, desc);
             emitSpan(store, ctx, note, s.captures);
         },
-        .assign_boxy_dict_ref => |s| emitDict(ctx, note, s.dict),
+        .assign_boxy_dict_ref => |s| {
+            emitDict(ctx, note, s.dict);
+            emitSpan(store, ctx, note, s.captures);
+        },
         .assign_boxy_box => |s| {
             note(ctx, s.payload);
             if (s.source_desc) |desc| emitDesc(ctx, note, desc);
@@ -1226,6 +1229,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .assign_boxy_dict_ref => |s| try self.store.addCFStmt(.{ .assign_boxy_dict_ref = .{
                     .target = try self.mapLocal(s.target),
                     .dict = try self.mapBoxyDictRef(s.dict),
+                    .captures = try self.mapLocalSpan(s.captures),
                     .next = try self.cloneStmt(s.next),
                 } }),
                 .assign_boxy_box => |s| try self.store.addCFStmt(.{ .assign_boxy_box = .{
@@ -1633,6 +1637,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             return switch (dict) {
                 .static => |id| .{ .static = id },
                 .local => |local| .{ .local = try self.mapLocal(local) },
+                .runtime => std.debug.panic("LIR invariant violated: a runtime dictionary reference reached LIR cloning", .{}),
             };
         }
 

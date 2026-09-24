@@ -26,9 +26,12 @@ const Self = @This();
 /// Requests of at least this many bytes are owned by this allocator. It
 /// matches the slab size above which `SmpAllocator` maps pages directly.
 pub const large_threshold: usize = 64 * 1024;
-const min_class_log2: u6 = std.math.log2_int(usize, large_threshold);
+/// A size class: the base-2 logarithm of a length, rounded up. Its type holds
+/// every such logarithm of a `usize` on the target, including the word width.
+const Class = std.math.Log2IntCeil(usize);
+const min_class_log2: Class = std.math.log2_int(usize, large_threshold);
 /// Largest cached class; bigger blocks are mapped and unmapped directly.
-const max_class_log2: u6 = 30; // 1 GiB
+const max_class_log2: Class = 30; // 1 GiB
 const class_count = max_class_log2 - min_class_log2 + 1;
 /// Bytes retained per class beyond which a freed block is unmapped, so the
 /// cache bounds peak memory at a few times the live set rather than growing
@@ -76,13 +79,16 @@ const vtable: Allocator.VTable = .{
     .free = free,
 };
 
-fn classOf(len: usize) u6 {
+fn classOf(len: usize) Class {
     std.debug.assert(len >= large_threshold);
-    return @intCast(std.math.log2_int_ceil(usize, len));
+    return std.math.log2_int_ceil(usize, len);
 }
 
-fn classCapacity(class: u6) usize {
-    return @as(usize, 1) << class;
+/// Only cached classes have a capacity; larger requests keep their exact length.
+fn classCapacity(class: Class) usize {
+    std.debug.assert(class <= max_class_log2);
+    const shift: std.math.Log2Int(usize) = @intCast(class);
+    return @as(usize, 1) << shift;
 }
 
 fn isLarge(len: usize, alignment: Alignment) bool {

@@ -771,6 +771,16 @@ pub const Store = struct {
         return self.resolveVar(target_var).desc.flags.static_dispatch_rejected;
     }
 
+    /// Record definition-site annotation openness (design.md "Derived Parser
+    /// Tag-Row Closure"). Provenance travels with the flex equivalence class.
+    pub fn markAnnotationTagExt(self: *Self, target_var: Var) Allocator.Error!void {
+        const resolved = self.resolveVar(target_var);
+        std.debug.assert(resolved.desc.content == .flex);
+        var desc = resolved.desc;
+        desc.flags.annotation_tag_ext = true;
+        try self.setDesc(resolved.desc_idx, desc);
+    }
+
     /// The declared rule a `dangerousSetVarRedirect` call site bends the solved
     /// graph under. A redirect outside ordinary unification is indistinguishable
     /// at review time from a change to the language's typing rules, so every call
@@ -1535,6 +1545,8 @@ pub const Store = struct {
         const b_data = self.resolveStorageRoot(b_var);
 
         var merged_desc = new_desc;
+        merged_desc.flags.annotation_tag_ext = merged_desc.content == .flex and
+            (a_data.desc.flags.annotation_tag_ext or b_data.desc.flags.annotation_tag_ext);
         const merged_is_empty_tag_union = merged_desc.content == .structure and
             merged_desc.content.structure == .empty_tag_union;
         if (merged_is_empty_tag_union) {
@@ -2981,4 +2993,23 @@ test "source declaration overflow is rejected before mutating type store" {
     try std.testing.expectEqual(before_slots, store.len());
     try std.testing.expectEqual(before_descs, store.descs.backing.len());
     try std.testing.expectEqual(before_vars, store.vars.len());
+}
+
+test "Store annotation tag provenance follows flex equivalence classes" {
+    for ([_]bool{ false, true }) |reverse| {
+        var store = try Store.init(std.testing.allocator);
+        defer store.deinit();
+        const annotation_ext = try store.fresh();
+        const inferred_ext = try store.fresh();
+        try store.markAnnotationTagExt(annotation_ext);
+        const a = if (reverse) annotation_ext else inferred_ext;
+        const b = if (reverse) inferred_ext else annotation_ext;
+        try store.union_(a, b, .{ .content = .{ .flex = Flex.init() }, .rank = .outermost });
+        try std.testing.expect(store.resolveVar(inferred_ext).desc.flags.annotation_tag_ext);
+        try std.testing.expect(store.resolveVar(annotation_ext).desc.flags.annotation_tag_ext);
+
+        const empty = try store.freshFromContentWithRank(.{ .structure = .empty_tag_union }, .outermost);
+        try store.union_(inferred_ext, empty, .{ .content = .{ .structure = .empty_tag_union }, .rank = .outermost });
+        try std.testing.expect(!store.resolveVar(annotation_ext).desc.flags.annotation_tag_ext);
+    }
 }

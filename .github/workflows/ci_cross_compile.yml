@@ -30,7 +30,7 @@ jobs:
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.16.0
-          use-cache: true
+          use-cache: false
 
       - name: Cache Zig dependency packages
         uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
@@ -68,6 +68,7 @@ jobs:
 
       - name: Cross-compile int platform test app (Windows)
         if: runner.os == 'Windows'
+        shell: pwsh
         run: |
           echo "Cross-compiling int platform from ${{ matrix.host }} to ${{ matrix.target }}"
           zig-out\bin\roc.exe build --target=${{ matrix.target }} --output=int_app_${{ matrix.target }}_${{ matrix.host }} test/int/app.roc
@@ -106,7 +107,7 @@ jobs:
       - name: List downloaded files
         run: |
           echo "Downloaded cross-compiled executables:"
-          ls -la *_${{ matrix.target }}* || echo "No files found"
+          ls -la ./*_${{ matrix.target }}* || echo "No files found"
 
       - name: Test cross-compiled executables from all hosts
         run: |
