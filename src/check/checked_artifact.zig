@@ -12080,7 +12080,7 @@ const CheckedLoopMutationPublisher = struct {
                     if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .always = .{}, .expect_only = .{} });
                     loop_.mutations = empty_plan;
                 },
-                else => {},
+                .pending, .decl, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
             };
             return;
         }
@@ -12092,7 +12092,7 @@ const CheckedLoopMutationPublisher = struct {
         };
         for (store.stored_statements.items) |*stmt| switch (stmt.data) {
             inline .for_, .while_, .infinite_loop, .breakable_loop => |*loop_| _ = try self.loop(loop_),
-            else => {},
+            .pending, .decl, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
         };
     }
 
