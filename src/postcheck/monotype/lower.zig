@@ -5359,6 +5359,16 @@ const Builder = struct {
         };
     }
 
+    /// Copy committed evidence out of the growable program lists so a lowered
+    /// template can compare later requests against its exact topology.
+    fn retainFnEvidence(self: *Builder, evidence: StoredConstFnEvidence) Allocator.Error!StoredConstFnEvidence {
+        return .{
+            .nodes = try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidence, evidence.nodes),
+            .frames = try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidenceFrame, evidence.frames),
+            .head = evidence.head,
+        };
+    }
+
     fn appendConstFnEvidence(
         self: *Builder,
         nodes: *std.ArrayList(check.ConstStore.ConstFnEvidence),
@@ -11642,7 +11652,13 @@ const Builder = struct {
                 specializationEvidenceView(evidence),
             )) |hit| {
                 if (hit.fn_id != fn_id) {
-                    Common.invariant("eager template duplicate committed to a different winning function");
+                    // The commit map never merges a specialization that must
+                    // stay local, so it keeps its own function beside an
+                    // equal committed one.
+                    if (!spec.requires_local) {
+                        Common.invariant("eager template duplicate committed to a different winning function");
+                    }
+                    continue;
                 }
                 self.promoteFnSignatureRelation(
                     fn_id,
@@ -11665,7 +11681,7 @@ const Builder = struct {
                 .def = ids.def(draft_def),
                 .spec = spec_id,
                 .evidence = spec.evidence,
-                .topology = null,
+                .topology = try self.retainFnEvidence(evidence),
             });
             try self.markTemplateReady(fn_id, solved_fn_ty);
         }

@@ -2860,6 +2860,13 @@ reference to an imported scheme copy; the def itself still checks with its
 annotation generated in its body's frame, sharing vars with the scheme the
 checked module outputs, which checked dispatch-evidence resolution relies on.
 
+Rank adjustment writes a node's enclosing traversal rank before descending
+into its children and marking it visited. In particular, a back-edge in a
+function's directed effect dependencies observes that enclosing rank, not the
+node's original inner-scope rank. The child-rank reduction cannot move a captured
+type back into an inner scope. Independent inner-scope variables remain eligible
+for generalization; captured variables wait for their owning boundary.
+
 Roc generalization is exclusively rank-1. Quantification belongs to a value
 binding; an arbitrary expression does not acquire a scheme, and the result of
 calling a polymorphic function is a monotype even when that result contains a
@@ -6886,19 +6893,14 @@ Ordinary tag-row unification remains the sole owner of tag merging and
 payload compatibility. Composition chooses its explicit source and destination
 rows before those relations; it never repairs a recursive solved graph.
 
-Tag names remain unique across a complete extension chain. Because an inferred
-tail can be generalized before a later use instantiates it, the checker
-validates this invariant over all reachable settled value types before it
-builds `CheckedModule`. Thus `[Wrapped(e), ..e]` remains polymorphic
-while `e` is an open tail, but an instantiation that makes `e` itself contain
-`Wrapped` is rejected. The validation reaches each type-store class once and
-starts only at tag-row roots, so an ordinary extension chain is walked once;
-it adds no metadata to every type variable and no work to the unifier's hot
-path. A duplicate-tag diagnostic snapshots the offending extension but points
-at the enclosing row's source, which introduced the conflicting head tag; the
-extension's solver representative does not own that source location. Rejected
-rows are poisoned only after all diagnostics snapshot the same settled graph,
-keeping recovery independent of traversal order.
+Because an inferred tail can be generalized before a later use instantiates
+it, an instantiation can give a composed row's tail a tag its head already
+lists: `[Wrapped(e), ..e]` with `e` containing `Wrapped`, or `[Oops, ..b]`
+with a callback that also fails with `Oops`. Row Union Normalization (below)
+decides such rows. Compatible occurrences are one tag, so a callback may raise
+the very tags its wrapper adds; occurrences whose relation fails or would make
+the row anonymously recursive, as when `e` contains `Wrapped(x)`, are
+rejected.
 
 The rule is confined to deferred returns carrying the explicit `try_suffix`
 return context emitted by canonicalization. Annotated returns retain the Hosted
@@ -7012,6 +7014,63 @@ second, narrow specialization of a template that needed neither.
 Since a payload's representation is taken from the REQUEST rather than from
 the declared type, a polymorphic implementation's rigid payloads are correct
 by construction: the declared row supplies only the set of labels.
+
+### Row Union Normalization
+
+A tag union or record row denotes the union of its labels. When a label occurs more than
+once along one row's extension chain, the occurrences name one tag or field:
+tag payloads are equal (same count, pairwise), and a field's value types and
+kinds are equal exactly, with a required occurrence making the field
+required. The row means what it would mean with only the innermost
+occurrence. Occurrences whose relation fails, or would make the row
+anonymously recursive, are a type error.
+
+A chain can repeat a label only when a row's tail is shared with a type that
+is not unified with the row itself; `?` composition's residual tails are the
+producer today, and any future record composition would be another. Ordinary
+unification never introduces a repeat, because relating two rows partitions
+their labels.
+
+Three consumers keep the rule exact:
+
+- Unification relates every repeated occurrence it gathers to the first one
+  (`relateChainDuplicateTags` / `relateChainDuplicateFields`), so a relation
+  that flattens a chain never discards a repeated occurrence's payload.
+- `normalizeRowUnion` relates each repeated occurrence to the next one out,
+  then rewrites the row part that holds the outer copy to omit it. Inner
+  parts may be shared by other types (a callback's own error row) and keep
+  their labels; the outer part's meaning is unchanged by the omission. A part
+  left with no labels redirects to its extension
+  (`RedirectRule.row_union_normalization`), taking the lower of the two ranks
+  as unification would. Each relation is first probed against throwaway
+  problem stores and rolled back, together with an occurs check of the row, so
+  a conflicting pair records nothing and changes nothing before it is
+  reported. Relations can bind further tails and expose further repeats; the
+  chain is rescanned until none remain, and each pass removes a label.
+- The type-key writer reports a repeated label to the checker
+  instead of keying it, in the requests the checker makes while inference is
+  still running (dispatch-state keys, generalized callable shapes, and
+  dispatch-requirement identities). The checker normalizes the reported row
+  and asks again. Every other request, including all post-check consumers,
+  treats a repeated label as an invariant violation.
+
+Before `CheckedModule` is built, every tag and record row reachable from a
+settled value type is checked once; rows that repeat a label are normalized
+in ascending root order. Normalization needs no metadata on type variables and
+adds no work where no label repeats: detection rides on the unifier's gather,
+the key writer's row sort, and the settled row walk, which already compare
+labels. A conflict is reported as a type mismatch between the two
+occurrences, each shown as a closed single-label row at the row's source, and
+the row is poisoned once every diagnostic has snapshotted the settled graph.
+
+The accepted side is pinned by `src/check/test/row_union_normalization_test.zig`
+(a callback raising the tag its wrapper adds, a repeated tag reaching a method
+dispatcher, a method call typing like the direct call it names, and a tag
+repeated two extensions down) and by the chain-duplicate unifier tests and the
+`normalizeRowUnion` test in `src/check/Check.zig`, which cover records. The
+rejected side is pinned by conflicting payloads and payload counts in the same
+file, `test/snapshots/issue/issue_11097_wrapped_try_overlap.md`, and the
+issue #11470 wrapper-overlap integration tests.
 
 ### Derived Parser Tag-Row Closure
 
@@ -8628,9 +8687,18 @@ site to any family below must classify it here.
   meets no instantiation that would resolve it, and the derivation
   determines the row exactly, so the marker redirects to the empty tag
   union—the same outcome instantiation's `.close` behavior produces.
+- `redirectEmptiedRowPart` (`RedirectRule.row_union_normalization`)—policy:
+  Row Union Normalization (above). A row part every one of whose labels also
+  occurs further along its chain denotes its extension once the occurrences
+  are related, so it redirects there with the lower of the two ranks.
 
 Other solved-graph mutations:
 
+- `recordForMerge` / `tagUnionForMerge`—mechanism: row-extension
+  preservation during ordinary unification. Both operand equivalence classes
+  acquire the merged content, so an extension reaching either operand must
+  preserve that operand's pre-merge row meaning before the classes are joined.
+  The surviving descriptor slot is not the only overwritten row identity.
 - `unifyWithFresh` (`dangerousSetVarDesc`)—mechanism: fast path writing
   exactly the descriptor that unifying a root flex placeholder with fresh
   content would produce.
@@ -8734,11 +8802,14 @@ Other solved-graph mutations:
   relates its residual tail after visible tags have merged; independent
   contributions retain full-row equality. No solved source row is redirected,
   and no checked metadata is restamped.
-- `validateSettledValueTagRows`—policy: Inferred Try Return-Row Composition
-  (above). A read-only walk rejects duplicate tag names exposed across a
-  settled value row's extension chain; after every rejection is reported from
-  the unchanged graph, the rejected row roots are set to `err` so no checked
-  module data can contain an invalid row.
+- `validateSettledValueRows`—policy: Row Union Normalization (above). A walk
+  over every settled tag and record row normalizes the rows that repeat a
+  label; rows with invalid content or conflicting occurrences are set to `err`
+  after every diagnostic has snapshotted the graph, so no checked module data
+  can contain an invalid row.
+- `omitRowLabels` (`setVarContent`)—policy: Row Union Normalization
+  (above). Rewrites the row part holding an outer copy of a repeated label to
+  omit it, after relating the occurrences through ordinary unification.
 - `constrainInterpolationPartToStr`—policy: Builtin Str Interpolation Part
   Compatibility (above). One commit-probe unifies the part with `Str` and
   validates every attached dispatch constraint; only full success is committed.
@@ -9808,7 +9879,10 @@ independently constructed nodes until an explicit relation joins them. A
 monotone provenance counter lets both iterator finalizers return immediately for
 graphs without generated iterators.
 Generated identity hashes a snapshot of the current graph representation after
-joins. An imported request's retained type remains its original witness and
+joins, under the equality digest: `typeEql` compares the stamped identity, so
+checked provenance such as `named_type.ty` must not make requests that are
+equal under `typeEql` mint unequal iterator types. An imported request's
+retained type remains its original witness and
 cannot supply the identity of a graph-owned producer that replaced it.
 Joining distinct iterator representations invalidates current snapshots and
 durable views, including snapshots of parents that reach the joined class.
@@ -10277,6 +10351,14 @@ lowered in a fresh graph on miss. Generated structural work may retain explicit
 lexical context when that context is one of its inputs, but it follows the same
 procedure-body ownership rule; encoding and decoding do not define a separate
 specialization path.
+
+A draft function that must stay local (a draft root, or a procedure used as a
+value) never merges into an equal specialization at commit; it keeps its own
+committed function. Registering the draft's eager bodies consumes that same
+decision: a local function beside an equal committed specialization is not a
+duplicate that lost its merge. Every registered eager body records its exact
+committed evidence topology, so a later request at the same identity compares
+against it like any reserved specialization.
 
 A fresh procedure specialization reserves its global function identity before
 lowering its body and records that reservation as the active root owner. A call
@@ -14827,6 +14909,16 @@ independently relevant, the read stays borrowed. Restoration of the remaining
 provenance happens only after all representatives exist, so correctness is
 independent of local numbering.
 
+A projected aggregate can dismantle its retained unit while its original
+unit remains stored in its parent. Whole consumption must account for both
+locations: an explicit intact surplus is consumed directly; otherwise the
+certifier claims the parent's stored unit at the exact recorded field read
+directly for the consumer. The dismantled unit's field claims remain outstanding.
+This transfer follows only recorded field-read provenance, on demand, and its
+claim and balance mutations participate in outcome restitution. It neither
+adds runtime retains nor changes join summaries on paths that already have an
+explicit intact unit.
+
 #### Per-edge aggregate residuals
 
 Field ownership is not a property of a container local for its whole lifetime.
@@ -15010,7 +15102,11 @@ reference-counted locals in that procedure's explicit argument and
 their definitions remain separate inventories. The certifier allocates no
 store-wide statement or local bitset per procedure; one reusable store-local to
 dense-proc-local table maps the explicit inventories into compact analysis
-sets.
+sets. Likewise each procedure's ordered-use topology (read, definition, and
+predecessor rows, jump targets, unresolved statements, and marks) is built in
+one reusable set of store-indexed tables: a build writes only the entries of its
+own statements and locals, and releasing it resets exactly those entries, so
+certification work is proportional to each procedure's body.
 
 ### Thread-Confined Reference Counts
 

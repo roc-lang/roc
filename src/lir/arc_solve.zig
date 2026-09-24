@@ -3983,10 +3983,20 @@ const UseOrder = struct {
 
     const UseQuery = struct { stmt: LIR.CFStmtId, local: LIR.LocalId };
 
-    /// Immutable store-wide CSR and control-flow topology. Component orders
-    /// borrow these slices; all marking and query-cache state lives separately.
+    /// Immutable control-flow and ordered-use topology over a set of
+    /// statement inventories. Component orders borrow it; all marking and
+    /// query-cache state lives separately.
     const Topology = struct {
         store: *const LirStore,
+        /// Store-indexed tables holding this topology's entries.
+        tables: *Scratch,
+        /// Whether `tables` belongs to this topology alone. Otherwise they are
+        /// a caller's reusable scratch, and releasing the topology resets
+        /// exactly the entries it wrote.
+        owns_tables: bool,
+        /// Each inventoried statement once, retained only to reset a
+        /// caller's scratch on release.
+        members: []u32,
         /// Statements reading and defining each local.
         reads_of: Rows,
         defs_of: Rows,
@@ -3996,19 +4006,116 @@ const UseOrder = struct {
         preds: Rows,
         /// Unknown successors conservatively count as used.
         unresolved: std.bit_set.DynamicBitSetUnmanaged,
+        unresolved_list: []u32,
 
         fn deinit(self: *@This(), allocator: Allocator) void {
+            if (self.owns_tables) {
+                self.tables.deinit(allocator);
+                allocator.destroy(self.tables);
+            } else {
+                for (self.members) |stmt| {
+                    self.tables.jump_join[stmt] = no_local;
+                    self.tables.mark_gen[stmt] = 0;
+                    self.tables.unresolved.unset(stmt);
+                }
+                self.reads_of.clearIndex();
+                self.defs_of.clearIndex();
+                self.preds.clearIndex();
+            }
             self.reads_of.deinit(allocator);
             self.defs_of.deinit(allocator);
             self.preds.deinit(allocator);
-            self.unresolved.deinit(allocator);
-            allocator.free(self.jump_join);
+            allocator.free(self.unresolved_list);
+            allocator.free(self.members);
         }
     };
 
-    /// CSR rows of statement ids per key, each row sorted.
+    /// Store-indexed tables for building topologies. A caller that builds
+    /// many small topologies over one store (one per procedure) allocates
+    /// these once; each build writes and later resets only its own entries,
+    /// so its cost is proportional to its inventories, not to the store.
+    /// Between builds every row is empty, every jump is unresolved, and
+    /// every mark is zero.
+    pub const Scratch = struct {
+        jump_join: []u32,
+        reads_index: RowIndex,
+        defs_index: RowIndex,
+        preds_index: RowIndex,
+        seen: std.bit_set.DynamicBitSetUnmanaged,
+        unresolved: std.bit_set.DynamicBitSetUnmanaged,
+        mark_gen: []u32,
+
+        pub fn init(allocator: Allocator, store: *const LirStore) Allocator.Error!Scratch {
+            return initTables(allocator, store, .with_marks);
+        }
+
+        /// Component orders keep their own compact marks, so a topology built
+        /// only for them needs no store-indexed marks.
+        fn initTables(allocator: Allocator, store: *const LirStore, marks: Marks) Allocator.Error!Scratch {
+            const stmt_count = store.cfStmtCount();
+            const local_count = store.localCount();
+            const jump_join = try allocator.alloc(u32, stmt_count);
+            errdefer allocator.free(jump_join);
+            @memset(jump_join, no_local);
+            var reads_index = try RowIndex.init(allocator, local_count);
+            errdefer reads_index.deinit(allocator);
+            var defs_index = try RowIndex.init(allocator, local_count);
+            errdefer defs_index.deinit(allocator);
+            var preds_index = try RowIndex.init(allocator, stmt_count);
+            errdefer preds_index.deinit(allocator);
+            var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, stmt_count);
+            errdefer seen.deinit(allocator);
+            var unresolved = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, stmt_count);
+            errdefer unresolved.deinit(allocator);
+            const mark_gen = try allocator.alloc(u32, if (marks == .with_marks) stmt_count else 0);
+            @memset(mark_gen, 0);
+            return .{
+                .jump_join = jump_join,
+                .reads_index = reads_index,
+                .defs_index = defs_index,
+                .preds_index = preds_index,
+                .seen = seen,
+                .unresolved = unresolved,
+                .mark_gen = mark_gen,
+            };
+        }
+
+        pub fn deinit(self: *Scratch, allocator: Allocator) void {
+            allocator.free(self.jump_join);
+            self.reads_index.deinit(allocator);
+            self.defs_index.deinit(allocator);
+            self.preds_index.deinit(allocator);
+            self.seen.deinit(allocator);
+            self.unresolved.deinit(allocator);
+            allocator.free(self.mark_gen);
+        }
+    };
+
+    /// Key-indexed row placement; a key with no statements has length zero.
+    const RowIndex = struct {
+        start: []u32,
+        len: []u32,
+
+        fn init(allocator: Allocator, key_count: usize) Allocator.Error!RowIndex {
+            const start = try allocator.alloc(u32, key_count);
+            errdefer allocator.free(start);
+            const len = try allocator.alloc(u32, key_count);
+            @memset(start, 0);
+            @memset(len, 0);
+            return .{ .start = start, .len = len };
+        }
+
+        fn deinit(self: *RowIndex, allocator: Allocator) void {
+            allocator.free(self.start);
+            allocator.free(self.len);
+        }
+    };
+
+    /// Sorted rows of statement ids per key, placed through a shared index.
     const Rows = struct {
-        offsets: []u32,
+        index: *RowIndex,
+        /// The keys whose rows are nonempty.
+        keys: []u32,
         stmts: []u32,
 
         fn row(self: *const Rows, local: LIR.LocalId) []const u32 {
@@ -4016,12 +4123,19 @@ const UseOrder = struct {
         }
 
         fn rowAt(self: *const Rows, key: u32) []const u32 {
-            if (key + 1 >= self.offsets.len) return &.{};
-            return self.stmts[self.offsets[key]..self.offsets[key + 1]];
+            if (key >= self.index.len.len) return &.{};
+            // An empty row's start is not maintained.
+            const len = self.index.len[key];
+            if (len == 0) return &.{};
+            return self.stmts[self.index.start[key]..][0..len];
+        }
+
+        fn clearIndex(self: *Rows) void {
+            for (self.keys) |key| self.index.len[key] = 0;
         }
 
         fn deinit(self: *Rows, allocator: Allocator) void {
-            allocator.free(self.offsets);
+            allocator.free(self.keys);
             allocator.free(self.stmts);
         }
     };
@@ -4029,14 +4143,20 @@ const UseOrder = struct {
     const RowKind = enum { reads, defs };
 
     fn init(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId) SolveError!UseOrder {
-        var topology = try initTopology(allocator, store, lists);
-        errdefer topology.deinit(allocator);
-        const mark_gen = try allocator.alloc(u32, store.cfStmtCount());
-        @memset(mark_gen, 0);
+        return fromTopology(allocator, try initTopology(allocator, store, lists, .{ .owned = .with_marks }));
+    }
+
+    /// An order over `lists` whose store-indexed tables are the caller's
+    /// reusable `scratch`, which must outlive the order.
+    fn initInScratch(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId, scratch: *Scratch) SolveError!UseOrder {
+        return fromTopology(allocator, try initTopology(allocator, store, lists, .{ .scratch = scratch }));
+    }
+
+    fn fromTopology(allocator: Allocator, topology: Topology) UseOrder {
         return .{
             .allocator = allocator,
             .topology = topology,
-            .mark_gen = mark_gen,
+            .mark_gen = topology.tables.mark_gen,
             .generation = 0,
             .marked_local = no_local,
             .marked_uses = false,
@@ -4044,12 +4164,53 @@ const UseOrder = struct {
         };
     }
 
-    fn initTopology(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId) SolveError!Topology {
+    /// Whether a topology's tables include store-indexed marks for a whole order.
+    const Marks = enum { with_marks, without_marks };
+
+    /// Where a topology's store-indexed tables come from: fresh tables it
+    /// owns, or a caller's reusable scratch.
+    const Tables = union(enum) {
+        owned: Marks,
+        scratch: *Scratch,
+    };
+
+    fn initTopology(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId, source: Tables) SolveError!Topology {
         if (builtin.is_test) uniqueness_topology_builds += 1;
-        const stmt_count = store.cfStmtCount();
-        const jump_join = try allocator.alloc(u32, stmt_count);
-        errdefer allocator.free(jump_join);
-        @memset(jump_join, no_local);
+        const scratch: ?*Scratch = switch (source) {
+            .owned => null,
+            .scratch => |tables| tables,
+        };
+        const tables = scratch orelse owned: {
+            const owned = try allocator.create(Scratch);
+            errdefer allocator.destroy(owned);
+            owned.* = try Scratch.initTables(allocator, store, source.owned);
+            break :owned owned;
+        };
+        errdefer if (scratch == null) {
+            tables.deinit(allocator);
+            allocator.destroy(tables);
+        };
+
+        var member_list = std.ArrayList(u32).empty;
+        defer member_list.deinit(allocator);
+        {
+            errdefer for (member_list.items) |stmt| tables.seen.unset(stmt);
+            for (lists) |list| {
+                for (list) |stmt_id| {
+                    const index = @intFromEnum(stmt_id);
+                    if (tables.seen.isSet(index)) continue;
+                    try member_list.append(allocator, index);
+                    tables.seen.set(index);
+                }
+            }
+        }
+        for (member_list.items) |stmt| tables.seen.unset(stmt);
+        const members = try allocator.dupe(u32, member_list.items);
+        errdefer allocator.free(members);
+        errdefer if (scratch != null) for (members) |stmt| {
+            tables.jump_join[stmt] = no_local;
+        };
+
         var joins = collections.DenseMap(LIR.JoinPointId, u32).init(allocator);
         defer joins.deinit();
         for (lists) |list| {
@@ -4062,27 +4223,49 @@ const UseOrder = struct {
                 const stmt = store.getCFStmt(stmt_id);
                 if (stmt != .jump) continue;
                 if (joins.get(stmt.jump.target)) |join_stmt| {
-                    jump_join[@intFromEnum(stmt_id)] = join_stmt;
+                    tables.jump_join[@intFromEnum(stmt_id)] = join_stmt;
                 }
             }
         }
 
-        var reads_of = try buildRows(allocator, store, lists, .reads);
-        errdefer reads_of.deinit(allocator);
-        var defs_of = try buildRows(allocator, store, lists, .defs);
-        errdefer defs_of.deinit(allocator);
-
-        var unresolved = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, stmt_count);
-        errdefer unresolved.deinit(allocator);
-        var preds = try buildPreds(allocator, store, lists, jump_join, &unresolved);
-        errdefer preds.deinit(allocator);
+        var reads_of = try buildRows(allocator, store, members, &tables.reads_index, .reads);
+        errdefer {
+            reads_of.clearIndex();
+            reads_of.deinit(allocator);
+        }
+        var defs_of = try buildRows(allocator, store, members, &tables.defs_index, .defs);
+        errdefer {
+            defs_of.clearIndex();
+            defs_of.deinit(allocator);
+        }
+        var unresolved_list = std.ArrayList(u32).empty;
+        errdefer unresolved_list.deinit(allocator);
+        errdefer for (unresolved_list.items) |stmt| tables.unresolved.unset(stmt);
+        var preds = try buildPreds(allocator, store, members, tables, &unresolved_list);
+        errdefer {
+            preds.clearIndex();
+            preds.deinit(allocator);
+        }
+        const owned_unresolved = try allocator.dupe(u32, unresolved_list.items);
+        unresolved_list.deinit(allocator);
+        // Only a reusable scratch needs `seen` for a later build, or the
+        // member inventory to reset its entries on release.
+        if (scratch == null) {
+            tables.seen.deinit(allocator);
+            tables.seen = .{};
+            allocator.free(members);
+        }
         return .{
             .store = store,
+            .tables = tables,
+            .owns_tables = scratch == null,
+            .members = if (scratch == null) &.{} else members,
             .reads_of = reads_of,
             .defs_of = defs_of,
-            .jump_join = jump_join,
+            .jump_join = tables.jump_join,
             .preds = preds,
-            .unresolved = unresolved,
+            .unresolved = tables.unresolved,
+            .unresolved_list = owned_unresolved,
         };
     }
 
@@ -4139,127 +4322,121 @@ const UseOrder = struct {
         };
     }
 
-    fn buildRows(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId, comptime kind: RowKind) SolveError!Rows {
-        const stmt_count = store.cfStmtCount();
-        const local_count = store.localCount();
-        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, stmt_count);
-        defer seen.deinit(allocator);
-        const offsets = try allocator.alloc(u32, local_count + 1);
-        errdefer allocator.free(offsets);
-        @memset(offsets, 0);
-        const Count = struct {
-            offsets: []u32,
-            fn note(self: *@This(), local: LIR.LocalId) void {
-                self.offsets[@intFromEnum(local) + 1] += 1;
+    /// Counts, places, and sorts one row per key reached from `members`.
+    /// Only reached keys are written, so the index's other entries stay empty.
+    fn RowBuilder(comptime Key: type, comptime keyIndex: fn (Key) u32) type {
+        return struct {
+            allocator: Allocator,
+            index: *RowIndex,
+            keys: std.ArrayList(u32) = .empty,
+            stmts: []u32 = &.{},
+            stmt: u32 = 0,
+            failed: bool = false,
+
+            fn count(self: *@This(), key: Key) void {
+                const raw = keyIndex(key);
+                if (self.index.len[raw] == 0) {
+                    self.keys.append(self.allocator, raw) catch {
+                        self.failed = true;
+                        return;
+                    };
+                }
+                self.index.len[raw] += 1;
+            }
+
+            fn place(self: *@This()) SolveError!void {
+                if (self.failed) return error.OutOfMemory;
+                var total: u32 = 0;
+                for (self.keys.items) |raw| {
+                    self.index.start[raw] = total;
+                    total += self.index.len[raw];
+                    self.index.len[raw] = 0;
+                }
+                self.stmts = try self.allocator.alloc(u32, total);
+            }
+
+            fn fill(self: *@This(), key: Key) void {
+                const raw = keyIndex(key);
+                self.stmts[self.index.start[raw] + self.index.len[raw]] = self.stmt;
+                self.index.len[raw] += 1;
+            }
+
+            fn finish(self: *@This()) SolveError!Rows {
+                for (self.keys.items) |raw| {
+                    std.mem.sortUnstable(u32, self.stmts[self.index.start[raw]..][0..self.index.len[raw]], {}, std.sort.asc(u32));
+                }
+                return .{
+                    .index = self.index,
+                    .keys = try self.keys.toOwnedSlice(self.allocator),
+                    .stmts = self.stmts,
+                };
+            }
+
+            fn abandon(self: *@This()) void {
+                for (self.keys.items) |raw| self.index.len[raw] = 0;
+                self.keys.deinit(self.allocator);
+                self.allocator.free(self.stmts);
             }
         };
-        var count = Count{ .offsets = offsets };
-        for (lists) |list| {
-            for (list) |stmt_id| {
-                const index = @intFromEnum(stmt_id);
-                if (seen.isSet(index)) continue;
-                seen.set(index);
-                const stmt = store.getCFStmt(stmt_id);
-                if (!rowsInclude(stmt, kind)) continue;
-                switch (kind) {
-                    .reads => body_clone.forEachStmtRead(store, stmt, &count, Count.note),
-                    .defs => body_clone.forEachStmtDef(store, stmt, &count, Count.note),
-                }
-            }
-        }
-        for (0..local_count) |local| offsets[local + 1] += offsets[local];
-        const stmts = try allocator.alloc(u32, offsets[local_count]);
-        errdefer allocator.free(stmts);
-        const fill = try allocator.dupe(u32, offsets[0..local_count]);
-        defer allocator.free(fill);
-        const Fill = struct {
-            fill: []u32,
-            stmts: []u32,
-            stmt: u32,
-            fn note(self: *@This(), local: LIR.LocalId) void {
-                const raw = @intFromEnum(local);
-                self.stmts[self.fill[raw]] = self.stmt;
-                self.fill[raw] += 1;
-            }
-        };
-        var filler = Fill{ .fill = fill, .stmts = stmts, .stmt = 0 };
-        seen.setRangeValue(.{ .start = 0, .end = stmt_count }, false);
-        for (lists) |list| {
-            for (list) |stmt_id| {
-                const index = @intFromEnum(stmt_id);
-                if (seen.isSet(index)) continue;
-                seen.set(index);
-                filler.stmt = @intCast(index);
-                const stmt = store.getCFStmt(stmt_id);
-                if (!rowsInclude(stmt, kind)) continue;
-                switch (kind) {
-                    .reads => body_clone.forEachStmtRead(store, stmt, &filler, Fill.note),
-                    .defs => body_clone.forEachStmtDef(store, stmt, &filler, Fill.note),
-                }
-            }
-        }
-        for (0..local_count) |local| {
-            std.mem.sort(u32, stmts[offsets[local]..offsets[local + 1]], {}, std.sort.asc(u32));
-        }
-        return .{ .offsets = offsets, .stmts = stmts };
     }
 
-    /// Predecessor rows over the successor edges of every statement in the
-    /// inventories, and the set of statements whose successors are unknown.
+    fn localKey(local: LIR.LocalId) u32 {
+        return @intFromEnum(local);
+    }
+
+    fn stmtKey(stmt: u32) u32 {
+        return stmt;
+    }
+
+    fn buildRows(allocator: Allocator, store: *const LirStore, members: []const u32, index: *RowIndex, comptime kind: RowKind) SolveError!Rows {
+        const Builder = RowBuilder(LIR.LocalId, localKey);
+        var builder = Builder{ .allocator = allocator, .index = index };
+        errdefer builder.abandon();
+        for (members) |raw| {
+            const stmt = store.getCFStmt(@enumFromInt(raw));
+            if (!rowsInclude(stmt, kind)) continue;
+            switch (kind) {
+                .reads => body_clone.forEachStmtRead(store, stmt, &builder, Builder.count),
+                .defs => body_clone.forEachStmtDef(store, stmt, &builder, Builder.count),
+            }
+        }
+        try builder.place();
+        for (members) |raw| {
+            const stmt = store.getCFStmt(@enumFromInt(raw));
+            if (!rowsInclude(stmt, kind)) continue;
+            builder.stmt = raw;
+            switch (kind) {
+                .reads => body_clone.forEachStmtRead(store, stmt, &builder, Builder.fill),
+                .defs => body_clone.forEachStmtDef(store, stmt, &builder, Builder.fill),
+            }
+        }
+        return try builder.finish();
+    }
+
+    /// Predecessor rows over the successor edges of every member, and the
+    /// members whose successors are unknown.
     fn buildPreds(
         allocator: Allocator,
         store: *const LirStore,
-        lists: []const []const LIR.CFStmtId,
-        jump_join: []const u32,
-        unresolved: *std.bit_set.DynamicBitSetUnmanaged,
+        members: []const u32,
+        tables: *Scratch,
+        unresolved: *std.ArrayList(u32),
     ) SolveError!Rows {
-        const stmt_count = store.cfStmtCount();
-        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, stmt_count);
-        defer seen.deinit(allocator);
-        const offsets = try allocator.alloc(u32, stmt_count + 1);
-        errdefer allocator.free(offsets);
-        @memset(offsets, 0);
-        const Count = struct {
-            offsets: []u32,
-            fn note(self: *@This(), succ: u32) void {
-                self.offsets[succ + 1] += 1;
-            }
-        };
-        var count = Count{ .offsets = offsets };
-        for (lists) |list| {
-            for (list) |stmt_id| {
-                const index = @intFromEnum(stmt_id);
-                if (seen.isSet(index)) continue;
-                seen.set(index);
-                if (forEachSuccessor(store, jump_join, index, &count, Count.note)) unresolved.set(index);
+        const Builder = RowBuilder(u32, stmtKey);
+        var builder = Builder{ .allocator = allocator, .index = &tables.preds_index };
+        errdefer builder.abandon();
+        for (members) |stmt| {
+            if (forEachSuccessor(store, tables.jump_join, stmt, &builder, Builder.count)) {
+                try unresolved.append(allocator, stmt);
+                tables.unresolved.set(stmt);
             }
         }
-        for (0..stmt_count) |index| offsets[index + 1] += offsets[index];
-        const stmts = try allocator.alloc(u32, offsets[stmt_count]);
-        errdefer allocator.free(stmts);
-        const fill = try allocator.dupe(u32, offsets[0..stmt_count]);
-        defer allocator.free(fill);
-        const Fill = struct {
-            fill: []u32,
-            stmts: []u32,
-            stmt: u32,
-            fn note(self: *@This(), succ: u32) void {
-                self.stmts[self.fill[succ]] = self.stmt;
-                self.fill[succ] += 1;
-            }
-        };
-        var filler = Fill{ .fill = fill, .stmts = stmts, .stmt = 0 };
-        seen.setRangeValue(.{ .start = 0, .end = stmt_count }, false);
-        for (lists) |list| {
-            for (list) |stmt_id| {
-                const index = @intFromEnum(stmt_id);
-                if (seen.isSet(index)) continue;
-                seen.set(index);
-                filler.stmt = @intCast(index);
-                _ = forEachSuccessor(store, jump_join, index, &filler, Fill.note);
-            }
+        try builder.place();
+        for (members) |stmt| {
+            builder.stmt = stmt;
+            _ = forEachSuccessor(store, tables.jump_join, stmt, &builder, Builder.fill);
         }
-        return .{ .offsets = offsets, .stmts = stmts };
+        return try builder.finish();
     }
 
     /// Statement inventories walked structurally from each procedure body,
@@ -4299,8 +4476,8 @@ const UseOrder = struct {
     }
 
     fn deinit(self: *UseOrder) void {
-        if (self.component == null) self.topology.deinit(self.allocator);
-        self.allocator.free(self.mark_gen);
+        // A whole order's marks live in its topology's tables.
+        if (self.component == null) self.topology.deinit(self.allocator) else self.allocator.free(self.mark_gen);
         self.work.deinit(self.allocator);
     }
 
@@ -4387,8 +4564,7 @@ const UseOrder = struct {
         if (self.component) |component| {
             for (component.unresolved) |stmt| try self.mark(stmt);
         } else {
-            var unresolved_iter = self.topology.unresolved.iterator(.{});
-            while (unresolved_iter.next()) |stmt| try self.mark(@intCast(stmt));
+            for (self.topology.unresolved_list) |stmt| try self.mark(stmt);
         }
         while (self.work.pop()) |stmt| {
             if (builtin.is_test) self.backward_visits += 1;
@@ -4976,7 +5152,7 @@ pub fn computeUniqueness(
     sigs: arc_sig.SigTable,
     layouts: *const layout_mod.Store,
 ) SolveError!Uniqueness {
-    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null, null, null, null, true, layouts, .none, null, null);
+    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null, null, null, null, true, layouts, .none, null, null, null);
 }
 
 const ProcUniquenessDomain = struct {
@@ -5000,8 +5176,9 @@ const ProcUniquenessDomain = struct {
 
 /// Re-derives uniqueness from exactly one emitted procedure's explicit
 /// statement and reference-counted-local inventories. ARC variants deliberately
-/// share source LocalIds, so sibling definitions cannot affect this proof; the
-/// dense proc domain also avoids store-wide allocation or clearing per proc.
+/// share source LocalIds, so sibling definitions cannot affect this proof. The
+/// dense proc domain and the caller's reusable `order_scratch` keep each proc's
+/// work proportional to its own body, with no store-wide allocation or clearing.
 pub fn computeProcUniqueness(
     allocator: Allocator,
     store: *const LirStore,
@@ -5012,6 +5189,7 @@ pub fn computeProcUniqueness(
     local_to_dense: []const u32,
     dense_local_count: usize,
     layouts: *const layout_mod.Store,
+    order_scratch: *UseOrderScratch,
 ) SolveError!Uniqueness {
     return computeUniquenessDetailed(
         allocator,
@@ -5027,8 +5205,12 @@ pub fn computeProcUniqueness(
         .stamped,
         null,
         null,
+        order_scratch,
     );
 }
+
+/// Store-indexed tables that `computeProcUniqueness` reuses across procedures.
+pub const UseOrderScratch = UseOrder.Scratch;
 
 /// Control flow and ordered-use topology depend on the body, not on the
 /// signatures being settled. Keep them outside the signature fixed point.
@@ -5091,7 +5273,7 @@ const UniquenessWorkspace = struct {
             uniqueness_analysis_rounds += 1;
         }
         self.order.use_answers = &self.use_answers;
-        return computeUniquenessDetailed(self.scratch.allocator(), store, rc_local, sigs, null, null, self.stmts, null, consume_dead_boxes, layouts, takes, borrowed, self);
+        return computeUniquenessDetailed(self.scratch.allocator(), store, rc_local, sigs, null, null, self.stmts, null, consume_dead_boxes, layouts, takes, borrowed, self, null);
     }
 };
 
@@ -5227,7 +5409,7 @@ const UniquenessStructure = struct {
             local_to_dense[raw] = @intCast(component.locals.items.len);
             try component.locals.append(arena, @intCast(raw));
         }
-        const topology = try UseOrder.initTopology(arena, store, lists);
+        const topology = try UseOrder.initTopology(arena, store, lists, .{ .owned = .without_marks });
         const stmt_to_dense = try arena.alloc(u32, store.cfStmtCount());
         @memset(stmt_to_dense, no_local);
         // Ascending statement ids reproduce the legacy whole-store deduplication.
@@ -5382,6 +5564,7 @@ const UniquenessComponentTask = struct {
             self.takes,
             &self.solution.borrowed,
             &result.workspace,
+            null,
         );
         result.updates = try arena.alloc(UniquenessProcUpdate, self.component.procs.items.len);
         for (self.component.procs.items, result.updates) |proc, *update| {
@@ -5859,6 +6042,7 @@ fn computeUniquenessDetailed(
     takes: TakeSource,
     borrowed: ?*const std.bit_set.DynamicBitSetUnmanaged,
     workspace: ?*UniquenessWorkspace,
+    order_scratch: ?*UseOrder.Scratch,
 ) SolveError!Uniqueness {
     const local_count = if (proc_domain) |domain| domain.count else store.localCount();
 
@@ -6633,7 +6817,10 @@ fn computeUniquenessDetailed(
     const order = if (workspace) |cached| &cached.order else blk: {
         if (exact_stmts) |stmts| {
             const lists = [_][]const LIR.CFStmtId{stmts};
-            owned_order = try UseOrder.init(allocator, store, &lists);
+            owned_order = if (order_scratch) |scratch|
+                try UseOrder.initInScratch(allocator, store, &lists, scratch)
+            else
+                try UseOrder.init(allocator, store, &lists);
             break :blk &owned_order.?;
         }
         if (proc_stmts) |by_proc| {
@@ -7069,6 +7256,82 @@ test "ordered-use inventory transfer cleans up on allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, Probe.run, .{&f.store});
 }
 
+fn expectEmptyUseOrderScratch(scratch: *const UseOrder.Scratch) error{TestExpectedEqual}!void {
+    for (scratch.jump_join) |join| try std.testing.expectEqual(no_local, join);
+    for (scratch.mark_gen) |mark| try std.testing.expectEqual(@as(u32, 0), mark);
+    for ([_]*const UseOrder.RowIndex{ &scratch.reads_index, &scratch.defs_index, &scratch.preds_index }) |index| {
+        for (index.len) |len| try std.testing.expectEqual(@as(u32, 0), len);
+    }
+    try std.testing.expectEqual(@as(usize, 0), scratch.seen.count());
+    try std.testing.expectEqual(@as(usize, 0), scratch.unresolved.count());
+}
+
+test "per-procedure use orders in a shared scratch match standalone orders and restore it" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    // ARC variants share source locals while owning distinct statements.
+    const x = try f.local(f.list);
+    const y = try f.local(f.list);
+    const cond = try f.local(.bool);
+    const locals = [_]LIR.LocalId{ x, y, cond };
+    var bodies: [4]LIR.CFStmtId = undefined;
+    for (bodies[0..3], 0..) |*body, index| {
+        const id: LIR.JoinPointId = @enumFromInt(index);
+        const left = try f.store.addCFStmt(.{ .assign_ref = .{ .target = y, .op = .{ .local = x }, .next = try f.store.addCFStmt(.{ .jump = .{ .target = id } }) } });
+        const right = try f.store.addCFStmt(.{ .assign_ref = .{ .target = y, .op = .{ .local = x }, .next = try f.store.addCFStmt(.{ .jump = .{ .target = id } }) } });
+        const branch = try f.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = cond,
+            .branches = try f.store.addCFSwitchBranches(&.{.{ .value = 1, .body = left }}),
+            .default_branch = right,
+        } });
+        body.* = try f.store.addCFStmt(.{ .join = .{ .id = id, .params = LIR.LocalSpan.empty(), .body = try f.ret(y), .remainder = branch } });
+    }
+    // A jump to no join in its procedure has unknown successors.
+    bodies[3] = try f.store.addCFStmt(.{ .assign_ref = .{ .target = y, .op = .{ .local = x }, .next = try f.store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(9) } }) } });
+    var lists: [4]std.ArrayList(LIR.CFStmtId) = @splat(.empty);
+    defer for (&lists) |*list| list.deinit(allocator);
+    for (bodies, &lists) |body, *list| {
+        _ = try f.proc(&.{ x, cond }, body, f.list);
+        try collectProcStatements(allocator, &f.store, body, list);
+    }
+
+    var scratch = try UseOrder.Scratch.init(allocator, &f.store);
+    defer scratch.deinit(allocator);
+    for (0..2) |_| {
+        for (&lists) |*list| {
+            const inventories = [_][]const LIR.CFStmtId{list.items};
+            var shared = try UseOrder.initInScratch(allocator, &f.store, &inventories, &scratch);
+            var standalone = try UseOrder.init(allocator, &f.store, &inventories);
+            defer standalone.deinit();
+            try testing.expectEqualSlices(u32, standalone.topology.unresolved_list, shared.topology.unresolved_list);
+            for (list.items) |stmt_id| {
+                const stmt = @intFromEnum(stmt_id);
+                for (locals) |local| {
+                    try testing.expectEqual(standalone.reads(stmt, local), shared.reads(stmt, local));
+                    try testing.expectEqual(standalone.defines(stmt, local), shared.defines(stmt, local));
+                    try testing.expectEqual(try standalone.usesAfter(stmt, local), try shared.usesAfter(stmt, local));
+                }
+            }
+            shared.deinit();
+            try expectEmptyUseOrderScratch(&scratch);
+        }
+    }
+
+    // A build that fails part way leaves no entries behind either.
+    const Probe = struct {
+        fn run(probe_allocator: Allocator, store: *const LirStore, tables: *UseOrder.Scratch, inventories: []const []const LIR.CFStmtId) (SolveError || error{TestExpectedEqual})!void {
+            try expectEmptyUseOrderScratch(tables);
+            var order = try UseOrder.initInScratch(probe_allocator, store, inventories, tables);
+            order.deinit();
+        }
+    };
+    const inventories = [_][]const LIR.CFStmtId{ lists[0].items, lists[3].items };
+    try testing.checkAllAllocationFailures(allocator, Probe.run, .{ &f.store, &scratch, @as([]const []const LIR.CFStmtId, &inventories) });
+    try expectEmptyUseOrderScratch(&scratch);
+}
+
 test "uniqueness workspace reuses topology and exact use queries across signature changes" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -7111,7 +7374,7 @@ test "uniqueness workspace reuses topology and exact use queries across signatur
         }
         const table = arc_sig.SigTable{ .sigs = &sigs, .ret_conditions = &conditions };
         const actual = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .{ .set = &takes }, &borrowed);
-        var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, null, true, &f.layouts, .{ .set = &takes }, &borrowed, null);
+        var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, null, true, &f.layouts, .{ .set = &takes }, &borrowed, null, null);
         defer expected.deinit(allocator);
         try UniquenessTest.expectSame(expected, actual);
         try testing.expectEqual(topology, workspace.order.topology.preds.stmts.ptr);
@@ -7165,7 +7428,7 @@ test "uniqueness workspace reanalyzes read-only signatures through borrowed view
         sigs[0].read_only_params = read_only;
         const table = arc_sig.SigTable{ .sigs = &sigs };
         const actual = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .none, &borrowed);
-        var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, null, true, &f.layouts, .none, &borrowed, null);
+        var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, null, true, &f.layouts, .none, &borrowed, null, null);
         defer expected.deinit(allocator);
         try UniquenessTest.expectSame(expected, actual);
         try testing.expectEqual(read_only != 0, actual.unique.isSet(@intFromEnum(source)));
@@ -7177,7 +7440,7 @@ test "uniqueness workspace reanalyzes read-only signatures through borrowed view
         borrowed.setValue(@intFromEnum(view), is_view);
         const table = arc_sig.SigTable{ .sigs = &sigs };
         const actual = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .none, &borrowed);
-        var reference = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, null, true, &f.layouts, .none, &borrowed, null);
+        var reference = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, null, true, &f.layouts, .none, &borrowed, null, null);
         defer reference.deinit(allocator);
         try UniquenessTest.expectSame(reference, actual);
         // An owned alias adds a holder before the source's return. Restoring
@@ -7190,7 +7453,7 @@ test "uniqueness workspace reanalyzes read-only signatures through borrowed view
     sigs[0].borrowed_params = 0;
     const table = arc_sig.SigTable{ .sigs = &sigs };
     const owned = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .none, &borrowed);
-    var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, null, true, &f.layouts, .none, &borrowed, null);
+    var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, null, true, &f.layouts, .none, &borrowed, null, null);
     defer expected.deinit(allocator);
     try UniquenessTest.expectSame(expected, owned);
     try testing.expectEqual(@as(usize, 4), workspace.consumption.rebuilds);

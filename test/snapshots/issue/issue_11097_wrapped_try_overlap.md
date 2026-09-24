@@ -41,7 +41,7 @@ TYPE MISMATCH - issue_11097_wrapped_try_overlap.md:3:6:3:30
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[]")
+			(text "[PersistFailed([PersistFailed([Foo])])]")
 			(annotation-end))))
 ~~~
 # TOKENS

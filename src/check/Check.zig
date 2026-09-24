@@ -5376,49 +5376,53 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
     }
 }
 
-fn settledTagRowThroughAliases(self: *Self, start: Var) ?Var {
+fn settledRowThroughAliases(self: *Self, start: Var) ?Var {
     var current = start;
     var remaining = self.types.len();
     while (remaining > 0) : (remaining -= 1) {
         const resolved = self.types.resolveVar(current);
         switch (resolved.desc.content) {
             .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            .structure => |flat_type| return if (flat_type == .tag_union) resolved.var_ else null,
+            .structure => |flat_type| return switch (flat_type) {
+                .tag_union, .record => resolved.var_,
+                .empty_record, .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => null,
+            },
             .flex, .rigid, .field_presence, .err => return null,
         }
     }
     return null;
 }
 
-fn recordSettledTagRowRoot(
+fn recordSettledRowRoot(
     self: *Self,
     roots: *std.AutoHashMapUnmanaged(Var, void),
     var_: Var,
 ) std.mem.Allocator.Error!void {
-    const row_root = self.settledTagRowThroughAliases(var_) orelse return;
+    const row_root = self.settledRowThroughAliases(var_) orelse return;
     try roots.put(self.gpa, row_root, {});
 }
 
 const SettledTypeReach = struct {
     var_: Var,
-    starts_tag_row: bool,
+    starts_row: bool,
 };
 
 fn appendSettledTypeReachVars(
     self: *Self,
     stack: *std.ArrayListUnmanaged(SettledTypeReach),
     vars: []const Var,
-    starts_tag_row: bool,
+    starts_row: bool,
 ) std.mem.Allocator.Error!void {
-    for (vars) |var_| try stack.append(self.gpa, .{ .var_ = var_, .starts_tag_row = starts_tag_row });
+    for (vars) |var_| try stack.append(self.gpa, .{ .var_ = var_, .starts_row = starts_row });
 }
 
-/// Validate every tag row reachable from a checked value after inference has
-/// settled. Source annotations are validated when they are materialized, but
-/// instantiating an inferred open row can expose a duplicate only later. This
-/// single linear reachability walk closes that checked-boundary invariant
+/// Validate every tag and record row reachable from a checked value after
+/// inference has settled. Source annotations are validated when they are
+/// materialized, but instantiating an inferred open row can repeat a label
+/// only later; such rows are normalized (design.md "Row Union Normalization").
+/// This single linear reachability walk closes that checked-boundary invariant
 /// without adding per-variable metadata or work to ordinary unification.
-fn validateSettledValueTagRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+fn validateSettledValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -5434,12 +5438,12 @@ fn validateSettledValueTagRows(self: *Self, env: *Env) std.mem.Allocator.Error!v
     while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
         const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
         if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
-        try walk_stack.append(self.gpa, .{ .var_ = @enumFromInt(raw_node_idx), .starts_tag_row = true });
+        try walk_stack.append(self.gpa, .{ .var_ = @enumFromInt(raw_node_idx), .starts_row = true });
     }
 
     while (walk_stack.pop()) |entry| {
-        if (entry.starts_tag_row) {
-            try self.recordSettledTagRowRoot(&semantic_row_roots, entry.var_);
+        if (entry.starts_row) {
+            try self.recordSettledRowRoot(&semantic_row_roots, entry.var_);
         }
 
         const resolved = self.types.resolveVar(entry.var_);
@@ -5450,7 +5454,7 @@ fn validateSettledValueTagRows(self: *Self, env: *Env) std.mem.Allocator.Error!v
             .alias => |alias| {
                 try walk_stack.append(self.gpa, .{
                     .var_ = self.types.getAliasBackingVar(alias),
-                    .starts_tag_row = entry.starts_tag_row,
+                    .starts_row = entry.starts_row,
                 });
                 try self.appendSettledTypeReachVars(&walk_stack, self.types.sliceAliasArgs(alias), true);
             },
@@ -5458,22 +5462,22 @@ fn validateSettledValueTagRows(self: *Self, env: *Env) std.mem.Allocator.Error!v
                 .tuple => |tuple| try self.appendSettledTypeReachVars(&walk_stack, self.types.sliceVars(tuple.elems), true),
                 .nominal_type => |nominal| try self.appendSettledTypeReachVars(&walk_stack, self.types.sliceNominalArgs(nominal), true),
                 .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    try walk_stack.append(self.gpa, .{ .var_ = func.ret, .starts_tag_row = true });
+                    try walk_stack.append(self.gpa, .{ .var_ = func.ret, .starts_row = true });
                     try self.appendSettledTypeReachVars(&walk_stack, self.types.sliceVars(func.args), true);
                     try self.appendSettledTypeReachVars(&walk_stack, self.types.sliceVars(func.effect_deps), true);
                 },
                 .record => |record| {
-                    try walk_stack.append(self.gpa, .{ .var_ = record.ext, .starts_tag_row = false });
+                    try walk_stack.append(self.gpa, .{ .var_ = record.ext, .starts_row = false });
                     const fields = self.types.getRecordFieldsSlice(record.fields);
                     for (fields.items(.presence)) |presence| {
-                        try walk_stack.append(self.gpa, .{ .var_ = presence.typeVar(), .starts_tag_row = true });
+                        try walk_stack.append(self.gpa, .{ .var_ = presence.typeVar(), .starts_row = true });
                         if (presence.presenceVar()) |presence_var| {
-                            try walk_stack.append(self.gpa, .{ .var_ = presence_var, .starts_tag_row = true });
+                            try walk_stack.append(self.gpa, .{ .var_ = presence_var, .starts_row = true });
                         }
                     }
                 },
                 .tag_union => |tag_union| {
-                    try walk_stack.append(self.gpa, .{ .var_ = tag_union.ext, .starts_tag_row = false });
+                    try walk_stack.append(self.gpa, .{ .var_ = tag_union.ext, .starts_row = false });
                     const tags = self.types.getTagsSlice(tag_union.tags);
                     for (tags.items(.args)) |args| {
                         try self.appendSettledTypeReachVars(&walk_stack, self.types.sliceVars(args), true);
@@ -5503,12 +5507,19 @@ fn validateSettledValueTagRows(self: *Self, env: *Env) std.mem.Allocator.Error!v
     defer seen_parts.deinit(self.gpa);
     var invalid_rows: std.ArrayListUnmanaged(Var) = .empty;
     defer invalid_rows.deinit(self.gpa);
+    var repeating_rows: std.ArrayListUnmanaged(Var) = .empty;
+    defer repeating_rows.deinit(self.gpa);
 
     for (row_roots.items) |row_root| {
         seen_names.clearRetainingCapacity();
         seen_parts.clearRetainingCapacity();
+        const row_kind: enum { tags, fields } = switch (self.types.resolveVar(row_root).desc.content.structure) {
+            .record => .fields,
+            .tag_union, .empty_record, .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => .tags,
+        };
         var current = row_root;
         var invalid_at: ?Var = null;
+        var repeats = false;
 
         while (true) {
             const resolved = self.types.resolveVar(current);
@@ -5517,30 +5528,35 @@ fn validateSettledValueTagRows(self: *Self, env: *Env) std.mem.Allocator.Error!v
 
             switch (resolved.desc.content) {
                 .alias => |alias| current = self.types.getAliasBackingVar(alias),
-                .structure => |flat_type| switch (flat_type) {
-                    .tag_union => |tag_union| {
-                        const tags = self.types.getTagsSlice(tag_union.tags);
-                        for (tags.items(.name)) |name| {
-                            const entry = try seen_names.getOrPut(self.gpa, name);
-                            if (entry.found_existing) {
-                                invalid_at = resolved.var_;
-                                break;
+                .structure => |flat_type| switch (row_kind) {
+                    .tags => switch (flat_type) {
+                        .tag_union => |tag_union| {
+                            for (self.types.getTagsSlice(tag_union.tags).items(.name)) |name| {
+                                if ((try seen_names.getOrPut(self.gpa, name)).found_existing) repeats = true;
                             }
-                        }
-                        if (invalid_at != null) break;
-                        current = tag_union.ext;
+                            current = tag_union.ext;
+                        },
+                        .empty_tag_union => break,
+                        .record,
+                        .tuple,
+                        .nominal_type,
+                        .fn_pure,
+                        .fn_effectful,
+                        .fn_unbound,
+                        .empty_record,
+                        => {
+                            invalid_at = resolved.var_;
+                            break;
+                        },
                     },
-                    .empty_tag_union => break,
-                    .record,
-                    .tuple,
-                    .nominal_type,
-                    .fn_pure,
-                    .fn_effectful,
-                    .fn_unbound,
-                    .empty_record,
-                    => {
-                        invalid_at = resolved.var_;
-                        break;
+                    .fields => switch (flat_type) {
+                        .record => |record| {
+                            for (self.types.getRecordFieldsSlice(record.fields).items(.name)) |name| {
+                                if ((try seen_names.getOrPut(self.gpa, name)).found_existing) repeats = true;
+                            }
+                            current = record.ext;
+                        },
+                        .tag_union, .empty_record, .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => break,
                     },
                 },
                 .flex, .rigid, .err => break,
@@ -5553,9 +5569,20 @@ fn validateSettledValueTagRows(self: *Self, env: *Env) std.mem.Allocator.Error!v
 
         if (invalid_at) |bad_var| {
             const problem_idx = try self.reportInvalidRow(.tag_union, bad_var, env, self.getRegionAt(row_root), .none);
-            // The row head introduces the tag that conflicts with its extension.
-            // Keep the offending suffix snapshot, but blame that row head.
+            // The row head introduces the content that conflicts with its
+            // extension. Keep the offending suffix snapshot, but blame that head.
             self.problems.problems.items[@intFromEnum(problem_idx)].type_mismatch.types.actual_var = row_root;
+            try invalid_rows.append(self.gpa, row_root);
+        } else if (repeats) {
+            try repeating_rows.append(self.gpa, row_root);
+        }
+    }
+
+    // Row roots are in ascending var order, so normalization order, and
+    // therefore every diagnostic, is independent of traversal order.
+    for (repeating_rows.items) |row_root| {
+        if (try self.normalizeRowUnion(row_root, env)) |conflict| {
+            try self.reportRowUnionConflict(row_root, conflict, env);
             try invalid_rows.append(self.gpa, row_root);
         }
     }
@@ -5566,6 +5593,279 @@ fn validateSettledValueTagRows(self: *Self, env: *Env) std.mem.Allocator.Error!v
     for (invalid_rows.items) |row_root| {
         try self.types.setVarContent(row_root, .err);
     }
+}
+
+/// Two occurrences of one label along a row's extension chain that cannot be
+/// the same field or tag.
+const RowLabelConflict = struct {
+    name: Ident.Idx,
+    outer: RowLabelOccurrence,
+    inner: RowLabelOccurrence,
+};
+
+/// One occurrence of a label along a row's extension chain.
+const RowLabelOccurrence = struct {
+    part: u32,
+    index: u32,
+    payload: union(enum) {
+        tag: types_mod.Var.SafeList.Range,
+        field: types_mod.RecordField.Presence,
+    },
+};
+
+/// design.md "Row Union Normalization". A label repeated along the extension
+/// chain from `row` names one field or tag. Relate every repeated occurrence
+/// to the next one out, then rewrite each row part holding an outer copy to
+/// omit it. Inner parts can be shared by other types (a callback's own error
+/// row, for example) and keep their labels; omitting an outer copy preserves
+/// the row's meaning. Occurrences whose relation fails, or would make an
+/// acyclic row anonymously recursive, conflict. Relations can bind other
+/// tails and expose further repeats, so the chain is rescanned until none
+/// remain; each pass removes at least one label. A conflicting pair is
+/// returned for the caller to report.
+fn normalizeRowUnion(self: *Self, row: Var, env: *Env) Allocator.Error!?RowLabelConflict {
+    std.debug.assert(self.probe_depth == 0 or self.commit_probe_active);
+    var parts: std.ArrayListUnmanaged(Var) = .empty;
+    defer parts.deinit(self.gpa);
+    var part_labels: std.ArrayListUnmanaged(Content) = .empty;
+    defer part_labels.deinit(self.gpa);
+    var labels: std.ArrayListUnmanaged(struct { name: Ident.Idx, occurrence: RowLabelOccurrence }) = .empty;
+    defer labels.deinit(self.gpa);
+    var latest: std.AutoHashMapUnmanaged(Ident.Idx, RowLabelOccurrence) = .empty;
+    defer latest.deinit(self.gpa);
+    var omitted: std.ArrayListUnmanaged(RowLabelOccurrence) = .empty;
+    defer omitted.deinit(self.gpa);
+
+    while (true) {
+        parts.clearRetainingCapacity();
+        part_labels.clearRetainingCapacity();
+        labels.clearRetainingCapacity();
+        latest.clearRetainingCapacity();
+        omitted.clearRetainingCapacity();
+
+        var current = row;
+        var row_kind: ?enum { tags, fields } = null;
+        chain: while (true) {
+            const resolved = self.types.resolveVar(current);
+            for (parts.items) |part| {
+                if (part == resolved.var_) break :chain;
+            }
+            switch (resolved.desc.content) {
+                .alias => |alias| current = self.types.getAliasBackingVar(alias),
+                .structure => |flat_type| switch (flat_type) {
+                    .tag_union => |tag_union| {
+                        if ((row_kind orelse .tags) != .tags) break :chain;
+                        row_kind = .tags;
+                        const part: u32 = @intCast(parts.items.len);
+                        try parts.append(self.gpa, resolved.var_);
+                        try part_labels.append(self.gpa, resolved.desc.content);
+                        const tags = self.types.getTagsSlice(tag_union.tags);
+                        for (tags.items(.name), tags.items(.args), 0..) |name, args, index| {
+                            try labels.append(self.gpa, .{ .name = name, .occurrence = .{ .part = part, .index = @intCast(index), .payload = .{ .tag = args } } });
+                        }
+                        current = tag_union.ext;
+                    },
+                    .record => |record| {
+                        if ((row_kind orelse .fields) != .fields) break :chain;
+                        row_kind = .fields;
+                        const part: u32 = @intCast(parts.items.len);
+                        try parts.append(self.gpa, resolved.var_);
+                        try part_labels.append(self.gpa, resolved.desc.content);
+                        const fields = self.types.getRecordFieldsSlice(record.fields);
+                        for (fields.items(.name), fields.items(.presence), 0..) |name, presence, index| {
+                            try labels.append(self.gpa, .{ .name = name, .occurrence = .{ .part = part, .index = @intCast(index), .payload = .{ .field = presence } } });
+                        }
+                        current = record.ext;
+                    },
+                    .empty_record, .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => break :chain,
+                },
+                .flex, .rigid, .field_presence, .err => break :chain,
+            }
+        }
+
+        var row_acyclic: ?bool = null;
+        for (labels.items) |label| {
+            const outer = (try latest.fetchPut(self.gpa, label.name, label.occurrence)) orelse continue;
+            const conflict: RowLabelConflict = .{ .name = label.name, .outer = outer.value, .inner = label.occurrence };
+            const acyclic = row_acyclic orelse ((try occurs.occurs(self.types, &self.occurs_scratch, row)) == .valid);
+            row_acyclic = acyclic;
+            if (!try self.repeatedRowLabelRelates(row, acyclic, outer.value, label.occurrence)) return conflict;
+            if (!try self.relateRepeatedRowLabel(outer.value, label.occurrence, env)) return conflict;
+            try omitted.append(self.gpa, outer.value);
+        }
+
+        if (omitted.items.len == 0) return null;
+        // Occurrences are positions in the parts as scanned; if a relation
+        // changed any part, scan again rather than rewrite a changed part.
+        const unchanged = for (parts.items, part_labels.items) |part_var, content| {
+            if (!std.meta.eql(self.types.resolveVar(part_var).desc.content, content)) break false;
+        } else true;
+        if (!unchanged) continue;
+        for (parts.items, 0..) |part_var, part| {
+            try self.omitRowLabels(part_var, @intCast(part), omitted.items);
+        }
+    }
+}
+
+/// Whether relating a repeated occurrence to the one outside it succeeds and,
+/// when `row` was acyclic, leaves it free of anonymous recursion. The relation
+/// is probed against throwaway problem stores and always rolled back, so it
+/// records nothing and needs no checker bookkeeping; only a relation known to
+/// hold is then made for real.
+fn repeatedRowLabelRelates(self: *Self, row: Var, row_acyclic: bool, outer: RowLabelOccurrence, inner: RowLabelOccurrence) Allocator.Error!bool {
+    var savepoint = try self.types.createSavepoint();
+    defer self.types.rollbackToSavepoint(&savepoint);
+    switch (outer.payload) {
+        .tag => |outer_args| {
+            const inner_args = inner.payload.tag;
+            if (outer_args.len() != inner_args.len()) return false;
+            for (self.types.sliceVars(outer_args), self.types.sliceVars(inner_args)) |outer_arg, inner_arg| {
+                if (!try self.probeUnifyWithoutRecordingProblems(outer_arg, inner_arg)) return false;
+            }
+        },
+        .field => |outer_presence| {
+            const outer_value, const outer_kind = rowFieldAxes(outer_presence);
+            const inner_value, const inner_kind = rowFieldAxes(inner.payload.field);
+            if (!try self.probeUnifyWithoutRecordingProblems(outer_value, inner_value)) return false;
+            if (outer_kind != null or inner_kind != null) {
+                const outer_kind_var = outer_kind orelse try self.types.freshFromContent(.{ .field_presence = .required });
+                const inner_kind_var = inner_kind orelse try self.types.freshFromContent(.{ .field_presence = .required });
+                if (!try self.probeUnifyWithoutRecordingProblems(outer_kind_var, inner_kind_var)) return false;
+            }
+        },
+    }
+    return !row_acyclic or (try occurs.occurs(self.types, &self.occurs_scratch, row)) == .valid;
+}
+
+/// A field's value type and, unless it is required, its kind variable.
+fn rowFieldAxes(presence: types_mod.RecordField.Presence) struct { Var, ?Var } {
+    return switch (presence.decode()) {
+        .required => |value| .{ value, null },
+        .unknown => |unknown| .{ unknown.var_, unknown.presence },
+    };
+}
+
+/// Relate a repeated label occurrence to the one outside it, exactly: tag
+/// payloads are equal, and a field's value types and kinds are equal.
+fn relateRepeatedRowLabel(self: *Self, outer: RowLabelOccurrence, inner: RowLabelOccurrence, env: *Env) Allocator.Error!bool {
+    switch (outer.payload) {
+        .tag => |outer_args| {
+            const inner_args = inner.payload.tag;
+            if (outer_args.len() != inner_args.len()) return false;
+            for (self.types.sliceVars(outer_args), self.types.sliceVars(inner_args)) |outer_arg, inner_arg| {
+                if (!(try self.runUnify(outer_arg, inner_arg, env, .{ .on_mismatch = .write_no_report })).isEstablished()) return false;
+            }
+            return true;
+        },
+        .field => |outer_presence| {
+            const outer_value, const outer_kind = rowFieldAxes(outer_presence);
+            const inner_value, const inner_kind = rowFieldAxes(inner.payload.field);
+            if (!(try self.runUnify(outer_value, inner_value, env, .{ .on_mismatch = .write_no_report })).isEstablished()) return false;
+            if (outer_kind == null and inner_kind == null) return true;
+            const region = self.getRegionAt(outer_value);
+            const outer_kind_var = outer_kind orelse try self.freshFromContent(.{ .field_presence = .required }, env, region);
+            const inner_kind_var = inner_kind orelse try self.freshFromContent(.{ .field_presence = .required }, env, region);
+            return (try self.runUnify(outer_kind_var, inner_kind_var, env, .{ .on_mismatch = .write_no_report })).isEstablished();
+        },
+    }
+}
+
+/// Rewrite one row part without the labels `omitted` assigns to it. A part
+/// left with no labels is its extension, so it redirects there with the
+/// lower of the two ranks, as unification would join them.
+fn omitRowLabels(self: *Self, part_var: Var, part: u32, omitted: []const RowLabelOccurrence) Allocator.Error!void {
+    var omitted_count: usize = 0;
+    for (omitted) |occurrence| {
+        if (occurrence.part == part) omitted_count += 1;
+    }
+    if (omitted_count == 0) return;
+
+    const resolved = self.types.resolveVar(part_var);
+    switch (resolved.desc.content.structure) {
+        .tag_union => |tag_union| {
+            const tags = self.types.getTagsSlice(tag_union.tags);
+            if (omitted_count == tags.len) return self.redirectEmptiedRowPart(resolved.var_, tag_union.ext);
+            var kept: std.ArrayListUnmanaged(types_mod.Tag) = .empty;
+            defer kept.deinit(self.gpa);
+            for (tags.items(.name), tags.items(.args), 0..) |name, args, index| {
+                if (isOmittedRowLabel(omitted, part, index)) continue;
+                try kept.append(self.gpa, .{ .name = name, .args = args });
+            }
+            const range = try self.types.appendTags(kept.items);
+            try self.types.setVarContent(resolved.var_, .{ .structure = .{ .tag_union = .{ .tags = range, .ext = tag_union.ext } } });
+        },
+        .record => |record| {
+            const fields = self.types.getRecordFieldsSlice(record.fields);
+            if (omitted_count == fields.len) return self.redirectEmptiedRowPart(resolved.var_, record.ext);
+            var kept: std.ArrayListUnmanaged(types_mod.RecordField) = .empty;
+            defer kept.deinit(self.gpa);
+            for (fields.items(.name), fields.items(.presence), 0..) |name, presence, index| {
+                if (isOmittedRowLabel(omitted, part, index)) continue;
+                try kept.append(self.gpa, .{ .name = name, .presence = presence });
+            }
+            const range = try self.types.appendRecordFields(kept.items);
+            try self.types.setVarContent(resolved.var_, .{ .structure = .{ .record = .{ .fields = range, .ext = record.ext } } });
+        },
+        .empty_record, .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => unreachable,
+    }
+}
+
+fn isOmittedRowLabel(omitted: []const RowLabelOccurrence, part: u32, index: usize) bool {
+    for (omitted) |occurrence| {
+        if (occurrence.part == part and occurrence.index == index) return true;
+    }
+    return false;
+}
+
+fn redirectEmptiedRowPart(self: *Self, part_var: Var, ext: Var) Allocator.Error!void {
+    const part_rank = self.types.resolveVar(part_var).desc.rank;
+    const ext_resolved = self.types.resolveVar(ext);
+    try self.types.setDescRank(ext_resolved.desc_idx, part_rank.min(ext_resolved.desc.rank));
+    try self.types.dangerousSetVarRedirect(.row_union_normalization, part_var, ext);
+}
+
+/// Report two occurrences of one label that cannot be the same field or tag,
+/// each shown as a closed single-label row at the row's source. The row is
+/// poisoned by the caller once every diagnostic has snapshotted the graph.
+fn reportRowUnionConflict(self: *Self, row: Var, conflict: RowLabelConflict, env: *Env) Allocator.Error!void {
+    const region = self.getRegionAt(row);
+    const outer_var = try self.freshFromContent(try self.singleLabelRow(conflict.name, conflict.outer), env, region);
+    const inner_var = try self.freshFromContent(try self.singleLabelRow(conflict.name, conflict.inner), env, region);
+    const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, outer_var);
+    const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, inner_var);
+    _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
+        .types = .{
+            .expected_var = outer_var,
+            .expected_snapshot = expected_snapshot,
+            .actual_var = inner_var,
+            .actual_snapshot = actual_snapshot,
+        },
+        .context = .none,
+    } });
+}
+
+fn singleLabelRow(self: *Self, name: Ident.Idx, occurrence: RowLabelOccurrence) Allocator.Error!Content {
+    return switch (occurrence.payload) {
+        .tag => |args| .{ .structure = .{ .tag_union = .{
+            .tags = try self.types.appendTags(&.{.{ .name = name, .args = args }}),
+            .ext = try self.types.freshFromContent(.{ .structure = .empty_tag_union }),
+        } } },
+        .field => |presence| .{ .structure = .{ .record = .{
+            .fields = try self.types.appendRecordFields(&.{.{ .name = name, .presence = presence }}),
+            .ext = try self.types.freshFromContent(.{ .structure = .empty_record }),
+        } } },
+    };
+}
+
+/// Normalize the row the canonical key writer reported repeating a label
+/// during its last request. Returns true when the caller must ask again.
+fn normalizeReportedDuplicateRow(self: *Self, env: *Env) Allocator.Error!bool {
+    const row = self.canonical_key_writer.takeDuplicateRow() orelse return false;
+    if (try self.normalizeRowUnion(row, env)) |conflict| {
+        try self.reportRowUnionConflict(row, conflict, env);
+        try self.types.setVarContent(row, .err);
+    }
+    return true;
 }
 
 /// The settled-state occurs sweep: check every binding root—top-level defs
@@ -9005,7 +9305,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // read it.
     try self.runLateImplicitOpenExtAudit(&env);
 
-    try self.validateSettledValueTagRows(&env);
+    try self.validateSettledValueRows(&env);
 
     // After solving all deferred constraints, check every binding root
     // (top-level defs and local bindings) for infinite types
@@ -13622,7 +13922,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     // steps at the matching points in its own sequence.
     try self.runLateImplicitOpenExtAudit(&env);
 
-    try self.validateSettledValueTagRows(&env);
+    try self.validateSettledValueRows(&env);
 
     // Check for infinite types, at the expression root and at every binding
     // root the expression contains
@@ -16147,7 +16447,7 @@ fn lateWriterWidenedOwnerRow(
 }
 
 /// Whether any of `targets` (already resolved) lies anywhere in the type graph
-/// rooted at `starts`. The descent is the one `validateSettledValueTagRows`
+/// rooted at `starts`. The descent is the one `validateSettledValueRows`
 /// uses—alias backings and arguments, structure arguments, function arguments,
 /// effect dependencies and result, record fields and extension, tag payloads
 /// and extension—and terminates the same way, by refusing to expand a resolved
@@ -29925,14 +30225,17 @@ fn generalizedCallableShape(
     anchors: *const std.AutoHashMap(Var, void),
     cache: *std.AutoHashMap(Var, [32]u8),
     fn_var: Var,
+    env: *Env,
 ) Allocator.Error![32]u8 {
     const fn_root = self.types.resolveVar(fn_var).var_;
     if (cache.get(fn_root)) |shape| return shape;
 
-    const shape = (try self.canonical_key_writer.fromVarWithAnchoredIdentities(
-        fn_root,
-        anchors,
-    )).bytes;
+    self.canonical_key_writer.setReportDuplicateRows(true);
+    defer self.canonical_key_writer.setReportDuplicateRows(false);
+    const shape = while (true) {
+        const key = try self.canonical_key_writer.fromVarWithAnchoredIdentities(fn_root, anchors);
+        if (!try self.normalizeReportedDuplicateRow(env)) break key.bytes;
+    };
     try cache.put(fn_root, shape);
     return shape;
 }
@@ -29963,12 +30266,35 @@ fn dispatchConstraintOriginFlag(origin: StaticDispatchConstraint.Origin) bool {
 /// Shape keys are memoized by finalized callable root for the duration of this
 /// pass because attached and side-table requirements commonly refer to the
 /// same callable graph.
+/// The identities of a generalized type, ignoring requirements, with any row
+/// that repeats a label normalized first.
+fn generalizedIdentityVars(self: *Self, var_: Var, env: *Env) Allocator.Error![]Var {
+    self.canonical_key_writer.setReportDuplicateRows(true);
+    defer self.canonical_key_writer.setReportDuplicateRows(false);
+    while (true) {
+        const identity_vars = try self.canonical_key_writer.identityVarsFromVarIgnoringConstraints(var_);
+        if (!try self.normalizeReportedDuplicateRow(env)) return identity_vars;
+        self.gpa.free(identity_vars);
+    }
+}
+
+fn appendGeneralizedIdentityVars(self: *Self, var_: Var, out: *std.ArrayListUnmanaged(Var), env: *Env) Allocator.Error!void {
+    self.canonical_key_writer.setReportDuplicateRows(true);
+    defer self.canonical_key_writer.setReportDuplicateRows(false);
+    const base_len = out.items.len;
+    while (true) {
+        try self.canonical_key_writer.appendIdentityVarsFromVar(var_, out);
+        if (!try self.normalizeReportedDuplicateRow(env)) return;
+        out.shrinkRetainingCapacity(base_len);
+    }
+}
+
 fn deduplicateGeneralizedDispatchRequirements(
     self: *Self,
     scheme_var: Var,
     env: *Env,
 ) Allocator.Error!void {
-    const identity_vars = try self.canonical_key_writer.identityVarsFromVarIgnoringConstraints(scheme_var);
+    const identity_vars = try self.generalizedIdentityVars(scheme_var, env);
     defer self.gpa.free(identity_vars);
 
     // Neither loop can merge a singleton. Inspect both sources before
@@ -30026,7 +30352,7 @@ fn deduplicateGeneralizedDispatchRequirements(
                 .fn_name = constraint.fn_name,
                 .origin_tag = std.meta.activeTag(constraint.origin),
                 .origin_flag = dispatchConstraintOriginFlag(constraint.origin),
-                .callable_shape = try self.generalizedCallableShape(&anchors, &callable_shapes, constraint.fn_var),
+                .callable_shape = try self.generalizedCallableShape(&anchors, &callable_shapes, constraint.fn_var, env),
             };
             const entry = try retained_by_key.getOrPut(key);
             if (!entry.found_existing) {
@@ -30034,10 +30360,7 @@ fn deduplicateGeneralizedDispatchRequirements(
                 continue;
             }
             if (try self.unifyEquivalentGeneralizedCallables(entry.value_ptr.*, constraint.fn_var, env)) {
-                try self.canonical_key_writer.appendIdentityVarsFromVar(
-                    entry.value_ptr.*,
-                    &pending_receivers,
-                );
+                try self.appendGeneralizedIdentityVars(entry.value_ptr.*, &pending_receivers, env);
             }
         }
 
@@ -30103,7 +30426,7 @@ fn deduplicateGeneralizedDispatchRequirements(
             .fn_name = requirement.constraint.fn_name,
             .origin_tag = std.meta.activeTag(requirement.constraint.origin),
             .origin_flag = dispatchConstraintOriginFlag(requirement.constraint.origin),
-            .callable_shape = try self.generalizedCallableShape(&anchors, &callable_shapes, requirement.constraint.fn_var),
+            .callable_shape = try self.generalizedCallableShape(&anchors, &callable_shapes, requirement.constraint.fn_var, env),
         };
         const entry = seen.getOrPutAssumeCapacity(key);
         if (entry.found_existing) {
@@ -30125,6 +30448,72 @@ fn deduplicateGeneralizedDispatchRequirements(
         write += 1;
     }
     self.type_schemes.items[scheme_idx].dispatch_requirements.shrinkRetainingCapacity(write);
+}
+
+test "row union normalization relates repeated labels and omits outer copies" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initExpr("RowUnion", "1.U64");
+    defer test_env.deinit();
+    const checker = &test_env.checker;
+    const store = checker.types;
+    var env = try checker.env_pool.acquire();
+    defer checker.env_pool.release(env);
+    const a = try test_env.module_env.insertIdent(Ident.for_text("a"));
+    const b = try test_env.module_env.insertIdent(Ident.for_text("b"));
+
+    // A record part whose only field repeats further out denotes its extension.
+    {
+        const outer_value = try store.fresh();
+        const inner_value = try store.fresh();
+        const inner = try store.freshFromContent(.{ .structure = .{ .record = .{
+            .fields = try store.appendRecordFields(&.{
+                .{ .name = a, .presence = .required(inner_value) },
+                .{ .name = b, .presence = .required(try store.fresh()) },
+            }),
+            .ext = try store.fresh(),
+        } } });
+        const row = try store.freshFromContent(.{ .structure = .{ .record = .{
+            .fields = try store.appendRecordFields(&.{.{ .name = a, .presence = .required(outer_value) }}),
+            .ext = inner,
+        } } });
+        try checker.fillInRegionsThrough(row);
+        try std.testing.expectEqual(@as(?RowLabelConflict, null), try checker.normalizeRowUnion(row, &env));
+        try std.testing.expectEqual(store.resolveVar(outer_value).var_, store.resolveVar(inner_value).var_);
+        try std.testing.expectEqual(store.resolveVar(inner).var_, store.resolveVar(row).var_);
+    }
+
+    // A tag part keeps its other tags; the shared inner part is unchanged.
+    {
+        const outer_payload = try store.fresh();
+        const inner_payload = try store.fresh();
+        const inner = try store.freshFromContent(try store.mkTagUnion(&.{.{ .name = a, .args = try store.appendVars(&.{inner_payload}) }}, try store.fresh()));
+        const row = try store.freshFromContent(try store.mkTagUnion(&.{
+            .{ .name = a, .args = try store.appendVars(&.{outer_payload}) },
+            .{ .name = b, .args = types_mod.Var.SafeList.Range.empty() },
+        }, inner));
+        try checker.fillInRegionsThrough(row);
+        try std.testing.expectEqual(@as(?RowLabelConflict, null), try checker.normalizeRowUnion(row, &env));
+        try std.testing.expectEqual(store.resolveVar(outer_payload).var_, store.resolveVar(inner_payload).var_);
+        const outer_row = store.resolveVar(row).desc.content.structure.tag_union;
+        try std.testing.expectEqualSlices(Ident.Idx, &.{b}, store.getTagsSlice(outer_row.tags).items(.name));
+        try std.testing.expectEqual(store.resolveVar(inner).var_, store.resolveVar(outer_row.ext).var_);
+        try std.testing.expectEqual(@as(usize, 1), store.getTagsSlice(store.resolveVar(inner).desc.content.structure.tag_union.tags).len);
+    }
+
+    // Occurrences that cannot be one tag are returned for the caller to report.
+    {
+        const inner = try store.freshFromContent(try store.mkTagUnion(&.{.{
+            .name = a,
+            .args = try store.appendVars(&.{try store.freshFromContent(.{ .structure = .empty_tag_union })}),
+        }}, try store.fresh()));
+        const row = try store.freshFromContent(try store.mkTagUnion(&.{.{
+            .name = a,
+            .args = try store.appendVars(&.{try store.freshFromContent(.{ .structure = .empty_record })}),
+        }}, inner));
+        try checker.fillInRegionsThrough(row);
+        const conflict = (try checker.normalizeRowUnion(row, &env)) orelse return error.TestExpectedConflict;
+        try std.testing.expect(conflict.name.eql(a));
+    }
 }
 
 test "issue 11350 singleton dispatch requirements need no deduplication scratch" {
@@ -32732,9 +33121,18 @@ fn dispatchStateTypeKey(
     self: *Self,
     dispatcher_var: Var,
     constraint_fn_var: Var,
+    env: *Env,
 ) Allocator.Error![32]u8 {
-    const receiver_key = try self.canonical_key_writer.fromVarErrSensitive(dispatcher_var);
-    const callable_key = try self.canonical_key_writer.fromVarErrSensitive(constraint_fn_var);
+    self.canonical_key_writer.setReportDuplicateRows(true);
+    defer self.canonical_key_writer.setReportDuplicateRows(false);
+    const receiver_key = while (true) {
+        const key = try self.canonical_key_writer.fromVarErrSensitive(dispatcher_var);
+        if (!try self.normalizeReportedDuplicateRow(env)) break key;
+    };
+    const callable_key = while (true) {
+        const key = try self.canonical_key_writer.fromVarErrSensitive(constraint_fn_var);
+        if (!try self.normalizeReportedDuplicateRow(env)) break key;
+    };
     var hasher = TypeDigestHasher.init();
     hasher.update(&receiver_key.bytes);
     hasher.update(&callable_key.bytes);
@@ -33608,7 +34006,7 @@ fn resolveDispatchTargetMethodVar(
         return existing.method_var;
     }
 
-    const state_type_key = try self.dispatchStateTypeKey(dispatcher_var, constraint.fn_var);
+    const state_type_key = try self.dispatchStateTypeKey(dispatcher_var, constraint.fn_var, env);
     if (self.repeatedDispatchStateAncestor(
         constraint,
         parent_constraint_fn_var,
@@ -37363,11 +37761,9 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
         try evidence_fn_roots.put(self.types.resolveVar(evidence_fn_var.*).var_, {});
     }
 
-    var plan_index: usize = 0;
-    while (plan_index < plans.len) : (plan_index += 1) {
-        // Finalization mutates only the record's resolution field and cannot
-        // reallocate the dense plan list, so index-based iteration is stable.
-        const plan = self.cir.store.literalDispatchPlans()[plan_index];
+    // Finalization only changes resolution fields and retirement happens
+    // after this loop, so the validated slice stays stable throughout.
+    for (plans) |plan| {
         if (plan.dispatchResolution() != .unresolved) {
             std.debug.panic("literal dispatch plan reached finalization already resolved", .{});
         }

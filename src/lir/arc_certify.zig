@@ -414,6 +414,8 @@ fn certifyUniqueArgs(
     defer dense_locals.deinit(allocator);
     var proc_stmts = std.ArrayList(LIR.CFStmtId).empty;
     defer proc_stmts.deinit(allocator);
+    var order_scratch = try arc_solve.UseOrderScratch.init(allocator, store);
+    defer order_scratch.deinit(allocator);
 
     const addLocal = struct {
         fn go(
@@ -458,6 +460,7 @@ fn certifyUniqueArgs(
             local_to_dense,
             dense_locals.items.len,
             layouts,
+            &order_scratch,
         );
         defer uniqueness.deinit(allocator);
 
@@ -2293,7 +2296,8 @@ const Certifier = struct {
         mutations: ?*std.ArrayList(OwnershipMutation),
     ) CertifyError!void {
         if (value == no_value) return;
-        if (!state.claimsOf(value).isEmpty() and !try self.hasIntactSurplusUnit(state, value)) {
+        if (!state.claimsOf(value).isEmpty()) {
+            if (try self.consumeIntactSurplusUnit(state, value, mutations)) return;
             return self.fail("consumed partially dismantled local {d}", .{@intFromEnum(local)});
         }
         if (state.balanceOf(value) < 1) {
@@ -2494,6 +2498,33 @@ const Certifier = struct {
         return try self.requiredClaims(value) != null;
     }
 
+    /// Consumes an intact unit while keeping the dismantled unit's claims
+    /// outstanding. A retained projection can spend its explicit unit through
+    /// field takes while its original unit still resides in its parent; a
+    /// whole consumption without an explicit surplus claims that exact stored
+    /// unit.
+    fn consumeIntactSurplusUnit(
+        self: *Certifier,
+        state: *State,
+        value: ValueId,
+        mutations: ?*std.ArrayList(OwnershipMutation),
+    ) Allocator.Error!bool {
+        if (try self.hasIntactSurplusUnit(state, value)) {
+            const before = state.balanceOf(value);
+            try state.addBalance(value, -1);
+            if (mutations) |list| try list.append(self.allocator, .{ .balance = .{
+                .value = value,
+                .before = before,
+                .after = before - 1,
+            } });
+            return true;
+        }
+        if (state.balanceOf(value) != 1 or state.conditionalConditionOf(value) != null) return false;
+        const seen = try self.valueWalkScratch();
+        // The parent's stored unit goes straight to the consumer.
+        return try self.tryClaimSeen(state, value, seen, mutations);
+    }
+
     /// Aggregate consumption: one unit moves into the holder. The emitted
     /// trailing incref restores the operand's own unit, so the balance may go
     /// transiently negative here; the per-path terminal balance check flags a
@@ -2505,13 +2536,16 @@ const Certifier = struct {
         holder_value: ValueId,
     ) CertifyError!void {
         if (value == no_value) return;
-        if (!state.claimsOf(value).isEmpty() and !try self.hasIntactSurplusUnit(state, value)) {
-            return self.fail(
-                "partially dismantled value originating at local {d} moved into an aggregate",
-                .{@intFromEnum(self.values.items[value].origin)},
-            );
+        if (!state.claimsOf(value).isEmpty()) {
+            if (!try self.consumeIntactSurplusUnit(state, value, null)) {
+                return self.fail(
+                    "partially dismantled value originating at local {d} moved into an aggregate",
+                    .{@intFromEnum(self.values.items[value].origin)},
+                );
+            }
+        } else {
+            try state.addBalance(value, -1);
         }
-        try state.addBalance(value, -1);
         if (holder_value != no_value) {
             try state.setHolder(value, holder_value);
         }
@@ -5763,7 +5797,8 @@ const Certifier = struct {
             self.diag.context_proc = self.current_proc;
             return self.fail("release of unbound local {d}", .{@intFromEnum(local)});
         }
-        if (!state.claimsOf(value).isEmpty() and !try self.hasIntactSurplusUnit(state, value)) {
+        if (!state.claimsOf(value).isEmpty()) {
+            if (try self.consumeIntactSurplusUnit(state, value, null)) return;
             self.diag.context_local = local;
             self.diag.context_proc = self.current_proc;
             return self.fail("whole release of partially dismantled local {d}", .{@intFromEnum(local)});
@@ -8479,6 +8514,223 @@ test "certify accepts a retained record moved whole beside a take of its field" 
     const body = try f.increfStmt(pair, f.pair_str, read_taken);
     _ = try f.addProc(&.{pair}, body, holder_layout);
     try f.certify();
+}
+
+test "certify accepts a retained record moved whole after a field take across a join" {
+    // Regression for https://github.com/roc-lang/roc/issues/11609.
+    // Both paths release one retained unit through the sole RC field and
+    // return the other inside a holder, in opposite orders.
+    // The original unit may be explicit on the record or still held by the
+    // parent it was projected from; both ownership representations are valid.
+    for ([_]bool{ false, true }) |projected| {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+        const record_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = .str }});
+        const holder_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = record_layout }});
+        const parent = try f.local(holder_layout);
+        const record = try f.local(record_layout);
+        const cond = try f.local(.bool);
+        const retained_alias = try f.local(record_layout);
+        const carried_alias = try f.local(record_layout);
+        const moved_alias = try f.local(record_layout);
+        const taken = try f.local(.str);
+        const holder = try f.local(holder_layout);
+        const join_id = f.freshJoinPointId();
+
+        const ret = try f.ret(holder);
+        const move_after_take = try f.store.addCFStmt(.{ .assign_struct = .{
+            .target = holder,
+            .fields = try f.store.addLocalSpan(&.{moved_alias}),
+            .next = ret,
+        } });
+        const join_body = try f.store.addCFStmt(.{ .assign_ref = .{
+            .target = moved_alias,
+            .op = .{ .local = carried_alias },
+            .next = move_after_take,
+        } });
+        const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        const release_before_jump = try f.decrefStmt(taken, .str, jump);
+        const take_before_jump = try f.store.addCFStmt(.{ .assign_ref = .{
+            .target = taken,
+            .op = .{ .field = .{ .source = record, .field_idx = 0 } },
+            .take_kind = .take,
+            .next = release_before_jump,
+        } });
+
+        const release_after_move = try f.decrefStmt(taken, .str, ret);
+        const take_after_move = try f.store.addCFStmt(.{ .assign_ref = .{
+            .target = taken,
+            .op = .{ .field = .{ .source = record, .field_idx = 0 } },
+            .take_kind = .take,
+            .next = release_after_move,
+        } });
+        const move_before_take = try f.store.addCFStmt(.{ .assign_struct = .{
+            .target = holder,
+            .fields = try f.store.addLocalSpan(&.{carried_alias}),
+            .next = take_after_move,
+        } });
+        const branch = try f.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = cond,
+            .branches = try f.store.addCFSwitchBranches(&.{.{ .value = 1, .body = move_before_take }}),
+            .default_branch = take_before_jump,
+        } });
+        const join = try f.store.addCFStmt(.{ .join = .{
+            .id = join_id,
+            .params = LIR.LocalSpan.empty(),
+            .body = join_body,
+            .remainder = branch,
+        } });
+        const carry = try f.store.addCFStmt(.{ .assign_ref = .{
+            .target = carried_alias,
+            .op = .{ .local = retained_alias },
+            .next = join,
+        } });
+        const retain = try f.increfStmt(retained_alias, record_layout, carry);
+        const alias = try f.store.addCFStmt(.{ .assign_ref = .{
+            .target = retained_alias,
+            .op = .{ .local = record },
+            .next = retain,
+        } });
+        const body = if (projected) try f.store.addCFStmt(.{ .assign_ref = .{
+            .target = record,
+            .op = .{ .field = .{ .source = parent, .field_idx = 0 } },
+            .take_kind = .take,
+            .next = alias,
+        } }) else alias;
+        _ = try f.addProc(&.{ if (projected) parent else record, cond }, body, holder_layout);
+        errdefer std.debug.print("{s}\n", .{f.diag.message()});
+        try f.certify();
+    }
+}
+
+test "certify whole consumption of dismantled projections requires an available parent unit" {
+    const Consumption = enum { aggregate, returned, released };
+    for ([_]usize{ 1, 8, 32 }) |depth| {
+        for (std.enums.values(Consumption)) |consumption| {
+            for ([_]bool{ false, true }) |release_parent| {
+                var f = try CertifyTest.init(testing.allocator);
+                defer f.deinit();
+                var layouts: [33]layout_mod.Idx = undefined;
+                var locals: [33]LIR.LocalId = undefined;
+                layouts[0] = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = .str }});
+                locals[0] = try f.local(layouts[0]);
+                for (1..depth + 1) |index| {
+                    layouts[index] = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = layouts[index - 1] }});
+                    locals[index] = try f.local(layouts[index]);
+                }
+                const record = locals[0];
+                const parent = locals[depth];
+                const taken = try f.local(.str);
+                const result = try f.local(.i64);
+                const cond = try f.local(.bool);
+                const holder = try f.local(layouts[1]);
+                const ret_layout: layout_mod.Idx = switch (consumption) {
+                    .aggregate => layouts[1],
+                    .returned => layouts[0],
+                    .released => .i64,
+                };
+                var consume = switch (consumption) {
+                    .aggregate => try f.store.addCFStmt(.{ .assign_struct = .{
+                        .target = holder,
+                        .fields = try f.store.addLocalSpan(&.{record}),
+                        .next = try f.ret(holder),
+                    } }),
+                    .returned => try f.ret(record),
+                    .released => try f.decrefStmt(record, layouts[0], try f.assignI64(result, try f.ret(result))),
+                };
+                // Repeated diamonds carry the partially dismantled value
+                // and its parent provenance. Equal arrivals must continue to
+                // share a join walk instead of multiplying path states.
+                for (0..depth) |_| {
+                    const id = f.freshJoinPointId();
+                    const left = try f.store.addCFStmt(.{ .jump = .{ .target = id } });
+                    const right = try f.store.addCFStmt(.{ .jump = .{ .target = id } });
+                    const branch = try f.store.addCFStmt(.{ .switch_stmt = .{
+                        .cond = cond,
+                        .branches = try f.store.addCFSwitchBranches(&.{.{ .value = 1, .body = left }}),
+                        .default_branch = right,
+                    } });
+                    consume = try f.store.addCFStmt(.{ .join = .{
+                        .id = id,
+                        .params = LIR.LocalSpan.empty(),
+                        .body = consume,
+                        .remainder = branch,
+                    } });
+                }
+                var body = try f.store.addCFStmt(.{ .assign_ref = .{
+                    .target = taken,
+                    .op = .{ .field = .{ .source = record, .field_idx = 0 } },
+                    .take_kind = .take,
+                    .next = try f.decrefStmt(taken, .str, consume),
+                } });
+                // Releasing the parent after the retain leaves only the unit
+                // dismantled by the leaf take. A whole use must then fail.
+                if (release_parent) body = try f.decrefStmt(parent, layouts[depth], body);
+                body = try f.increfStmt(record, layouts[0], body);
+                for (0..depth) |index| {
+                    body = try f.store.addCFStmt(.{ .assign_ref = .{
+                        .target = locals[index],
+                        .op = .{ .field = .{ .source = locals[index + 1], .field_idx = 0 } },
+                        .take_kind = .take,
+                        .next = body,
+                    } });
+                }
+                _ = try f.addProc(&.{ parent, cond }, body, ret_layout);
+                if (release_parent) {
+                    try testing.expectError(error.Certification, f.certify());
+                } else {
+                    errdefer std.debug.print("{s}\n", .{f.diag.message()});
+                    const stats = try f.certifyAndMeasureWork();
+                    try testing.expect(stats.work_items <= 4 * depth + 1);
+                }
+            }
+        }
+    }
+}
+
+test "certifier restitution restores a claimed surplus parent unit exactly once" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const record_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = .str }});
+    const parent_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = record_layout }});
+    const parent = try f.local(parent_layout);
+    const record = try f.local(record_layout);
+    const result = try f.local(.str);
+    const body = try f.ret(result);
+    const proc = try f.addProc(&.{ parent, record, result }, body, .str);
+    var conditions = try MaybeUninitializedConditions.init(f.allocator, &f.store, &f.diag);
+    defer conditions.deinit();
+    var certifier = Certifier.initStore(f.allocator, &f.store, &f.layouts, arc_sig.SigTable.all_owned, &.{ true, true, true }, &conditions, &f.diag, null);
+    defer certifier.deinit();
+    certifier.current_proc = proc;
+    certifier.current_stmt = body;
+    try certifier.collectProcLocals(f.store.getProcSpec(proc), body);
+    var state = try State.init(certifier.state_arena.allocator(), certifier.local_dense.items, certifier.proc_locals.items.len);
+    const parent_value = try certifier.bindFresh(&state, parent, 1, &.{});
+    const record_value = try certifier.bindFresh(&state, record, 1, &.{parent_value});
+    certifier.values.items[record_value].payload_source = parent_value;
+    certifier.values.items[record_value].payload_projection = arc_dismantle.encodeProjection(.{ .field = .{ .source = parent, .field_idx = 0 } }).?;
+    try state.setClaims(record_value, .{ .low = 1 });
+    const result_value = try certifier.bindFresh(&state, result, 0, &.{});
+    var mutations = std.ArrayList(OwnershipMutation).empty;
+    defer mutations.deinit(f.allocator);
+    try certifier.consumeUnitRecording(&state, record_value, record, &mutations);
+    try testing.expect(state.claimsOf(parent_value).contains(0));
+    try testing.expectEqual(@as(i32, 1), state.balanceOf(record_value));
+    try testing.expectError(error.Certification, certifier.consumeUnit(&state, record_value, record));
+
+    const receipts = [_]RestitutionReceipt{.{ .value = record_value, .mutations = mutations.items }};
+    certifier.values.items[result_value].call_restitution = &receipts;
+    try certifier.restoreCallOutcome(&state, result_value, 1);
+    try testing.expect(state.claimsOf(parent_value).isEmpty());
+    try testing.expectEqual(@as(i32, 1), state.balanceOf(parent_value));
+    try testing.expectEqual(@as(i32, 1), state.balanceOf(record_value));
+    try testing.expect(state.claimsOf(record_value).contains(0));
+    // The original parent unit is usable again, but the dismantled retained
+    // unit must not have been restored along with it.
+    try certifier.applyRelease(&state, parent);
+    try testing.expectError(error.Certification, certifier.consumeUnit(&state, record_value, record));
+    try certifier.checkLeaks(&state);
 }
 
 test "certify rejects a dismantled record moved whole without a retained surplus" {
