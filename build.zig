@@ -1771,12 +1771,10 @@ const CoverageSummaryStep = struct {
     /// - macOS (ARM64 and x86_64): Uses libdwarf for DWARF parsing
     /// - Linux ARM64: Uses libdw (elfutils) for DWARF parsing
     ///
-    /// TODO ZIG 16: re-check if this DWARF bug is fixed in 0.16—may be able to enable x86_64 coverage
-    /// Coverage does NOT work on Linux x86_64 due to a Zig 0.15.2 compiler bug that
-    /// generates invalid DWARF .debug_line sections. libdw fails with "invalid
-    /// .debug_line section" when parsing user code compilation units, while stdlib
-    /// CUs parse successfully. This causes kcov to find only stdlib files, not user
-    /// source files. ARM64 Zig generates valid DWARF, so coverage works there.
+    /// Coverage is not enabled on Linux x86_64. With Zig 0.15.2 the x86_64 backend
+    /// emitted DWARF .debug_line sections that libdw rejects ("invalid .debug_line
+    /// section") for user compilation units while stdlib CUs parse, so kcov found
+    /// only stdlib files. That has not been re-measured with kcov on Zig 0.16.
     /// See: https://github.com/roc-lang/roc/pull/8864 for investigation details.
     fn create(b: *std.Build, coverage_dir: []const u8, exe_name: []const u8) *CoverageSummaryStep {
         return createWithOptions(b, coverage_dir, exe_name, "PARSER", 28.0);
@@ -6636,10 +6634,6 @@ pub fn build(b: *std.Build) void {
     if (is_coverage_supported and isNativeishOrMusl(target)) {
         // Get the kcov dependency and build it from source
         // lazyDependency returns null on first pass; Zig re-runs build() after fetching
-        // TODO ZIG 16: re-check if lazy dependency bug is fixed—may be able to restructure this block
-        // ALL coverage-related code must be inside this block due to Zig 0.15.2 lazy dependency bug
-        // where dependencies added to a step outside the lazy block are not executed when the step
-        // also has dependencies added inside the lazy block.
         if (b.lazyDependency("kcov", .{})) |kcov_dep| {
             // Create parse module unit tests for coverage
             // We only use the parse unit tests (not snapshot tool) because:
@@ -6784,9 +6778,6 @@ pub fn build(b: *std.Build) void {
             }
 
             // Cross-compile for Windows to verify comptime branches compile
-            // TODO ZIG 16: re-check if this lazy dependency bug is fixed
-            // NOTE: This must be inside the lazy block due to Zig 0.15.2 bug where
-            // dependencies added outside the lazy block prevent those inside from executing
             const windows_target = b.resolveTargetQuery(.{
                 .cpu_arch = .x86_64,
                 .os_tag = .windows,
@@ -6804,9 +6795,7 @@ pub fn build(b: *std.Build) void {
             // Just compile, don't run - verifies Windows comptime branches
             build_coverage_tools_step.dependOn(&windows_parse_build.step);
 
-            // Add explicit dependencies on install steps to the build step itself
-            // TODO ZIG 16: re-check if lazy dependency issues are fixed
-            // to work around Zig 0.15.2 lazy dependency issues
+            // The coverage tools step builds and installs the instrumented test and kcov.
             build_coverage_tools_step.dependOn(&install_parse_test.step);
             build_coverage_tools_step.dependOn(&install_kcov.step);
 
