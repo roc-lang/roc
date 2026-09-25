@@ -40,15 +40,24 @@ fn expectRefreshSpecializations(
     }.inspect;
 }
 
+const U64IdentityCallable = enum { nested_site, proc_template };
+
 /// Nested specializations whose closed request type is exactly `U64 -> U64`.
 /// The lambda under test is the only nested callable at that type in these
 /// programs, so this counts its specializations without naming a site id.
 fn countNestedU64IdentitySpecs(program: anytype) usize {
+    return countU64IdentitySpecs(program, .nested_site);
+}
+
+/// Specializations of the given callable kind whose closed request type is
+/// exactly `U64 -> U64`.
+fn countU64IdentitySpecs(program: anytype, callable: U64IdentityCallable) usize {
     var count: usize = 0;
     for (program.specs) |record| {
         switch (record.identity.callable) {
-            .nested_site => {},
-            .proc_template, .hosted, .generated => continue,
+            .nested_site => if (callable != .nested_site) continue,
+            .proc_template => if (callable != .proc_template) continue,
+            .hosted, .generated => continue,
         }
         const fn_type = switch (program.types.get(record.request_fn_ty)) {
             .func => |func| func,
@@ -75,6 +84,14 @@ fn expectSingleNestedU64Specialization(
 ) harness.LowerToLirHarnessError!void {
     const program = prepared.program.view();
     try std.testing.expectEqual(@as(usize, 1), countNestedU64IdentitySpecs(program));
+}
+
+fn expectSingleProcedureU64Specialization(
+    prepared: *const lir.CheckedPipeline.PreparedMonotype,
+) harness.LowerToLirHarnessError!void {
+    const program = prepared.program.view();
+    try std.testing.expectEqual(@as(usize, 1), countU64IdentitySpecs(program, .proc_template));
+    try std.testing.expectEqual(@as(usize, 0), countNestedU64IdentitySpecs(program));
 }
 
 test "closed specialization identity: two aliases and the bare type share one specialization" {
@@ -142,7 +159,26 @@ test "closed specialization identity: alias-equal requests reuse one specializat
 test "closed specialization identity: one lambda passed at alias-differing parameter types is one nested specialization" {
     // The nested site, its owner context, its captures, and the closed
     // request type are equal at both uses; only the checked parameter type of
-    // the higher-order callee differs.
+    // the higher-order callee differs. The lambda captures the runtime `n`, so
+    // it stays a nested function of `main!`.
+    try harness.expectLowersToLirWithOptions(
+        \\Count : U64
+        \\apply_count : (Count -> Count), Count -> Count
+        \\apply_count = |f, value| f(value)
+        \\apply_raw : (U64 -> U64), U64 -> U64
+        \\apply_raw = |f, value| f(value)
+        \\main! = |args| {
+        \\    n = args.len()
+        \\    add_n = |value| value + n
+        \\    echo!((apply_count(add_n, n) + apply_raw(add_n, n)).to_str())
+        \\    Ok({})
+        \\}
+    , .{ .prepared_inspect = expectSingleNestedU64Specialization });
+}
+
+test "closed specialization identity: a promoted local function passed at alias-differing parameter types is one procedure specialization" {
+    // A local function that uses nothing from `main!` is a procedure of its
+    // own, so both uses request one closed procedure specialization.
     try harness.expectLowersToLirWithOptions(
         \\Count : U64
         \\apply_count : (Count -> Count), Count -> Count
@@ -155,7 +191,7 @@ test "closed specialization identity: one lambda passed at alias-differing param
         \\    echo!((apply_count(add_one, n) + apply_raw(add_one, n)).to_str())
         \\    Ok({})
         \\}
-    , .{ .prepared_inspect = expectSingleNestedU64Specialization });
+    , .{ .prepared_inspect = expectSingleProcedureU64Specialization });
 }
 
 fn monotypeCounters(

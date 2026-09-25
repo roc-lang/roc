@@ -44,7 +44,7 @@ pub fn freezeRoot(
     value: Value,
     callables: CallableResolver,
 ) Error![]static_data.StaticDataExport {
-    return freezeRootIntoSlot(allocator, program, slot, root, value, callables, root.ret_layout);
+    return freezeRootIntoSlot(allocator, program, slot, root.shape(), value, callables, root.ret_layout);
 }
 
 /// Freeze a root whose slot may hold a pointer to the value rather than the
@@ -56,7 +56,7 @@ pub fn freezeRootIntoSlot(
     allocator: Allocator,
     program: *const Program.Result,
     slot: lir.LIR.StaticDataId,
-    root: Program.ConstRootPlan,
+    root: Program.RootShape,
     value: Value,
     callables: CallableResolver,
     slot_layout: layout.Idx,

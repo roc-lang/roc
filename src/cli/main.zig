@@ -8740,6 +8740,13 @@ fn packFileBytes(
     defer specs.deinit(allocator);
     var withheld: usize = 0;
     const procs = lowered.lir_result.store.getProcSpecs();
+    const converting = try lir.PackProgram.literalConvertingProcs(allocator, &lowered.lir_result.store);
+    defer allocator.free(converting);
+    var literal_converters = std.AutoHashMap(lir.ProcIdentity, void).init(allocator);
+    defer literal_converters.deinit();
+    for (procs, converting) |proc, converts| {
+        if (converts) try literal_converters.put(proc.identity, {});
+    }
     for (lowered.lir_result.spec_procs.items) |spec_proc| {
         const proc = procs[@intFromEnum(spec_proc.proc)];
         const artifact = artifact_by_identity.get(proc.identity) orelse continue;
@@ -8747,7 +8754,9 @@ fn packFileBytes(
         // constant holding a code pointer names code the pack may not carry;
         // an entry that reaches either cannot be linked elsewhere, so it is
         // not offered.
-        if (try artifactClosureNamesProgramLocalSymbols(allocator, set, artifact)) {
+        if (try artifactClosureNamesProgramLocalSymbols(allocator, set, artifact) or
+            try artifactClosureConvertsLiteral(allocator, set, &literal_converters, artifact))
+        {
             withheld += 1;
             continue;
         }
@@ -8763,6 +8772,32 @@ fn packFileBytes(
         std.debug.print("pack: {d} artifacts, {d} specs offered, {d} withheld (reach program-local symbols)\n", .{ set.artifacts.len, specs.items.len, withheld });
     }
     return try backend.dev.PackFile.write(allocator, set, specs.items);
+}
+
+/// Whether any procedure reachable from `root` converts a specialized custom
+/// literal when it runs (`PackProgram.procConvertsLiteralAtRuntime`).
+fn artifactClosureConvertsLiteral(
+    allocator: Allocator,
+    set: *const backend.dev.ProcArtifact.Set,
+    literal_converters: *const std.AutoHashMap(lir.ProcIdentity, void),
+    root: u32,
+) Allocator.Error!bool {
+    if (literal_converters.count() == 0) return false;
+    var seen = std.AutoHashMap(u32, void).init(allocator);
+    defer seen.deinit();
+    var stack = std.ArrayList(u32).empty;
+    defer stack.deinit(allocator);
+    try stack.append(allocator, root);
+    while (stack.pop()) |index| {
+        if ((try seen.getOrPut(index)).found_existing) continue;
+        const artifact = set.artifacts[index];
+        switch (artifact.kind) {
+            .proc => |identity| if (literal_converters.contains(identity)) return true,
+            .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
+        }
+        for (artifact.refs) |ref| try stack.append(allocator, ref.target);
+    }
+    return false;
 }
 
 /// Whether any artifact reachable from `root` relocates against static data
@@ -10911,7 +10946,11 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
     reporter.recordCounters("Native artifact emission", &nativeEmissionCounters(backend_timing.snapshot().native_emission));
     try writePackObjects(ctx, &build_env, root_artifact, imported_artifacts, relation_artifacts, &lowered, args, target, final_output_path);
-    if (object_store) |*store| {
+    // A literal root that failed reported an error. Its specializations
+    // must not be served to a later build, which would skip evaluating it
+    // and so skip its diagnostic, so a build with errors writes no packs.
+    if (object_store != null and diag.errors == 0) {
+        const store = &object_store.?;
         try writePacksToStore(ctx, &build_env, store, root_artifact, imported_artifacts, relation_artifacts, &lowered, if (object_compiler.captured_artifacts) |*set| set else null, args, target);
     }
 

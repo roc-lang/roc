@@ -2941,6 +2941,9 @@ pub const Coordinator = struct {
         options.splice_source = if (self.runtime_lowering) |config| config.splice_source else null;
         var runtime_target: ?lir.CheckedPipeline.TargetConfig = if (self.runtime_lowering) |config| config.target else null;
         if (runtime_target) |*target| target.post_check_executor = self.postCheckExecutor();
+        var unfinalized = UnfinalizedReportDestinations{ .coordinator = self, .program_root = root.key };
+        defer unfinalized.deinit();
+        options.unfinalized_reports = .{ .context = &unfinalized, .module = UnfinalizedReportDestinations.module };
         std.debug.assert(self.program_session == null);
         self.program_session = try eval.CompileTimeFinalization.finalizeProgram(
             self.gpa,
@@ -2951,7 +2954,116 @@ pub const Coordinator = struct {
             options,
         );
         for (entries.items) |entry| try self.commitPreparedModule(entry.mod);
+        try unfinalized.commit();
     }
+
+    /// Report destinations for checked modules whose finalization completed
+    /// in an earlier compilation. A literal such a module owns can still be
+    /// rejected by a specialization this program makes of it; the report
+    /// joins that module's reports without touching its cached result, since
+    /// every compilation that makes the specialization evaluates it again.
+    ///
+    /// The builtin module belongs to no package, so its reports render against
+    /// its own source and join the reports of the program's root module.
+    const UnfinalizedReportDestinations = struct {
+        coordinator: *Coordinator,
+        program_root: CheckedArtifact.ModuleId,
+        modules: std.ArrayList(*ModuleState) = .empty,
+        builtin_problems: ?*messages.PendingEvaluationState = null,
+
+        fn newState(coord: *Coordinator) Allocator.Error!*messages.PendingEvaluationState {
+            const state = try coord.gpa.create(messages.PendingEvaluationState);
+            state.* = .{
+                .allocator = coord.gpa,
+                .problems = check.problem.Store.initEmpty(coord.gpa),
+                .import_mapping = @import("types").import_mapping.ImportMapping.init(coord.gpa),
+                .imported_envs = &.{},
+                .reported_problem_count = 0,
+            };
+            return state;
+        }
+
+        fn moduleState(coord: *Coordinator, key: CheckedArtifact.ModuleId) *ModuleState {
+            const location = coord.checked_artifact_index.get(key.bytes) orelse
+                coordinatorInvariant("compile-time report named a checked module the coordinator does not hold", .{});
+            const pkg = coord.packages.get(location.pkg_name) orelse
+                coordinatorInvariant("checked artifact registry points at missing package {s}", .{location.pkg_name});
+            return pkg.getModule(location.module_id) orelse
+                coordinatorInvariant("checked artifact registry points at missing module {d}", .{location.module_id});
+        }
+
+        fn module(context: *anyopaque, key: CheckedArtifact.ModuleId) Allocator.Error!eval.CompileTimeFinalization.ReportDestination {
+            const self: *UnfinalizedReportDestinations = @ptrCast(@alignCast(context));
+            const coord = self.coordinator;
+            const builtin_artifact = &coord.builtin_modules.checked_artifact;
+            if (builtin_artifact.key.eql(key)) {
+                if (self.builtin_problems == null) self.builtin_problems = try newState(coord);
+                return .{ .module = builtin_artifact, .problem_store = &self.builtin_problems.?.problems };
+            }
+            const mod = moduleState(coord, key);
+            if (mod.pending_evaluation == null) {
+                const state = try newState(coord);
+                mod.pending_evaluation = state;
+                self.modules.append(coord.gpa, mod) catch |err| {
+                    state.deinit();
+                    mod.pending_evaluation = null;
+                    return err;
+                };
+            }
+            return .{ .module = mod.checkedArtifact().?, .problem_store = &mod.pending_evaluation.?.problems };
+        }
+
+        fn commit(self: *UnfinalizedReportDestinations) Allocator.Error!void {
+            const coord = self.coordinator;
+            if (self.builtin_problems) |state| {
+                defer {
+                    state.deinit();
+                    self.builtin_problems = null;
+                }
+                const root_mod = moduleState(coord, self.program_root);
+                var rb = try check.ReportBuilder.initEvaluation(
+                    coord.gpa,
+                    coord.builtin_modules.builtin_module.env,
+                    &state.problems,
+                    "Builtin.roc",
+                    &.{},
+                    &state.import_mapping,
+                );
+                defer rb.deinit();
+                for (state.problems.problems.items) |problem| {
+                    try root_mod.reports.append(coord.gpa, try rb.build(problem));
+                }
+            }
+            while (self.modules.pop()) |mod| {
+                const state = mod.pending_evaluation.?;
+                defer {
+                    state.deinit();
+                    mod.pending_evaluation = null;
+                }
+                var rb = try check.ReportBuilder.initEvaluation(
+                    coord.gpa,
+                    mod.moduleEnv().?,
+                    &state.problems,
+                    mod.path,
+                    state.imported_envs,
+                    &state.import_mapping,
+                );
+                defer rb.deinit();
+                for (state.problems.problems.items) |problem| {
+                    try mod.reports.append(coord.gpa, try rb.build(problem));
+                }
+            }
+        }
+
+        fn deinit(self: *UnfinalizedReportDestinations) void {
+            if (self.builtin_problems) |state| state.deinit();
+            for (self.modules.items) |mod| {
+                mod.pending_evaluation.?.deinit();
+                mod.pending_evaluation = null;
+            }
+            self.modules.deinit(self.coordinator.gpa);
+        }
+    };
 
     fn commitPreparedModule(self: *Coordinator, mod: *ModuleState) CoordinatorError!void {
         const state = mod.pending_evaluation.?;

@@ -998,7 +998,20 @@ its explicit function relocations retain exactly the callable procedures that
 the completed values contain, and those procedures join the ordinary runtime
 roots supplied to ARC. Successful evaluation evidence removes its value guards
 after guard construction; failed values keep their ordinary runtime failure
-paths. Attaching completed data after ARC and then repeating reachability is
+paths. A root that stops at a checked root's value guard is a propagated
+failure: it records the failure it read and is not reported again, because the
+failing root already reported it in the module that owns it. A literal root
+belongs to no checked module, so nothing retains its failure between
+compilations except the checked results that embed it: a checked root that
+stops at a literal root's value guard, or reaches a rejected literal inline,
+reports that failure in its own module, naming the literal as the failure's
+origin, which keeps that module from being cached clean while its result holds
+the failure. A failed literal root that no checked root embeds is reported at
+its literal once finalization is done. A module whose finalization completed in
+an earlier compilation receives such a report through the coordinator's report
+destination for it, without its cached result changing; a literal in the
+builtin module, which belongs to no package, is rendered against the builtin
+source and joins the program root module's reports. Attaching completed data after ARC and then repeating reachability is
 forbidden, because it would make ARC run over a different procedure graph from
 the one emitted to the backend.
 
@@ -3693,6 +3706,22 @@ expression is evaluated exactly once by the compile-time finalizer. Nested uses
 of other already-sorted compile-time constants may still restore their stored
 `ConstStore` values.
 
+A block-local function binding whose body refers to nothing bound inside its
+enclosing function—no outer local, no outer rigid type variable, no local type
+declaration—is a promoted local procedure. Checking decides promotion while it
+already walks the body: each `s_decl` of a lambda or closure is a candidate,
+every local lookup, rigid-variable use, and local type-declaration reference
+records the candidate depths it crosses, and the greatest fixpoint over
+references between candidates removes every candidate that reaches a
+contextual one. The capture list is not that proof: canonicalization omits
+local functions and globally resolvable patterns from captures. A promoted
+local procedure outputs a `promoted_proc` checked statement in place of its
+binding, its own procedure template (`ProcBaseKind.promoted_local`), and its
+pattern's scheme; references resolve to `promoted_top_level_proc`, so it
+specializes exactly like a top-level procedure. Hoisting treats a lookup of it
+as known, so a top-level-equivalent call through a local helper is selected
+as a hoisted root. Lexically context-dependent local procedures are unchanged.
+
 Hoisted roots use the same compile-time constant rules as ordinary top-level
 constants. A failure produced while evaluating a hoisted root is a checking-time
 failure reported at the hoisted expression's original source region. If Roc ever
@@ -4128,12 +4157,46 @@ Every live literal-origin record leaves checking with one explicit resolution:
   materializes the value directly.
 - `custom_dispatch` means checking selected and typechecked one concrete custom
   conversion callable. `CheckedModule` construction retains its
-  dispatcher and callable types, and compile-time evaluation evaluates that
-  conversion when a checked constant is required.
+  dispatcher and callable types and gives the literal exactly one
+  `numeral_conversion`/`quote_conversion` root, linked from the checked
+  literal data (`conversion_root`). That root is the single source of the
+  literal's value: its body lowers through ordinary dispatch-call lowering,
+  and every use restores the root's stored payload, or, while its module is
+  still finalizing, reads the root's declared compile-time value. A root no
+  evaluation requests (its type holds a callable, so the root is
+  specialization-owned) is hoisted per program instead, as a literal root
+  (see `specialization_dispatch` below). No use re-runs the conversion. A root whose conversion returns `Err` records the
+  literal-specific rejection as its failure.
 - `specialization_dispatch` means the target remains an identity variable in a
   generalized callable. The checked plan retains this erased requirement; each
-  Monotype specialization either materializes a builtin directly or consumes
-  the callable evidence supplied for that specialization.
+  Monotype specialization reads the literal's own type node and either
+  materializes a builtin directly or lowers the conversion call at that node
+  with the callable evidence supplied for that specialization. The `Err` arm
+  of that conversion lowers to `literal_rejected`, a non-returning terminal
+  carrying the rejection message and the literal's `LiteralRejectionSite`
+  (owner module, checked expression, numeral or quote). LIR carries the site on
+  the `crash` statement, so a compile-time evaluation that reaches it reports
+  the literal-specific diagnostic instead of a generic crash.
+  A conversion at a specialization's concrete type depends on nothing at
+  runtime, so it is hoisted like any top-level-equivalent expression: a
+  program whose compile-time work is evaluated with it (`literal_roots`) turns
+  the conversion into a literal root. The conversion becomes a zero-argument
+  definition the draft registers; the specialization reads the root's
+  `comptime_value` slot (producer `.literal`); LIR carries `LiteralRootPlan`s
+  beside the checked roots' plans; and finalization evaluates each literal root
+  on its first slot demand, and the rest after every checked root. Every native
+  build evaluates its literal roots: when no checked compile-time root shares
+  the runtime program, finalization prepares the runtime program itself, under
+  the runtime policy (object-cache hits at Monotype reservation included),
+  lowers a native consumer holding only the literal roots, evaluates them, and
+  the runtime consumer transcodes their completed values. Two object-cache
+  rules keep a specialization served from a pack equivalent to one lowered
+  again, whose literal roots would be evaluated again: an entry whose closure
+  still converts a specialized literal at runtime (a program lowered without
+  literal roots, such as a module's pack program) is withheld, and a build
+  that reported an error writes no packs, so no entry embeds a failed literal
+  root. A successful conversion is deterministic in the literal and the
+  concrete type, both part of the entry's identity.
 - `checked_error` means checking rejected the conversion while retaining the
   literal node for diagnostic recovery. `CheckedModule` stores no
   callable, runtime dispatch plan, or compile-time root for it; the containing
@@ -7725,7 +7788,14 @@ can still change when a downstream use substitutes a nested generalized
 variable. A generated-codec receiver can also be structurally known while one
 of its components is still a scheme variable. When the receiver shares type
 variables with the owning binding's interface, capture records the same exact
-receiver and callable relation before generalization. Only after the binding is
+receiver and callable relation before generalization. What makes a shared
+component refinable is what a later use can do to it: a type variable can be
+substituted, and an anonymous record or tag union can be lifted into a
+nominal whose backing it matches. A shared component that is neither—a
+nominal such as `I32`, a tuple, or a function type, each of whose own
+variables are checked separately—is final at the requiring site, so its codec
+evidence resolves there and the owning scheme gains no evidence parameter for
+it. Only after the binding is
 classified as a scheme does the definition-side worklist entry retire; every
 instantiation copies the structural receiver and validates the resulting codec
 independently. An unresolved outer record or tag extension is not a component
@@ -8562,12 +8632,11 @@ materialized and contributes no edge. Foreign constructions
 module's defaults are that module's own compile-time roots.
 When the default literal uses a custom `from_numeral` or `from_quote`, the
 conversion gets an ORDINARY `numeral_conversion`/`quote_conversion` root
-in the declaring module: finalization still evaluates the raw conversion
-once and reports `Err` with the literal-specific diagnostic; sites restore
-the archived `Ok` payload when it is finalized and lower the real dispatch
-call inside their own comptime evaluation while the declaring module's
-roots are still mid-finalization (the same split every custom literal
-gets).
+in the declaring module: finalization evaluates the conversion once and
+reports `Err` with the literal-specific diagnostic; sites restore the
+archived `Ok` payload when it is finalized and read the root's declared
+compile-time value while the declaring module's roots are still
+mid-finalization (the same single-owner rule every custom literal gets).
 CROSS-MODULE materialization is COMPLETE through the same route: the
 default identity's declaring-module content hash resolves the declaring
 view (`moduleForIdentityHash`), and the foreign checked expression lowers

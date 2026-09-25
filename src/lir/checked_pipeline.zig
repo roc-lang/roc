@@ -130,6 +130,8 @@ pub const TargetConfig = struct {
     checked_module_state: CheckedModuleState = .complete,
     /// The compilation session supplies evaluated root slots for these reads.
     comptime_value_reads: bool = false,
+    /// The compilation session evaluates the program's literal roots.
+    literal_roots: bool = false,
     inline_mode: InlineMode = .none,
     /// Direct-call inlining scope for SpecConstr's value-aware clones.
     /// Optimized builds use `.all_calls`; dev builds use `.iterator_fusion`
@@ -1000,6 +1002,7 @@ pub fn retainRuntimeRoots(lowered: *LoweredProgram, root_indices: []const u32) A
     procs = .empty;
     metadata = .empty;
     result.const_roots.clearRetainingCapacity();
+    result.literal_roots.clearRetainingCapacity();
     try completeComptimeValueSlots(lowered);
 }
 
@@ -1010,7 +1013,7 @@ pub fn retainRuntimeRoots(lowered: *LoweredProgram, root_indices: []const u32) A
 /// reaches each compile-time value through a slot the evaluation has since
 /// filled, and its own roots are the program's roots already.
 pub fn adoptCompletedComptimeValues(lowered: *LoweredProgram) Allocator.Error!void {
-    if (lowered.lir_result.const_roots.items.len != 0) checkedPipelineInvariant("runtime consumer lowered a compile-time root");
+    if (lowered.lir_result.const_roots.items.len != 0 or lowered.lir_result.literal_roots.items.len != 0) checkedPipelineInvariant("runtime consumer lowered a compile-time root");
     if (lowered.frozen_static_data == null) checkedPipelineInvariant("runtime consumer has no completed compile-time values to adopt");
     try completeComptimeValueSlots(lowered);
 }
@@ -1020,7 +1023,7 @@ pub fn adoptCompletedComptimeValues(lowered: *LoweredProgram) Allocator.Error!vo
 /// rerunning compaction here would repeat work after ARC and cannot discover
 /// any new procedure edge.
 pub fn adoptReachableCompletedComptimeValues(lowered: *LoweredProgram) Allocator.Error!void {
-    if (lowered.lir_result.const_roots.items.len != 0) checkedPipelineInvariant("runtime consumer lowered a compile-time root");
+    if (lowered.lir_result.const_roots.items.len != 0 or lowered.lir_result.literal_roots.items.len != 0) checkedPipelineInvariant("runtime consumer lowered a compile-time root");
     if (lowered.frozen_static_data == null) checkedPipelineInvariant("runtime consumer has no completed compile-time values to adopt");
     const result = &lowered.lir_result;
     result.comptime_value_guards.clearRetainingCapacity();
@@ -1247,6 +1250,7 @@ pub fn prepareCheckedModulesMonotype(
                 .post_check_executor = target.post_check_executor,
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
+                .literal_roots = target.literal_roots,
                 .target_usize = target.target_usize,
                 .inline_expects = if (target.comptime_value_reads) .shared else switch (target.inline_expects) {
                     .run => .run,
@@ -1386,6 +1390,11 @@ pub const PreparedSolved = struct {
     /// materializes completed values materializes these and no others.
     pub fn comptimeValueReads(self: *const PreparedSolved) []const postcheck.Common.ComptimeValueRoot {
         return self.program.lifted.comptimeValueReadsView();
+    }
+
+    /// How many literal roots the producer registered.
+    pub fn literalRootCount(self: *const PreparedSolved) usize {
+        return self.program.lifted.literalRootsView().len;
     }
 
     /// Release the retained solved program and its owned continuation metadata.

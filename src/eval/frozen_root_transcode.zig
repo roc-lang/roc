@@ -20,9 +20,9 @@ pub fn transcodeRoot(allocator: Allocator, source_program: *const Program.Result
 /// Re-encode the same checked root value for the destination slot representation.
 pub fn transcodeValueSlot(allocator: Allocator, source_program: *const Program.Result, source_slot: Program.StaticDataValue, source_exports: []const static_data.StaticDataExport, source_symbol: SymbolId, target_program: *const Program.Result, target_slot: lir.LIR.StaticDataId) Allocator.Error![]static_data.StaticDataExport {
     const target = target_program.static_data_values.items[@intFromEnum(target_slot)];
-    const source_identity = source_slot.compile_time_root orelse invariant("source slot lacks checked root authority");
-    const target_identity = target.compile_time_root orelse invariant("target slot lacks checked root authority");
-    if (!std.meta.eql(source_identity.module, target_identity.module) or source_identity.root != target_identity.root or std.meta.activeTag(source_identity.role) != std.meta.activeTag(target_identity.role)) invariant("paired slots do not name the same checked root role");
+    const source_identity = source_slot.compile_time_root orelse invariant("source slot lacks compile-time producer authority");
+    const target_identity = target.compile_time_root orelse invariant("target slot lacks compile-time producer authority");
+    if (!std.meta.eql(source_identity.module, target_identity.module) or !source_identity.root.eql(target_identity.root) or std.meta.activeTag(source_identity.role) != std.meta.activeTag(target_identity.role)) invariant("paired slots do not name the same producer role");
     return transcodePlans(allocator, source_program, .{ .plan = source_slot.compile_time_root.?.role.value.plan, .layout_idx = source_slot.layout_idx }, source_exports, source_symbol, target_program, .{ .plan = target.compile_time_root.?.role.value.plan, .layout_idx = target.layout_idx }, target_slot);
 }
 
@@ -40,9 +40,9 @@ fn transcodePlans(allocator: Allocator, source_program: *const Program.Result, s
 /// Re-encode failure status and message using the paired slots' explicit fields.
 pub fn transcodeFailure(allocator: Allocator, source_program: *const Program.Result, source_slot: Program.StaticDataValue, source_exports: []const static_data.StaticDataExport, source_symbol: SymbolId, target_program: *const Program.Result, target_slot: lir.LIR.StaticDataId) Allocator.Error![]static_data.StaticDataExport {
     const target = target_program.static_data_values.items[@intFromEnum(target_slot)];
-    const source_identity = source_slot.compile_time_root orelse invariant("source slot lacks checked root authority");
-    const target_identity = target.compile_time_root orelse invariant("target slot lacks checked root authority");
-    if (!std.meta.eql(source_identity.module, target_identity.module) or source_identity.root != target_identity.root or std.meta.activeTag(source_identity.role) != std.meta.activeTag(target_identity.role)) invariant("paired slots do not name the same checked root role");
+    const source_identity = source_slot.compile_time_root orelse invariant("source slot lacks compile-time producer authority");
+    const target_identity = target.compile_time_root orelse invariant("target slot lacks compile-time producer authority");
+    if (!std.meta.eql(source_identity.module, target_identity.module) or !source_identity.root.eql(target_identity.root) or std.meta.activeTag(source_identity.role) != std.meta.activeTag(target_identity.role)) invariant("paired slots do not name the same producer role");
     const source_fields = source_slot.compile_time_root.?.role.failure_message;
     const target_fields = target.compile_time_root.?.role.failure_message;
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -583,7 +583,7 @@ fn failureSlot(allocator: Allocator, program: *Program.Result, root: @import("ch
     const idx = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
     const data = program.layouts.getLayout(idx).getStruct().idx;
     const id: lir.LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
-    try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = idx, .compile_time_root = .{ .module = .{ .bytes = @splat(0) }, .root = root, .const_locator = null, .role = .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(data, 0), .message_offset = program.layouts.getStructFieldOffsetByOriginalIndex(data, 1) } } } });
+    try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = idx, .compile_time_root = .{ .module = .{ .bytes = @splat(0) }, .root = .{ .checked = root }, .const_locator = null, .role = .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(data, 0), .message_offset = program.layouts.getStructFieldOffsetByOriginalIndex(data, 1) } } } });
     return id;
 }
 
@@ -755,7 +755,7 @@ test "frozen root transcode re-points a boxed slot at its payload across pointer
         allocator,
         &source,
         source_slot_id,
-        testRoot(source_plan, source_tag),
+        testRoot(source_plan, source_tag).shape(),
         .{ .ptr = value_bytes.ptr },
         .{},
         source_box,
@@ -803,7 +803,7 @@ fn boxedValueSlot(
         .layout_idx = box_idx,
         .compile_time_root = .{
             .module = .{},
-            .root = root,
+            .root = .{ .checked = root },
             .const_locator = null,
             .role = .{ .value = .{ .failure_slot = failure_slot, .plan = plan } },
         },

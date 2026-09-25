@@ -14354,8 +14354,8 @@ const ProcBodyBuilder = struct {
             .direct_closed, .direct_parametric => {},
             .direct_pending, .structural => boxyLowerInvariant("quote conversion had an invalid checked dispatch resolution"),
         }
-        const root = self.module.compile_time_roots.lookupNumeralRootByExpr(expr_id) orelse
-            boxyLowerInvariant("checked from_quote expression had no compile-time conversion root");
+        const root = self.module.compile_time_roots.root(self.module.checked_bodies.literalConversionRoot(expr_id) orelse
+            boxyLowerInvariant("checked from_quote expression had no compile-time conversion root"));
         return switch (root.payload) {
             .const_node => |node| try self.restoreConstNodeInto(
                 target,
@@ -14501,8 +14501,8 @@ const ProcBodyBuilder = struct {
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const root = self.module.compile_time_roots.lookupNumeralRootByExpr(expr_id) orelse
-            return try self.lowerNumFromNumeralInto(target, maybe_plan, next);
+        const root = self.module.compile_time_roots.root(self.module.checked_bodies.literalConversionRoot(expr_id) orelse
+            return try self.lowerNumFromNumeralInto(target, maybe_plan, next));
         return switch (root.payload) {
             .const_node => |node| try self.restoreConstNodeInto(
                 target,
@@ -23403,6 +23403,7 @@ const ProcBodyBuilder = struct {
                 .var_ => |decl| decl.expr,
                 .reassign => |reassign| reassign.expr,
                 .pending,
+                .promoted_proc,
                 .var_uninitialized,
                 .crash,
                 .dbg,
@@ -23434,6 +23435,7 @@ const ProcBodyBuilder = struct {
                 .nominal_decl,
                 .type_anno,
                 .type_var_alias,
+                .promoted_proc,
                 => {},
                 .pending, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .where_alias_decl, .runtime_error => {},
             }
@@ -25368,6 +25370,7 @@ const ProcBodyBuilder = struct {
             .reassign => |reassign| reassign.expr,
             .expr => |expr| expr,
             .pending,
+            .promoted_proc,
             .var_uninitialized,
             .crash,
             .dbg,
@@ -25392,6 +25395,8 @@ const ProcBodyBuilder = struct {
         };
         return switch (statement.data) {
             .decl => |decl| try self.lowerDeclPattern(decl.pattern, decl.expr, next),
+            // A promoted procedure is declared by its own template.
+            .promoted_proc => next,
             .var_ => |decl| try self.lowerDeclPattern(decl.pattern, decl.expr, next),
             .var_uninitialized => |decl| try self.lowerUninitializedPattern(decl.pattern, next),
             .reassign => |reassign| try self.lowerReassignPattern(reassign.pattern, reassign.expr, reassign.reassigned_binders, next),
