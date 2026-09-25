@@ -19,7 +19,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 3;
+pub const format_version: u32 = 4;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature ARC solved
@@ -48,8 +48,12 @@ pub const ReadError = Allocator.Error || error{
     UnsupportedPackVersion,
 };
 
-/// Encode an artifact set and its spec table.
+/// Encode an artifact set and its spec table. Every carried constant the
+/// set's program named for itself is written under its content name, and so
+/// is every relocation to it, so the pack links into any program.
 pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const SpecEntry) Allocator.Error![]u8 {
+    var names = try ProcArtifact.ContentNames.init(allocator, set);
+    defer names.deinit();
     var bytes = std.ArrayList(u8).empty;
     errdefer bytes.deinit(allocator);
     var writer = Writer{ .allocator = allocator, .bytes = &bytes };
@@ -146,11 +150,11 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
                     try writer.byte(@intFromEnum(data_kind));
                 },
             }
-            try writer.str(relocation.name);
+            try writer.str(names.of(relocation.name));
         }
         try writer.word(@intCast(artifact.data.len));
         for (artifact.data) |item| {
-            try writer.str(item.name);
+            try writer.str(names.of(item.name));
             try writer.str(item.bytes);
             try writer.word(item.alignment);
             try writer.word(item.symbol_offset);
@@ -160,7 +164,8 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
                 try writer.wide(@bitCast(relocation.addend));
                 try writer.byte(@intFromBool(relocation.function));
                 try writer.byte(@intFromBool(relocation.external));
-                try writer.str(relocation.name);
+                // An external binding names the linking image's symbol.
+                try writer.str(if (relocation.external) relocation.name else names.of(relocation.name));
             }
         }
     }
@@ -556,4 +561,60 @@ test "pack bytes round-trip every artifact field and spec entry" {
     try testing.expectEqualSlices(u8, bytes, rewritten);
 
     try testing.expectError(error.MalformedPack, read(testing.allocator, bytes[0 .. bytes.len - 1]));
+}
+
+test "pack writes program-local constants and every reference to them under content names" {
+    const testing = std.testing;
+    // Two programs gave one program-local name to different constants.
+    const names = [_][]const u8{ "first", "second" };
+    var packed_names: [names.len][]const u8 = undefined;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    for (names, 0..) |bytes, index| {
+        const set = ProcArtifact.Set{
+            .arena = std.heap.ArenaAllocator.init(testing.allocator),
+            .artifacts = &.{.{
+                .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
+                .code = "code",
+                .entry = 0,
+                .frame = null,
+                .refs = &.{},
+                .relocations = &.{.{ .offset = 0, .name = "roc__static_const_value_1", .kind = .{ .data = .rel32 } }},
+                .data = &.{
+                    .{
+                        .name = "roc__static_const_value_1",
+                        .bytes = "\x00" ** 8,
+                        .alignment = 8,
+                        .symbol_offset = 0,
+                        .relocations = &.{.{ .offset = 0, .name = "roc__ctfe_1_1", .addend = 16, .function = false }},
+                        .program_local_name = true,
+                    },
+                    .{
+                        .name = "roc__ctfe_1_1",
+                        .bytes = bytes,
+                        .alignment = 8,
+                        .symbol_offset = 0,
+                        .relocations = &.{.{ .offset = 0, .name = "roc__ctfe_1_1", .addend = 0, .function = false, .external = true }},
+                        .program_local_name = true,
+                    },
+                },
+            }},
+        };
+        const encoded = try write(testing.allocator, &set, &.{});
+        defer testing.allocator.free(encoded);
+        var pack = try read(testing.allocator, encoded);
+        defer pack.deinit();
+        const artifact = pack.set.artifacts[0];
+        const root = artifact.data[0];
+        const node = artifact.data[1];
+        try testing.expect(std.mem.startsWith(u8, root.name, ProcArtifact.content_data_prefix));
+        try testing.expect(std.mem.startsWith(u8, node.name, ProcArtifact.content_data_prefix));
+        try testing.expectEqualStrings(root.name, artifact.relocations[0].name);
+        try testing.expectEqualStrings(node.name, root.relocations[0].name);
+        // An external binding keeps the linking image's name, even one the
+        // set also carries a datum under.
+        try testing.expectEqualStrings("roc__ctfe_1_1", node.relocations[0].name);
+        packed_names[index] = try arena.allocator().dupe(u8, node.name);
+    }
+    try testing.expect(!std.mem.eql(u8, packed_names[0], packed_names[1]));
 }

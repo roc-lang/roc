@@ -909,19 +909,19 @@ test "use order compact procedure domain matches dense queries and excludes unre
     // A high store ID is not a large procedure domain.
     for (0..1024) |_| {
         const unused = try store.addLocal(.{ .layout_idx = .u64 });
-        _ = try store.addCFStmt(.{ .ret = .{ .value = unused } });
+        _ = try store.addCFStmt(.{ .ret = .{ .value = unused } }, .test_fixture);
     }
     const input = try store.addLocal(.{ .layout_idx = .u64 });
     const view = try store.addLocal(.{ .layout_idx = .u64 });
-    const done = try store.addCFStmt(.{ .ret = .{ .value = view } });
-    const alias = try store.addCFStmt(.{ .assign_ref = .{ .target = view, .op = .{ .local = input }, .next = done } });
+    const done = try store.addCFStmt(.{ .ret = .{ .value = view } }, .test_fixture);
+    const alias = try store.addCFStmt(.{ .assign_ref = .{ .target = view, .op = .{ .local = input }, .next = done } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(11661),
         .args = try store.addLocalSpan(&.{input}),
         .body = alias,
         .ret_layout = .u64,
-    });
+    }, .none);
     var compact = try UseOrder.initFromStore(allocator, &store, proc);
     defer compact.deinit();
     var dense = try UseOrder.init(allocator, &store, &.{&.{ alias, done }});

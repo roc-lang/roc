@@ -4734,7 +4734,7 @@ const Lowerer = struct {
         // places read it, and the evaluation's slot demand is raised from one
         // place. A program lowered after evaluation reads its slots directly.
         if (!is_static_initializer and self.completed_scalar_values == null) {
-            const accessor = try self.comptimeRootAccessor(where, id, layout_idx);
+            const accessor = try self.comptimeRootAccessor(where, id, root, ty, layout_idx);
             return try self.result.store.addCFStmt(.{ .assign_call = .{
                 .target = target,
                 .proc = accessor,
@@ -4749,9 +4749,9 @@ const Lowerer = struct {
         } }, where.source());
     }
 
-    /// The procedure that reads compile-time value slot `id`, created on
-    /// its first use.
-    fn comptimeRootAccessor(self: *Lowerer, where: LowerSite, id: LIR.StaticDataId, layout_idx: layout.Idx) Common.LowerError!LIR.LirProcSpecId {
+    /// The procedure that reads compile-time value slot `id`, which holds
+    /// `root` at `ty`, created on its first use.
+    fn comptimeRootAccessor(self: *Lowerer, where: LowerSite, id: LIR.StaticDataId, root: Common.ComptimeValueRoot, ty: Type.TypeId, layout_idx: layout.Idx) Common.LowerError!LIR.LirProcSpecId {
         if (self.result.static_data_values.items[@intFromEnum(id)].accessor) |accessor| return accessor;
         const store = &self.result.store;
         const value = try self.addLocalForLayout(layout_idx);
@@ -4772,7 +4772,7 @@ const Lowerer = struct {
         const frame_locals = try store.addLocalSpan(&[_]LIR.LocalId{value});
         const accessor = try store.addProcSpec(.{
             .name = lirSymbol(self.symbols.fresh()),
-            .identity = try self.comptimeRootAccessorIdentity(id, layout_idx),
+            .identity = try self.comptimeRootAccessorIdentity(root, ty, layout_idx),
             .args = LIR.LocalSpan.empty(),
             .frame_locals = frame_locals,
             .body = read,
@@ -4784,14 +4784,21 @@ const Lowerer = struct {
         return accessor;
     }
 
-    fn comptimeRootAccessorIdentity(self: *Lowerer, id: LIR.StaticDataId, layout_idx: layout.Idx) std.mem.Allocator.Error!LIR.ProcIdentity {
+    /// An accessor is emitted and carried in object-cache packs like any
+    /// procedure, so its identity names what it reads in every program: the
+    /// root's module by content key, the root within that module, and the
+    /// representation the slot commits, the same parts that decide which
+    /// roots share a slot (`ComptimeRootKey`).
+    fn comptimeRootAccessorIdentity(self: *Lowerer, root: Common.ComptimeValueRoot, ty: Type.TypeId, layout_idx: layout.Idx) std.mem.Allocator.Error!LIR.ProcIdentity {
         var digests = try layout.Digests.init(self.allocator, &self.result.layouts);
         defer digests.deinit();
         var hasher = base.TypeDigestHasher.init();
-        hasher.update("roc.proc.comptime-root-accessor.v1");
+        hasher.update("roc.proc.comptime-root-accessor.v2");
+        hasher.update(&root.module.bytes);
+        const root_index: u32 = @intFromEnum(root.root);
+        hasher.update(&[_]u8{ @truncate(root_index), @truncate(root_index >> 8), @truncate(root_index >> 16), @truncate(root_index >> 24) });
+        hasher.update(&(try self.types.typeDigest(&self.solved.lifted.names, ty)).bytes);
         hasher.update(&try digests.get(layout_idx));
-        const slot: u32 = @intFromEnum(id);
-        hasher.update(&[_]u8{ @truncate(slot), @truncate(slot >> 8), @truncate(slot >> 16), @truncate(slot >> 24) });
         return .{ .bytes = hasher.finalResult() };
     }
 

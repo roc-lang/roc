@@ -8766,7 +8766,8 @@ fn packFileBytes(
 }
 
 /// Whether any artifact reachable from `root` relocates against static data
-/// that only its own program defines.
+/// that only its own program defines: data it does not carry, or boxy
+/// descriptor tables.
 fn artifactClosureNamesProgramLocalSymbols(allocator: Allocator, set: *const backend.dev.ProcArtifact.Set, root: u32) Allocator.Error!bool {
     var seen = std.AutoHashMap(u32, void).init(allocator);
     defer seen.deinit();
@@ -8778,15 +8779,20 @@ fn artifactClosureNamesProgramLocalSymbols(allocator: Allocator, set: *const bac
         if (gop.found_existing) continue;
         const artifact = set.artifacts[index];
         for (artifact.relocations) |relocation| {
-            if (std.mem.startsWith(u8, relocation.name, "roc__static_") and
-                !std.mem.startsWith(u8, relocation.name, "roc__static_str_") and
-                !std.mem.startsWith(u8, relocation.name, backend.dev.ProcArtifact.content_data_prefix)) return true;
+            if (std.mem.startsWith(u8, relocation.name, "roc__static_") and !carriesData(artifact, relocation.name)) return true;
             if (std.mem.startsWith(u8, relocation.name, "roc_boxy_")) return true;
         }
         for (artifact.data) |item| {
             for (item.relocations) |relocation| if (relocation.function) return true;
         }
         for (artifact.refs) |ref| try stack.append(allocator, ref.target);
+    }
+    return false;
+}
+
+fn carriesData(artifact: backend.dev.ProcArtifact.Artifact, name: []const u8) bool {
+    for (artifact.data) |item| {
+        if (std.mem.eql(u8, item.name, name)) return true;
     }
     return false;
 }
