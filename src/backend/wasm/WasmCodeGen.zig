@@ -14193,7 +14193,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 .float => .float,
                 .dec => .dec,
             };
-            const builtin_fn = LowLevelBuiltins.numFromStrPrefix(class, spec.source);
             if (self.externalCallsUseRelocs()) {
                 const Layout = builtins.dev_wrappers.NumPrefixParseLayout;
                 const layout_offset = try self.allocStackMemory(@sizeOf(Layout), @alignOf(Layout));
@@ -14221,15 +14220,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 try self.emitI32Const(@intCast(rest_offset));
                 try self.emitI32Const(@intCast(value_offset));
             }
-            switch (builtin_fn) {
-                inline .int_from_str_prefix,
-                .int_from_utf8_prefix,
-                .dec_from_str_prefix,
-                .dec_from_utf8_prefix,
-                .float_from_str_prefix,
-                .float_from_utf8_prefix,
-                => |f| try self.emitBuiltinCall(BuiltinSignatures.kindOf(f), @field(self, @tagName(f) ++ "_import")),
-                else => unreachable,
+            switch (class) {
+                inline .int, .float, .dec => |c| switch (spec.source) {
+                    inline .str, .utf8 => |src| {
+                        const f = comptime LowLevelBuiltins.numFromStrPrefix(c, src);
+                        try self.emitBuiltinCall(BuiltinSignatures.kindOf(f), @field(self, @tagName(f) ++ "_import"));
+                    },
+                },
             }
             try self.emitFpOffset(result_offset);
         },

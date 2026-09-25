@@ -9373,15 +9373,10 @@ pub const MonoLlvmCodeGen = struct {
             .dec => .dec,
         };
         try call_args.append(self.allocator, try self.ptrType(), layout_ptr);
-        const symbol = switch (LowLevelBuiltins.numFromStrPrefix(class, spec.source)) {
-            inline .int_from_str_prefix,
-            .int_from_utf8_prefix,
-            .dec_from_str_prefix,
-            .dec_from_utf8_prefix,
-            .float_from_str_prefix,
-            .float_from_utf8_prefix,
-            => |f| builtinSymbol(f),
-            else => unreachable,
+        const symbol = switch (class) {
+            inline .int, .float, .dec => |c| switch (spec.source) {
+                inline .str, .utf8 => |src| builtinSymbol(comptime LowLevelBuiltins.numFromStrPrefix(c, src)),
+            },
         };
         try self.callBuiltinVoid(symbol, call_args.types.items, call_args.values.items);
     }
