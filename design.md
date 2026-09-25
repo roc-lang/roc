@@ -10042,6 +10042,33 @@ preceding explicit relations. Applying defaults is never part of cache identity.
 Digests select buckets; exact input constraints and evidence are the collision
 authorities.
 
+A Roc template without evidence parameters cannot dispatch on its quantified
+variables, so its interface relates a quantified variable only by unification
+when every occurrence of that variable in its checked function type is a value
+position: a function argument or result, a tuple element, a record field, a tag
+payload, or the element of `List` or `Box`. A row tail, or an argument of any
+other nominal type, is not a value position. A request captures such a
+variable's substitution cell as a parametric hole, an unconstrained variable,
+when the cell is resolved and nothing it reaches carries private backing,
+source-interface or constructor evidence, forced-dynamic iterator identity, or
+generated or iterator representation authority. Structure reaching a hole stays
+open instead of settling, so requests that differ only in their holes' contents
+share one input identity and one summary, and relating the summary back to a
+request fills its holes. A cell that is unresolved or carries representation
+authority is captured as itself: relating it back would not be plain
+unification. An unfinished expansion is joined only by the instantiation it
+expands: each hole slot of the joining request names the class the expanding
+request supplied, or the expansion's own hole cell, as a recursive call inside
+the expansion does. A single-request component takes a parametric
+summary from its expansion before relating back to the request, so the summary
+keeps its holes open. Members of a larger component relate back to each other's
+requests before their summaries are taken, so a parametric member stores no
+reusable summary. The pins are the monotype capture test
+"interface constraints capture representation-neutral holes as variables", the
+compile test "interface summaries share one expansion across parametric
+instantiations", and test/echo/parametric_interface_summaries.roc (a template
+that dispatches on its variable keeps a summary per instantiation).
+
 Interface summaries are immutable constraints over explicit input roots. They
 preserve unresolved variables and their defaults, row tails, variable and
 field-presence sharing, recursive topology, and producer-owned representation

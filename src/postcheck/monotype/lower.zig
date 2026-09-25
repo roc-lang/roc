@@ -977,6 +977,87 @@ fn templateInterfaceIsClosed(view: ModuleView, template: *const checked.CheckedP
         !view.types.roots[raw].contains_identity_variables;
 }
 
+/// A Roc template without evidence parameters cannot dispatch on its quantified
+/// variables, so its interface relates a variable that occurs only in value
+/// positions of its function type by unification alone. A request captures
+/// such a variable's representation-neutral instantiation as a hole: one
+/// summary serves every instantiation, and relating the summary back to the
+/// request fills the hole. Row tails and arguments of nominal types other than
+/// `List` and `Box` are not value positions.
+fn parametricSchemeVarMask(
+    allocator: Allocator,
+    view: ModuleView,
+    template: *const checked.CheckedProcedureTemplate,
+) Allocator.Error![]const bool {
+    const scheme_vars = view.templates.templateSchemeVars(template);
+    const mask = try allocator.alloc(bool, scheme_vars.len);
+    errdefer allocator.free(mask);
+    @memset(mask, false);
+    if (template.target != .roc or template.evidence_params.len != 0 or scheme_vars.len == 0) return mask;
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
+    const arena = scratch.allocator();
+    const excluded = try arena.alloc(bool, scheme_vars.len);
+    @memset(excluded, false);
+    const Visit = struct { ty: checked.CheckedTypeId, value_position: bool };
+    var pending = std.ArrayList(Visit).empty;
+    var visited = [_]collections.DenseMap(checked.CheckedTypeId, void){
+        collections.DenseMap(checked.CheckedTypeId, void).init(arena),
+        collections.DenseMap(checked.CheckedTypeId, void).init(arena),
+    };
+    try pending.append(arena, .{ .ty = template.checked_fn_root, .value_position = true });
+    while (pending.pop()) |visit| {
+        if ((try visited[@intFromBool(visit.value_position)].getOrPut(visit.ty)).found_existing) continue;
+        const scheme_index = for (scheme_vars, 0..) |scheme_var, index| {
+            if (scheme_var == visit.ty) break index;
+        } else null;
+        if (scheme_index) |index| {
+            if (visit.value_position) mask[index] = true else excluded[index] = true;
+            continue;
+        }
+        switch (view.types.payload(visit.ty)) {
+            .function => |function| {
+                for (function.args) |arg| try pending.append(arena, .{ .ty = arg, .value_position = visit.value_position });
+                try pending.append(arena, .{ .ty = function.ret, .value_position = visit.value_position });
+            },
+            .tuple => |items| for (items) |item| try pending.append(arena, .{ .ty = item, .value_position = visit.value_position }),
+            .record => |record| {
+                for (record.fields) |field| try pending.append(arena, .{ .ty = field.ty, .value_position = visit.value_position });
+                try pending.append(arena, .{ .ty = record.ext, .value_position = false });
+            },
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| {
+                    for (tag.argsSlice(view.types)) |arg| try pending.append(arena, .{ .ty = arg, .value_position = visit.value_position });
+                }
+                try pending.append(arena, .{ .ty = tag_union.ext, .value_position = false });
+            },
+            .nominal => |nominal| {
+                const container = if (nominal.builtin) |builtin_nominal| builtin_nominal == .list or builtin_nominal == .box else false;
+                for (nominal.args) |arg| try pending.append(arena, .{ .ty = arg, .value_position = visit.value_position and container });
+                for (nominal.padding_field_types) |padding| try pending.append(arena, .{ .ty = padding, .value_position = false });
+            },
+            .alias => |alias| try pending.append(arena, .{ .ty = alias.backing, .value_position = visit.value_position }),
+            .pending,
+            .err,
+            .flex,
+            .rigid,
+            .empty_record,
+            .empty_tag_union,
+            => {},
+        }
+    }
+    for (mask, excluded) |*is_parametric, is_excluded| {
+        if (is_excluded) is_parametric.* = false;
+    }
+    return mask;
+}
+
+/// A request's parametric substitution cells and their request-root positions.
+const ParametricHoles = struct {
+    nodes: []const NodeId = &.{},
+    root_indices: []const u32 = &.{},
+};
+
 /// The requirement schema of a procedure template's scheme.
 fn templateSchemaIn(view: ModuleView, template: *const checked.CheckedProcedureTemplate) SchemeRequirements {
     return .{
@@ -3566,6 +3647,9 @@ const Builder = struct {
     worker_inputs: WorkerInputs.ProgramInputs = .{},
     shared_summaries: ?SharedSummaries = null,
     interface_summaries: InterfaceSummaryCache,
+    /// Per template, which quantified variables its interface relates only
+    /// by unification (see `parametricSchemeVarMask`).
+    parametric_scheme_vars: std.AutoHashMapUnmanaged(names.ProcTemplate, []const bool) = .empty,
     coordinator_interface_summaries: ?*const SharedSummaries = null,
     coordinator_interface_summary_end: usize = 0,
     interface_summary_checks: u32 = 0,
@@ -3951,6 +4035,9 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
+        var parametric_masks = self.parametric_scheme_vars.valueIterator();
+        while (parametric_masks.next()) |mask| self.allocator.free(mask.*);
+        self.parametric_scheme_vars.deinit(self.allocator);
         self.source_file_ids.deinit();
         self.lowering_module_ids.deinit();
         self.declared_comptime_root_functions.deinit();
@@ -18252,6 +18339,10 @@ const InterfaceReplayEntry = struct {
     /// the remaining bytes mark the checked-error substitution slots.
     request: InterfaceConstraints.Identity,
     input_len: usize,
+    /// The classes the request's parametric holes stood for.
+    hole_classes: []const ?NodeId,
+    /// This expansion's instantiated cell for each parametric hole slot.
+    hole_cells: []const NodeId,
     roots: []const NodeId,
     summary: ?InterfaceSummary = null,
     verify_summary: ?InterfaceSummary = null,
@@ -23019,6 +23110,70 @@ const BodyContext = struct {
         });
     }
 
+    fn parametricRequestHoles(
+        self: *BodyContext,
+        allocator: Allocator,
+        template_ref: names.ProcTemplate,
+        view: ModuleView,
+        template: *const checked.CheckedProcedureTemplate,
+        subst: SpecSubstitution,
+    ) Allocator.Error!ParametricHoles {
+        if (subst.len == 0) return .{};
+        const cached = try self.builder.parametric_scheme_vars.getOrPut(self.builder.allocator, template_ref);
+        if (!cached.found_existing) {
+            cached.value_ptr.* = parametricSchemeVarMask(self.builder.allocator, view, template) catch |err| {
+                _ = self.builder.parametric_scheme_vars.remove(template_ref);
+                return err;
+            };
+        }
+        const mask = cached.value_ptr.*;
+        if (mask.len != subst.len) Common.invariant("parametric request substitution differed from its scheme's quantified variables");
+        var count: usize = 0;
+        for (mask, subst) |is_parametric, slot| {
+            if (is_parametric and slot == .node) count += 1;
+        }
+        if (count == 0) return .{};
+        const nodes = try allocator.alloc(NodeId, count);
+        const root_indices = try allocator.alloc(u32, count);
+        var next: usize = 0;
+        // Request roots are the function request followed by each node slot.
+        var root_index: u32 = 1;
+        for (mask, subst) |is_parametric, slot| {
+            switch (slot) {
+                .node => |node| {
+                    if (is_parametric) {
+                        nodes[next] = node;
+                        root_indices[next] = root_index;
+                        next += 1;
+                    }
+                    root_index += 1;
+                },
+                .checked_error => {},
+            }
+        }
+        return .{ .nodes = nodes, .root_indices = root_indices };
+    }
+
+    /// An unfinished expansion is joined only by the instantiation it expands:
+    /// each hole slot names the class the expansion's request supplied or
+    /// the expansion's own hole cell.
+    fn joinsUnfinishedExpansion(
+        self: *BodyContext,
+        entry: InterfaceReplayEntry,
+        holes: []const NodeId,
+        hole_classes: []const ?NodeId,
+    ) bool {
+        if (entry.hole_classes.len != hole_classes.len) return false;
+        for (entry.hole_classes, entry.hole_cells, holes, hole_classes) |expanded_class, expanded_cell, hole, hole_class| {
+            const expanded = expanded_class orelse {
+                if (hole_class != null) return false;
+                continue;
+            };
+            if (!self.graph.sameClass(hole, expanded) and !self.graph.sameClass(hole, expanded_cell)) return false;
+        }
+        return true;
+    }
+
     fn relateInterfaceRoots(self: *BodyContext, produced: []const NodeId, requested: []const NodeId) Allocator.Error!void {
         std.debug.assert(produced.len == requested.len);
         try relateFunctionRequestInterface(self.graph, produced[0], requested[0]);
@@ -23090,7 +23245,13 @@ const BodyContext = struct {
         };
         var input_arena = std.heap.ArenaAllocator.init(self.allocator);
         defer input_arena.deinit();
-        const input = try InterfaceConstraints.capture(self.graph, input_arena.allocator(), request_roots.items);
+        const holes = try self.parametricRequestHoles(input_arena.allocator(), template_ref, callee_view, &template, edge.subst);
+        const hole_classes = try input_arena.allocator().alloc(?NodeId, holes.nodes.len);
+        const input = try InterfaceConstraints.captureWithHoles(self.graph, input_arena.allocator(), request_roots.items, holes.nodes, hole_classes);
+        for (hole_classes) |hole_class| if (hole_class != null) {
+            self.builder.count("interface_parametric_requests");
+            break;
+        };
         const shape = try input.identityInto(self.graph, input_arena.allocator());
         const request_bytes = try input_arena.allocator().alloc(u8, shape.bytes.len + edge.subst.len);
         @memcpy(request_bytes[0..shape.bytes.len], shape.bytes);
@@ -23106,6 +23267,9 @@ const BodyContext = struct {
         if (replay_state.buckets.get(address)) |candidates| for (candidates.items) |raw_entry| {
             const entry = replay_state.entries.items[raw_entry];
             if (!storedConstFnEvidenceEql(entry.evidence, stored_evidence) or !try entry.request.eql(request, self.typeStore(), self.nameStore())) continue;
+            // An unfinished expansion is joined only by the exact request it
+            // expands; parametric holes generalize completed summaries.
+            if (entry.status != .ready and !self.joinsUnfinishedExpansion(entry, holes.nodes, hole_classes)) continue;
             self.builder.count("interface_replay_hits");
             switch (entry.status) {
                 .expanding, .expanded => {
@@ -23117,7 +23281,7 @@ const BodyContext = struct {
                 },
                 .ready => {
                     if (!replay_state.use_finished_summaries) continue;
-                    cached = entry.summary.?;
+                    cached = entry.summary orelse continue;
                     break;
                 },
             }
@@ -23161,6 +23325,12 @@ const BodyContext = struct {
             .evidence = stored_evidence,
             .request = try request.copy(self.graph.arena(), InterfaceSummaryCopy{}),
             .input_len = shape.bytes.len,
+            .hole_classes = try self.graph.arena().dupe(?NodeId, hole_classes),
+            .hole_cells = hole_cells: {
+                const cells = try self.graph.arena().alloc(NodeId, holes.root_indices.len);
+                for (holes.root_indices, cells) |root_index, *cell| cell.* = roots[root_index];
+                break :hole_cells cells;
+            },
             .roots = roots,
             .lowlink = replay_index,
             .verify_summary = verify_summary,
@@ -23226,6 +23396,20 @@ const BodyContext = struct {
                 replay_state,
             );
         }
+        // A component of one request is complete before it relates back to
+        // that request. A parametric request's summary is therefore taken
+        // from its expansion alone, so relating back cannot fill its holes.
+        const single_request_component = replay_state.entries.items[replay_index].lowlink == replay_index and
+            replay_state.stack.items[replay_state.stack.items.len - 1] == replay_index;
+        const parametric_request = for (hole_classes) |hole_class| {
+            if (hole_class != null) break true;
+        } else false;
+        var component_scratch = std.heap.ArenaAllocator.init(self.allocator);
+        defer component_scratch.deinit();
+        const single_request_constraints: ?InterfaceConstraints = if (single_request_component and parametric_request)
+            try InterfaceConstraints.capture(self.graph, component_scratch.allocator(), roots)
+        else
+            null;
         try self.relateInterfaceRoots(roots, request_roots.items);
         replay_state.entries.items[replay_index].status = .expanded;
         const lowlink = replay_state.entries.items[replay_index].lowlink;
@@ -23239,7 +23423,19 @@ const BodyContext = struct {
                 const entry = &replay_state.entries.items[index];
                 var scratch = std.heap.ArenaAllocator.init(self.allocator);
                 defer scratch.deinit();
-                const constraints = try InterfaceConstraints.capture(self.graph, scratch.allocator(), entry.roots);
+                // Members of a larger component are captured after relating
+                // back to each other's requests, so their interfaces hold the
+                // settled types their holes stood for; only exact requests
+                // may reuse them.
+                const parametric = for (entry.hole_classes) |hole_class| {
+                    if (hole_class != null) break true;
+                } else false;
+                if (parametric and !single_request_component) {
+                    entry.status = .ready;
+                    if (index == replay_index) break;
+                    continue;
+                }
+                const constraints = single_request_constraints orelse try InterfaceConstraints.capture(self.graph, scratch.allocator(), entry.roots);
                 const entry_input: InterfaceConstraints.Identity = .{ .bytes = entry.request.bytes[0..entry.input_len], .leaves = entry.request.leaves };
                 const summary: InterfaceSummary = if (try (try constraints.identityInto(self.graph, scratch.allocator())).eql(entry_input, self.typeStore(), self.nameStore()))
                     .unchanged

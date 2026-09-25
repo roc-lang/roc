@@ -23,6 +23,22 @@ test "interface summaries replay independent generic inputs with fresh-expansion
     try std.testing.expect(diagnostics.specialization.interface_summary_verifications > 0);
 }
 
+test "interface summaries share one expansion across parametric instantiations" {
+    var diagnostics: postcheck.Monotype.Lower.Diagnostics = .{};
+    try harness.expectLowersToLirWithOptions(
+        \\count_items : List(a) -> U64
+        \\count_items = |items| items.len()
+        \\main! = |_args| {
+        \\    echo!(count_items([1.U8, 2.U8]).to_str())
+        \\    echo!(count_items(["a", "b", "c"]).to_str())
+        \\    Ok({})
+        \\}
+    , .{ .monotype_only = true, .monotype_diagnostics_out = &diagnostics });
+    try std.testing.expect(diagnostics.specialization.interface_parametric_requests >= 2);
+    try std.testing.expect(diagnostics.specialization.interface_summary_hits > 0);
+    try std.testing.expect(diagnostics.specialization.interface_summary_verifications > 0);
+}
+
 test "interface summaries finish mutually recursive components before reuse" {
     var diagnostics: postcheck.Monotype.Lower.Diagnostics = .{};
     try harness.expectLowersToLirWithOptions(

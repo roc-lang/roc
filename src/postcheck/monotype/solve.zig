@@ -315,6 +315,25 @@ pub const InterfaceConstraints = struct {
     };
 
     pub fn capture(graph: *InstGraph, allocator: Allocator, roots: []const NodeId) Allocator.Error!InterfaceConstraints {
+        return try captureWithHoles(graph, allocator, roots, &.{}, &.{});
+    }
+
+    /// Capture `roots` with each representation-neutral class in `holes`
+    /// recorded as an unconstrained variable. `hole_classes[i]` receives the
+    /// class a hole stood for, or null when `holes[i]` carries representation
+    /// authority and was captured as itself. Structure reaching a hole stays
+    /// open rather than settling.
+    pub fn captureWithHoles(
+        graph: *InstGraph,
+        allocator: Allocator,
+        roots: []const NodeId,
+        holes: []const NodeId,
+        hole_classes: []?NodeId,
+    ) Allocator.Error!InterfaceConstraints {
+        std.debug.assert(holes.len == hole_classes.len);
+        @memset(hole_classes, null);
+        const hole_roots = try allocator.alloc(NodeId, holes.len);
+        for (holes, hole_roots) |hole, *root| root.* = graph.find(hole);
         var retained = GraphTypeFinals.initRetainedTypeView(graph);
         defer retained.deinit();
         var settled = GraphTypeFinals.initSettledInterface(graph);
@@ -325,6 +344,8 @@ pub const InterfaceConstraints = struct {
             .retained = &retained,
             .graph = graph,
             .allocator = allocator,
+            .holes = hole_roots,
+            .hole_classes = hole_classes,
             .node_ids = scratch.node_ids,
             .kind_ids = scratch.kind_ids,
             .shareable = scratch.shareable,
@@ -558,6 +579,8 @@ pub const InterfaceConstraints = struct {
         nodes: std.ArrayList(Node) = .empty,
         open_nodes: std.ArrayList(OpenNode) = .empty,
         kinds: std.ArrayList(Kind) = .empty,
+        holes: []const NodeId = &.{},
+        hole_classes: []?NodeId = &.{},
 
         // Backing groups can span declarations. Cache groups encode the full
         // identity predicate used by sameRelatedNamedInstance, including the
@@ -577,6 +600,15 @@ pub const InterfaceConstraints = struct {
             const id: NodeId = @enumFromInt(self.nodes.items.len);
             try self.node_ids.put(root, id);
             try self.nodes.append(self.graph.allocator, undefined);
+            if (self.holeIndex(root)) |hole| {
+                if (self.graph.content(root) != .unresolved and try self.holeIsRepresentationNeutral(raw)) {
+                    self.hole_classes[hole] = root;
+                    const open_index: u32 = @intCast(self.open_nodes.items.len);
+                    self.nodes.items[@intFromEnum(id)] = .{ .open = open_index };
+                    try self.open_nodes.append(self.graph.allocator, .{ .content = .{ .unresolved = InstVariable.placeholder() } });
+                    return id;
+                }
+            }
             // Representation authority and open field-kind cells forbid sharing
             // even when the runtime shape happens to be settled.
             // Source-interface evidence belongs to the original request node,
@@ -613,6 +645,110 @@ pub const InterfaceConstraints = struct {
             return id;
         }
 
+        fn holeIndex(self: *const Capture, root: NodeId) ?usize {
+            for (self.holes, 0..) |hole, index| {
+                if (hole == root) return index;
+            }
+            return null;
+        }
+
+        /// A hole stands for a class whose relation to the request is plain
+        /// unification: nothing it reaches carries representation authority,
+        /// source-interface or constructor evidence, or iterator identity.
+        fn holeIsRepresentationNeutral(self: *Capture, raw: NodeId) Allocator.Error!bool {
+            self.share_seen.clearRetainingCapacity();
+            var scan = NeutralScan{ .graph = self.graph, .seen = &self.share_seen };
+            return try scan.node(raw);
+        }
+
+        const NeutralScan = struct {
+            graph: *InstGraph,
+            seen: *collections.DenseMap(NodeId, void),
+
+            fn node(self: *NeutralScan, raw: NodeId) Allocator.Error!bool {
+                const graph = self.graph;
+                const root = graph.find(raw);
+                if ((try self.seen.getOrPut(root)).found_existing) return true;
+                if (graph.private_backing_roots.items[@intFromEnum(root)]) return false;
+                if (graph.requestSourceInterface(raw) != null or graph.requestPropagatesConstructorEvidence(raw)) return false;
+                if (graph.forced_dynamic_iterator_roots.items[@intFromEnum(root)]) return false;
+                const content = graph.content(root);
+                switch (content) {
+                    .named => |named| {
+                        if (named.generated_iterator != null or named.def.generated != null or named.def.iterator_representation != .none or named.def.iterator_kind != .none) return false;
+                        if (named.backing) |backing| if (backing.authority == .generated_private) {
+                            return false;
+                        };
+                    },
+                    .redirect,
+                    .unresolved,
+                    .primitive,
+                    .list,
+                    .box,
+                    .tuple,
+                    .func,
+                    .tag_union,
+                    .record,
+                    .empty_tag_union,
+                    .empty_record,
+                    .erased,
+                    .zst,
+                    => {},
+                }
+                return self.value(InstNode, content);
+            }
+
+            fn value(self: *NeutralScan, comptime T: type, item: T) Allocator.Error!bool {
+                if (T == NodeId) return self.node(item);
+                if (T == InstFieldKind) return true;
+                switch (@typeInfo(T)) {
+                    .@"struct" => |info| inline for (info.fields) |field| {
+                        if (!try self.value(field.type, @field(item, field.name))) return false;
+                    },
+                    .@"union" => |info| {
+                        inline for (info.fields) |field| {
+                            if (std.meta.activeTag(item) == @field(info.tag_type.?, field.name)) return self.value(field.type, @field(item, field.name));
+                        }
+                        unreachable;
+                    },
+                    .optional => |info| if (item) |actual| {
+                        return self.value(info.child, actual);
+                    },
+                    .pointer => |info| switch (info.size) {
+                        .slice => for (item) |child| {
+                            if (!try self.value(info.child, child)) return false;
+                        },
+                        .one => return self.value(info.child, item.*),
+                        .many, .c => @compileError("neutral scan reached an unbounded pointer"),
+                    },
+                    .array => |info| for (item) |child| {
+                        if (!try self.value(info.child, child)) return false;
+                    },
+                    .type,
+                    .void,
+                    .bool,
+                    .noreturn,
+                    .int,
+                    .float,
+                    .comptime_float,
+                    .comptime_int,
+                    .undefined,
+                    .null,
+                    .error_union,
+                    .error_set,
+                    .@"enum",
+                    .@"fn",
+                    .@"opaque",
+                    .frame,
+                    .@"anyframe",
+                    .vector,
+                    .enum_literal,
+                    => {},
+                }
+                return true;
+            }
+        };
+
         fn canShare(self: *Capture, root: NodeId) Allocator.Error!bool {
             if (self.shareable.get(root)) |known| return known;
             self.share_seen.clearRetainingCapacity();
@@ -631,6 +767,7 @@ pub const InterfaceConstraints = struct {
 
             fn node(self: *Shareability, raw: NodeId) Allocator.Error!bool {
                 const root = self.capture.graph.find(raw);
+                if (self.capture.holeIndex(root) != null) return false;
                 if (self.capture.shareable.get(root)) |known| return known;
                 const result = try self.visit(raw, root);
                 // A failed path proves every ancestor on that path reaches
@@ -11731,6 +11868,47 @@ test "interface constraints retain settled producer evidence and exact leaf coll
     const collision: InterfaceConstraints.Identity = .{ .bytes = str_identity.bytes, .leaves = bool_identity.leaves };
     try std.testing.expect(!try str_identity.eql(collision, &types, &name_store));
     try std.testing.expect(try str_identity.eql(str_identity, &types, &name_store));
+}
+
+test "interface constraints capture representation-neutral holes as variables" {
+    const allocator = std.testing.allocator;
+    var types = Type.Store.init(allocator);
+    defer types.deinit();
+    var name_store = names.NameStore.init(allocator);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(allocator, &types, &name_store);
+    defer graph.destroy();
+
+    const u8_node = try graph.newNode(.{ .primitive = .u8 });
+    const u8_list = try graph.newNode(.{ .list = u8_node });
+    const str_node = try graph.newNode(.{ .primitive = .str });
+    const str_list = try graph.newNode(.{ .list = str_node });
+
+    var u8_classes: [1]?NodeId = undefined;
+    const u8_constraints = try InterfaceConstraints.captureWithHoles(graph, graph.arena(), &.{ u8_list, u8_node }, &.{u8_node}, &u8_classes);
+    var str_classes: [1]?NodeId = undefined;
+    const str_constraints = try InterfaceConstraints.captureWithHoles(graph, graph.arena(), &.{ str_list, str_node }, &.{str_node}, &str_classes);
+    try std.testing.expect(u8_classes[0] != null);
+    try std.testing.expect(str_classes[0] != null);
+    // Requests that differ only in a hole's settled instantiation share one identity.
+    try std.testing.expect(try (try u8_constraints.identity(graph)).eql(try str_constraints.identity(graph), &types, &name_store));
+    const exact_u8 = try InterfaceConstraints.capture(graph, graph.arena(), &.{ u8_list, u8_node });
+    const exact_str = try InterfaceConstraints.capture(graph, graph.arena(), &.{ str_list, str_node });
+    try std.testing.expect(!try (try exact_u8.identity(graph)).eql(try exact_str.identity(graph), &types, &name_store));
+
+    // The hole instantiates as one fresh variable wherever the class occurs.
+    const copied = try u8_constraints.instantiate(graph);
+    try std.testing.expect(graph.content(copied[1]) == .unresolved);
+    try std.testing.expect(graph.sameClass(graph.content(copied[0]).list, copied[1]));
+
+    // A class carrying representation authority is captured as itself.
+    const private_node = try graph.newNode(.{ .primitive = .u8 });
+    graph.private_backing_roots.items[@intFromEnum(private_node)] = true;
+    const private_list = try graph.newNode(.{ .list = private_node });
+    var private_classes: [1]?NodeId = undefined;
+    const private_constraints = try InterfaceConstraints.captureWithHoles(graph, graph.arena(), &.{ private_list, private_node }, &.{private_node}, &private_classes);
+    try std.testing.expect(private_classes[0] == null);
+    try std.testing.expect(!try (try private_constraints.identity(graph)).eql(try u8_constraints.identity(graph), &types, &name_store));
 }
 
 test "interface constraints distinguish variable sharing defaults and field-kind relationships" {
