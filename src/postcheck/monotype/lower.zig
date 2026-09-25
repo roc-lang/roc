@@ -9641,7 +9641,7 @@ const Builder = struct {
                 // A recursive edge into a function with no arguments carries
                 // its recursive value flow through the result alone.
                 const request = try source_ctx.graph.functionNodes(request_fn_node);
-                if (request.args.len == 0) try source_ctx.graph.markRecursiveValueSlot(request.ret);
+                if (request.args.len == 0) source_ctx.graph.markRecursiveValueSlot(request.ret);
                 try source_ctx.graph.unifyRecursiveFunctionInterface(
                     spec.request_fn_node,
                     spec.initial_request_arg_classes,
@@ -56075,7 +56075,7 @@ const BodyContext = struct {
             // the loop parameter. Record the edge itself; representation
             // finalization will force only slots that actually joined distinct
             // minted iterator identities.
-            try self.graph.markRecursiveValueSlot(carry_node);
+            self.graph.markRecursiveValueSlot(carry_node);
         }
         if (!self.graph.sameClass(carry_node, current_node)) {
             try selectRequestRepresentation(self.graph, carry_node, current_node);
