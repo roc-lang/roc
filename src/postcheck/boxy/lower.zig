@@ -3673,7 +3673,9 @@ const ProcedureBuilder = struct {
         defer descs.deinit(self.allocator);
         for (payloads, 0..) |child, index| {
             const field_layout = self.tagVariantPayloadFieldLayout(variant_payload_layout, index, payloads.len);
-            const desc_rep = self.tagPayloadStorageDescRepForLayout(child.rep, field_layout, false) orelse continue;
+            // Concrete payloads carry descriptors too; see
+            // `staticPayloadDescRefsForTagVariant`.
+            const desc_rep = self.tagPayloadStorageDescRepForLayout(child.rep, field_layout, true) orelse continue;
             const source_child = self.matchingTagPayloadInstantiationSource(source_payloads, child);
             try descs.append(self.allocator, .{
                 .payload_index = @intCast(index),
