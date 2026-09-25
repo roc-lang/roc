@@ -688,6 +688,8 @@ pub const PublishInputs = struct {
     platform_requirement_solutions: []const requirement_solution.SolutionInput = &.{},
     explicit_roots: []const ExplicitRootRequestInput = &.{},
     hoisted_roots: []const hoist_roots.SelectedHoistedRoot = &.{},
+    /// Local function bindings checking promoted to procedures of their own.
+    promoted_local_procedures: []const hoist_roots.PromotedLocalProcedure = &.{},
     compile_time_finalizer: CompileTimeFinalizer,
     /// Prepared metadata may serve frontend imports; evaluation and cache publication wait.
     evaluation_phase: enum { immediate, post_frontend } = .immediate,
@@ -4688,6 +4690,7 @@ pub const CheckedTypeStore = struct {
         available: []const ImportedModuleView,
         source_nodes: *const CheckedSourceNodes,
         selected_hoisted_roots: []const hoist_roots.SelectedHoistedRoot,
+        promoted_local_procedures: []const hoist_roots.PromotedLocalProcedure,
     ) Allocator.Error!CheckedTypePublication {
         const import_views = CheckedImportViews{
             .current_owner = current_owner,
@@ -4920,6 +4923,14 @@ pub const CheckedTypeStore = struct {
                 ModuleEnv.varFrom(pattern)
             else
                 module.exprType(selected.expr);
+            const root = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, source_var);
+            try store.publishSourceScheme(allocator, module, &source_schemes, &scheme_writer, source_var, root);
+        }
+
+        // A promoted local function is a procedure of its own, published
+        // under its binding's generalized scheme like a top-level function.
+        for (promoted_local_procedures) |promoted| {
+            const source_var = ModuleEnv.varFrom(promoted.pattern);
             const root = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, source_var);
             try store.publishSourceScheme(allocator, module, &source_schemes, &scheme_writer, source_var, root);
         }
@@ -9406,7 +9417,7 @@ fn expectSingleNominalBackingPayload(allocator: Allocator, module_name: []const 
     var source_nodes = try CheckedSourceNodes.init(allocator, module);
     defer source_nodes.deinit(allocator);
 
-    var publication = try CheckedTypeStore.fromModule(allocator, module, &names, artifact_key, &.{}, &.{}, &source_nodes, &.{});
+    var publication = try CheckedTypeStore.fromModule(allocator, module, &names, artifact_key, &.{}, &.{}, &source_nodes, &.{}, &.{});
     defer publication.deinit(allocator);
 
     const nominal_stmt = for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
@@ -9720,6 +9731,7 @@ test "checked binder mutability comes from the CIR var tag, not identifier spell
         &.{},
         &source_nodes,
         &.{},
+        &.{},
     );
     defer checked_type_publication.deinit(allocator);
     var checked_body_builder = try CheckedBodyStoreBuilder.fromModule(
@@ -9728,6 +9740,7 @@ test "checked binder mutability comes from the CIR var tag, not identifier spell
         &names,
         &checked_type_publication,
         &source_nodes,
+        &.{},
     );
     defer checked_body_builder.deinit(allocator);
     const checked_bodies = checked_body_builder.storePtr();
@@ -10564,6 +10577,11 @@ pub const CheckedConditionLoop = struct {
 pub const CheckedStatementData = union(enum) {
     pending,
     decl: struct { pattern: CheckedPatternId, expr: CheckedExprId },
+    /// A local function binding promoted to a procedure of its own
+    /// (`hoist_roots.PromotedLocalProcedure`). It evaluates nothing where it
+    /// is written: `expr` is the root of the procedure's own template, and
+    /// every use of `pattern` references that procedure.
+    promoted_proc: struct { pattern: CheckedPatternId, expr: CheckedExprId },
     var_: struct { pattern: CheckedPatternId, expr: CheckedExprId },
     var_uninitialized: struct { pattern: CheckedPatternId },
     reassign: struct { pattern: CheckedPatternId, expr: CheckedExprId, reassigned_binders: []const PatternBinderId },
@@ -11042,6 +11060,7 @@ pub const StoredCheckedPatternData = union(enum) {
 pub const StoredCheckedStatementData = union(enum) {
     pending,
     decl: struct { pattern: CheckedPatternId, expr: CheckedExprId },
+    promoted_proc: struct { pattern: CheckedPatternId, expr: CheckedExprId },
     var_: struct { pattern: CheckedPatternId, expr: CheckedExprId },
     var_uninitialized: struct { pattern: CheckedPatternId },
     reassign: struct { pattern: CheckedPatternId, expr: CheckedExprId, reassigned_binders: CheckedBodyRange },
@@ -11267,6 +11286,7 @@ fn reconstructCheckedStatementData(pool_owner: anytype, stored: StoredCheckedSta
         .type_var_alias => .type_var_alias,
         .runtime_error => .runtime_error,
         .decl => |s| .{ .decl = .{ .pattern = s.pattern, .expr = s.expr } },
+        .promoted_proc => |s| .{ .promoted_proc = .{ .pattern = s.pattern, .expr = s.expr } },
         .var_ => |s| .{ .var_ = .{ .pattern = s.pattern, .expr = s.expr } },
         .var_uninitialized => |s| .{ .var_uninitialized = .{ .pattern = s.pattern } },
         .reassign => |s| .{ .reassign = .{
@@ -12106,7 +12126,7 @@ const CheckedLoopMutationPublisher = struct {
                     if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .always = .{}, .expect_only = .{} });
                     loop_.mutations = empty_plan;
                 },
-                .pending, .decl, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
+                .pending, .decl, .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
             };
             return;
         }
@@ -12118,7 +12138,7 @@ const CheckedLoopMutationPublisher = struct {
         };
         for (store.stored_statements.items) |*stmt| switch (stmt.data) {
             inline .for_, .while_, .infinite_loop, .breakable_loop => |*loop_| _ = try self.loop(loop_),
-            .pending, .decl, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
+            .pending, .decl, .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
         };
     }
 
@@ -12286,7 +12306,7 @@ const CheckedLoopMutationPublisher = struct {
                 expect_only,
             ),
             .return_ => |ret| try self.collectExpr(ret.expr, expect_only),
-            .var_uninitialized, .crash, .break_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
+            .promoted_proc, .var_uninitialized, .crash, .break_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
             .pending => checkedArtifactInvariant("pending statement in loop mutation publication", .{}),
         }
     }
@@ -12376,7 +12396,12 @@ pub const CheckedBodyStore = struct {
         names: *canonical.CanonicalNameStore,
         checked_types: *const CheckedTypePublication,
         source_nodes: *const CheckedSourceNodes,
+        promoted_local_procedures: []const hoist_roots.PromotedLocalProcedure,
     ) Allocator.Error!CheckedBodyStore {
+        var promoted_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){};
+        defer promoted_patterns.deinit(allocator);
+        try promoted_patterns.ensureTotalCapacity(allocator, @intCast(promoted_local_procedures.len));
+        for (promoted_local_procedures) |promoted| promoted_patterns.putAssumeCapacity(promoted.pattern, {});
         var exprs = std.ArrayList(CheckedExpr).empty;
         errdefer exprs.deinit(allocator);
         errdefer deinitCheckedExprList(allocator, exprs.items);
@@ -12477,6 +12502,7 @@ pub const CheckedBodyStore = struct {
             .literal_pattern_exprs = &literal_pattern_exprs,
             .match_branch_pattern_pool = &match_branch_pattern_pool,
             .binder_remap_pool = &binder_remap_pool,
+            .promoted_patterns = &promoted_patterns,
         };
 
         node_idx = 0;
@@ -13013,6 +13039,7 @@ pub const CheckedBodyStore = struct {
             .type_var_alias => .type_var_alias,
             .runtime_error => .runtime_error,
             .decl => |s| .{ .decl = .{ .pattern = s.pattern, .expr = s.expr } },
+            .promoted_proc => |s| .{ .promoted_proc = .{ .pattern = s.pattern, .expr = s.expr } },
             .var_ => |s| .{ .var_ = .{ .pattern = s.pattern, .expr = s.expr } },
             .var_uninitialized => |s| .{ .var_uninitialized = .{ .pattern = s.pattern } },
             .reassign => |s| .{ .reassign = .{
@@ -13576,9 +13603,10 @@ pub const CheckedBodyStoreBuilder = struct {
         names: *canonical.CanonicalNameStore,
         checked_types: *const CheckedTypePublication,
         source_nodes: *const CheckedSourceNodes,
+        promoted_local_procedures: []const hoist_roots.PromotedLocalProcedure,
     ) Allocator.Error!CheckedBodyStoreBuilder {
         return .{
-            .store = try CheckedBodyStore.fromModule(allocator, module, names, checked_types, source_nodes),
+            .store = try CheckedBodyStore.fromModule(allocator, module, names, checked_types, source_nodes, promoted_local_procedures),
             .synthetic_expr_origins = .empty,
         };
     }
@@ -14117,6 +14145,8 @@ fn CheckedBodyDiagnosticErrorScan(comptime follow_constants: bool) type {
                 .runtime_error => true,
                 .decl => |decl| (try self.pattern(decl.pattern)) or
                     try self.expr(decl.expr),
+                // The promoted procedure's body is its own template.
+                .promoted_proc => false,
                 .var_ => |var_| (try self.pattern(var_.pattern)) or
                     try self.expr(var_.expr),
                 .var_uninitialized => |var_| self.pattern(var_.pattern),
@@ -14532,6 +14562,8 @@ fn checkedStatementDataDiverges(
         .runtime_error,
         => true,
         .decl => |decl| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, decl.expr, expr_states, statement_states, mode),
+        // Declaring a promoted procedure evaluates nothing here.
+        .promoted_proc => false,
         .var_ => |var_| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, var_.expr, expr_states, statement_states, mode),
         .var_uninitialized => false,
         .reassign => |reassign| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, reassign.expr, expr_states, statement_states, mode),
@@ -14808,6 +14840,9 @@ const CheckedBodyPayloadCopier = struct {
     /// store's pools at commit, so the in-branch ranges stay valid.
     match_branch_pattern_pool: *std.ArrayList(CheckedMatchBranchPattern),
     binder_remap_pool: *std.ArrayList(CheckedAlternativeBinderRemap),
+    /// Binding patterns of the local functions checking promoted to
+    /// procedures of their own.
+    promoted_patterns: *const std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 
     fn copyExprData(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error!CheckedExprData {
         const expr = self.module.expr(expr_idx).data;
@@ -15259,6 +15294,9 @@ const CheckedBodyPayloadCopier = struct {
         const statement = self.module.getStatement(statement_idx);
         return switch (statement) {
             .s_decl => |decl| blk: {
+                if (self.promoted_patterns.contains(decl.pattern)) {
+                    break :blk .{ .promoted_proc = .{ .pattern = self.checkedPattern(decl.pattern), .expr = self.checkedExpr(decl.expr) } };
+                }
                 // Generalization is checker-owned binding metadata. The RHS
                 // lookup supplies the explicit forwarding edge; calls and
                 // other computations retain their ordinary evaluation site.
@@ -15937,6 +15975,7 @@ fn deinitCheckedStatementData(allocator: Allocator, data: *CheckedStatementData)
         .reassign => |reassign| allocator.free(reassign.reassigned_binders),
         .pending,
         .decl,
+        .promoted_proc,
         .var_,
         .var_uninitialized,
         .crash,
@@ -16020,6 +16059,7 @@ fn verifyCheckedStatementDataComplete(data: StoredCheckedStatementData) void {
         },
         inline .while_, .infinite_loop, .breakable_loop => |loop_| std.debug.assert(loop_.mutations != null),
         .decl,
+        .promoted_proc,
         .var_,
         .var_uninitialized,
         .reassign,
@@ -16429,6 +16469,8 @@ pub const CallableEvalTemplateTable = struct {
 /// being published.
 const SelectedHoistedCallableTable = struct {
     by_pattern: []?TopLevelProcedureBindingRef = &.{},
+    /// Procedure bindings of promoted local functions, by binding pattern.
+    promoted_by_pattern: []?TopLevelProcedureBindingRef = &.{},
 
     fn fromRoots(
         allocator: Allocator,
@@ -16438,10 +16480,27 @@ const SelectedHoistedCallableTable = struct {
         callable_eval_templates: *CallableEvalTemplateTable,
         procedure_bindings: *TopLevelProcedureBindingTable,
         checked_type_publication: *const CheckedTypePublication,
+        promoted_templates: []const PromotedProcedureTemplateEntry,
     ) Allocator.Error!SelectedHoistedCallableTable {
         const by_pattern = try allocator.alloc(?TopLevelProcedureBindingRef, checked_bodies.patternCount());
         errdefer allocator.free(by_pattern);
         @memset(by_pattern, null);
+        const promoted_by_pattern = try allocator.alloc(?TopLevelProcedureBindingRef, checked_bodies.patternCount());
+        errdefer allocator.free(promoted_by_pattern);
+        @memset(promoted_by_pattern, null);
+
+        for (promoted_templates) |promoted| {
+            const checked_pattern = checkedPatternIdForSource(checked_bodies, promoted.pattern);
+            const binding = try procedure_bindings.appendDirect(
+                allocator,
+                checked_type_publication.schemeForSourceVar(module, ModuleEnv.varFrom(promoted.pattern)),
+                .{ .artifact = promoted.template.artifact, .proc_base = promoted.template.proc_base },
+                promoted.template,
+            );
+            const slot = &promoted_by_pattern[@intFromEnum(checked_pattern)];
+            if (slot.* != null) checkedArtifactInvariant("promoted local procedure was published more than once", .{});
+            slot.* = binding;
+        }
 
         for (roots.roots) |root| {
             if (root.kind != .callable_binding) continue;
@@ -16478,7 +16537,7 @@ const SelectedHoistedCallableTable = struct {
             slot.* = binding;
         }
 
-        return .{ .by_pattern = by_pattern };
+        return .{ .by_pattern = by_pattern, .promoted_by_pattern = promoted_by_pattern };
     }
 
     fn lookupByPattern(self: *const SelectedHoistedCallableTable, pattern: CheckedPatternId) ?TopLevelProcedureBindingRef {
@@ -16487,8 +16546,17 @@ const SelectedHoistedCallableTable = struct {
         return self.by_pattern[raw];
     }
 
+    /// The procedure binding of the promoted local function a binding pattern
+    /// declares.
+    fn lookupPromotedByPattern(self: *const SelectedHoistedCallableTable, pattern: CheckedPatternId) ?TopLevelProcedureBindingRef {
+        const raw = @intFromEnum(pattern);
+        if (raw >= self.promoted_by_pattern.len) return null;
+        return self.promoted_by_pattern[raw];
+    }
+
     fn deinit(self: *SelectedHoistedCallableTable, allocator: Allocator) void {
         allocator.free(self.by_pattern);
+        allocator.free(self.promoted_by_pattern);
         self.* = .{};
     }
 };
@@ -17170,6 +17238,17 @@ fn categorizeLocalValueRef(
 
     if (selected_hoisted_callables.lookupByPattern(checked_pattern)) |binding| {
         return .{ .top_level_proc = .{
+            .binding = .{ .top_level = .{
+                .artifact = artifact_key,
+                .binding = binding,
+            } },
+            .source_fn_ty_template = .{},
+            .runtime_result_provenance = null,
+        } };
+    }
+
+    if (selected_hoisted_callables.lookupPromotedByPattern(checked_pattern)) |binding| {
+        return .{ .promoted_top_level_proc = .{
             .binding = .{ .top_level = .{
                 .artifact = artifact_key,
                 .binding = binding,
@@ -17917,6 +17996,12 @@ fn sealCheckedProcedureTemplateRefs(
             }
         }
 
+        // A promoted local function is the root of its own template, whose
+        // scheme is the template's; it opens no generalized-local scope.
+        var promoted_patterns = std.AutoHashMap(CIR.Pattern.Idx, void).init(allocator);
+        defer promoted_patterns.deinit();
+        for (templates.promoted) |promoted| try promoted_patterns.put(promoted.pattern, {});
+
         var raw_node: u32 = 0;
         while (raw_node < module.nodeCount()) : (raw_node += 1) {
             if (module.nodeTag(@enumFromInt(raw_node)) != .statement_decl) continue;
@@ -17924,6 +18009,7 @@ fn sealCheckedProcedureTemplateRefs(
             const statement_data = module.getStatement(statement);
             if (statement_data != .s_decl) continue;
             const decl = statement_data.s_decl;
+            if (promoted_patterns.contains(decl.pattern)) continue;
             const expr_data = module.expr(decl.expr).data;
             const is_alias = if (checked_bodies.patternBinderForSource(decl.pattern)) |binder|
                 checked_bodies.patternBinder(binder).is_scheme_alias
@@ -18444,11 +18530,16 @@ const EvidencePass = struct {
         var params = std.ArrayListUnmanaged(EvidenceParam).empty;
         defer params.deinit(self.allocator);
 
-        // by_def maps source defs to templates.
-        var template_defs = std.AutoHashMap(u32, CIR.Def.Idx).init(self.allocator);
+        // Each source-defined procedure template publishes its source
+        // binding's scheme: a top-level def's, or a promoted local function
+        // binding pattern's.
+        var template_defs = std.AutoHashMap(u32, Var).init(self.allocator);
         defer template_defs.deinit();
         for (self.templates.by_def) |entry| {
-            try template_defs.put(@intFromEnum(entry.template.template), entry.def);
+            try template_defs.put(@intFromEnum(entry.template.template), ModuleEnv.varFrom(entry.def));
+        }
+        for (self.templates.promoted) |entry| {
+            try template_defs.put(@intFromEnum(entry.template.template), ModuleEnv.varFrom(entry.pattern));
         }
 
         // Publish every template schema before resolving any target edge. A
@@ -18710,9 +18801,9 @@ const EvidencePass = struct {
     fn templateSchemeVar(
         self: *EvidencePass,
         template: CheckedProcedureTemplate,
-        template_defs: *const std.AutoHashMap(u32, CIR.Def.Idx),
+        template_defs: *const std.AutoHashMap(u32, Var),
     ) ?Var {
-        if (template_defs.get(@intFromEnum(template.template_id))) |def_idx| return ModuleEnv.varFrom(def_idx);
+        if (template_defs.get(@intFromEnum(template.template_id))) |scheme_var| return scheme_var;
         return switch (template.body) {
             .entry_wrapper => |wrapper_id| rootSchemeVar(self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root)),
             .checked_body, .intrinsic_wrapper, .unimplemented => null,
@@ -18799,9 +18890,9 @@ const EvidencePass = struct {
     fn templateEvidenceSchemeVar(
         self: *EvidencePass,
         template: CheckedProcedureTemplate,
-        template_defs: *const std.AutoHashMap(u32, CIR.Def.Idx),
+        template_defs: *const std.AutoHashMap(u32, Var),
     ) ?Var {
-        if (template_defs.get(@intFromEnum(template.template_id))) |def_idx| return ModuleEnv.varFrom(def_idx);
+        if (template_defs.get(@intFromEnum(template.template_id))) |scheme_var| return scheme_var;
         return switch (template.body) {
             .entry_wrapper => |wrapper_id| blk: {
                 const root = self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root);
@@ -18814,7 +18905,7 @@ const EvidencePass = struct {
     fn enumerateTemplateParams(
         self: *EvidencePass,
         template: CheckedProcedureTemplate,
-        template_defs: *const std.AutoHashMap(u32, CIR.Def.Idx),
+        template_defs: *const std.AutoHashMap(u32, Var),
         params: *std.ArrayListUnmanaged(EvidenceParam),
     ) Allocator.Error!void {
         params.clearRetainingCapacity();
@@ -21176,6 +21267,8 @@ const CheckedTemplateRefCollector = struct {
                 try self.collectPattern(decl.pattern);
                 try self.collectExpr(decl.expr);
             },
+            // The promoted procedure is collected as its own template.
+            .promoted_proc => {},
             .var_ => |var_| {
                 try self.collectPattern(var_.pattern);
                 try self.collectExpr(var_.expr);
@@ -21718,6 +21811,9 @@ fn hostedTryAdapterCapabilityForCheckedRoot(
 pub const CheckedProcedureTemplateTable = struct {
     templates: std.ArrayList(CheckedProcedureTemplate) = .empty,
     by_def: []static_dispatch.ProcedureTemplateLookupEntry = &.{},
+    /// The templates of local functions checking promoted to procedures of
+    /// their own, in promotion order, with each one's binding pattern.
+    promoted: []PromotedProcedureTemplateEntry = &.{},
     /// Flat pool backing each template's `evidence_params` span.
     evidence_params_pool: []static_dispatch.EvidenceParamRecord = &.{},
     /// Flat pool backing each evidence param's `path` span.
@@ -21744,6 +21840,7 @@ pub const CheckedProcedureTemplateTable = struct {
     pub const Serialized = extern struct {
         templates: SerializedSlice(CheckedProcedureTemplate) = .{},
         by_def: SerializedSlice(static_dispatch.ProcedureTemplateLookupEntry) = .{},
+        promoted: SerializedSlice(PromotedProcedureTemplateEntry) = .{},
         evidence_params_pool: SerializedSlice(static_dispatch.EvidenceParamRecord) = .{},
         evidence_param_paths: SerializedSlice(static_dispatch.EvidencePathStep) = .{},
         scheme_vars_pool: SerializedSlice(CheckedTypeId) = .{},
@@ -21879,6 +21976,73 @@ pub const CheckedProcedureTemplateTable = struct {
         };
     }
 
+    /// Give each promoted local function its own procedure template, rooted at
+    /// its lambda and published under its binding's generalized scheme. A
+    /// promoted closure's captures name other promoted procedures, so its
+    /// template root is the closure's lambda.
+    pub fn appendPromotedLocalProcedures(
+        self: *CheckedProcedureTemplateTable,
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        names: *canonical.CanonicalNameStore,
+        owner_artifact: canonical.ArtifactRef,
+        checked_type_publication: *CheckedTypePublication,
+        checked_bodies: *CheckedBodyStore,
+        promoted_local_procedures: []const hoist_roots.PromotedLocalProcedure,
+    ) Allocator.Error!void {
+        if (promoted_local_procedures.len == 0) return;
+        const module_name = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
+        const entries = try allocator.alloc(PromotedProcedureTemplateEntry, promoted_local_procedures.len);
+        errdefer allocator.free(entries);
+        try self.templates.ensureUnusedCapacity(allocator, promoted_local_procedures.len);
+        for (promoted_local_procedures, entries) |promoted, *entry| {
+            const source_data = module.expr(promoted.expr).data;
+            const lambda_source = if (source_data == .e_lambda)
+                promoted.expr
+            else if (source_data == .e_closure)
+                source_data.e_closure.lambda_idx
+            else
+                checkedArtifactInvariant("promoted local procedure was not a lambda or closure", .{});
+            const root_expr = checked_bodies.exprIdForSource(lambda_source) orelse
+                checkedArtifactInvariant("promoted local procedure lambda was not published", .{});
+            const proc_base = try names.internProcBase(.{
+                .module_name = module_name,
+                .export_name = null,
+                .kind = .promoted_local,
+                .ordinal = @intFromEnum(lambda_source),
+                .source_def_idx = null,
+            });
+            const template_id: canonical.CheckedProcedureTemplateId = @enumFromInt(@as(u32, @intCast(self.templates.items.len)));
+            const template_ref = canonical.ProcedureTemplateRef{
+                .artifact = owner_artifact,
+                .proc_base = proc_base,
+                .template = template_id,
+            };
+            const checked_fn_root = checked_bodies.expr(root_expr).ty;
+            self.templates.appendAssumeCapacity(.{
+                .proc_base = proc_base,
+                .template_id = template_id,
+                .body = .{ .checked_body = try checked_bodies.appendBody(allocator, root_expr, template_ref) },
+                .checked_fn_scheme = checked_type_publication.schemeForSourceVar(module, ModuleEnv.varFrom(promoted.pattern)),
+                .checked_fn_root = checked_fn_root,
+                .static_dispatch_plans = .{},
+                .direct_dispatch_plans = .{},
+                .dispatch_relations = .{},
+                .resolved_value_refs = .{},
+                .top_level_value_uses = .{},
+                .nested_proc_sites = .{},
+                .target = .roc,
+                .hosted_try_adapter = if (checkedRootHasClosedResultRow(&checked_type_publication.store, checked_fn_root))
+                    try hostedTryAdapterCapabilityForCheckedRoot(names, &checked_type_publication.store, checked_fn_root)
+                else
+                    null,
+            });
+            entry.* = .{ .pattern = promoted.pattern, .template = template_ref };
+        }
+        allocator.free(self.promoted);
+        self.promoted = entries;
+    }
+
     pub fn lookupByDef(self: *const CheckedProcedureTemplateTable, def_idx: CIR.Def.Idx) ?canonical.ProcedureTemplateRef {
         var lo: usize = 0;
         var hi: usize = self.by_def.len;
@@ -21987,6 +22151,7 @@ pub const CheckedProcedureTemplateTable = struct {
 
     pub fn deinit(self: *CheckedProcedureTemplateTable, allocator: Allocator) void {
         allocator.free(self.by_def);
+        allocator.free(self.promoted);
         self.templates.deinit(allocator);
         allocator.free(self.evidence_params_pool);
         allocator.free(self.evidence_param_paths);
@@ -22045,6 +22210,13 @@ pub const CheckedProcedureTemplateTable = struct {
     pub fn specializationRelationTypes(self: *const CheckedProcedureTemplateTable, span: artifact_serialize.Span) []const CheckedTypeId {
         return self.specialization_interface_types[span.start .. span.start + span.len];
     }
+};
+
+/// A promoted local procedure's template and the binding pattern whose
+/// generalized scheme it publishes.
+pub const PromotedProcedureTemplateEntry = struct {
+    pattern: CIR.Pattern.Idx,
+    template: canonical.ProcedureTemplateRef,
 };
 
 /// Public `CheckedProcedureTemplateTableView` declaration.
@@ -22630,6 +22802,8 @@ const NestedProcSiteBuilder = struct {
                 try self.scanPattern(decl.pattern, owner);
                 try self.scanExpr(decl.expr, owner, false);
             },
+            // The promoted procedure's sites belong to its own template.
+            .promoted_proc => {},
             .var_ => |var_| {
                 try self.scanPattern(var_.pattern, owner);
                 try self.scanExpr(var_.expr, owner, false);
@@ -28499,6 +28673,8 @@ fn checkedStatementContainsExpr(
     const statement = checked_bodies.statement(statement_id);
     return switch (statement.data) {
         .decl => |decl| checkedExprContainsExpr(checked_bodies, decl.expr, needle),
+        // The promoted procedure's lambda is its own template's body.
+        .promoted_proc => false,
         .var_ => |var_| checkedExprContainsExpr(checked_bodies, var_.expr, needle),
         .reassign => |reassign| checkedExprContainsExpr(checked_bodies, reassign.expr, needle),
         .dbg, .expr, .expect => |expr| checkedExprContainsExpr(checked_bodies, expr, needle),
@@ -28651,6 +28827,8 @@ fn checkedStatementContainsPattern(
     return switch (statement.data) {
         .decl => |decl| checkedPatternContainsPattern(checked_bodies, decl.pattern, needle) or
             checkedExprContainsPattern(checked_bodies, decl.expr, needle),
+        // The promoted procedure's lambda is its own template's body.
+        .promoted_proc => |promoted| checkedPatternContainsPattern(checked_bodies, promoted.pattern, needle),
         .var_ => |var_| checkedPatternContainsPattern(checked_bodies, var_.pattern, needle) or
             checkedExprContainsPattern(checked_bodies, var_.expr, needle),
         .var_uninitialized => |var_| checkedPatternContainsPattern(checked_bodies, var_.pattern, needle),
@@ -32933,7 +33111,8 @@ pub const CheckedModuleArtifact = struct {
             // record-unset label pool one more. Ordered debug entries and their
             // byte pool add two explicit relocation pointers, and the
             // checked-error template list one more. Loop mutation plans add one.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 230);
+            // Promoted local procedure templates add one.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 231);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -36928,7 +37107,7 @@ pub fn publishFromTypedModule(
     var source_nodes = try CheckedSourceNodes.init(allocator, module);
     defer source_nodes.deinit(allocator);
 
-    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, artifact_key, inputs.imports, inputs.available_artifacts, &source_nodes, inputs.hoisted_roots);
+    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, artifact_key, inputs.imports, inputs.available_artifacts, &source_nodes, inputs.hoisted_roots, inputs.promoted_local_procedures);
     defer checked_type_publication.deinitIndex(allocator);
     errdefer checked_type_publication.store.deinit(allocator);
     const checked_types = &checked_type_publication.store;
@@ -36963,7 +37142,7 @@ pub fn publishFromTypedModule(
         try relation_type_substitutions.applyToPublication(allocator, &canonical_names, &checked_type_publication);
     }
 
-    var checked_body_builder = try CheckedBodyStoreBuilder.fromModule(allocator, module, &canonical_names, &checked_type_publication, &source_nodes);
+    var checked_body_builder = try CheckedBodyStoreBuilder.fromModule(allocator, module, &canonical_names, &checked_type_publication, &source_nodes, inputs.promoted_local_procedures);
     errdefer checked_body_builder.deinit(allocator);
     try checked_body_builder.reserveSyntheticExprs(allocator, syntheticExprCapacityForHoistedRoots(inputs.hoisted_roots));
     const checked_bodies = checked_body_builder.storePtr();
@@ -36984,6 +37163,15 @@ pub fn publishFromTypedModule(
         &intrinsic_wrappers,
     );
     errdefer checked_procedure_templates.deinit(allocator);
+    try checked_procedure_templates.appendPromotedLocalProcedures(
+        allocator,
+        module,
+        &canonical_names,
+        owner_artifact,
+        &checked_type_publication,
+        checked_bodies,
+        inputs.promoted_local_procedures,
+    );
     const template_lookup = checked_procedure_templates.asLookup(module_idx);
 
     var method_registry = try static_dispatch.MethodRegistry.fromModule(
@@ -37111,6 +37299,7 @@ pub fn publishFromTypedModule(
         &callable_eval_templates,
         &top_level_procedure_bindings,
         &checked_type_publication,
+        checked_procedure_templates.promoted,
     );
     defer selected_hoisted_callables.deinit(allocator);
 
@@ -37601,7 +37790,7 @@ fn expectProvidedExportKind(
     );
     var builtin_source_nodes = try CheckedSourceNodes.init(allocator, builtin_module);
     defer builtin_source_nodes.deinit(allocator);
-    var builtin_checked_type_publication = try CheckedTypeStore.fromModule(allocator, builtin_module, &builtin_names, builtin_key, &.{}, &.{}, &builtin_source_nodes, &.{});
+    var builtin_checked_type_publication = try CheckedTypeStore.fromModule(allocator, builtin_module, &builtin_names, builtin_key, &.{}, &.{}, &builtin_source_nodes, &.{}, &.{});
     defer builtin_checked_type_publication.deinit(allocator);
     const empty_checked_bodies = CheckedBodyStore{};
     const empty_checked_const_bodies = CheckedConstBodyTable{};
@@ -37634,7 +37823,7 @@ fn expectProvidedExportKind(
     // (bodies, templates, then the registry over them).
     var builtin_pub_source_nodes = try CheckedSourceNodes.init(allocator, builtin_module);
     defer builtin_pub_source_nodes.deinit(allocator);
-    var builtin_body_builder = try CheckedBodyStoreBuilder.fromModule(allocator, builtin_module, &builtin_names, &builtin_checked_type_publication, &builtin_pub_source_nodes);
+    var builtin_body_builder = try CheckedBodyStoreBuilder.fromModule(allocator, builtin_module, &builtin_names, &builtin_checked_type_publication, &builtin_pub_source_nodes, &.{});
     defer builtin_body_builder.deinit(allocator);
     const builtin_bodies = builtin_body_builder.storePtr();
     var builtin_intrinsic_wrappers = IntrinsicWrapperTable{};
@@ -37730,11 +37919,11 @@ fn expectProvidedExportKind(
     var source_nodes = try CheckedSourceNodes.init(allocator, module);
     defer source_nodes.deinit(allocator);
 
-    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, artifact_key, &builtin_imports, &.{}, &source_nodes, &.{});
+    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, artifact_key, &builtin_imports, &.{}, &source_nodes, &.{}, &.{});
     defer checked_type_publication.deinit(allocator);
     const checked_types = &checked_type_publication.store;
 
-    var checked_body_builder = try CheckedBodyStoreBuilder.fromModule(allocator, module, &canonical_names, &checked_type_publication, &source_nodes);
+    var checked_body_builder = try CheckedBodyStoreBuilder.fromModule(allocator, module, &canonical_names, &checked_type_publication, &source_nodes, &.{});
     defer checked_body_builder.deinit(allocator);
     const checked_bodies = checked_body_builder.storePtr();
 
@@ -37883,6 +38072,7 @@ fn expectProvidedExportKind(
         &callable_eval_templates,
         &top_level_procedure_bindings,
         &checked_type_publication,
+        checked_procedure_templates.promoted,
     );
     defer selected_hoisted_callables.deinit(allocator);
 
@@ -40002,8 +40192,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x96, 0x0D, 0x66, 0x60, 0x55, 0x6C, 0x67, 0x6B, 0x27, 0x2A, 0xB2, 0xEF, 0xA7, 0xBF, 0x24, 0xE0,
-        0xBA, 0x11, 0x39, 0x38, 0x3D, 0x15, 0x3B, 0x02, 0xF2, 0x98, 0x80, 0xFD, 0x91, 0xD7, 0xFD, 0x96,
+        0x0C, 0x96, 0xE5, 0x7C, 0x82, 0xF2, 0x74, 0x06, 0xA5, 0x9F, 0xD0, 0x42, 0x50, 0xE5, 0x96, 0x90,
+        0x9B, 0x79, 0x1B, 0x90, 0xAB, 0x27, 0x29, 0xDE, 0x84, 0xDD, 0xF9, 0x18, 0x38, 0xA2, 0xF3, 0xDE,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

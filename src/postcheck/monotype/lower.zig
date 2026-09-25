@@ -54585,6 +54585,7 @@ const BodyContext = struct {
         const statement = self.view.bodies.statement(statement_id);
         const expr_id = switch (statement.data) {
             .decl => |decl| if (self.statementDeclIsLocalProc(decl.pattern, decl.expr)) return null else decl.expr,
+            .promoted_proc => return null,
             .var_ => |decl| decl.expr,
             .reassign => |decl| decl.expr,
             .expr => |expr| expr,
@@ -54629,6 +54630,7 @@ const BodyContext = struct {
                 if (self.statementDeclIsLocalProc(decl.pattern, decl.expr)) return false;
                 break :blk .{ decl.pattern, decl.expr };
             },
+            .promoted_proc => return false,
             .var_ => |decl| .{ decl.pattern, decl.expr },
             .reassign => |decl| .{ decl.pattern, decl.expr },
             .pending, .var_uninitialized, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => return false,
@@ -54882,6 +54884,9 @@ const BodyContext = struct {
             .runtime_error,
             => true,
             .expect => self.builder.inline_expects.includesConditions(),
+            // A promoted procedure is declared by its own template, not by a
+            // statement of the body that contains its source.
+            .promoted_proc => false,
             .import_,
             .alias_decl,
             .where_alias_decl,
@@ -56158,7 +56163,7 @@ const BodyContext = struct {
         switch (statement.data) {
             .decl => |decl| try self.collectReassignedBindersInExpr(decl.expr, out),
             .var_ => |var_| try self.collectReassignedBindersInExpr(var_.expr, out),
-            .var_uninitialized => {},
+            .var_uninitialized, .promoted_proc => {},
             .reassign => |reassign| {
                 for (reassign.reassigned_binders) |binder| try self.appendUniqueBinder(out, binder);
                 try self.collectReassignedBindersInExpr(reassign.expr, out);
@@ -56377,6 +56382,7 @@ const BodyContext = struct {
             .nominal_decl,
             .type_anno,
             .type_var_alias,
+            .promoted_proc,
             => Common.invariant("non-runtime checked statement reached Monotype lowering"),
             .runtime_error => .{ .crash = try self.addStringLiteral("runtime error") },
             .decl => |decl| blk: {

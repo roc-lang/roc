@@ -23317,6 +23317,7 @@ const ProcBodyBuilder = struct {
                 .var_ => |decl| decl.expr,
                 .reassign => |reassign| reassign.expr,
                 .pending,
+                .promoted_proc,
                 .var_uninitialized,
                 .crash,
                 .dbg,
@@ -23348,6 +23349,7 @@ const ProcBodyBuilder = struct {
                 .nominal_decl,
                 .type_anno,
                 .type_var_alias,
+                .promoted_proc,
                 => {},
                 .pending, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .where_alias_decl, .runtime_error => {},
             }
@@ -25282,6 +25284,7 @@ const ProcBodyBuilder = struct {
             .reassign => |reassign| reassign.expr,
             .expr => |expr| expr,
             .pending,
+            .promoted_proc,
             .var_uninitialized,
             .crash,
             .dbg,
@@ -25306,6 +25309,8 @@ const ProcBodyBuilder = struct {
         };
         return switch (statement.data) {
             .decl => |decl| try self.lowerDeclPattern(decl.pattern, decl.expr, next),
+            // A promoted procedure is declared by its own template.
+            .promoted_proc => next,
             .var_ => |decl| try self.lowerDeclPattern(decl.pattern, decl.expr, next),
             .var_uninitialized => |decl| try self.lowerUninitializedPattern(decl.pattern, next),
             .reassign => |reassign| try self.lowerReassignPattern(reassign.pattern, reassign.expr, reassign.reassigned_binders, next),

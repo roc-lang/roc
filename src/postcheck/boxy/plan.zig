@@ -12834,6 +12834,8 @@ const Builder = struct {
         const statement = view.checked_bodies.statement(statement_id);
         switch (statement.data) {
             .pending => boxyPlanInvariant("pending checked statement reached boxy body type planning"),
+            // A promoted procedure is planned as its own template.
+            .promoted_proc => {},
             .decl => |decl| {
                 if (view.checked_bodies.expr(decl.expr).data == .runtime_error) return;
                 try self.analyzePatternTypes(view, decl.pattern);
