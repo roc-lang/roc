@@ -6505,8 +6505,12 @@ const AppRootIdentity = struct {
     /// requirement solutions it carries must be a pure function of the artifacts
     /// they relate.
     app_root_bytes: []u8,
+    /// Everything the compile wrote to stderr, such as compile-time `dbg`
+    /// output, captured rather than written to the test process's stderr.
+    stderr_bytes: []u8,
 
     fn deinit(self: *AppRootIdentity, allocator: Allocator) void {
+        allocator.free(self.stderr_bytes);
         allocator.free(self.app_root_bytes);
         allocator.free(self.executable_root_bytes);
         self.* = undefined;
@@ -6564,6 +6568,17 @@ fn compileAppRootIdentityWithConstants(
     return compileAppRootIdentityExpecting(allocator, cache_dir, app_path, mode, expected_constants, &.{});
 }
 
+/// Collects a compile's stderr writes in memory.
+const StderrCapture = struct {
+    allocator: Allocator,
+    bytes: std.ArrayList(u8) = .empty,
+
+    fn write(raw: ?*anyopaque, _: std.Io, bytes: []const u8) CoreCtx.StdioError!void {
+        const self: *StderrCapture = @ptrCast(@alignCast(raw.?));
+        self.bytes.appendSlice(self.allocator, bytes) catch return error.IoError;
+    }
+};
+
 fn compileAppRootIdentityExpecting(
     allocator: Allocator,
     cache_dir: []const u8,
@@ -6572,7 +6587,11 @@ fn compileAppRootIdentityExpecting(
     expected_constants: []const ExpectedPairingConstant,
     expected_errors: []const []const u8,
 ) CheckedModuleCacheRunError!AppRootIdentity {
-    const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    var stderr_capture: StderrCapture = .{ .allocator = allocator };
+    defer stderr_capture.bytes.deinit(allocator);
+    var roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    roc_ctx.ctx = &stderr_capture;
+    roc_ctx.vtable.writeStderr = StderrCapture.write;
     var cache_manager = CacheManager.init(allocator, .{
         .enabled = true,
         .cache_dir = cache_dir,
@@ -6630,6 +6649,8 @@ fn compileAppRootIdentityExpecting(
     errdefer allocator.free(executable_root_bytes);
     const app_root_bytes = try serializedCheckedArtifactBytes(allocator, coord.appRootCheckedArtifact());
     errdefer allocator.free(app_root_bytes);
+    const stderr_bytes = try stderr_capture.bytes.toOwnedSlice(allocator);
+    errdefer allocator.free(stderr_bytes);
     var where_method_scheme_use_count: usize = 0;
     for (root.moduleEnvConst().scheme_uses.items.items) |record| {
         if (record.slot_kind == @intFromEnum(can.ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
@@ -6657,6 +6678,7 @@ fn compileAppRootIdentityExpecting(
         .direct_required_call_count = direct_required_call_count,
         .executable_root_bytes = executable_root_bytes,
         .app_root_bytes = app_root_bytes,
+        .stderr_bytes = stderr_bytes,
     };
 }
 
@@ -7142,9 +7164,11 @@ test "issue 11389 pairing cache retains exported constants and debug observation
     var cold = try compileAppRootIdentityWithConstants(allocator, cache, app, .executable_artifacts, &.{.{ .name = "value", .value = 42 }});
     defer cold.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 1), cold.compile_time_debug_count);
+    try std.testing.expectEqualStrings("[dbg] 41\n", cold.stderr_bytes);
     var warm = try compileAppRootIdentityWithConstants(allocator, cache, app, .executable_artifacts, &.{.{ .name = "value", .value = 42 }});
     defer warm.deinit(allocator);
     try std.testing.expectEqual(@as(u32, 0), warm.platform_pairing_count);
+    try std.testing.expectEqualStrings("[dbg] 41\n", warm.stderr_bytes);
     try std.testing.expectEqualSlices(u8, cold.executable_root_bytes, warm.executable_root_bytes);
 }
 

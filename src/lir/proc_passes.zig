@@ -336,25 +336,25 @@ test "procedure rewrite ownership includes statements reached through shared met
     var store = LirStore.init(allocator);
     defer store.deinit();
     const value = try store.addLocal(.{ .layout_idx = .u64 });
-    const shared_body = try store.addCFStmt(.{ .ret = .{ .value = value } });
+    const shared_body = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = shared_body }});
     var contexts: [2]TaskContext = undefined;
     var initialized: usize = 0;
     defer for (contexts[0..initialized]) |*context| context.shard.?.deinit();
     for (&contexts, 0..) |*context, i| {
-        const fallback = try store.addCFStmt(.{ .ret = .{ .value = value } });
+        const fallback = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
         const body = try store.addCFStmt(.{ .switch_stmt = .{
             .cond = value,
             .branches = branches,
             .default_branch = fallback,
-        } });
+        } }, .test_fixture);
         const proc = try store.addProcSpec(.{
             .identity = LIR.ProcIdentity.forTest(@intCast(i)),
             .name = store.freshSyntheticSymbol(),
             .args = try store.addLocalSpan(&.{value}),
             .body = body,
             .ret_layout = .u64,
-        });
+        }, .none);
         context.* = .{ .source = &store, .layouts = undefined, .phase = .tag_fusion, .proc = proc };
     }
     const prefix = store.captureBodyPrefix();
@@ -381,8 +381,8 @@ test "issue 11325 procedure counting reuses lane storage across distant local ID
     for (0..100000) |_| _ = try store.addLocal(.{ .layout_idx = .u64 });
     const high = try store.addLocal(.{ .layout_idx = .u64 });
     for (0..16) |index| {
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = high } });
-        const body = try store.addCFStmt(.{ .assign_ref = .{ .target = high, .op = .{ .local = low }, .next = ret } });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = high } }, .test_fixture);
+        const body = try store.addCFStmt(.{ .assign_ref = .{ .target = high, .op = .{ .local = low }, .next = ret } }, .test_fixture);
         _ = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(@intCast(index)),
@@ -390,7 +390,7 @@ test "issue 11325 procedure counting reuses lane storage across distant local ID
             .frame_locals = try store.addLocalSpan(&.{ low, high }),
             .body = body,
             .ret_layout = .u64,
-        });
+        }, .none);
     }
     var meter = testing.FailingAllocator.init(testing.allocator, .{});
     var lane = TaskExecutor.LaneState.init(meter.allocator());
@@ -451,8 +451,8 @@ test "issue 11325 lane registration and counting allocation failures release sto
         .identity = LIR.ProcIdentity.forTest(0),
         .args = try store.addLocalSpan(&.{local}),
         .frame_locals = try store.addLocalSpan(&.{local}),
-        .body = try store.addCFStmt(.{ .ret = .{ .value = local } }),
+        .body = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture),
         .ret_layout = .u64,
-    });
+    }, .none);
     try testing.checkAllAllocationFailures(testing.allocator, testLaneCountingAllocation, .{ &store, &layouts, proc });
 }

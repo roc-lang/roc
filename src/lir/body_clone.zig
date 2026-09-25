@@ -979,7 +979,7 @@ pub fn cloneCallVariant(
         .body = body,
         .ret_layout = spec.ret_layout,
         .abi = .roc,
-    });
+    }, store.procLoc(source));
     try store.copyProcDebugInfo(variant, source);
 
     return variant;
@@ -991,9 +991,9 @@ pub fn cloneCallVariant(
 /// `Rewriter` carries the pass-specific destination state and supplies the
 /// hooks that diverge between passes:
 ///
-///   * `cloneRet(self: *Rewriter, cloner: anytype, value: LocalId)`—required.
+///   * `cloneRet(self: *Rewriter, cloner: anytype, value: LocalId, origin: LIR.StmtOrigin)`—required.
 ///     Produces the cloned tail for a source `ret value`.
-///   * `interceptStmt(self: *Rewriter, cloner: anytype, old_id: CFStmtId, stmt: LIR.CFStmt)`—
+///   * `interceptStmt(self: *Rewriter, cloner: anytype, old_id: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin)`—
 ///     optional. Returns a cloned statement id to short-circuit the default
 ///     clone, letting the pass fuse a direct constructor/concat return into
 ///     the tail or rewrite statements it identified up front, or `null` to
@@ -1002,6 +1002,10 @@ pub fn cloneCallVariant(
 ///     Retains an uncached local's original identity instead of allocating a
 ///     clone. This lets subtree rewrites preserve external inputs by default
 ///     without seeding a map over the entire store.
+///
+/// `origin` is the provenance of the source statement being cloned, with its
+/// inline scope already mapped into the destination; a hook's statements
+/// state it (with the pass's own kind where the hook rewrites) explicitly.
 ///
 /// Both hooks receive the cloner and use its `mapLocal`, `mapLocalSpan`,
 /// `addTemp`, `directReturnOf`, and `store` surface to build their statements.
@@ -1146,19 +1150,12 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         pub fn cloneStmt(self: *Self, old_id: CFStmtId) Allocator.Error!CFStmtId {
             if (self.stmt_map.get(old_id)) |existing| return existing;
 
-            const saved_loc = self.store.current_loc;
-            defer self.store.current_loc = saved_loc;
-            const saved_region = self.store.current_region;
-            defer self.store.current_region = saved_region;
-            const saved_inline_scope = self.store.current_inline_scope;
-            defer self.store.current_inline_scope = saved_inline_scope;
-            self.store.current_loc = self.store.stmtLoc(old_id);
-            self.store.current_region = self.store.stmtRegion(old_id);
-            self.store.current_inline_scope = try self.mapInlineScope(self.store.stmtInlineScope(old_id));
+            var origin = self.store.stmtOrigin(old_id);
+            origin.inline_scope = try self.mapInlineScope(origin.inline_scope);
 
             const stmt = self.store.getCFStmt(old_id);
             if (@hasDecl(Rewriter, "interceptStmt")) {
-                if (try self.rewriter.interceptStmt(self, old_id, stmt)) |intercepted| {
+                if (try self.rewriter.interceptStmt(self, old_id, stmt, origin)) |intercepted| {
                     try self.stmt_map.put(old_id, intercepted);
                     return intercepted;
                 }
@@ -1168,19 +1165,19 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .init_uninitialized => |s| try self.store.addCFStmt(.{ .init_uninitialized = .{
                     .target = try self.mapLocal(s.target),
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .assign_ref => |s| try self.store.addCFStmt(.{ .assign_ref = .{
                     .target = try self.mapLocal(s.target),
                     .op = try self.mapRefOp(s.op),
                     .take_kind = s.take_kind,
                     .residual_shell_absent_fields = s.residual_shell_absent_fields,
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .assign_literal => |s| try self.store.addCFStmt(.{ .assign_literal = .{
                     .target = try self.mapLocal(s.target),
                     .value = s.value,
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .assign_call => |s| try self.store.addCFStmt(.{ .assign_call = .{
                     .target = try self.mapLocal(s.target),
                     .proc = s.proc,
@@ -1189,7 +1186,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .out_desc = try self.mapMaybeLocal(s.out_desc),
                     .is_cold = s.is_cold,
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .assign_call_erased => |s| try self.store.addCFStmt(.{ .assign_call_erased = .{
                     .target = try self.mapLocal(s.target),
                     .closure = try self.mapLocal(s.closure),
@@ -1203,7 +1200,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .reuse_closure = s.reuse_closure,
                     .reuse_source = try self.mapMaybeLocal(s.reuse_source),
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .assign_packed_erased_fn => |s| try self.store.addCFStmt(.{ .assign_packed_erased_fn = .{
                     .target = try self.mapLocal(s.target),
                     .proc = s.proc,
@@ -1214,7 +1211,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .reuse = try self.mapMaybeLocal(s.reuse),
                     .reuse_unique = s.reuse_unique,
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .assign_boxy_desc_ref => |s| try self.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                     .target = try self.mapLocal(s.target),
                     .desc = try self.mapBoxyDescRef(s.desc),
@@ -1225,13 +1222,13 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .tag_residual_for = try self.mapMaybeBoxyDescRef(s.tag_residual_for),
                     .captures = try self.mapLocalSpan(s.captures),
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .assign_boxy_dict_ref => |s| try self.store.addCFStmt(.{ .assign_boxy_dict_ref = .{
                     .target = try self.mapLocal(s.target),
                     .dict = try self.mapBoxyDictRef(s.dict),
                     .captures = try self.mapLocalSpan(s.captures),
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .assign_boxy_box => |s| try self.store.addCFStmt(.{ .assign_boxy_box = .{
                     .target = try self.mapLocal(s.target),
                     .payload = try self.mapLocal(s.payload),
@@ -1240,13 +1237,13 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .payload_desc = try self.mapMaybeBoxyDescRef(s.payload_desc),
                     .payload_mode = s.payload_mode,
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .assign_boxy_reuse_box => |s| try self.store.addCFStmt(.{ .assign_boxy_reuse_box = .{
                     .target = try self.mapLocal(s.target),
                     .source = try self.mapLocal(s.source),
                     .desc = try self.mapBoxyDescRef(s.desc),
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .assign_boxy_unbox => |s| try self.store.addCFStmt(.{ .assign_boxy_unbox = .{
                     .target = try self.mapLocal(s.target),
                     .source = try self.mapLocal(s.source),
@@ -1255,7 +1252,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .target_layout = s.target_layout,
                     .source_mode = s.source_mode,
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .assign_boxy_adapt => |s| try self.store.addCFStmt(.{ .assign_boxy_adapt = .{
                     .target = try self.mapLocal(s.target),
                     .source = try self.mapLocal(s.source),
@@ -1264,14 +1261,14 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .target_desc = try self.mapMaybeBoxyDescRef(s.target_desc),
                     .source_mode = s.source_mode,
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .assign_boxy_inspect => |s| try self.store.addCFStmt(.{ .assign_boxy_inspect = .{
                     .target = try self.mapLocal(s.target),
                     .source = try self.mapLocal(s.source),
                     .source_desc = try self.mapBoxyDescRef(s.source_desc),
                     .source_mode = s.source_mode,
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .assign_boxy_eq => |s| try self.store.addCFStmt(.{ .assign_boxy_eq = .{
                     .target = try self.mapLocal(s.target),
                     .lhs = try self.mapLocal(s.lhs),
@@ -1279,7 +1276,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .source_desc = try self.mapBoxyDescRef(s.source_desc),
                     .source_mode = s.source_mode,
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .assign_boxy_tag => |s| try self.store.addCFStmt(.{ .assign_boxy_tag = .{
                     .target = try self.mapLocal(s.target),
                     .target_desc = try self.mapBoxyDescRef(s.target_desc),
@@ -1289,7 +1286,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .payload_desc = try self.mapMaybeBoxyDescRef(s.payload_desc),
                     .payload_mode = s.payload_mode,
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .assign_boxy_tag_payload => |s| try self.store.addCFStmt(.{ .assign_boxy_tag_payload = .{
                     .target = try self.mapLocal(s.target),
                     .target_desc = try self.mapMaybeLocal(s.target_desc),
@@ -1299,14 +1296,14 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .payload_index = s.payload_index,
                     .source_mode = s.source_mode,
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .boxy_tag_match => |s| try self.store.addCFStmt(.{ .boxy_tag_match = .{
                     .source = try self.mapLocal(s.source),
                     .source_desc = try self.mapBoxyDescRef(s.source_desc),
                     .tag_name = s.tag_name,
                     .on_match = try self.cloneStmt(s.on_match),
                     .on_miss = try self.cloneStmt(s.on_miss),
-                } }),
+                } }, origin),
                 .assign_call_dict => |s| try self.store.addCFStmt(.{ .assign_call_dict = .{
                     .target = try self.mapLocal(s.target),
                     .dict = try self.mapBoxyDictRef(s.dict),
@@ -1318,7 +1315,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .result_desc = try self.mapMaybeBoxyDescRef(s.result_desc),
                     .is_cold = s.is_cold,
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .assign_low_level => |s| try self.store.addCFStmt(.{ .assign_low_level = .{
                     .target = try self.mapLocal(s.target),
                     .op = s.op,
@@ -1328,30 +1325,30 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .simd_concat_count = s.simd_concat_count,
                     .args = try self.mapLocalSpan(s.args),
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .assign_list => |s| try self.store.addCFStmt(.{ .assign_list = .{
                     .target = try self.mapLocal(s.target),
                     .elems = try self.mapLocalSpan(s.elems),
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .assign_struct => |s| try self.store.addCFStmt(.{ .assign_struct = .{
                     .target = try self.mapLocal(s.target),
                     .fields = try self.mapLocalSpan(s.fields),
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .assign_tag => |s| try self.store.addCFStmt(.{ .assign_tag = .{
                     .target = try self.mapLocal(s.target),
                     .variant_index = s.variant_index,
                     .discriminant = s.discriminant,
                     .payload = try self.mapMaybeLocal(s.payload),
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .store_struct => |s| try self.store.addCFStmt(.{ .store_struct = .{
                     .dest = try self.mapLocal(s.dest),
                     .struct_layout = s.struct_layout,
                     .fields = try self.mapLocalSpan(s.fields),
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .store_tag => |s| try self.store.addCFStmt(.{ .store_tag = .{
                     .dest = try self.mapLocal(s.dest),
                     .tag_layout = s.tag_layout,
@@ -1359,48 +1356,48 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .discriminant = s.discriminant,
                     .payload = try self.mapMaybeLocal(s.payload),
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .set_local => |s| try self.store.addCFStmt(.{ .set_local = .{
                     .target = try self.mapLocal(s.target),
                     .value = try self.mapLocal(s.value),
                     .mode = s.mode,
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .debug => |s| try self.store.addCFStmt(.{ .debug = .{
                     .message = try self.mapLocal(s.message),
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .expect => |s| try self.store.addCFStmt(.{ .expect = .{
                     .condition = try self.mapLocal(s.condition),
                     .site = s.site,
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .expect_err => |s| try self.store.addCFStmt(.{ .expect_err = .{
                     .message = try self.mapLocal(s.message),
                     .region = s.region,
-                } }),
-                .runtime_error => try self.store.addCFStmt(.runtime_error),
+                } }, origin),
+                .runtime_error => try self.store.addCFStmt(.runtime_error, origin),
                 .comptime_exhaustiveness_failed => |s| try self.store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{
                     .site = s.site,
-                } }),
+                } }, origin),
                 .comptime_branch_taken => |s| try self.store.addCFStmt(.{ .comptime_branch_taken = .{
                     .site = s.site,
                     .branch_index = s.branch_index,
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .incref => |s| try self.store.addCFStmt(.{ .incref = .{
                     .value = try self.mapLocal(s.value),
                     .rc = s.rc,
                     .count = s.count,
                     .atomicity = s.atomicity,
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .decref => |s| try self.store.addCFStmt(.{ .decref = .{
                     .value = try self.mapLocal(s.value),
                     .rc = s.rc,
                     .atomicity = s.atomicity,
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .decref_if_initialized => |s| try self.store.addCFStmt(.{ .decref_if_initialized = .{
                     .cond = try self.mapLocal(s.cond),
                     .cond_mask = s.cond_mask,
@@ -1408,14 +1405,14 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .rc = s.rc,
                     .atomicity = s.atomicity,
                     .next = try self.cloneStmt(s.next),
-                } }),
+                } }, origin),
                 .free => |s| try self.store.addCFStmt(.{ .free = .{
                     .value = try self.mapLocal(s.value),
                     .rc = s.rc,
                     .atomicity = s.atomicity,
                     .next = try self.cloneStmt(s.next),
-                } }),
-                .switch_stmt => |s| try self.cloneSwitch(s),
+                } }, origin),
+                .switch_stmt => |s| try self.cloneSwitch(s, origin),
                 .switch_initialized_payload => |s| try self.store.addCFStmt(.{ .switch_initialized_payload = .{
                     .cond = try self.mapLocal(s.cond),
                     .cond_mask = s.cond_mask,
@@ -1423,7 +1420,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .uninitialized_is_cold = s.uninitialized_is_cold,
                     .initialized_branch = try self.cloneStmt(s.initialized_branch),
                     .uninitialized_branch = try self.cloneStmt(s.uninitialized_branch),
-                } }),
+                } }, origin),
                 .str_match => |s| try self.store.addCFStmt(.{ .str_match = .{
                     .source = try self.mapLocal(s.source),
                     .prefix = s.prefix,
@@ -1431,27 +1428,27 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .end = s.end,
                     .on_match = try self.cloneStmt(s.on_match),
                     .on_miss = try self.cloneStmt(s.on_miss),
-                } }),
-                .str_match_set => |s| try self.cloneStrMatchSet(s),
-                .loop_continue => try self.store.addCFStmt(.loop_continue),
-                .loop_break => try self.store.addCFStmt(.loop_break),
-                .join => |s| try self.cloneJoin(s),
-                .jump => |s| try self.cloneJump(s),
-                .ret => |s| try self.rewriter.cloneRet(self, s.value),
+                } }, origin),
+                .str_match_set => |s| try self.cloneStrMatchSet(s, origin),
+                .loop_continue => try self.store.addCFStmt(.loop_continue, origin),
+                .loop_break => try self.store.addCFStmt(.loop_break, origin),
+                .join => |s| try self.cloneJoin(s, origin),
+                .jump => |s| try self.cloneJump(s, origin),
+                .ret => |s| try self.rewriter.cloneRet(self, s.value, origin),
                 .crash => |s| try self.store.addCFStmt(.{ .crash = .{
                     .msg = switch (s.msg) {
                         .literal => |literal| .{ .literal = literal },
                         .local => |local| .{ .local = try self.mapLocal(local) },
                     },
                     .literal_rejection = s.literal_rejection,
-                } }),
+                } }, origin),
             };
 
             try self.stmt_map.put(old_id, cloned);
             return cloned;
         }
 
-        fn cloneJoin(self: *Self, join: @FieldType(LIR.CFStmt, "join")) Allocator.Error!CFStmtId {
+        fn cloneJoin(self: *Self, join: @FieldType(LIR.CFStmt, "join"), origin: LIR.StmtOrigin) Allocator.Error!CFStmtId {
             const cloned = try self.store.addCFStmt(.{ .join = .{
                 .id = try self.mapJoinPoint(join.id),
                 .params = try self.mapLocalSpan(join.params),
@@ -1461,7 +1458,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .maybe_uninitialized_condition_masks = join.maybe_uninitialized_condition_masks,
                 .body = try self.cloneStmt(join.body),
                 .remainder = try self.cloneStmt(join.remainder),
-            } });
+            } }, origin);
             if (self.join_params) |params| try params.record(self.store.getCFStmt(cloned).join);
             return cloned;
         }
@@ -1470,17 +1467,17 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         /// parameter of an enclosing join. Jumps encode their arguments as
         /// preceding writes, so bridge each remapped value back into the
         /// enclosing join's original parameter before leaving the clone.
-        fn cloneJump(self: *Self, jump: @FieldType(LIR.CFStmt, "jump")) Allocator.Error!CFStmtId {
-            var next = try self.store.addCFStmt(.{ .jump = .{ .target = try self.mapJoinPoint(jump.target) } });
+        fn cloneJump(self: *Self, jump: @FieldType(LIR.CFStmt, "jump"), origin: LIR.StmtOrigin) Allocator.Error!CFStmtId {
+            var next = try self.store.addCFStmt(.{ .jump = .{ .target = try self.mapJoinPoint(jump.target) } }, origin);
             if (self.join_remap != .declared or self.declared_joins.contains(jump.target)) return next;
 
             const params = self.join_params.?.get(jump.target) orelse
                 @panic("subtree clone jumped to an unknown external join");
-            next = try self.bridgeExternalJoinParams(params, next);
+            next = try self.bridgeExternalJoinParams(params, origin, next);
             return next;
         }
 
-        fn bridgeExternalJoinParams(self: *Self, span: LIR.LocalSpan, tail: CFStmtId) Allocator.Error!CFStmtId {
+        fn bridgeExternalJoinParams(self: *Self, span: LIR.LocalSpan, origin: LIR.StmtOrigin, tail: CFStmtId) Allocator.Error!CFStmtId {
             var next = tail;
             const params = self.store.getLocalSpan(span);
             var index = params.len;
@@ -1497,7 +1494,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .value = mapped,
                     .mode = .initialize_join_param,
                     .next = next,
-                } });
+                } }, origin);
             }
             return next;
         }
@@ -1509,7 +1506,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             return stmt == .ret and stmt.ret.value == value;
         }
 
-        fn cloneSwitch(self: *Self, s: anytype) Allocator.Error!CFStmtId {
+        fn cloneSwitch(self: *Self, s: anytype, origin: LIR.StmtOrigin) Allocator.Error!CFStmtId {
             // Recursive body cloning appends switch branches and can therefore
             // invalidate a guarded borrow of this same backing list. Own the
             // source descriptors before cloning any branch body.
@@ -1535,10 +1532,10 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .default_branch = try self.cloneStmt(s.default_branch),
                 .default_is_cold = s.default_is_cold,
                 .continuation = if (s.continuation) |continuation| try self.cloneStmt(continuation) else null,
-            } });
+            } }, origin);
         }
 
-        fn cloneStrMatchSet(self: *Self, s: anytype) Allocator.Error!CFStmtId {
+        fn cloneStrMatchSet(self: *Self, s: anytype, origin: LIR.StmtOrigin) Allocator.Error!CFStmtId {
             // Cloning an arm can append nested string-match arms. Snapshot the
             // source descriptors so those appends cannot invalidate the input.
             const old_arms = try GuardedList.dupe(
@@ -1563,7 +1560,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .source = try self.mapLocal(s.source),
                 .arms = try self.store.addStrMatchArms(arms),
                 .on_miss = try self.cloneStmt(s.on_miss),
-            } });
+            } }, origin);
         }
 
         fn mapStrMatchSteps(self: *Self, span: LIR.StrMatchStepSpan) Allocator.Error!LIR.StrMatchStepSpan {
@@ -1711,8 +1708,8 @@ pub fn BodyCloner(comptime Rewriter: type) type {
 }
 
 const TestRetRewriter = struct {
-    pub fn cloneRet(_: *TestRetRewriter, cloner: anytype, value: LocalId) Allocator.Error!CFStmtId {
-        return try cloner.store.addCFStmt(.{ .ret = .{ .value = try cloner.mapLocal(value) } });
+    pub fn cloneRet(_: *TestRetRewriter, cloner: anytype, value: LocalId, origin: LIR.StmtOrigin) Allocator.Error!CFStmtId {
+        return try cloner.store.addCFStmt(.{ .ret = .{ .value = try cloner.mapLocal(value) } }, origin);
     }
 };
 
@@ -1725,21 +1722,21 @@ test "subtree clone bridges renamed parameters before an external join" {
     const external_id: LIR.JoinPointId = @enumFromInt(1);
     const internal_id: LIR.JoinPointId = @enumFromInt(2);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = shared_param } });
-    const jump_external = try store.addCFStmt(.{ .jump = .{ .target = external_id } });
-    const jump_internal = try store.addCFStmt(.{ .jump = .{ .target = internal_id } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = shared_param } }, .test_fixture);
+    const jump_external = try store.addCFStmt(.{ .jump = .{ .target = external_id } }, .test_fixture);
+    const jump_internal = try store.addCFStmt(.{ .jump = .{ .target = internal_id } }, .test_fixture);
     const internal_stmt = try store.addCFStmt(.{ .join = .{
         .id = internal_id,
         .params = try store.addLocalSpan(&.{shared_param}),
         .body = jump_external,
         .remainder = jump_internal,
-    } });
+    } }, .test_fixture);
     const external_stmt = try store.addCFStmt(.{ .join = .{
         .id = external_id,
         .params = try store.addLocalSpan(&.{shared_param}),
         .body = ret,
         .remainder = internal_stmt,
-    } });
+    } }, .test_fixture);
 
     var join_params = JoinParamIndex.init(testing.allocator);
     defer join_params.deinit();
@@ -1773,12 +1770,12 @@ test "chainIsSingleUse rejects an extra read of any link" {
     const b = try store.addLocal(.{ .layout_idx = .str });
     const unit = try store.addLocal(.{ .layout_idx = .zst });
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = b } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = b } }, .test_fixture);
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = b,
         .op = .{ .local = a },
         .next = ret,
-    } });
+    } }, .test_fixture);
 
     // `a` is read once (by the alias) and `b` once (by the return).
     try std.testing.expect(try chainIsSingleUse(&store, alias, &.{ a, b }));
@@ -1788,7 +1785,7 @@ test "chainIsSingleUse rejects an extra read of any link" {
         .target = unit,
         .op = .{ .local = a },
         .next = alias,
-    } });
+    } }, .test_fixture);
     try std.testing.expect(!try chainIsSingleUse(&store, extra_head, &.{ a, b }));
 
     // A second read of the tail link refuses it just the same.
@@ -1796,7 +1793,7 @@ test "chainIsSingleUse rejects an extra read of any link" {
         .target = unit,
         .op = .{ .local = b },
         .next = alias,
-    } });
+    } }, .test_fixture);
     try std.testing.expect(!try chainIsSingleUse(&store, extra_tail, &.{ a, b }));
 
     // A local with no reads at all is not "exactly one" either.
@@ -1810,7 +1807,7 @@ test "rewritableProcBody refuses procs whose body is not the compiler's to clone
     defer store.deinit();
 
     const unit = try store.addLocal(.{ .layout_idx = .zst });
-    const body = try store.addCFStmt(.{ .ret = .{ .value = unit } });
+    const body = try store.addCFStmt(.{ .ret = .{ .value = unit } }, .test_fixture);
 
     const roc_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
@@ -1820,7 +1817,7 @@ test "rewritableProcBody refuses procs whose body is not the compiler's to clone
         .body = body,
         .ret_layout = .zst,
         .abi = .roc,
-    });
+    }, .none);
     try std.testing.expectEqual(body, rewritableProcBody(&store, roc_proc).?);
 
     const bodyless = try store.addProcSpec(.{
@@ -1831,7 +1828,7 @@ test "rewritableProcBody refuses procs whose body is not the compiler's to clone
         .body = null,
         .ret_layout = .zst,
         .abi = .roc,
-    });
+    }, .none);
     try std.testing.expect(rewritableProcBody(&store, bodyless) == null);
 
     const erased = try store.addProcSpec(.{
@@ -1842,7 +1839,7 @@ test "rewritableProcBody refuses procs whose body is not the compiler's to clone
         .body = body,
         .ret_layout = .zst,
         .abi = .erased_callable,
-    });
+    }, .none);
     try std.testing.expect(rewritableProcBody(&store, erased) == null);
 }
 
@@ -1884,7 +1881,7 @@ test "body_clone scratch is bounded by reachable locals and scopes" {
     };
     for (0..65536) |_| {
         _ = try store.addLocal(.{ .layout_idx = .u64 });
-        _ = try store.addCFStmt(.runtime_error);
+        _ = try store.addCFStmt(.runtime_error, .test_fixture);
         _ = try store.addInlineScope(scope);
     }
     const desc = try store.addLocal(.{ .layout_idx = .u64 });
@@ -1894,19 +1891,20 @@ test "body_clone scratch is bounded by reachable locals and scopes" {
     var child_scope = scope;
     child_scope.parent = parent_scope;
     const source_scope = try store.addInlineScope(child_scope);
-    store.current_inline_scope = source_scope;
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = alias } });
+    var source_origin = LIR.StmtOrigin.test_fixture;
+    source_origin.inline_scope = source_scope;
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = alias } }, source_origin);
     const copy = try store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
         .op = .{ .local = value },
         .next = ret,
-    } });
+    } }, source_origin);
     const body = try store.addCFStmt(.{ .assign_boxy_desc_ref = .{
         .target = desc,
         .desc = .{ .local = value },
         .captures = try store.addLocalSpan(&.{ value, value }),
         .next = copy,
-    } });
+    } }, source_origin);
     var scratch: [32768]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&scratch);
     const allocator = fba.allocator();
@@ -1952,14 +1950,14 @@ test "body_clone sparse maps preserve loop back jumps and local reuse" {
     defer store.deinit();
     const param = try store.addLocal(.{ .layout_idx = .u64 });
     const id: LIR.JoinPointId = @enumFromInt(9);
-    const jump = try store.addCFStmt(.{ .jump = .{ .target = id } });
-    const write = try store.addCFStmt(.{ .set_local = .{ .target = param, .value = param, .mode = .initialize_join_param, .next = jump } });
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = id } }, .test_fixture);
+    const write = try store.addCFStmt(.{ .set_local = .{ .target = param, .value = param, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
     const body = try store.addCFStmt(.{ .join = .{
         .id = id,
         .params = try store.addLocalSpan(&.{param}),
         .body = write,
         .remainder = write,
-    } });
+    } }, .test_fixture);
     var cloner = try BodyCloner(TestRetRewriter).init(&store, .{});
     defer cloner.deinit();
     const cloned = store.getCFStmt(try cloner.cloneStmt(body)).join;
@@ -1975,26 +1973,26 @@ test "body_clone join allocation belongs to the destination procedure" {
     const testing = std.testing;
     var store = LirStore.init(testing.allocator);
     defer store.deinit();
-    const end = try store.addCFStmt(.runtime_error);
+    const end = try store.addCFStmt(.runtime_error, .test_fixture);
     _ = try store.addCFStmt(.{ .join = .{
         .id = @enumFromInt(9000),
         .params = LIR.LocalSpan.empty(),
         .body = end,
         .remainder = end,
-    } });
+    } }, .test_fixture);
     const destination = try store.addCFStmt(.{ .join = .{
         .id = @enumFromInt(40),
         .params = LIR.LocalSpan.empty(),
         .body = end,
         .remainder = end,
-    } });
-    const jump = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(2) } });
+    } }, .test_fixture);
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(2) } }, .test_fixture);
     const source = try store.addCFStmt(.{ .join = .{
         .id = @enumFromInt(2),
         .params = LIR.LocalSpan.empty(),
         .body = jump,
         .remainder = jump,
-    } });
+    } }, .test_fixture);
     var inliner = try BodyCloner(TestRetRewriter).initWithInlineScopeOuter(&store, .{}, .none, destination);
     defer inliner.deinit();
     const cloned = store.getCFStmt(try inliner.cloneStmt(source)).join;
@@ -2025,12 +2023,12 @@ test "body_clone sparse counting propagates allocation failures" {
     var store = LirStore.init(std.testing.allocator);
     defer store.deinit();
     const local = try store.addLocal(.{ .layout_idx = .u64 });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = local } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_ref = .{
         .target = local,
         .op = .{ .local = local },
         .next = ret,
-    } });
+    } }, .test_fixture);
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testSparseCountAllocations, .{ &store, body });
 }
 
@@ -2063,15 +2061,15 @@ test "body_clone retained counts isolate nested inventories and clear only live 
     const low = try store.addLocal(.{ .layout_idx = .u64 });
     for (0..100000) |_| _ = try store.addLocal(.{ .layout_idx = .u64 });
     const high = try store.addLocal(.{ .layout_idx = .u64 });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = high } });
-    const copy = try store.addCFStmt(.{ .assign_ref = .{ .target = high, .op = .{ .local = low }, .next = ret } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = high } }, .test_fixture);
+    const copy = try store.addCFStmt(.{ .assign_ref = .{ .target = high, .op = .{ .local = low }, .next = ret } }, .test_fixture);
     // Both successors share a suffix: count its statements once, but count
     // both operand occurrences of low (the condition and the copy).
     const body = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = low,
         .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = copy }}),
         .default_branch = copy,
-    } });
+    } }, .test_fixture);
     var meter = testing.FailingAllocator.init(testing.allocator, .{});
     var scratch = AnalysisScratch.init(meter.allocator());
     defer scratch.deinit();
@@ -2120,7 +2118,7 @@ test "body_clone retained counts isolate nested inventories and clear only live 
     var other = LirStore.init(testing.allocator);
     defer other.deinit();
     const other_low = try other.addLocal(.{ .layout_idx = .u64 });
-    const other_ret = try other.addCFStmt(.{ .ret = .{ .value = other_low } });
+    const other_ret = try other.addCFStmt(.{ .ret = .{ .value = other_low } }, .test_fixture);
     var reads = try countReachableReadsWithScratch(&other, other_ret, &scratch);
     defer reads.deinit();
     try testing.expectEqual(@as(u32, 1), reads.get(low));
@@ -2144,14 +2142,14 @@ test "body_clone retained counting returns every lease on allocation failure" {
     const local = try store.addLocal(.{ .layout_idx = .u64 });
     for (0..256) |_| _ = try store.addLocal(.{ .layout_idx = .u64 });
     const distant = try store.addLocal(.{ .layout_idx = .u64 });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = local } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_low_level = .{
         .target = local,
         .op = .num_int_add_wrap,
         .rc_effect = .none(),
         .args = try store.addLocalSpan(&.{ local, distant }),
         .next = ret,
-    } });
+    } }, .test_fixture);
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testRetainedCountAllocations, .{ &store, body });
 
     // Retry with the same owner after each possible allocation failure. An

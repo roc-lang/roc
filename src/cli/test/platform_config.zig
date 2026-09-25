@@ -92,8 +92,16 @@ const fx_open_tests = [_]SimpleTestSpec{
         .description = "Regression test: a bare and a tag-wrapped ? on one callee cross the return boundary into the composed row (issue 11097)",
     },
     .{
+        .roc_file = "test/fx-open/issue_11626_polymorphic_try.roc",
+        .description = "Regression test: polymorphic ? payloads keep a shared tail callee's result independent (issue 11626)",
+    },
+    .{
         .roc_file = "test/fx-open/issue_11469_higher_order_try_error_row.roc",
         .description = "Regression test: a callback's narrower Try crosses a ?-composed return boundary into the wider row (issue 11469)",
+    },
+    .{
+        .roc_file = "test/fx-open/issue_11621_recursive_try.roc",
+        .description = "Regression test: a ?-composed error row includes a repeated or self-referential tail (issue 11621)",
     },
     .{
         .roc_file = "test/fx-open/issue_10270_named_map_err_closure.roc",

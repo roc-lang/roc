@@ -34,74 +34,27 @@ const TopLevelDemandDependency = can.DependencyGraph.Dependency;
 const Var = types.Var;
 const CompactWriter = collections.CompactWriter;
 const StringLiteral = base.StringLiteral;
+const output_type_roots = @import("output_type_roots.zig");
 
-fn typeDispatchOwnerVar(module: anytype, stmt_idx: CIR.Statement.Idx) Var {
-    return switch (module.getStatement(stmt_idx)) {
-        .s_type_var_alias => |alias| ModuleEnv.varFrom(alias.type_var_anno),
-        .s_alias_decl => ModuleEnv.varFrom(stmt_idx),
-        .s_decl,
-        .s_var,
-        .s_var_uninitialized,
-        .s_reassign,
-        .s_crash,
-        .s_dbg,
-        .s_expr,
-        .s_expect,
-        .s_for,
-        .s_while,
-        .s_infinite_loop,
-        .s_breakable_loop,
-        .s_break,
-        .s_return,
-        .s_import,
-        .s_nominal_decl,
-        .s_where_alias_decl,
-        .s_type_anno,
-        .s_runtime_error,
-        => @panic("type dispatch owner statement was not a type-var alias or type alias"),
-    };
-}
+/// Publishes each visited root into a checked type store.
+const CheckedTypeRootPublisher = struct {
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    imports: CheckedImportViews,
+    store: *CheckedTypeStore,
+    active: *CheckedSourceTypeRoots,
 
-fn checkedFieldBackingAccess(module: TypedCIR.Module, receiver_var: Var) CheckedFieldBackingAccess {
-    const store = module.typeStoreConst();
-    var current = receiver_var;
-    var remaining = store.len();
-    while (remaining > 0) : (remaining -= 1) {
-        const resolved = store.resolveVar(current);
-        switch (resolved.desc.content) {
-            .alias => |alias| {
-                current = store.getAliasBackingVar(alias);
-            },
-            .structure => |flat| return switch (flat) {
-                .nominal_type => |nominal| checkedNominalFieldBackingAccess(
-                    nominal,
-                    module.moduleEnvConst().selfModuleIdentity(),
-                ),
-                .record,
-                .tuple,
-                .fn_pure,
-                .fn_effectful,
-                .fn_unbound,
-                .empty_record,
-                .tag_union,
-                .empty_tag_union,
-                => .inspectable,
-            },
-            .flex, .rigid, .field_presence, .err => return .inspectable,
-        }
+    /// Publish one root.
+    pub fn visit(self: *const CheckedTypeRootPublisher, var_: Var) Allocator.Error!void {
+        _ = try appendCheckedTypeRoot(self.allocator, self.module, self.names, self.imports, self.store, self.active, var_);
     }
-    checkedArtifactInvariant("field access receiver alias chain contained a cycle", .{});
-}
 
-fn checkedNominalFieldBackingAccess(
-    nominal: types.NominalType,
-    current_module: base.ModuleIdentity.Idx,
-) CheckedFieldBackingAccess {
-    return if (nominal.isOpaque() and nominal.canLiftInner(current_module))
-        .opaque_definition_private
-    else
-        .inspectable;
-}
+    /// Publish a root checking must have recorded.
+    pub fn visitRequired(self: *const CheckedTypeRootPublisher, maybe_var: ?Var, comptime missing: []const u8) Allocator.Error!void {
+        try self.visit(maybe_var orelse checkedArtifactInvariant(missing, .{}));
+    }
+};
 
 /// Public `ModuleEnvStorage` declaration.
 pub const ModuleEnvStorage = union(enum) {
@@ -4710,6 +4663,14 @@ pub const CheckedTypeStore = struct {
         var top_level_defs = try TopLevelDefPatternIndex.init(allocator, module);
         defer top_level_defs.deinit(allocator);
         const module_env = module.moduleEnvConst();
+        const publisher = CheckedTypeRootPublisher{
+            .allocator = allocator,
+            .module = module,
+            .names = names,
+            .imports = import_views,
+            .store = &store,
+            .active = &active,
+        };
 
         var node_idx: u32 = 0;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
@@ -4722,27 +4683,7 @@ pub const CheckedTypeStore = struct {
             if (source_nodes.hasExpr(@enumFromInt(node_idx))) {
                 const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
                 _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, module.exprType(expr_idx));
-                const expr = module.expr(expr_idx).data;
-                if (expr == .e_call) {
-                    if (expr.e_call.constraint_fn_var) |constraint_fn_var| {
-                        _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, constraint_fn_var);
-                    }
-                } else if (expr == .e_field_access) {
-                    const field_access = expr.e_field_access;
-                    var position: u32 = 0;
-                    while (position < field_access.segments.len) : (position += 1) {
-                        const segment_idx = module_env.store.fieldAccessSegmentAt(field_access.segments, position);
-                        _ = try appendCheckedTypeRoot(
-                            allocator,
-                            module,
-                            names,
-                            import_views,
-                            &store,
-                            &active,
-                            ModuleEnv.varFrom(segment_idx),
-                        );
-                    }
-                }
+                try output_type_roots.forEachCallTypeRoot(module_env, expr_idx, &publisher);
             } else if (source_nodes.hasPattern(@enumFromInt(node_idx))) {
                 const pattern_source_var = checkedPatternSourceTypeVar(module, &top_level_defs, @enumFromInt(node_idx));
                 _ = try appendCheckedTypeRoot(
@@ -4763,75 +4704,7 @@ pub const CheckedTypeStore = struct {
         // checked type id rather than retaining checker-only variables.
         // Explicit scheme requirements may be absent from the public callable.
         // Publish their roots before the evidence schema names them.
-        for (module_env.binding_scheme_codec_requirements.items.items) |requirement| {
-            const constraint = module_env.types.getStaticDispatchConstraintAt(requirement.constraint_index);
-            _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @enumFromInt(requirement.receiver_var));
-            _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, constraint.fn_var);
-        }
-        for (module_env.scheme_use_pairs.items.items) |pair| {
-            _ = try appendCheckedTypeRoot(
-                allocator,
-                module,
-                names,
-                import_views,
-                &store,
-                &active,
-                @enumFromInt(pair.fresh_var),
-            );
-        }
-        for (module_env.generated_codec_derivations.items.items) |derivation| {
-            inline for (.{
-                derivation.source_constraint_fn_var,
-                derivation.source_runtime_fn_var,
-                derivation.source_shape_var,
-                derivation.source_body_shape_var,
-                derivation.source_encoding_var,
-                derivation.source_state_var,
-                derivation.source_error_var,
-                derivation.constraint_fn_var,
-                derivation.runtime_fn_var,
-                derivation.shape_var,
-                derivation.body_shape_var,
-                derivation.encoding_var,
-                derivation.state_var,
-                derivation.error_var,
-            }) |raw_var| {
-                _ = try appendCheckedTypeRoot(
-                    allocator,
-                    module,
-                    names,
-                    import_views,
-                    &store,
-                    &active,
-                    @enumFromInt(raw_var),
-                );
-            }
-            const calls = module_env.generated_codec_calls.items.items[derivation.calls_start..][0..derivation.calls_len];
-            for (calls) |call| {
-                inline for (.{ call.dispatcher_var, call.callable_var, call.evidence_var }) |raw_var| {
-                    _ = try appendCheckedTypeRoot(
-                        allocator,
-                        module,
-                        names,
-                        import_views,
-                        &store,
-                        &active,
-                        @enumFromInt(raw_var),
-                    );
-                }
-                if (call.subject_var != ModuleEnv.GeneratedCodecCall.no_subject_var) {
-                    _ = try appendCheckedTypeRoot(
-                        allocator,
-                        module,
-                        names,
-                        import_views,
-                        &store,
-                        &active,
-                        @enumFromInt(call.subject_var),
-                    );
-                }
-            }
-        }
+        try output_type_roots.forEachRecordedTypeRoot(module_env, &publisher);
         for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
             if (!source_nodes.hasStatement(statement_idx)) continue;
             switch (module.getStatement(statement_idx)) {
@@ -4895,19 +4768,7 @@ pub const CheckedTypeStore = struct {
         // every fresh type participating in a recorded scheme use, including
         // the constraint function that identifies a selected dispatch target
         // or a per-use where-method callable.
-        for (module_env.scheme_uses.items.items) |record| {
-            if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.dispatch_target) or
-                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.recursive_dispatch_target) or
-                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
-                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.nested_function_use))
-            {
-                _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @enumFromInt(record.slot_data));
-            }
-            const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
-            for (pairs) |pair| {
-                _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @enumFromInt(pair.fresh_var));
-            }
-        }
+        try output_type_roots.forEachSchemeUseTypeRoot(module_env, &publisher);
 
         for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
             const root = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, module.defType(def_idx));
@@ -8312,6 +8173,14 @@ fn appendStaticDispatchTypeRoots(
     store: *CheckedTypeStore,
     active: *CheckedSourceTypeRoots,
 ) Allocator.Error!void {
+    const publisher = CheckedTypeRootPublisher{
+        .allocator = allocator,
+        .module = module,
+        .names = names,
+        .imports = imports,
+        .store = store,
+        .active = active,
+    };
     var node_idx: u32 = 0;
     while (node_idx < module.nodeCount()) : (node_idx += 1) {
         const tag = module.nodeTag(@enumFromInt(node_idx));
@@ -8322,137 +8191,15 @@ fn appendStaticDispatchTypeRoots(
 
         const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
         if (!source_nodes.hasExpr(expr_idx)) continue;
-        const expr = module.expr(expr_idx);
-        switch (expr.data) {
-            .e_dispatch_call => |dispatch_call| {
-                _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, module.exprType(dispatch_call.receiver));
-                _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, dispatch_call.constraint_fn_var);
-            },
-            .e_interpolation => |interpolation| {
-                _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, module.exprType(expr_idx));
-                _ = try appendCheckedTypeRoot(
-                    allocator,
-                    module,
-                    names,
-                    imports,
-                    store,
-                    active,
-                    interpolation.dispatcher_var orelse checkedArtifactInvariant("checked interpolation expression had no static dispatch dispatcher type", .{}),
-                );
-                _ = try appendCheckedTypeRoot(
-                    allocator,
-                    module,
-                    names,
-                    imports,
-                    store,
-                    active,
-                    interpolation.constraint_fn_var orelse checkedArtifactInvariant("checked interpolation expression had no static dispatch constraint type", .{}),
-                );
-                _ = try appendCheckedTypeRoot(
-                    allocator,
-                    module,
-                    names,
-                    imports,
-                    store,
-                    active,
-                    interpolation.step_fn_var orelse checkedArtifactInvariant("checked interpolation expression had no generated step function type", .{}),
-                );
-            },
-            .e_type_dispatch_call => |dispatch_call| {
-                _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, typeDispatchOwnerVar(module, dispatch_call.type_dispatch_stmt));
-                _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, dispatch_call.constraint_fn_var);
-            },
-            .e_method_eq => |eq| {
-                _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, module.exprType(eq.lhs));
-                _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, eq.constraint_fn_var);
-            },
-            .e_num,
-            .e_frac_f32,
-            .e_frac_f64,
-            .e_dec,
-            .e_dec_small,
-            .e_num_from_numeral,
-            .e_typed_int,
-            .e_typed_frac,
-            .e_typed_num_from_numeral,
-            .e_str_segment,
-            .e_str,
-            .e_bytes_literal,
-            .e_lookup_local,
-            .e_lookup_external,
-            .e_lookup_associated_local,
-            .e_lookup_associated,
-            .e_lookup_associated_resolved,
-            .e_lookup_required,
-            .e_list,
-            .e_empty_list,
-            .e_tuple,
-            .e_match,
-            .e_if,
-            .e_call,
-            .e_record,
-            .e_empty_record,
-            .e_block,
-            .e_tag,
-            .e_nominal,
-            .e_nominal_external,
-            .e_zero_argument_tag,
-            .e_closure,
-            .e_lambda,
-            .e_binop,
-            .e_unary_minus,
-            .e_field_access,
-            .e_method_call,
-            .e_structural_eq,
-            .e_structural_hash,
-            .e_type_method_call,
-            .e_tuple_access,
-            .e_runtime_error,
-            .e_crash,
-            .e_dbg,
-            .e_expect_err,
-            .e_expect,
-            .e_ellipsis,
-            .e_anno_only,
-            .e_derived_method,
-            .e_return,
-            .e_break,
-            .e_for,
-            .e_hosted_lambda,
-            .e_run_low_level,
-            => unreachable,
-            .e_deferred_import_ref => checkedArtifactInvariant("deferred import reference reached checked artifact publication", .{}),
-        }
+        try output_type_roots.forEachStaticDispatchTypeRoot(module.moduleEnvConst(), expr_idx, &publisher);
     }
 
     for (module.moduleEnvConst().for_loop_dispatch_plans.items.items) |plan| {
         if (!source_nodes.hasRawLoop(plan.node_idx)) continue;
-        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.iterator_var));
-        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.step_var));
-        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.iter_fn_var));
-        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.next_fn_var));
-        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.step_topology.one_payload_var));
-        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.step_topology.skip_payload_var));
+        try output_type_roots.forEachForLoopDispatchTypeRoot(plan, &publisher);
     }
 
-    for (module.moduleEnvConst().store.literalDispatchPlans()) |plan| {
-        switch (plan.dispatchResolution()) {
-            .builtin_direct, .checked_error => continue,
-            .custom_dispatch, .specialization_dispatch => {},
-            .unresolved => checkedArtifactInvariant(
-                "unresolved literal dispatch plan reached checked type publication",
-                .{},
-            ),
-        }
-        // Custom and specialization-time conversion expressions need both the
-        // target and callable roots. Direct builtins need neither.
-        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.target_var));
-        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.fn_var));
-        if (plan.patternContext(&module.moduleEnvConst().store)) |context| {
-            std.debug.assert(context.equality_fn_var_plus_one != 0);
-            _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(context.equality_fn_var_plus_one - 1));
-        }
-    }
+    try output_type_roots.forEachLiteralDispatchTypeRoot(module.moduleEnvConst(), &publisher);
 }
 
 fn syntheticFunctionTypeKey(
@@ -10389,13 +10136,6 @@ pub const CheckedFieldAccessSegment = struct {
     success_ty: CheckedTypeId,
     source_region: base.Region,
     mode: CheckedFieldAccessMode,
-    /// How Monotype may reach this segment's slot in its receiver: through an
-    /// ordinary record field, or through the private backing record of an
-    /// opaque nominal defined in the current module. Computed per segment:
-    /// the first segment's receiver is the access expression's receiver, and
-    /// each later segment's receiver is the previous segment's successful
-    /// value.
-    backing_access: CheckedFieldBackingAccess,
 };
 
 /// Public `CheckedIfBranch` declaration.
@@ -10692,12 +10432,6 @@ pub const CheckedQuoteData = struct {
     /// conversion, when checking selected one concrete custom conversion.
     /// Every use of the literal consumes that root's value.
     conversion_root: ?ComptimeRootId = null,
-};
-
-/// Checker-recorded authority for a field access to cross a named backing.
-pub const CheckedFieldBackingAccess = enum(u8) {
-    inspectable,
-    opaque_definition_private,
 };
 
 /// Checker-authored plan for equality against one payload-free tag.
@@ -14932,7 +14666,7 @@ const CheckedBodyPayloadCopier = struct {
             .e_unary_minus => |unary| .{ .unary_minus = self.checkedExpr(unary.expr) },
             .e_field_access => |field_access| .{ .field_access = .{
                 .receiver = self.checkedExpr(field_access.receiver),
-                .segments = try self.copyFieldAccessSegments(field_access.receiver, field_access.segments),
+                .segments = try self.copyFieldAccessSegments(field_access.segments),
             } },
             .e_method_call => checkedArtifactInvariant(
                 "ordinary method call reached artifact publication after checking; expected explicit static-dispatch plan",
@@ -15423,7 +15157,6 @@ const CheckedBodyPayloadCopier = struct {
     /// `commitExprs`, so they cannot share one scratch buffer.
     fn copyFieldAccessSegments(
         self: *@This(),
-        receiver: CIR.Expr.Idx,
         span: CIR.Expr.FieldAccessSegment.Span,
     ) Allocator.Error![]const CheckedFieldAccessSegment {
         if (span.len == 0) {
@@ -15434,7 +15167,6 @@ const CheckedBodyPayloadCopier = struct {
         errdefer self.allocator.free(out);
 
         const module_env = self.module.moduleEnvConst();
-        var receiver_var = ModuleEnv.varFrom(receiver);
         var position: u32 = 0;
         while (position < span.len) : (position += 1) {
             const segment_idx = module_env.store.fieldAccessSegmentAt(span, position);
@@ -15450,10 +15182,7 @@ const CheckedBodyPayloadCopier = struct {
                     .required => .required,
                     .optional => .optional,
                 },
-                .backing_access = checkedFieldBackingAccess(self.module, receiver_var),
             };
-            // The next segment reads from this segment's successful value.
-            receiver_var = ModuleEnv.varFrom(segment_idx);
         }
         return out;
     }
@@ -39763,14 +39492,12 @@ test "CheckedBodyStore: POD round-trip preserves exprs, paths, match branches, s
             .success_ty = ty0,
             .source_region = base.Region.from_raw_offsets(11, 17),
             .mode = .required,
-            .backing_access = .inspectable,
         },
         .{
             .field_name = @enumFromInt(4),
             .success_ty = ty1,
             .source_region = base.Region.from_raw_offsets(18, 25),
             .mode = .optional,
-            .backing_access = .inspectable,
         },
     };
     const exprs = [_]CheckedExpr{
@@ -40143,7 +39870,6 @@ test "checked inspect evaluation elision is producer-recorded for exact callable
         .success_ty = testIndexId(CheckedTypeId, 0),
         .source_region = base.Region.zero(),
         .mode = .required,
-        .backing_access = .inspectable,
     }};
     const block_statements = [_]CheckedStatementId{};
     const call_args = [_]CheckedExprId{};
@@ -40159,31 +39885,6 @@ test "checked inspect evaluation elision is producer-recorded for exact callable
     try std.testing.expectEqualSlices(bool, &.{ true, false, true, false, false }, &may_be_elided);
 }
 
-test "checked field backing access is private only for a local opaque definition" {
-    const declaring_module: base.ModuleIdentity.Idx = @enumFromInt(4);
-    const other_module: base.ModuleIdentity.Idx = @enumFromInt(5);
-    const opaque_nominal = types.NominalType{
-        .ident = undefined,
-        .args = undefined,
-        .origin_module = declaring_module,
-        .source = types.NominalType.Source.init(.none, true, false),
-    };
-    try std.testing.expectEqual(
-        CheckedFieldBackingAccess.opaque_definition_private,
-        checkedNominalFieldBackingAccess(opaque_nominal, declaring_module),
-    );
-    try std.testing.expectEqual(
-        CheckedFieldBackingAccess.inspectable,
-        checkedNominalFieldBackingAccess(opaque_nominal, other_module),
-    );
-    var nominal = opaque_nominal;
-    nominal.source = types.NominalType.Source.init(.none, false, false);
-    try std.testing.expectEqual(
-        CheckedFieldBackingAccess.inspectable,
-        checkedNominalFieldBackingAccess(nominal, declaring_module),
-    );
-}
-
 test "SERIALIZED_VERSION_HASH golden value" {
     // Tripwire: an *accidental* change to `CheckedModuleArtifact.Serialized`'s layout
     // would make a previously-baked builtin blob / cached artifact relocate into a
@@ -40192,8 +39893,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x0C, 0x96, 0xE5, 0x7C, 0x82, 0xF2, 0x74, 0x06, 0xA5, 0x9F, 0xD0, 0x42, 0x50, 0xE5, 0x96, 0x90,
-        0x9B, 0x79, 0x1B, 0x90, 0xAB, 0x27, 0x29, 0xDE, 0x84, 0xDD, 0xF9, 0x18, 0x38, 0xA2, 0xF3, 0xDE,
+        0x55, 0xF3, 0x96, 0x56, 0xD4, 0x62, 0x21, 0x1D, 0x04, 0x9C, 0xE2, 0x23, 0x95, 0x2D, 0x80, 0xB4,
+        0x25, 0xEA, 0x1E, 0x63, 0xD9, 0x15, 0x71, 0x6E, 0xA8, 0xCC, 0xCD, 0xC5, 0xAA, 0x2C, 0xAA, 0x5B,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

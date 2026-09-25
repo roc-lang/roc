@@ -10768,7 +10768,10 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     );
     defer lowered.deinit();
     finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
-    if (loaded_packs) |packs| {
+    // Cache statistics are diagnostic output. Ordinary successful builds must
+    // leave stderr empty so build runners do not report false warnings.
+    if (loaded_packs != null and std.c.getenv("ROC_PACK_STATS") != null) {
+        const packs = loaded_packs.?;
         var external_procs: usize = 0;
         for (lowered.lir_result.store.getProcSpecs()) |proc| {
             if (proc.external) external_procs += 1;

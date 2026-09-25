@@ -921,7 +921,7 @@ pub const FrozenMaterializer = struct {
     materialize: *const fn (Allocator, *anyopaque, *LirProgram.Result) Allocator.Error!LirProgram.FrozenStaticData,
     /// Apply evaluation outcomes after guard insertion. Successful values
     /// bypass their guards; failed values retain the emitted failure path.
-    complete_guards: *const fn (*anyopaque, *LirProgram.Result) void,
+    complete_guards: *const fn (*anyopaque, *LirProgram.Result) Allocator.Error!void,
 };
 
 /// Materialized Lambda Mono program type, re-exported for harnesses that
@@ -1668,7 +1668,7 @@ fn finishLoweredOutput(
 
     try @import("comptime_value_guards.zig").insert(allocator, &lowered.lir_result);
     if (frozen_materializer) |materializer| {
-        materializer.complete_guards(materializer.context, &lowered.lir_result);
+        try materializer.complete_guards(materializer.context, &lowered.lir_result);
     }
 
     try LirDump.run(&lowered.lir_result);
@@ -1990,7 +1990,7 @@ test "runtime extraction consumes producer root positions and preserves their or
     };
     defer lowered.deinit();
     const local = try lowered.lir_result.store.addLocal(.{ .layout_idx = .zst });
-    const ret = try lowered.lir_result.store.addCFStmt(.{ .ret = .{ .value = local } });
+    const ret = try lowered.lir_result.store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     for (0..3) |index| {
         const proc = try lowered.lir_result.store.addProcSpec(.{
             .name = lowered.lir_result.store.freshSyntheticSymbol(),
@@ -1998,7 +1998,7 @@ test "runtime extraction consumes producer root positions and preserves their or
             .args = .empty(),
             .body = ret,
             .ret_layout = .zst,
-        });
+        }, .none);
         try lowered.lir_result.root_procs.append(allocator, proc);
         try lowered.lir_result.root_metadata.append(allocator, .{
             .order = @intCast(index),
@@ -2026,7 +2026,7 @@ test "adopting completed compile-time values drops their initializers and identi
     };
     defer lowered.deinit();
     const local = try lowered.lir_result.store.addLocal(.{ .layout_idx = .zst });
-    const ret = try lowered.lir_result.store.addCFStmt(.{ .ret = .{ .value = local } });
+    const ret = try lowered.lir_result.store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     var procs: [2]LIR.LirProcSpecId = undefined;
     for (&procs, 0..) |*proc, index| {
         proc.* = try lowered.lir_result.store.addProcSpec(.{
@@ -2035,7 +2035,7 @@ test "adopting completed compile-time values drops their initializers and identi
             .args = .empty(),
             .body = ret,
             .ret_layout = .zst,
-        });
+        }, .none);
     }
     // One runtime root, and one slot whose value the evaluation completed:
     // its initializer is the only reference to the second procedure.

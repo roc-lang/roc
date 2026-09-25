@@ -133,6 +133,40 @@ pub const EvaluationOrder = struct {
     }
 };
 
+/// The order in which type checking processes a module's top-level defs,
+/// together with each group's direct name dependencies. Groups are indexed by
+/// their position in `sccs`; every dependency index is smaller than the index
+/// of the group that depends on it.
+pub const CheckOrder = struct {
+    /// Binding groups in deterministic topological order
+    /// (dependencies come before dependents).
+    sccs: []SCC,
+
+    /// Offsets into `group_dependencies`: the direct name dependencies of
+    /// group `g` are `group_dependencies[group_dependency_starts[g]..group_dependency_starts[g + 1]]`.
+    group_dependency_starts: []u32,
+
+    /// Every group's direct name dependencies (other groups only, each listed
+    /// once), in ascending group order within each group's range.
+    group_dependencies: []u32,
+
+    allocator: std.mem.Allocator,
+
+    /// The groups that `group_index` names directly, in ascending order.
+    pub fn dependenciesOf(self: *const CheckOrder, group_index: u32) []const u32 {
+        return self.group_dependencies[self.group_dependency_starts[group_index]..self.group_dependency_starts[group_index + 1]];
+    }
+
+    pub fn deinit(self: *CheckOrder) void {
+        for (self.sccs) |scc| {
+            self.allocator.free(scc.defs);
+        }
+        self.allocator.free(self.sccs);
+        self.allocator.free(self.group_dependency_starts);
+        self.allocator.free(self.group_dependencies);
+    }
+};
+
 /// Collect the graph's exact edges in deterministic order for downstream
 /// consumers that need the strict top-level demand relation.
 pub fn collectDependencies(
@@ -1595,7 +1629,7 @@ pub fn computeCheckOrder(
     cir: *const ModuleEnv,
     all_defs: CIR.Def.Span,
     allocator: std.mem.Allocator,
-) std.mem.Allocator.Error!EvaluationOrder {
+) std.mem.Allocator.Error!CheckOrder {
     const defs_slice = cir.store.sliceDefs(all_defs);
 
     var pattern_to_def: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Def.Idx) = .{};
@@ -1709,8 +1743,13 @@ pub fn computeCheckOrder(
     }
     try ordered_sccs.ensureTotalCapacityPrecise(allocator, group_count);
 
+    // Each Tarjan group's position in the emitted order.
+    const emitted_index = try allocator.alloc(u32, group_count);
+    defer allocator.free(emitted_index);
+
     while (ready.pop()) |group_index| {
         const scc = tarjan_order.sccs[group_index];
+        emitted_index[group_index] = @intCast(ordered_sccs.items.len);
         ordered_sccs.appendAssumeCapacity(.{
             .defs = try allocator.dupe(CIR.Def.Idx, scc.defs),
             .is_recursive = scc.is_recursive,
@@ -1723,14 +1762,45 @@ pub fn computeCheckOrder(
     // Tarjan produced an acyclic condensation, so Kahn must emit every group.
     std.debug.assert(ordered_sccs.items.len == group_count);
 
+    // Each emitted group's direct dependencies, flattened. A successor edge
+    // `dep -> dependent` lists `dep` among `dependent`'s dependencies.
+    const group_dependency_starts = try allocator.alloc(u32, group_count + 1);
+    errdefer allocator.free(group_dependency_starts);
+    @memset(group_dependency_starts, 0);
+    for (successors) |list| {
+        for (list.items) |dependent| {
+            group_dependency_starts[emitted_index[dependent] + 1] += 1;
+        }
+    }
+    for (1..group_count + 1) |i| {
+        group_dependency_starts[i] += group_dependency_starts[i - 1];
+    }
+    const group_dependencies = try allocator.alloc(u32, group_dependency_starts[group_count]);
+    errdefer allocator.free(group_dependencies);
+    const fill = try allocator.dupe(u32, group_dependency_starts[0..group_count]);
+    defer allocator.free(fill);
+    for (successors, 0..) |list, dependency| {
+        for (list.items) |dependent| {
+            const dependent_index = emitted_index[dependent];
+            group_dependencies[fill[dependent_index]] = emitted_index[dependency];
+            fill[dependent_index] += 1;
+        }
+    }
+    for (0..group_count) |group_index| {
+        const deps = group_dependencies[group_dependency_starts[group_index]..group_dependency_starts[group_index + 1]];
+        std.mem.sort(u32, deps, {}, std.sort.asc(u32));
+    }
+
     const sccs = try ordered_sccs.toOwnedSlice(allocator);
     errdefer {
         for (sccs) |scc| allocator.free(scc.defs);
         allocator.free(sccs);
     }
 
-    return EvaluationOrder{
+    return CheckOrder{
         .sccs = sccs,
+        .group_dependency_starts = group_dependency_starts,
+        .group_dependencies = group_dependencies,
         .allocator = allocator,
     };
 }
