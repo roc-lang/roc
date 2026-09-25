@@ -18,6 +18,14 @@ string_report = |seed| {
     split = Str.split_on("${roc},x", ",")
     utf8 = if seed == 0 { [82.U8, 111.U8, 99.U8] } else { [82.U8, 79.U8, 99.U8] }
     decoded = Str.from_utf8(utf8)
+    utf16 = List.map(utf8, U8.to_u16)
+    utf32 = List.map(utf8, U8.to_u32)
+    decoded16 = Str.from_utf16(utf16)
+    decoded32 = Str.from_utf32(utf32)
+    lossy16 = Str.from_utf16_lossy(List.append(utf16, 0xD800))
+    lossy32 = Str.from_utf32_lossy(List.append(utf32, 0x110000))
+    invalid16 = Str.from_utf16(List.append(utf16, 0xDC00)) == Err(BadUtf16({ index: 3, problem: UnpairedLowSurrogate }))
+    invalid32 = Str.from_utf32(List.append(utf32, 0xD800)) == Err(BadUtf32({ index: 3, problem: SurrogateCodePoint }))
 
     found = match Str.split_first("${roc}:lang", ":") {
         Ok({ before, after }) => { before, after }
@@ -47,6 +55,12 @@ string_report = |seed| {
         \\string find first: ${Str.inspect(found)}
         \\string caseless prefix: ${Str.inspect(caseless_prefix)}
         \\string from utf8: ${Str.inspect(decoded)}
+        \\string from utf16: ${Str.inspect(decoded16)}
+        \\string from utf32: ${Str.inspect(decoded32)}
+        \\string from utf16 lossy: ${lossy16}
+        \\string from utf32 lossy: ${lossy32}
+        \\string invalid utf16: ${Str.inspect(invalid16)}
+        \\string invalid utf32: ${Str.inspect(invalid32)}
 
     expected =
         \\string trimmed: ${Str.inspect(roc)}
@@ -66,6 +80,12 @@ string_report = |seed| {
         \\string find first: ${Str.inspect({ before: roc, after: "lang" })}
         \\string caseless prefix: ${Str.inspect(roc)}
         \\string from utf8: Ok(${Str.inspect(roc)})
+        \\string from utf16: Ok(${Str.inspect(roc)})
+        \\string from utf32: Ok(${Str.inspect(roc)})
+        \\string from utf16 lossy: ${roc}�
+        \\string from utf32 lossy: ${roc}�
+        \\string invalid utf16: True
+        \\string invalid utf32: True
 
     { actual, expected }
 }

@@ -81,7 +81,7 @@ result = poly().to_i128()
 							(e-literal (string "x"))))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-dispatch-call (method "to_i128") (constraint-fn-var 224)
+		(e-dispatch-call (method "to_i128") (constraint-fn-var 228)
 			(receiver
 				(e-runtime-error (tag "erroneous_value_expr")))
 			(args))))

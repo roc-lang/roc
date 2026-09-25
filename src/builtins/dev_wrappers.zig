@@ -120,12 +120,47 @@ pub fn roc_builtins_simd_store_16(out: *RocList, vector_low: u64, vector_high: u
 pub fn roc_builtins_simd_append_16(out: *RocList, vector_low: u64, vector_high: u64, bytes: ?[*]u8, length: usize, capacity_or_alloc_ptr: usize, update_mode: utils.UpdateMode) callconv(.c) void {
     const roc_ops = in_process_host.ops();
     var result = RocList{ .bytes = bytes, .length = length, .capacity_or_alloc_ptr = capacity_or_alloc_ptr };
-    result = list.listReserve(result, 1, 16, 1, false, null, utils.rcNone, null, utils.rcNone, update_mode, roc_ops);
-    const vector = @as(u128, vector_low) | (@as(u128, vector_high) << 64);
-    for (std.mem.asBytes(&vector)) |*byte| {
-        result = list.listAppendUnsafe(result, @ptrCast(@constCast(byte)), 1, &list.copy_fallback);
+    // Match the byte-list append primitive's hot path: when ownership and
+    // capacity already permit this write, avoid the general reserve call.
+    if (result.getCapacity() - length < 16 or !result.isExclusive(update_mode, roc_ops)) {
+        result = list.listReserve(result, 1, 16, 1, false, null, utils.rcNone, null, utils.rcNone, update_mode, roc_ops);
     }
+    const vector = @as(u128, vector_low) | (@as(u128, vector_high) << 64);
+    @memcpy(result.bytes.?[length..][0..16], std.mem.asBytes(&vector));
+    result.length = length + 16;
     out.* = result;
+}
+
+test "SIMD append preserves shared input and reuses owned capacity" {
+    const testing = std.testing;
+    const TestEnv = utils.TestEnv;
+    var env = TestEnv.init(testing.allocator);
+    defer env.deinit();
+    const saved_host = in_process_host.enter(env.getOps(), null);
+    defer in_process_host.leave(saved_host);
+    const tail: [16]u8 = .{ 0, 1, 2, 3, 4, 5, 6, 7, 0x80, 0x81, 0x82, 0x83, 0xfc, 0xfd, 0xfe, 0xff };
+    const bits: u128 = @bitCast(tail);
+    inline for (.{ false, true }) |shared| {
+        for ([_]usize{ 3, 18, 19, 64 }) |capacity| {
+            var input = RocList.list_allocate(1, capacity, 1, false, env.getOps());
+            input.length = 3;
+            @memcpy(input.bytes.?[0..3], "abc");
+            if (shared) input.incref(1, false, env.getOps());
+            var result: RocList = undefined;
+            roc_builtins_simd_append_16(&result, @truncate(bits), @truncate(bits >> 64), input.bytes, input.length, input.capacity_or_alloc_ptr, if (shared) .Immutable else .InPlace);
+            defer result.decref(1, 1, false, null, utils.rcNone, env.getOps());
+            try testing.expectEqual(@as(usize, 19), result.len());
+            try testing.expectEqualStrings("abc", result.bytes.?[0..3]);
+            try testing.expectEqualSlices(u8, &tail, result.bytes.?[3..19]);
+            if (shared) {
+                defer input.decref(1, 1, false, null, utils.rcNone, env.getOps());
+                try testing.expect(input.bytes != result.bytes);
+                try testing.expectEqualStrings("abc", input.bytes.?[0..3]);
+            } else if (capacity >= 19) {
+                try testing.expectEqual(input.bytes, result.bytes);
+            }
+        }
+    }
 }
 
 /// C ABI wrapper for hashing raw F32 bits.
@@ -485,6 +520,21 @@ pub fn roc_builtins_str_with_ascii_uppercased(out: *RocStr, str_bytes: ?[*]u8, s
     const roc_ops = in_process_host.ops();
     const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
     out.* = strWithAsciiUppercased(s, update_mode, roc_ops);
+}
+
+/// Wrapper for private validated-byte construction. The input remains borrowed.
+pub fn roc_builtins_str_from_utf8_validated(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize) callconv(.c) void {
+    out.* = str.fromUtf8Validated(.{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap }, in_process_host.ops());
+}
+
+/// Wrapper for the private inline-sized UTF-16 decode. The input remains borrowed.
+pub fn roc_builtins_str_from_utf16_short(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize) callconv(.c) void {
+    out.* = str.fromUtf16Short(.{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap }, in_process_host.ops());
+}
+
+/// Wrapper for the private inline-sized UTF-32 decode. The input remains borrowed.
+pub fn roc_builtins_str_from_utf32_short(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize) callconv(.c) void {
+    out.* = str.fromUtf32Short(.{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap }, in_process_host.ops());
 }
 
 /// Wrapper: fromUtf8Lossy(RocList, *RocOps) -> RocStr

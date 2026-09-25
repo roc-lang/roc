@@ -6422,6 +6422,18 @@ pub const Interpreter = struct {
                 }
                 break :blk val;
             },
+            .str_from_utf8_validated => blk: {
+                const result = builtins.str.fromUtf8Validated(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
+                break :blk self.rocStrToValue(result, ll.ret_layout);
+            },
+            .str_from_utf16_short => blk: {
+                const result = builtins.str.fromUtf16Short(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
+                break :blk self.rocStrToValue(result, ll.ret_layout);
+            },
+            .str_from_utf32_short => blk: {
+                const result = builtins.str.fromUtf32Short(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
+                break :blk self.rocStrToValue(result, ll.ret_layout);
+            },
             .str_from_utf8_lossy => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
@@ -7896,10 +7908,13 @@ pub const Interpreter = struct {
     }
 
     fn evalSimdLoad(self: *LirInterpreter, ll: LowLevelEvalInput) Error!Value {
-        const list = self.valueToRocListForLayout(ll.args[0], try self.lowLevelArgLayout(ll, 0));
+        const list_layout = try self.lowLevelArgLayout(ll, 0);
+        const list = self.valueToRocListForLayout(ll.args[0], list_layout);
+        const abi = self.layout_store.builtinListAbi(list_layout);
         const index: usize = @intCast(ll.args[1].read(u64));
+        const offset = index * abi.elem_size;
         const result = try self.alloc(ll.ret_layout);
-        @memcpy(result.ptr[0..16], list.bytes.?[index..][0..16]);
+        @memcpy(result.ptr[0..16], list.bytes.?[offset..][0..16]);
         return result;
     }
 

@@ -245,7 +245,7 @@ main! = |_| {}
 							(p-assign (ident "z")))))
 				(s-let
 					(p-assign (ident "result"))
-					(e-call (constraint-fn-var 271)
+					(e-call (constraint-fn-var 275)
 						(e-lookup-local
 							(p-assign (ident "f")))
 						(e-lookup-local
@@ -255,14 +255,14 @@ main! = |_| {}
 					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-let
 					(p-assign (ident "_result3"))
-					(e-call (constraint-fn-var 278)
+					(e-call (constraint-fn-var 282)
 						(e-lookup-local
 							(p-assign (ident "g")))
 						(e-lookup-local
 							(p-assign (ident "a")))))
 				(s-let
 					(p-assign (ident "_result4"))
-					(e-call (constraint-fn-var 283)
+					(e-call (constraint-fn-var 287)
 						(e-lookup-local
 							(p-assign (ident "g")))
 						(e-lookup-local

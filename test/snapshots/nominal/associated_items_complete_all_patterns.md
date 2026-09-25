@@ -12306,7 +12306,7 @@ L2 := [DS].{
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 764)
+		(e-dispatch-call (method "plus") (constraint-fn-var 768)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "val1"))))

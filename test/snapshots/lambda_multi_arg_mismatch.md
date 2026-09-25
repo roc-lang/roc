@@ -262,7 +262,7 @@ result = multi_arg_fn(
 					(ty-rigid-var-lookup (ty-rigid-var (name "e")))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 338)
+		(e-call (constraint-fn-var 342)
 			(e-lookup-local
 				(p-assign (ident "multi_arg_fn")))
 			(e-runtime-error (tag "erroneous_value_expr"))

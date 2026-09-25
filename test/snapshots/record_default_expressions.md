@@ -313,7 +313,7 @@ NO CHANGE
 			(e-if
 				(if-branches
 					(if-branch
-						(e-dispatch-call (method "is_gt") (constraint-fn-var 378)
+						(e-dispatch-call (method "is_gt") (constraint-fn-var 382)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))

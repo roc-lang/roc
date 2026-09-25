@@ -35,6 +35,9 @@ pub const LowLevel = enum(u16) {
     str_release_excess_capacity,
     str_to_utf8,
     str_from_utf8_lossy,
+    str_from_utf8_validated,
+    str_from_utf16_short,
+    str_from_utf32_short,
     str_from_utf8,
     str_split_on,
     str_join_with,
@@ -212,6 +215,8 @@ pub const LowLevel = enum(u16) {
     // Fixed-width integer SIMD operations. Lane width and signedness are
     // carried by the operand/result layouts; these operations never encode a
     // concrete vector type in their identity.
+    // Load 16 bytes from a list, indexed in its element units. The input list
+    // layout commits the stride (bytes or typed integer lanes).
     simd_load_16_unchecked,
     simd_store_16_unchecked,
     simd_append_16,
@@ -864,6 +869,7 @@ pub const LowLevel = enum(u16) {
             .str_from_utf8 => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
 
             .str_to_utf8 => RcEffect.allocatesAndRetainsOrReleasesSharingArgs(argMask(&.{0})),
+            .str_from_utf8_validated => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
 
             .list_drop_at,
             .list_sublist,
@@ -960,6 +966,9 @@ pub const LowLevel = enum(u16) {
 
             .str_repeat,
             .str_from_utf8_lossy,
+            .str_from_utf16_short,
+            .str_from_utf32_short,
+
             .str_with_capacity,
             .str_inspect,
             .u8_to_str,

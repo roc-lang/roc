@@ -67,7 +67,7 @@ stringify = |value| value.to_str()
 		(e-lambda
 			(args
 				(p-assign (ident "value")))
-			(e-dispatch-call (method "to_str") (constraint-fn-var 240)
+			(e-dispatch-call (method "to_str") (constraint-fn-var 244)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "value"))))

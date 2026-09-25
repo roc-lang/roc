@@ -1368,7 +1368,7 @@ pub const Evaluator = struct {
             .num_count_trailing_zero_bits => self.numBitCount(args, arg_types, .count_trailing_zeros),
 
             .num_from_le_bytes_unchecked => self.evalNumFromLeBytes(args, result_ty),
-            .simd_load_16_unchecked => self.evalSimdLoad(args, result_ty),
+            .simd_load_16_unchecked => self.evalSimdLoad(args, arg_types[0], result_ty),
             .simd_store_16_unchecked => self.evalSimdStore(args),
             .simd_append_16 => self.evalSimdAppend(args),
             .simd_splat,
@@ -1474,6 +1474,10 @@ pub const Evaluator = struct {
             .str_release_excess_capacity,
             .str_to_utf8,
             .str_from_utf8_lossy,
+            .str_from_utf8_validated,
+            .str_from_utf16_short,
+            .str_from_utf32_short,
+
             .str_from_utf8,
             .str_split_on,
             .str_join_with,
@@ -2294,16 +2298,25 @@ pub const Evaluator = struct {
         };
     }
 
-    fn evalSimdLoad(self: *Evaluator, args: []const Value, result_ty: Type.TypeId) EvalError!Value {
+    fn evalSimdLoad(self: *Evaluator, args: []const Value, list_ty: Type.TypeId, result_ty: Type.TypeId) EvalError!Value {
         const result_prim = self.primitiveOf(result_ty) orelse return self.unsupported_("SIMD load result without primitive type");
         if (simdKindForPrimitive(result_prim) == null) return self.unsupported_("SIMD load result without vector type");
         if (args[0] != .list) return self.unsupported_("SIMD load from non-list value");
-        const bytes = args[0].list;
+        const list_type = self.structural(list_ty);
+        if (list_type != .list) return self.unsupported_("SIMD load without list type");
+        const element_prim = self.primitiveOf(list_type.list) orelse return self.unsupported_("SIMD load without primitive element type");
+        const lane_bits: usize = switch (element_prim) {
+            .u8 => 8,
+            .u16 => 16,
+            .u32 => 32,
+            .bool, .str, .i8, .i16, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return self.unsupported_("SIMD load with unsupported element type"),
+        };
+        const units = args[0].list;
         const index: usize = @intCast(valueBits(args[1]) catch return self.unsupported_("SIMD load index without integer bits"));
         var bits: u128 = 0;
-        for (0..16) |i| {
-            const byte_bits = valueBits(bytes[index + i]) catch return self.unsupported_("SIMD load byte without integer bits");
-            bits |= @as(u128, @truncate(byte_bits)) << @intCast(i * 8);
+        for (0..128 / lane_bits) |i| {
+            const unit_bits = valueBits(units[index + i]) catch return self.unsupported_("SIMD load unit without integer bits");
+            bits |= unit_bits << @intCast(i * lane_bits);
         }
         return .{ .int = @bitCast(bits) };
     }
@@ -2432,6 +2445,10 @@ pub const Evaluator = struct {
             str_split_last,
             str_from_utf8,
             str_from_utf8_lossy,
+            str_from_utf8_validated,
+            str_from_utf16_short,
+            str_from_utf32_short,
+
             str_is_eq_static_small,
             str_static_small_word_eq,
             str_static_small_word_caseless_eq,
@@ -2492,6 +2509,14 @@ pub const Evaluator = struct {
             .str_split_first => return try self.strSplitFirst(result_ty, args[0].str, args[1].str),
             .str_split_last => return try self.strSplitLast(result_ty, args[0].str, args[1].str),
             .str_from_utf8 => return try self.strFromUtf8(result_ty, args[0]),
+            .str_from_utf8_validated => {
+                const elems = args[0].list;
+                const bytes = arena.alloc(u8, elems.len) catch return error.OutOfMemory;
+                for (elems, 0..) |elem, i| bytes[i] = readInt(u8, elem);
+                return .{ .str = bytes };
+            },
+            .str_from_utf16_short => return try self.strFromWideUtfShort(u16, args[0]),
+            .str_from_utf32_short => return try self.strFromWideUtfShort(u32, args[0]),
             .str_from_utf8_lossy => {
                 const elems = args[0].list;
                 const buf = arena.alloc(u8, elems.len) catch return error.OutOfMemory;
@@ -2505,6 +2530,14 @@ pub const Evaluator = struct {
             .str_static_small_word_caseless_eq,
             => return self.unsupported_("static small string dispatch op"),
         }
+    }
+
+    fn strFromWideUtfShort(self: *Evaluator, comptime Unit: type, input: Value) EvalError!Value {
+        const units = self.alloc().alloc(Unit, input.list.len) catch return error.OutOfMemory;
+        for (input.list, 0..) |value, i| units[i] = readInt(Unit, value);
+        const list = builtins.list.RocList{ .bytes = @ptrCast(units.ptr), .length = units.len, .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(units.len) };
+        const decoded = if (Unit == u16) builtins.str.fromUtf16Short(list, self.getOps()) else builtins.str.fromUtf32Short(list, self.getOps());
+        return .{ .str = self.alloc().dupe(u8, decoded.asSlice()) catch return error.OutOfMemory };
     }
 
     fn mapAscii(self: *Evaluator, source: []const u8, comptime f: fn (u8) u8) EvalError![]const u8 {

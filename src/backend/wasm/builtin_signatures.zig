@@ -90,6 +90,10 @@ pub const BuiltinKind = enum {
     str_escape_and_quote,
     str_from_utf8,
     str_from_utf8_result,
+    str_from_utf8_validated,
+    str_from_utf16_short,
+    str_from_utf32_short,
+
     list_append_unsafe,
     list_concat,
     list_append_range_within,

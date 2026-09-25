@@ -294,8 +294,9 @@ fn withRocMacosDeploymentTarget(b: *std.Build, target: ResolvedTarget) ResolvedT
 ///   scalar.
 /// - musl has no ifunc and no x86_64 string assembly, so it is unaffected.
 /// - compiler_rt has no dispatch and nothing above baseline to give up.
-/// - Roc's own code under src/ contains no `@Vector` and no `std.simd`, so the
-///   only thing a higher floor buys it is wider autovectorization.
+/// - Zig string primitives use scalar/word operations and standard-library
+///   helpers. Roc SIMD operations go through the compiler's explicit lowering.
+///   SHA rounds separately use target-specific assembly with runtime dispatch.
 ///
 /// build.zig.zon carries the same accounting for each declared dependency.
 fn getReleaseTargetQuery(b: *std.Build, target: ResolvedTarget) std.Target.Query {

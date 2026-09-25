@@ -74,6 +74,8 @@ pub fn intrinsicAnnotation(env: *const ModuleEnv, ident: base.Ident.Idx) ?Intrin
 
     const entries = [_]struct { name: []const u8, intrinsic: IntrinsicId }{
         .{ .name = "Builtin.Str.Utf8Problem.is_eq", .intrinsic = .structural_eq },
+        .{ .name = "Builtin.Str.Utf16Problem.is_eq", .intrinsic = .structural_eq },
+        .{ .name = "Builtin.Str.Utf32Problem.is_eq", .intrinsic = .structural_eq },
         .{ .name = "Builtin.Encoding.ParseTagUnionSpec.parse", .intrinsic = .parse_tag_union },
         .{ .name = "Builtin.Encoding.FieldName.FieldNames.rename_fields", .intrinsic = .field_names_rename_fields },
         .{ .name = "Builtin.Encoding.FieldName.FieldNames.shortest_name", .intrinsic = .field_names_shortest_name },
@@ -273,6 +275,15 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     }
     if (env.common.findIdent("Builtin.Str.to_utf8")) |str_to_utf8_ident| {
         try low_level_map.put(str_to_utf8_ident, .str_to_utf8);
+    }
+    if (env.common.findIdent("str_from_utf8_validated")) |ident| {
+        try low_level_map.put(ident, .str_from_utf8_validated);
+    }
+    if (env.common.findIdent("str_from_utf16_short")) |ident| {
+        try low_level_map.put(ident, .str_from_utf16_short);
+    }
+    if (env.common.findIdent("str_from_utf32_short")) |ident| {
+        try low_level_map.put(ident, .str_from_utf32_short);
     }
     if (env.common.findIdent("Builtin.Str.from_utf8_lossy")) |str_from_utf8_lossy_ident| {
         try low_level_map.put(str_from_utf8_lossy_ident, .str_from_utf8_lossy);
@@ -587,6 +598,8 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "simd_{s}_store_16_unchecked", .{simd_type}, .simd_store_16_unchecked);
     }
     try putLowLevelFmt(&low_level_map, env, &name_scratch, "simd_u8x16_concat_shift_bytes_unchecked", .{}, .simd_concat_shift_bytes);
+    try putLowLevelFmt(&low_level_map, env, &name_scratch, "simd_u16x8_load_units_unchecked", .{}, .simd_load_16_unchecked);
+    try putLowLevelFmt(&low_level_map, env, &name_scratch, "simd_u32x4_load_units_unchecked", .{}, .simd_load_16_unchecked);
 
     const simd_method_mappings = [_]struct { owner: []const u8, name: []const u8, op: CIR.Expr.LowLevel }{
         .{ .owner = "U8x16", .name = "plus_saturated", .op = .simd_add_sat },

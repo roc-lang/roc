@@ -4285,6 +4285,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrWithAsciiUppercased), LowLevelBuiltins.strOp(.str_with_ascii_uppercased), .str, updateModeImmForArg0(ll.unique_args));
                 },
+                .str_from_utf8_validated => {
+                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    return try self.callList1RocOpsToStr(list_off, @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf8_validated), LowLevelBuiltins.strOp(.str_from_utf8_validated));
+                },
+                .str_from_utf16_short => {
+                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    return try self.callList1RocOpsToStr(list_off, @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf16_short), LowLevelBuiltins.strOp(.str_from_utf16_short));
+                },
+                .str_from_utf32_short => {
+                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    return try self.callList1RocOpsToStr(list_off, @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf32_short), LowLevelBuiltins.strOp(.str_from_utf32_short));
+                },
                 .str_from_utf8_lossy => {
                     // str_from_utf8_lossy(list) -> Str
                     if (args.len != 1) unreachable;
@@ -7548,6 +7563,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .str_ends_with,
                 .str_from_utf8,
                 .str_from_utf8_lossy,
+                .str_from_utf8_validated,
+                .str_from_utf16_short,
+                .str_from_utf32_short,
+
                 .str_get_utf8_byte_unsafe,
                 .str_inspect,
                 .str_is_eq,
@@ -8107,6 +8126,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const index_loc = try self.emitValueLocal(GuardedList.at(args, 1));
             const index_reg = try self.ensureInGeneralReg(index_loc);
             defer self.codegen.freeGeneral(index_reg);
+            const abi = self.layout_store.builtinListAbi(self.localLayout(GuardedList.at(args, 0)));
+            std.debug.assert(abi.elem_size == 1 or abi.elem_size == 2 or abi.elem_size == 4);
+            if (abi.elem_size > 1) try self.emitShlImm(.w64, index_reg, index_reg, @intCast(@ctz(abi.elem_size)));
             const bytes_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(bytes_reg);
             try self.emitLoad(.w64, bytes_reg, frame_ptr, list_offset);

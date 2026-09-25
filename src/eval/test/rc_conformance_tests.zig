@@ -184,6 +184,23 @@ const cases = [_]Case{
         ,
     },
     .{
+        // Short output takes the scalar inline primitive; long output is
+        // encoded into a byte list whose storage the validated string retains.
+        .name = "wide UTF decoding: short inline and long validated output",
+        .source =
+        \\{
+        \\    short16 = Str.from_utf16_lossy([82, 111, 99, 0xD83D, 0xDC26])
+        \\    short32 = Str.from_utf32_lossy([82, 111, 99, 0x1F426])
+        \\    long16 = Str.from_utf16(List.repeat(0x20AC, 40)).ok_or("")
+        \\    long32 = Str.from_utf32(List.repeat(0x1F426, 40)).ok_or("")
+        \\    Str.count_utf8_bytes(short16)
+        \\        + Str.count_utf8_bytes(short32)
+        \\        + Str.count_utf8_bytes(long16)
+        \\        + Str.count_utf8_bytes(long32)
+        \\}
+        ,
+    },
+    .{
         .name = "numeric to_str allocates a fresh string",
         .source =
         \\{

@@ -1735,6 +1735,92 @@ fn utf8EncodeLossy(c: u32, out: []u8) u3 {
     return unicode.utf8Encode(UNICODE_REPLACEMENT, out) catch unreachable;
 }
 
+/// Borrows bytes whose producer guarantees valid UTF-8. No validation scan is
+/// needed: copy inline output, or retain and share the existing byte allocation.
+pub fn fromUtf8Validated(list: RocList, roc_ops: *RocOps) callconv(.c) RocStr {
+    const len = list.len();
+    if (len == 0) return RocStr.empty();
+    if (RocStr.fitsInSmallStr(len)) return RocStr.fromSliceSmall(list.bytes.?[0..len]);
+    list.incref(1, false, roc_ops);
+    return .{ .bytes = list.bytes, .length = len, .capacity_or_alloc_ptr = list.capacity_or_alloc_ptr };
+}
+
+/// Largest lossy UTF-8 output the Roc wide-UTF decoders route to the scalar
+/// short path. Matches the 64-bit inline capacity and `wide_utf_short_max_bytes`
+/// in Builtin.roc; on 32-bit targets output above the inline capacity allocates once.
+pub const WIDE_UTF_SHORT_MAX_BYTES = 23;
+
+/// Borrows wide UTF units whose lossy UTF-8 output the caller has already sized
+/// at most WIDE_UTF_SHORT_MAX_BYTES, and builds the string from a stack buffer,
+/// so inline-sized output never allocates. Scalar only: bulk decoding is Roc
+/// SIMD code in Builtin.roc.
+fn fromWideUtfShort(comptime Unit: type, list: RocList, roc_ops: *RocOps) RocStr {
+    const len = list.len();
+    if (len == 0) return RocStr.empty();
+    const units = @as([*]const Unit, @ptrCast(@alignCast(list.bytes)))[0..len];
+    var buffer: [WIDE_UTF_SHORT_MAX_BYTES]u8 = undefined;
+    var written: usize = 0;
+    var index: usize = 0;
+    while (index < units.len) {
+        const unit = units[index];
+        index += 1;
+        var scalar: u21 = UNICODE_REPLACEMENT;
+        if (Unit == u16) {
+            if (unit >= 0xd800 and unit <= 0xdbff) {
+                if (index < units.len and units[index] >= 0xdc00 and units[index] <= 0xdfff) {
+                    scalar = 0x10000 + ((@as(u21, unit) - 0xd800) << 10) + (units[index] - 0xdc00);
+                    index += 1;
+                }
+            } else if (unit < 0xdc00 or unit > 0xdfff) {
+                scalar = unit;
+            }
+        } else if (unit <= 0x10ffff and (unit < 0xd800 or unit > 0xdfff)) {
+            scalar = @intCast(unit);
+        }
+        const width = unicode.utf8CodepointSequenceLength(scalar) catch unreachable;
+        if (buffer.len - written < width) {
+            roc_ops.crash("short wide UTF decode exceeded its sized output");
+            unreachable;
+        }
+        written += unicode.utf8Encode(scalar, buffer[written..]) catch unreachable;
+    }
+    return RocStr.init(&buffer, written, roc_ops);
+}
+
+/// Lossy UTF-16 decode for output already sized to fit inline.
+pub fn fromUtf16Short(list: RocList, roc_ops: *RocOps) callconv(.c) RocStr {
+    return fromWideUtfShort(u16, list, roc_ops);
+}
+
+/// Lossy UTF-32 decode for output already sized to fit inline.
+pub fn fromUtf32Short(list: RocList, roc_ops: *RocOps) callconv(.c) RocStr {
+    return fromWideUtfShort(u32, list, roc_ops);
+}
+
+test "short wide UTF decoding: inline output, replacement, and pairs" {
+    var env = TestEnv.init(testing.allocator);
+    defer env.deinit();
+    const Case16 = struct { units: []const u16, expected: []const u8 };
+    for ([_]Case16{
+        .{ .units = &.{}, .expected = "" },
+        .{ .units = &.{ 82, 111, 99, 0xd83d, 0xdc26 }, .expected = "Roc🐦" },
+        .{ .units = &.{ 65, 0xd800, 66 }, .expected = "A\u{fffd}B" },
+        .{ .units = &.{ 0xdc00, 0xd800 }, .expected = "\u{fffd}\u{fffd}" },
+        .{ .units = &.{0xfeff}, .expected = "\u{feff}" },
+    }) |case| {
+        const list = RocList{ .bytes = @ptrCast(@constCast(case.units.ptr)), .length = case.units.len, .capacity_or_alloc_ptr = RocList.encodeCapacity(case.units.len) };
+        const result = fromUtf16Short(list, env.getOps());
+        try testing.expect(result.isSmallStr());
+        try testing.expectEqualStrings(case.expected, result.asSlice());
+    }
+    const units32 = [_]u32{ 0x1f426, 0x110000, 0xdfff, 0x10ffff, 0xffffffff };
+    const list32 = RocList{ .bytes = @ptrCast(@constCast(&units32)), .length = units32.len, .capacity_or_alloc_ptr = RocList.encodeCapacity(units32.len) };
+    const result32 = fromUtf32Short(list32, env.getOps());
+    try testing.expect(result32.isSmallStr());
+    try testing.expectEqualStrings("🐦\u{fffd}\u{fffd}\u{10ffff}\u{fffd}", result32.asSlice());
+    try testing.expectEqual(@as(usize, 0), env.getAllocationCount());
+}
+
 /// TODO: Document fromUtf8Lossy.
 pub fn fromUtf8Lossy(
     list: RocList,
@@ -4993,4 +5079,40 @@ test "default-platform RocStr view matches canonical RocStr layout" {
         try std.testing.expectEqual(cf.type, vf.type);
         try std.testing.expectEqual(@offsetOf(RocStr, cf.name), @offsetOf(View, vf.name));
     }
+}
+
+test "validated UTF-8 construction: inline copies and retained heap ownership" {
+    var env = TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    inline for (.{ "", "Roc🐦", "a longer valid UTF-8 string containing 🐦 and €" }) |text| {
+        const list = RocList.fromSlice(u8, text, false, env.getOps());
+        const result = fromUtf8Validated(list, env.getOps());
+        try testing.expectEqualStrings(text, result.asSlice());
+        if (text.len <= SMALL_STR_MAX_LENGTH) {
+            try testing.expect(result.isSmallStr());
+        } else {
+            try testing.expectEqual(list.bytes, result.bytes);
+            try testing.expectEqual(list.capacity_or_alloc_ptr, result.capacity_or_alloc_ptr);
+        }
+        list.decref(1, 1, false, null, &rcNone, env.getOps());
+        // The returned string remains owned after the borrowed source is gone.
+        try testing.expectEqualStrings(text, result.asSlice());
+        result.decref(env.getOps());
+        try testing.expectEqual(@as(usize, 0), env.allocation_map.count());
+    }
+}
+
+test "validated UTF-8 construction: seamless slices retain their allocation" {
+    var env = TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const text = "prefix: a long slice containing 🐦 and € survives its source";
+    const list = RocList.fromSlice(u8, text, false, env.getOps());
+    const slice = @import("list.zig").listSublistBorrowed(list, 1, 8, text.len - 8, false, env.getOps());
+    const result = fromUtf8Validated(slice, env.getOps());
+    try testing.expect(result.isSeamlessSlice());
+    try testing.expectEqual(slice.bytes, result.bytes);
+    list.decref(1, 1, false, null, &rcNone, env.getOps());
+    try testing.expectEqualStrings(text[8..], result.asSlice());
+    result.decref(env.getOps());
+    try testing.expectEqual(@as(usize, 0), env.allocation_map.count());
 }

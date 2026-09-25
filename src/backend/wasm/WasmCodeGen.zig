@@ -457,6 +457,10 @@ str_with_ascii_lowercased_import: ?u32 = null,
 str_with_ascii_uppercased_import: ?u32 = null,
 str_caseless_ascii_equals_import: ?u32 = null,
 str_from_utf8_import: ?u32 = null,
+str_from_utf8_validated_import: ?u32 = null,
+str_from_utf16_short_import: ?u32 = null,
+str_from_utf32_short_import: ?u32 = null,
+
 int_from_str_import: ?u32 = null,
 dec_from_str_import: ?u32 = null,
 float_from_str_import: ?u32 = null,
@@ -794,6 +798,10 @@ fn hostBuiltinImports(self: *const Self) HostBuiltinImports {
             .str_escape_and_quote => self.str_escape_and_quote_import,
             .str_from_utf8 => self.str_from_utf8_import,
             .str_from_utf8_result => null,
+            .str_from_utf8_validated => self.str_from_utf8_validated_import,
+            .str_from_utf16_short => self.str_from_utf16_short_import,
+            .str_from_utf32_short => self.str_from_utf32_short_import,
+
             .list_append_unsafe => self.list_append_unsafe_import,
             .list_concat => self.list_concat_import,
             .list_append_range_within => self.list_append_range_within_import,
@@ -988,6 +996,29 @@ fn emitStrUnaryResultCall(
         try self.emitFpOffset(result_offset);
     }
     try self.emitBuiltinCall(kind, host_import);
+}
+
+/// Borrowed list -> owned Str private primitives (validated UTF-8 and short wide UTF).
+fn emitStrFromListPrimitive(self: *Self, comptime op: lir.LowLevel, input_local: ProcLocalId, ret_layout: layout.Idx) Allocator.Error!void {
+    const kind = comptime BuiltinSignatures.kindOf(LowLevelBuiltins.strOp(op));
+    try self.emitProcLocal(input_local);
+    const input = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(input);
+    const result_offset = try self.allocStackMemory(try self.layoutStorageByteSize(ret_layout), 8);
+    switch (self.external_calls) {
+        .host_imports => {
+            try self.emitLocalGet(input);
+            try self.emitFpOffset(result_offset);
+        },
+        .builtin_relocs => {
+            const list = try self.loadRocListFields(input);
+            try self.emitFpOffset(result_offset);
+            try self.emitRocListFields(list);
+        },
+        .unconfigured => unreachable,
+    }
+    try self.emitBuiltinCall(kind, null);
+    try self.emitFpOffset(result_offset);
 }
 
 fn emitStrUnaryLowLevel(
@@ -2124,6 +2155,10 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
     self.str_release_excess_capacity_import = try self.module.addImport("env", "roc_str_release_excess_capacity", str_unary_type);
     self.str_with_capacity_import = try self.module.addImport("env", "roc_str_with_capacity", str_unary_type);
 
+    self.str_from_utf8_validated_import = try self.module.addImport("env", "roc_str_from_utf8_validated", str_unary_type);
+    self.str_from_utf16_short_import = try self.module.addImport("env", "roc_str_from_utf16_short", str_unary_type);
+    self.str_from_utf32_short_import = try self.module.addImport("env", "roc_str_from_utf32_short", str_unary_type);
+
     const str_from_utf8_type = try self.module.addFuncType(
         &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 },
         &.{},
@@ -2248,7 +2283,7 @@ pub fn generateEntrypointWrapper(
     // Classify the natural C-ABI wasm signature for this entrypoint.
     var arena_state = std.heap.ArenaAllocator.init(self.allocator);
     defer arena_state.deinit();
-    const lowered = layout.abi.lower(arena_state.allocator(), self.getLayoutStore(), .wasm32, arg_layouts, ret_layout, false) catch return error.OutOfMemory;
+    const lowered = layout.abi.lower(arena_state.allocator(), self.getLayoutStore(), if (self.cpu_level == .v1) .wasm32v1 else .wasm32, arg_layouts, ret_layout, false) catch return error.OutOfMemory;
 
     var param_types = std.ArrayList(ValType).empty;
     defer param_types.deinit(self.allocator);
@@ -4118,7 +4153,7 @@ fn isCompositeLocal(self: *const Self, value: ProcLocalId) Allocator.Error!bool 
 
 /// Check if a layout represents a composite type stored in stack memory.
 fn isCompositeLayout(self: *const Self, layout_idx: layout.Idx) Allocator.Error!bool {
-    const repr = try WasmLayout.wasmReprWithStore(layout_idx, self.getLayoutStore());
+    const repr = try WasmLayout.wasmReprWithStore(layout_idx, self.getLayoutStore(), self.cpu_level != .v1);
     return switch (repr) {
         .stack_memory => |s| s > 0,
         .primitive => false,
@@ -8030,7 +8065,7 @@ fn emitI128TryToI128(self: *Self) Allocator.Error!void {
 /// (not one of the well-known sentinel values like .bool, .i32, etc.).
 /// If a lambda's body returns an unwrapped_capture closure, get the capture's layout.
 fn resolveValType(self: *const Self, layout_idx: layout.Idx) Allocator.Error!ValType {
-    return try WasmLayout.resultValTypeWithStore(layout_idx, self.getLayoutStore());
+    return try WasmLayout.resultValTypeWithStore(layout_idx, self.getLayoutStore(), self.cpu_level != .v1);
 }
 
 /// Allocate space on the stack frame, returning the offset from the frame pointer.
@@ -9132,7 +9167,7 @@ pub fn registerHostedSymbolTargets(self: *Self, proc_specs: []const LIR.LirProcS
 
         var arena_state = std.heap.ArenaAllocator.init(self.allocator);
         defer arena_state.deinit();
-        const lowered = layout.abi.lower(arena_state.allocator(), self.getLayoutStore(), .wasm32, hosted_arg_layouts, spec.ret_layout, false) catch return error.OutOfMemory;
+        const lowered = layout.abi.lower(arena_state.allocator(), self.getLayoutStore(), if (self.cpu_level == .v1) .wasm32v1 else .wasm32, hosted_arg_layouts, spec.ret_layout, false) catch return error.OutOfMemory;
 
         var params = std.ArrayList(ValType).empty;
         defer params.deinit(self.allocator);
@@ -9222,7 +9257,7 @@ fn emitHostedCall(
     var arena_state = std.heap.ArenaAllocator.init(self.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const lowered = layout.abi.lower(arena, self.getLayoutStore(), .wasm32, arg_layouts, ret_layout, false) catch return error.OutOfMemory;
+    const lowered = layout.abi.lower(arena, self.getLayoutStore(), if (self.cpu_level == .v1) .wasm32v1 else .wasm32, arg_layouts, ret_layout, false) catch return error.OutOfMemory;
 
     // An indirect return is passed as a result pointer (wasm has no sret register).
     if (lowered.ret == .indirect) {
@@ -10323,7 +10358,7 @@ fn generateBoxyDynamicLiteral(
 }
 
 fn generateIntLiteralForLayout(self: *Self, value: i128, layout_idx: layout.Idx) Allocator.Error!void {
-    const repr = try WasmLayout.wasmReprWithStore(layout_idx, self.getLayoutStore());
+    const repr = try WasmLayout.wasmReprWithStore(layout_idx, self.getLayoutStore(), self.cpu_level != .v1);
     switch (repr) {
         .primitive => |vt| switch (vt) {
             .i32 => {
@@ -10354,7 +10389,7 @@ fn generateStaticDataLiteral(self: *Self, id: LIR.StaticDataId, target_layout: l
         return;
     }
 
-    const repr = try WasmLayout.wasmReprWithStore(runtime_layout, self.getLayoutStore());
+    const repr = try WasmLayout.wasmReprWithStore(runtime_layout, self.getLayoutStore(), self.cpu_level != .v1);
     switch (repr) {
         .primitive => |vt| {
             try self.emitStaticDataAddressConst(id, 0);
@@ -10485,7 +10520,7 @@ fn bindAssignedLocal(self: *Self, target: ProcLocalId) Allocator.Error!void {
 fn bindLocalFromWasmStack(self: *Self, target: ProcLocalId) Allocator.Error!void {
     const ls = self.getLayoutStore();
     const runtime_layout = self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(target));
-    const repr = try WasmLayout.wasmReprWithStore(runtime_layout, ls);
+    const repr = try WasmLayout.wasmReprWithStore(runtime_layout, ls, self.cpu_level != .v1);
     switch (repr) {
         .stack_memory => |size| {
             if (size > 0) {
@@ -11158,7 +11193,7 @@ fn getLayoutStore(self: *const Self) *const LayoutStore {
 /// Get the byte size of a layout index using the layout store.
 fn layoutByteSize(self: *const Self, layout_idx: layout.Idx) Allocator.Error!u32 {
     const ls = self.getLayoutStore();
-    return switch (try WasmLayout.wasmReprWithStore(layout_idx, ls)) {
+    return switch (try WasmLayout.wasmReprWithStore(layout_idx, ls, self.cpu_level != .v1)) {
         .primitive => |vt| switch (vt) {
             .i32, .f32 => 4,
             .i64, .f64 => 8,
@@ -11200,7 +11235,7 @@ fn layoutStorageByteSize(self: *const Self, layout_idx: layout.Idx) Allocator.Er
 
 fn layoutByteAlign(self: *const Self, layout_idx: layout.Idx) Allocator.Error!u32 {
     const ls = self.getLayoutStore();
-    return switch (try WasmLayout.wasmReprWithStore(layout_idx, ls)) {
+    return switch (try WasmLayout.wasmReprWithStore(layout_idx, ls, self.cpu_level != .v1)) {
         .primitive => |vt| switch (vt) {
             .i32, .f32 => 4,
             .i64, .f64 => 8,
@@ -11588,7 +11623,7 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
         if (field_byte_size == 0) continue;
         const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(l.getStruct().idx, @intCast(i));
         const is_composite = try self.isCompositeLayout(field_layout_idx);
-        const field_vt = try WasmLayout.resultValTypeWithStore(field_layout_idx, ls);
+        const field_vt = try WasmLayout.resultValTypeWithStore(field_layout_idx, ls, self.cpu_level != .v1);
 
         // Generate the field expression
         try self.emitProcLocal(field_expr_id);
@@ -11698,7 +11733,7 @@ fn generateStructAccess(self: *Self, sa: anytype) Allocator.Error!void {
         try self.emitMemCopy(stable_local, 0, src_local, field_byte_size);
         try self.emitLocalGet(stable_local);
     } else {
-        const field_vt = try WasmLayout.resultValTypeWithStore(sa.field_layout, ls);
+        const field_vt = try WasmLayout.resultValTypeWithStore(sa.field_layout, ls, self.cpu_level != .v1);
         // Load the field: [struct_ptr + field_offset] (size-aware for sub-32-bit fields)
         try self.emitLocalGet(struct_ptr);
         try self.emitLoadOpSized(field_vt, field_byte_size, field_offset);
@@ -11956,7 +11991,7 @@ fn generateList(self: *Self, l: anytype) Allocator.Error!void {
     }
 
     // Store each element
-    const elem_vt = try WasmLayout.resultValTypeWithStore(l.elem_layout, ls);
+    const elem_vt = try WasmLayout.resultValTypeWithStore(l.elem_layout, ls, self.cpu_level != .v1);
     for (0..elems.len) |i| {
         const elem_expr_id = GuardedList.at(elems, i);
         try self.emitProcLocal(elem_expr_id);
@@ -13774,6 +13809,9 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .str_to_utf8 => {
             try self.emitStrToUtf8(GuardedList.at(args, 0));
         },
+        .str_from_utf8_validated => try self.emitStrFromListPrimitive(.str_from_utf8_validated, GuardedList.at(args, 0), ll.ret_layout),
+        .str_from_utf16_short => try self.emitStrFromListPrimitive(.str_from_utf16_short, GuardedList.at(args, 0), ll.ret_layout),
+        .str_from_utf32_short => try self.emitStrFromListPrimitive(.str_from_utf32_short, GuardedList.at(args, 0), ll.ret_layout),
         .str_from_utf8_lossy => {
             try self.emitStrFromUtf8Lossy(GuardedList.at(args, 0));
         },
@@ -14147,7 +14185,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 if (value_size == 0) {
                     try self.emitI32Const(0);
                 } else {
-                    const value_repr = try WasmLayout.wasmReprWithStore(self.procLocalLayoutIdx(value_expr), ls);
+                    const value_repr = try WasmLayout.wasmReprWithStore(self.procLocalLayoutIdx(value_expr), ls, self.cpu_level != .v1);
                     const value_vt: ValType = switch (value_repr) {
                         .stack_memory => .i32,
                         .primitive => |val_type| val_type,
@@ -14269,7 +14307,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 } else {
                     try self.emitProcLocal(box_expr);
 
-                    const result_repr = try WasmLayout.wasmReprWithStore(ll.ret_layout, ls);
+                    const result_repr = try WasmLayout.wasmReprWithStore(ll.ret_layout, ls, self.cpu_level != .v1);
                     const result_vt: ValType = switch (result_repr) {
                         .stack_memory => .i32,
                         .primitive => |val_type| val_type,
@@ -14487,7 +14525,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const value_size = try self.layoutByteSize(self.procLocalLayoutIdx(value_expr));
 
             if (value_size != 0) {
-                const value_repr = try WasmLayout.wasmReprWithStore(self.procLocalLayoutIdx(value_expr), self.getLayoutStore());
+                const value_repr = try WasmLayout.wasmReprWithStore(self.procLocalLayoutIdx(value_expr), self.getLayoutStore(), self.cpu_level != .v1);
                 const value_vt: ValType = switch (value_repr) {
                     .stack_memory => .i32,
                     .primitive => |val_type| val_type,
@@ -14515,7 +14553,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // ptr_load: (Ptr(T)) -> T. Copy sizeOf(T) bytes out of *ptr.
             // Same shape as erased_capture_load above.
             const result_size = try self.layoutByteSize(ll.ret_layout);
-            const result_repr = try WasmLayout.wasmReprWithStore(ll.ret_layout, self.getLayoutStore());
+            const result_repr = try WasmLayout.wasmReprWithStore(ll.ret_layout, self.getLayoutStore(), self.cpu_level != .v1);
             const result_vt: ValType = switch (result_repr) {
                 .stack_memory => .i32,
                 .primitive => |val_type| val_type,
@@ -15796,6 +15834,10 @@ fn numericOpFromLowLevel(op: LIR.LowLevel) NumericOp {
         .str_release_excess_capacity,
         .str_to_utf8,
         .str_from_utf8_lossy,
+        .str_from_utf8_validated,
+        .str_from_utf16_short,
+        .str_from_utf32_short,
+
         .str_from_utf8,
         .str_split_on,
         .str_join_with,
@@ -18816,6 +18858,11 @@ fn emitSimdLoad16(self: *Self, args: anytype) Allocator.Error!void {
     try self.emitLoadOp(.i32, 0);
     try self.emitProcLocal(GuardedList.at(args, 1));
     try self.emitConversion(try self.procLocalValType(GuardedList.at(args, 1)), .i32);
+    const abi = self.getLayoutStore().builtinListAbi(self.procLocalLayoutIdx(GuardedList.at(args, 0)));
+    if (abi.elem_size > 1) {
+        try self.emitI32Const(@intCast(abi.elem_size));
+        self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
+    }
     self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
     try self.emitV128Load(0, 0);
 }
@@ -19020,13 +19067,18 @@ fn emitSimdLowLevel(self: *Self, op: SimdLowLevel, ll: anytype, args: anytype) A
 }
 
 fn emitSimdVectorHalves(self: *Self, vector_arg: ProcLocalId) Allocator.Error!struct { low: u32, high: u32 } {
-    const scratch_offset = try self.allocStackMemory(16, 16);
     const scratch = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitFpOffset(scratch_offset);
-    try self.emitLocalSet(scratch);
-    try self.emitLocalGet(scratch);
-    try self.emitProcLocal(vector_arg);
-    try self.emitStoreOp(.v128, 0);
+    if (self.cpu_level == .v1) {
+        try self.emitProcLocal(vector_arg);
+        try self.emitLocalSet(scratch);
+    } else {
+        const scratch_offset = try self.allocStackMemory(16, 16);
+        try self.emitFpOffset(scratch_offset);
+        try self.emitLocalSet(scratch);
+        try self.emitLocalGet(scratch);
+        try self.emitProcLocal(vector_arg);
+        try self.emitStoreOp(.v128, 0);
+    }
     const low = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
     const high = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
     try self.emitLocalGet(scratch);

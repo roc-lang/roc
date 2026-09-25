@@ -3791,6 +3791,269 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "2" },
     },
     .{
+        .name = "wide UTF decoding - UTF-16 strict valid",
+        .source =
+        \\Str.from_utf16([82, 111, 99, 0xD83D, 0xDC26]) == Ok("Roc🐦")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 lossy valid",
+        .source =
+        \\Str.from_utf16_lossy([82, 111, 99, 0xD83D, 0xDC26]) == "Roc🐦"
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 empty",
+        .source =
+        \\Str.from_utf16([]) == Ok("") and Str.from_utf16_lossy([]) == ""
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 strict error 0",
+        .source =
+        \\Str.from_utf16([65, 0xD800, 66]) == Err(BadUtf16({ index: 1, problem: UnpairedHighSurrogate }))
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 strict error 1",
+        .source =
+        \\Str.from_utf16([0xD83D, 0xDC26, 0xDFFF]) == Err(BadUtf16({ index: 2, problem: UnpairedLowSurrogate }))
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 strict error 2",
+        .source =
+        \\Str.from_utf16([65, 0xDBFF]) == Err(BadUtf16({ index: 1, problem: UnpairedHighSurrogate }))
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 shared input and heap result",
+        .source =
+        \\{
+        \\    units = List.repeat(65.U16, 64)
+        \\    strict = Str.from_utf16(units)
+        \\    lossy = Str.from_utf16_lossy(units)
+        \\    strict == Ok(Str.repeat("A", 64)) and lossy == Str.repeat("A", 64) and units == List.repeat(65.U16, 64)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 sliced input",
+        .source =
+        \\Str.from_utf16(List.drop_first([99.U16, 65, 66, 67], 1)) == Ok("ABC")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 strict valid",
+        .source =
+        \\Str.from_utf32([82, 111, 99, 0x1F426]) == Ok("Roc🐦")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 lossy valid",
+        .source =
+        \\Str.from_utf32_lossy([82, 111, 99, 0x1F426]) == "Roc🐦"
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 empty",
+        .source =
+        \\Str.from_utf32([]) == Ok("") and Str.from_utf32_lossy([]) == ""
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 strict error 0",
+        .source =
+        \\Str.from_utf32([65, 0xD800]) == Err(BadUtf32({ index: 1, problem: SurrogateCodePoint }))
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 strict error 1",
+        .source =
+        \\Str.from_utf32([65, 0x110000]) == Err(BadUtf32({ index: 1, problem: CodePointTooLarge }))
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 strict error 2",
+        .source =
+        \\Str.from_utf32([0xFFFFFFFF]) == Err(BadUtf32({ index: 0, problem: CodePointTooLarge }))
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 shared input and heap result",
+        .source =
+        \\{
+        \\    units = List.repeat(65.U32, 64)
+        \\    strict = Str.from_utf32(units)
+        \\    lossy = Str.from_utf32_lossy(units)
+        \\    strict == Ok(Str.repeat("A", 64)) and lossy == Str.repeat("A", 64) and units == List.repeat(65.U32, 64)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 sliced input",
+        .source =
+        \\Str.from_utf32(List.drop_first([99.U32, 65, 66, 67], 1)) == Ok("ABC")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 lossy resynchronization",
+        .source =
+        \\Str.from_utf16_lossy([0xD800, 0xD83D, 0xDC26, 0xDC00, 65, 0xDBFF]) == "�🐦�A�"
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 lossy invalid units",
+        .source =
+        \\Str.from_utf32_lossy([0xD83D, 0xDC26, 65, 0x110000, 0xFFFFFFFF]) == "��A��"
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 all scalar boundaries",
+        .source =
+        \\Str.from_utf16([0, 0x7F, 0x80, 0x7FF, 0x800, 0xD7FF, 0xE000, 0xFEFF, 0xFFFF, 0xD800, 0xDC00, 0xDBFF, 0xDFFF]).ok_or("").to_utf8() == [0, 127, 194, 128, 223, 191, 224, 160, 128, 237, 159, 191, 238, 128, 128, 239, 187, 191, 239, 191, 191, 240, 144, 128, 128, 244, 143, 191, 191] and Str.from_utf32([0, 0x7F, 0x80, 0x7FF, 0x800, 0xD7FF, 0xE000, 0xFEFF, 0xFFFF, 0x10000, 0x10FFFF]).ok_or("").to_utf8() == [0, 127, 194, 128, 223, 191, 224, 160, 128, 237, 159, 191, 238, 128, 128, 239, 187, 191, 239, 191, 191, 240, 144, 128, 128, 244, 143, 191, 191]
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 SIMD lengths and lanes",
+        .source =
+        \\{
+        \\var $ok = True
+        \\var $len = 0.U64
+        \\while $len <= 65 {
+        \\    units = List.repeat(65.U16, $len)
+        \\    expected = Str.repeat("A", $len)
+        \\    $ok = $ok and Str.from_utf16(units) == Ok(expected) and Str.from_utf16_lossy(units) == expected
+        \\    $len = $len + 1
+        \\}
+        \\var $lane = 0.U64
+        \\while $lane < 32 {
+        \\    units = List.repeat(65.U16, $lane).concat([0x100]).concat(List.repeat(66.U16, 32 - $lane))
+        \\    expected = Str.repeat("A", $lane).concat("Ā").concat(Str.repeat("B", 32 - $lane))
+        \\    $ok = $ok and Str.from_utf16(units) == Ok(expected) and Str.from_utf16_lossy(units) == expected
+        \\    $lane = $lane + 1
+        \\}
+        \\$ok
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 SIMD invalid lanes and shared slices",
+        .source =
+        \\{
+        \\var $ok = True
+        \\var $lane = 0.U64
+        \\while $lane < 32 {
+        \\    units = List.repeat(65.U16, $lane).concat([0xD800]).concat(List.repeat(66.U16, 32 - $lane))
+        \\    expected = Str.repeat("A", $lane).concat("�").concat(Str.repeat("B", 32 - $lane))
+        \\    $ok = $ok and Str.from_utf16(units) == Err(BadUtf16({ index: $lane, problem: UnpairedHighSurrogate })) and Str.from_utf16_lossy(units) == expected
+        \\    $lane = $lane + 1
+        \\}
+        \\shared = [99.U16].concat(List.repeat(65.U16, 65)).concat([100])
+        \\slice = shared.drop_first(1).drop_last(1)
+        \\$ok and Str.from_utf16(slice) == Ok(Str.repeat("A", 65)) and List.len(shared) == 67
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 SIMD lengths and lanes",
+        .source =
+        \\{
+        \\var $ok = True
+        \\var $len = 0.U64
+        \\while $len <= 65 {
+        \\    units = List.repeat(65.U32, $len)
+        \\    expected = Str.repeat("A", $len)
+        \\    $ok = $ok and Str.from_utf32(units) == Ok(expected) and Str.from_utf32_lossy(units) == expected
+        \\    $len = $len + 1
+        \\}
+        \\var $lane = 0.U64
+        \\while $lane < 32 {
+        \\    units = List.repeat(65.U32, $lane).concat([0x100]).concat(List.repeat(66.U32, 32 - $lane))
+        \\    expected = Str.repeat("A", $lane).concat("Ā").concat(Str.repeat("B", 32 - $lane))
+        \\    $ok = $ok and Str.from_utf32(units) == Ok(expected) and Str.from_utf32_lossy(units) == expected
+        \\    $lane = $lane + 1
+        \\}
+        \\$ok
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 SIMD invalid lanes and shared slices",
+        .source =
+        \\{
+        \\var $ok = True
+        \\var $lane = 0.U64
+        \\while $lane < 32 {
+        \\    units = List.repeat(65.U32, $lane).concat([0xD800]).concat(List.repeat(66.U32, 32 - $lane))
+        \\    expected = Str.repeat("A", $lane).concat("�").concat(Str.repeat("B", 32 - $lane))
+        \\    $ok = $ok and Str.from_utf32(units) == Err(BadUtf32({ index: $lane, problem: SurrogateCodePoint })) and Str.from_utf32_lossy(units) == expected
+        \\    $lane = $lane + 1
+        \\}
+        \\shared = [99.U32].concat(List.repeat(65.U32, 65)).concat([100])
+        \\slice = shared.drop_first(1).drop_last(1)
+        \\$ok and Str.from_utf32(slice) == Ok(Str.repeat("A", 65)) and List.len(shared) == 67
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 surrogate pair across SIMD chunks",
+        .source =
+        \\{
+        \\var $ok = True
+        \\var $prefix = 0.U64
+        \\while $prefix < 33 {
+        \\    units = List.repeat(65.U16, $prefix).concat([0xD83D, 0xDC26]).concat(List.repeat(66.U16, 33))
+        \\    expected = Str.repeat("A", $prefix).concat("🐦").concat(Str.repeat("B", 33))
+        \\    $ok = $ok and Str.from_utf16(units) == Ok(expected) and Str.from_utf16_lossy(units) == expected
+        \\    $prefix = $prefix + 1
+        \\}
+        \\$ok
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 high-bit SIMD lanes",
+        .source =
+        \\{
+        \\var $ok = True
+        \\var $lane = 0.U64
+        \\while $lane < 16 {
+        \\    units = List.repeat(65.U32, $lane).concat([0x80000000]).concat(List.repeat(66.U32, 32 - $lane))
+        \\    expected = Str.repeat("A", $lane).concat("�").concat(Str.repeat("B", 32 - $lane))
+        \\    $ok = $ok and Str.from_utf32(units) == Err(BadUtf32({ index: $lane, problem: CodePointTooLarge })) and Str.from_utf32_lossy(units) == expected
+        \\    $lane = $lane + 1
+        \\}
+        \\$ok
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "low_level - Str.from_utf8_lossy roundtrip ASCII",
         .source =
         \\{
