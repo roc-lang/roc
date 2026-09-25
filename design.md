@@ -950,6 +950,9 @@ names the merged variables. Both arms remain visible through lifting and lambda
 solving, including callable identities stored in compile-time results. The
 consumer input is opaque to value folding until target LIR lowering supplies the
 configured run/omit Boolean. No specialization is repeated.
+Run-only lowering uses the same explicit state-result binding without the
+consumer branch; it must not lower a mutating condition as an isolated Boolean
+whose state updates are lost to the enclosing continuation.
 
 Monotype lowering, lifting, SpecConstr, lambda solving, and inline analysis
 run once over the union of the compilation's compile-time and runtime root
@@ -2971,16 +2974,21 @@ are pinned at the group's boundary rank so no inner lambda can generalize
 them first. At the group's generalization boundary—a singleton def's RHS
 frame or a recursive group's shared frame, where no mid-body state is pending—
 the driver checks each target's group in its own nested frame (together
-with any unchecked topological prefix), re-runs dispatch, and interleaves
-boundary literal defaulting to a fixpoint before generalizing. Group checks
-nest only at such boundaries. Ownership of a waiting target constraint is
+with the unchecked groups it transitively name-depends on, and no other
+group), re-runs dispatch, and interleaves boundary literal defaulting to a
+fixpoint before generalizing. Group checks nest only at such boundaries. A
+group the target does not name-depend on is never checked early: nested
+inside the requesting frame, its use of that frame's still in-flight def
+would merge with the def's live vars instead of instantiating its finished
+scheme. The driver reaches such a group in its own turn, after that def
+generalizes. Ownership of a waiting target constraint is
 decided by its pinned callable relation: every active frame's drain re-sees
 the waiting constraint, and only a frame whose boundary rank the relation's
 callable var still sits at records the target—a relation pinned by an
 enclosing frame is generalization-safe in every nested frame, and re-recording
-it there would check the target's topological prefix inside the nested frame,
-where a prefix group can name that frame's still in-flight def and merge with
-it monomorphically instead of instantiating its finished scheme. The outermost
+it there would check the target's unchecked name dependencies inside the
+nested frame, where a dependency group can name that frame's still in-flight
+def and merge with it monomorphically instead of instantiating its finished scheme. The outermost
 active frame owns every remaining waiting constraint.
 
 The same nesting discipline governs a waiting constraint whose target is in
@@ -10079,12 +10087,27 @@ identity. Shared backing witnesses can connect distinct declarations in the live
 graph; capture partitions those groups by the declaration checks used by nominal
 identity queries so replay never asserts equality between distinct declarations.
 Imported finished-type witnesses remain finished after replay, preserving the prohibition
-on rewriting a finalized representation. Settled
+on rewriting a finalized representation. Import and summary replay register each
+witness on its singleton cell before relating it. Each union class stores its
+first finished witness, or explicit absence. Because union concatenates the
+winner's permanent-member list before the loser's, it retains the winner's
+witness when present and otherwise takes the loser's. Capture and finished-type
+containment read this class column without traversing historical aliases.
+The original-node witness map remains separate: a read of a particular imported
+occurrence still returns that occurrence's exact type. Registration does not
+attach witnesses retrospectively to already joined cells. Permanent-member
+history remains intact for recursive argument snapshots and alias indexes. Settled
 structure without mutable field-presence or representation evidence is interned
 directly as Monotype content, without retaining intermediate active snapshots.
 This capture does not finalize the surrounding graph or apply variable defaults.
 Settled leaves retain only their interned identities; storage for open structure
 and producer evidence is proportional to the open portion of the interface.
+Recursive-slot and forced-dynamic membership are explicit bits on each
+instantiation union-find class. Marking resolves the current representative;
+unions OR both classes' bits into the winner. Capture, shareability, interface
+identity, and iterator finalization read that class metadata directly, never
+scan graph-wide inventories. Summary replay marks its newly instantiated cells
+before relating them. Unrelated marked classes impose no work on capture.
 Open constraints use local indices, never graph identities
 or defaulted Monotype views. Expansion
 uses an independent instantiation of the inputs so incidental caller state
@@ -10511,7 +10534,11 @@ types digest equally regardless of alias spelling or knot-tying ids.
 Generated helper code for an empty tag union, such as an inspector requested
 only because a container type mentions the empty tag union, has an unreachable
 body. Reaching that helper means a runtime value of an uninhabited type existed,
-which is a compiler or unsafe-runtime bug.
+which is a compiler or unsafe-runtime bug. The same rule applies when an
+explicit typed boundary has an empty source row: LIR emits a terminal impossible
+path before considering layout equality or payload conversion. A destination
+row or primitive never gives an uninhabited source a value. This includes the
+`Err` branch when returning `Try(a, [])` into a composed `Try` result.
 
 If Monotype lowering cannot construct a closed monomorphic type from checked
 data, that is a compiler bug.
@@ -10664,6 +10691,22 @@ from the loop body supplies exactly one value for every loop parameter, in the
 same order and with the same types. Loops with no carried state use empty spans.
 `break_` carries the loop result when the loop is value-producing and carries no
 expression when the loop result is unit/control-only.
+
+Source `for` expressions and statements share one state-carrying lowering
+contract, which condition loops (`while`, infinite, and breakable loops) also
+follow. Checked output records every loop's mutation identities once, with
+disjoint ranges for mutations outside `expect` and mutations occurring only in
+`expect` conditions. A `for` plan covers its body; a condition loop's plan also
+covers its condition, which runs on every iteration. Recording follows
+resolved assignment identities and explicit dispatch operands, excludes nested
+function bodies, and reuses nested loop summaries. A loop-only table holds these
+compact ranges into the checked binder pool; loops reference it by ID without
+widening unrelated expression payloads. Both the table and pool survive
+serialization. Post-check lowering never rediscovers a loop's mutations.
+Only binders in scope at loop entry become carried state. Every iteration and
+exit transports that state explicitly. An expression-form loop produces unit
+after binding its exit state, and enclosing branch results must be constructed
+inside the scope of those bindings. Discarding unit never discards mutations.
 
 Monotype normally preserves source control structure, but compiler-generated
 algorithms may introduce typed `join_point` and `jump` expressions when their
@@ -10909,6 +10952,17 @@ checked source identity. A record keeps whichever requester reserved it, so a
 requester-derived component in either identity would make two programs that
 reach one specialization through differently annotated call sites disagree—one
 key naming two procedure identities.
+
+A procedure identity hashes its source specialization, ABI choices, and solved
+argument, result, and capture types. It excludes the outer function's callable
+set: that set describes the contexts where the function value flows, while the
+selected source and captures already identify the procedure being compiled.
+Passing a closed imported function beside another lambda must not change its
+procedure identity or prevent reuse of its module-pack entry. Callable sets
+nested in arguments, results, and captures remain part of identity because they
+determine runtime representations and dispatch inside the procedure. Function
+value type digests retain their complete callable sets, including when reached
+recursively from those nested positions.
 
 A compiler-generated body retains its own source key. An interpolation or
 field-names iterator step, a structural parser or encoder runtime, and a
@@ -11736,6 +11790,34 @@ The solver:
 - solves recursive groups as groups, not by accidental declaration order
 - verifies each lifted jump is lexically scoped and unifies its arguments with
   the corresponding join-point parameter types
+
+Explicit return boundaries preserve the source value's tag rows and the
+function's destination rows independently. Lambda Solved infers the returned
+value at its producer type, then relates the payloads of each source tag to
+its destination payloads without linking the row roots. This relation follows
+nested tag rows, including `Try`'s error payload, with directed pair visitation
+for cycles. Other payloads retain ordinary callable-flow unification. An empty
+source row contributes no payload flow. In particular, returning one shared
+`Ok`-only callee from two `?`-composed functions must never write either
+function's error row into that callee. LIR consumes the retained source and
+destination types at the explicit return boundary.
+
+A terminal crash, failed compile-time exhaustiveness marker, or unreachable
+marker produces no value and contributes no return payload flow. Lambda Solved
+retains its source type for structural consumers, such as a field access on a
+checked-error record, but does not relate a terminal return operand to the
+function's destination type. In particular, a checked-error crash may retain
+a different source type from the function without unifying those types.
+
+When backwards LIR construction first reaches a local through a return use,
+it reserves storage at that local's solved producer type. The destination row
+does not determine the producer's storage. Typed boundaries may copy matching
+layouts directly only when the source and destination value encodings also
+agree: identical byte layouts do not prove identical tag encodings. Finite
+callables compare their ordered source members and capture encodings; their
+specialized procedure targets are consumer decisions, not stored code pointers.
+Erased callable entries retain the complete target comparison because their
+runtime values do carry code pointers.
 
 Expression inference uses an explicit, reusable continuation stack. A suspended
 block owns one statement cursor, and a suspended match owns its branch and

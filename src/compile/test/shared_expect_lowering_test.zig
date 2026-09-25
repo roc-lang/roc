@@ -136,6 +136,24 @@ test "shared expect lowering preserves consumer-specific outer variable mutation
     , .{ .shared_comptime_reads = true, .prepared_inspect = inspectMutation });
 }
 
+test "issue 11618 shared expect loop carries preserve both consumers" {
+    try harness.expectLowersToLirWithOptions(
+        \\main! = |args| {
+        \\    var code = 7
+        \\    match True {
+        \\        True => for increment in [1] {
+        \\            expect {
+        \\                code = code + increment
+        \\                List.is_empty(args)
+        \\            }
+        \\        }
+        \\        False => {}
+        \\    }
+        \\    Err(Exit(code))
+        \\}
+    , .{ .shared_comptime_reads = true, .prepared_inspect = inspectMutation });
+}
+
 test "shared expect lowering merges callable identities assigned by the condition" {
     try harness.expectLowersToLirWithOptions(
         \\main! = |args| {
