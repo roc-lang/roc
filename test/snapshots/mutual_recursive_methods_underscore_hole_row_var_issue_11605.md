@@ -378,7 +378,7 @@ run = |sql| {
 		(patt (type "Str -> Str"))
 		(patt (type "Client(_a), Str, U64 -> Try(Str, [Refused(Str), ..others])"))
 		(patt (type "Client(_a), Str, U64 -> Try(Str, [Refused(Str), ..others])"))
-		(patt (type "Str -> Try(Str, [Refused(Str), ..others])")))
+		(patt (type "Str -> Try(Str, [Refused(Str)])")))
 	(type_decls
 		(nominal (type "Client(effects)")
 			(ty-header (name "Client")
@@ -388,5 +388,5 @@ run = |sql| {
 		(expr (type "Str -> Str"))
 		(expr (type "Client(_a), Str, U64 -> Try(Str, [Refused(Str), ..others])"))
 		(expr (type "Client(_a), Str, U64 -> Try(Str, [Refused(Str), ..others])"))
-		(expr (type "Str -> Try(Str, [Refused(Str), ..others])"))))
+		(expr (type "Str -> Try(Str, [Refused(Str)])"))))
 ~~~
