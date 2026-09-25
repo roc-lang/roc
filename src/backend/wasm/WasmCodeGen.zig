@@ -12551,16 +12551,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             };
             self.currentCode().append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
-        .num_round => {
-            try self.emitProcLocal(GuardedList.at(args, 0));
-            const vt = try self.resolveValType(ll.ret_layout);
-            const wasm_op: u8 = switch (vt) {
-                .f32 => Op.f32_nearest,
-                .f64 => Op.f64_nearest,
-                .i32, .i64, .v128 => unreachable,
-            };
-            self.currentCode().append(self.allocator, wasm_op) catch return error.OutOfMemory;
-        },
 
         // List operations
         .list_len => {
@@ -15920,7 +15910,6 @@ fn numericOpFromLowLevel(op: LIR.LowLevel) NumericOp {
         .num_acos,
         .num_atan,
         .num_log,
-        .num_round,
         .num_floor,
         .num_ceiling,
         .num_to_str,

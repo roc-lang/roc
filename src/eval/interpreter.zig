@@ -7181,7 +7181,6 @@ pub const Interpreter = struct {
             .num_acos => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .acos),
             .num_atan => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .atan),
             .num_log => self.evalNumLog(args[0], ll.ret_layout, arg_layout),
-            .num_round => self.evalNumRound(args[0], ll.ret_layout, arg_layout),
             .num_floor => self.evalNumFloor(args[0], ll.ret_layout, arg_layout),
             .num_ceiling => self.evalNumCeiling(args[0], ll.ret_layout, arg_layout),
 
@@ -8428,26 +8427,6 @@ pub const Interpreter = struct {
             .signed_int, .unsigned_int => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: integer num_{s} survived lowering for layout {d}",
                 .{ @tagName(op), @intFromEnum(arg_layout) },
-            ),
-        }
-        return val;
-    }
-
-    fn evalNumRound(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
-        const val = try self.alloc(ret_layout);
-        switch (try self.numericOperandKind(arg_layout)) {
-            .dec => {
-                const dec = RocDec{ .num = a.read(i128) };
-                val.write(i128, RocDec.round(dec, &self.roc_ops).num);
-            },
-            .float => |bits| switch (bits) {
-                32 => val.write(f32, @round(a.read(f32))),
-                64 => val.write(f64, @round(a.read(f64))),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float round width {d}", .{bits}),
-            },
-            .signed_int, .unsigned_int => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: integer num_round survived lowering for layout {d}",
-                .{@intFromEnum(arg_layout)},
             ),
         }
         return val;
