@@ -7950,13 +7950,13 @@ test "uniqueness gives a tail loop parameter no field origins from its back edge
         .target = taken,
         .op = .{ .field = .{ .source = param, .field_idx = 0 } },
         .next = try f.ret(taken),
-    } });
+    } }, .test_fixture);
     const back_edge = try f.store.addCFStmt(.{ .set_local = .{
         .target = param,
         .value = next,
         .mode = .initialize_join_param,
-        .next = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }),
-    } });
+        .next = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture),
+    } }, .test_fixture);
     const rebuild = try f.store.addCFStmt(.{ .assign_list = .{
         .target = fresh,
         .elems = try f.store.addLocalSpan(&.{}),
@@ -7967,21 +7967,21 @@ test "uniqueness gives a tail loop parameter no field origins from its back edge
                 .target = next,
                 .fields = try f.store.addLocalSpan(&.{ fresh, other }),
                 .next = back_edge,
-            } }),
-        } }),
-    } });
+            } }, .test_fixture),
+        } }, .test_fixture),
+    } }, .test_fixture);
     const body = try f.store.addCFStmt(.{ .switch_stmt = .{
         .cond = flag,
         .branches = try f.store.addCFSwitchBranches(&.{.{ .value = 1, .body = read }}),
         .default_branch = rebuild,
         .continuation = null,
-    } });
+    } }, .test_fixture);
     const loop = try f.store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try f.store.addLocalSpan(&.{param}),
         .body = body,
-        .remainder = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }),
-    } });
+        .remainder = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture),
+    } }, .test_fixture);
     _ = try f.proc(&.{ param, flag }, loop, f.list);
     const rc = [_]bool{ true, false, true, true, true, true };
     var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
