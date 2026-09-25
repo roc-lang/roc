@@ -457,31 +457,36 @@ Builtin :: [].{
 				Err(Json.invalid_json)
 			}
 
-			parse_json_unsigned_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
-			parse_json_unsigned_int = |raw, parse_num| {
+			## Parse a JSON integer or float scalar with a numeric prefix parser. The prefix
+			## parser consumes the longest Roc numeric token; that token must also be a valid
+			## JSON literal and must end at a JSON scalar delimiter or at the end of input.
+			## Every Roc-only continuation (`_`, radix prefixes, `+`, `inf`, int exponents)
+			## is therefore consumed into the token and rejected by `is_json_literal`.
+			parse_json_number_prefix : Str, (Str -> { err : U8, rest : Str, value : a }), (Str -> Bool) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
+			parse_json_number_prefix = |raw, parse_prefix, is_json_literal| {
 				trimmed = json_trim_start(raw)
-				parts = Json.split_json_scalar_tail(trimmed)?
+				parsed = parse_prefix(trimmed)
 
-				if Json.is_json_unsigned_int_literal(parts.value) {
-					match parse_num(parts.value) {
-						Ok(value) => Ok({ value, rest: JsonState.Input(json_trim_start(parts.after)) })
-						Err(_) => Err(Json.invalid_json)
-					}
-				} else {
-					Err(Json.invalid_json)
+				if parsed.err != 0 {
+					return Err(Json.invalid_json)
 				}
-			}
 
-			parse_json_signed_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
-			parse_json_signed_int = |raw, parse_num| {
-				trimmed = json_trim_start(raw)
-				parts = Json.split_json_scalar_tail(trimmed)?
+				rest_len = Str.count_utf8_bytes(parsed.rest)
+				ends_scalar = rest_len == 0 or is_json_scalar_delimiter(str_get_utf8_byte_unsafe(parsed.rest, 0))
 
-				if Json.is_json_signed_int_literal(parts.value) {
-					match parse_num(parts.value) {
-						Ok(value) => Ok({ value, rest: JsonState.Input(json_trim_start(parts.after)) })
-						Err(_) => Err(Json.invalid_json)
+				if !ends_scalar {
+					return Err(Json.invalid_json)
+				}
+
+				token = match Str.drop_last_bytes(trimmed, rest_len) {
+					Ok(t) => t
+					Err(BadUtf8) => {
+						crash "Json number prefix invariant violated: numeric token did not end on a UTF-8 boundary"
 					}
+				}
+
+				if is_json_literal(token) {
+					Ok({ value: parsed.value, rest: JsonState.Input(json_trim_start(parsed.rest)) })
 				} else {
 					Err(Json.invalid_json)
 				}
@@ -1520,61 +1525,61 @@ Builtin :: [].{
 			parse_u8 : JsonEncoding, JsonState -> Try({ value : U8, rest : JsonState }, [InvalidJson(Str)])
 			parse_u8 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_unsigned_int(raw, u8_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, u8_from_str_prefix_raw, Json.is_json_unsigned_int_literal)
 				}
 
 			parse_i8 : JsonEncoding, JsonState -> Try({ value : I8, rest : JsonState }, [InvalidJson(Str)])
 			parse_i8 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_signed_int(raw, i8_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, i8_from_str_prefix_raw, Json.is_json_signed_int_literal)
 				}
 
 			parse_u16 : JsonEncoding, JsonState -> Try({ value : U16, rest : JsonState }, [InvalidJson(Str)])
 			parse_u16 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_unsigned_int(raw, u16_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, u16_from_str_prefix_raw, Json.is_json_unsigned_int_literal)
 				}
 
 			parse_i16 : JsonEncoding, JsonState -> Try({ value : I16, rest : JsonState }, [InvalidJson(Str)])
 			parse_i16 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_signed_int(raw, i16_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, i16_from_str_prefix_raw, Json.is_json_signed_int_literal)
 				}
 
 			parse_u32 : JsonEncoding, JsonState -> Try({ value : U32, rest : JsonState }, [InvalidJson(Str)])
 			parse_u32 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_unsigned_int(raw, u32_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, u32_from_str_prefix_raw, Json.is_json_unsigned_int_literal)
 				}
 
 			parse_i32 : JsonEncoding, JsonState -> Try({ value : I32, rest : JsonState }, [InvalidJson(Str)])
 			parse_i32 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_signed_int(raw, i32_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, i32_from_str_prefix_raw, Json.is_json_signed_int_literal)
 				}
 
 			parse_u64 : JsonEncoding, JsonState -> Try({ value : U64, rest : JsonState }, [InvalidJson(Str)])
 			parse_u64 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_unsigned_int(raw, u64_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, u64_from_str_prefix_raw, Json.is_json_unsigned_int_literal)
 				}
 
 			parse_i64 : JsonEncoding, JsonState -> Try({ value : I64, rest : JsonState }, [InvalidJson(Str)])
 			parse_i64 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_signed_int(raw, i64_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, i64_from_str_prefix_raw, Json.is_json_signed_int_literal)
 				}
 
 			parse_u128 : JsonEncoding, JsonState -> Try({ value : U128, rest : JsonState }, [InvalidJson(Str)])
 			parse_u128 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_unsigned_int(raw, u128_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, u128_from_str_prefix_raw, Json.is_json_unsigned_int_literal)
 				}
 
 			parse_i128 : JsonEncoding, JsonState -> Try({ value : I128, rest : JsonState }, [InvalidJson(Str)])
 			parse_i128 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_signed_int(raw, i128_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, i128_from_str_prefix_raw, Json.is_json_signed_int_literal)
 				}
 
 			parse_dec : JsonEncoding, JsonState -> Try({ value : Dec, rest : JsonState }, [InvalidJson(Str)])
@@ -1586,13 +1591,13 @@ Builtin :: [].{
 			parse_f32 : JsonEncoding, JsonState -> Try({ value : F32, rest : JsonState }, [InvalidJson(Str)])
 			parse_f32 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_number(raw, f32_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, f32_from_str_prefix_raw, Json.is_json_number)
 				}
 
 			parse_f64 : JsonEncoding, JsonState -> Try({ value : F64, rest : JsonState }, [InvalidJson(Str)])
 			parse_f64 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_number(raw, f64_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, f64_from_str_prefix_raw, Json.is_json_number)
 				}
 
 			parse_null : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str)])
