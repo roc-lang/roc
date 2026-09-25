@@ -24543,6 +24543,13 @@ const BodyContext = struct {
                 if (self.graph.content(expr_node) == .unresolved) {
                     try self.graph.materializeLiteralDefault(expr_node);
                 }
+                // A builtin target is resolved by the time its value is
+                // demanded, so a target with open parts is a custom type whose
+                // conversion is an ordinary dispatch call. That call lowers at
+                // the target node and completes when the node resolves.
+                if (!try self.graph.typeIsResolved(expr_node)) {
+                    return try self.lowerLiteralConversionCallAtNode(expr_id, expr, expr_node);
+                }
                 const expr_ty = try self.resolvedTypeViewForNode(expr_node);
                 return try self.lowerExprWithType(expr_id, expr_ty);
             },
@@ -33660,7 +33667,7 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         caller: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
-        target_ty: Type.TypeId,
+        target_node: NodeId,
         operands: []const static_dispatch.StaticDispatchOperand,
     ) Allocator.Error!NodeId {
         const function = self.checkedFunctionType(source_fn_ty);
@@ -33677,8 +33684,8 @@ const BodyContext = struct {
         }
         // The numeral expression's checked type is the converted value type;
         // the plan's checked structure relates it to the Try-shaped return.
-        try self.graph.unify(try caller.instNode(checked_ret_ty), try self.graph.importMono(target_ty));
-        try self.graph.unify(try self.instNode(checked_ret_ty), try self.graph.importMono(target_ty));
+        try self.graph.unify(try caller.instNode(checked_ret_ty), target_node);
+        try self.graph.unify(try self.instNode(checked_ret_ty), target_node);
         for (fn_graph.args, operands) |formal_node, operand| {
             try self.relateFormalToOperand(formal_node, caller, operand);
         }
@@ -41901,6 +41908,21 @@ const BodyContext = struct {
         callable: CallableDispatchPlan,
         target_ty: Type.TypeId,
     ) Allocator.Error!NumeralCall {
+        const result = try self.lowerNumeralCallRawAtNode(checked_ret_ty, callable, try self.graph.importMono(target_ty));
+        return .{ .call = result.call, .try_ty = try self.activeTypeFromNode(result.try_node) };
+    }
+
+    const NumeralCallAtNode = struct {
+        call: DraftExprId,
+        try_node: NodeId,
+    };
+
+    fn lowerNumeralCallRawAtNode(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        callable: CallableDispatchPlan,
+        target_node: NodeId,
+    ) Allocator.Error!NumeralCallAtNode {
         const plan = callable.plan;
         const plan_args = callable.operands;
 
@@ -41913,21 +41935,74 @@ const BodyContext = struct {
         call_ctx.current_entry_root = self.current_entry_root;
         call_ctx.in_deferred_body = self.in_deferred_body;
 
-        const callable_node = try call_ctx.instantiateNumeralPlanCallNode(plan.callable_ty, self, checked_ret_ty, target_ty, plan_args);
+        const callable_node = try call_ctx.instantiateNumeralPlanCallNode(plan.callable_ty, self, checked_ret_ty, target_node, plan_args);
 
         const resolved = self.dispatchTarget(plan) orelse
             Common.invariant("checked from_numeral dispatch unexpectedly resolved to structural equality");
 
-        const target_node = try self.methodTargetNodeFromPlan(resolved, &call_ctx, plan.callable_ty);
-        try self.relateDispatchTargetRequestInterface(resolved, target_node, callable_node);
+        const method_node = try self.methodTargetNodeFromPlan(resolved, &call_ctx, plan.callable_ty);
+        try self.relateDispatchTargetRequestInterface(resolved, method_node, callable_node);
         const fn_nodes = try self.graph.functionNodes(callable_node);
-        const ret_ty = try self.activeTypeFromNode(fn_nodes.ret);
 
         const call_expr = try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(fn_nodes.ret),
             try self.lowerResolvedDispatchAtNode(plan, resolved, callable_node, self, &.{}),
         );
-        return .{ .call = call_expr, .try_ty = ret_ty };
+        return .{ .call = call_expr, .try_node = fn_nodes.ret };
+    }
+
+    /// Lower a literal conversion whose target still has open parts: the
+    /// target's `from_numeral`/`from_quote` dispatch call and the unwrap of
+    /// its `Try` result, all at graph nodes.
+    fn lowerLiteralConversionCallAtNode(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        expr: checked.CheckedExpr,
+        target_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        if (self.view.compile_time_roots.lookupNumeralRootByExpr(expr_id)) |root| switch (root.payload) {
+            .const_node => |node| return try self.restoreConstNodeAtNode(self.view, self.view, node, target_node),
+            .pending => {},
+            .fn_value, .discarded, .expect => Common.invariant("numeral conversion root stored a non-constant payload"),
+        };
+        const maybe_plan = switch (expr.data) {
+            .numeral => |numeral| numeral.plan,
+            .str_from_quote => |quote| quote.plan,
+            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("literal conversion call did not point at a conversion expression"),
+        };
+        const target_cell = DraftTypeCell.fromGraphNode(target_node);
+        const callable = switch (self.literalDispatchRuntimePlan(maybe_plan)) {
+            .callable => |callable| callable,
+            .crash => |reason| return try self.runtimeCrashExprAtCell(target_cell, dispatchCrashMessage(reason)),
+        };
+        const result = try self.lowerNumeralCallRawAtNode(expr.ty, callable, target_node);
+
+        const ok_name = try self.nameStoreMut().internTagLabel("Ok");
+        const err_name = try self.nameStoreMut().internTagLabel("Err");
+        const try_cell = DraftTypeCell.fromGraphNode(result.try_node);
+
+        const ok_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), target_cell, null);
+        const ok_pat = try self.addPatWithTypeCell(try_cell, .{ .tag = .{
+            .name = ok_name,
+            .payloads = try self.addPatSpan(&.{try self.addPatWithTypeCell(target_cell, .{ .bind = ok_local })}),
+        } });
+        const ok_body = try self.addExprWithTypeCell(target_cell, .{ .local = ok_local });
+
+        const err_payload_cell = DraftTypeCell.fromGraphNode(try self.graph.tagPayloadNode(result.try_node, err_name, 0));
+        const err_pat = try self.addPatWithTypeCell(try_cell, .{ .tag = .{
+            .name = err_name,
+            .payloads = try self.addPatSpan(&.{try self.addPatWithTypeCell(err_payload_cell, .wildcard)}),
+        } });
+        const err_body = try self.runtimeCrashExprAtCell(target_cell, "invalid numeric literal");
+
+        const branches = [_]DraftBranch{
+            .{ .pat = ok_pat, .body = ok_body },
+            .{ .pat = err_pat, .body = err_body },
+        };
+        return try self.addExprWithTypeCell(target_cell, .{ .match_ = .{
+            .scrutinee = result.call,
+            .branches = try self.addBranchSpan(&branches),
+        } });
     }
 
     fn lowerNumeralRootBody(

@@ -3341,4 +3341,49 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "[1, 1]" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/11668
+        // The literal's target `Sql(a)` gets `a` from the record argument, whose
+        // field kind is still open when the literal is lowered, so the
+        // `from_quote` call must lower at the open target instead of demanding
+        // its finished type.
+        .name = "issue 11668: from_quote literal argument whose type parameter comes from a record argument",
+        .source_kind = .module,
+        .source =
+        \\Sql(a) := { text : Str }.{
+        \\    from_quote : Str -> Try(Sql(a), [BadQuotedBytes(Str)])
+        \\    from_quote = |raw| Ok(Sql.{ text: raw })
+        \\}
+        \\
+        \\query : Sql(a), a -> Str
+        \\query = |sql, _| sql.text
+        \\
+        \\run : {} -> Str
+        \\run = |_| query("select 1", { id: 1.I32 })
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "\"select 1\"" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11668
+        // The numeral flavor of the same open-target literal conversion.
+        .name = "issue 11668: from_numeral literal argument whose type parameter comes from a record argument",
+        .source_kind = .module,
+        .source =
+        \\Tally(a) := { count : I64 }.{
+        \\    from_numeral : Numeral -> Try(Tally(a), [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Ok(Tally.{ count: 7 })
+        \\}
+        \\
+        \\total : Tally(a), a -> I64
+        \\total = |tally, _| tally.count
+        \\
+        \\run : {} -> I64
+        \\run = |_| total(3, { id: 1.I32 })
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "7" },
+    },
 };
