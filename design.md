@@ -7660,10 +7660,14 @@ can still change when a downstream use substitutes a nested generalized
 variable. A generated-codec receiver can also be structurally known while one
 of its components is still a scheme variable. When the receiver shares type
 variables with the owning binding's interface, capture records the same exact
-receiver and callable relation before generalization. Sharing only concrete
-structure is not sharing a type variable: a fully concrete receiver component
-can never be substituted, so its codec evidence resolves directly at the
-requiring site and the owning scheme gains no evidence parameter for it. Only after the binding is
+receiver and callable relation before generalization. What makes a shared
+component refinable is what a later use can do to it: a type variable can be
+substituted, and an anonymous record or tag union can be lifted into a
+nominal whose backing it matches. A shared component that is neither—a
+nominal such as `I32`, a tuple, or a function type, each of whose own
+variables are checked separately—is final at the requiring site, so its codec
+evidence resolves there and the owning scheme gains no evidence parameter for
+it. Only after the binding is
 classified as a scheme does the definition-side worklist entry retire; every
 instantiation copies the structural receiver and validates the resulting codec
 independently. An unresolved outer record or tag extension is not a component

@@ -31213,6 +31213,22 @@ fn schemeCandidateIsUnresolvedGeneratedCodec(
         !self.schemeCodecReceiverHasOpenOuterRow(candidate.receiver_var);
 }
 
+/// Whether a later use of a scheme can still change what `var_` denotes: a
+/// type variable can be substituted, and an anonymous record or tag union can
+/// be lifted into a nominal whose backing it matches. A nominal, a tuple, or
+/// a function type keeps its identity; its own variables are reached
+/// separately.
+fn laterUseCanRefine(self: *Self, var_: Var) bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .flex, .rigid => true,
+        .structure => |flat| switch (flat) {
+            .record, .empty_record, .tag_union, .empty_tag_union => true,
+            .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => false,
+        },
+        .alias, .field_presence, .err => false,
+    };
+}
+
 /// Move every still-open dispatch relation owned by this generalization
 /// boundary into its explicit scheme. Ordinary relations need the side table
 /// while their receiver belongs to an outer rank. A generated codec relation
@@ -31263,12 +31279,11 @@ fn captureSchemeDispatchRequirements(
             const needs_explicit_requirement = if (scheme_codec) blk: {
                 // A generated codec on a structural receiver does not live on
                 // that receiver's descriptor. Preserve it explicitly when a
-                // type variable of the receiver escapes through this scheme:
-                // that shared variable is exactly where a later use can refine
-                // the shape before final validation. A shared component with
-                // no type variable is already final, so its checked evidence
-                // resolves directly at the requiring site and the scheme needs
-                // no parameter for it.
+                // part of the receiver that a later use can still refine
+                // escapes through this scheme. That shared component is
+                // exactly where a later use can refine the shape before final
+                // validation. A shared component nothing can refine is final
+                // here, so its evidence resolves at the requiring site.
                 if (!interface_reachable_collected) {
                     self.var_set.clearRetainingCapacity();
                     try self.collectReachableVars(root.interface, &self.var_set);
@@ -31285,10 +31300,7 @@ fn captureSchemeDispatchRequirements(
                 while (reachable_iter.next()) |reachable_var| {
                     const other = if (iterate_receiver) &self.var_set else &final_codec_receiver_vars;
                     if (!other.contains(reachable_var.*)) continue;
-                    switch (self.types.resolveVar(reachable_var.*).desc.content) {
-                        .flex, .rigid => break :blk true,
-                        .structure, .alias, .field_presence, .err => {},
-                    }
+                    if (self.laterUseCanRefine(reachable_var.*)) break :blk true;
                 }
                 break :blk false;
             } else blk: {
