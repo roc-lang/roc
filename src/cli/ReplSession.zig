@@ -346,6 +346,22 @@ pub fn stepLanguageWithConfig(self: *ReplSession, input: []const u8, report_conf
                 .none, .exit => error.Internal,
             };
         },
+        .statement => {
+            const result = try self.evaluateStatement(line, report_config);
+            return switch (result) {
+                .output => |output| blk: {
+                    self.allocator.free(output);
+                    break :blk .none;
+                },
+                .diagnostic => |message| .{ .diagnostic = .{
+                    .kind = .compile_error,
+                    .input = input_info,
+                    .message = message,
+                } },
+                .runtime_crash => |message| .{ .runtime_crash = message },
+                .none, .exit => error.Internal,
+            };
+        },
         .definition => {
             const name = input_info.name orelse line;
             if (input_info.file_import and self.import_policy == .virtual_only) {
@@ -1638,7 +1654,21 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     // evaluation and archives the resulting Str directly in ConstStore.
     const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || Str.inspect(({s}))\n", .{ definitions, expr });
     defer self.allocator.free(source);
+    return self.evaluateMainSource(source, report_config);
+}
 
+/// Evaluate a value-less statement (`expect`, `for`, `while`) by running it
+/// as the body of a block whose result is the unit record.
+fn evaluateStatement(self: *ReplSession, statement: []const u8, report_config: reporting.ReportingConfig) ReplStepError!StepResult {
+    const definitions = try self.definitionsSource();
+    defer self.allocator.free(definitions);
+
+    const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || {{\n{s}\nStr.inspect({{}})\n}}\n", .{ definitions, statement });
+    defer self.allocator.free(source);
+    return self.evaluateMainSource(source, report_config);
+}
+
+fn evaluateMainSource(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) ReplStepError!StepResult {
     const import_sources = switch (try self.resolveImports()) {
         .resolved => |s| s,
         .failed => |msg| return .{ .diagnostic = msg },
@@ -1968,6 +1998,9 @@ fn renderFallbackParseDiagnostic(self: *ReplSession, source: []const u8, report_
 pub const InputKind = enum {
     definition,
     expression,
+    /// A statement that only exists for its effect (`expect`, `for`, `while`)
+    /// and has no value to print.
+    statement,
 };
 
 /// Distinguishes declarations that can share a name in the REPL definition store.
@@ -2036,12 +2069,13 @@ pub fn inputStatusWithAllocator(allocator: Allocator, line: []const u8) Allocato
             .expr,
             .crash,
             .dbg,
-            .expect,
-            .@"for",
-            .@"while",
             .@"return",
             .@"break",
             => .{ .kind = .expression },
+            .expect,
+            .@"for",
+            .@"while",
+            => .{ .kind = .statement },
             .decl => |decl| .{
                 .kind = .definition,
                 .definition_kind = .value,
@@ -2753,6 +2787,75 @@ test "Repl - compile-time evaluation records dbg events" {
     switch (events[0]) {
         .dbg => |message| try testing.expectEqualStrings("\"hello\"", message),
         .expect_failed, .crashed, .effect => return error.TestUnexpectedResult,
+    }
+}
+
+test "Repl - passing expect statement produces no output" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const status = try repl.inputStatus("expect 10 == (2 + 8)");
+    switch (status) {
+        .complete => |info| try testing.expectEqual(InputKind.statement, info.kind),
+        .incomplete, .invalid => return error.TestUnexpectedResult,
+    }
+
+    const result = try repl.stepLanguageWithConfig("expect 10 == (2 + 8)", reporting.ReportingConfig.initForTesting());
+    defer result.deinit(testing.allocator);
+    switch (result) {
+        .none => {},
+        .diagnostic => |diagnostic| {
+            std.debug.print("Repl expect failed:\n{s}\n", .{diagnostic.message});
+            return error.TestUnexpectedResult;
+        },
+        .expression, .definition, .runtime_crash => return error.TestUnexpectedResult,
+    }
+}
+
+test "Repl - failing expect statement is reported" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const result = try repl.stepLanguageWithConfig("expect 1 == 2", reporting.ReportingConfig.initForTesting());
+    defer result.deinit(testing.allocator);
+    switch (result) {
+        .diagnostic => |diagnostic| {
+            try testing.expectEqual(LanguageDiagnosticKind.compile_error, diagnostic.kind);
+            try testing.expect(std.mem.find(u8, diagnostic.message, "Compile Time Expect Failed") != null);
+        },
+        .expression, .definition, .runtime_crash, .none => return error.TestUnexpectedResult,
+    }
+}
+
+test "Repl - expect statement sees stored definitions" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+    const config = reporting.ReportingConfig.initForTesting();
+
+    const defined = try repl.stepLanguageWithConfig("x = 5", config);
+    defer defined.deinit(testing.allocator);
+
+    const result = try repl.stepLanguageWithConfig("expect x + 1 == 6", config);
+    defer result.deinit(testing.allocator);
+    switch (result) {
+        .none => {},
+        .expression, .definition, .diagnostic, .runtime_crash => return error.TestUnexpectedResult,
+    }
+}
+
+test "Repl - for loop statement runs" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const result = try repl.stepLanguageWithConfig("for n in [1, 2, 3] { expect n > 0 }", reporting.ReportingConfig.initForTesting());
+    defer result.deinit(testing.allocator);
+    switch (result) {
+        .none => {},
+        .diagnostic => |diagnostic| {
+            std.debug.print("Repl for failed:\n{s}\n", .{diagnostic.message});
+            return error.TestUnexpectedResult;
+        },
+        .expression, .definition, .runtime_crash => return error.TestUnexpectedResult,
     }
 }
 

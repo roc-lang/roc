@@ -195,6 +195,7 @@ fn definitionKindName(kind: ReplSession.DefinitionKind, file_import: bool) []con
 fn inputMetadata(info: ReplSession.InputInfo) SnippetMetadata {
     return switch (info.kind) {
         .expression => .{ .kind = "expression" },
+        .statement => .{ .kind = "statement" },
         .definition => .{
             .kind = "definition",
             .definition_kind = definitionKindName(info.definition_kind, info.file_import),
@@ -430,7 +431,7 @@ fn inspect(request: Request, arena: Allocator) RequestError![]u8 {
             arena,
             source,
             "expected_expression",
-            "inspect accepts an expression, not a definition.",
+            "inspect accepts an expression, not a definition or statement.",
         ),
     }
 
