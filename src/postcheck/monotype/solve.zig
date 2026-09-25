@@ -1241,6 +1241,18 @@ const NominalBackingLookup = struct {
     args: []const NodeId,
 };
 
+const UnifyScratch = struct {
+    const retained_capacity = 256;
+
+    pending: std.ArrayList(NodePair) = .empty,
+    related: std.AutoHashMap(NodePair, void),
+
+    fn deinit(self: *UnifyScratch, allocator: Allocator) void {
+        self.pending.deinit(allocator);
+        self.related.deinit();
+    }
+};
+
 /// Hash-map adapter that resolves a lookup's permanent argument ids without
 /// allocating a temporary root tuple. Resident keys always contain live roots;
 /// `union_` eagerly rekeys every tuple that mentions its losing root.
@@ -1461,6 +1473,9 @@ pub const InstGraph = struct {
     /// maps re-allocate and re-zero sparse chunks across the node/type ID
     /// domains on every walk; pooled maps keep their chunks.
     node_set_pool: collections.DenseMapPool(NodeId, void),
+    /// Transitive unification scratch, one entry per call in flight; a union
+    /// can unify again while an outer call is still draining.
+    unify_scratch_pool: std.ArrayList(UnifyScratch) = .empty,
     /// Maps and lists borrowed by every `InterfaceConstraints.capture`.
     capture_scratch: InterfaceConstraints.CaptureScratch,
     /// Roots whose every reachable node was found resolved, stamped with the
@@ -1673,6 +1688,8 @@ pub const InstGraph = struct {
         self.snapshot_free_types.deinit();
         self.resolved_roots.deinit();
         self.node_set_pool.deinit();
+        for (self.unify_scratch_pool.items) |*scratch| scratch.deinit(self.allocator);
+        self.unify_scratch_pool.deinit(self.allocator);
         self.capture_scratch.deinit(allocator);
         self.type_set_pool.deinit();
         var containment_entries = self.containment_cache.valueIterator();
@@ -5251,13 +5268,25 @@ pub const InstGraph = struct {
     ) Allocator.Error!void {
         self.requireRelationProduction();
         self.countDiagnostic("unify_requests");
-        var pending = std.ArrayList(NodePair).empty;
-        defer pending.deinit(self.allocator);
-        var related = std.AutoHashMap(NodePair, void).init(self.allocator);
-        defer related.deinit();
-        try pending.append(self.allocator, .{ .left = a, .right = b, .row_width = row_width });
-        while (pending.pop()) |pair| {
-            try self.unifyRoots(pair.left, pair.right, pair.row_width, &pending, &related, allow_private_selection);
+        var scratch = self.unify_scratch_pool.pop() orelse UnifyScratch{ .related = std.AutoHashMap(NodePair, void).init(self.allocator) };
+        defer {
+            // Pooled scratch keeps only the capacity an ordinary call needs:
+            // clearing touches a map's whole capacity.
+            if (scratch.pending.capacity > UnifyScratch.retained_capacity) {
+                scratch.pending.clearAndFree(self.allocator);
+            } else {
+                scratch.pending.clearRetainingCapacity();
+            }
+            if (scratch.related.capacity() > UnifyScratch.retained_capacity) {
+                scratch.related.clearAndFree();
+            } else {
+                scratch.related.clearRetainingCapacity();
+            }
+            self.unify_scratch_pool.append(self.allocator, scratch) catch scratch.deinit(self.allocator);
+        }
+        try scratch.pending.append(self.allocator, .{ .left = a, .right = b, .row_width = row_width });
+        while (scratch.pending.pop()) |pair| {
+            try self.unifyRoots(pair.left, pair.right, pair.row_width, &scratch.pending, &scratch.related, allow_private_selection);
         }
     }
 
