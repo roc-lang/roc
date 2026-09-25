@@ -27,7 +27,7 @@ const ParsedDecimal = struct {
 
 /// Which decimal token grammar a scan recognizes.
 pub const Grammar = enum {
-    /// `sign? D (_? D)* (e +? D (_? D)*)?`: no decimal point, no negative exponent.
+    /// `sign? D (_? D)* (e sign? D (_? D)*)?`: no decimal point.
     int,
     /// `sign? (D+ | D+ . D* | . D+) (e sign? D (_? D)*)?`, with `_` between digits.
     dec,
@@ -99,7 +99,7 @@ fn scanPrefix(bytes: []const u8, comptime grammar: Grammar) ?ParsedDecimal {
     if (index < bytes.len and (bytes[index] == 'e' or bytes[index] == 'E')) exponent: {
         var cursor = index + 1;
         var candidate_negative = false;
-        if (cursor < bytes.len and (bytes[cursor] == '+' or (grammar == .dec and bytes[cursor] == '-'))) {
+        if (cursor < bytes.len and (bytes[cursor] == '+' or bytes[cursor] == '-')) {
             candidate_negative = bytes[cursor] == '-';
             cursor += 1;
         }
@@ -200,19 +200,20 @@ fn parseCoefficientPrefix(comptime limit: u128, bytes: []const u8, parsed: Parse
 }
 
 fn positiveExponent(parsed: ParsedDecimal) ?usize {
-    std.debug.assert(!parsed.exponent_negative);
+    if (parsed.exponent_negative and (parsed.exponent_overflow or parsed.exponent_magnitude != 0)) return null;
     if (parsed.exponent_overflow or parsed.exponent_magnitude > 38) return null;
     return @intCast(parsed.exponent_magnitude);
 }
 
 /// Parse an exact integer. The whole of `bytes` must be one `.int` token, so
-/// decimal points and negative exponents are rejected.
+/// decimal points are rejected; a negative exponent is accepted only when the
+/// value stays an exact integer (`1e-0`), matching Roc integer conversion.
 pub fn parseInt(comptime T: type, bytes: []const u8) ?T {
     const info = @typeInfo(T).int;
     const parsed = scan(bytes, .int) orelse return null;
 
     const zeros = positiveExponent(parsed) orelse {
-        if (parsed.isZero()) return 0;
+        if (!parsed.exponent_negative and parsed.isZero()) return 0;
         return null;
     };
     if (parsed.coefficient_overflow) return null;

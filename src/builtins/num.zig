@@ -2125,8 +2125,8 @@ test "parseIntPrefix never ends a token on a dangling sign, underscore, or expon
         try expectPrefixOk(T, parseIntPrefix(T, "2E+1,"), 20, 4);
         try expectPrefixOk(T, parseIntPrefix(T, "2e_1"), 2, 1);
         try expectPrefixOk(T, parseIntPrefix(T, "2e1_"), 20, 3);
-        // A negative exponent is not integer grammar: the token stops before `e`.
-        try expectPrefixOk(T, parseIntPrefix(T, "2e-1"), 2, 1);
+        try expectPrefixOk(T, parseIntPrefix(T, "2e-"), 2, 1);
+        try expectPrefixErr(T, parseIntPrefix(T, "2e-1"), prefix_parse_out_of_range, 4);
         // `.` is not integer grammar: version strings split at the first `.`.
         try expectPrefixOk(T, parseIntPrefix(T, "1.2.3"), 1, 1);
     }
@@ -2159,13 +2159,17 @@ test "parseIntPrefix unsigned negative zero is Ok and negative magnitudes are ou
     }
 }
 
-test "parseIntPrefix token grammar has no negative exponent, so whole-string e-0 is rejected" {
-    // The integer token grammar is `D (e +? D)?`. Because whole-string parsing is
-    // "the entire input is one token", `1e-0` is no longer an integer string:
-    // its token is `1`, and `e-0` is left over.
-    try expectPrefixOk(i64, parseIntPrefix(i64, "1e-0"), 1, 1);
-    try std.testing.expectEqual(@as(?i64, null), parseIntSlice(i64, "1e-0"));
+test "parseIntPrefix integer exponents may be negative, and non-integral values are out of range" {
+    // The integer token grammar is `D (e sign? D)?`, independent of value, so
+    // whole-string `from_str` is unchanged: `1e-0` is an integer and `0e-5`,
+    // `2e-1` are complete tokens that do not denote integers.
+    try expectPrefixOk(i64, parseIntPrefix(i64, "1e-0,"), 1, 4);
+    try std.testing.expectEqual(@as(?i64, 1), parseIntSlice(i64, "1e-0"));
+    try std.testing.expectEqual(@as(?i64, 10), parseIntSlice(i64, "10e-00"));
+    try expectPrefixErr(i64, parseIntPrefix(i64, "0e-5,"), prefix_parse_out_of_range, 4);
     try std.testing.expectEqual(@as(?i64, null), parseIntSlice(i64, "0e-5"));
+    try expectPrefixErr(u64, parseIntPrefix(u64, "2e-1,"), prefix_parse_out_of_range, 4);
+    try expectPrefixOk(u64, parseIntPrefix(u64, "2e-"), 2, 1);
 }
 
 test "parseFloatPrefix decimal mantissa forms" {
