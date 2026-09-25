@@ -11800,12 +11800,12 @@ const Lowerer = struct {
             }
 
             // Reuse an already committed child only together with the digest
-            // its node settled to. A bare canonical ref would be an opaque
+            // its node settled to. A store-interned layout ref would be an opaque
             // leaf to commitGraph's analysis, hiding recursive paths and
             // changing boxing for an unrolled copy of a committed recursive
             // node; the committed leaf digests exactly like a re-expansion.
-            // A type committed without a digest resolved to a bare canonical
-            // ref, which expanding again reproduces directly.
+            // A type committed without a digest resolved to a store-interned
+            // layout ref, which expanding again reproduces directly.
             if (self.lowerer.knownLayoutForType(ty)) |layout_idx| {
                 if (self.lowerer.type_layout_digests.get(ty)) |digest| {
                     const node = try self.graph.addCommitted(self.lowerer.allocator, layout_idx, digest);
