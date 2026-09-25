@@ -106,7 +106,7 @@ NO CHANGE
 				(p-assign (ident "task"))
 				(e-nominal (nominal "Task")
 					(e-tag (name "Task"))))
-			(e-dispatch-call (method "run!") (constraint-fn-var 248)
+			(e-dispatch-call (method "run!") (constraint-fn-var 252)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "task"))))

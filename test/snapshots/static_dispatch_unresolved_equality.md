@@ -84,7 +84,7 @@ result = poly() == poly()
 			(lhs
 				(e-runtime-error (tag "erroneous_value_expr")))
 			(rhs
-				(e-call (constraint-fn-var 228)
+				(e-call (constraint-fn-var 232)
 					(e-lookup-local
 						(p-assign (ident "poly"))))))))
 ~~~

@@ -120,7 +120,7 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 		(e-lambda
 			(args
 				(p-assign (ident "list")))
-			(e-dispatch-call (method "len") (constraint-fn-var 250)
+			(e-dispatch-call (method "len") (constraint-fn-var 254)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "list"))))
@@ -141,7 +141,7 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 293)
+				(e-call (constraint-fn-var 297)
 					(e-field-access
 						(receiver
 							(e-lookup-local
@@ -153,7 +153,7 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 							(e-runtime-error (tag "erroneous_value_expr"))
 							(e-runtime-error (tag "erroneous_value_expr"))
 							(e-runtime-error (tag "erroneous_value_expr")))))
-				(e-call (constraint-fn-var 317)
+				(e-call (constraint-fn-var 321)
 					(e-field-access
 						(receiver
 							(e-lookup-local

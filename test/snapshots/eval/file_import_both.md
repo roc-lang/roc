@@ -72,7 +72,7 @@ NO CHANGE
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 250)
+				(e-call (constraint-fn-var 254)
 					(e-lookup-external
 						(builtin))
 					(e-lookup-local

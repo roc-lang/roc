@@ -66,7 +66,7 @@ match value {
 					(pattern (degenerate false)
 						(p-assign (ident "x"))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 217)
+					(e-dispatch-call (method "plus") (constraint-fn-var 221)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))

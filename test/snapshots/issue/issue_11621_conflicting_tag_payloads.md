@@ -208,7 +208,7 @@ use = |n| apply(describe, n)
 			(e-if
 				(if-branches
 					(if-branch
-						(e-dispatch-call (method "is_gt") (constraint-fn-var 332)
+						(e-dispatch-call (method "is_gt") (constraint-fn-var 336)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
@@ -239,7 +239,7 @@ use = |n| apply(describe, n)
 			(e-if
 				(if-branches
 					(if-branch
-						(e-dispatch-call (method "is_gt") (constraint-fn-var 376)
+						(e-dispatch-call (method "is_gt") (constraint-fn-var 380)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
@@ -278,7 +278,7 @@ use = |n| apply(describe, n)
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 405)
+								(e-call (constraint-fn-var 409)
 									(e-lookup-local
 										(p-assign (ident "step")))
 									(e-lookup-local
@@ -305,10 +305,10 @@ use = |n| apply(describe, n)
 													(args
 														(e-lookup-local
 															(p-assign (ident "#err")))))))))))))
-				(e-call (constraint-fn-var 457)
+				(e-call (constraint-fn-var 461)
 					(e-lookup-local
 						(p-assign (ident "f")))
-					(e-dispatch-call (method "plus") (constraint-fn-var 451)
+					(e-dispatch-call (method "plus") (constraint-fn-var 455)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "n"))))
@@ -319,7 +319,7 @@ use = |n| apply(describe, n)
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-call (constraint-fn-var 473)
+			(e-call (constraint-fn-var 477)
 				(e-lookup-local
 					(p-assign (ident "apply")))
 				(e-lookup-local

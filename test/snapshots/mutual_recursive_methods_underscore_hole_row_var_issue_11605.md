@@ -231,7 +231,7 @@ run = |sql| {
 			(e-block
 				(s-let
 					(p-underscore)
-					(e-call (constraint-fn-var 400)
+					(e-call (constraint-fn-var 404)
 						(e-lookup-local
 							(p-assign (ident "say")))
 						(e-lookup-local
@@ -250,14 +250,14 @@ run = |sql| {
 									(e-string
 										(e-literal (string "done")))))))
 					(if-else
-						(e-call (constraint-fn-var 452)
+						(e-call (constraint-fn-var 456)
 							(e-lookup-local
 								(p-assign (ident "mutual_recursive_methods_underscore_hole_row_var_issue_11605.Client.retry")))
 							(e-lookup-local
 								(p-assign (ident "client")))
 							(e-lookup-local
 								(p-assign (ident "sql")))
-							(e-dispatch-call (method "minus") (constraint-fn-var 446)
+							(e-dispatch-call (method "minus") (constraint-fn-var 450)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "attempts"))))
@@ -282,7 +282,7 @@ run = |sql| {
 				(p-assign (ident "client"))
 				(p-assign (ident "sql"))
 				(p-assign (ident "attempts")))
-			(e-call (constraint-fn-var 474)
+			(e-call (constraint-fn-var 478)
 				(e-lookup-local
 					(p-assign (ident "mutual_recursive_methods_underscore_hole_row_var_issue_11605.Client.command")))
 				(e-lookup-local
@@ -321,7 +321,7 @@ run = |sql| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 516)
+								(e-call (constraint-fn-var 520)
 									(e-lookup-local
 										(p-assign (ident "mutual_recursive_methods_underscore_hole_row_var_issue_11605.Client.command")))
 									(e-lookup-local

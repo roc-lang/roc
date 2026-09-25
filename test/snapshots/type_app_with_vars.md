@@ -131,7 +131,7 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 			(args
 				(p-assign (ident "list"))
 				(p-assign (ident "fn")))
-			(e-dispatch-call (method "map") (constraint-fn-var 246)
+			(e-dispatch-call (method "map") (constraint-fn-var 250)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "list"))))
