@@ -23,6 +23,7 @@ const snapshot_mod = @import("snapshot.zig");
 const exhaustive = @import("exhaustive.zig");
 const ExhaustivenessContext = @import("exhaustiveness_context.zig");
 const hoist_roots = @import("hoist_roots.zig");
+const published_type_roots = @import("published_type_roots.zig");
 const dispatch_evidence = @import("dispatch_evidence.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
 
@@ -5546,6 +5547,22 @@ const SettledTypeReach = struct {
     starts_row: bool,
 };
 
+/// Seeds the settled row walk with each published root as a row start.
+const SettledRootSeeder = struct {
+    gpa: Allocator,
+    stack: *std.ArrayListUnmanaged(SettledTypeReach),
+
+    /// Seed one published root.
+    pub fn visit(self: *const SettledRootSeeder, var_: Var) Allocator.Error!void {
+        try self.stack.append(self.gpa, .{ .var_ = var_, .starts_row = true });
+    }
+
+    /// Seed a root checking recorded; an erroneous expression may have none.
+    pub fn visitRequired(self: *const SettledRootSeeder, maybe_var: ?Var, comptime _: []const u8) Allocator.Error!void {
+        if (maybe_var) |var_| try self.visit(var_);
+    }
+};
+
 fn appendSettledTypeReachVars(
     self: *Self,
     stack: *std.ArrayListUnmanaged(SettledTypeReach),
@@ -5573,12 +5590,32 @@ fn validateSettledValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void
     var walk_stack: std.ArrayListUnmanaged(SettledTypeReach) = .empty;
     defer walk_stack.deinit(self.gpa);
 
+    // Every type the checked module can publish, so no published row escapes
+    // normalization: expression and pattern types, definition types, and the
+    // inferred roots publication enumerates through `published_type_roots`.
+    const seeder = SettledRootSeeder{ .gpa = self.gpa, .stack = &walk_stack };
     var raw_node_idx: u32 = 0;
     while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
         const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
-        if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
-        try walk_stack.append(self.gpa, .{ .var_ = @enumFromInt(raw_node_idx), .starts_row = true });
+        const tag = self.cir.store.nodes.get(node_idx).tag;
+        if (isExprNodeTag(tag)) {
+            const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+            try seeder.visit(ModuleEnv.varFrom(expr_idx));
+            try published_type_roots.forEachCallTypeRoot(self.cir, expr_idx, &seeder);
+            try published_type_roots.forEachStaticDispatchTypeRoot(self.cir, expr_idx, &seeder);
+        } else if (isPatternNodeTag(tag)) {
+            try seeder.visit(@enumFromInt(raw_node_idx));
+        }
     }
+    for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
+        try seeder.visit(ModuleEnv.varFrom(def_idx));
+    }
+    try published_type_roots.forEachRecordedTypeRoot(self.cir, &seeder);
+    try published_type_roots.forEachSchemeUseTypeRoot(self.cir, &seeder);
+    for (self.cir.for_loop_dispatch_plans.items.items) |plan| {
+        try published_type_roots.forEachForLoopDispatchTypeRoot(plan, &seeder);
+    }
+    try published_type_roots.forEachLiteralDispatchTypeRoot(self.cir, &seeder);
 
     while (walk_stack.pop()) |entry| {
         if (entry.starts_row) {
@@ -23769,6 +23806,10 @@ fn hostedAnnotationIsEffectful(module_env: *const ModuleEnv, annotation_idx: CIR
 
 fn isExprNodeTag(tag: CIR.Node.Tag) bool {
     return Ident.textStartsWith(@tagName(tag), "expr_");
+}
+
+fn isPatternNodeTag(tag: CIR.Node.Tag) bool {
+    return Ident.textStartsWith(@tagName(tag), "pattern_");
 }
 
 const AnnoVars = struct {

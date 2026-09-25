@@ -34,33 +34,27 @@ const TopLevelDemandDependency = can.DependencyGraph.Dependency;
 const Var = types.Var;
 const CompactWriter = collections.CompactWriter;
 const StringLiteral = base.StringLiteral;
+const published_type_roots = @import("published_type_roots.zig");
 
-fn typeDispatchOwnerVar(module: anytype, stmt_idx: CIR.Statement.Idx) Var {
-    return switch (module.getStatement(stmt_idx)) {
-        .s_type_var_alias => |alias| ModuleEnv.varFrom(alias.type_var_anno),
-        .s_alias_decl => ModuleEnv.varFrom(stmt_idx),
-        .s_decl,
-        .s_var,
-        .s_var_uninitialized,
-        .s_reassign,
-        .s_crash,
-        .s_dbg,
-        .s_expr,
-        .s_expect,
-        .s_for,
-        .s_while,
-        .s_infinite_loop,
-        .s_breakable_loop,
-        .s_break,
-        .s_return,
-        .s_import,
-        .s_nominal_decl,
-        .s_where_alias_decl,
-        .s_type_anno,
-        .s_runtime_error,
-        => @panic("type dispatch owner statement was not a type-var alias or type alias"),
-    };
-}
+/// Publishes each visited root into a checked type store.
+const CheckedTypeRootPublisher = struct {
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    imports: CheckedImportViews,
+    store: *CheckedTypeStore,
+    active: *CheckedSourceTypeRoots,
+
+    /// Publish one root.
+    pub fn visit(self: *const CheckedTypeRootPublisher, var_: Var) Allocator.Error!void {
+        _ = try appendCheckedTypeRoot(self.allocator, self.module, self.names, self.imports, self.store, self.active, var_);
+    }
+
+    /// Publish a root checking must have recorded.
+    pub fn visitRequired(self: *const CheckedTypeRootPublisher, maybe_var: ?Var, comptime missing: []const u8) Allocator.Error!void {
+        try self.visit(maybe_var orelse checkedArtifactInvariant(missing, .{}));
+    }
+};
 
 /// Public `ModuleEnvStorage` declaration.
 pub const ModuleEnvStorage = union(enum) {
@@ -4666,6 +4660,14 @@ pub const CheckedTypeStore = struct {
         var top_level_defs = try TopLevelDefPatternIndex.init(allocator, module);
         defer top_level_defs.deinit(allocator);
         const module_env = module.moduleEnvConst();
+        const publisher = CheckedTypeRootPublisher{
+            .allocator = allocator,
+            .module = module,
+            .names = names,
+            .imports = import_views,
+            .store = &store,
+            .active = &active,
+        };
 
         var node_idx: u32 = 0;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
@@ -4678,27 +4680,7 @@ pub const CheckedTypeStore = struct {
             if (source_nodes.hasExpr(@enumFromInt(node_idx))) {
                 const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
                 _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, module.exprType(expr_idx));
-                const expr = module.expr(expr_idx).data;
-                if (expr == .e_call) {
-                    if (expr.e_call.constraint_fn_var) |constraint_fn_var| {
-                        _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, constraint_fn_var);
-                    }
-                } else if (expr == .e_field_access) {
-                    const field_access = expr.e_field_access;
-                    var position: u32 = 0;
-                    while (position < field_access.segments.len) : (position += 1) {
-                        const segment_idx = module_env.store.fieldAccessSegmentAt(field_access.segments, position);
-                        _ = try appendCheckedTypeRoot(
-                            allocator,
-                            module,
-                            names,
-                            import_views,
-                            &store,
-                            &active,
-                            ModuleEnv.varFrom(segment_idx),
-                        );
-                    }
-                }
+                try published_type_roots.forEachCallTypeRoot(module_env, expr_idx, &publisher);
             } else if (source_nodes.hasPattern(@enumFromInt(node_idx))) {
                 const pattern_source_var = checkedPatternSourceTypeVar(module, &top_level_defs, @enumFromInt(node_idx));
                 _ = try appendCheckedTypeRoot(
@@ -4719,75 +4701,7 @@ pub const CheckedTypeStore = struct {
         // checked type id rather than retaining checker-only variables.
         // Explicit scheme requirements may be absent from the public callable.
         // Publish their roots before the evidence schema names them.
-        for (module_env.binding_scheme_codec_requirements.items.items) |requirement| {
-            const constraint = module_env.types.getStaticDispatchConstraintAt(requirement.constraint_index);
-            _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @enumFromInt(requirement.receiver_var));
-            _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, constraint.fn_var);
-        }
-        for (module_env.scheme_use_pairs.items.items) |pair| {
-            _ = try appendCheckedTypeRoot(
-                allocator,
-                module,
-                names,
-                import_views,
-                &store,
-                &active,
-                @enumFromInt(pair.fresh_var),
-            );
-        }
-        for (module_env.generated_codec_derivations.items.items) |derivation| {
-            inline for (.{
-                derivation.source_constraint_fn_var,
-                derivation.source_runtime_fn_var,
-                derivation.source_shape_var,
-                derivation.source_body_shape_var,
-                derivation.source_encoding_var,
-                derivation.source_state_var,
-                derivation.source_error_var,
-                derivation.constraint_fn_var,
-                derivation.runtime_fn_var,
-                derivation.shape_var,
-                derivation.body_shape_var,
-                derivation.encoding_var,
-                derivation.state_var,
-                derivation.error_var,
-            }) |raw_var| {
-                _ = try appendCheckedTypeRoot(
-                    allocator,
-                    module,
-                    names,
-                    import_views,
-                    &store,
-                    &active,
-                    @enumFromInt(raw_var),
-                );
-            }
-            const calls = module_env.generated_codec_calls.items.items[derivation.calls_start..][0..derivation.calls_len];
-            for (calls) |call| {
-                inline for (.{ call.dispatcher_var, call.callable_var, call.evidence_var }) |raw_var| {
-                    _ = try appendCheckedTypeRoot(
-                        allocator,
-                        module,
-                        names,
-                        import_views,
-                        &store,
-                        &active,
-                        @enumFromInt(raw_var),
-                    );
-                }
-                if (call.subject_var != ModuleEnv.GeneratedCodecCall.no_subject_var) {
-                    _ = try appendCheckedTypeRoot(
-                        allocator,
-                        module,
-                        names,
-                        import_views,
-                        &store,
-                        &active,
-                        @enumFromInt(call.subject_var),
-                    );
-                }
-            }
-        }
+        try published_type_roots.forEachRecordedTypeRoot(module_env, &publisher);
         for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
             if (!source_nodes.hasStatement(statement_idx)) continue;
             switch (module.getStatement(statement_idx)) {
@@ -4851,19 +4765,7 @@ pub const CheckedTypeStore = struct {
         // every fresh type participating in a recorded scheme use, including
         // the constraint function that identifies a selected dispatch target
         // or a per-use where-method callable.
-        for (module_env.scheme_uses.items.items) |record| {
-            if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.dispatch_target) or
-                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.recursive_dispatch_target) or
-                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
-                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.nested_function_use))
-            {
-                _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @enumFromInt(record.slot_data));
-            }
-            const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
-            for (pairs) |pair| {
-                _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @enumFromInt(pair.fresh_var));
-            }
-        }
+        try published_type_roots.forEachSchemeUseTypeRoot(module_env, &publisher);
 
         for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
             const root = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, module.defType(def_idx));
@@ -8260,6 +8162,14 @@ fn appendStaticDispatchTypeRoots(
     store: *CheckedTypeStore,
     active: *CheckedSourceTypeRoots,
 ) Allocator.Error!void {
+    const publisher = CheckedTypeRootPublisher{
+        .allocator = allocator,
+        .module = module,
+        .names = names,
+        .imports = imports,
+        .store = store,
+        .active = active,
+    };
     var node_idx: u32 = 0;
     while (node_idx < module.nodeCount()) : (node_idx += 1) {
         const tag = module.nodeTag(@enumFromInt(node_idx));
@@ -8270,137 +8180,15 @@ fn appendStaticDispatchTypeRoots(
 
         const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
         if (!source_nodes.hasExpr(expr_idx)) continue;
-        const expr = module.expr(expr_idx);
-        switch (expr.data) {
-            .e_dispatch_call => |dispatch_call| {
-                _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, module.exprType(dispatch_call.receiver));
-                _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, dispatch_call.constraint_fn_var);
-            },
-            .e_interpolation => |interpolation| {
-                _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, module.exprType(expr_idx));
-                _ = try appendCheckedTypeRoot(
-                    allocator,
-                    module,
-                    names,
-                    imports,
-                    store,
-                    active,
-                    interpolation.dispatcher_var orelse checkedArtifactInvariant("checked interpolation expression had no static dispatch dispatcher type", .{}),
-                );
-                _ = try appendCheckedTypeRoot(
-                    allocator,
-                    module,
-                    names,
-                    imports,
-                    store,
-                    active,
-                    interpolation.constraint_fn_var orelse checkedArtifactInvariant("checked interpolation expression had no static dispatch constraint type", .{}),
-                );
-                _ = try appendCheckedTypeRoot(
-                    allocator,
-                    module,
-                    names,
-                    imports,
-                    store,
-                    active,
-                    interpolation.step_fn_var orelse checkedArtifactInvariant("checked interpolation expression had no generated step function type", .{}),
-                );
-            },
-            .e_type_dispatch_call => |dispatch_call| {
-                _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, typeDispatchOwnerVar(module, dispatch_call.type_dispatch_stmt));
-                _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, dispatch_call.constraint_fn_var);
-            },
-            .e_method_eq => |eq| {
-                _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, module.exprType(eq.lhs));
-                _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, eq.constraint_fn_var);
-            },
-            .e_num,
-            .e_frac_f32,
-            .e_frac_f64,
-            .e_dec,
-            .e_dec_small,
-            .e_num_from_numeral,
-            .e_typed_int,
-            .e_typed_frac,
-            .e_typed_num_from_numeral,
-            .e_str_segment,
-            .e_str,
-            .e_bytes_literal,
-            .e_lookup_local,
-            .e_lookup_external,
-            .e_lookup_associated_local,
-            .e_lookup_associated,
-            .e_lookup_associated_resolved,
-            .e_lookup_required,
-            .e_list,
-            .e_empty_list,
-            .e_tuple,
-            .e_match,
-            .e_if,
-            .e_call,
-            .e_record,
-            .e_empty_record,
-            .e_block,
-            .e_tag,
-            .e_nominal,
-            .e_nominal_external,
-            .e_zero_argument_tag,
-            .e_closure,
-            .e_lambda,
-            .e_binop,
-            .e_unary_minus,
-            .e_field_access,
-            .e_method_call,
-            .e_structural_eq,
-            .e_structural_hash,
-            .e_type_method_call,
-            .e_tuple_access,
-            .e_runtime_error,
-            .e_crash,
-            .e_dbg,
-            .e_expect_err,
-            .e_expect,
-            .e_ellipsis,
-            .e_anno_only,
-            .e_derived_method,
-            .e_return,
-            .e_break,
-            .e_for,
-            .e_hosted_lambda,
-            .e_run_low_level,
-            => unreachable,
-            .e_deferred_import_ref => checkedArtifactInvariant("deferred import reference reached checked artifact publication", .{}),
-        }
+        try published_type_roots.forEachStaticDispatchTypeRoot(module.moduleEnvConst(), expr_idx, &publisher);
     }
 
     for (module.moduleEnvConst().for_loop_dispatch_plans.items.items) |plan| {
         if (!source_nodes.hasRawLoop(plan.node_idx)) continue;
-        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.iterator_var));
-        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.step_var));
-        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.iter_fn_var));
-        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.next_fn_var));
-        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.step_topology.one_payload_var));
-        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.step_topology.skip_payload_var));
+        try published_type_roots.forEachForLoopDispatchTypeRoot(plan, &publisher);
     }
 
-    for (module.moduleEnvConst().store.literalDispatchPlans()) |plan| {
-        switch (plan.dispatchResolution()) {
-            .builtin_direct, .checked_error => continue,
-            .custom_dispatch, .specialization_dispatch => {},
-            .unresolved => checkedArtifactInvariant(
-                "unresolved literal dispatch plan reached checked type publication",
-                .{},
-            ),
-        }
-        // Custom and specialization-time conversion expressions need both the
-        // target and callable roots. Direct builtins need neither.
-        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.target_var));
-        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.fn_var));
-        if (plan.patternContext(&module.moduleEnvConst().store)) |context| {
-            std.debug.assert(context.equality_fn_var_plus_one != 0);
-            _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(context.equality_fn_var_plus_one - 1));
-        }
-    }
+    try published_type_roots.forEachLiteralDispatchTypeRoot(module.moduleEnvConst(), &publisher);
 }
 
 fn syntheticFunctionTypeKey(
