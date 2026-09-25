@@ -6103,6 +6103,28 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[0, 1, 1, 2, 3]" },
     },
     .{
+        .name = "inspect: Iter.custom overcounted Known hint collects every item",
+        .source =
+        \\{
+        \\    adv : U64 -> Try((U64, U64), [NoMore])
+        \\    adv = |n| if n < 4 Try.Ok((n, n + 1)) else Try.Err(NoMore)
+        \\    List.from_iter(Iter.custom(0, Known(10), adv))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[0, 1, 2, 3]" },
+    },
+    .{
+        .name = "Iter.custom crashes when the source outlives its Known size hint",
+        .source =
+        \\{
+        \\    adv : U64 -> Try((U64, U64), [NoMore])
+        \\    adv = |n| if n < 4 Try.Ok((n, n + 1)) else Try.Err(NoMore)
+        \\    List.from_iter(Iter.custom(0, Known(2), adv))
+        \\}
+        ,
+        .expected = .{ .crash = {} },
+    },
+    .{
         .name = "inspect: Iter.step_by yields first then every nth",
         .source =
         \\{

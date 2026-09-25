@@ -3049,6 +3049,7 @@ Builtin :: [].{
 		# The general unfold. `advance` maps a seed to either the next item paired with the
 		# next seed, or `NoMore`. `custom` owns rebuilding the rest from the new seed, so the
 		# seed type stays hidden inside the step closure and never appears in `Iter(item)`.
+		# `Known(n)` is a promise: yielding more than n items crashes. Fewer is allowed.
 		custom : state, [Known(U64), Unknown], (state -> Try((item, state), [NoMore])) -> Iter(item)
 		custom = |seed, len_if_known, advance|
 			iter_from_step(
@@ -3060,6 +3061,11 @@ Builtin :: [].{
 								item,
 								rest: Iter.custom(
 									next_seed,
+									# A source that outlives its `Known` count crashes on this
+									# subtraction, before the extra item reaches the unchecked
+									# append in `List.from_iter`. No extra branch here: ranges
+									# are built on `custom`, and loops rely on this step
+									# optimizing away completely.
 									match len_if_known {
 										Known(l) => Known(l - 1)
 										Unknown => Unknown
