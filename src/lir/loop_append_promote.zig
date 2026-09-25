@@ -2910,34 +2910,34 @@ test "promote metadata follows alias observations across source redefinitions" {
         const changed = try store.addLocal(.{ .layout_idx = f.list });
         const item = try store.addLocal(.{ .layout_idx = .u8 });
         const index = try store.addLocal(.{ .layout_idx = .u64 });
-        const done = try store.addCFStmt(.{ .ret = .{ .value = changed } });
+        const done = try store.addCFStmt(.{ .ret = .{ .value = changed } }, .test_fixture);
         const read = try store.addCFStmt(.{ .assign_low_level = .{
             .target = item,
             .op = .list_get_unsafe,
             .rc_effect = LowLevelOp.list_get_unsafe.rcEffect(),
             .args = try store.addLocalSpan(&.{ saved, index }),
             .next = done,
-        } });
+        } }, .test_fixture);
         const rebind = try store.addCFStmt(.{ .set_local = .{
             .target = input,
             .value = changed,
             .mode = .initialize_join_param,
             .next = if (observe_after) read else done,
-        } });
+        } }, .test_fixture);
         const site = try addSetSite(&f, changed, input, rebind);
         if (!observe_after) store.getCFStmtPtr(read).assign_low_level.next = site;
         const alias = try store.addCFStmt(.{ .assign_ref = .{
             .target = saved,
             .op = .{ .local = input },
             .next = if (observe_after) site else read,
-        } });
+        } }, .test_fixture);
         const proc = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(11661),
             .args = try store.addLocalSpan(&.{ input, index }),
             .body = alias,
             .ret_layout = f.list,
-        });
+        }, .none);
         try testMetadataTransfer(&f, proc, site, !observe_after);
     }
 }
@@ -2949,21 +2949,21 @@ test "promote metadata preserves exclusive consuming branches" {
     const input = try store.addLocal(.{ .layout_idx = f.list });
     const output = try store.addLocal(.{ .layout_idx = f.list });
     const cond = try store.addLocal(.{ .layout_idx = .bool });
-    const done = try store.addCFStmt(.{ .ret = .{ .value = output } });
+    const done = try store.addCFStmt(.{ .ret = .{ .value = output } }, .test_fixture);
     const left = try addSetSite(&f, output, input, done);
     const right = try addSetSite(&f, output, input, done);
     const branch = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = cond,
         .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = left }}),
         .default_branch = right,
-    } });
+    } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(11662),
         .args = try store.addLocalSpan(&.{ input, cond }),
         .body = branch,
         .ret_layout = f.list,
-    });
+    }, .none);
     try testMetadataTransfer(&f, proc, left, true);
     try testMetadataTransfer(&f, proc, right, true);
 }
