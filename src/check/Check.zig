@@ -43933,6 +43933,7 @@ fn checkBranchBodyAgainstExpected(
 /// reachable graph—the visited set only prunes—so no particular visit order
 /// is required.
 fn varContainsError(self: *Self, root_var: Var, visited: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!bool {
+    if (!self.types.mayContainErrorState()) return false;
     const stack = &self.type_visit_stack;
     const stack_base = stack.items.len;
     defer stack.items.len = stack_base;
