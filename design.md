@@ -2874,6 +2874,20 @@ reference to an imported scheme copy; the def itself still checks with its
 annotation generated in its body's frame, sharing vars with the scheme the
 checked module outputs, which checked dispatch-evidence resolution relies on.
 
+An annotation with `_` holes cannot be predeclared module-wide: a hole's type
+is inferred from its body, so quantifying it into a standalone scheme would
+hand every use an unconstrained variable the body never committed to. When
+such an annotated member belongs to a recursive binding group, its scheme is
+instead predeclared at the start of that group, inside the group's shared rank
+frame. The scheme quantifies the annotation's named variables exactly like a
+module-wide predeclaration, but it shares the live hole variables with the
+body's annotation rather than copying them: every in-group use instantiates
+fresh copies of the named variables and constrains the very hole variables
+the body's inference constrains. The holes therefore stay monomorphic across
+the group, and two members' same-named variables are never unified with each
+other. The group's boundary generalizes the holes like any other
+body-inferred variable.
+
 Rank adjustment writes a node's enclosing traversal rank before descending
 into its children and marking it visited. In particular, a back-edge in a
 function's directed effect dependencies observes that enclosing rank, not the
@@ -6965,6 +6979,44 @@ the very tags its wrapper adds; occurrences whose relation fails or would make
 the row anonymously recursive, as when `e` contains `Wrapped(x)`, are
 rejected.
 
+Composition relates only rows whose final identity is known. A frame whose
+results other expressions still reach monomorphically is a FIXPOINT: every
+binding group frame, and every unannotated local function declaration's own
+frame. Until its boundary, an unannotated function member's result row can
+still become the row of any expression that reached it through a recursive
+reference or a dispatch back-edge, and a deferred dispatch constraint
+waiting for an unchecked target still becomes that target's instantiated
+result. A contribution whose source row ends in such an open row (a member's
+result row, a waiting dispatch constraint's result row, or a destination
+already waiting on a fixpoint) is not related when its lambda composes: building the result
+on top of that row could make the result its own extension once the
+fixpoint closes (`helper = |_| { _a = Err(Bad)?  helper({}) }` would infer
+`E = [Bad, ..E]`). The contribution waits for the outermost fixpoint in which
+its source is open, and the destination's residual tail is kept at that
+fixpoint's rank so no frame nested inside it generalizes the tail first. A
+member result reached before the member's own result is built may still be
+the structural union `Try`'s backing relates to; its error row is the `Err`
+payload.
+
+At the fixpoint's boundary—after every member's pattern has been related to
+its right-hand side and every deferred dispatch constraint the frame owns
+has resolved, and before anything generalizes—the waiting contributions form a
+graph whose nodes are destinations keyed by residual tail; a contribution
+points at the destination its source row ends in. Rows that include one
+another around a cycle are one row, so each strongly connected component
+with a cycle collapses by ordinary unification before any row is built on
+another, and every other contribution then relates exactly as its lambda
+classified it, visiting components after everything they reach. A source that
+already ends in its destination's residual tail and has no tag the
+destination lacks is already included. A destination generalized by a frame
+nested inside the fixpoint is live only through its residual tail, which
+receives the source. A contribution whose source ends in a row still open in
+an enclosing fixpoint moves to that fixpoint. Thus a self tail call adds
+nothing to its own result, mutually tail-calling functions share one error
+row, and a closure whose result includes its enclosing function's errors
+adds nothing to that function unless the function returns the closure's
+result. Pinned by `src/check/test/issue_11640_test.zig`.
+
 The rule is confined to deferred returns carrying the explicit `try_suffix`
 return context emitted by canonicalization. Annotated returns retain the Hosted
 Try Question Widening policy above, including its ordinary non-hosted
@@ -7264,10 +7316,17 @@ field.
 
 An open row simply gains the tag, so a program that never mentions it still
 sees `MissingRequiredField(field_name)`. A row the program closed without the
-tag rejects it: a closed row reports an ordinary type mismatch at the
-unification, and an annotated output row, whose extension is implicitly open,
-reports that the definition can produce a tag its annotation does not list
-(Polarity). The failure is never mapped onto a format error.
+tag rejects it. When the closed row belongs to an annotated value or
+function, the report is the annotation mismatch: the definition can produce a
+tag its annotation does not list (Polarity). When the closed row belongs to a
+where-clause parser contract, the report is the dedicated
+`derived_parser_error_row` problem instead of a generic row mismatch: it is
+located at the expression that instantiated the codec relation (the call that
+fixes the record type, where the user can act), and names the record type,
+the tag, the closed row, and the required fields. A nested custom parser whose
+error tag the enclosing row lacks reports the same problem; a payload conflict
+on a tag the row already lists remains an ordinary row mismatch (issue 11246).
+The failure is never mapped onto a format error.
 
 A custom nominal parser nested inside a derived shape keeps its own minimal
 error row. During checking, `constrainDerivedParserErrorRowIncludes` closes an
@@ -7470,7 +7529,12 @@ without CIR nodes included, so slot i of one is slot i of the other. The body
 side is enumerated at the moment the body generates the annotation, before
 anything unifies with it; it is enumerated for every predeclared annotation,
 because a use made while the body is being checked is only discovered after
-that generation. The predeclared side is enumerated at the first use. A use
+that generation. The predeclared side is enumerated at the first use. A
+group-start predeclaration's shared hole variables are opaque leaves in both
+enumerations: a hole is never quantified by the predeclared scheme, and
+whatever the group has unified it with by the time either side is enumerated
+is not part of either side's interface, so both sides still enumerate exactly
+the annotation's own variables in the same order. A use
 keeps only its copies of the predeclared slots (and of their where-clause
 callables), and its record pairs each body slot that is still a variable with
 the copy of the same predeclared slot. A use made while the body is in flight
@@ -8855,8 +8919,11 @@ Other solved-graph mutations:
   uses before error-row relations run. A source row used in a payload
   contributes through a fresh spine with unchanged payload identities, and
   relates its residual tail after visible tags have merged; independent
-  contributions retain full-row equality. No solved source row is redirected,
-  and no checked metadata is restamped.
+  contributions retain full-row equality. A contribution whose source ends in
+  a row still open in a fixpoint (`collectOpenTryRowTails`) waits for that
+  fixpoint's boundary (`relateTryRowFixpoint`), where cyclic components
+  collapse by ordinary unification before the rest relate as classified. No
+  solved source row is redirected, and no checked metadata is restamped.
 - `validateSettledValueRows`—policy: Row Union Normalization (above). A walk
   over every settled tag and record row normalizes the rows that repeat a
   label; rows with invalid content or conflicting occurrences are set to `err`
@@ -15739,6 +15806,16 @@ its existing value-flow edges once per candidate; validation and emission consum
 that classification. Tracked sources forward valid metadata, while sources
 entering the chain establish metadata for their actual allocation. A merged
 local's membership in the chain is not evidence about all of its definitions.
+
+Metadata forwarding also requires linear value use. Pure single-definition
+aliases belong to the same logical value; join writes, merged definitions,
+and operation results establish new values. If a consuming use can execute
+while another use of that value remains live (including through an alias),
+transfers out of that value establish fresh metadata. Checked operations keep
+their checks and measure their results; aliases and join entries acquire their
+unit before measuring. Mutually exclusive consuming uses and reads completed
+before consumption preserve forwarding. Control-flow use ordering is shared
+with ARC as a neutral LIR query; promotion never consults an ARC solution.
 
 An incoming alias or join argument transfers its ownership unit through the
 existing consuming `list_map_prepare_reuse` identity before querying uniqueness.
