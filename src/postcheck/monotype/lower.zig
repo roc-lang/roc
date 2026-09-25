@@ -23241,10 +23241,9 @@ const BodyContext = struct {
             .repl_expr,
             => saved_source_region_override,
         };
-        const body = if (root.literalConversionKind() != null) blk: {
-            const ret_ty = try self.activeTypeFromCell(ret_cell);
-            break :blk try self.lowerNumeralRootBody(wrapper.body_expr, ret_ty);
-        } else switch (root.kind) {
+        const body = if (root.literalConversionKind() != null)
+            try self.lowerLiteralConversionRootBody(wrapper.body_expr, ret_cell)
+        else switch (root.kind) {
             .constant,
             .hoisted_constant,
             .hoisted_validation,
@@ -24537,6 +24536,9 @@ const BodyContext = struct {
             // requesting an active view of their still-unresolved payload.
             .numeral, .str_from_quote => {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
+                if (checked.literalConversionRootOf(expr.data)) |root_id| {
+                    return try self.lowerLiteralConversionAtNode(expr_id, root_id, expr_node);
+                }
                 // Only an unpinned target variable takes the checked literal
                 // default. Openness inside a custom target is not evidence
                 // that the target itself should default to a builtin.
@@ -24878,12 +24880,12 @@ const BodyContext = struct {
             => Common.invariant("non-runtime checked expression reached Monotype lowering"),
             .runtime_error => return try self.runtimeCrashExpr(ty, "runtime error"),
             .numeral => |numeral| {
-                if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
-                return try self.lowerNumeralExpr(expr.ty, numeral, ty);
+                if (numeral.conversion_root) |root_id| return try self.lowerLiteralConversionAtNode(expr_id, root_id, try self.graph.importMono(ty));
+                return try self.lowerNumeralExpr(numeral, ty);
             },
             .str_from_quote => |quote| {
-                if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
-                return try self.lowerQuoteExpr(expr.ty, quote, ty);
+                if (quote.conversion_root) |root_id| return try self.lowerLiteralConversionAtNode(expr_id, root_id, try self.graph.importMono(ty));
+                return try self.lowerQuoteExpr(quote, ty);
             },
             .str_segment => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
             .bytes_literal => |str| blk: {
@@ -33658,36 +33660,6 @@ const BodyContext = struct {
         }
     }
 
-    fn instantiateNumeralPlanCallNode(
-        self: *BodyContext,
-        source_fn_ty: checked.CheckedTypeId,
-        caller: *BodyContext,
-        checked_ret_ty: checked.CheckedTypeId,
-        target_ty: Type.TypeId,
-        operands: []const static_dispatch.StaticDispatchOperand,
-    ) Allocator.Error!NodeId {
-        const function = self.checkedFunctionType(source_fn_ty);
-        if (function.args.len != operands.len) {
-            Common.invariant("checked from_numeral plan arity differs from its function type");
-        }
-        const fn_node = try self.instNode(source_fn_ty);
-        const fn_graph = switch (self.graph.content(fn_node)) {
-            .func => |func| func,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked from_numeral plan had a non-function instantiation node"),
-        };
-        if (fn_graph.args.len != operands.len) {
-            Common.invariant("checked from_numeral plan graph arity differed from its operand span");
-        }
-        // The numeral expression's checked type is the converted value type;
-        // the plan's checked structure relates it to the Try-shaped return.
-        try self.graph.unify(try caller.instNode(checked_ret_ty), try self.graph.importMono(target_ty));
-        try self.graph.unify(try self.instNode(checked_ret_ty), try self.graph.importMono(target_ty));
-        for (fn_graph.args, operands) |formal_node, operand| {
-            try self.relateFormalToOperand(formal_node, caller, operand);
-        }
-        return fn_node;
-    }
-
     fn instantiateTargetFromPlanNode(
         self: *BodyContext,
         source_fn_ty: checked.CheckedTypeId,
@@ -39071,6 +39043,12 @@ const BodyContext = struct {
                     },
                     .record => |record| break :blk try self.lowerRecordConstructorAtNode(checked_expr, record, expected_node),
                     .call => break :blk try self.lowerCallExprAtNode(checked_expr, expected_node),
+                    .numeral => |numeral| if (numeral.conversion_root) |root_id| {
+                        break :blk try self.lowerLiteralConversionAtNode(checked_expr, root_id, expected_node);
+                    },
+                    .str_from_quote => |quote| if (quote.conversion_root) |root_id| {
+                        break :blk try self.lowerLiteralConversionAtNode(checked_expr, root_id, expected_node);
+                    },
                     .dispatch_call => |plan| {
                         try self.selectExprRepresentationAtNode(checked_expr, expected_node);
                         break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, plan, cell);
@@ -39092,7 +39070,7 @@ const BodyContext = struct {
                     .if_ => |if_| break :blk try self.lowerIfExprAtTypeCell(checked_expr, if_, cell),
                     .runtime_error => break :blk try self.runtimeCrashExprAtCell(cell, "runtime error"),
                     .anno_only => Common.invariant("non-runtime checked expression reached Monotype lowering"),
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+                    .pending, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
                 }
                 switch (expr.data) {
                     .tuple_access => |access| {
@@ -41869,106 +41847,117 @@ const BodyContext = struct {
         };
     }
 
-    fn lowerNumeralCall(
-        self: *BodyContext,
-        checked_ret_ty: checked.CheckedTypeId,
-        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
-        target_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        const callable = switch (self.literalDispatchRuntimePlan(maybe_plan)) {
-            .callable => |callable| callable,
-            .crash => |reason| return try self.runtimeCrashExpr(target_ty, dispatchCrashMessage(reason)),
-        };
-        const result = try self.lowerNumeralCallRaw(checked_ret_ty, callable, target_ty);
-        return try self.unwrapNumeralResult(result.call, result.try_ty, target_ty);
-    }
-
-    fn literalDispatchRuntimePlan(
+    /// A literal whose conversion is selected per specialization: the checked
+    /// conversion call at this specialization's target, unwrapped to its value.
+    fn lowerSpecializedLiteralConversion(
         self: *BodyContext,
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
-    ) DispatchRuntimePlan {
-        const plan_id = maybe_plan orelse Common.invariant("checked literal conversion reached Monotype without a dispatch plan");
-        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
-        if (plan.result_mode != .value) Common.invariant("checked literal conversion plan had a non-value result mode");
-        return self.dispatchRuntimePlan(plan);
-    }
-
-    const NumeralCall = struct {
-        call: DraftExprId,
-        try_ty: Type.TypeId,
-    };
-
-    fn lowerNumeralCallRaw(
-        self: *BodyContext,
-        checked_ret_ty: checked.CheckedTypeId,
-        callable: CallableDispatchPlan,
         target_ty: Type.TypeId,
-    ) Allocator.Error!NumeralCall {
-        const plan = callable.plan;
-        const plan_args = callable.operands;
-
-        var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
-        call_ctx.evidence = self.evidence;
-        defer call_ctx.deinit();
-        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
-        call_ctx.current_fn_key = self.current_fn_key;
-        call_ctx.source_region_override = self.source_region_override;
-        call_ctx.current_entry_root = self.current_entry_root;
-        call_ctx.in_deferred_body = self.in_deferred_body;
-
-        const callable_node = try call_ctx.instantiateNumeralPlanCallNode(plan.callable_ty, self, checked_ret_ty, target_ty, plan_args);
-
-        const resolved = self.dispatchTarget(plan) orelse
-            Common.invariant("checked from_numeral dispatch unexpectedly resolved to structural equality");
-
-        const target_node = try self.methodTargetNodeFromPlan(resolved, &call_ctx, plan.callable_ty);
-        try self.relateDispatchTargetRequestInterface(resolved, target_node, callable_node);
-        const fn_nodes = try self.graph.functionNodes(callable_node);
-        const ret_ty = try self.activeTypeFromNode(fn_nodes.ret);
-
-        const call_expr = try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(fn_nodes.ret),
-            try self.lowerResolvedDispatchAtNode(plan, resolved, callable_node, self, &.{}),
-        );
-        return .{ .call = call_expr, .try_ty = ret_ty };
+        rejected_message: []const u8,
+    ) Allocator.Error!DraftExprId {
+        const try_ty = self.literalConversionTryType(maybe_plan);
+        const try_node = try self.instNode(try_ty);
+        const try_value = try self.lowerDispatchExprAtType(try_ty, maybe_plan, DraftTypeCell.fromGraphNode(try_node));
+        return try self.unwrapLiteralConversionAtNode(try_value, try_node, try self.graph.importMono(target_ty), rejected_message);
     }
 
-    fn lowerNumeralRootBody(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        try_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        const expr = self.view.bodies.expr(expr_id);
-        const plan = switch (expr.data) {
+    /// The checked conversion plan of a literal expression.
+    fn literalConversionPlan(self: *BodyContext, expr_id: checked.CheckedExprId) ?static_dispatch.StaticDispatchPlanId {
+        return switch (self.view.bodies.expr(expr_id).data) {
             .numeral => |numeral| numeral.plan,
             .str_from_quote => |quote| quote.plan,
-            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("literal conversion root did not point at a conversion expression"),
+            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("literal conversion did not point at a conversion expression"),
         };
-        const callable = switch (self.literalDispatchRuntimePlan(plan)) {
-            .callable => |callable| callable,
-            .crash => |reason| return try self.runtimeCrashExpr(try_ty, dispatchCrashMessage(reason)),
-        };
-        const ok_tag = self.monoTagByText(try_ty, "Ok");
-        const ok_payloads = self.typeStore().span(ok_tag.payloads);
-        if (ok_payloads.len != 1) Common.invariant("numeral conversion root Try.Ok did not carry one payload");
-        const result = try self.lowerNumeralCallRaw(expr.ty, callable, GuardedList.at(ok_payloads, 0));
-        if (!self.sameType(result.try_ty, try_ty)) {
-            Common.invariant("numeral conversion root type differed from the from_numeral result type");
-        }
-        return result.call;
     }
 
-    fn restoredNumeralConst(
+    /// The checked `Try` result type of a literal's conversion call.
+    fn literalConversionTryType(self: *BodyContext, plan_id: ?static_dispatch.StaticDispatchPlanId) checked.CheckedTypeId {
+        const id = plan_id orelse Common.invariant("checked literal conversion reached Monotype without a dispatch plan");
+        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(id)];
+        if (plan.result_mode != .value) Common.invariant("checked literal conversion plan had a non-value result mode");
+        return self.checkedFunctionType(plan.callable_ty).ret;
+    }
+
+    /// A literal-conversion root evaluates its literal's checked conversion
+    /// call to the call's `Try` result. Finalization reports `Err` as the
+    /// literal's own diagnostic and stores the `Ok` payload for every use.
+    fn lowerLiteralConversionRootBody(
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
-        ty: Type.TypeId,
-    ) Allocator.Error!?DraftExprId {
-        const root = self.view.compile_time_roots.lookupNumeralRootByExpr(expr_id) orelse return null;
-        return switch (root.payload) {
-            .const_node => |node| try self.restoreConstNodeAtType(self.view, self.view, node, ty),
-            .pending => null,
-            .fn_value, .discarded, .expect => Common.invariant("numeral conversion root stored a non-constant payload"),
+        ret_cell: DraftTypeCell,
+    ) Allocator.Error!DraftExprId {
+        const plan = self.literalConversionPlan(expr_id);
+        return try self.lowerDispatchExprAtType(self.literalConversionTryType(plan), plan, ret_cell);
+    }
+
+    /// Lower one use of a literal whose conversion checking selected, as that
+    /// literal's conversion root. The root evaluates the conversion once at
+    /// compile time. A use restores the root's stored value once it is
+    /// finalized; during finalization a use reads the root's declared
+    /// compile-time value, whose guard reports a rejected conversion as the
+    /// root's failure. A lowering that can do neither evaluates the same
+    /// checked conversion call.
+    fn lowerLiteralConversionAtNode(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        root_id: checked.ComptimeRootId,
+        request_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const root = self.view.compile_time_roots.root(root_id);
+        const kind = root.literalConversionKind() orelse
+            Common.invariant("literal conversion root link named a non-conversion root");
+        switch (root.payload) {
+            .const_node => |node| return try self.restoreConstNodeAtNode(self.view, self.view, node, request_node),
+            .pending => {},
+            .fn_value, .discarded, .expect => Common.invariant("literal conversion root stored a non-constant payload"),
+        }
+        const plan = self.literalConversionPlan(expr_id);
+        const try_ty = self.literalConversionTryType(plan);
+        const try_node = try self.instNode(try_ty);
+        const try_cell = DraftTypeCell.fromGraphNode(try_node);
+        const try_value = if (self.builder.comptimeValueReadDeclared(self.view, root_id))
+            try self.declaredComptimeValueRead(self.view, root_id, try_cell, null)
+        else
+            try self.lowerDispatchExprAtType(try_ty, plan, try_cell);
+        return try self.unwrapLiteralConversionAtNode(try_value, try_node, request_node, switch (kind) {
+            .numeral => "invalid numeric literal",
+            .quote => "invalid string literal",
+        });
+    }
+
+    /// The value of a literal conversion's `Try` result: its `Ok` payload, or
+    /// a crash when the conversion rejected the literal.
+    fn unwrapLiteralConversionAtNode(
+        self: *BodyContext,
+        try_value: DraftExprId,
+        try_node: NodeId,
+        value_node: NodeId,
+        rejected_message: []const u8,
+    ) Allocator.Error!DraftExprId {
+        const payloads = try self.graphTryPayloads(try_node);
+        try relateRequestComponent(self.graph, payloads.ok, value_node);
+        const ok_name = try self.nameStoreMut().internTagLabel("Ok");
+        const err_name = try self.nameStoreMut().internTagLabel("Err");
+        const try_cell = DraftTypeCell.fromGraphNode(try_node);
+        const value_cell = DraftTypeCell.fromGraphNode(value_node);
+
+        const ok_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null);
+        const ok_pat = try self.addPatWithTypeCell(try_cell, .{ .tag = .{
+            .name = ok_name,
+            .payloads = try self.addPatSpan(&.{try self.addPatWithTypeCell(value_cell, .{ .bind = ok_local })}),
+        } });
+        const err_pat = try self.addPatWithTypeCell(try_cell, .{ .tag = .{
+            .name = err_name,
+            .payloads = try self.addPatSpan(&.{try self.addPatWithTypeCell(DraftTypeCell.fromGraphNode(payloads.err), .wildcard)}),
+        } });
+        const branches = [_]DraftBranch{
+            .{ .pat = ok_pat, .body = try self.addExprWithTypeCell(value_cell, .{ .local = ok_local }) },
+            .{ .pat = err_pat, .body = try self.addExprWithTypeCell(value_cell, .{ .crash = try self.addStringLiteral(rejected_message) }) },
         };
+        return try self.addExprWithTypeCell(value_cell, .{ .match_ = .{
+            .scrutinee = try_value,
+            .branches = try self.addBranchSpan(&branches),
+        } });
     }
 
     /// Produce a numeric literal's constant—the ONE place in the compiler
@@ -41977,13 +41966,12 @@ const BodyContext = struct {
     /// real user-defined `from_numeral` dispatch call instead.
     fn lowerNumeralExpr(
         self: *BodyContext,
-        checked_ret_ty: checked.CheckedTypeId,
         numeral: checked.CheckedNumeralData,
         target_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const primitive = switch (self.shapeContent(target_ty)) {
             .primitive => |p| p,
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return try self.lowerNumeralCall(checked_ret_ty, numeral.plan, target_ty),
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return try self.lowerSpecializedLiteralConversion(numeral.plan, target_ty, "invalid numeric literal"),
         };
         const data = (try self.numeralBits(numeral.literal, primitive)) orelse blk: {
             // A value that does not fit its concrete integer or Dec target (a
@@ -42002,7 +41990,6 @@ const BodyContext = struct {
     /// every custom target follows the explicit from_quote dispatch plan.
     fn lowerQuoteExpr(
         self: *BodyContext,
-        checked_ret_ty: checked.CheckedTypeId,
         quote: checked.CheckedQuoteData,
         target_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
@@ -42019,7 +42006,7 @@ const BodyContext = struct {
                 }
                 return try self.lowerQuoteValue(quote.literal, target_ty);
             },
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return try self.lowerNumeralCall(checked_ret_ty, quote.plan, target_ty),
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return try self.lowerSpecializedLiteralConversion(quote.plan, target_ty, "invalid string literal"),
         }
     }
 
@@ -42184,52 +42171,6 @@ const BodyContext = struct {
             .ty = ty,
             .data = .{ .list = try self.addExprSpan(items) },
         });
-    }
-
-    fn unwrapNumeralResult(
-        self: *BodyContext,
-        result: DraftExprId,
-        try_ty: Type.TypeId,
-        target_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        const ok_tag = self.monoTagByText(try_ty, "Ok");
-        const err_tag = self.monoTagByText(try_ty, "Err");
-        const ok_payloads = self.typeStore().span(ok_tag.payloads);
-        const err_payloads = self.typeStore().span(err_tag.payloads);
-        if (ok_payloads.len != 1) Common.invariant("Try.Ok from from_numeral did not carry one payload");
-        if (!self.sameType(GuardedList.at(ok_payloads, 0), target_ty)) {
-            Common.invariant("Try.Ok from from_numeral carried a type different from the literal target type");
-        }
-
-        const ok_local = try self.addLocal(self.builder.symbols.fresh(), target_ty);
-        const ok_payload_pat = try self.bindPat(ok_local, target_ty);
-        const ok_pat = try self.addPat(.{ .ty = try_ty, .data = .{ .tag = .{
-            .name = ok_tag.name,
-            .payloads = try self.addPatSpan(&[_]DraftPatId{ok_payload_pat}),
-        } } });
-        const ok_body = try self.localExpr(ok_local, target_ty);
-
-        const err_payload_pats = try self.allocator.alloc(DraftPatId, err_payloads.len);
-        defer self.allocator.free(err_payload_pats);
-        for (0..GuardedList.borrowLen(err_payloads)) |i| {
-            const payload_ty = GuardedList.at(err_payloads, i);
-            err_payload_pats[i] = try self.addPat(.{ .ty = payload_ty, .data = .wildcard });
-        }
-        const err_pat = try self.addPat(.{ .ty = try_ty, .data = .{ .tag = .{
-            .name = err_tag.name,
-            .payloads = try self.addPatSpan(err_payload_pats),
-        } } });
-        const msg = try self.addStringLiteral("invalid numeric literal");
-        const err_body = try self.addExpr(.{ .ty = target_ty, .data = .{ .crash = msg } });
-
-        const branches = [_]DraftBranch{
-            .{ .pat = ok_pat, .body = ok_body },
-            .{ .pat = err_pat, .body = err_body },
-        };
-        return try self.addExpr(.{ .ty = target_ty, .data = .{ .match_ = .{
-            .scrutinee = result,
-            .branches = try self.addBranchSpan(&branches),
-        } } });
     }
 
     fn monoTagByText(self: *BodyContext, ty: Type.TypeId, text: []const u8) Type.Tag {

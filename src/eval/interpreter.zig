@@ -405,6 +405,8 @@ pub const Interpreter = struct {
     failed_stmt_region: base.Region = base.Region.zero(),
     /// Virtual source frame captured with the failed statement location.
     failed_stmt_inline_scope: InlineScopeId = InlineScopeId.none,
+    /// The crash statement that ended the current evaluation, if one did.
+    failed_crash_stmt: ?LIR.CFStmtId = null,
     comptime_branch_hits: std.ArrayList(ComptimeBranchHit),
     comptime_failed_site: ?LIR.ComptimeSiteId = null,
     /// Heap-pinned owner used by host-facing integrations whose erased
@@ -957,6 +959,11 @@ pub const Interpreter = struct {
         return self.failed_call_stack.items;
     }
 
+    /// The crash statement that ended the last evaluation, if one did.
+    pub fn getFailedCrashStmt(self: *const LirInterpreter) ?LIR.CFStmtId {
+        return self.failed_crash_stmt;
+    }
+
     pub fn getFailedSourceLoc(self: *const LirInterpreter) ?base.SourceLoc {
         if (self.failed_stmt_loc.hasLocation()) return self.failed_stmt_loc;
         return null;
@@ -1119,6 +1126,7 @@ pub const Interpreter = struct {
         self.failed_stmt_loc = base.SourceLoc.none;
         self.failed_stmt_region = base.Region.zero();
         self.failed_stmt_inline_scope = InlineScopeId.none;
+        self.failed_crash_stmt = null;
         self.comptime_failed_site = null;
         if (builtin.mode == .Debug) self.inflight_zeroed_box_payloads.clearRetainingCapacity();
     }
@@ -1430,6 +1438,7 @@ pub const Interpreter = struct {
         self.failed_stmt_loc = base.SourceLoc.none;
         self.failed_stmt_region = base.Region.zero();
         self.failed_stmt_inline_scope = InlineScopeId.none;
+        self.failed_crash_stmt = null;
         self.comptime_branch_hits.clearRetainingCapacity();
         self.comptime_failed_site = null;
         if (builtin.mode == .Debug) self.inflight_zeroed_box_payloads.clearRetainingCapacity();
@@ -3436,6 +3445,7 @@ pub const Interpreter = struct {
                 },
                 .ret => |ret_stmt| return .{ .returned = ret_stmt.value },
                 .crash => |crash_stmt| {
+                    self.failed_crash_stmt = current;
                     if (@intFromEnum(current) < self.failure_origins.len) {
                         if (self.failure_origins[@intFromEnum(current)]) |origin| {
                             self.failed_stmt_loc = origin.loc orelse base.SourceLoc.none;

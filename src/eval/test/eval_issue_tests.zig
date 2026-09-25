@@ -3341,4 +3341,109 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "[1, 1]" },
     },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11668
+        // The literal's target `Sql({ id : I32 })` is concrete once the call's
+        // record argument is lowered; lowering the literal before that sibling
+        // must still produce the converted value.
+        .name = "issue 11668: from_quote literal passed beside a record to a generic function",
+        .source_kind = .module,
+        .source =
+        \\Sql(a) := { text : Str }.{
+        \\    from_quote : Str -> Try(Sql(a), [BadQuotedBytes(Str)])
+        \\    from_quote = |raw| Ok(Sql.{ text: raw })
+        \\}
+        \\
+        \\query : Sql(a), a -> Str
+        \\query = |sql, _| sql.text
+        \\
+        \\run : {} -> Str
+        \\run = |_| query("select 1", { id: 1.I32 })
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "\"select 1\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11668
+        // The literal's target `Sql({ n : Str })` is fixed by a later field
+        // access in the same monomorphic body.
+        .name = "issue 11668: from_quote literal whose target record is fixed by a later use",
+        .source_kind = .module,
+        .source =
+        \\Sql(a) := { text : Str }.{
+        \\    from_quote : Str -> Try(Sql(a), [BadQuotedBytes(Str)])
+        \\    from_quote = |raw| Ok(Sql.{ text: raw })
+        \\}
+        \\
+        \\query : Sql(a) -> Try(a, [X])
+        \\query = |_| Err(X)
+        \\
+        \\run : {} -> Try(Str, [X])
+        \\run = |_| {
+        \\    row = query("select 1")?
+        \\    Ok(row.n)
+        \\}
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "Err(X)" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11674
+        // `from_quote`'s `where` clause asks for a derived `I32.parser_for`;
+        // the literal inside `run` converts at `Sql(I32)`.
+        .name = "issue 11674: from_quote literal whose where clause needs a derived parser_for",
+        .source_kind = .module,
+        .source =
+        \\Sql(a) := { text : Str }.{
+        \\    from_quote : Str -> Try(Sql(a), [BadQuotedBytes(Str)])
+        \\        where [a.parser_for : Fmt -> (U8 -> Try({ value : a, rest : U8 }, [Bad]))]
+        \\    from_quote = |raw| Ok(Sql.{ text: raw })
+        \\}
+        \\
+        \\Fmt := [Default].{
+        \\    parse_i32 : Fmt, U8 -> Try({ value : I32, rest : U8 }, [Bad])
+        \\    parse_i32 = |_, state| Ok({ value: 0, rest: state })
+        \\}
+        \\
+        \\query : Sql(a) -> Try(List(a), [X])
+        \\query = |_| Ok([])
+        \\
+        \\run : {} -> Try(List(I32), [X])
+        \\run = |_| query("select 1")
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "Ok([])" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11669
+        // `from_quote` calls a derived `I32.parser_for` whose error row is the
+        // `where` clause's open `err`, which includes the parser's `Bad`.
+        .name = "issue 11669: from_quote calling a derived parser_for with an open error row",
+        .source_kind = .module,
+        .source =
+        \\Sql(a) := { text : Str }.{
+        \\    from_quote : Str -> Try(Sql(a), [BadQuotedBytes(Str)])
+        \\        where [a.parser_for : Fmt -> (U8 -> Try({ value : a, rest : U8 }, err))]
+        \\    from_quote = |raw| {
+        \\        A : a
+        \\        _ = A.parser_for(Fmt.Default)
+        \\        Ok(Sql.{ text: raw })
+        \\    }
+        \\}
+        \\
+        \\Fmt := [Default].{
+        \\    parse_i32 : Fmt, U8 -> Try({ value : I32, rest : U8 }, [Bad])
+        \\    parse_i32 = |_, state| Ok({ value: 0, rest: state })
+        \\}
+        \\
+        \\sql : Sql(I32)
+        \\sql = "select 1"
+        \\
+        \\main = sql.text
+        ,
+        .expected = .{ .inspect_str = "\"select 1\"" },
+    },
 };

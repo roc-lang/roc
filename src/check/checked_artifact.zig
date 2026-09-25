@@ -10637,6 +10637,17 @@ pub const CheckedPatternData = union(enum) {
     runtime_error,
 };
 
+/// The literal-conversion compile-time root checking linked to a checked
+/// literal expression, or null for any other expression and for a literal
+/// whose conversion is builtin or selected per specialization.
+pub fn literalConversionRootOf(data: CheckedExprData) ?ComptimeRootId {
+    return switch (data) {
+        .numeral => |numeral| numeral.conversion_root,
+        .str_from_quote => |quote| quote.conversion_root,
+        .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
+    };
+}
+
 /// Public `CheckedNumeralData` declaration: a numeric literal's exact digit
 /// facts, carried through the checked artifact unchanged. The checked stage
 /// stores NO concrete bit pattern for a literal—monotype lowering produces
@@ -10648,6 +10659,10 @@ pub const CheckedNumeralData = struct {
     /// The checked `from_numeral` dispatch plan, when the literal's target is
     /// a non-builtin type (or is still polymorphic at publication).
     plan: ?StaticDispatchPlanId,
+    /// The `numeral_conversion` compile-time root that evaluates this
+    /// literal's conversion, when checking selected one concrete custom
+    /// conversion. Every use of the literal consumes that root's value.
+    conversion_root: ?ComptimeRootId = null,
 };
 
 /// A checked literal-only string conversion: exact post-escape bytes plus the
@@ -10655,6 +10670,10 @@ pub const CheckedNumeralData = struct {
 pub const CheckedQuoteData = struct {
     plan: ?StaticDispatchPlanId,
     literal: CheckedStringLiteralId,
+    /// The `quote_conversion` compile-time root that evaluates this literal's
+    /// conversion, when checking selected one concrete custom conversion.
+    /// Every use of the literal consumes that root's value.
+    conversion_root: ?ComptimeRootId = null,
 };
 
 /// Checker-recorded authority for a field access to cross a named backing.
@@ -11111,7 +11130,7 @@ fn reconstructCheckedExprData(pool_owner: anytype, stored: StoredCheckedExprData
         .ellipsis => .ellipsis,
         .anno_only => .anno_only,
         .numeral => |v| .{ .numeral = v },
-        .str_from_quote => |v| .{ .str_from_quote = .{ .plan = v.plan, .literal = v.literal } },
+        .str_from_quote => |v| .{ .str_from_quote = v },
         .str_segment => |l| .{ .str_segment = l },
         .str => |r| .{ .str = pool_owner.exprIdPool()[r.start .. r.start + r.len] },
         .bytes_literal => |l| .{ .bytes_literal = l },
@@ -11465,6 +11484,12 @@ pub const CheckedBodyStoreView = struct {
 
     pub fn expr(self: CheckedBodyStoreView, id: CheckedExprId) CheckedExpr {
         return reconstructCheckedExpr(self, self.stored_exprs[@intFromEnum(id)]);
+    }
+
+    /// The literal-conversion compile-time root checking linked to a literal
+    /// expression (see `literalConversionRootOf`).
+    pub fn literalConversionRoot(self: CheckedBodyStoreView, id: CheckedExprId) ?ComptimeRootId {
+        return literalConversionRootOf(self.expr(id).data);
     }
 
     pub fn pattern(self: CheckedBodyStoreView, id: CheckedPatternId) CheckedPattern {
@@ -12871,7 +12896,7 @@ pub const CheckedBodyStore = struct {
             .ellipsis => .ellipsis,
             .anno_only => .anno_only,
             .numeral => |v| .{ .numeral = v },
-            .str_from_quote => |v| .{ .str_from_quote = .{ .plan = v.plan, .literal = v.literal } },
+            .str_from_quote => |v| .{ .str_from_quote = v },
             .str_segment => |l| .{ .str_segment = l },
             .str => |items| .{ .str = try self.appendExprIds(allocator, items) },
             .bytes_literal => |l| .{ .bytes_literal = l },
@@ -13063,6 +13088,12 @@ pub const CheckedBodyStore = struct {
 
     pub fn expr(self: *const CheckedBodyStore, id: CheckedExprId) CheckedExpr {
         return reconstructCheckedExpr(self, self.stored_exprs.items[@intFromEnum(id)]);
+    }
+
+    /// The literal-conversion compile-time root checking linked to a literal
+    /// expression (see `literalConversionRootOf`).
+    pub fn literalConversionRoot(self: *const CheckedBodyStore, id: CheckedExprId) ?ComptimeRootId {
+        return literalConversionRootOf(self.expr(id).data);
     }
 
     pub fn pattern(self: *const CheckedBodyStore, id: CheckedPatternId) CheckedPattern {
@@ -27320,6 +27351,9 @@ pub const CompileTimeRootTable = struct {
             }
             const try_ty = fn_payload.function.ret;
             const expr_idx: CIR.Expr.Idx = @enumFromInt(numeral_plan.node_idx);
+            const numeral_data = &checked_bodies.stored_exprs.items[@intFromEnum(checked_expr)].data.numeral;
+            if (numeral_data.conversion_root != null) checkedArtifactInvariant("literal received a second conversion root", .{});
+            numeral_data.conversion_root = nextCompileTimeRootId(roots.items);
             try appendCompileTimeRoot(&roots, allocator, .{
                 .module_idx = module.moduleIndex(),
                 .kind = .numeral_conversion,
@@ -27352,6 +27386,9 @@ pub const CompileTimeRootTable = struct {
             }
             const try_ty = fn_payload.function.ret;
             const expr_idx: CIR.Expr.Idx = @enumFromInt(quote_plan.node_idx);
+            const quote_data = &checked_bodies.stored_exprs.items[@intFromEnum(checked_expr)].data.str_from_quote;
+            if (quote_data.conversion_root != null) checkedArtifactInvariant("literal received a second conversion root", .{});
+            quote_data.conversion_root = nextCompileTimeRootId(roots.items);
             try appendCompileTimeRoot(&roots, allocator, .{
                 .module_idx = module.moduleIndex(),
                 .kind = .quote_conversion,
@@ -27399,18 +27436,6 @@ pub const CompileTimeRootTable = struct {
             return entry.payload == .discarded;
         }
         return false;
-    }
-
-    /// Look up the literal-conversion (from_numeral or from_quote) root whose
-    /// body is the given checked expression.
-    pub fn lookupNumeralRootByExpr(self: *const CompileTimeRootTable, expr: CheckedExprId) ?CompileTimeRoot {
-        for (self.roots) |entry| {
-            if (entry.expr != expr) continue;
-            if (entry.literalConversionKind() != null) {
-                return entry;
-            }
-        }
-        return null;
     }
 
     /// Look up a selected hoisted constant root by its checked source expression.
@@ -27479,12 +27504,17 @@ pub const CompileTimeRootTable = struct {
         });
     }
 
+    /// The id `appendCompileTimeRoot` assigns to the next appended root.
+    fn nextCompileTimeRootId(roots: []const CompileTimeRoot) ComptimeRootId {
+        return @enumFromInt(@as(u32, @intCast(roots.len)));
+    }
+
     fn appendCompileTimeRoot(
         roots: *std.ArrayList(CompileTimeRoot),
         allocator: Allocator,
         entry: RootWithoutId,
     ) Allocator.Error!void {
-        const id: ComptimeRootId = @enumFromInt(@as(u32, @intCast(roots.items.len)));
+        const id = nextCompileTimeRootId(roots.items);
         roots.append(allocator, .{
             .id = id,
             .module_idx = entry.module_idx,
@@ -33169,7 +33199,9 @@ pub const CheckedModuleArtifact = struct {
     // adapted (design.md "Result-Row Widening Adapter").
     // Version 102 preserves solver-independent deferred evaluation diagnostics.
     // Version 103 persists the checked root index for immutable composition.
-    const serialized_layout_version: u32 = 103;
+    // Version 104 links each custom literal to its conversion root
+    // (`CheckedNumeralData.conversion_root`, `CheckedQuoteData.conversion_root`).
+    const serialized_layout_version: u32 = 104;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin

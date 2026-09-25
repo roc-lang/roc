@@ -1663,7 +1663,8 @@ fn evalInterpreterProgramRoots(
         host.clearDebugMessages();
         var succeeded = false;
         var failed_message: ?[]const u8 = null;
-        var payload: checked.CompileTimeRootPayload = blk: {
+        var rejected_literal = false;
+        const payload: checked.CompileTimeRootPayload = blk: {
             if (root.request.kind == .compile_time_constant and problem_store == null) {
                 const eval_result = interpreter.eval(.{
                     .proc_id = root.proc,
@@ -1694,12 +1695,19 @@ fn evalInterpreterProgramRoots(
                     };
                 };
                 defer interpreter.dropValue(eval_result.value, root.ret_layout);
-                if (options.publish_shared_slots) try program.publishRoot(lowered, module.key, root_id, root, eval_result.value);
-                succeeded = true;
-                break :blk if (compile_time_root.kind == .hoisted_validation)
+                const stored: checked.CompileTimeRootPayload = if (compile_time_root.kind == .hoisted_validation)
                     .discarded
                 else
                     try writer.storeRoot(root, eval_result.value);
+                const evaluated = try finishEvaluatedRootPayload(allocator, module, problem_store, compile_time_root, stored, &had_problem);
+                if (evaluated.rejected_message) |message| {
+                    failed_message = message;
+                    rejected_literal = true;
+                    break :blk evaluated.payload;
+                }
+                if (options.publish_shared_slots) try program.publishRoot(lowered, module.key, root_id, root, eval_result.value);
+                succeeded = true;
+                break :blk evaluated.payload;
             }
 
             const eval_result = try evalCompileTimeRoot(allocator, interpreter, problem_store, owners, root.owner, module, compile_time_root, &lowered.lir_result, root.proc, root.ret_layout, &program.demand_error);
@@ -1707,12 +1715,19 @@ fn evalInterpreterProgramRoots(
             switch (eval_result) {
                 .value => |value| {
                     defer interpreter.dropValue(value.value, root.ret_layout);
-                    if (options.publish_shared_slots) try program.publishRoot(lowered, module.key, root_id, root, value.value);
-                    succeeded = true;
-                    break :blk if (compile_time_root.kind == .hoisted_validation)
+                    const stored: checked.CompileTimeRootPayload = if (compile_time_root.kind == .hoisted_validation)
                         .discarded
                     else
                         try writer.storeRoot(root, value.value);
+                    const evaluated = try finishEvaluatedRootPayload(allocator, module, problem_store, compile_time_root, stored, &had_problem);
+                    if (evaluated.rejected_message) |message| {
+                        failed_message = message;
+                        rejected_literal = true;
+                        break :blk evaluated.payload;
+                    }
+                    if (options.publish_shared_slots) try program.publishRoot(lowered, module.key, root_id, root, value.value);
+                    succeeded = true;
+                    break :blk evaluated.payload;
                 },
                 .failed => |failed| {
                     failed_message = failed.message;
@@ -1723,7 +1738,11 @@ fn evalInterpreterProgramRoots(
 
         if (!succeeded and options.publish_shared_slots) {
             const message = failed_message orelse finalizationInvariant("failed interpreter root omitted its explicit failure message");
-            program.slotEnvironment().publishFailureOrigin(lowered, module.key, root_id, .{ .loc = interpreter.getFailedSourceLoc(), .region = interpreter.getFailedCheckedRegion() });
+            const origin: lir.LIR.ComptimeFailureOrigin = if (rejected_literal)
+                literalRejectionOrigin(module, compile_time_root)
+            else
+                .{ .loc = interpreter.getFailedSourceLoc(), .region = interpreter.getFailedCheckedRegion() };
+            program.slotEnvironment().publishFailureOrigin(lowered, module.key, root_id, origin);
             try program.slotEnvironment().publishFailure(lowered, module.key, root_id, message, .{ .resolve = InterpreterProgram.resolveFunction });
             try program.refreshCallableMetadata();
         }
@@ -1743,10 +1762,6 @@ fn evalInterpreterProgramRoots(
             compile_time_root,
             host.debugMessages(),
         );
-
-        if (compile_time_root.literalConversionKind() != null) {
-            payload = try finishLiteralConversionRoot(allocator, module, problem_store, compile_time_root, payload);
-        }
 
         module.compile_time_roots.fillPayload(root_id, payload);
         const stored_root_type = switch (compile_time_root.kind) {
@@ -2936,6 +2951,7 @@ fn evalDevProgramRoots(
                 job.host.crashMessage() orelse "Roc crashed",
                 job.host.failed_region,
                 job.host.failed_loc,
+                failedAtValueGuard(&lowered.lir_result, job.host.failed_stmt),
                 &lowered.lir_result.store,
                 &had_problem,
             ),
@@ -2945,26 +2961,29 @@ fn evalDevProgramRoots(
                 try writer.storeRoot(job.root, .{ .ptr = job.ret_buf.ptr }),
         };
 
-        if (options.publish_shared_slots and job.result == .success) try native.publishRoot(lowered, module.key, job.root_id, job.root, .{ .ptr = job.ret_buf.ptr });
-        const failure_message: ?[]const u8 = switch (job.result) {
+        var failure_message: ?[]const u8 = switch (job.result) {
             .success => null,
             .crashed => job.host.crashMessage() orelse "Roc crashed",
             .comptime_exhaustiveness => "compile-time exhaustiveness failure",
             .pending, .host_oom, .host_error => unreachable,
         };
-        if (options.publish_shared_slots and failure_message != null) native.slots.publishFailureOrigin(lowered, module.key, job.root_id, .{ .loc = job.host.failed_loc, .region = job.host.failed_region });
+        var failure_origin: lir.LIR.ComptimeFailureOrigin = .{ .loc = job.host.failed_loc, .region = job.host.failed_region };
+        if (job.result == .success) {
+            const evaluated = try finishEvaluatedRootPayload(allocator, module, problem_store, job.compile_time_root, payload, &had_problem);
+            payload = evaluated.payload;
+            if (evaluated.rejected_message) |message| {
+                failure_message = message;
+                failure_origin = literalRejectionOrigin(module, job.compile_time_root);
+            }
+        }
+        if (options.publish_shared_slots and failure_message == null) try native.publishRoot(lowered, module.key, job.root_id, job.root, .{ .ptr = job.ret_buf.ptr });
+        if (options.publish_shared_slots and failure_message != null) native.slots.publishFailureOrigin(lowered, module.key, job.root_id, failure_origin);
         if (options.publish_shared_slots) try native.publishFailure(lowered, module.key, job.root_id, failure_message);
 
         try recordComptimeSiteHits(problem_store, coverage, owners, job.root.owner, job.compile_time_root, &lowered.lir_result, job.host.comptime_branch_hits.items, job.root.proc);
 
         if (try reportDevHostEvents(allocator, options, problem_store, module, job.compile_time_root, &lowered.lir_result.store, job.host.events.items)) {
             had_problem = true;
-        }
-
-        if (job.compile_time_root.literalConversionKind() != null) {
-            const conversion = try finishLiteralConversionRootDetailed(allocator, module, problem_store, job.compile_time_root, payload);
-            payload = conversion.payload;
-            if (conversion.had_problem) had_problem = true;
         }
 
         module.compile_time_roots.fillPayload(job.root_id, payload);
@@ -3145,9 +3164,11 @@ fn devCrashedRootPayload(
     message: []const u8,
     failed_region: ?base.Region,
     failed_loc: ?base.SourceLoc,
+    failed_at_value_guard: bool,
     lir_store: *const lir.LirStore,
     had_problem: *bool,
 ) FinalizeError!checked.CompileTimeRootPayload {
+    if (failed_at_value_guard) return try failedRootPayload(module, root, message);
     if (request.kind == .compile_time_constant and problem_store == null) {
         return .{ .const_node = try appendCrashConst(module, message) };
     }
@@ -3239,17 +3260,48 @@ fn emitDebugMessage(allocator: Allocator, options: Options, is_repl: bool, messa
 const LiteralConversionFinish = struct {
     payload: checked.CompileTimeRootPayload,
     had_problem: bool,
+    /// The conversion's `Err` message when it rejected its literal.
+    rejected_message: ?[]const u8 = null,
 };
 
-fn finishLiteralConversionRoot(
+/// A successfully evaluated root's payload once literal-conversion results
+/// are resolved. A literal-conversion root that evaluated to `Err` rejected
+/// its literal: it has no value for other roots to read, so it publishes the
+/// rejection as its failure, exactly as a crashed root publishes its crash.
+const EvaluatedRoot = struct {
+    payload: checked.CompileTimeRootPayload,
+    rejected_message: ?[]const u8,
+};
+
+fn finishEvaluatedRootPayload(
     allocator: Allocator,
     module: *checked.CheckedModuleArtifact,
     problem_store: ?*check.problem.Store,
     root: checked.CompileTimeRoot,
     payload: checked.CompileTimeRootPayload,
-) FinalizeError!checked.CompileTimeRootPayload {
-    const result = try finishLiteralConversionRootDetailed(allocator, module, problem_store, root, payload);
-    return result.payload;
+    had_problem: *bool,
+) FinalizeError!EvaluatedRoot {
+    if (root.literalConversionKind() == null) return .{ .payload = payload, .rejected_message = null };
+    const conversion = try finishLiteralConversionRootDetailed(allocator, module, problem_store, root, payload);
+    if (conversion.had_problem) had_problem.* = true;
+    return .{ .payload = conversion.payload, .rejected_message = conversion.rejected_message };
+}
+
+/// The failure origin a rejected literal publishes: the literal itself.
+fn literalRejectionOrigin(module: *const checked.CheckedModuleArtifact, root: checked.CompileTimeRoot) lir.LIR.ComptimeFailureOrigin {
+    return .{ .loc = null, .region = module.checked_bodies.expr(root.expr).source_region };
+}
+
+/// Whether a root failed at a compile-time value guard: it read another
+/// root's value and that root had failed. The failure is that root's, which
+/// already reported it, so the reading root records the failure without a
+/// second report.
+fn failedAtValueGuard(lir_result: *const lir.Program.Result, failed_stmt: ?lir.LIR.CFStmtId) bool {
+    const stmt = failed_stmt orelse return false;
+    for (lir_result.comptime_value_guards.items) |guard| {
+        if (guard.crash == stmt) return true;
+    }
+    return false;
 }
 
 fn finishLiteralConversionRootDetailed(
@@ -3338,9 +3390,14 @@ fn finishLiteralConversionRootDetailed(
         return .{
             .payload = .{ .const_node = try appendCrashConst(module, message) },
             .had_problem = true,
+            .rejected_message = message,
         };
     }
-    return .{ .payload = .{ .const_node = try appendCrashConst(module, message) }, .had_problem = false };
+    return .{
+        .payload = .{ .const_node = try appendCrashConst(module, message) },
+        .had_problem = false,
+        .rejected_message = message,
+    };
 }
 
 fn constTagValue(
@@ -3443,16 +3500,16 @@ fn evalCompileTimeRoot(
             error.OutOfMemory => return error.OutOfMemory,
             error.RuntimeError => {
                 const message = interpreter.getRuntimeErrorMessage() orelse "compile-time evaluation failed";
-                return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, message) } };
+                return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, lir_result, message) } };
             },
             error.ComptimeExhaustiveness => return .{ .failed = .{ .message = "compile-time exhaustiveness failure", .payload = try reportCompileTimeExhaustiveness(allocator, problem_store, owners, root_owner, module, root, lir_result, interpreter, proc) } },
             error.DivisionByZero => {
                 const message = interpreter.getRuntimeErrorMessage() orelse "Division by zero";
-                return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, message) } };
+                return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, lir_result, message) } };
             },
             error.Crash => {
                 const message = interpreter.getCrashMessage() orelse "Roc crashed";
-                return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, message) } };
+                return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, lir_result, message) } };
             },
             error.ExpectErr => finalizationInvariant("compile-time root reached an expect_err statement"),
             error.UnsupportedHostedFunction => finalizationInvariant("compile-time root reached an unsupported hosted function"),
@@ -3670,8 +3727,10 @@ fn reportCompileTimeCrash(
     module: *checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     interpreter: *const Interpreter,
+    lir_result: *const lir.Program.Result,
     message: []const u8,
 ) FinalizeError!checked.CompileTimeRootPayload {
+    if (failedAtValueGuard(lir_result, interpreter.getFailedCrashStmt())) return try failedRootPayload(module, root, message);
     const problem_store = maybe_problem_store orelse {
         finalizationInvariant("compile-time root crashed without a checking problem store");
     };

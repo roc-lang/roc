@@ -14268,8 +14268,8 @@ const ProcBodyBuilder = struct {
             .direct_closed, .direct_parametric => {},
             .direct_pending, .structural => boxyLowerInvariant("quote conversion had an invalid checked dispatch resolution"),
         }
-        const root = self.module.compile_time_roots.lookupNumeralRootByExpr(expr_id) orelse
-            boxyLowerInvariant("checked from_quote expression had no compile-time conversion root");
+        const root = self.module.compile_time_roots.root(self.module.checked_bodies.literalConversionRoot(expr_id) orelse
+            boxyLowerInvariant("checked from_quote expression had no compile-time conversion root"));
         return switch (root.payload) {
             .const_node => |node| try self.restoreConstNodeInto(
                 target,
@@ -14415,8 +14415,8 @@ const ProcBodyBuilder = struct {
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const root = self.module.compile_time_roots.lookupNumeralRootByExpr(expr_id) orelse
-            return try self.lowerNumFromNumeralInto(target, maybe_plan, next);
+        const root = self.module.compile_time_roots.root(self.module.checked_bodies.literalConversionRoot(expr_id) orelse
+            return try self.lowerNumFromNumeralInto(target, maybe_plan, next));
         return switch (root.payload) {
             .const_node => |node| try self.restoreConstNodeInto(
                 target,

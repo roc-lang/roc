@@ -8405,8 +8405,8 @@ test "custom literal field default gets an ordinary conversion root" {
     var numeral_roots: usize = 0;
     var quote_roots: usize = 0;
     for (resources.checked_artifact.checked_bodies.default_exprs.items) |entry| {
-        const conversion = resources.checked_artifact.compile_time_roots.lookupNumeralRootByExpr(entry.checked_expr) orelse
-            return error.TestUnexpectedResult;
+        const conversion = resources.checked_artifact.compile_time_roots.root(resources.checked_artifact.checked_bodies.literalConversionRoot(entry.checked_expr) orelse
+            return error.TestUnexpectedResult);
         switch (conversion.kind) {
             .numeral_conversion => numeral_roots += 1,
             .quote_conversion => quote_roots += 1,
