@@ -4499,29 +4499,50 @@ pub const InstGraph = struct {
     }
 
     /// Apply one checked required-access judgment to the field-kind cell and
-    /// return the inline value slot selected by that judgment.
+    /// return the inline value slot selected by that judgment. A checked
+    /// field access reads through any named backing its receiver specializes
+    /// to: the checker admits a named type into a record position only where
+    /// that type's backing is visible, so the access itself is the authority.
     pub fn requiredRecordFieldNode(self: *InstGraph, raw_record: NodeId, name: names.RecordFieldNameId) Allocator.Error!NodeId {
-        return self.requiredRecordFieldNodeWithAccess(raw_record, name, .inspectable, "required record field access");
+        const field = try self.recordFieldWithAccess(raw_record, name, .runtime_layout, "required record field access");
+        switch (field.kind) {
+            .sealed => {
+                if (field.value_ty != null) {
+                    Common.invariant("required access reached a sealed optional record field");
+                }
+            },
+            .required, .defaulted => {},
+            .optional => Common.invariant("required access reached an optional record field"),
+            .undetermined => |id| if (self.resolvedFieldKind(field.kind)) |resolved| switch (resolved) {
+                .required, .defaulted => {},
+                .optional => Common.invariant("required access resolved an optional record field kind"),
+            } else {
+                self.constrainUndeterminedFieldKind(id, .required);
+            },
+        }
+        const value = field.value_ty orelse field.ty;
+        try self.unify(field.ty, value);
+        return self.find(field.ty);
     }
 
-    /// Select a private backing field for
-    /// `CheckedFieldBackingAccess.opaque_definition_private`.
+    /// Select a backing field through a runtime-layout-only named backing
+    /// whose private fields the caller is the explicit producer of.
     pub fn opaqueDefinitionFieldNode(self: *InstGraph, raw_record: NodeId, name: names.RecordFieldNameId) Allocator.Error!NodeId {
         return self.recordFieldNodeWithAccess(raw_record, name, .runtime_layout, "opaque-definition-private record field access");
     }
 
-    pub fn requiredOpaqueDefinitionFieldNode(self: *InstGraph, raw_record: NodeId, name: names.RecordFieldNameId) Allocator.Error!NodeId {
-        return self.requiredRecordFieldNodeWithAccess(raw_record, name, .runtime_layout, "required opaque-definition-private record field access");
-    }
-
     /// Apply one checked optional-access judgment and return the distinct
     /// source-value/runtime-slot cells whose relationship the caller records.
+    /// Like `requiredRecordFieldNode`, the checked access is the authority to
+    /// read through any named backing its receiver specializes to.
     pub fn optionalRecordFieldNodes(self: *InstGraph, raw_record: NodeId, name: names.RecordFieldNameId) Allocator.Error!OptionalFieldAccessNodes {
-        return self.optionalRecordFieldNodesWithAccess(raw_record, name, .inspectable, "optional record field access");
-    }
-
-    pub fn optionalOpaqueDefinitionFieldNodes(self: *InstGraph, raw_record: NodeId, name: names.RecordFieldNameId) Allocator.Error!OptionalFieldAccessNodes {
-        return self.optionalRecordFieldNodesWithAccess(raw_record, name, .runtime_layout, "optional opaque-definition-private record field access");
+        const field = try self.recordFieldWithAccess(raw_record, name, .runtime_layout, "optional record field access");
+        _ = self.unifyFieldKinds(field.kind, field.default, .optional, null);
+        return .{
+            .slot = self.find(field.ty),
+            .value = self.find(field.value_ty orelse
+                Common.invariant("optional field access had no source value cell")),
+        };
     }
 
     /// Return one backing field cell while lowering a checked record
@@ -4654,50 +4675,6 @@ pub const InstGraph = struct {
             }
         }
         Common.invariant("instantiation " ++ noun ++ " requested an absent field");
-    }
-
-    fn requiredRecordFieldNodeWithAccess(
-        self: *InstGraph,
-        raw_record: NodeId,
-        name: names.RecordFieldNameId,
-        access: BackingAccess,
-        comptime noun: []const u8,
-    ) Allocator.Error!NodeId {
-        const field = try self.recordFieldWithAccess(raw_record, name, access, noun);
-        switch (field.kind) {
-            .sealed => {
-                if (field.value_ty != null) {
-                    Common.invariant("required access reached a sealed optional record field");
-                }
-            },
-            .required, .defaulted => {},
-            .optional => Common.invariant("required access reached an optional record field"),
-            .undetermined => |id| if (self.resolvedFieldKind(field.kind)) |resolved| switch (resolved) {
-                .required, .defaulted => {},
-                .optional => Common.invariant("required access resolved an optional record field kind"),
-            } else {
-                self.constrainUndeterminedFieldKind(id, .required);
-            },
-        }
-        const value = field.value_ty orelse field.ty;
-        try self.unify(field.ty, value);
-        return self.find(field.ty);
-    }
-
-    fn optionalRecordFieldNodesWithAccess(
-        self: *InstGraph,
-        raw_record: NodeId,
-        name: names.RecordFieldNameId,
-        access: BackingAccess,
-        comptime noun: []const u8,
-    ) Allocator.Error!OptionalFieldAccessNodes {
-        const field = try self.recordFieldWithAccess(raw_record, name, access, noun);
-        _ = self.unifyFieldKinds(field.kind, field.default, .optional, null);
-        return .{
-            .slot = self.find(field.ty),
-            .value = self.find(field.value_ty orelse
-                Common.invariant("optional field access had no source value cell")),
-        };
     }
 
     /// Read every field cell from a record-shaped live node without creating
