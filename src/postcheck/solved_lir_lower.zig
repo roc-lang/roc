@@ -746,6 +746,10 @@ const Lowerer = struct {
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
     type_layouts: collections.DenseMap(Type.TypeId, layout.Idx),
+    /// Recursive-graph digest the layout commit settled for each type whose
+    /// node was local to its graph. A layout graph reuses a cached child only
+    /// through this digest, so the child stays visible to recursion analysis.
+    type_layout_digests: collections.DenseMap(Type.TypeId, layout.GraphDigest),
     named_layout_index: std.HashMap(NamedRepresentationKey, std.ArrayList(Type.TypeId), NamedRepresentationKeyContext, std.hash_map.default_max_load_percentage),
     layout_owner_types: collections.DenseMap(Type.TypeId, Type.TypeId),
     const_plan_map: collections.DenseMap(Type.TypeId, LirProgram.ConstPlanId),
@@ -992,6 +996,7 @@ const Lowerer = struct {
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
             .type_layouts = collections.DenseMap(Type.TypeId, layout.Idx).init(allocator),
+            .type_layout_digests = collections.DenseMap(Type.TypeId, layout.GraphDigest).init(allocator),
             .named_layout_index = std.HashMap(NamedRepresentationKey, std.ArrayList(Type.TypeId), NamedRepresentationKeyContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
             .layout_owner_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(allocator),
             .const_plan_map = collections.DenseMap(Type.TypeId, LirProgram.ConstPlanId).init(allocator),
@@ -1120,6 +1125,7 @@ const Lowerer = struct {
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
         self.type_layouts.deinit();
+        self.type_layout_digests.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
@@ -1180,6 +1186,7 @@ const Lowerer = struct {
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
         self.type_layouts.deinit();
+        self.type_layout_digests.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
@@ -11720,6 +11727,7 @@ const Lowerer = struct {
         }
         if (try self.knownLayoutForEquivalentNamedType(ty)) |existing| {
             try self.rememberLayoutForType(ty, existing.layout_idx);
+            if (self.type_layout_digests.get(existing.ty)) |digest| try self.type_layout_digests.put(ty, digest);
             try self.layout_owner_types.put(ty, existing.ty);
             return existing.layout_idx;
         }
@@ -11762,6 +11770,13 @@ const Lowerer = struct {
             const mapped_node = local_nodes.get(local_ty) orelse
                 Common.invariant("local layout node key had no mapped node");
             try self.rememberLayoutForType(local_ty, commit.value_layouts[@intFromEnum(mapped_node)]);
+            if (commit.digests[@intFromEnum(mapped_node)]) |digest| {
+                if (self.type_layout_digests.get(local_ty)) |existing| {
+                    if (!std.mem.eql(u8, &existing, &digest)) Common.invariant("type layout digest changed across layout commits");
+                } else {
+                    try self.type_layout_digests.put(local_ty, digest);
+                }
+            }
         }
         return self.knownLayoutForType(ty) orelse commit.value_layouts[@intFromEnum(node)];
     }
@@ -11772,10 +11787,6 @@ const Lowerer = struct {
         local_nodes: *collections.DenseMap(Type.TypeId, layout.GraphNodeId),
 
         fn inputForType(self: *LayoutGraphBuilder, ty: Type.TypeId) Common.LowerError!layout.GraphInput {
-            // Expand the complete type graph, including already committed children.
-            // A cached layout is a leaf in commitGraph's analysis: substituting it
-            // here hides recursive paths and changes boxing for an unrolled copy
-            // of a previously committed node. commitGraph owns recursive interning.
             if (self.local_nodes.get(ty)) |node| return layout.localGraphInput(node);
 
             switch (self.lowerer.types.get(ty)) {
@@ -11786,6 +11797,21 @@ const Lowerer = struct {
                     if (builtinOwnerLayout(owner)) |layout_idx| return layout.committedGraphInput(layout_idx);
                 },
                 .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_fn => {},
+            }
+
+            // Reuse an already committed child only together with the digest
+            // its node settled to. A bare canonical ref would be an opaque
+            // leaf to commitGraph's analysis, hiding recursive paths and
+            // changing boxing for an unrolled copy of a committed recursive
+            // node; the committed leaf digests exactly like a re-expansion.
+            // A type committed without a digest resolved to a bare canonical
+            // ref, which expanding again reproduces directly.
+            if (self.lowerer.knownLayoutForType(ty)) |layout_idx| {
+                if (self.lowerer.type_layout_digests.get(ty)) |digest| {
+                    const node = try self.graph.addCommitted(self.lowerer.allocator, layout_idx, digest);
+                    try self.local_nodes.put(ty, node);
+                    return layout.localGraphInput(node);
+                }
             }
 
             switch (self.lowerer.types.get(ty)) {
