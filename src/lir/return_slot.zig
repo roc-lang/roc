@@ -127,13 +127,14 @@ const ReturnSlotPass = struct {
             try args.append(self.store.allocator, GuardedList.at(call_args, index));
         }
 
-        self.store.getCFStmtPtr(call_stmt_id).* = .{ .assign_call = .{
+        const slot_args = try self.store.addLocalSpan(args.items);
+        try self.store.replaceCFStmt(call_stmt_id, .{ .assign_call = .{
             .target = store_stmt.target,
             .proc = variant,
-            .args = try self.store.addLocalSpan(args.items),
+            .args = slot_args,
             .is_cold = call_stmt.is_cold,
             .next = store_stmt.next,
-        } };
+        } }, slotOrigin(self.store.stmtOrigin(call_stmt_id)));
 
         return true;
     }
@@ -189,6 +190,13 @@ const ReturnSlotPass = struct {
     }
 };
 
+/// Origin of a statement this pass produces in place of `rewritten`.
+fn slotOrigin(rewritten: LIR.StmtOrigin) LIR.StmtOrigin {
+    var origin = rewritten;
+    origin.kind = .return_slot;
+    return origin;
+}
+
 /// Return rewriter that stores each source return value into the caller's
 /// destination pointer, folding a direct struct or tag construction into a
 /// destination store so the aggregate is never built into a temporary first.
@@ -196,40 +204,41 @@ const ReturnSlotRewriter = struct {
     out_ptr: LocalId,
     store_unit: LocalId,
 
-    pub fn cloneRet(self: *ReturnSlotRewriter, cloner: anytype, value: LocalId) ResourceError!CFStmtId {
-        const ret_stmt = try cloner.store.addCFStmt(.{ .ret = .{ .value = self.store_unit } });
+    pub fn cloneRet(self: *ReturnSlotRewriter, cloner: anytype, value: LocalId, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
+        const slot = slotOrigin(origin);
+        const ret_stmt = try cloner.store.addCFStmt(.{ .ret = .{ .value = self.store_unit } }, slot);
         return try cloner.store.addCFStmt(.{ .assign_low_level = .{
             .target = self.store_unit,
             .op = .ptr_store,
             .rc_effect = LowLevelOp.ptr_store.rcEffect(),
             .args = try cloner.store.addLocalSpan(&.{ self.out_ptr, try cloner.mapLocal(value) }),
             .next = ret_stmt,
-        } });
+        } }, slot);
     }
 
-    pub fn interceptStmt(self: *ReturnSlotRewriter, cloner: anytype, _: CFStmtId, stmt: LIR.CFStmt) ResourceError!?CFStmtId {
+    pub fn interceptStmt(self: *ReturnSlotRewriter, cloner: anytype, _: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) ResourceError!?CFStmtId {
         if (stmt == .assign_struct) {
             const s = stmt.assign_struct;
-            if (cloner.directReturnOf(s.next, s.target)) return try self.cloneStructReturn(cloner, s);
+            if (cloner.directReturnOf(s.next, s.target)) return try self.cloneStructReturn(cloner, s, slotOrigin(origin));
         } else if (stmt == .assign_tag) {
             const s = stmt.assign_tag;
-            if (cloner.directReturnOf(s.next, s.target)) return try self.cloneTagReturn(cloner, s);
+            if (cloner.directReturnOf(s.next, s.target)) return try self.cloneTagReturn(cloner, s, slotOrigin(origin));
         }
         return null;
     }
 
-    fn cloneStructReturn(self: *ReturnSlotRewriter, cloner: anytype, s: anytype) ResourceError!CFStmtId {
-        const ret_stmt = try cloner.store.addCFStmt(.{ .ret = .{ .value = self.store_unit } });
+    fn cloneStructReturn(self: *ReturnSlotRewriter, cloner: anytype, s: anytype, slot: LIR.StmtOrigin) ResourceError!CFStmtId {
+        const ret_stmt = try cloner.store.addCFStmt(.{ .ret = .{ .value = self.store_unit } }, slot);
         return try cloner.store.addCFStmt(.{ .store_struct = .{
             .dest = self.out_ptr,
             .struct_layout = cloner.store.getLocal(s.target).layout_idx,
             .fields = try cloner.mapLocalSpan(s.fields),
             .next = ret_stmt,
-        } });
+        } }, slot);
     }
 
-    fn cloneTagReturn(self: *ReturnSlotRewriter, cloner: anytype, s: anytype) ResourceError!CFStmtId {
-        const ret_stmt = try cloner.store.addCFStmt(.{ .ret = .{ .value = self.store_unit } });
+    fn cloneTagReturn(self: *ReturnSlotRewriter, cloner: anytype, s: anytype, slot: LIR.StmtOrigin) ResourceError!CFStmtId {
+        const ret_stmt = try cloner.store.addCFStmt(.{ .ret = .{ .value = self.store_unit } }, slot);
         return try cloner.store.addCFStmt(.{ .store_tag = .{
             .dest = self.out_ptr,
             .tag_layout = cloner.store.getLocal(s.target).layout_idx,
@@ -237,7 +246,7 @@ const ReturnSlotRewriter = struct {
             .discriminant = s.discriminant,
             .payload = try cloner.mapMaybeLocal(s.payload),
             .next = ret_stmt,
-        } });
+        } }, slot);
     }
 };
 
@@ -252,7 +261,7 @@ fn testLowLevel(store: *LirStore, target: LocalId, op: LowLevelOp, args: []const
         .rc_effect = op.rcEffect(),
         .args = try store.addLocalSpan(args),
         .next = next,
-    } });
+    } }, .test_fixture);
 }
 
 fn testStructLayout(layouts: *layout_mod.Store) ResourceError!layout_mod.Idx {
@@ -265,12 +274,12 @@ fn testStructLayout(layouts: *layout_mod.Store) ResourceError!layout_mod.Idx {
 fn testAggregateCallee(store: *LirStore, result_layout: layout_mod.Idx) ResourceError!LIR.LirProcSpecId {
     const arg = try testLocal(store, .u64);
     const result = try testLocal(store, result_layout);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const assign = try store.addCFStmt(.{ .assign_struct = .{
         .target = result,
         .fields = try store.addLocalSpan(&.{ arg, arg }),
         .next = ret,
-    } });
+    } }, .test_fixture);
     return try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(6),
@@ -278,7 +287,7 @@ fn testAggregateCallee(store: *LirStore, result_layout: layout_mod.Idx) Resource
         .frame_locals = try store.addLocalSpan(&.{ arg, result }),
         .body = assign,
         .ret_layout = result_layout,
-    });
+    }, .none);
 }
 
 fn testTagLayout(layouts: *layout_mod.Store) ResourceError!layout_mod.Idx {
@@ -288,14 +297,14 @@ fn testTagLayout(layouts: *layout_mod.Store) ResourceError!layout_mod.Idx {
 fn testTagCallee(store: *LirStore, result_layout: layout_mod.Idx) ResourceError!LIR.LirProcSpecId {
     const arg = try testLocal(store, .u64);
     const result = try testLocal(store, result_layout);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const assign = try store.addCFStmt(.{ .assign_tag = .{
         .target = result,
         .variant_index = 0,
         .discriminant = 0,
         .payload = arg,
         .next = ret,
-    } });
+    } }, .test_fixture);
     return try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(5),
@@ -303,7 +312,7 @@ fn testTagCallee(store: *LirStore, result_layout: layout_mod.Idx) ResourceError!
         .frame_locals = try store.addLocalSpan(&.{ arg, result }),
         .body = assign,
         .ret_layout = result_layout,
-    });
+    }, .none);
 }
 
 test "return slot creates an explicit ptr-result variant for aggregate call stores" {
@@ -323,19 +332,19 @@ test "return slot creates an explicit ptr-result variant for aggregate call stor
     const temporary_alias = try testLocal(&store, aggregate);
     const store_unit = try testLocal(&store, .zst);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = store_unit } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = store_unit } }, .test_fixture);
     const ptr_store = try testLowLevel(&store, store_unit, .ptr_store, &.{ destination, temporary_alias }, ret);
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = temporary_alias,
         .op = .{ .local = temporary },
         .next = ptr_store,
-    } });
+    } }, .test_fixture);
     const call = try store.addCFStmt(.{ .assign_call = .{
         .target = temporary,
         .proc = callee,
         .args = try store.addLocalSpan(&.{arg}),
         .next = alias,
-    } });
+    } }, .test_fixture);
     const caller = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(4),
@@ -343,7 +352,7 @@ test "return slot creates an explicit ptr-result variant for aggregate call stor
         .frame_locals = try store.addLocalSpan(&.{ destination, arg, temporary, temporary_alias, store_unit }),
         .body = call,
         .ret_layout = .zst,
-    });
+    }, .none);
 
     try run(&store, &layouts);
 
@@ -394,14 +403,14 @@ test "return slot lowers direct tag return into destination store" {
     const temporary = try testLocal(&store, aggregate);
     const store_unit = try testLocal(&store, .zst);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = store_unit } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = store_unit } }, .test_fixture);
     const ptr_store = try testLowLevel(&store, store_unit, .ptr_store, &.{ destination, temporary }, ret);
     const call = try store.addCFStmt(.{ .assign_call = .{
         .target = temporary,
         .proc = callee,
         .args = try store.addLocalSpan(&.{arg}),
         .next = ptr_store,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(3),
@@ -409,7 +418,7 @@ test "return slot lowers direct tag return into destination store" {
         .frame_locals = try store.addLocalSpan(&.{ destination, arg, temporary, store_unit }),
         .body = call,
         .ret_layout = .zst,
-    });
+    }, .none);
 
     try run(&store, &layouts);
 
@@ -446,21 +455,21 @@ test "return slot shares one variant for identical proc and layout demands" {
     const store_unit_a = try testLocal(&store, .zst);
     const store_unit_b = try testLocal(&store, .zst);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = store_unit_b } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = store_unit_b } }, .test_fixture);
     const ptr_store_b = try testLowLevel(&store, store_unit_b, .ptr_store, &.{ destination_b, temporary_b }, ret);
     const call_b = try store.addCFStmt(.{ .assign_call = .{
         .target = temporary_b,
         .proc = callee,
         .args = try store.addLocalSpan(&.{arg}),
         .next = ptr_store_b,
-    } });
+    } }, .test_fixture);
     const ptr_store_a = try testLowLevel(&store, store_unit_a, .ptr_store, &.{ destination_a, temporary_a }, call_b);
     const call_a = try store.addCFStmt(.{ .assign_call = .{
         .target = temporary_a,
         .proc = callee,
         .args = try store.addLocalSpan(&.{arg}),
         .next = ptr_store_a,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(2),
@@ -468,7 +477,7 @@ test "return slot shares one variant for identical proc and layout demands" {
         .frame_locals = try store.addLocalSpan(&.{ destination_a, destination_b, arg, temporary_a, temporary_b, store_unit_a, store_unit_b }),
         .body = call_a,
         .ret_layout = .zst,
-    });
+    }, .none);
 
     const before_proc_count = store.procSpecCount();
     try run(&store, &layouts);
@@ -497,7 +506,7 @@ test "return slot does not fuse a multi-use stored call result" {
     const store_unit_a = try testLocal(&store, .zst);
     const store_unit_b = try testLocal(&store, .zst);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = store_unit_b } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = store_unit_b } }, .test_fixture);
     const ptr_store_b = try testLowLevel(&store, store_unit_b, .ptr_store, &.{ destination_b, temporary }, ret);
     const ptr_store_a = try testLowLevel(&store, store_unit_a, .ptr_store, &.{ destination_a, temporary }, ptr_store_b);
     const call = try store.addCFStmt(.{ .assign_call = .{
@@ -505,7 +514,7 @@ test "return slot does not fuse a multi-use stored call result" {
         .proc = callee,
         .args = try store.addLocalSpan(&.{arg}),
         .next = ptr_store_a,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
@@ -513,7 +522,7 @@ test "return slot does not fuse a multi-use stored call result" {
         .frame_locals = try store.addLocalSpan(&.{ destination_a, destination_b, arg, temporary, store_unit_a, store_unit_b }),
         .body = call,
         .ret_layout = .zst,
-    });
+    }, .none);
 
     const before_proc_count = store.procSpecCount();
     try run(&store, &layouts);

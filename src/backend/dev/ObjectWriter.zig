@@ -1224,9 +1224,10 @@ fn exerciseBorrowedObjectSections(allocator: Allocator) (Allocator.Error || erro
             try std.testing.expectEqual(@as(usize, 1), (try coffSectionData(output.items, ".debug_abbrev")).len);
         }
         if (target.toOsTag() == .macos) {
+            // Mach-O keeps references between debug sections section-relative.
             const info = try machoSection(output.items, "__debug_info");
-            try std.testing.expectEqual(@as(u32, code.len + data.len + debug_line.len + 1), std.mem.readInt(u32, info[0..4], .little));
-            try std.testing.expectEqual(@as(u64, code.len + data.len + 2), std.mem.readInt(u64, info[8..16], .little));
+            try std.testing.expectEqual(@as(u32, 1), std.mem.readInt(u32, info[0..4], .little));
+            try std.testing.expectEqual(@as(u64, 2), std.mem.readInt(u64, info[8..16], .little));
         }
     }
 }
