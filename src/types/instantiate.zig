@@ -69,6 +69,60 @@ pub const AdapterReachPosition = enum {
     /// Every other position: inside a `List`, a record field, a tuple, a tag
     /// payload, a function, or a non-`Try` nominal.
     nested,
+
+    /// One edge from a type to a child position. `step` is the single
+    /// grammar of the result spine: the instantiator's frames and the
+    /// declaration-time spine walk (`Check.aliasSpineEnd`) both step through
+    /// it, so the two cannot drift.
+    pub const Edge = enum {
+        /// An alias's backing: the alias is transparent.
+        alias_backing,
+        /// A function's return.
+        func_return,
+        /// The ERROR argument of the builtin `Try(ok, err)`.
+        try_error_arg,
+        /// A tag union's extension: the position a polarity marker occupies.
+        tag_ext,
+        /// Every other child: a function argument or effect dependency, a
+        /// `Try`'s ok argument, any other nominal argument, an alias
+        /// argument, a tag payload, a record field or extension, a tuple
+        /// element, a static-dispatch constraint.
+        other,
+    };
+
+    /// The reach of the child `edge` leads to from a position at `self`.
+    pub fn step(self: AdapterReachPosition, edge: Edge) AdapterReachPosition {
+        return switch (edge) {
+            .alias_backing, .tag_ext => self,
+            // The signature's OWN function puts its direct result within the
+            // adapter's reach; a function anywhere deeper does not.
+            .func_return => switch (self) {
+                .signature => .result,
+                .result, .try_row, .value_try_row, .nested => .nested,
+            },
+            // A `Try` written as the direct result passes the adapter's reach
+            // to its ERROR row; a `Try` standing as the whole signature is a
+            // bare value's type, whose error row is `.value_try_row`. A `Try`
+            // standing IN another `Try`'s error row passes nothing on: the
+            // relation re-tags that row and relates everything below it
+            // EXACTLY (`resultRowWideningOrNull`), so a second descent would
+            // open a row lowering will not adapt.
+            .try_error_arg => switch (self) {
+                .result => .try_row,
+                .signature => .value_try_row,
+                .try_row, .value_try_row, .nested => .nested,
+            },
+            .other => .nested,
+        };
+    }
+
+    /// Whether a position at this reach is on the result spine.
+    pub fn onSpine(self: AdapterReachPosition) bool {
+        return switch (self) {
+            .signature, .result, .try_row, .value_try_row => true,
+            .nested => false,
+        };
+    }
 };
 
 /// The explicit declaration-backed opening operation (issue #9983): make a
@@ -1427,7 +1481,7 @@ pub const Instantiator = struct {
                 const backing_var = self.store.getAliasBackingVar(frame.alias);
                 // An alias is transparent: its backing occupies the same
                 // position the alias reference does.
-                self.current_reach = frame.saved_reach;
+                self.current_reach = frame.saved_reach.step(.alias_backing);
                 if (!try self.requestVar(backing_var, false)) return false;
                 continue;
             }
@@ -1504,35 +1558,12 @@ pub const Instantiator = struct {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < frame.args_count) {
                 const arg_var = self.store.vars.items.items[frame.args_start + arrived];
-                // A `Try` written as the direct result passes the adapter's
-                // reach to its ERROR row. The ok row is deliberately NOT
-                // reachable: the adapter asserts the ok type is unchanged.
-                const try_error_row_reachable = frame.is_try and
-                    arrived == try_error_type_arg_index and
-                    switch (frame.saved_reach) {
-                        // The signature's direct result: the adapter re-tags
-                        // this `Try`'s error row.
-                        .result => true,
-                        // A `Try` standing as the whole signature is a bare
-                        // value's type: its error row is `.value_try_row`
-                        // (below), exactly as the checker's inline walk
-                        // re-aims it.
-                        .signature => true,
-                        // A `Try` standing IN another `Try`'s error row. The
-                        // relation re-tags that row and relates everything
-                        // below it EXACTLY (`resultRowWideningOrNull`,
-                        // src/postcheck/monotype/lower.zig:1806-1812), so a
-                        // second descent would open a row lowering will not
-                        // adapt.
-                        .try_row, .value_try_row => false,
-                        .nested => false,
-                    };
-                self.current_reach = if (!try_error_row_reachable)
-                    .nested
-                else if (frame.saved_reach == .signature)
-                    .value_try_row
-                else
-                    .try_row;
+                // A `Try` passes the adapter's reach to its ERROR row
+                // (`AdapterReachPosition.step`). The ok row is deliberately
+                // NOT reachable: the adapter asserts the ok type is unchanged.
+                self.current_reach = frame.saved_reach.step(
+                    if (frame.is_try and arrived == try_error_type_arg_index) .try_error_arg else .other,
+                );
                 if (!try self.requestVar(arg_var, false)) return false;
                 continue;
             }
@@ -1571,10 +1602,7 @@ pub const Instantiator = struct {
                 self.current_polarity = frame.saved_polarity;
                 // The signature's OWN function puts its direct result within
                 // the adapter's reach; a function anywhere deeper does not.
-                self.current_reach = switch (frame.saved_reach) {
-                    .signature => .result,
-                    .result, .try_row, .value_try_row, .nested => .nested,
-                };
+                self.current_reach = frame.saved_reach.step(.func_return);
                 if (!try self.requestVar(frame.func.ret, false)) return false;
                 continue;
             }
@@ -1703,7 +1731,7 @@ pub const Instantiator = struct {
                         frame.stage = .await_ext;
                         // The ext is the position a polarity marker occupies,
                         // so it keeps this union's own reach.
-                        self.current_reach = frame.saved_reach;
+                        self.current_reach = frame.saved_reach.step(.tag_ext);
                         if (!try self.requestVar(frame.ext, false)) return false;
                         continue;
                     }
