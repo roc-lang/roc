@@ -4793,7 +4793,7 @@ const Lowerer = struct {
     fn comptimeRootAccessorIdentity(self: *Lowerer, root: Common.ComptimeValueRoot, ty: Type.TypeId, layout_idx: layout.Idx) std.mem.Allocator.Error!LIR.ProcIdentity {
         var digests = try layout.Digests.init(self.allocator, &self.result.layouts);
         defer digests.deinit();
-        const representation = try self.types.contentDigest(&self.solved.lifted.names, ty, .{ .context = self, .digest = callableSourceDigest });
+        const representation = try self.types.contentDigest(&self.solved.lifted.names, ty, .{ .context = self, .identity = callableTargetIdentity });
         var hasher = base.TypeDigestHasher.init();
         hasher.update("roc.proc.comptime-root-accessor.v2");
         hasher.update(&root.module.bytes);
@@ -4804,13 +4804,10 @@ const Lowerer = struct {
         return .{ .bytes = hasher.finalResult() };
     }
 
-    /// The content digest of the lifted function a callable variant names.
-    fn callableSourceDigest(context: *const anyopaque, source: Common.Symbol) proc_identity.Identity {
-        const self: *const Lowerer = @ptrCast(@alignCast(context));
-        const fn_id = self.source_symbols.get(source) orelse
-            Common.invariant("callable variant named a symbol with no lifted function");
-        return self.source_digests[@intFromEnum(fn_id)] orelse
-            Common.invariant("callable variant named a lifted function with no content identity");
+    /// The content identity of the specialization a callable variant targets.
+    fn callableTargetIdentity(context: *anyopaque, target: Type.FnId) std.mem.Allocator.Error!proc_identity.Identity {
+        const self: *Lowerer = @ptrCast(@alignCast(context));
+        return (try self.specIdentity(self.fn_specs.items[@intFromEnum(target)])).bytes;
     }
 
     fn lowerStaticDataCandidateInto(
