@@ -2656,7 +2656,7 @@ pub const tests = [_]TestCase{
         \\    Str.join_with([show(I128.from_str_prefix("170141183460469231731687303715884105727?")), show(I128.from_str_prefix("-170141183460469231731687303715884105728?")), show(I128.from_str_prefix("170141183460469231731687303715884105728")), show(I128.from_str_prefix("2e-1"))], ",")
         \\}
         ,
-        .expected = .{ .inspect_str = "\"170141183460469231731687303715884105727|?,-170141183460469231731687303715884105728|?,OutOfRange,2|e-1\"" },
+        .expected = .{ .inspect_str = "\"170141183460469231731687303715884105727|?,-170141183460469231731687303715884105728|?,OutOfRange,OutOfRange\"" },
     },
     .{
         .name = "low_level - I128.from_utf8_prefix matches from_str_prefix",
@@ -2823,6 +2823,61 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "(True, 65)" },
+    },
+    .{
+        .name = "low_level - from_str_prefix on runtime-built small and heap strings",
+        .source =
+        \\{
+        \\    tail = Str.repeat("z", 30)
+        \\    run = |s| match U32.from_str_prefix(s) {
+        \\        Ok({ value, rest }) => U32.to_str(value).concat("|").concat(U64.to_str(Str.count_utf8_bytes(Str.concat(rest, rest))))
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\    small = List.map(["7", "4294967296", "x", "12"], |p| Str.concat(p, ","))
+        \\    heap = List.map(["88", "abc", "99999999999"], |p| Str.concat(p, tail))
+        \\    Str.join_with(List.map(List.concat(small, heap), run), ";")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"7|2;OutOfRange;NotANumber;12|2;88|60;NotANumber;OutOfRange\"" },
+    },
+    .{
+        .name = "low_level - from_utf8_prefix on runtime-built small and heap lists",
+        .source =
+        \\{
+        \\    tail = List.repeat(0xFF, 30)
+        \\    run = |bytes| match I16.from_utf8_prefix(bytes) {
+        \\        Ok({ value, rest }) => I16.to_str(value).concat("|").concat(U64.to_str(List.len(List.concat(rest, rest))))
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\    small = List.map(["-5", "40000", "-"], |p| List.append(Str.to_utf8(p), 0xC3))
+        \\    heap = List.map(["321", "q"], |p| List.concat(Str.to_utf8(p), tail))
+        \\    Str.join_with(List.map(List.concat(small, heap), run), ";")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"-5|2;OutOfRange;NotANumber;321|60;NotANumber\"" },
+    },
+    .{
+        .name = "low_level - F64 and Dec prefix parse on runtime-built heap inputs",
+        .source =
+        \\{
+        \\    tail = Str.repeat(" tail", 8)
+        \\    f = |s| match F64.from_str_prefix(s) {
+        \\        Ok({ value, rest }) => F64.to_str(value).concat("|").concat(U64.to_str(Str.count_utf8_bytes(rest)))
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\    d = |s| match Dec.from_utf8_prefix(Str.to_utf8(s)) {
+        \\        Ok({ value, rest }) => Dec.to_str(value).concat("|").concat(U64.to_str(List.len(rest)))
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\    inputs = List.map(["2.5", "1e400", "nope"], |p| Str.concat(p, tail))
+        \\    Str.join_with(List.concat(List.map(inputs, f), List.map(inputs, d)), ";")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"2.5|40;OutOfRange;NotANumber;2.5|40;OutOfRange;NotANumber\"" },
     },
     .{
         .name = "low_level - exact from_str accepts exponent notation issue 10550",

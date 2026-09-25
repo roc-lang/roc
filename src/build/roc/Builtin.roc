@@ -7079,7 +7079,7 @@ Builtin :: [].{
 			##
 			## The number is the longest prefix that matches the grammar [U8.from_str]
 			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
-			## decimal digits with an optional non-negative exponent (`2e5`). Digits may be
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
 			## separated by single underscores. A `.` is never part of an integer, so
 			## `"1.2.3"` parses `1` and leaves `".2.3"`.
 			##
@@ -7945,7 +7945,7 @@ Builtin :: [].{
 			##
 			## The number is the longest prefix that matches the grammar [I8.from_str]
 			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
-			## decimal digits with an optional non-negative exponent (`2e5`). Digits may be
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
 			## separated by single underscores. A `.` is never part of an integer, so
 			## `"1.2.3"` parses `1` and leaves `".2.3"`.
 			##
@@ -8744,7 +8744,7 @@ Builtin :: [].{
 			##
 			## The number is the longest prefix that matches the grammar [U16.from_str]
 			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
-			## decimal digits with an optional non-negative exponent (`2e5`). Digits may be
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
 			## separated by single underscores. A `.` is never part of an integer, so
 			## `"1.2.3"` parses `1` and leaves `".2.3"`.
 			##
@@ -9603,7 +9603,7 @@ Builtin :: [].{
 			##
 			## The number is the longest prefix that matches the grammar [I16.from_str]
 			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
-			## decimal digits with an optional non-negative exponent (`2e5`). Digits may be
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
 			## separated by single underscores. A `.` is never part of an integer, so
 			## `"1.2.3"` parses `1` and leaves `".2.3"`.
 			##
@@ -10417,7 +10417,7 @@ Builtin :: [].{
 			##
 			## The number is the longest prefix that matches the grammar [U32.from_str]
 			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
-			## decimal digits with an optional non-negative exponent (`2e5`). Digits may be
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
 			## separated by single underscores. A `.` is never part of an integer, so
 			## `"1.2.3"` parses `1` and leaves `".2.3"`.
 			##
@@ -11308,7 +11308,7 @@ Builtin :: [].{
 			##
 			## The number is the longest prefix that matches the grammar [I32.from_str]
 			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
-			## decimal digits with an optional non-negative exponent (`2e5`). Digits may be
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
 			## separated by single underscores. A `.` is never part of an integer, so
 			## `"1.2.3"` parses `1` and leaves `".2.3"`.
 			##
@@ -12166,7 +12166,7 @@ Builtin :: [].{
 			##
 			## The number is the longest prefix that matches the grammar [U64.from_str]
 			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
-			## decimal digits with an optional non-negative exponent (`2e5`). Digits may be
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
 			## separated by single underscores. A `.` is never part of an integer, so
 			## `"1.2.3"` parses `1` and leaves `".2.3"`.
 			##
@@ -13100,7 +13100,7 @@ Builtin :: [].{
 			##
 			## The number is the longest prefix that matches the grammar [I64.from_str]
 			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
-			## decimal digits with an optional non-negative exponent (`2e5`). Digits may be
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
 			## separated by single underscores. A `.` is never part of an integer, so
 			## `"1.2.3"` parses `1` and leaves `".2.3"`.
 			##
@@ -13956,7 +13956,7 @@ Builtin :: [].{
 			##
 			## The number is the longest prefix that matches the grammar [U128.from_str]
 			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
-			## decimal digits with an optional non-negative exponent (`2e5`). Digits may be
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
 			## separated by single underscores. A `.` is never part of an integer, so
 			## `"1.2.3"` parses `1` and leaves `".2.3"`.
 			##
@@ -14930,7 +14930,7 @@ Builtin :: [].{
 			##
 			## The number is the longest prefix that matches the grammar [I128.from_str]
 			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
-			## decimal digits with an optional non-negative exponent (`2e5`). Digits may be
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
 			## separated by single underscores. A `.` is never part of an integer, so
 			## `"1.2.3"` parses `1` and leaves `".2.3"`.
 			##
