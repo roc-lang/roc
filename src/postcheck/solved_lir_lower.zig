@@ -2878,7 +2878,7 @@ const Lowerer = struct {
         if (try self.captureBindingForLocal(local)) |capture| {
             return try self.lowerCaptureBindingInto(target, capture, next);
         }
-        const source = try self.bindUnboundLocalForTarget(local, ty, target);
+        const source = try self.bindUnboundLocal(local);
         const source_ty = try self.lowerLocalTy(local);
         try self.noteReturnForwardingLocal(target, source);
         return try self.assignTypedBoundary(target, ty, source, source_ty, next);
@@ -10072,13 +10072,12 @@ const Lowerer = struct {
         return lir_local;
     }
 
-    fn bindUnboundLocalForTarget(
+    fn bindUnboundLocal(
         self: *Lowerer,
         local: Lifted.LocalId,
-        ty: Type.TypeId,
-        target: LIR.LocalId,
     ) Common.LowerError!LIR.LocalId {
         if (self.local_map.contains(local)) Common.invariant("unbound local destination was already bound");
+        const ty = try self.lowerLocalTy(local);
 
         // Recursive values have an explicit slot representation selected before
         // ordinary value lowering. A backwards-built lookup must reserve that
@@ -10091,12 +10090,10 @@ const Lowerer = struct {
             return binding.slot;
         }
 
-        // LIR chains are built backwards, so the first use can reach an
-        // unbound local before its producer. Preserve that use's committed
-        // destination layout in a distinct local; direct let lowering later
-        // writes the producer into this exact slot.
-        const target_layout = self.result.store.getLocal(target).layout_idx;
-        const source = try self.addLocalForLayout(target_layout);
+        // LIR chains are built backwards, so a use can precede its producer.
+        // Reserve the producer's solved representation; the use's destination
+        // may have a different row and is converted at its typed boundary.
+        const source = try self.addTemp(ty);
         try self.local_map.put(local, source);
         try self.typed_local_map.put(.{ .local = local, .ty = ty }, source);
         try self.local_types.put(source, ty);
@@ -10257,7 +10254,11 @@ const Lowerer = struct {
             return try self.result.store.addCFStmt(.{ .runtime_error = {} });
         }
         if (target == source) return next;
-        if (try self.maybeAssignDirectLayoutBoundary(target, source, next)) |stmt| return stmt;
+        var equivalent_pairs = std.AutoHashMap(u64, void).init(self.allocator);
+        defer equivalent_pairs.deinit();
+        if (try self.representationTypesEquivalent(target_ty, source_ty, &equivalent_pairs)) {
+            if (try self.maybeAssignDirectLayoutBoundary(target, source, next)) |stmt| return stmt;
+        }
 
         const target_runtime_ty = self.runtimeBackingType(target_ty);
         if (target_runtime_ty != target_ty or source_runtime_ty != source_ty) {

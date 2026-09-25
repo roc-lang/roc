@@ -1245,7 +1245,11 @@ const Solver = struct {
 
         const expr = self.lifted.exprs[index];
         const tag = std.meta.activeTag(expr.data);
-        const ty = if (tag == .local)
+        // Terminal expressions produce no value, including checked-error
+        // crashes whose source annotation need not match the enclosing return.
+        const ty = if (tag == .crash or tag == .comptime_exhaustiveness_failed or tag == .@"unreachable")
+            try self.program.types.add(.{ .tag_union = .empty() })
+        else if (tag == .local)
             self.localTy(expr.data.local)
         else if (tag == .fn_ref)
             self.program.fn_tys.items[@intFromEnum(expr.data.fn_ref.fn_id)]

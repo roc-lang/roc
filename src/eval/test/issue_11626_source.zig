@@ -1,5 +1,6 @@
 //! Shared regression source for polymorphic `?` return boundaries.
 
+/// Shared callees returned through distinct polymorphic error rows.
 pub const source =
     \\find = |text, what| if text == "" Err(NotFound(what)) else Ok(text)
     \\respond = |text| Ok(text)

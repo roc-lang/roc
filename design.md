@@ -11718,6 +11718,18 @@ source row contributes no payload flow. In particular, returning one shared
 function's error row into that callee. LIR consumes the retained source and
 destination types at the explicit return boundary.
 
+A terminal crash, failed compile-time exhaustiveness marker, or unreachable
+marker produces no value. When inferred without an expected slot, Lambda
+Solved assigns it an empty row rather than importing its source annotation.
+In particular, a checked-error crash contributes no return payload flow even
+when its retired source expression had a different type from the function.
+
+When backwards LIR construction first reaches a local through a return use,
+it reserves storage at that local's solved producer type. The destination row
+does not determine the producer's storage. Typed boundaries may copy matching
+layouts directly only when the source and destination representation types
+also agree: identical byte layouts do not prove identical tag encodings.
+
 Expression inference uses an explicit, reusable continuation stack. A suspended
 block owns one statement cursor, and a suspended match owns its branch and
 binding cursors; sequence length never becomes native call-stack depth. Child
