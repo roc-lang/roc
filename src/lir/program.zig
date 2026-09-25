@@ -349,6 +349,8 @@ pub const BoxyMethodAdapter = struct {
 
 /// Origin of a hidden descriptor argument passed to a dictionary method.
 pub const BoxyMethodHiddenDescSource = union(enum) {
+    /// Index into the slot's `hidden_descs`; for a descriptor-carried inspect
+    /// method, into the inspected descriptor's `inspect_hidden_descs`.
     slot: u32,
     call: u32,
     argument: u32,

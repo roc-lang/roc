@@ -950,6 +950,9 @@ names the merged variables. Both arms remain visible through lifting and lambda
 solving, including callable identities stored in compile-time results. The
 consumer input is opaque to value folding until target LIR lowering supplies the
 configured run/omit Boolean. No specialization is repeated.
+Run-only lowering uses the same explicit state-result binding without the
+consumer branch; it must not lower a mutating condition as an isolated Boolean
+whose state updates are lost to the enclosing continuation.
 
 Monotype lowering, lifting, SpecConstr, lambda solving, and inline analysis
 run once over the union of the compilation's compile-time and runtime root
@@ -2971,16 +2974,21 @@ are pinned at the group's boundary rank so no inner lambda can generalize
 them first. At the group's generalization boundary—a singleton def's RHS
 frame or a recursive group's shared frame, where no mid-body state is pending—
 the driver checks each target's group in its own nested frame (together
-with any unchecked topological prefix), re-runs dispatch, and interleaves
-boundary literal defaulting to a fixpoint before generalizing. Group checks
-nest only at such boundaries. Ownership of a waiting target constraint is
+with the unchecked groups it transitively name-depends on, and no other
+group), re-runs dispatch, and interleaves boundary literal defaulting to a
+fixpoint before generalizing. Group checks nest only at such boundaries. A
+group the target does not name-depend on is never checked early: nested
+inside the requesting frame, its use of that frame's still in-flight def
+would merge with the def's live vars instead of instantiating its finished
+scheme. The driver reaches such a group in its own turn, after that def
+generalizes. Ownership of a waiting target constraint is
 decided by its pinned callable relation: every active frame's drain re-sees
 the waiting constraint, and only a frame whose boundary rank the relation's
 callable var still sits at records the target—a relation pinned by an
 enclosing frame is generalization-safe in every nested frame, and re-recording
-it there would check the target's topological prefix inside the nested frame,
-where a prefix group can name that frame's still in-flight def and merge with
-it monomorphically instead of instantiating its finished scheme. The outermost
+it there would check the target's unchecked name dependencies inside the
+nested frame, where a dependency group can name that frame's still in-flight
+def and merge with it monomorphically instead of instantiating its finished scheme. The outermost
 active frame owns every remaining waiting constraint.
 
 The same nesting discipline governs a waiting constraint whose target is in
@@ -9271,7 +9279,10 @@ the operations needed for a value representation:
 - optional structural operation entries such as equality and hashing
 - an optional planned `to_inspect` method slot for a nominal identity that can
   reach the generic `Str.inspect` intrinsic; this narrow method entry preserves
-  nominal inspection after the value has been erased
+  nominal inspection after the value has been erased. The slot is shared by
+  every instantiation of the owning nominal, so the descriptor also carries its
+  own instantiation's descriptors for that call: the adapted receiver argument
+  and the worker's hidden descriptors
 
 The exact field order and encoding of `TypeDesc` is LIR-owned static data.
 Every descriptor has an explicit id in the lowered program. Backends and the
@@ -10049,12 +10060,27 @@ identity. Shared backing witnesses can connect distinct declarations in the live
 graph; capture partitions those groups by the declaration checks used by nominal
 identity queries so replay never asserts equality between distinct declarations.
 Imported finished-type witnesses remain finished after replay, preserving the prohibition
-on rewriting a finalized representation. Settled
+on rewriting a finalized representation. Import and summary replay register each
+witness on its singleton cell before relating it. Each union class stores its
+first finished witness, or explicit absence. Because union concatenates the
+winner's permanent-member list before the loser's, it retains the winner's
+witness when present and otherwise takes the loser's. Capture and finished-type
+containment read this class column without traversing historical aliases.
+The original-node witness map remains separate: a read of a particular imported
+occurrence still returns that occurrence's exact type. Registration does not
+attach witnesses retrospectively to already joined cells. Permanent-member
+history remains intact for recursive argument snapshots and alias indexes. Settled
 structure without mutable field-presence or representation evidence is interned
 directly as Monotype content, without retaining intermediate active snapshots.
 This capture does not finalize the surrounding graph or apply variable defaults.
 Settled leaves retain only their interned identities; storage for open structure
 and producer evidence is proportional to the open portion of the interface.
+Recursive-slot and forced-dynamic membership are explicit bits on each
+instantiation union-find class. Marking resolves the current representative;
+unions OR both classes' bits into the winner. Capture, shareability, interface
+identity, and iterator finalization read that class metadata directly, never
+scan graph-wide inventories. Summary replay marks its newly instantiated cells
+before relating them. Unrelated marked classes impose no work on capture.
 Open constraints use local indices, never graph identities
 or defaulted Monotype views. Expansion
 uses an independent instantiation of the inputs so incidental caller state
@@ -10642,6 +10668,22 @@ from the loop body supplies exactly one value for every loop parameter, in the
 same order and with the same types. Loops with no carried state use empty spans.
 `break_` carries the loop result when the loop is value-producing and carries no
 expression when the loop result is unit/control-only.
+
+Source `for` expressions and statements share one state-carrying lowering
+contract, which condition loops (`while`, infinite, and breakable loops) also
+follow. Checked output records every loop's mutation identities once, with
+disjoint ranges for mutations outside `expect` and mutations occurring only in
+`expect` conditions. A `for` plan covers its body; a condition loop's plan also
+covers its condition, which runs on every iteration. Recording follows
+resolved assignment identities and explicit dispatch operands, excludes nested
+function bodies, and reuses nested loop summaries. A loop-only table holds these
+compact ranges into the checked binder pool; loops reference it by ID without
+widening unrelated expression payloads. Both the table and pool survive
+serialization. Post-check lowering never rediscovers a loop's mutations.
+Only binders in scope at loop entry become carried state. Every iteration and
+exit transports that state explicitly. An expression-form loop produces unit
+after binding its exit state, and enclosing branch results must be constructed
+inside the scope of those bindings. Discarding unit never discards mutations.
 
 Monotype normally preserves source control structure, but compiler-generated
 algorithms may introduce typed `join_point` and `jump` expressions when their
@@ -12755,8 +12797,16 @@ demanded nominal or SIMD representation records its exact `to_inspect` worker,
 owning checked module, and module-local `MethodNameId`. Descriptor construction consumes that identity
 directly; it does not rediscover a method from the representation's source
 module. It turns the plan into a method slot carrying the worker procedure,
-concrete argument layout and descriptor, hidden descriptor sources, and nested
-dictionaries. Transparent nominals may share their backing storage layout, but
+receiver argument layout, hidden descriptor sources, and nested dictionaries.
+The receiver's descriptor and the hidden descriptors depend on the inspected
+instantiation, so the inspected descriptor carries them
+(`inspect_arg_descs`, `inspect_hidden_descs`). The override's receiver is its
+owning nominal applied to the method's own type variables (see Inspect
+Overrides), so each variable is bound to the described nominal's type argument
+at the same position: a static descriptor binds it in its instantiation
+context, and a descriptor template binds it as an exact representation, so a
+generic value's inspect call reads the descriptors the template captured.
+Transparent nominals may share their backing storage layout, but
 they retain a distinct checked descriptor identity when they carry an inspect
 method. Nested vector values retain descriptors even though they contain no
 reference-counted data: their inspection method is part of the descriptor

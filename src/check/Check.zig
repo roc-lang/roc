@@ -413,11 +413,20 @@ canonical_key_writer: canonical_type_keys.TypeWriter,
 /// Checking order for the current module's top-level defs. Owned; freed in
 /// `deinit`. Transient: computed when file checking starts, never part of
 /// the checked module.
-check_order: ?DependencyGraph.EvaluationOrder = null,
+check_order: ?DependencyGraph.CheckOrder = null,
 /// Which check-order group each top-level def belongs to.
 def_group: std.ArrayListUnmanaged(u32) = .empty,
 /// Per-group progress; a `.checking` group has a frame on `group_stack`.
 group_states: std.ArrayListUnmanaged(GroupState) = .empty,
+/// Scratch for `ensureGroupCheckedWithDependencies`: the walk's worklist, and
+/// the membership set of the groups it has collected. Both are empty between
+/// walks; a walk never nests inside another walk.
+group_dependency_walk: std.ArrayListUnmanaged(u32) = .empty,
+group_dependency_collected: std.DynamicBitSetUnmanaged = .{},
+/// The unchecked groups each active `ensureGroupCheckedWithDependencies` call
+/// checks, in ascending group order. A nested call appends its own groups
+/// above its caller's and truncates back to them before returning.
+group_dependency_checks: std.ArrayListUnmanaged(u32) = .empty,
 /// Groups currently being checked, outermost first. Nesting happens only at
 /// group generalization boundaries (Invariant E): a dispatch obligation whose
 /// target group is unchecked suspends the current group at its boundary,
@@ -2869,6 +2878,9 @@ pub fn deinit(self: *Self) void {
     if (self.check_order) |*order| order.deinit();
     self.def_group.deinit(self.gpa);
     self.group_states.deinit(self.gpa);
+    self.group_dependency_walk.deinit(self.gpa);
+    self.group_dependency_collected.deinit(self.gpa);
+    self.group_dependency_checks.deinit(self.gpa);
     self.group_stack.deinit(self.gpa);
     self.pending_dispatch_targets.deinit(self.gpa);
     self.pending_predeclared_scheme_uses.deinit(self.gpa);
@@ -14189,6 +14201,7 @@ fn setupCheckOrder(self: *Self) std.mem.Allocator.Error!void {
     self.check_order = try DependencyGraph.computeCheckOrder(self.cir, self.cir.all_defs, self.gpa);
     const sccs = self.check_order.?.sccs;
     try self.group_states.appendNTimes(self.gpa, .pending, sccs.len);
+    try self.group_dependency_collected.resize(self.gpa, sccs.len, false);
     for (sccs, 0..) |scc, group_index| {
         for (scc.defs) |def_idx| {
             self.setDefGroupIndex(def_idx, @intCast(group_index));
@@ -14666,14 +14679,54 @@ fn defInCurrentRecursiveGroup(self: *const Self, def_idx: CIR.Def.Idx) bool {
     return group_index == frame.group_index;
 }
 
-fn ensureGroupsCheckedUpTo(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!void {
-    // Groups are in topological order, so every group this one name-depends on
-    // has a smaller index. Checking the whole prefix keeps nested checking
-    // deterministic and guarantees the target group's name dependencies are in
-    // place before its bodies run.
-    var gi: u32 = 0;
-    while (gi <= group_index) : (gi += 1) {
-        try self.ensureGroupChecked(gi, env);
+/// Check `group_index` together with every unchecked group it transitively
+/// name-depends on, in ascending group order, so each group's name
+/// dependencies are in place before its bodies run. No other group is
+/// checked: an unrelated group checked here would run nested inside the
+/// requesting frame, where a use of that frame's still in-flight def links to
+/// its live vars instead of instantiating its finished scheme.
+///
+/// The walk stops at groups that are already checked or being checked; a
+/// group enters `.checking` only after all of its name dependencies are
+/// checked. Each group is collected by at most one walk, so all walks
+/// together visit every group and dependency edge once.
+fn ensureGroupCheckedWithDependencies(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!void {
+    if (self.group_states.items[group_index] != .pending) {
+        try self.ensureGroupChecked(group_index, env);
+        return;
+    }
+
+    const order = &self.check_order.?;
+    const checks_base = self.group_dependency_checks.items.len;
+    defer self.group_dependency_checks.shrinkRetainingCapacity(checks_base);
+
+    std.debug.assert(self.group_dependency_walk.items.len == 0);
+    try self.group_dependency_walk.append(self.gpa, group_index);
+    self.group_dependency_collected.set(group_index);
+    while (self.group_dependency_walk.pop()) |walk_group| {
+        try self.group_dependency_checks.append(self.gpa, walk_group);
+        for (order.dependenciesOf(walk_group)) |dependency| {
+            if (self.group_states.items[dependency] != .pending) continue;
+            if (self.group_dependency_collected.isSet(dependency)) continue;
+            self.group_dependency_collected.set(dependency);
+            try self.group_dependency_walk.append(self.gpa, dependency);
+        }
+    }
+
+    const collected = self.group_dependency_checks.items[checks_base..];
+    for (collected) |collected_group| {
+        self.group_dependency_collected.unset(collected_group);
+    }
+    std.mem.sort(u32, collected, {}, std.sort.asc(u32));
+
+    // Nested checks append above `checks_base + collected.len` and truncate
+    // back, so this range stays intact; re-read it through `items` because
+    // those appends may reallocate the list.
+    const checks_end = self.group_dependency_checks.items.len;
+    var i = checks_base;
+    while (i < checks_end) : (i += 1) {
+        try self.ensureGroupChecked(self.group_dependency_checks.items[i], env);
+        std.debug.assert(self.group_dependency_checks.items.len == checks_end);
     }
 }
 
@@ -14913,8 +14966,8 @@ fn finalizeFunctionEffectsAtBoundary(self: *Self, roots: []const BoundaryRoot) A
 }
 
 /// Drain the current frame's pending dispatch targets: check each target's
-/// group (nested, in its own frame, together with the topological prefix it
-/// may name-depend on), then re-run dispatch constraint processing, which may
+/// group (nested, in its own frame, together with the unchecked groups it
+/// transitively name-depends on), then re-run dispatch constraint processing, which may
 /// pin further receivers and record further targets—loop to quiescence.
 fn resolveGroupPendingDispatchTargets(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     const top = self.currentFramePendingTargetsTop();
@@ -14922,7 +14975,7 @@ fn resolveGroupPendingDispatchTargets(self: *Self, env: *Env) std.mem.Allocator.
         while (self.pending_dispatch_targets.items.len > top) {
             const target_def = self.pending_dispatch_targets.pop().?;
             const target_group = self.defGroupIndex(target_def).?;
-            try self.ensureGroupsCheckedUpTo(target_group, env);
+            try self.ensureGroupCheckedWithDependencies(target_group, env);
         }
         try self.checkStaticDispatchConstraints(env, false);
     }
@@ -15080,9 +15133,9 @@ fn resolveLocalDispatchTargetByStatus(
 /// the top frame exactly when the lookup found the last index. An obligation
 /// with no live owner—never stamped, or stamped by a group that has already
 /// popped—is an orphan, and only the outermost active frame may take it: the
-/// adopting frame records the target and checks the target's topological
-/// prefix inside itself, and a prefix group that names an enclosing frame's
-/// still in-flight def would merge with it monomorphically instead of
+/// adopting frame records the target and checks the target's unchecked name
+/// dependencies inside itself, and a dependency group that names an enclosing
+/// frame's still in-flight def would merge with it monomorphically instead of
 /// instantiating its finished scheme. The outermost frame encloses no such
 /// def, and neither does the frameless context (module finalization, REPL,
 /// expect bodies), where nothing is in flight at all.
@@ -15145,14 +15198,14 @@ fn enqueueDeferredDispatchConstraint(
 /// group frame records an unchecked target for its own boundary and pins the
 /// relation there; any other frame leaves the obligation waiting, because
 /// recording it as a nested frame's pending target would check the target's
-/// topological prefix inside that frame, where a prefix group can name the
-/// nested frame's still in-flight def and merge with it monomorphically
-/// instead of instantiating its finished scheme. A nested in-flight target
+/// unchecked name dependencies inside that frame, where a dependency group can
+/// name the nested frame's still in-flight def and merge with it
+/// monomorphically instead of instantiating its finished scheme. A nested in-flight target
 /// is already being checked to resolve this obligation, so no frame records
 /// it again; the obligation only waits for the target's frame to finish. An
 /// orphan obligation—one whose stamp names no active frame, or that carries
 /// no stamp—goes to the outermost active frame for the same reason; only
-/// that frame (and the frameless context) encloses no def that a prefix
+/// that frame (and the frameless context) encloses no def that a dependency
 /// group could capture. A frame that does not adopt still pins
 /// the callable and receiver at the adopting frame's boundary rank
 /// (Invariant D): the obligation stays waiting across every nested boundary
@@ -15390,7 +15443,7 @@ fn resolvePendingPredeclaredSchemeUses(
     while (read < end) : (read += 1) {
         const pending = self.pending_predeclared_scheme_uses.items[read];
         const target_group = self.defGroupIndex(pending.target_def).?;
-        try self.ensureGroupsCheckedUpTo(target_group, env);
+        try self.ensureGroupCheckedWithDependencies(target_group, env);
         std.debug.assert(self.pending_predeclared_scheme_uses.items.len == end);
 
         const target_def = self.cir.store.getDef(pending.target_def);
@@ -38792,9 +38845,9 @@ test "deferred dispatch obligation ownership is by group identity, not rank" {
 // obligation whose stamp names no active frame—never stamped, or stamped by a
 // group that has already popped—must not be taken over by whichever frame
 // happens to be processing it. The adopting frame records the target and
-// checks the target's topological prefix inside itself, and a prefix group
-// that names an enclosing frame's still in-flight def would merge with it
-// monomorphically instead of instantiating its finished scheme. Only the
+// checks the target's unchecked name dependencies inside itself, and a
+// dependency group that names an enclosing frame's still in-flight def would
+// merge with it monomorphically instead of instantiating its finished scheme. Only the
 // outermost active frame encloses no such def, so only it may adopt; a nested
 // frame leaves the obligation waiting, pinned at the outermost frame's
 // boundary rank so nothing it touches generalizes first.
