@@ -24542,8 +24542,18 @@ const BodyContext = struct {
                 // Only an unpinned target variable takes the checked literal
                 // default. Openness inside a custom target is not evidence
                 // that the target itself should default to a builtin.
-                if (self.graph.content(expr_node) == .unresolved) {
-                    try self.graph.materializeLiteralDefault(expr_node);
+                switch (self.graph.content(expr_node)) {
+                    .unresolved => try self.graph.materializeLiteralDefault(expr_node),
+                    .primitive => {},
+                    // A custom target converts through its checked conversion
+                    // plan at this node; the target's own arguments may still
+                    // resolve through later relations in this body.
+                    .named, .record, .tuple, .tag_union, .empty_tag_union, .empty_record, .list, .box, .func, .erased, .zst => return try self.lowerSpecializedLiteralConversion(
+                        self.literalConversionPlan(expr_id),
+                        expr_node,
+                        if (expr.data == .numeral) "invalid numeric literal" else "invalid string literal",
+                    ),
+                    .redirect => Common.invariant("literal type node was not a class root"),
                 }
                 const expr_ty = try self.resolvedTypeViewForNode(expr_node);
                 return try self.lowerExprWithType(expr_id, expr_ty);
@@ -41852,13 +41862,13 @@ const BodyContext = struct {
     fn lowerSpecializedLiteralConversion(
         self: *BodyContext,
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
-        target_ty: Type.TypeId,
+        value_node: NodeId,
         rejected_message: []const u8,
     ) Allocator.Error!DraftExprId {
         const try_ty = self.literalConversionTryType(maybe_plan);
         const try_node = try self.instNode(try_ty);
         const try_value = try self.lowerDispatchExprAtType(try_ty, maybe_plan, DraftTypeCell.fromGraphNode(try_node));
-        return try self.unwrapLiteralConversionAtNode(try_value, try_node, try self.graph.importMono(target_ty), rejected_message);
+        return try self.unwrapLiteralConversionAtNode(try_value, try_node, value_node, rejected_message);
     }
 
     /// The checked conversion plan of a literal expression.
@@ -41971,7 +41981,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const primitive = switch (self.shapeContent(target_ty)) {
             .primitive => |p| p,
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return try self.lowerSpecializedLiteralConversion(numeral.plan, target_ty, "invalid numeric literal"),
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return try self.lowerSpecializedLiteralConversion(numeral.plan, try self.graph.importMono(target_ty), "invalid numeric literal"),
         };
         const data = (try self.numeralBits(numeral.literal, primitive)) orelse blk: {
             // A value that does not fit its concrete integer or Dec target (a
@@ -42006,7 +42016,7 @@ const BodyContext = struct {
                 }
                 return try self.lowerQuoteValue(quote.literal, target_ty);
             },
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return try self.lowerSpecializedLiteralConversion(quote.plan, target_ty, "invalid string literal"),
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return try self.lowerSpecializedLiteralConversion(quote.plan, try self.graph.importMono(target_ty), "invalid string literal"),
         }
     }
 
