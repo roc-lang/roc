@@ -16678,7 +16678,7 @@ pub const ResolvedValueRefTable = struct {
             const checked_type_key = checked_types.store.view().rootKey(checked_ty);
             if (builtin.mode == .Debug) {
                 const written = (try key_writer.fromVar(module.exprType(expr_idx))).key;
-                if (!std.mem.eql(u8, &written.bytes, &checked_type_key.bytes)) {
+                if (@as(u256, @bitCast(written.bytes)) != @as(u256, @bitCast(checked_type_key.bytes))) {
                     std.debug.panic("checked artifact invariant violated: resolved value ref type key differs from its published root", .{});
                 }
             }
