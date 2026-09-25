@@ -10142,6 +10142,33 @@ preceding explicit relations. Applying defaults is never part of cache identity.
 Digests select buckets; exact input constraints and evidence are the collision
 authorities.
 
+A Roc template without evidence parameters cannot dispatch on its quantified
+variables, so its interface relates a quantified variable only by unification
+when every occurrence of that variable in its checked function type is a value
+position: a function argument or result, a tuple item, a record field, a tag
+payload, or the item of `List` or `Box`. A row tail, or an argument of any
+other nominal type, is not a value position. A request captures such a
+variable's substitution cell as a parametric hole, an unconstrained variable,
+when the cell is resolved and nothing it reaches carries private backing,
+source-interface or constructor evidence, forced-dynamic iterator identity, or
+generated or iterator representation authority. Structure reaching a hole stays
+open instead of settling, so requests that differ only in their holes' contents
+share one input identity and one summary, and relating the summary back to a
+request fills its holes. A cell that is unresolved or carries representation
+authority is captured as itself: relating it back would not be plain
+unification. An unfinished expansion is joined only by the instantiation it
+expands: each hole slot of the joining request names the class the expanding
+request supplied, or the expansion's own hole cell, as a recursive call inside
+the expansion does. A single-request component takes a parametric
+summary from its expansion before relating back to the request, so the summary
+keeps its holes open. Members of a larger component relate back to each other's
+requests before their summaries are taken, so a parametric member stores no
+reusable summary. The pins are the monotype capture test
+"interface constraints capture representation-neutral holes as variables", the
+compile test "interface summaries share one expansion across parametric
+instantiations", and test/echo/parametric_interface_summaries.roc (a template
+that dispatches on its variable keeps a summary per instantiation).
+
 Selected method contracts are part of the dependency's output constraints.
 Summary inputs materialize their exact checked evidence without first applying
 those contracts to the caller graph. Expansion relates the contracts over its
@@ -10191,7 +10218,11 @@ or defaulted Monotype views. Expansion
 uses an independent instantiation of the inputs so incidental caller state
 cannot enter the summary. Replaying a summary instantiates its open cells once
 per request and relates all its input roots, preserving relationships through
-scheme variables that are not reachable from the function shape.
+scheme variables that are not reachable from the function shape. An expansion
+whose captured roots equal its captured input contributed no constraint; its
+summary records exactly that, and replaying it neither instantiates nor
+relates anything. The input identity is the same exact interface the cache key
+compares, so an unchanged summary is as complete as any other.
 
 Recursive dependency components store summaries only after every member has
 contributed its relations. An active exact request joins its active interface;

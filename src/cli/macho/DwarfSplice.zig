@@ -147,7 +147,6 @@ pub fn spliceDwarf(gpa: Allocator, io: Io, exe_path: []const u8, obj_path: []con
             data,
             obj_bytes,
             sect.header,
-            obj_sections.items,
             obj_nlists,
             symtab,
             text,
@@ -285,7 +284,6 @@ fn applyRelocations(
     data: []u8,
     obj_bytes: []const u8,
     sect: macho.section_64,
-    obj_sections: []const ObjSection,
     obj_nlists: []const macho.nlist_64,
     symtab: macho.symtab_command,
     text: ObjSection,
@@ -327,12 +325,9 @@ fn applyRelocations(
             // The stored bytes are an object-space address inside __text.
             value = (try mapTextAddress(text_symbols, stored)) orelse 0;
         } else {
-            // References between DWARF sections are section-relative offsets
-            // in the final image; the object stores them as object-space
-            // addresses.
-            const target = targetSection(obj_sections, reloc.r_symbolnum) orelse return SpliceError.UnsupportedRelocation;
-            if (!std.mem.eql(u8, target.header.segName(), "__DWARF")) return SpliceError.UnsupportedRelocation;
-            value = stored -% target.header.addr;
+            // References between DWARF sections are already section-relative
+            // offsets and carry no relocation.
+            return SpliceError.UnsupportedRelocation;
         }
 
         if (field_size == 8) {
@@ -342,13 +337,6 @@ fn applyRelocations(
             std.mem.writeInt(u32, data[field_off..][0..4], narrow, .little);
         }
     }
-}
-
-fn targetSection(sections: []const ObjSection, ordinal: u32) ?ObjSection {
-    for (sections) |sect| {
-        if (sect.ordinal == ordinal) return sect;
-    }
-    return null;
 }
 
 fn rewriteExecutable(

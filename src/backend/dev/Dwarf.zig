@@ -266,6 +266,18 @@ fn buildAbbrevSection(gpa: Allocator) Allocator.Error![]u8 {
     try appendUleb(&buf, gpa, 0);
     try appendUleb(&buf, gpa, 0);
 
+    // Abbrev 3: subprogram with no source location. DWARF file index 0
+    // names no file, so the declaration attributes are absent instead.
+    try appendUleb(&buf, gpa, 3);
+    try appendUleb(&buf, gpa, DW_TAG_subprogram);
+    try buf.append(gpa, 0); // DW_CHILDREN_no
+    for (sp_attrs[0..3]) |attr| {
+        try appendUleb(&buf, gpa, attr[0]);
+        try appendUleb(&buf, gpa, attr[1]);
+    }
+    try appendUleb(&buf, gpa, 0);
+    try appendUleb(&buf, gpa, 0);
+
     try appendUleb(&buf, gpa, 0); // section terminator
     return buf.toOwnedSlice(gpa);
 }
@@ -316,7 +328,7 @@ fn buildInfoSection(
     try appendInt(&buf, gpa, u32, 0); // stmt_list
 
     for (procs) |proc| {
-        try appendUleb(&buf, gpa, 2);
+        try appendUleb(&buf, gpa, if (proc.loc.hasLocation()) 2 else 3);
         try buf.appendSlice(gpa, proc.name);
         try buf.append(gpa, 0);
         try relocs.append(gpa, .{
@@ -327,9 +339,10 @@ fn buildInfoSection(
         });
         try appendInt(&buf, gpa, u64, 0); // low_pc
         try appendInt(&buf, gpa, u64, proc.code_size); // high_pc (length form)
-        const decl_file: u64 = if (proc.loc.hasLocation()) @as(u64, proc.loc.file) + 1 else 0;
-        try appendUleb(&buf, gpa, decl_file);
-        try appendUleb(&buf, gpa, if (proc.loc.hasLocation()) proc.loc.line else 0);
+        if (proc.loc.hasLocation()) {
+            try appendUleb(&buf, gpa, @as(u64, proc.loc.file) + 1);
+            try appendUleb(&buf, gpa, proc.loc.line);
+        }
     }
 
     try appendUleb(&buf, gpa, 0); // children terminator
@@ -380,4 +393,22 @@ test "DWARF sections expose every linker-owned reference" {
         sections.debug_info.len - 4,
         std.mem.readInt(u32, sections.debug_info[0..4], .little),
     );
+}
+
+test "DWARF subprograms without a source location omit their declaration" {
+    const gpa = std.testing.allocator;
+    const files = [_][]const u8{"main"};
+    const entries = [_]LineEntry{};
+    const procs = [_]ProcEntry{
+        .{ .name = "roc_generated", .code_start = 0, .code_size = 16, .loc = base.SourceLoc.none },
+    };
+    var sections = try build(gpa, "roc test", &files, &entries, &procs, 16);
+    defer sections.deinit(gpa);
+
+    // The last DIE before the children terminator: abbrev code, name,
+    // low_pc, high_pc, and nothing after.
+    const die_len = 1 + "roc_generated".len + 1 + 8 + 8;
+    const die_start = sections.debug_info.len - 1 - die_len;
+    try std.testing.expectEqual(@as(u8, 3), sections.debug_info[die_start]);
+    try std.testing.expectEqual(@as(u8, 0), sections.debug_info[sections.debug_info.len - 1]);
 }
