@@ -24992,7 +24992,10 @@ const BodyContext = struct {
                 .{ .expect = try self.lowerExpr(child) },
             .break_ => try self.breakCurrentLoopExprData(),
             .return_ => |ret| .{ .return_ = try self.lowerReturn(ret, ret.context) },
-            .for_ => |for_| try self.lowerIteratorFor(for_, .{ .sealed = ty }, &.{}),
+            .for_ => |for_| .{ .block = .{
+                .statements = try self.addStmtSpan(&.{try self.addStmt(try self.lowerForStatement(for_))}),
+                .final_expr = try self.addExpr(.{ .ty = ty, .data = .unit }),
+            } },
             .hosted_lambda => Common.invariant("hosted lambda expression reached ordinary Monotype expression lowering"),
             .run_low_level => |low_level| .{ .low_level = .{ .op = low_level.op, .args = try self.lowerExprSpan(low_level.args) } },
         };
@@ -54162,6 +54165,9 @@ const BodyContext = struct {
         outer_merge_binders: []const MergeBinder,
     ) Allocator.Error!DraftExprId {
         const checked_body = self.view.bodies.expr(body);
+        if (checked_body.data == .for_) {
+            return try self.lowerForThenStateResult(checked_body.data.for_, result_cell, outer_state_cell, outer_merge_binders);
+        }
         switch (checked_body.data) {
             .if_ => |if_| return try self.lowerNestedIfThenStateResultAtTypeCells(
                 body,
@@ -54369,6 +54375,12 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
     ) Allocator.Error!LoweredDiscardedExpr {
         const checked_expr = self.view.bodies.expr(expr_id);
+        if (checked_expr.data == .for_ and !self.checkedExprDivergesInLoweredRuntime(expr_id)) {
+            return .{
+                .stmt = try self.addStmt(try self.lowerForStatement(checked_expr.data.for_)),
+                .termination = .none,
+            };
+        }
         switch (checked_expr.data) {
             .if_, .match_ => {
                 const merge_binders = try self.stateMergeBinders(expr_id);
@@ -54762,8 +54774,8 @@ const BodyContext = struct {
     ) Allocator.Error!bool {
         const checked_expr = self.view.bodies.expr(expr_id);
         switch (checked_expr.data) {
-            .if_, .match_ => {},
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return false,
+            .if_, .match_, .for_ => {},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level => return false,
         }
 
         const merge_binders = try self.stateMergeBinders(expr_id);
@@ -54774,6 +54786,7 @@ const BodyContext = struct {
         try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern).ty, value_cell);
         const state_cell = try self.stateResultTypeCell(merge_binders, value_cell);
         const state_value = switch (checked_expr.data) {
+            .for_ => |for_| try self.lowerForThenStateResult(for_, value_cell, state_cell, merge_binders),
             .if_ => |if_| try self.addExprWithTypeCell(
                 state_cell,
                 try self.lowerIfAtTypeCells(
@@ -54794,7 +54807,7 @@ const BodyContext = struct {
                 } },
                 try self.matchComptimeSite(expr_id, match),
             ),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level => unreachable,
         };
 
         const state_pattern_items = try self.allocator.alloc(DraftPatId, merge_binders.len + 1);
@@ -55273,6 +55286,47 @@ const BodyContext = struct {
         result_cell: DraftTypeCell,
         carries: []const LoopCarry,
     };
+
+    fn lowerForThenStateResult(
+        self: *BodyContext,
+        for_: anytype,
+        result_cell: DraftTypeCell,
+        state_cell: DraftTypeCell,
+        merge_binders: []const MergeBinder,
+    ) Allocator.Error!DraftExprId {
+        const stmt = try self.addStmt(try self.lowerForStatement(for_));
+        const unit = try self.addExprWithTypeCell(result_cell, .unit);
+        return try self.addExprWithTypeCell(state_cell, .{ .block = .{
+            .statements = try self.addStmtSpan(&.{stmt}),
+            .final_expr = try self.stateResultTupleExprAtTypeCells(state_cell, merge_binders, unit),
+        } });
+    }
+
+    /// Both source loop forms bind their exit state in the enclosing
+    /// continuation. Expression callers supply unit only after that binding.
+    fn lowerForStatement(self: *BodyContext, for_: anytype) Allocator.Error!DraftStmt {
+        const carries = try self.prepareLoopCarries(for_.mutations);
+        defer self.allocator.free(carries);
+        const loop_cell = try self.loopStateTypeCell(try self.unitType(), carries);
+        const expr = try self.addExprWithTypeCell(loop_cell, try self.lowerIteratorFor(for_, loop_cell, carries));
+        return try self.loopExitStatement(expr, carries, loop_cell);
+    }
+
+    fn lowerConditionLoopStatement(self: *BodyContext, loop: checked.CheckedConditionLoop, condition: WhileCondition) Allocator.Error!DraftStmt {
+        const carries = try self.prepareLoopCarries(loop.mutations);
+        defer self.allocator.free(carries);
+        const loop_cell = try self.loopStateTypeCell(try self.unitType(), carries);
+        const expr = try self.addExprWithTypeCell(loop_cell, try self.lowerWhile(loop, loop_cell, carries, condition));
+        return try self.loopExitStatement(expr, carries, loop_cell);
+    }
+
+    fn loopExitStatement(self: *BodyContext, expr: DraftExprId, carries: []const LoopCarry, loop_cell: DraftTypeCell) Allocator.Error!DraftStmt {
+        if (carries.len == 0) return .{ .expr = expr };
+        return .{ .let_ = .{
+            .pat = try self.finalCarryPattern(carries, loop_cell),
+            .value = expr,
+        } };
+    }
 
     fn lowerIteratorFor(
         self: *BodyContext,
@@ -56040,10 +56094,10 @@ const BodyContext = struct {
         return try self.typeStore().internRecord(self.nameStore(), &.{});
     }
 
-    fn prepareLoopCarries(self: *BodyContext, binders: []const checked.PatternBinderId) Allocator.Error![]LoopCarry {
+    fn prepareLoopCarries(self: *BodyContext, plan: ?checked.LoopMutationPlanId) Allocator.Error![]LoopCarry {
         var carries = std.ArrayList(LoopCarry).empty;
         errdefer carries.deinit(self.allocator);
-        for (binders) |binder| {
+        for (self.loopMutationSpans(plan)) |binders| for (binders) |binder| {
             const initial = self.binders.get(binder) orelse continue;
             const ty = self.localTypeCell(initial);
             // The loop parameter is an ordinary version of the binder's local:
@@ -56057,7 +56111,7 @@ const BodyContext = struct {
                 .param_local = param_local,
                 .ty = ty,
             });
-        }
+        };
         return try carries.toOwnedSlice(self.allocator);
     }
 
@@ -56144,7 +56198,7 @@ const BodyContext = struct {
             .return_ => |ret| try self.collectReassignedBindersInExpr(ret.expr, out),
             .for_ => |for_| {
                 try self.collectReassignedBindersInExpr(for_.expr, out);
-                try self.collectReassignedBindersInExpr(for_.body, out);
+                try self.collectLoopMutationBinders(for_.mutations, out);
             },
             .run_low_level => |low_level| for (low_level.args) |arg| try self.collectReassignedBindersInExpr(arg, out),
             .lambda,
@@ -56196,20 +56250,9 @@ const BodyContext = struct {
             },
             .for_ => |for_| {
                 try self.collectReassignedBindersInExpr(for_.expr, out);
-                try self.collectReassignedBindersInExpr(for_.body, out);
+                try self.collectLoopMutationBinders(for_.mutations, out);
             },
-            .while_ => |while_| {
-                try self.collectReassignedBindersInExpr(while_.cond, out);
-                try self.collectReassignedBindersInExpr(while_.body, out);
-            },
-            .infinite_loop => |loop| {
-                try self.collectReassignedBindersInExpr(loop.cond, out);
-                try self.collectReassignedBindersInExpr(loop.body, out);
-            },
-            .breakable_loop => |loop| {
-                try self.collectReassignedBindersInExpr(loop.cond, out);
-                try self.collectReassignedBindersInExpr(loop.body, out);
-            },
+            inline .while_, .infinite_loop, .breakable_loop => |loop| try self.collectLoopMutationBinders(loop.mutations, out),
             .return_ => |ret| try self.collectReassignedBindersInExpr(ret.expr, out),
             .pending,
             .crash,
@@ -56223,6 +56266,25 @@ const BodyContext = struct {
             .runtime_error,
             => {},
         }
+    }
+
+    fn collectLoopMutationBinders(
+        self: *BodyContext,
+        plan: ?checked.LoopMutationPlanId,
+        out: *std.ArrayList(checked.PatternBinderId),
+    ) Allocator.Error!void {
+        const spans = self.loopMutationSpans(plan);
+        for (spans) |binders| for (binders) |binder| try self.appendUniqueBinder(out, binder);
+    }
+
+    /// The published binders a loop carries under this compilation's expect mode.
+    fn loopMutationSpans(self: *BodyContext, plan: ?checked.LoopMutationPlanId) [2][]const checked.PatternBinderId {
+        const mutations = self.view.bodies.loopMutations(plan orelse Common.invariant("checked loop omitted its mutation plan"));
+        const pool = self.view.bodies.patternBinderIdPool();
+        return .{
+            pool[mutations.always.start..][0..mutations.always.len],
+            if (self.builder.inline_expects.includesConditions()) pool[mutations.expect_only.start..][0..mutations.expect_only.len] else &.{},
+        };
     }
 
     fn appendUniqueBinder(
@@ -56316,7 +56378,7 @@ const BodyContext = struct {
         termination: StatementTermination,
     };
 
-    fn lowerSharedExpectStatement(self: *BodyContext, child: checked.CheckedExprId) Allocator.Error!DraftStmt {
+    fn lowerStatefulExpectStatement(self: *BodyContext, child: checked.CheckedExprId) Allocator.Error!DraftStmt {
         const merges = try self.stateMergeBinders(child);
         defer self.allocator.free(merges);
         if (merges.len == 0) return .{ .expect = try self.lowerExpr(child) };
@@ -56325,7 +56387,10 @@ const BodyContext = struct {
         const state_cell = try self.stateResultTypeCell(merges, unit_cell);
         const condition_state_cell = try self.stateResultTypeCell(merges, condition_cell);
         const unit = try self.addExprWithTypeCell(unit_cell, .unit);
-        const omitted = try self.stateResultTupleExprAtTypeCells(state_cell, merges, unit);
+        const omitted = if (self.builder.inline_expects == .shared)
+            try self.stateResultTupleExprAtTypeCells(state_cell, merges, unit)
+        else
+            null;
         const condition_state = try self.lowerBodyThenStateResultAtTypeCells(child, condition_cell, condition_state_cell, merges);
         const condition_pattern = try self.allocator.alloc(DraftPatId, merges.len + 1);
         defer self.allocator.free(condition_pattern);
@@ -56348,11 +56413,13 @@ const BodyContext = struct {
             .statements = try self.addStmtSpan(&run_statements),
             .final_expr = try self.stateResultTupleExprAtTypeCells(state_cell, merges, unit),
         } });
-        const enabled = try self.addExpr(.{ .ty = try self.primitiveType(.bool), .data = .inline_expects_enabled });
-        const choice = try self.addExprWithTypeCell(state_cell, .{ .if_ = .{
-            .branches = try self.addIfBranchSpan(&.{.{ .cond = enabled, .body = executed }}),
-            .final_else = omitted,
-        } });
+        const choice = if (omitted) |omitted_state| blk: {
+            const enabled = try self.addExpr(.{ .ty = try self.primitiveType(.bool), .data = .inline_expects_enabled });
+            break :blk try self.addExprWithTypeCell(state_cell, .{ .if_ = .{
+                .branches = try self.addIfBranchSpan(&.{.{ .cond = enabled, .body = executed }}),
+                .final_else = omitted_state,
+            } });
+        } else executed;
         const output_pattern = try self.allocator.alloc(DraftPatId, merges.len + 1);
         defer self.allocator.free(output_pattern);
         for (merges, 0..) |merge, i| {
@@ -56420,85 +56487,11 @@ const BodyContext = struct {
             .expect => |child| if (self.builder.inline_expects == .omit) blk: {
                 const unit_ty = try self.unitType();
                 break :blk .{ .expr = try self.addExpr(.{ .ty = unit_ty, .data = .unit }) };
-            } else if (self.builder.inline_expects == .shared)
-                try self.lowerSharedExpectStatement(child)
-            else
-                .{ .expect = try self.lowerExpr(child) },
-            .for_ => |for_| blk: {
-                var reassigned = std.ArrayList(checked.PatternBinderId).empty;
-                defer reassigned.deinit(self.allocator);
-                try self.collectReassignedBindersInExpr(for_.body, &reassigned);
-
-                const carries = try self.prepareLoopCarries(reassigned.items);
-                defer self.allocator.free(carries);
-
-                const unit_ty = try self.unitType();
-                const loop_cell = try self.loopStateTypeCell(unit_ty, carries);
-                const expr = try self.addExprWithTypeCell(loop_cell, try self.lowerIteratorFor(for_, loop_cell, carries));
-                if (carries.len == 0) break :blk .{ .expr = expr };
-
-                break :blk .{ .let_ = .{
-                    .pat = try self.finalCarryPattern(carries, loop_cell),
-                    .value = expr,
-                } };
-            },
-            .while_ => |while_| blk: {
-                var reassigned = std.ArrayList(checked.PatternBinderId).empty;
-                defer reassigned.deinit(self.allocator);
-                try self.collectReassignedBindersInExpr(while_.cond, &reassigned);
-                try self.collectReassignedBindersInExpr(while_.body, &reassigned);
-
-                const carries = try self.prepareLoopCarries(reassigned.items);
-                defer self.allocator.free(carries);
-
-                const unit_ty = try self.unitType();
-                const loop_cell = try self.loopStateTypeCell(unit_ty, carries);
-                const expr = try self.addExprWithTypeCell(loop_cell, try self.lowerWhile(while_, loop_cell, carries, .checked));
-                if (carries.len == 0) break :blk .{ .expr = expr };
-
-                break :blk .{ .let_ = .{
-                    .pat = try self.finalCarryPattern(carries, loop_cell),
-                    .value = expr,
-                } };
-            },
-            .infinite_loop => |loop| blk: {
-                var reassigned = std.ArrayList(checked.PatternBinderId).empty;
-                defer reassigned.deinit(self.allocator);
-                try self.collectReassignedBindersInExpr(loop.cond, &reassigned);
-                try self.collectReassignedBindersInExpr(loop.body, &reassigned);
-
-                const carries = try self.prepareLoopCarries(reassigned.items);
-                defer self.allocator.free(carries);
-
-                const unit_ty = try self.unitType();
-                const loop_cell = try self.loopStateTypeCell(unit_ty, carries);
-                const expr = try self.addExprWithTypeCell(loop_cell, try self.lowerWhile(loop, loop_cell, carries, .always_true));
-                if (carries.len == 0) break :blk .{ .expr = expr };
-
-                break :blk .{ .let_ = .{
-                    .pat = try self.finalCarryPattern(carries, loop_cell),
-                    .value = expr,
-                } };
-            },
-            .breakable_loop => |loop| blk: {
-                var reassigned = std.ArrayList(checked.PatternBinderId).empty;
-                defer reassigned.deinit(self.allocator);
-                try self.collectReassignedBindersInExpr(loop.cond, &reassigned);
-                try self.collectReassignedBindersInExpr(loop.body, &reassigned);
-
-                const carries = try self.prepareLoopCarries(reassigned.items);
-                defer self.allocator.free(carries);
-
-                const unit_ty = try self.unitType();
-                const loop_cell = try self.loopStateTypeCell(unit_ty, carries);
-                const expr = try self.addExprWithTypeCell(loop_cell, try self.lowerWhile(loop, loop_cell, carries, .always_true));
-                if (carries.len == 0) break :blk .{ .expr = expr };
-
-                break :blk .{ .let_ = .{
-                    .pat = try self.finalCarryPattern(carries, loop_cell),
-                    .value = expr,
-                } };
-            },
+            } else try self.lowerStatefulExpectStatement(child),
+            .for_ => |for_| try self.lowerForStatement(for_),
+            .while_ => |while_| try self.lowerConditionLoopStatement(while_, .checked),
+            .infinite_loop => |loop| try self.lowerConditionLoopStatement(loop, .always_true),
+            .breakable_loop => |loop| try self.lowerConditionLoopStatement(loop, .always_true),
             .break_ => .{ .expr = try self.breakCurrentLoopExpr() },
             .return_ => |ret| .{ .return_ = try self.lowerReturn(ret, .return_expr) },
         };
