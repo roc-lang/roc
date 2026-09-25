@@ -58,7 +58,7 @@ pub const UseOrder = struct {
         stmts: collections.DenseMap(LIR.CFStmtId, u32),
         locals: collections.DenseMap(LIR.LocalId, u32),
 
-        fn create(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId) !*Domain {
+        fn create(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId) Allocator.Error!*Domain {
             const self = try allocator.create(Domain);
             self.* = .{ .stmts = .init(allocator), .locals = .init(allocator) };
             errdefer self.destroy(allocator);

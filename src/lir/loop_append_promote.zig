@@ -2857,7 +2857,7 @@ test "promote summary provenance distinguishes aliased reserve siblings" {
 }
 
 /// Check the immutable metadata plan without changing the test procedure.
-fn testMetadataTransfer(f: *PromoteTest, proc: LIR.LirProcSpecId, site_entry: CFStmtId, expected: bool) !void {
+fn testMetadataTransfer(f: *PromoteTest, proc: LIR.LirProcSpecId, site_entry: CFStmtId, expected: bool) (Allocator.Error || error{ TestExpectedEqual, MissingTransfer })!void {
     // addSetSite emits the index and element literals before the actual set.
     const element = f.store.getCFStmt(site_entry).assign_literal.next;
     const site = f.store.getCFStmt(element).assign_literal.next;
