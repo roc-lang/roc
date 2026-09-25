@@ -7,6 +7,31 @@
 
 const TestEnv = @import("./TestEnv.zig");
 
+test "recursive decoder captures retain their enclosing generalization rank" {
+    const source =
+        \\step! : {} => Try([Done, Row], [Oops])
+        \\step! = |_| Ok(Done)
+        \\columns! : {} => List(Str)
+        \\columns! = |_| []
+        \\decode_rows! = |stmt, gen_decode| {
+        \\    cols = columns!(stmt)
+        \\    decode_row! = gen_decode(cols)
+        \\    helper! = |out|
+        \\        match step!(stmt)? {
+        \\            Done => Ok(out)
+        \\            Row => {
+        \\                row = decode_row!(stmt)?
+        \\                helper!(out.append(row))
+        \\            }
+        \\        }
+        \\    helper!([])
+        \\}
+    ;
+    var env = try TestEnv.init("Test", source);
+    defer env.deinit();
+    try env.assertNoErrors();
+}
+
 test "nested lambda with higher-rank variables does not panic during generalization" {
     // This code structure triggered the bug in the original report.
     // It involves nested lambdas that create rank-2 variables, pattern matching

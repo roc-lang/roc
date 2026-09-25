@@ -8106,6 +8106,17 @@ const Builder = struct {
                     const source_fn_type = CheckedTypeIdentity{ .module = lookup.view.key, .ty = lookup.target.callable_ty };
                     _ = try self.analyzeType(lookup.view, lookup.target.callable_ty);
                     const worker = try self.ensureWorker(source, source_fn_type, null);
+                    // An eligible inspect override has type `T -> Str` where `T`
+                    // is the owning nominal (design.md "Inspect Overrides"), so
+                    // the worker's receiver is its only argument, analyzed in
+                    // the override's declaring view.
+                    const source_fn_rep = self.plan.repForSourceType(source_fn_type) orelse
+                        boxyPlanInvariant("planned boxy inspect override callable type was not analyzed");
+                    const source_function = self.repQuery().functionChildren(source_fn_rep) orelse
+                        boxyPlanInvariant("planned boxy inspect override callable type was not callable");
+                    if (source_function.arg_count != 1) {
+                        boxyPlanInvariant("planned boxy inspect override callable had unexpected receiver arity");
+                    }
                     try self.plan.inspect_methods.append(self.allocator, .{
                         .source_rep = rep_id,
                         .worker = worker,
@@ -10579,7 +10590,19 @@ const Builder = struct {
                 => null,
             };
             var call_source: ?u32 = null;
-            if (argument_source == null) {
+            // A call descriptor describes the requirement's storage of the
+            // actual. It serves a worker descriptor for a bare type variable,
+            // whose storage is the actual's own, and one whose actual needs
+            // runtime instantiation. A structured worker position with a
+            // concrete actual gets a static descriptor of the worker's own
+            // storage, which differs (a concrete `List(U64)` key reaching a
+            // `List(item)` worker stores its items boxed).
+            const param_value = self.plan.representations.items[@intFromEnum(param.rep)];
+            const param_is_bare_variable = param_value.kind == .dynamic and param_value.children.len == 0 and
+                param_value.tag_variants.len == 0 and param_value.declared_fields.len == 0;
+            if (argument_source == null and
+                (param_is_bare_variable or try self.repQuery().repSubtreeHasDescriptor(worker_arg.rep)))
+            {
                 const requirement_source_identity = self.repQuery().descriptorArgumentIdentityRep(worker_arg.rep);
                 for (requirement_args, 0..) |requirement_arg, call_index| {
                     const requirement_call_identity = self.repQuery().descriptorArgumentIdentityRep(requirement_arg.rep);

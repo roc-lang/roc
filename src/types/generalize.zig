@@ -406,7 +406,13 @@ pub const Generalizer = struct {
             return true;
         }
 
-        // Mark as seen before descending to handle cycles
+        // Publish the traversal's scope before marking this node as seen.
+        // A back-edge must observe the rank of this walk, not the node's
+        // original inner scope: otherwise an effect-dependency cycle can
+        // raise an enclosing function back to that inner scope.
+        if (@intFromEnum(resolved.desc.rank) > @intFromEnum(group_rank)) {
+            try self.store.setDescRank(resolved.desc_idx, group_rank);
+        }
         try self.rank_adjusted_vars.put(resolved.var_, {});
 
         // For vars being generalized: rank INCREASES to max of nested vars
@@ -821,6 +827,56 @@ test "mergeFrom - vars at multiple ranks" {
     try expectVarsEqual(pool_a.getVarsForRank(.outermost), &.{ mkVar(1), mkVar(10) });
     try expectVarsEqual(pool_a.getVarsForRank(@enumFromInt(2)), &.{mkVar(20)});
     try expectVarsEqual(pool_a.getVarsForRank(@enumFromInt(3)), &.{mkVar(30)});
+}
+
+test "generalize - effect cycles inherit the enclosing traversal rank" {
+    const gpa = std.testing.allocator;
+    const outer: Rank = @enumFromInt(2);
+    const inner: Rank = @enumFromInt(3);
+
+    for ([_]usize{ 1, 2, 32 }) |depth| {
+        var store = try TypesStore.initCapacity(gpa, 64, 8);
+        defer store.deinit();
+        var pool = try VarPool.init(gpa);
+        defer pool.deinit();
+        try pool.pushRank();
+        try pool.pushRank();
+        try pool.pushRank();
+        var gen = try Generalizer.init(gpa, &store);
+        defer gen.deinit(gpa);
+
+        const captured = try store.freshWithRank(outer);
+        const result = try store.freshWithRank(inner);
+        const independent = try store.freshWithRank(inner);
+        const cycle = try gpa.alloc(Var, depth);
+        defer gpa.free(cycle);
+        for (cycle) |*node| node.* = try store.freshWithRank(inner);
+        for (cycle, 0..) |node, i| {
+            try store.setVarContent(node, try store.mkFuncUnboundWithEffectDeps(
+                &.{},
+                result,
+                &.{cycle[(i + 1) % depth]},
+            ));
+            try pool.addVarToRank(node, inner);
+        }
+        try store.setVarContent(captured, try store.mkFuncUnboundWithEffectDeps(&.{}, result, &.{cycle[0]}));
+        // The captured root was unified into this pool from an outer scope.
+        try pool.addVarToRank(captured, outer);
+        try pool.addVarToRank(captured, inner);
+        try pool.addVarToRank(result, inner);
+        try pool.addVarToRank(independent, inner);
+
+        try gen.generalize(gpa, &pool, inner);
+        try std.testing.expectEqual(outer, store.resolveVar(captured).desc.rank);
+        try std.testing.expectEqual(outer, store.resolveVar(result).desc.rank);
+        for (cycle) |node| try std.testing.expectEqual(outer, store.resolveVar(node).desc.rank);
+        try std.testing.expectEqual(Rank.generalized, store.resolveVar(independent).desc.rank);
+
+        pool.popRank();
+        try gen.generalize(gpa, &pool, outer);
+        try std.testing.expectEqual(Rank.generalized, store.resolveVar(captured).desc.rank);
+        try std.testing.expectEqual(Rank.generalized, store.resolveVar(result).desc.rank);
+    }
 }
 
 // Depth pin for rank adjustment. Generalization visits every var the
