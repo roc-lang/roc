@@ -590,8 +590,9 @@ pub const InterfaceConstraints = struct {
             try self.open_nodes.append(self.graph.allocator, undefined);
             var captured: OpenNode = .{ .content = try mapValue(self, InstNode, self.graph.content(root)) };
             if (self.graph.requestSourceInterface(raw)) |source| captured.source = try self.node(source);
-            captured.recursive_slot = self.graph.recursive_value_slots.items[@intFromEnum(root)];
-            captured.forced_dynamic = self.graph.forced_dynamic_iterator_roots.items[@intFromEnum(root)];
+            const membership = self.graph.representation_membership.items[@intFromEnum(root)];
+            captured.recursive_slot = membership.recursive_slot;
+            captured.forced_dynamic = membership.forced_dynamic;
             captured.constructor_evidence = self.graph.requestPropagatesConstructorEvidence(raw);
             captured.private_backing = self.graph.private_backing_roots.items[@intFromEnum(root)];
             if (self.graph.classImportedMono(root)) |ty| captured.finished = try self.retained.sealType(ty);
@@ -645,8 +646,8 @@ pub const InterfaceConstraints = struct {
                 if ((try self.seen.getOrPut(root)).found_existing) return true;
                 if (graph.private_backing_roots.items[@intFromEnum(root)]) return false;
                 if (graph.requestSourceInterface(raw) != null or graph.requestPropagatesConstructorEvidence(raw) or graph.related_named_instances.contains(root)) return false;
-                if (graph.recursive_value_slots.items[@intFromEnum(root)]) return false;
-                if (graph.forced_dynamic_iterator_roots.items[@intFromEnum(root)]) return false;
+                const membership = graph.representation_membership.items[@intFromEnum(root)];
+                if (membership.recursive_slot or membership.forced_dynamic) return false;
                 const content = graph.content(root);
                 switch (content) {
                     .unresolved => return false,
@@ -1219,6 +1220,15 @@ const GeneratedIteratorDepthFrame = struct {
 /// structure, so a specialization that tries to exceed its requested type is a
 /// unification conflict, not a silent divergence.
 pub const InstGraph = struct {
+    const RepresentationMembership = packed struct {
+        /// Explicit recursive argument or loop feedback value flow. A later
+        /// join of distinct minted identities proves representation growth.
+        recursive_slot: bool = false,
+        /// A minted join on recursive value flow requires the finite dynamic
+        /// fixed point when iterator representations are finalized.
+        forced_dynamic: bool = false,
+    };
+
     allocator: Allocator,
     relation_state: RelationState,
     /// Sole owner domain for every `TypeId` retained by this graph, including
@@ -1302,17 +1312,9 @@ pub const InstGraph = struct {
     /// Producer-marked representation witnesses must retain request-local
     /// identity even when the backing's runtime structure is fully settled.
     private_backing_roots: std.ArrayList(bool),
-    /// Per class root: a minted iterator whose relation graph proved that
-    /// retaining the minted tier would create a recursive component identity.
-    /// Unions carry the mark to the joined class; finalization constructs the
-    /// single forced-dynamic fixed point for it.
-    forced_dynamic_iterator_roots: std.ArrayList(bool),
-    /// Per class root: a value slot that differs from the corresponding source
-    /// slot on an explicit recursive edge. Function recursion and loop
-    /// feedback both mark here; a later minted join touching one of these
-    /// slots proves that recursion grows the representation rather than merely
-    /// recurring over a fixed iterator. Unions carry the mark.
-    recursive_value_slots: std.ArrayList(bool),
+    /// Exact producer-authored membership on union-find classes. Only the
+    /// representative's bits are authoritative; union joins them with OR.
+    representation_membership: std.ArrayList(RepresentationMembership),
     /// Shared allocation-free scratch and cache for exact structural
     /// containment. The two queries share one conservative dependency list,
     /// while each walk can stop as soon as its requested property is found.
@@ -1395,9 +1397,8 @@ pub const InstGraph = struct {
             .request_source_interfaces = .empty,
             .constructor_evidence_requests = .empty,
             .private_backing_roots = .empty,
+            .representation_membership = .empty,
             .class_imported_monos = .empty,
-            .forced_dynamic_iterator_roots = .empty,
-            .recursive_value_slots = .empty,
             .containment_pending = .empty,
             .containment_visit_epochs = .empty,
             .containment_visit_epoch = 0,
@@ -1459,9 +1460,8 @@ pub const InstGraph = struct {
         self.request_source_interfaces.clearRetainingCapacity();
         self.constructor_evidence_requests.clearRetainingCapacity();
         self.private_backing_roots.clearRetainingCapacity();
+        self.representation_membership.clearRetainingCapacity();
         self.class_imported_monos.clearRetainingCapacity();
-        self.forced_dynamic_iterator_roots.clearRetainingCapacity();
-        self.recursive_value_slots.clearRetainingCapacity();
         self.containment_pending.clearRetainingCapacity();
         self.containment_visit_epochs.clearRetainingCapacity();
         self.containment_visit_epoch = 0;
@@ -1527,9 +1527,8 @@ pub const InstGraph = struct {
         self.request_source_interfaces.deinit(allocator);
         self.constructor_evidence_requests.deinit(allocator);
         self.private_backing_roots.deinit(allocator);
+        self.representation_membership.deinit(allocator);
         self.class_imported_monos.deinit(allocator);
-        self.forced_dynamic_iterator_roots.deinit(allocator);
-        self.recursive_value_slots.deinit(allocator);
         self.containment_pending.deinit(allocator);
         self.containment_visit_epochs.deinit(allocator);
         self.current_durable.deinit();
@@ -2063,22 +2062,21 @@ pub const InstGraph = struct {
             Common.invariant("recursive function interface changed argument arity");
         }
         for (initial_active_arg_classes, request.args) |initial_class, request_arg| {
-            if (!initial_class.contains(self, request_arg)) self.markRecursiveValueSlot(request_arg);
+            if (!initial_class.contains(self, request_arg)) {
+                self.markRecursiveValueSlot(request_arg);
+            }
         }
         try self.unify(active_fn, recursive_request);
     }
 
     pub fn markRecursiveValueSlot(self: *InstGraph, slot: NodeId) void {
         self.requireRelationProduction();
-        self.recursive_value_slots.items[@intFromEnum(self.find(slot))] = true;
-    }
-
-    pub fn isRecursiveValueSlot(self: *InstGraph, node: NodeId) bool {
-        return self.recursive_value_slots.items[@intFromEnum(self.find(node))];
+        self.representation_membership.items[@intFromEnum(self.find(slot))].recursive_slot = true;
     }
 
     fn markForcedDynamicIteratorRoot(self: *InstGraph, node: NodeId) void {
-        self.forced_dynamic_iterator_roots.items[@intFromEnum(self.find(node))] = true;
+        self.requireRelationProduction();
+        self.representation_membership.items[@intFromEnum(self.find(node))].forced_dynamic = true;
     }
 
     /// Record `node`'s finished Monotype and keep its class's first imported
@@ -2180,7 +2178,7 @@ pub const InstGraph = struct {
     }
 
     fn iteratorRootRequiresForcedDynamic(self: *InstGraph, node: NodeId) bool {
-        return self.forced_dynamic_iterator_roots.items[@intFromEnum(self.find(node))];
+        return self.representation_membership.items[@intFromEnum(self.find(node))].forced_dynamic;
     }
 
     fn rewriteGeneratedIteratorAsForcedDynamic(
@@ -2771,8 +2769,7 @@ pub const InstGraph = struct {
         std.debug.assert(self.request_source_interfaces.items.len == self.nodes.items.len);
         std.debug.assert(self.constructor_evidence_requests.items.len == self.nodes.items.len);
         std.debug.assert(self.private_backing_roots.items.len == self.nodes.items.len);
-        std.debug.assert(self.forced_dynamic_iterator_roots.items.len == self.nodes.items.len);
-        std.debug.assert(self.recursive_value_slots.items.len == self.nodes.items.len);
+        std.debug.assert(self.representation_membership.items.len == self.nodes.items.len);
         std.debug.assert(self.class_imported_monos.items.len == self.nodes.items.len);
     }
 
@@ -2789,8 +2786,7 @@ pub const InstGraph = struct {
         try self.request_source_interfaces.ensureUnusedCapacity(self.allocator, 1);
         try self.constructor_evidence_requests.ensureUnusedCapacity(self.allocator, 1);
         try self.private_backing_roots.ensureUnusedCapacity(self.allocator, 1);
-        try self.forced_dynamic_iterator_roots.ensureUnusedCapacity(self.allocator, 1);
-        try self.recursive_value_slots.ensureUnusedCapacity(self.allocator, 1);
+        try self.representation_membership.ensureUnusedCapacity(self.allocator, 1);
         try self.class_imported_monos.ensureUnusedCapacity(self.allocator, 1);
         try self.updateGeneratedIterator(id, node_content);
         if (contentHasGeneratedPrivateBacking(node_content)) self.generated_private_nodes += 1;
@@ -2803,8 +2799,7 @@ pub const InstGraph = struct {
         self.request_source_interfaces.appendAssumeCapacity(null);
         self.constructor_evidence_requests.appendAssumeCapacity(false);
         self.private_backing_roots.appendAssumeCapacity(false);
-        self.forced_dynamic_iterator_roots.appendAssumeCapacity(false);
-        self.recursive_value_slots.appendAssumeCapacity(false);
+        self.representation_membership.appendAssumeCapacity(.{});
         self.class_imported_monos.appendAssumeCapacity(null);
         self.markPrivateBacking(node_content);
         if (node_content == .named and node_content.named.generated_iterator != null) self.generated_iterator_nodes += 1;
@@ -4918,14 +4913,16 @@ pub const InstGraph = struct {
         const winner_content = self.nodes.items[@intFromEnum(winner)];
         const loser_content = self.nodes.items[@intFromEnum(loser)];
         self.private_backing_roots.items[@intFromEnum(winner)] = self.private_backing_roots.items[@intFromEnum(winner)] or self.private_backing_roots.items[@intFromEnum(loser)];
-        self.forced_dynamic_iterator_roots.items[@intFromEnum(winner)] = self.forced_dynamic_iterator_roots.items[@intFromEnum(winner)] or self.forced_dynamic_iterator_roots.items[@intFromEnum(loser)];
-        self.recursive_value_slots.items[@intFromEnum(winner)] = self.recursive_value_slots.items[@intFromEnum(winner)] or self.recursive_value_slots.items[@intFromEnum(loser)];
         if (self.class_imported_monos.items[@intFromEnum(winner)] == null) {
             self.class_imported_monos.items[@intFromEnum(winner)] = self.class_imported_monos.items[@intFromEnum(loser)];
         }
         self.constructor_evidence_requests.items[@intFromEnum(winner)] =
             self.constructor_evidence_requests.items[@intFromEnum(winner)] or
             self.constructor_evidence_requests.items[@intFromEnum(loser)];
+        const winner_membership = &self.representation_membership.items[@intFromEnum(winner)];
+        const loser_membership = self.representation_membership.items[@intFromEnum(loser)];
+        winner_membership.recursive_slot = winner_membership.recursive_slot or loser_membership.recursive_slot;
+        winner_membership.forced_dynamic = winner_membership.forced_dynamic or loser_membership.forced_dynamic;
         const joins_nominal_with_structural = winner_content != .unresolved and loser_content != .unresolved and
             (winner_content == .named) != (loser_content == .named);
         const joins_iterator_representations = winner_content == .named and loser_content == .named and
@@ -5398,7 +5395,9 @@ pub const InstGraph = struct {
                                 Common.invariant("minted iterator join found backing on only one side");
                             }
 
-                            if (self.isRecursiveValueSlot(left) or self.isRecursiveValueSlot(right)) {
+                            if (self.representation_membership.items[@intFromEnum(left)].recursive_slot or
+                                self.representation_membership.items[@intFromEnum(right)].recursive_slot)
+                            {
                                 self.markForcedDynamicIteratorRoot(left);
                             }
 
@@ -7209,11 +7208,11 @@ const OpenFunctionInterfaceShapeWriter = struct {
     }
 
     fn hasRecursiveValueSlot(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) bool {
-        return self.graph.isRecursiveValueSlot(node);
+        return self.graph.representation_membership.items[@intFromEnum(node)].recursive_slot;
     }
 
     fn hasForcedDynamicIteratorRoot(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) bool {
-        return self.graph.iteratorRootRequiresForcedDynamic(node);
+        return self.graph.representation_membership.items[@intFromEnum(node)].forced_dynamic;
     }
 
     fn writeNodeSpan(self: *OpenFunctionInterfaceShapeWriter, nodes: []const NodeId) Allocator.Error!void {
@@ -7895,7 +7894,7 @@ test "argument class snapshots preserve entry membership through unions on both 
         } });
         try graph.unifyRecursiveFunctionInterface(active, initial, request);
     }
-    for ([_]NodeId{ first, last }) |member| try std.testing.expect(!graph.isRecursiveValueSlot(member));
+    try std.testing.expect(!graph.representation_membership.items[@intFromEnum(graph.find(first))].recursive_slot);
     for ([_]NodeId{ before, after, new_node }) |member| {
         try std.testing.expect(!initial[0].contains(graph, member));
         try std.testing.expect(later[0].contains(graph, member));
@@ -7905,7 +7904,7 @@ test "argument class snapshots preserve entry membership through unions on both 
         } });
         try graph.unifyRecursiveFunctionInterface(active, initial, request);
     }
-    for ([_]NodeId{ before, after, new_node }) |member| try std.testing.expect(graph.isRecursiveValueSlot(member));
+    try std.testing.expect(graph.representation_membership.items[@intFromEnum(graph.find(first))].recursive_slot);
     // Re-reading a snapshot after another snapshot and recursive relations
     // must still stop at its original tail.
     try std.testing.expect(!initial[0].contains(graph, after));
@@ -11718,7 +11717,7 @@ test "interface constraints retain settled producer evidence and exact leaf coll
     const copied = (try constraints.instantiate(graph))[0];
     const copied_child = graph.content(copied).list;
     try std.testing.expect(!graph.sameClass(child, copied_child));
-    try std.testing.expect(graph.isRecursiveValueSlot(copied_child));
+    try std.testing.expect(graph.representation_membership.items[@intFromEnum(graph.find(copied_child))].recursive_slot);
 
     const str_node = try graph.newNode(.{ .primitive = .str });
     const bool_node = try graph.newNode(.{ .primitive = .bool });
@@ -11904,4 +11903,102 @@ test "interface constraints separate declarations sharing a related backing grou
         }
         try std.testing.expect(!graph.sameRelatedNamedInstance(first[i], second[i]));
     }
+}
+
+test "interface constraints capture work is independent of unrelated representation marks" {
+    const allocator = std.testing.allocator;
+    for ([_]usize{ 1, 32, 128 }) |root_count| {
+        var expected_work: ?u64 = null;
+        for ([_]usize{ 0, 32, 256 }) |unrelated_count| {
+            var types = Type.Store.init(allocator);
+            defer types.deinit();
+            var name_store = names.NameStore.init(allocator);
+            defer name_store.deinit();
+            const graph = try InstGraph.create(allocator, &types, &name_store);
+            defer graph.destroy();
+            const roots = try allocator.alloc(NodeId, root_count);
+            defer allocator.free(roots);
+            for (roots) |*root| root.* = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+            for (0..unrelated_count) |_| {
+                const recursive = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+                graph.markRecursiveValueSlot(recursive);
+                const dynamic = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+                graph.markForcedDynamicIteratorRoot(dynamic);
+            }
+            var diagnostics: GraphDiagnostics = .{};
+            graph.setDiagnostics(&diagnostics);
+            const captured = try InterfaceConstraints.capture(graph, graph.arena(), roots);
+            try std.testing.expectEqual(root_count, captured.open_nodes.len);
+            for (captured.open_nodes) |node| {
+                try std.testing.expect(!node.recursive_slot);
+                try std.testing.expect(!node.forced_dynamic);
+            }
+            const work = diagnostics.union_find_resolutions;
+            if (expected_work) |expected| try std.testing.expectEqual(expected, work);
+            expected_work = work;
+            try std.testing.expect(work <= 10 * root_count);
+        }
+    }
+}
+
+test "interface constraints representation membership survives unions replay and reset" {
+    const allocator = std.testing.allocator;
+    var types = Type.Store.init(allocator);
+    defer types.deinit();
+    var name_store = names.NameStore.init(allocator);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(allocator, &types, &name_store);
+    defer graph.destroy();
+    for ([_]InstGraph.RepresentationMembership{
+        .{},
+        .{ .recursive_slot = true },
+        .{ .forced_dynamic = true },
+        .{ .recursive_slot = true, .forced_dynamic = true },
+    }) |membership| {
+        const node = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+        if (membership.recursive_slot) graph.markRecursiveValueSlot(node);
+        if (membership.forced_dynamic) graph.markForcedDynamicIteratorRoot(node);
+        const captured = try InterfaceConstraints.capture(graph, graph.arena(), &.{node});
+        try std.testing.expectEqual(membership.recursive_slot, captured.open_nodes[0].recursive_slot);
+        try std.testing.expectEqual(membership.forced_dynamic, captured.open_nodes[0].forced_dynamic);
+        const copied = (try captured.instantiate(graph))[0];
+        try std.testing.expectEqual(membership, graph.representation_membership.items[@intFromEnum(graph.find(copied))]);
+    }
+    for ([_]bool{ false, true }) |marked_wins| {
+        const recursive = try graph.newNode(.{ .primitive = .str });
+        const dynamic = try graph.newNode(.{ .primitive = .str });
+        const alias = try graph.newNode(.{ .primitive = .str });
+        try graph.union_(recursive, alias);
+        // Mark through a redirected permanent identity, including repeated marks.
+        graph.markRecursiveValueSlot(alias);
+        graph.markRecursiveValueSlot(alias);
+        graph.markForcedDynamicIteratorRoot(dynamic);
+        if (marked_wins) {
+            try graph.union_(recursive, dynamic);
+        } else {
+            try graph.union_(dynamic, recursive);
+        }
+        const winner = try graph.newNode(.{ .primitive = .str });
+        try graph.union_(winner, recursive);
+        const constraints = try InterfaceConstraints.capture(graph, graph.arena(), &.{ alias, dynamic });
+        try std.testing.expectEqual(@as(usize, 1), constraints.open_nodes.len);
+        try std.testing.expect(constraints.open_nodes[0].recursive_slot);
+        try std.testing.expect(constraints.open_nodes[0].forced_dynamic);
+        const copied = try constraints.instantiate(graph);
+        try std.testing.expect(graph.sameClass(copied[0], copied[1]));
+        try std.testing.expect(!graph.sameClass(copied[0], winner));
+        try std.testing.expect(graph.iteratorRootRequiresForcedDynamic(copied[0]));
+        const recaptured = try InterfaceConstraints.capture(graph, graph.arena(), copied);
+        try std.testing.expectEqual(@as(usize, 1), recaptured.open_nodes.len);
+        try std.testing.expect(recaptured.open_nodes[0].recursive_slot);
+        try std.testing.expect(recaptured.open_nodes[0].forced_dynamic);
+        const fresh = try graph.newNode(.{ .primitive = .str });
+        const unmarked = try InterfaceConstraints.capture(graph, graph.arena(), &.{fresh});
+        try std.testing.expectEqual(@as(usize, 0), unmarked.open_nodes.len);
+    }
+    graph.reset();
+    const fresh = try graph.newNode(.{ .primitive = .str });
+    graph.assertPermanentNode(fresh);
+    try std.testing.expect(!graph.iteratorRootRequiresForcedDynamic(fresh));
+    try std.testing.expect(!graph.representation_membership.items[@intFromEnum(fresh)].recursive_slot);
 }

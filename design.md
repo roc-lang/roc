@@ -950,6 +950,9 @@ names the merged variables. Both arms remain visible through lifting and lambda
 solving, including callable identities stored in compile-time results. The
 consumer input is opaque to value folding until target LIR lowering supplies the
 configured run/omit Boolean. No specialization is repeated.
+Run-only lowering uses the same explicit state-result binding without the
+consumer branch; it must not lower a mutating condition as an isolated Boolean
+whose state updates are lost to the enclosing continuation.
 
 Monotype lowering, lifting, SpecConstr, lambda solving, and inline analysis
 run once over the union of the compilation's compile-time and runtime root
@@ -10058,6 +10061,12 @@ directly as Monotype content, without retaining intermediate active snapshots.
 This capture does not finalize the surrounding graph or apply variable defaults.
 Settled leaves retain only their interned identities; storage for open structure
 and producer evidence is proportional to the open portion of the interface.
+Recursive-slot and forced-dynamic membership are explicit bits on each
+instantiation union-find class. Marking resolves the current representative;
+unions OR both classes' bits into the winner. Capture, shareability, interface
+identity, and iterator finalization read that class metadata directly, never
+scan graph-wide inventories. Summary replay marks its newly instantiated cells
+before relating them. Unrelated marked classes impose no work on capture.
 Open constraints use local indices, never graph identities
 or defaulted Monotype views. Expansion
 uses an independent instantiation of the inputs so incidental caller state
@@ -10638,6 +10647,22 @@ same order and with the same types. Loops with no carried state use empty spans.
 `break_` carries the loop result when the loop is value-producing and carries no
 expression when the loop result is unit/control-only.
 
+Source `for` expressions and statements share one state-carrying lowering
+contract, which condition loops (`while`, infinite, and breakable loops) also
+follow. Checked output records every loop's mutation identities once, with
+disjoint ranges for mutations outside `expect` and mutations occurring only in
+`expect` conditions. A `for` plan covers its body; a condition loop's plan also
+covers its condition, which runs on every iteration. Recording follows
+resolved assignment identities and explicit dispatch operands, excludes nested
+function bodies, and reuses nested loop summaries. A loop-only table holds these
+compact ranges into the checked binder pool; loops reference it by ID without
+widening unrelated expression payloads. Both the table and pool survive
+serialization. Post-check lowering never rediscovers a loop's mutations.
+Only binders in scope at loop entry become carried state. Every iteration and
+exit transports that state explicitly. An expression-form loop produces unit
+after binding its exit state, and enclosing branch results must be constructed
+inside the scope of those bindings. Discarding unit never discards mutations.
+
 Monotype normally preserves source control structure, but compiler-generated
 algorithms may introduce typed `join_point` and `jump` expressions when their
 sharing is part of the producer's correctness or complexity contract. A join's
@@ -10882,6 +10907,17 @@ checked source identity. A record keeps whichever requester reserved it, so a
 requester-derived component in either identity would make two programs that
 reach one specialization through differently annotated call sites disagree—one
 key naming two procedure identities.
+
+A procedure identity hashes its source specialization, ABI choices, and solved
+argument, result, and capture types. It excludes the outer function's callable
+set: that set describes the contexts where the function value flows, while the
+selected source and captures already identify the procedure being compiled.
+Passing a closed imported function beside another lambda must not change its
+procedure identity or prevent reuse of its module-pack entry. Callable sets
+nested in arguments, results, and captures remain part of identity because they
+determine runtime representations and dispatch inside the procedure. Function
+value type digests retain their complete callable sets, including when reached
+recursively from those nested positions.
 
 A compiler-generated body retains its own source key. An interpolation or
 field-names iterator step, a structural parser or encoder runtime, and a

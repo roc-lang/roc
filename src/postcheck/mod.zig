@@ -67,6 +67,7 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("match_tree.zig"));
     std.testing.refAllDecls(@import("solved_inline.zig"));
     std.testing.refAllDecls(@import("solved_lir_lower.zig"));
+    std.testing.refAllDecls(@import("proc_identity.zig"));
     std.testing.refAllDecls(@import("structural_test.zig"));
 }
 
