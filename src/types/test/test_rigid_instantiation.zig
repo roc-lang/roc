@@ -639,3 +639,27 @@ const TestEnv = struct {
         return self.mkTagUnion(tags, ext_var);
     }
 };
+
+test "instantiate - annotation tag closure authority belongs to the definition" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const original = try env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, .generalized);
+    try env.types.markAnnotationTagExt(original);
+
+    var instantiator = Instantiator{
+        .store = &env.types,
+        .idents = &env.idents,
+        .var_map = &env.var_map,
+        .rigid_behavior = .fresh_flex,
+        .current_rank = .outermost,
+    };
+    const use = try instantiator.instantiateVar(original);
+    try std.testing.expect(!env.types.resolveVar(use).desc.flags.annotation_tag_ext);
+    try std.testing.expect(env.types.resolveVar(original).desc.flags.annotation_tag_ext);
+
+    env.var_map.clearRetainingCapacity();
+    instantiator.preserve_annotation_tag_ext = true;
+    const faithful_copy = try instantiator.instantiateVar(original);
+    try std.testing.expect(faithful_copy != original);
+    try std.testing.expect(env.types.resolveVar(faithful_copy).desc.flags.annotation_tag_ext);
+}

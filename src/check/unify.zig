@@ -1598,11 +1598,25 @@ const Unifier = struct {
         try self.scheduleGuardedPair(post.a_backing_var, post.b_backing_var, .ignore);
     }
 
-    fn rowExtMergeTarget(self: *Self, vars: *const ResolvedVarDescs) types_mod.DescStoreIdx {
-        return self.types_store.resolveVar(vars.b.var_).desc_idx;
+    const RowMergeTargets = struct {
+        a: types_mod.DescStoreIdx,
+        b: types_mod.DescStoreIdx,
+
+        fn contains(self: @This(), desc: types_mod.DescStoreIdx) bool {
+            return desc == self.a or desc == self.b;
+        }
+    };
+
+    fn rowExtMergeTargets(self: *Self, vars: *const ResolvedVarDescs) RowMergeTargets {
+        // Both equivalence classes acquire the merged content, regardless of
+        // which descriptor slot survives the union.
+        return .{
+            .a = self.types_store.resolveVar(vars.a.var_).desc_idx,
+            .b = self.types_store.resolveVar(vars.b.var_).desc_idx,
+        };
     }
 
-    fn recordExtReachesDesc(self: *Self, ext: Var, target_desc: types_mod.DescStoreIdx) bool {
+    fn recordExtReachesDesc(self: *Self, ext: Var, targets: RowMergeTargets) bool {
         var ext_var = ext;
         var guard = types_mod.debug.IterationGuard.init("recordExtReachesDesc");
 
@@ -1610,7 +1624,7 @@ const Unifier = struct {
             guard.tick();
 
             const resolved = self.types_store.resolveVar(ext_var);
-            if (resolved.desc_idx == target_desc) return true;
+            if (targets.contains(resolved.desc_idx)) return true;
 
             switch (resolved.desc.content) {
                 .alias => |alias| {
@@ -1637,7 +1651,7 @@ const Unifier = struct {
         }
     }
 
-    fn tagExtReachesDesc(self: *Self, ext: Var, target_desc: types_mod.DescStoreIdx) bool {
+    fn tagExtReachesDesc(self: *Self, ext: Var, targets: RowMergeTargets) bool {
         var ext_var = ext;
         var guard = types_mod.debug.IterationGuard.init("tagExtReachesDesc");
 
@@ -1645,7 +1659,7 @@ const Unifier = struct {
             guard.tick();
 
             const resolved = self.types_store.resolveVar(ext_var);
-            if (resolved.desc_idx == target_desc) return true;
+            if (targets.contains(resolved.desc_idx)) return true;
 
             switch (resolved.desc.content) {
                 .alias => |alias| {
@@ -1703,27 +1717,29 @@ const Unifier = struct {
     }
 
     fn recordForMerge(self: *Self, vars: *const ResolvedVarDescs, record: types_mod.Record) std.mem.Allocator.Error!types_mod.Record {
-        const target_desc = self.rowExtMergeTarget(vars);
-        if (!self.recordExtReachesDesc(record.ext, target_desc)) return record;
+        const targets = self.rowExtMergeTargets(vars);
+        if (!self.recordExtReachesDesc(record.ext, targets)) return record;
 
         var range = try self.scratch.copyGatherFieldsFromMultiList(
             &self.types_store.record_fields,
             record.fields,
         );
         var ext_var = record.ext;
-        var spliced_target = false;
+        var spliced_a = false;
+        var spliced_b = false;
         var guard = types_mod.debug.IterationGuard.init("recordForMerge");
 
         while (true) {
             guard.tick();
 
             const resolved = self.types_store.resolveVar(ext_var);
-            if (resolved.desc_idx == target_desc) {
-                if (spliced_target) {
+            if (targets.contains(resolved.desc_idx)) {
+                const spliced = if (resolved.desc_idx == targets.a) &spliced_a else &spliced_b;
+                if (spliced.*) {
                     return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content));
                 }
 
-                spliced_target = true;
+                spliced.* = true;
                 switch (resolved.desc.content) {
                     .structure => |flat_type| {
                         switch (flat_type) {
@@ -1774,27 +1790,29 @@ const Unifier = struct {
     }
 
     fn tagUnionForMerge(self: *Self, vars: *const ResolvedVarDescs, tag_union: TagUnion) std.mem.Allocator.Error!TagUnion {
-        const target_desc = self.rowExtMergeTarget(vars);
-        if (!self.tagExtReachesDesc(tag_union.ext, target_desc)) return tag_union;
+        const targets = self.rowExtMergeTargets(vars);
+        if (!self.tagExtReachesDesc(tag_union.ext, targets)) return tag_union;
 
         var range = try self.scratch.copyGatherTagsFromMultiList(
             &self.types_store.tags,
             tag_union.tags,
         );
         var ext_var = tag_union.ext;
-        var spliced_target = false;
+        var spliced_a = false;
+        var spliced_b = false;
         var guard = types_mod.debug.IterationGuard.init("tagUnionForMerge");
 
         while (true) {
             guard.tick();
 
             const resolved = self.types_store.resolveVar(ext_var);
-            if (resolved.desc_idx == target_desc) {
-                if (spliced_target) {
+            if (targets.contains(resolved.desc_idx)) {
+                const spliced = if (resolved.desc_idx == targets.a) &spliced_a else &spliced_b;
+                if (spliced.*) {
                     return try self.finishTagUnionForMerge(range, try self.fresh(vars, resolved.desc.content));
                 }
 
-                spliced_target = true;
+                spliced.* = true;
                 switch (resolved.desc.content) {
                     .structure => |flat_type| {
                         switch (flat_type) {
@@ -2419,6 +2437,7 @@ const Unifier = struct {
         // invalid record ext var
         const a_gathered_fields = try self.gatherRecordFields(a_fields, a_ext);
         const b_gathered_fields = try self.gatherRecordFields(b_fields, b_ext);
+        try self.relateChainDuplicateFields(vars);
 
         // Then partition the fields
         const partitioned = try self.partitionFields(
@@ -2564,6 +2583,52 @@ const Unifier = struct {
     /// * the final tail extension variable, which is either a flex var or an empty record
     ///
     /// Errors if it encounters a malformed or invalid extension (e.g. a non-record type).
+    /// A field repeated along one row's extension chain is the same field:
+    /// its value types and kinds are equal exactly (design.md "Row Union
+    /// Normalization"), with no relation-specific kind relaxation.
+    fn relateChainDuplicateFields(self: *Self, vars: *const ResolvedVarDescs) Error!void {
+        while (self.scratch.chain_duplicate_fields.pop()) |duplicate| {
+            const first = duplicate.first.decode();
+            const repeated = duplicate.repeated.decode();
+            switch (first) {
+                .required => |first_var| switch (repeated) {
+                    .required => |repeated_var| try self.scheduleGuardedPair(first_var, repeated_var, .propagate),
+                    .unknown => |unknown| {
+                        try self.scheduleGuardedPair(first_var, unknown.var_, .propagate);
+                        try self.scheduleGuardedPair(try self.fresh(vars, .{ .field_presence = .required }), unknown.presence, .propagate);
+                    },
+                },
+                .unknown => |first_unknown| switch (repeated) {
+                    .required => |repeated_var| {
+                        try self.scheduleGuardedPair(first_unknown.var_, repeated_var, .propagate);
+                        try self.scheduleGuardedPair(first_unknown.presence, try self.fresh(vars, .{ .field_presence = .required }), .propagate);
+                    },
+                    .unknown => |unknown| {
+                        try self.scheduleGuardedPair(first_unknown.var_, unknown.var_, .propagate);
+                        try self.scheduleGuardedPair(first_unknown.presence, unknown.presence, .propagate);
+                    },
+                },
+            }
+        }
+    }
+
+    /// A tag repeated along one row's extension chain is the same tag: its
+    /// payloads are equal (design.md "Row Union Normalization").
+    fn relateChainDuplicateTags(self: *Self) Error!void {
+        while (self.scratch.chain_duplicate_tags.pop()) |duplicate| {
+            if (duplicate.first.len() != duplicate.repeated.len()) return error.TypeMismatch;
+            var arg_idx: u32 = duplicate.first.len();
+            while (arg_idx > 0) {
+                arg_idx -= 1;
+                try self.scheduleGuardedPair(
+                    self.types_store.getVarAt(duplicate.first, arg_idx),
+                    self.types_store.getVarAt(duplicate.repeated, arg_idx),
+                    .propagate,
+                );
+            }
+        }
+    }
+
     fn gatherRecordFields(self: *Self, record_fields: RecordField.SafeMultiList.Range, record_ext: Var) Error!GatheredFields {
         // first, copy from the store's MultiList record fields array into scratch's
         // regular list, capturing the insertion range
@@ -2572,11 +2637,8 @@ const Unifier = struct {
             record_fields,
         );
 
-        // Note: If a field name appears multiple times (e.g., in both base and extension),
-        // we keep the leftmost field (left-bias semantics, like Haskell's Map.union).
-        // Duplicates within a single record's extension chain are rare and typically
-        // indicate a type system bug (e.g., malformed type like `{ name: Str, ..{ name: U32 } }`).
-        // The outer unification logic handles unifying fields across *different* records.
+        // A field repeated along the chain keeps its first occurrence here;
+        // `relateChainDuplicateFields` relates each repeat to it.
 
         // Recursively gather fields from extensions
         var ext = record_ext;
@@ -2989,6 +3051,7 @@ const Unifier = struct {
         // Unwrap all fields for tag unions, erroring on invalid ext var
         const a_gathered_tags = try self.gatherTagUnionTags(a_tag_union);
         const b_gathered_tags = try self.gatherTagUnionTags(b_tag_union);
+        try self.relateChainDuplicateTags();
 
         // Then partition the tags
         const partitioned = try self.partitionTags(
@@ -3950,6 +4013,18 @@ const TwoRecordFields = struct {
 };
 const TwoRecordFieldsSafeList = MkSafeList(TwoRecordFields);
 
+/// A record field that reappears further along its row's extension chain.
+pub const ChainDuplicateField = struct {
+    first: RecordField.Presence,
+    repeated: RecordField.Presence,
+};
+
+/// A tag that reappears further along its row's extension chain.
+pub const ChainDuplicateTag = struct {
+    first: Var.SafeList.Range,
+    repeated: Var.SafeList.Range,
+};
+
 /// A reusable memory arena used across unification calls to avoid per-call allocations.
 ///
 /// `Scratch` owns several typed scratch arrays, each designed to hold a specific type of
@@ -4007,6 +4082,12 @@ pub const Scratch = struct {
     /// Successful width-absorption facts consumed by the checker before the
     /// next unification call resets this scratch store.
     absorbed_record_defaults: AbsorbedRecordDefault.SafeList,
+
+    /// A label repeated along one row's extension chain names one field or
+    /// tag (design.md "Row Union Normalization"). Gathering keeps the first
+    /// occurrence; these pairs relate each repeated occurrence to it.
+    chain_duplicate_fields: std.ArrayListUnmanaged(ChainDuplicateField),
+    chain_duplicate_tags: std.ArrayListUnmanaged(ChainDuplicateTag),
 
     // records - used internal by unification
     gathered_tags: TagSafeList,
@@ -4191,6 +4272,8 @@ pub const Scratch = struct {
             .open_var_map = collections.DenseMap(types_mod.Var, types_mod.Var).init(gpa),
             .opened_nominals = .empty,
             .opened_nominal_persistable = .empty,
+            .chain_duplicate_fields = .empty,
+            .chain_duplicate_tags = .empty,
             .persistent_openings = .empty,
             .persistent_opening_args = try VarSafeList.initCapacity(gpa, 8),
             .persistent_opening_index = .empty,
@@ -4225,6 +4308,8 @@ pub const Scratch = struct {
         self.open_var_map.deinit();
         self.opened_nominals.deinit(self.gpa);
         self.opened_nominal_args.deinit(self.gpa);
+        self.chain_duplicate_fields.deinit(self.gpa);
+        self.chain_duplicate_tags.deinit(self.gpa);
         self.opened_nominal_persistable.deinit(self.gpa);
         self.persistent_opening_index.deinit(self.gpa);
         self.persistent_openings.deinit(self.gpa);
@@ -4258,6 +4343,8 @@ pub const Scratch = struct {
         self.opened_nominals.clearRetainingCapacity();
         self.opened_nominal_args.items.clearRetainingCapacity();
         self.opened_nominal_persistable.clearRetainingCapacity();
+        self.chain_duplicate_fields.clearRetainingCapacity();
+        self.chain_duplicate_tags.clearRetainingCapacity();
     }
 
     // helpers //
@@ -4281,7 +4368,8 @@ pub const Scratch = struct {
     }
 
     /// Merge sorted extension fields into an already-sorted gathered range.
-    /// Maintains sorted order and left-bias semantics (base fields take precedence).
+    /// Maintains sorted order; a field already gathered keeps its first
+    /// occurrence, and the repeat is recorded in `chain_duplicate_fields`.
     /// The range is updated in-place to reflect the new count.
     /// Returns whether any new fields were added.
     fn mergeSortedExtensionFields(
@@ -4298,13 +4386,16 @@ pub const Scratch = struct {
         const current_fields = self.gathered_fields.sliceRange(range.*);
         const current_len = current_fields.len;
 
-        // Count how many extension fields are NOT duplicates
+        // Count the extension fields that are not already gathered, recording
+        // each repeated one against its first occurrence.
         var new_count: usize = 0;
-        for (ext_names) |ext_name| {
-            const is_dup = for (current_fields) |existing| {
-                if (existing.name.eql(ext_name)) break true;
-            } else false;
-            if (!is_dup) new_count += 1;
+        for (ext_names, ext_presences) |ext_name, ext_presence| {
+            const first = for (current_fields) |existing| {
+                if (existing.name.eql(ext_name)) break existing;
+            } else null;
+            if (first) |existing| {
+                try self.chain_duplicate_fields.append(self.gpa, .{ .first = existing.presence, .repeated = ext_presence });
+            } else new_count += 1;
         }
 
         if (new_count == 0) return;
@@ -4346,7 +4437,8 @@ pub const Scratch = struct {
     }
 
     /// Merge sorted extension tags into an already-sorted gathered range.
-    /// Maintains sorted order and left-bias semantics (base tags take precedence).
+    /// Maintains sorted order; a tag already gathered keeps its first
+    /// occurrence, and the repeat is recorded in `chain_duplicate_tags`.
     fn mergeSortedExtensionTags(
         self: *Self,
         range: *TagSafeList.Range,
@@ -4361,13 +4453,16 @@ pub const Scratch = struct {
         const current_tags = self.gathered_tags.sliceRange(range.*);
         const current_len = current_tags.len;
 
-        // Count how many extension tags are NOT duplicates
+        // Count the extension tags that are not already gathered, recording
+        // each repeated one against its first occurrence.
         var new_count: usize = 0;
-        for (ext_names) |ext_name| {
-            const is_dup = for (current_tags) |existing| {
-                if (existing.name.eql(ext_name)) break true;
-            } else false;
-            if (!is_dup) new_count += 1;
+        for (ext_names, ext_args) |ext_name, args| {
+            const first = for (current_tags) |existing| {
+                if (existing.name.eql(ext_name)) break existing;
+            } else null;
+            if (first) |existing| {
+                try self.chain_duplicate_tags.append(self.gpa, .{ .first = existing.args, .repeated = args });
+            } else new_count += 1;
         }
 
         if (new_count == 0) return;

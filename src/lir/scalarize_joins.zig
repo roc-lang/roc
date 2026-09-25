@@ -741,7 +741,7 @@ const Pass = struct {
                     .{ .local = payload };
                 break :blk .{ .assign_ref = updated };
             },
-            else => unreachable, // validSingleVariantRead admitted only these reads
+            .local, .field, .list_reinterpret, .nominal => unreachable, // validSingleVariantRead admitted only these reads
         };
         try self.store.replaceCFStmt(stmt_id, replacement, scalarizeOrigin(self.store.stmtOrigin(stmt_id)));
     }

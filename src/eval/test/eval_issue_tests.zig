@@ -266,6 +266,110 @@ const issue11377GenericNominalCollectionSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "issue 11632: annotated Try parser keeps its listed tags",
+        .source_kind = .module,
+        .source =
+        \\parse : Str -> Try([A, B], _)
+        \\parse = |json| Json.parse(json)
+        \\main = match parse("\"C\"") {
+        \\    Ok(_) => False
+        \\    Err(_) => True
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "issue 11632: single inferred tag still derives",
+        .source_kind = .module,
+        .source =
+        \\main = Ok(Friendly) == Json.parse("\"Friendly\"")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "issue 11632: nested inferred encoder row",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    value = { tags: [A] }
+        \\    encoded = Json.to_str(value)
+        \\    all_a = List.all(value.tags, |tag| match tag {
+        \\        A => True
+        \\        B => False
+        \\    })
+        \\    encoded == "{\"tags\":[\"A\"]}" and all_a
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "issue 11632: parser branch order A then B",
+        .source_kind = .module,
+        .source =
+        \\run = |json| {
+        \\    w = Json.parse(json)
+        \\    match w {
+        \\        Ok(A(s)) => s == ""
+        \\        Ok(B) => True
+        \\        Err(_) => False
+        \\    }
+        \\}
+        \\main = run("\"B\"") and run("{\"A\":\"\"}")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "issue 11632: parser branch order B then A",
+        .source_kind = .module,
+        .source =
+        \\run = |json| {
+        \\    w = Json.parse(json)
+        \\    match w {
+        \\        Ok(B) => True
+        \\        Ok(A(s)) => s == ""
+        \\        Err(_) => False
+        \\    }
+        \\}
+        \\main = run("\"B\"") and run("{\"A\":\"\"}")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "issue 11632: encoder before later match",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    v = if 1 == 1 A else B
+        \\    s = Json.to_str(v)
+        \\    extra = match v {
+        \\        A => 1
+        \\        B => 2
+        \\        C => 3
+        \\    }
+        \\    s == "\"A\"" and extra == 1
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "issue 11632: fresh caller openness remains inferred",
+        .source_kind = .module,
+        .source =
+        \\make : {} -> [A, B]
+        \\make = |_| A
+        \\main = {
+        \\    value = make({})
+        \\    encoded = Json.to_str(value)
+        \\    match value {
+        \\        A => encoded == "\"A\""
+        \\        B => False
+        \\        C => False
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "issue 11377: nested nominal alias applications retain outer parameters",
         .source_kind = .module,
         .source =

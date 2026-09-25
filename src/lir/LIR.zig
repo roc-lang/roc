@@ -301,7 +301,7 @@ pub const OriginKind = union(enum(u8)) {
     pub fn isArcInserted(self: OriginKind) bool {
         return switch (self) {
             .arc_incref, .arc_decref, .arc_dismantle => true,
-            else => false,
+            .source, .lowering_glue, .derived, .scaffold, .join_scalarize, .box_reuse, .return_slot, .str_append_fuse, .loop_append_promote, .tag_case_fusion, .forwarding_join_inline, .comptime_value_guard, .trmc, .range_prove => false,
         };
     }
 

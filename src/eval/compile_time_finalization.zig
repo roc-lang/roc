@@ -380,13 +380,13 @@ const RuntimeFrozenMaterializer = struct {
         return transcodeCompletedSlots(allocator, self.source, target, &self.successful_roots);
     }
 
-    fn completeGuards(context: *anyopaque, target: *LirProgram.Result) void {
+    fn completeGuards(context: *anyopaque, target: *LirProgram.Result) Allocator.Error!void {
         const self: *RuntimeFrozenMaterializer = @ptrCast(@alignCast(context));
         for (self.successful_roots.items) |successful| {
             for (target.static_data_values.items, 0..) |value, index| {
                 const root = value.compile_time_root orelse continue;
                 if (root.role != .value or !std.meta.eql(root.module, successful.module) or root.root != successful.root) continue;
-                lir.ComptimeValueGuards.completeSuccessfulSlot(target, @enumFromInt(index));
+                try lir.ComptimeValueGuards.completeSuccessfulSlot(target, @enumFromInt(index));
                 break;
             } else finalizationInvariant("successful completed root was removed before guard completion");
         }

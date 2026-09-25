@@ -919,7 +919,7 @@ pub const FrozenMaterializer = struct {
     materialize: *const fn (Allocator, *anyopaque, *LirProgram.Result) Allocator.Error!LirProgram.FrozenStaticData,
     /// Apply evaluation outcomes after guard insertion. Successful values
     /// bypass their guards; failed values retain the emitted failure path.
-    complete_guards: *const fn (*anyopaque, *LirProgram.Result) void,
+    complete_guards: *const fn (*anyopaque, *LirProgram.Result) Allocator.Error!void,
 };
 
 /// Materialized Lambda Mono program type, re-exported for harnesses that
@@ -1659,7 +1659,7 @@ fn finishLoweredOutput(
 
     try @import("comptime_value_guards.zig").insert(allocator, &lowered.lir_result);
     if (frozen_materializer) |materializer| {
-        materializer.complete_guards(materializer.context, &lowered.lir_result);
+        try materializer.complete_guards(materializer.context, &lowered.lir_result);
     }
 
     try LirDump.run(&lowered.lir_result);
