@@ -34,7 +34,7 @@ const TopLevelDemandDependency = can.DependencyGraph.Dependency;
 const Var = types.Var;
 const CompactWriter = collections.CompactWriter;
 const StringLiteral = base.StringLiteral;
-const published_type_roots = @import("published_type_roots.zig");
+const output_type_roots = @import("output_type_roots.zig");
 
 /// Publishes each visited root into a checked type store.
 const CheckedTypeRootPublisher = struct {
@@ -4721,7 +4721,7 @@ pub const CheckedTypeStore = struct {
             if (source_nodes.hasExpr(@enumFromInt(node_idx))) {
                 const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
                 _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, module.exprType(expr_idx));
-                try published_type_roots.forEachCallTypeRoot(module_env, expr_idx, &publisher);
+                try output_type_roots.forEachCallTypeRoot(module_env, expr_idx, &publisher);
             } else if (source_nodes.hasPattern(@enumFromInt(node_idx))) {
                 const pattern_source_var = checkedPatternSourceTypeVar(module, &top_level_defs, @enumFromInt(node_idx));
                 _ = try appendCheckedTypeRoot(
@@ -4742,7 +4742,7 @@ pub const CheckedTypeStore = struct {
         // checked type id rather than retaining checker-only variables.
         // Explicit scheme requirements may be absent from the public callable.
         // Publish their roots before the evidence schema names them.
-        try published_type_roots.forEachRecordedTypeRoot(module_env, &publisher);
+        try output_type_roots.forEachRecordedTypeRoot(module_env, &publisher);
         for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
             if (!source_nodes.hasStatement(statement_idx)) continue;
             switch (module.getStatement(statement_idx)) {
@@ -4806,7 +4806,7 @@ pub const CheckedTypeStore = struct {
         // every fresh type participating in a recorded scheme use, including
         // the constraint function that identifies a selected dispatch target
         // or a per-use where-method callable.
-        try published_type_roots.forEachSchemeUseTypeRoot(module_env, &publisher);
+        try output_type_roots.forEachSchemeUseTypeRoot(module_env, &publisher);
 
         for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
             const root = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, module.defType(def_idx));
@@ -8221,15 +8221,15 @@ fn appendStaticDispatchTypeRoots(
 
         const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
         if (!source_nodes.hasExpr(expr_idx)) continue;
-        try published_type_roots.forEachStaticDispatchTypeRoot(module.moduleEnvConst(), expr_idx, &publisher);
+        try output_type_roots.forEachStaticDispatchTypeRoot(module.moduleEnvConst(), expr_idx, &publisher);
     }
 
     for (module.moduleEnvConst().for_loop_dispatch_plans.items.items) |plan| {
         if (!source_nodes.hasRawLoop(plan.node_idx)) continue;
-        try published_type_roots.forEachForLoopDispatchTypeRoot(plan, &publisher);
+        try output_type_roots.forEachForLoopDispatchTypeRoot(plan, &publisher);
     }
 
-    try published_type_roots.forEachLiteralDispatchTypeRoot(module.moduleEnvConst(), &publisher);
+    try output_type_roots.forEachLiteralDispatchTypeRoot(module.moduleEnvConst(), &publisher);
 }
 
 fn syntheticFunctionTypeKey(

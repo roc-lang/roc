@@ -7118,15 +7118,15 @@ Three consumers keep the rule exact:
   treats a repeated label as an invariant violation.
 
 Before `CheckedModule` is built, every tag and record row reachable from a
-type the checked module can publish is checked once; rows that repeat a label
+type the checked module can output is checked once; rows that repeat a label
 are normalized in ascending root order. Those types are the expression,
 pattern, and definition types and the roots inference recorded elsewhere: call
 and dispatch constraint functions, scheme-use substitutions and instances, and
 codec requirements and derivations. A scheme-use substitution can hold a copy
 of an unnormalized row that no expression's type still reaches, such as a
 mutually recursive member's error row copied before its group settled.
-Publication and this walk enumerate the recorded roots through the same
-`published_type_roots` functions, so a root publication adds is normalized
+`CheckedModule` construction and this walk enumerate the recorded roots
+through the same `output_type_roots` functions, so a root the output adds is normalized
 without a second list to keep in step.
 
 Normalization needs no metadata on type variables and adds no work where no
@@ -7136,7 +7136,7 @@ labels. A conflict is reported as a conflicting tag or field: each occurrence
 is shown as a closed single-label row at the source of the row part holding it,
 so the report names where each copy of the label came from. Its location is
 the value whose type holds the row when the settled walk reached the row from
-a published root, and otherwise the outer occurrence. The walk finishes each
+an output root, and otherwise the outer occurrence. The walk finishes each
 root before starting the next, in source-node order, so the value is the
 earliest source node whose type reaches the row; choosing it is a reporting
 decision and changes nothing about which programs check. The row is poisoned
@@ -7149,7 +7149,7 @@ repeated two extensions down), by `src/check/test/issue_11621_test.zig`
 (recursive functions using `?`, directly, mutually, through a generalized
 helper, and through dispatch), and by the chain-duplicate unifier tests and the
 `normalizeRowUnion` test in `src/check/Check.zig`, which cover records.
-`src/compile/test/issue_11621_test.zig` pins the publication of a mutually
+`src/compile/test/issue_11621_test.zig` pins the output of a mutually
 recursive group's substitution rows, and
 `test/fx-open/issue_11621_recursive_try.roc` runs those programs on every
 backend. The

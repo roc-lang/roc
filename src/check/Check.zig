@@ -23,7 +23,7 @@ const snapshot_mod = @import("snapshot.zig");
 const exhaustive = @import("exhaustive.zig");
 const ExhaustivenessContext = @import("exhaustiveness_context.zig");
 const hoist_roots = @import("hoist_roots.zig");
-const published_type_roots = @import("published_type_roots.zig");
+const output_type_roots = @import("output_type_roots.zig");
 const dispatch_evidence = @import("dispatch_evidence.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
 
@@ -5526,7 +5526,7 @@ fn validateSettledValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void
 
     // Every type the checked module can publish, so no published row escapes
     // normalization: expression and pattern types, definition types, and the
-    // inferred roots publication enumerates through `published_type_roots`.
+    // inferred roots publication enumerates through `output_type_roots`.
     const seeder = SettledRootSeeder{ .gpa = self.gpa, .seeds = &seeds };
     var raw_node_idx: u32 = 0;
     while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
@@ -5535,8 +5535,8 @@ fn validateSettledValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void
         if (isExprNodeTag(tag)) {
             const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
             try seeder.visit(ModuleEnv.varFrom(expr_idx));
-            try published_type_roots.forEachCallTypeRoot(self.cir, expr_idx, &seeder);
-            try published_type_roots.forEachStaticDispatchTypeRoot(self.cir, expr_idx, &seeder);
+            try output_type_roots.forEachCallTypeRoot(self.cir, expr_idx, &seeder);
+            try output_type_roots.forEachStaticDispatchTypeRoot(self.cir, expr_idx, &seeder);
         } else if (isPatternNodeTag(tag)) {
             try seeder.visit(@enumFromInt(raw_node_idx));
         }
@@ -5544,12 +5544,12 @@ fn validateSettledValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void
     for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
         try seeder.visit(ModuleEnv.varFrom(def_idx));
     }
-    try published_type_roots.forEachRecordedTypeRoot(self.cir, &seeder);
-    try published_type_roots.forEachSchemeUseTypeRoot(self.cir, &seeder);
+    try output_type_roots.forEachRecordedTypeRoot(self.cir, &seeder);
+    try output_type_roots.forEachSchemeUseTypeRoot(self.cir, &seeder);
     for (self.cir.for_loop_dispatch_plans.items.items) |plan| {
-        try published_type_roots.forEachForLoopDispatchTypeRoot(plan, &seeder);
+        try output_type_roots.forEachForLoopDispatchTypeRoot(plan, &seeder);
     }
-    try published_type_roots.forEachLiteralDispatchTypeRoot(self.cir, &seeder);
+    try output_type_roots.forEachLiteralDispatchTypeRoot(self.cir, &seeder);
 
     // Each seed's walk finishes before the next starts, so a row belongs to
     // the earliest source node whose type reaches it.
