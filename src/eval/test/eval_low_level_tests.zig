@@ -2377,6 +2377,25 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "True" },
     },
     .{
+        .name = "low_level - Json number decoding rejects Roc-only numeric continuations",
+        .source =
+        \\{
+        \\    i : Str -> Try(List(I64), _)
+        \\    i = |s| Json.parse(s)
+        \\    u : Str -> Try(U8, _)
+        \\    u = |s| Json.parse(s)
+        \\    f : Str -> Try(F64, _)
+        \\    f = |s| Json.parse(s)
+        \\    ok = i("[ 1 , -2,0,12 ]") == Ok([1, -2, 0, 12]) and u(" 255 ") == Ok(255) and f("-0.5E+1") == Ok(-5.0) and f("1e2") == Ok(100.0)
+        \\    bad_ints = ["[1_0]", "[0x1]", "[1e5]", "[01]", "[+1]", "[1.5]", "[1a]", "[1:]", "[-]", "[1e-0]"].all(|s| i(s).is_err())
+        \\    bad_u8 = ["256", "-1", "0b1", "1 x"].all(|s| u(s).is_err())
+        \\    bad_f = ["inf", "-infinity", "nan", "1.", ".5", "1_0.0", "0x1p3", "1e", "+1.0", "1.0f"].all(|s| f(s).is_err())
+        \\    ok and bad_ints and bad_u8 and bad_f
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "low_level - from_str_prefix issue 7010 expects",
         .source =
         \\{
