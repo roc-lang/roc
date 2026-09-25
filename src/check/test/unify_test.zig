@@ -591,7 +591,7 @@ test "unify - two declared applications of one alias are related by their argume
 }
 
 test "unify - an opened alias application is related to its alias by backing" {
-    // design.md "Opened Alias Instances": when either instance is `.opened`
+    // design.md "Opened Alias Instances": when either instance is opened
     // its arguments do not describe its backing, so the backings are related
     // for real and their disagreement is the relation's mismatch.
     for ([_]bool{ false, true }) |reverse| {
@@ -604,7 +604,7 @@ test "unify - an opened alias application is related to its alias by backing" {
         const narrow = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{other})).content);
         const wide = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{ aborted, other })).content);
         var opened_content = try env.mkAlias("Base", wide, &[_]Var{});
-        opened_content.alias.backing = .opened;
+        opened_content.alias.backing = .opened_at_use;
         const opened = try env.module_env.types.freshFromContent(opened_content);
         const declared = try env.module_env.types.freshFromContent(try env.mkAlias("Base", narrow, &[_]Var{}));
 
@@ -629,7 +629,7 @@ test "unify - an opened alias application meets its alias by backing, not by arg
         const opened_backing = try env.module_env.types.freshFromContent((try env.mkTagUnionOpen(&[_]Tag{other})).content);
         const declared_arg = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{ aborted, other })).content);
         var opened_content = try env.mkAlias("Id", opened_backing, &[_]Var{opened_arg});
-        opened_content.alias.backing = .opened;
+        opened_content.alias.backing = .opened_at_use;
         const opened = try env.module_env.types.freshFromContent(opened_content);
         const declared_content = try env.mkAlias("Id", declared_arg, &[_]Var{declared_arg});
         const declared = try env.module_env.types.freshFromContent(declared_content);
@@ -645,6 +645,71 @@ test "unify - an opened alias application meets its alias by backing, not by arg
             env.module_env.types.resolveVar(opened_arg).desc.content.structure.tag_union.tags.len(),
             @as(usize, 1),
         );
+    }
+}
+
+test "unify - a use's opened alias never replaces the structure it meets" {
+    // design.md "Opened Alias Instances": the backing is related, then the
+    // use's instance merges into the structure, whose content is kept.
+    for ([_]bool{ false, true }) |reverse| {
+        const gpa = std.testing.allocator;
+        var env = try TestEnv.init(gpa);
+        defer env.deinit();
+
+        const other = try env.mkTag("Other", &[_]Var{});
+        const aborted = try env.mkTag("Aborted", &[_]Var{});
+        const backing = try env.module_env.types.freshFromContent((try env.mkTagUnionOpen(&[_]Tag{other})).content);
+        var opened_content = try env.mkAlias("Base", backing, &[_]Var{});
+        opened_content.alias.backing = .opened_at_use;
+        const opened = try env.module_env.types.freshFromContent(opened_content);
+        const structure = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{ aborted, other })).content);
+
+        const result = if (reverse) try env.unify(structure, opened) else try env.unify(opened, structure);
+        try std.testing.expectEqual(.unified, result);
+        try std.testing.expectEqual(env.module_env.types.resolveVar(structure).var_, env.module_env.types.resolveVar(opened).var_);
+        try std.testing.expect(env.module_env.types.resolveVar(opened).desc.content == .structure);
+    }
+}
+
+test "unify - an annotation's opened alias keeps its own view against a structure" {
+    // Only a use's instance is absorbed; an annotation's instance stays the
+    // transparent view it always was, its backing constrained.
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const other = try env.mkTag("Other", &[_]Var{});
+    const backing = try env.module_env.types.freshFromContent((try env.mkTagUnionOpen(&[_]Tag{other})).content);
+    var opened_content = try env.mkAlias("Base", backing, &[_]Var{});
+    opened_content.alias.backing = .opened_by_annotation;
+    const opened = try env.module_env.types.freshFromContent(opened_content);
+    const structure = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{other})).content);
+
+    try std.testing.expectEqual(.unified, try env.unify(opened, structure));
+    try std.testing.expect(env.module_env.types.resolveVar(opened).desc.content == .alias);
+    try std.testing.expect(env.module_env.types.resolveVar(opened).var_ != env.module_env.types.resolveVar(structure).var_);
+}
+
+test "unify - a use's opened alias application never replaces an annotation's" {
+    // Both instances are opened and one alias's; the annotation's view is kept.
+    for ([_]bool{ false, true }) |reverse| {
+        const gpa = std.testing.allocator;
+        var env = try TestEnv.init(gpa);
+        defer env.deinit();
+
+        const other = try env.mkTag("Other", &[_]Var{});
+        const use_backing = try env.module_env.types.freshFromContent((try env.mkTagUnionOpen(&[_]Tag{other})).content);
+        const anno_backing = try env.module_env.types.freshFromContent((try env.mkTagUnionOpen(&[_]Tag{other})).content);
+        var use_content = try env.mkAlias("Base", use_backing, &[_]Var{});
+        use_content.alias.backing = .opened_at_use;
+        var anno_content = try env.mkAlias("Base", anno_backing, &[_]Var{});
+        anno_content.alias.backing = .opened_by_annotation;
+        const use = try env.module_env.types.freshFromContent(use_content);
+        const anno = try env.module_env.types.freshFromContent(anno_content);
+
+        const result = if (reverse) try env.unify(anno, use) else try env.unify(use, anno);
+        try std.testing.expectEqual(.unified, result);
+        try std.testing.expectEqual(types_mod.AliasBacking.opened_by_annotation, env.module_env.types.resolveVar(use).desc.content.alias.backing);
     }
 }
 

@@ -676,6 +676,7 @@ const Unifier = struct {
             .merge => |merge_frame| try self.merge(&merge_frame.vars, merge_frame.content),
             .merge_to_nominal => |merge_frame| try self.mergeToNominal(&merge_frame.vars, merge_frame.direction),
             .same_alias_after_args => |post| try self.processSameAliasAfterArgs(post),
+            .absorb_opened_alias => |absorb| try self.processAbsorbOpenedAlias(absorb),
             .shared_fields_after_children => |post| try self.processSharedFieldsAfterChildren(post),
             .shared_tags_after_children => |post| try self.processSharedTagsAfterChildren(post),
         }
@@ -967,6 +968,13 @@ const Unifier = struct {
                         try self.unifyOpenedSameAliases(vars, a_alias, b_alias);
                     }
                 } else {
+                    // Two different aliases: a use's opened instance never
+                    // wins over the other side (see `scheduleAbsorbOpenedAlias`).
+                    if (a_alias.backing == .opened_at_use and b_alias.backing != .opened_at_use) {
+                        try self.scheduleAbsorbOpenedAlias(vars.a.var_, vars.b.var_);
+                    } else if (b_alias.backing == .opened_at_use and a_alias.backing != .opened_at_use) {
+                        try self.scheduleAbsorbOpenedAlias(vars.b.var_, vars.a.var_);
+                    }
                     try self.unifyGuarded(backing_var, b_backing_var);
                 }
             },
@@ -974,12 +982,37 @@ const Unifier = struct {
                 // Structural aliases are transparent. The concrete structure
                 // constrains the alias backing; alias spelling is checked
                 // presentation data, not union-find representative shape.
+                if (a_alias.backing == .opened_at_use) try self.scheduleAbsorbOpenedAlias(vars.a.var_, vars.b.var_);
                 try self.unifyGuarded(vars.b.var_, backing_var);
             },
             // A presence fact is not a type: it can never unify with an alias
             // (two-axes invariant). Reaching here is a structural mismatch.
             .field_presence => return error.TypeMismatch,
             .err => return error.ErroneousType,
+        }
+    }
+
+    /// Once `opened_var` (an `.opened_at_use` alias) and `other_var` (a
+    /// structure, or an alias that is not a use's) have been related through
+    /// the alias's backing, merge the opened alias into the other side, which
+    /// keeps its own content. A use's opened instance is a use-site
+    /// artifact: the widening it carries happens at that use, and it must
+    /// never replace what the other side states—an annotation stays exactly
+    /// as written, including a nominal argument such as a `Try`'s error row
+    /// (design.md "Opened Alias Instances"). Pushed before the backing relation so it runs after it;
+    /// a mismatch there unwinds past it. The other side's content is read
+    /// when it runs, since relating the backing may have refined it.
+    fn scheduleAbsorbOpenedAlias(self: *Self, opened_var: Var, other_var: Var) std.mem.Allocator.Error!void {
+        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .absorb_opened_alias = .{
+            .opened = opened_var,
+            .other = other_var,
+        } });
+    }
+
+    fn processAbsorbOpenedAlias(self: *Self, absorb: AbsorbOpenedAlias) Error!void {
+        switch (self.types_store.checkVarsEquiv(absorb.opened, absorb.other)) {
+            .equiv => return,
+            .not_equiv => |vars| try self.merge(&vars, vars.b.desc.content),
         }
     }
 
@@ -1030,21 +1063,20 @@ const Unifier = struct {
         }
     }
 
-    /// Unify two applications of one alias when either is `.opened`
-    /// (design.md "Opened Alias Instances"): its backing is no longer its
-    /// declaration's body under its arguments, so the arguments do not decide
-    /// the relation and are never unified. The backings are related for real,
-    /// and a disagreement is this relation's mismatch. Once they agree the
-    /// two views merge; a `.declared` side is kept when there is one, since
-    /// its arguments are exactly the substitution of the backing both now
-    /// share.
+    /// Unify two applications of one alias when either is opened (design.md
+    /// "Opened Alias Instances"): its backing is no longer its declaration's
+    /// body under its arguments, so the arguments do not decide the relation
+    /// and are never unified. The backings are related for real, and a
+    /// disagreement is this relation's mismatch. Once they agree the two
+    /// views merge, keeping the side with the higher
+    /// `AliasBacking.mergePriority`: a `.declared` side's arguments are
+    /// exactly the substitution of the backing both now share, and a use's
+    /// opened instance never replaces what the other side states.
     fn unifyOpenedSameAliases(self: *Self, vars: *const ResolvedVarDescs, a_alias: Alias, b_alias: Alias) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        const merged: Content = if (b_alias.backing == .declared)
-            .{ .alias = b_alias }
-        else if (a_alias.backing == .declared)
+        const merged: Content = if (a_alias.backing.mergePriority() > b_alias.backing.mergePriority())
             .{ .alias = a_alias }
         else
             .{ .alias = b_alias };
@@ -1081,6 +1113,7 @@ const Unifier = struct {
                 // Structural aliases are transparent. The concrete structure
                 // constrains the alias backing; alias spelling is checked
                 // presentation data, not union-find representative shape.
+                if (b_alias.backing == .opened_at_use) try self.scheduleAbsorbOpenedAlias(vars.b.var_, vars.a.var_);
                 try self.unifyGuarded(vars.a.var_, backing_var);
             },
             .structure => |b_flat_type| {
@@ -3951,6 +3984,12 @@ const MismatchHandling = union(enum) {
     record_then_propagate: RawTypePair,
 };
 
+/// See `Unifier.scheduleAbsorbOpenedAlias`.
+const AbsorbOpenedAlias = struct {
+    opened: Var,
+    other: Var,
+};
+
 const SameAliasAfterArgs = struct {
     vars: ResolvedVarDescs,
     a_backing_var: Var,
@@ -4004,6 +4043,7 @@ const WorkFrame = union(enum) {
         direction: NominalDirection,
     },
     same_alias_after_args: SameAliasAfterArgs,
+    absorb_opened_alias: AbsorbOpenedAlias,
     shared_fields_after_children: SharedFieldsAfterChildren,
     shared_tags_after_children: SharedTagsAfterChildren,
 

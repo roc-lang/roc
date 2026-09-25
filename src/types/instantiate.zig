@@ -157,7 +157,7 @@ pub const Scratch = struct {
     twin_marks: std.ArrayListUnmanaged(u32) = .empty,
     /// The fresh vars whose copy opened something (`Instantiator.openings`):
     /// a polarity marker resolved open, a result-row twin taken, or an
-    /// `.opened` alias copied, at or below that var. A later visit of the
+    /// opened alias copied, at or below that var. A later visit of the
     /// same source var reuses the copy through the `var_map` memo, so the
     /// frame making that visit learns from here that its copy contains an
     /// opening. Every entry stays true for as long as its var exists, so the
@@ -412,10 +412,15 @@ pub const Instantiator = struct {
     result_row_twin_builder: ?ResultRowTwinBuilder = null,
     /// How many openings this instantiation has made so far: polarity
     /// markers resolved open, result-row twins taken that open their row,
-    /// `.opened` aliases copied, and reuses of a copy that contains one. An
+    /// opened aliases copied, and reuses of a copy that contains one. An
     /// alias frame whose count grew while it copied its backing and arguments
-    /// is `.opened` (design.md "Opened Alias Instances").
+    /// is opened (design.md "Opened Alias Instances").
     openings: u32 = 0,
+    /// Where this instantiation happens, which decides how an alias it opens
+    /// is marked (`types.AliasBacking`): an annotation walk generating a
+    /// definition's own declared type (`.annotation`), or a use of a
+    /// definition (`.use`: a scheme instantiated where it is used).
+    opening_site: OpeningSite = .use,
     /// How to resolve polarity vars (see `PolarityVarBehavior`). `.close`
     /// reproduces the written (closed) row and is the safe default.
     polarity_var_behavior: PolarityVarBehavior = .close,
@@ -466,7 +471,7 @@ pub const Instantiator = struct {
     /// result row mints nothing.
     ///
     /// An alias whose backing took a twin is no longer its declaration's body
-    /// under its arguments, so `stepAlias` makes it `.opened`: unification
+    /// under its arguments, so `stepAlias` makes it opened: unification
     /// relates it to another application of the alias by its backing, never
     /// by its arguments (design.md "Opened Alias Instances"). The alias layer
     /// is kept. Its arguments are presentation: a twinned formal's argument
@@ -499,6 +504,9 @@ pub const Instantiator = struct {
         ctx: *anyopaque,
         build: *const fn (ctx: *anyopaque, index: usize) std.mem.Allocator.Error!Var,
     };
+
+    /// See `opening_site`.
+    pub const OpeningSite = enum { annotation, use };
 
     /// Re-exported so callers name one enum: `Instantiator.AdapterReach`.
     pub const AdapterReach = AdapterReachPosition;
@@ -1450,13 +1458,20 @@ pub const Instantiator = struct {
             const values = machine.value_stack.items;
             const fresh_backing_var = values[frame.vars_base];
             const fresh_args = values[frame.vars_base + 1 ..][0..frame.args_count];
-            // A copy of an `.opened` alias stays `.opened`, and is itself an
+            // A copy of an opened alias stays opened, and is itself an
             // opening for every alias frame enclosing it. A copy that opened
-            // anything inside its backing or arguments is `.opened` too: its
+            // anything inside its backing or arguments is opened too: its
             // backing is no longer its declaration's body under its
-            // arguments (design.md "Opened Alias Instances").
-            if (frame.alias.backing == .opened) self.openings += 1;
-            const backing: types_mod.AliasBacking = if (self.openings > frame.common.openings_base) .opened else .declared;
+            // arguments (design.md "Opened Alias Instances"). It is opened
+            // by the annotation walk when that walk made it, and at a use
+            // otherwise; a use's instance stays a use's instance.
+            if (frame.alias.backing.isOpened()) self.openings += 1;
+            const backing: types_mod.AliasBacking = if (self.openings == frame.common.openings_base)
+                .declared
+            else switch (self.opening_site) {
+                .use => .opened_at_use,
+                .annotation => if (frame.alias.backing == .opened_at_use) .opened_at_use else .opened_by_annotation,
+            };
             const fresh_content = try self.store.mkAliasWithSourceDeclAndBuiltinOrigin(
                 frame.alias.ident,
                 fresh_backing_var,

@@ -68,7 +68,7 @@ count_pending: std.array_list.Managed(Var),
 /// Row collection runs to completion without rendering anything, so one
 /// buffer serves every row node.
 ext_seen: std.AutoHashMap(Var, void),
-/// How an `.opened` alias instance is rendered (see `OpenedAliasDisplay`).
+/// How an opened alias instance is rendered (see `OpenedAliasDisplay`).
 opened_aliases: OpenedAliasDisplay = .name_only,
 next_name_index: u32,
 name_counters: std.EnumMap(TypeContext, u32),
@@ -188,7 +188,7 @@ const Frame = union(enum) {
 };
 
 /// How to render an alias instance whose backing an instantiation opened
-/// (`types.AliasBacking.opened`, design.md "Opened Alias Instances"). Its
+/// (`types.AliasBacking.isOpened`, design.md "Opened Alias Instances"). Its
 /// arguments are presentation of the NARROW declaration while its backing may
 /// have been widened, so two such instances can render identically while
 /// their types differ.
@@ -202,7 +202,7 @@ pub const OpenedAliasDisplay = enum {
     name_and_backing,
 };
 
-/// An `.opened` alias rendered with its backing (`OpenedAliasDisplay`): its
+/// An opened alias rendered with its backing (`OpenedAliasDisplay`): its
 /// arguments, then its backing. The frame owns the `seen` entry its node
 /// pushed.
 const OpenedAliasFrame = struct {
@@ -768,7 +768,7 @@ fn startAlias(self: *TypeWriter, writer: *ByteWrite, alias: Alias) error{ OutOfM
     // its arguments are the span with that element dropped.
     var args = alias.vars.nonempty;
     args.dropFirstElem();
-    if (alias.backing == .opened and self.opened_aliases == .name_and_backing) {
+    if (alias.backing.isOpened() and self.opened_aliases == .name_and_backing) {
         if (args.len() > 0) try writer.writeAll("(");
         try self.frames.append(.{ .opened_alias = .{
             .args = args,
@@ -1575,7 +1575,7 @@ fn collectCountChildren(self: *TypeWriter, content: Content) std.mem.Allocator.E
             while (args_iter.next()) |arg_var| {
                 try self.count_pending.append(arg_var);
             }
-            if (alias.backing == .opened and self.opened_aliases == .name_and_backing) {
+            if (alias.backing.isOpened() and self.opened_aliases == .name_and_backing) {
                 try self.count_pending.append(self.types.getAliasBackingVar(alias));
             }
         },

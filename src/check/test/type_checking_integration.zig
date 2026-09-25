@@ -9741,7 +9741,7 @@ test "check type - polarity - a coerced Try error row whose extension is an alia
         \\wider : Try(U64, Errs) -> Try(U64, [HostErr(U64), Other, Widened])
         \\wider = |t| fwd(t)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, Errs) -> Try(U64, Errs)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, Errs) -> Try(U64, [HostErr(U64), Other, Widened])");
 }
 
 test "check type - polarity - a coerced direct row whose extension is an alias coerces" {
@@ -9792,7 +9792,7 @@ test "check type - polarity - an alias applied at the result row whose formal is
         \\wider : Try(U64, [HostErr(U64), Other]) -> Try(U64, [HostErr(U64), Other, Widened])
         \\wider = |t| fwd(t)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, [HostErr(U64), Other]) -> Try(U64, Wrap(Base))");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, [HostErr(U64), Other]) -> Try(U64, [HostErr(U64), Other, Widened])");
 }
 
 test "check type - polarity - an identity alias applied at the result row coerces" {
@@ -9846,7 +9846,7 @@ test "check type - polarity - a function alias Try error argument whose row cont
         \\wider : Try(U64, Errs) -> Try(U64, [Aborted, HostErr(U64), Other])
         \\wider = |t| fwd(t)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, Errs) -> Try(U64, Errs)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, Errs) -> Try(U64, [Aborted, HostErr(U64), Other])");
 }
 
 test "check type - polarity - a function alias argument continuing through an alias link keeps its input closed" {
@@ -9949,7 +9949,7 @@ test "check type - polarity - an alias using its formal at the input and the res
 
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
-    try expectDefAliasBacking(&test_env, "fwd", .opened);
+    try expectDefAliasBacking(&test_env, "fwd", .opened_by_annotation);
 }
 
 /// Assert that `def_name`'s type is an alias application whose backing is
@@ -10025,9 +10025,11 @@ test "check type - polarity - a twin copied through an alias link is related by 
 }
 
 test "check type - polarity - a twin copied through an alias link widens to a wider application" {
-    // The twin's `Wrap` layer is `.opened`, so it meets `Wrap([Other,
-    // Aborted])` by its backing, the inline spelling's relation: the widened
-    // row `[Aborted, HostErr(U64), Other]` is exactly that application.
+    // The twin's `Wrap` layer is opened, so it is related by its backing, the
+    // inline spelling's relation: the widened row `[Aborted, HostErr(U64),
+    // Other]` is exactly `Wrap([Aborted, Other])`. The use's instance merges
+    // into the widened row, so the value reads as that row, exactly as
+    // `x = if Bool.True Other else Aborted` under the same annotation does.
     const source =
         \\Wrap(ext) : [HostErr(U64), ..ext]
         \\
@@ -10039,7 +10041,7 @@ test "check type - polarity - a twin copied through an alias link widens to a wi
         \\x : Wrap([Other, Aborted])
         \\x = if Bool.True mk("") else Aborted
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Wrap([Aborted, Other])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "[Aborted, HostErr(U64), Other]");
 }
 
 test "check type - polarity - a twin copied down an alias chain is related by its backing" {
@@ -10150,16 +10152,23 @@ test "check type - polarity - a re-opened use keeps its alias layers, opened" {
 }
 
 test "check type - polarity - a mismatch between two opened alias instances shows their backings" {
+    // Two `.opened` instances of different aliases relate by backing and
+    // neither absorbs the other, so the widened `Base` reaches `take`.
     const source =
         \\Base : [Other]
+        \\
+        \\Extra : [Aborted]
         \\
         \\mk : Str -> Base
         \\mk = |_| Other
         \\
+        \\mk_extra : Str -> Extra
+        \\mk_extra = |_| Aborted
+        \\
         \\take : Base -> Str
         \\take = |b| match b { Other => "o" }
         \\
-        \\z = if Bool.True mk("") else Aborted
+        \\z = if Bool.True mk("") else mk_extra("")
         \\
         \\r = take(z)
     ;
@@ -10181,6 +10190,59 @@ test "check type - polarity - a mismatch between two opened alias instances show
         \\
         \\
     );
+}
+
+test "check type - polarity - an annotated def whose body widens a coerced call keeps its annotation" {
+    // Widening happens at the use: the `.opened` instances a re-opened call
+    // brings into the body never replace what the annotation states
+    // (design.md "Opened Alias Instances").
+    const inline_row =
+        \\Errs : [A, B]
+        \\
+        \\fwd : Errs -> Errs
+        \\fwd = |e| e
+        \\
+        \\wider : Errs -> [A, B, C]
+        \\wider = |e| fwd(e)
+    ;
+    try checkTypesModule(inline_row, .{ .pass = .last_def }, "Errs -> [A, B, C]");
+
+    const try_row =
+        \\Errs : [A, B]
+        \\
+        \\fwd : Try(U64, Errs) -> Try(U64, Errs)
+        \\fwd = |t| t
+        \\
+        \\wider : Try(U64, Errs) -> Try(U64, [A, B, C])
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(try_row, .{ .pass = .last_def }, "Try(U64, Errs) -> Try(U64, [A, B, C])");
+
+    const other_alias =
+        \\Errs : [A, B]
+        \\
+        \\Wide : [A, B, C]
+        \\
+        \\fwd : Errs -> Errs
+        \\fwd = |e| e
+        \\
+        \\wider : Errs -> Wide
+        \\wider = |e| fwd(e)
+    ;
+    try checkTypesModule(other_alias, .{ .pass = .last_def }, "Errs -> Wide");
+
+    const same_alias =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\fwd : Wrap(Base) -> Wrap(Base)
+        \\fwd = |t| t
+        \\
+        \\wider : Wrap(Base) -> Wrap([Aborted, Other])
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(same_alias, .{ .pass = .last_def }, "Wrap(Base) -> Wrap([Aborted, Other])");
 }
 
 test "check type - polarity - an imported opened alias instance is related by its backing" {

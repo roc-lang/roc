@@ -271,7 +271,10 @@ pub const Constants = struct {
     ///      something inside it (`Alias.backing`); an opened instance is
     ///      related to another application of its alias by its backing, and
     ///      alias layers survive re-opens and result-row twins.
-    pub const CACHE_VERSION = 116;
+    /// 117: An opened alias instance records where it was opened (by the
+    ///      annotation walk, or at a use), and a use's instance never wins a
+    ///      merge, so an annotated definition keeps its annotation.
+    pub const CACHE_VERSION = 117;
 };
 
 /// Configuration for the Roc cache system.

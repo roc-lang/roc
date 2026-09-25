@@ -361,10 +361,10 @@ pub const Alias = struct {
     source_decl: SourceDecl = .none,
     /// Whether this instance's backing is still exactly its declaration's
     /// body under its arguments (`.declared`), or a copy opened something
-    /// inside it (`.opened`): a polarity marker resolved open, a result-row
-    /// twin substituted for an argument, or a coerced row re-opened. Only a
+    /// inside it: a polarity marker resolved open, a result-row twin
+    /// substituted for an argument, or a coerced row re-opened. Only a
     /// `.declared` instance may be related to another application of its
-    /// alias by its arguments; an `.opened` one is related by its backing
+    /// alias by its arguments; an opened one is related by its backing
     /// (design.md "Opened Alias Instances"). No default: every producer
     /// states which it built.
     backing: AliasBacking,
@@ -372,11 +372,31 @@ pub const Alias = struct {
 
 /// See `Alias.backing`.
 pub const AliasBacking = enum(u8) {
+    /// The backing is the declaration's body under the arguments.
     declared,
-    opened,
+    /// Opened by the annotation walk that generated this instance: it is
+    /// part of a definition's own declared type.
+    opened_by_annotation,
+    /// Opened at a use: a scheme instantiated where a definition is used, a
+    /// coerced row re-opened there, or a copy of such an instance. The
+    /// widening it may carry belongs to that use, so it never replaces the
+    /// other side of a merge (design.md "Opened Alias Instances").
+    opened_at_use,
 
-    pub fn join(a: AliasBacking, b: AliasBacking) AliasBacking {
-        return if (a == .opened or b == .opened) .opened else .declared;
+    pub fn isOpened(self: AliasBacking) bool {
+        return self != .declared;
+    }
+
+    /// Which instance's content a merge of two views keeps: the higher one.
+    /// A declared instance's arguments are exact; an annotation's opened
+    /// instance is still what the annotation states; a use's opened
+    /// instance is never authoritative.
+    pub fn mergePriority(self: AliasBacking) u8 {
+        return switch (self) {
+            .declared => 2,
+            .opened_by_annotation => 1,
+            .opened_at_use => 0,
+        };
     }
 };
 
