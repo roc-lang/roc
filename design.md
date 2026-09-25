@@ -1009,7 +1009,9 @@ origin, which keeps that module from being cached clean while its result holds
 the failure. A failed literal root that no checked root embeds is reported at
 its literal once finalization is done. A module whose finalization completed in
 an earlier compilation receives such a report through the coordinator's report
-destination for it, without its cached result changing. Attaching completed data after ARC and then repeating reachability is
+destination for it, without its cached result changing; a literal in the
+builtin module, which belongs to no package, is rendered against the builtin
+source and joins the program root module's reports. Attaching completed data after ARC and then repeating reachability is
 forbidden, because it would make ARC run over a different procedure graph from
 the one emitted to the backend.
 

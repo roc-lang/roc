@@ -92,11 +92,18 @@ pub const Options = struct {
     unfinalized_reports: ?UnfinalizedReports = null,
 };
 
-/// The report destination of a checked module whose finalization completed
-/// in an earlier compilation.
+/// The report destination of a checked module this finalization does not
+/// complete: one whose finalization completed in an earlier compilation, or
+/// the builtin module.
 pub const UnfinalizedReports = struct {
     context: *anyopaque,
-    module: *const fn (context: *anyopaque, key: checked.ModuleId) Allocator.Error!ProgramModule,
+    module: *const fn (context: *anyopaque, key: checked.ModuleId) Allocator.Error!ReportDestination,
+};
+
+/// A checked module's source, and the store its reports go to.
+pub const ReportDestination = struct {
+    module: *const checked.CheckedModuleArtifact,
+    problem_store: ?*check.problem.Store,
 };
 
 const DebugEvents = struct {
@@ -183,16 +190,17 @@ const ModuleOwners = struct {
     const ReportTargets = struct {
         owners: *const ModuleOwners,
         next: ?u32,
-        unfinalized: ?ProgramModule,
+        unfinalized: ?ReportDestination,
 
-        fn nextTarget(self: *ReportTargets) ?ProgramModule {
+        fn nextTarget(self: *ReportTargets) ?ReportDestination {
             if (self.unfinalized) |target| {
                 self.unfinalized = null;
                 return target;
             }
             const index = self.next orelse return null;
             self.next = self.owners.next_alias[index];
-            return self.owners.modules[index];
+            const owner = self.owners.modules[index];
+            return .{ .module = owner.module, .problem_store = owner.problem_store };
         }
     };
 
