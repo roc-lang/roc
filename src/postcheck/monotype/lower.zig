@@ -923,6 +923,9 @@ const NestedSpecEvidence = union(enum) {
 const EvidenceMaterializationPurpose = enum {
     body_lowering,
     specialization_interface,
+    /// Materialize the input to an interface summary. Its selected contracts
+    /// are related on the detached expansion graph and captured in the summary.
+    interface_summary_input,
 };
 
 /// One quantified variable's binding at a specialization request: the live
@@ -976,6 +979,87 @@ fn templateInterfaceIsClosed(view: ModuleView, template: *const checked.CheckedP
         template.evidence_params.len == 0 and
         !view.types.roots[raw].contains_identity_variables;
 }
+
+/// A Roc template without evidence parameters cannot dispatch on its quantified
+/// variables, so its interface relates a variable that occurs only in value
+/// positions of its function type by unification alone. A request captures
+/// such a variable's representation-neutral instantiation as a hole: one
+/// summary serves every instantiation, and relating the summary back to the
+/// request fills the hole. Row tails and arguments of nominal types other than
+/// `List` and `Box` are not value positions.
+fn parametricSchemeVarMask(
+    allocator: Allocator,
+    view: ModuleView,
+    template: *const checked.CheckedProcedureTemplate,
+) Allocator.Error![]const bool {
+    const scheme_vars = view.templates.templateSchemeVars(template);
+    const mask = try allocator.alloc(bool, scheme_vars.len);
+    errdefer allocator.free(mask);
+    @memset(mask, false);
+    if (template.target != .roc or template.evidence_params.len != 0 or scheme_vars.len == 0) return mask;
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
+    const arena = scratch.allocator();
+    const excluded = try arena.alloc(bool, scheme_vars.len);
+    @memset(excluded, false);
+    const Visit = struct { ty: checked.CheckedTypeId, value_position: bool };
+    var pending = std.ArrayList(Visit).empty;
+    var visited = [_]collections.DenseMap(checked.CheckedTypeId, void){
+        collections.DenseMap(checked.CheckedTypeId, void).init(arena),
+        collections.DenseMap(checked.CheckedTypeId, void).init(arena),
+    };
+    try pending.append(arena, .{ .ty = template.checked_fn_root, .value_position = true });
+    while (pending.pop()) |visit| {
+        if ((try visited[@intFromBool(visit.value_position)].getOrPut(visit.ty)).found_existing) continue;
+        const scheme_index = for (scheme_vars, 0..) |scheme_var, index| {
+            if (scheme_var == visit.ty) break index;
+        } else null;
+        if (scheme_index) |index| {
+            if (visit.value_position) mask[index] = true else excluded[index] = true;
+            continue;
+        }
+        switch (view.types.payload(visit.ty)) {
+            .function => |function| {
+                for (function.args) |arg| try pending.append(arena, .{ .ty = arg, .value_position = visit.value_position });
+                try pending.append(arena, .{ .ty = function.ret, .value_position = visit.value_position });
+            },
+            .tuple => |items| for (items) |item| try pending.append(arena, .{ .ty = item, .value_position = visit.value_position }),
+            .record => |record| {
+                for (record.fields) |field| try pending.append(arena, .{ .ty = field.ty, .value_position = visit.value_position });
+                try pending.append(arena, .{ .ty = record.ext, .value_position = false });
+            },
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| {
+                    for (tag.argsSlice(view.types)) |arg| try pending.append(arena, .{ .ty = arg, .value_position = visit.value_position });
+                }
+                try pending.append(arena, .{ .ty = tag_union.ext, .value_position = false });
+            },
+            .nominal => |nominal| {
+                const container = if (nominal.builtin) |builtin_nominal| builtin_nominal == .list or builtin_nominal == .box else false;
+                for (nominal.args) |arg| try pending.append(arena, .{ .ty = arg, .value_position = visit.value_position and container });
+                for (nominal.padding_field_types) |padding| try pending.append(arena, .{ .ty = padding, .value_position = false });
+            },
+            .alias => |alias| try pending.append(arena, .{ .ty = alias.backing, .value_position = visit.value_position }),
+            .pending,
+            .err,
+            .flex,
+            .rigid,
+            .empty_record,
+            .empty_tag_union,
+            => {},
+        }
+    }
+    for (mask, excluded) |*is_parametric, is_excluded| {
+        if (is_excluded) is_parametric.* = false;
+    }
+    return mask;
+}
+
+/// A request's parametric substitution cells and their request-root positions.
+const ParametricHoles = struct {
+    nodes: []const NodeId = &.{},
+    root_indices: []const u32 = &.{},
+};
 
 /// The requirement schema of a procedure template's scheme.
 fn templateSchemaIn(view: ModuleView, template: *const checked.CheckedProcedureTemplate) SchemeRequirements {
@@ -2755,7 +2839,7 @@ const TemplateBodyScheduling = enum { immediate, queued };
 
 /// Bound running plus completed-but-unaccepted jobs. Extra slots let free
 /// lanes continue working when an earlier dispatch delays ordered acceptance.
-const parallel_spec_jobs_per_lane: usize = 4;
+pub const parallel_spec_jobs_per_lane: usize = 64;
 const SharedSummaries = WorkerInputs.AppendIndex(InterfaceReplayAddress, InterfaceSummaryEntry);
 
 const SpecJobRunId = enum(u32) { _ };
@@ -3566,6 +3650,9 @@ const Builder = struct {
     worker_inputs: WorkerInputs.ProgramInputs = .{},
     shared_summaries: ?SharedSummaries = null,
     interface_summaries: InterfaceSummaryCache,
+    /// Per template, which quantified variables its interface relates only
+    /// by unification (see `parametricSchemeVarMask`).
+    parametric_scheme_vars: std.AutoHashMapUnmanaged(names.ProcTemplate, []const bool) = .empty,
     coordinator_interface_summaries: ?*const SharedSummaries = null,
     coordinator_interface_summary_end: usize = 0,
     interface_summary_checks: u32 = 0,
@@ -3951,6 +4038,9 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
+        var parametric_masks = self.parametric_scheme_vars.valueIterator();
+        while (parametric_masks.next()) |mask| self.allocator.free(mask.*);
+        self.parametric_scheme_vars.deinit(self.allocator);
         self.source_file_ids.deinit();
         self.lowering_module_ids.deinit();
         self.declared_comptime_root_functions.deinit();
@@ -4115,11 +4205,15 @@ const Builder = struct {
         defer roots.deinit(self.allocator);
         for (entries) |entry| {
             try roots.appendSlice(self.allocator, entry.request.leaves);
-            for (entry.summary.nodes) |node| switch (node) {
+            const summary = switch (entry.summary) {
+                .unchanged => continue,
+                .constraints => |constraints| constraints,
+            };
+            for (summary.nodes) |node| switch (node) {
                 .mono => |ty| try roots.append(self.allocator, ty),
                 .open => {},
             };
-            for (entry.summary.open_nodes) |node| {
+            for (summary.open_nodes) |node| {
                 if (node.finished) |ty| try roots.append(self.allocator, ty);
             }
         }
@@ -18123,6 +18217,7 @@ const ActiveConstBindingScope = struct {
 const InterfaceReplayStatus = enum { expanding, expanded, ready };
 
 const InterfaceReplayAddress = struct {
+    kind: enum { procedure, method_contract, local_method_contract } = .procedure,
     family: DraftTemplateFamilyAddress,
     evidence_digest: [32]u8,
     input_digest: [32]u8,
@@ -18134,7 +18229,36 @@ const InterfaceSummaryEntry = struct {
     address: InterfaceReplayAddress,
     evidence: StoredConstFnEvidence,
     request: InterfaceConstraints.Identity,
-    summary: InterfaceConstraints,
+    summary: InterfaceSummary,
+};
+
+/// A completed expansion's contribution to its request roots. An expansion
+/// whose captured roots equal its captured input added no constraint, so
+/// replaying it relates nothing and instantiates nothing.
+const InterfaceSummary = union(enum) {
+    unchanged,
+    constraints: InterfaceConstraints,
+
+    fn copy(self: InterfaceSummary, allocator: Allocator, context: anytype) Allocator.Error!InterfaceSummary {
+        return switch (self) {
+            .unchanged => .unchanged,
+            .constraints => |constraints| .{ .constraints = try constraints.copy(allocator, context) },
+        };
+    }
+
+    fn eql(self: InterfaceSummary, other: InterfaceSummary, graph: *InstGraph, allocator: Allocator, types_: *Type.Store, name_store: *const names.NameStore) Allocator.Error!bool {
+        return switch (self) {
+            .unchanged => other == .unchanged,
+            .constraints => |constraints| switch (other) {
+                .unchanged => false,
+                .constraints => |other_constraints| try (try constraints.identityInto(graph, allocator)).eql(
+                    try other_constraints.identityInto(graph, allocator),
+                    types_,
+                    name_store,
+                ),
+            },
+        };
+    }
 };
 
 const InterfaceSummaryCopy = struct {
@@ -18189,7 +18313,7 @@ const InterfaceSummaryCache = struct {
         self.evidence_arena.deinit();
     }
 
-    fn insert(self: *InterfaceSummaryCache, types_: *Type.Store, name_store: *const names.NameStore, entry: InterfaceSummaryEntry) Allocator.Error!InterfaceConstraints {
+    fn insert(self: *InterfaceSummaryCache, types_: *Type.Store, name_store: *const names.NameStore, entry: InterfaceSummaryEntry) Allocator.Error!InterfaceSummary {
         const bucket = try self.buckets.getOrPut(entry.address);
         if (!bucket.found_existing) bucket.value_ptr.* = .empty;
         for (bucket.value_ptr.items) |index| {
@@ -18217,10 +18341,17 @@ const InterfaceSummaryCache = struct {
 const InterfaceReplayEntry = struct {
     address: InterfaceReplayAddress,
     evidence: StoredConstFnEvidence,
+    /// `request.bytes[0..input_len]` identifies the captured input interface;
+    /// the remaining bytes mark the checked-error substitution slots.
     request: InterfaceConstraints.Identity,
+    input_len: usize,
+    /// The classes the request's parametric holes stood for.
+    hole_classes: []const ?NodeId,
+    /// This expansion's instantiated cell for each parametric hole slot.
+    hole_cells: []const NodeId,
     roots: []const NodeId,
-    summary: ?InterfaceConstraints = null,
-    verify_summary: ?InterfaceConstraints = null,
+    summary: ?InterfaceSummary = null,
+    verify_summary: ?InterfaceSummary = null,
     status: InterfaceReplayStatus = .expanding,
     lowlink: usize,
 };
@@ -20051,13 +20182,13 @@ const BodyContext = struct {
                 if (named.kind == .alias) Common.invariant("constructor witness retained a transparent alias node");
                 const backing = named.backing orelse
                     Common.invariant("named constructor witness had no explicit backing");
-                var witness = raw_named;
+                var witness = raw_named.*;
                 witness.backing = .{
                     .node = try self.constructorWitnessWithStructuralNode(backing.node, structural_node),
                     .use = backing.use,
                     .authority = backing.authority,
                 };
-                break :blk try self.graph.newNode(.{ .named = witness });
+                break :blk try self.graph.newNode(try self.graph.namedContent(witness));
             },
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => try self.constructorWitnessAliasLayers(node, structural_node),
         };
@@ -20078,13 +20209,13 @@ const BodyContext = struct {
                 if (named.kind != .alias) break :blk structural_node;
                 const backing = named.backing orelse
                     Common.invariant("transparent alias graph node had no explicit backing");
-                var witness = raw_named;
+                var witness = raw_named.*;
                 witness.backing = .{
                     .node = try self.constructorWitnessAliasLayers(backing.node, structural_node),
                     .use = backing.use,
                     .authority = backing.authority,
                 };
-                break :blk try self.graph.newNode(.{ .named = witness });
+                break :blk try self.graph.newNode(try self.graph.namedContent(witness));
             },
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => structural_node,
         };
@@ -22454,7 +22585,7 @@ const BodyContext = struct {
         } else null;
         const def = try self.typeDef(self.view, nominal.origin_module, nominal.name, nominal.source_decl);
         self.builder.noteBuiltinTryDef(nominal.builtin, self.nameStore(), def);
-        return try self.graph.newNode(.{ .named = .{
+        return try self.graph.newNode(try self.graph.namedContent(.{
             .named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = checked_ty },
             .def = def,
             .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
@@ -22462,7 +22593,7 @@ const BodyContext = struct {
             .args = args,
             .backing = backing,
             .declared_order = try self.instDeclaredOrderForNominal(nominal),
-        } });
+        }));
     }
 
     fn instDeclaredOrderForNominal(
@@ -22923,7 +23054,7 @@ const BodyContext = struct {
         return .{ .cache = &workspace.interface_summaries, .types_are_durable = false };
     }
 
-    fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, request: InterfaceConstraints.Identity) Allocator.Error!?InterfaceConstraints {
+    fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, request: InterfaceConstraints.Identity) Allocator.Error!?InterfaceSummary {
         const local = self.interfaceSummaryCache().cache;
         if (local.buckets.get(address)) |candidates| for (candidates.items) |index| {
             const entry = local.entries.items[index];
@@ -22947,7 +23078,7 @@ const BodyContext = struct {
         return null;
     }
 
-    fn importInterfaceSummary(self: *BodyContext, entry: InterfaceSummaryEntry, request: InterfaceConstraints.Identity) Allocator.Error!?InterfaceConstraints {
+    fn importInterfaceSummary(self: *BodyContext, entry: InterfaceSummaryEntry, request: InterfaceConstraints.Identity) Allocator.Error!?InterfaceSummary {
         const relocation = InterfaceSummaryRelocation{
             .source_names = &self.builder.program.names,
             .destination_names = self.nameStoreMut(),
@@ -22961,7 +23092,7 @@ const BodyContext = struct {
         return try self.insertInterfaceSummary(.{ .address = entry.address, .evidence = entry.evidence, .request = imported_request, .summary = summary });
     }
 
-    fn insertInterfaceSummary(self: *BodyContext, entry: InterfaceSummaryEntry) Allocator.Error!InterfaceConstraints {
+    fn insertInterfaceSummary(self: *BodyContext, entry: InterfaceSummaryEntry) Allocator.Error!InterfaceSummary {
         const binding = self.interfaceSummaryCache();
         if (binding.types_are_durable) {
             // Coordinator leaves already belong to permanent program storage.
@@ -22983,6 +23114,70 @@ const BodyContext = struct {
             .request = try entry.request.copy(scratch.allocator(), relocation),
             .summary = try entry.summary.copy(scratch.allocator(), relocation),
         });
+    }
+
+    fn parametricRequestHoles(
+        self: *BodyContext,
+        allocator: Allocator,
+        template_ref: names.ProcTemplate,
+        view: ModuleView,
+        template: *const checked.CheckedProcedureTemplate,
+        subst: SpecSubstitution,
+    ) Allocator.Error!ParametricHoles {
+        if (subst.len == 0) return .{};
+        const cached = try self.builder.parametric_scheme_vars.getOrPut(self.builder.allocator, template_ref);
+        if (!cached.found_existing) {
+            cached.value_ptr.* = parametricSchemeVarMask(self.builder.allocator, view, template) catch |err| {
+                _ = self.builder.parametric_scheme_vars.remove(template_ref);
+                return err;
+            };
+        }
+        const mask = cached.value_ptr.*;
+        if (mask.len != subst.len) Common.invariant("parametric request substitution differed from its scheme's quantified variables");
+        var count: usize = 0;
+        for (mask, subst) |is_parametric, slot| {
+            if (is_parametric and slot == .node) count += 1;
+        }
+        if (count == 0) return .{};
+        const nodes = try allocator.alloc(NodeId, count);
+        const root_indices = try allocator.alloc(u32, count);
+        var next: usize = 0;
+        // Request roots are the function request followed by each node slot.
+        var root_index: u32 = 1;
+        for (mask, subst) |is_parametric, slot| {
+            switch (slot) {
+                .node => |node| {
+                    if (is_parametric) {
+                        nodes[next] = node;
+                        root_indices[next] = root_index;
+                        next += 1;
+                    }
+                    root_index += 1;
+                },
+                .checked_error => {},
+            }
+        }
+        return .{ .nodes = nodes, .root_indices = root_indices };
+    }
+
+    /// An unfinished expansion is joined only by the instantiation it expands:
+    /// each hole slot names the class the expansion's request supplied or
+    /// the expansion's own hole cell.
+    fn joinsUnfinishedExpansion(
+        self: *BodyContext,
+        entry: InterfaceReplayEntry,
+        holes: []const NodeId,
+        hole_classes: []const ?NodeId,
+    ) bool {
+        if (entry.hole_classes.len != hole_classes.len) return false;
+        for (entry.hole_classes, entry.hole_cells, holes, hole_classes) |expanded_class, expanded_cell, hole, hole_class| {
+            const expanded = expanded_class orelse {
+                if (hole_class != null) return false;
+                continue;
+            };
+            if (!self.graph.sameClass(hole, expanded) and !self.graph.sameClass(hole, expanded_cell)) return false;
+        }
+        return true;
     }
 
     fn relateInterfaceRoots(self: *BodyContext, produced: []const NodeId, requested: []const NodeId) Allocator.Error!void {
@@ -23023,7 +23218,7 @@ const BodyContext = struct {
         const template_ref = self.builder.templateRefForProcedureUse(procedure);
         const callee_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = callee_view.templates.get(template_ref.template);
-        const partial_edge = try self.evidenceForProcedureUseAtNode(procedure, record.expr, root_evidence, request_fn_node, .specialization_interface);
+        const partial_edge = try self.evidenceForProcedureUseAtNode(procedure, record.expr, root_evidence, request_fn_node, .interface_summary_input);
         var edge = if (partial_edge.vector.len == template.evidence_params.len)
             partial_edge
         else
@@ -23032,14 +23227,14 @@ const BodyContext = struct {
                 template_ref,
                 template,
                 partial_edge,
-                .specialization_interface,
+                .interface_summary_input,
             );
         edge.vector = try self.resolveCallableEvidenceAtNode(
             callee_view,
             template,
             edge.vector,
             request_fn_node,
-            .specialization_interface,
+            .interface_summary_input,
         );
         const evidence = edge.vector;
         const stored_evidence = try self.builder.constFnEvidence(rootEvidence(template_ref, evidence));
@@ -23056,7 +23251,13 @@ const BodyContext = struct {
         };
         var input_arena = std.heap.ArenaAllocator.init(self.allocator);
         defer input_arena.deinit();
-        const input = try InterfaceConstraints.capture(self.graph, input_arena.allocator(), request_roots.items);
+        const holes = try self.parametricRequestHoles(input_arena.allocator(), template_ref, callee_view, &template, edge.subst);
+        const hole_classes = try input_arena.allocator().alloc(?NodeId, holes.nodes.len);
+        const input = try InterfaceConstraints.captureWithHoles(self.graph, input_arena.allocator(), request_roots.items, holes.nodes, hole_classes);
+        for (hole_classes) |hole_class| if (hole_class != null) {
+            self.builder.count("interface_parametric_requests");
+            break;
+        };
         const shape = try input.identityInto(self.graph, input_arena.allocator());
         const request_bytes = try input_arena.allocator().alloc(u8, shape.bytes.len + edge.subst.len);
         @memcpy(request_bytes[0..shape.bytes.len], shape.bytes);
@@ -23068,10 +23269,13 @@ const BodyContext = struct {
             .input_digest = TypeDigestHasher.hash(request.bytes),
         };
 
-        var cached: ?InterfaceConstraints = null;
+        var cached: ?InterfaceSummary = null;
         if (replay_state.buckets.get(address)) |candidates| for (candidates.items) |raw_entry| {
             const entry = replay_state.entries.items[raw_entry];
             if (!storedConstFnEvidenceEql(entry.evidence, stored_evidence) or !try entry.request.eql(request, self.typeStore(), self.nameStore())) continue;
+            // An unfinished expansion is joined only by the exact request it
+            // expands; parametric holes generalize completed summaries.
+            if (entry.status != .ready and !self.joinsUnfinishedExpansion(entry, holes.nodes, hole_classes)) continue;
             self.builder.count("interface_replay_hits");
             switch (entry.status) {
                 .expanding, .expanded => {
@@ -23083,13 +23287,13 @@ const BodyContext = struct {
                 },
                 .ready => {
                     if (!replay_state.use_finished_summaries) continue;
-                    cached = entry.summary.?;
+                    cached = entry.summary orelse continue;
                     break;
                 },
             }
         };
         if (cached == null and replay_state.use_finished_summaries) cached = try self.findInterfaceSummary(address, stored_evidence, request);
-        var verify_summary: ?InterfaceConstraints = null;
+        var verify_summary: ?InterfaceSummary = null;
         const saved_use_summaries = replay_state.use_finished_summaries;
         defer replay_state.use_finished_summaries = saved_use_summaries;
         if (cached) |summary| {
@@ -23099,9 +23303,15 @@ const BodyContext = struct {
                 self.builder.count("interface_summary_verifications");
                 verify_summary = summary;
                 replay_state.use_finished_summaries = false;
-            } else {
-                try self.relateInterfaceRoots(try summary.instantiate(self.graph), request_roots.items);
-                return;
+            } else switch (summary) {
+                .unchanged => {
+                    self.builder.count("interface_summary_unchanged_hits");
+                    return;
+                },
+                .constraints => |constraints| {
+                    try self.relateInterfaceRoots(try constraints.instantiate(self.graph), request_roots.items);
+                    return;
+                },
             }
         }
         self.builder.count("interface_summary_expansions");
@@ -23120,6 +23330,13 @@ const BodyContext = struct {
             .address = address,
             .evidence = stored_evidence,
             .request = try request.copy(self.graph.arena(), InterfaceSummaryCopy{}),
+            .input_len = shape.bytes.len,
+            .hole_classes = try self.graph.arena().dupe(?NodeId, hole_classes),
+            .hole_cells = hole_cells: {
+                const cells = try self.graph.arena().alloc(NodeId, holes.root_indices.len);
+                for (holes.root_indices, cells) |root_index, *cell| cell.* = roots[root_index];
+                break :hole_cells cells;
+            },
             .roots = roots,
             .lowlink = replay_index,
             .verify_summary = verify_summary,
@@ -23168,6 +23385,7 @@ const BodyContext = struct {
         )) {
             try relateConstructionFunctionRequestInterface(self.graph, root_node, roots[0]);
         }
+        try callee_ctx.relateMaterializedEvidenceConstraints(&callee_ctx, callee_ctx.evidence.schema.?, edge.vector);
         if (templateInterfaceIsClosed(callee_view, &template)) {
             // A closed interface is complete once the request is related to
             // its checked root; its relation table never enters this graph.
@@ -23185,6 +23403,20 @@ const BodyContext = struct {
                 replay_state,
             );
         }
+        // A component of one request is complete before it relates back to
+        // that request. A parametric request's summary is therefore taken
+        // from its expansion alone, so relating back cannot fill its holes.
+        const single_request_component = replay_state.entries.items[replay_index].lowlink == replay_index and
+            replay_state.stack.items[replay_state.stack.items.len - 1] == replay_index;
+        const parametric_request = for (hole_classes) |hole_class| {
+            if (hole_class != null) break true;
+        } else false;
+        var component_scratch = std.heap.ArenaAllocator.init(self.allocator);
+        defer component_scratch.deinit();
+        const single_request_constraints: ?InterfaceConstraints = if (single_request_component and parametric_request)
+            try InterfaceConstraints.capture(self.graph, component_scratch.allocator(), roots)
+        else
+            null;
         try self.relateInterfaceRoots(roots, request_roots.items);
         replay_state.entries.items[replay_index].status = .expanded;
         const lowlink = replay_state.entries.items[replay_index].lowlink;
@@ -23198,12 +23430,27 @@ const BodyContext = struct {
                 const entry = &replay_state.entries.items[index];
                 var scratch = std.heap.ArenaAllocator.init(self.allocator);
                 defer scratch.deinit();
-                const summary = try InterfaceConstraints.capture(self.graph, scratch.allocator(), entry.roots);
+                // Members of a larger component are captured after relating
+                // back to each other's requests, so their interfaces hold the
+                // settled types their holes stood for; only exact requests
+                // may reuse them.
+                const parametric = for (entry.hole_classes) |hole_class| {
+                    if (hole_class != null) break true;
+                } else false;
+                if (parametric and !single_request_component) {
+                    entry.status = .ready;
+                    if (index == replay_index) break;
+                    continue;
+                }
+                const constraints = single_request_constraints orelse try InterfaceConstraints.capture(self.graph, scratch.allocator(), entry.roots);
+                const entry_input: InterfaceConstraints.Identity = .{ .bytes = entry.request.bytes[0..entry.input_len], .leaves = entry.request.leaves };
+                const summary: InterfaceSummary = if (try (try constraints.identityInto(self.graph, scratch.allocator())).eql(entry_input, self.typeStore(), self.nameStore()))
+                    .unchanged
+                else
+                    .{ .constraints = constraints };
                 entry.status = .ready;
                 if (entry.verify_summary) |expected| {
-                    const expected_identity = try expected.identityInto(self.graph, scratch.allocator());
-                    const actual_identity = try summary.identityInto(self.graph, scratch.allocator());
-                    if (!try expected_identity.eql(actual_identity, self.typeStore(), self.nameStore())) {
+                    if (!try expected.eql(summary, self.graph, scratch.allocator(), self.typeStore(), self.nameStore())) {
                         Common.compilerBug("cached interface constraints disagreed with fresh checked relation expansion");
                     }
                 }
@@ -23729,13 +23976,13 @@ const BodyContext = struct {
                         visiting,
                     );
                     if (self.graph.sameClass(backing, produced_backing.node)) return produced_node;
-                    var witness = produced_named;
+                    var witness = produced_named.*;
                     witness.backing = .{
                         .node = backing,
                         .use = produced_backing.use,
                         .authority = produced_backing.authority,
                     };
-                    return try self.graph.newNode(.{ .named = witness });
+                    return try self.graph.newNode(try self.graph.namedContent(witness));
                 },
                 .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
             },
@@ -24544,6 +24791,13 @@ const BodyContext = struct {
                 // that the target itself should default to a builtin.
                 if (self.graph.content(expr_node) == .unresolved) {
                     try self.graph.materializeLiteralDefault(expr_node);
+                }
+                // A builtin target is resolved by the time its value is
+                // demanded, so a target with open parts is a custom type whose
+                // conversion is an ordinary dispatch call. That call lowers at
+                // the target node and completes when the node resolves.
+                if (!try self.graph.typeIsResolved(expr_node)) {
+                    return try self.lowerLiteralConversionCallAtNode(expr_id, expr, expr_node);
                 }
                 const expr_ty = try self.resolvedTypeViewForNode(expr_node);
                 return try self.lowerExprWithType(expr_id, expr_ty);
@@ -27492,7 +27746,7 @@ const BodyContext = struct {
                 def.iterator_kind = ctx.kind;
                 def.iterator_depth = ctx.mint_depth;
                 def.iterator_topology = try ctx.body.iteratorRepresentationNames();
-                return .{ .named = .{
+                return try ctx.body.graph.namedContent(.{
                     .named_type = ctx.public_source.named_type,
                     .def = def,
                     .kind = ctx.public_source.kind,
@@ -27507,12 +27761,12 @@ const BodyContext = struct {
                         .use = ctx.public_source.backing.use,
                         .authority = .generated_private,
                     },
-                    .generated_iterator = .{
+                    .generated_iterator = try ctx.body.graph.generatedIterator(.{
                         .callable_evidence = ctx.callable_evidence,
                         .public_source = ctx.public_source,
-                    },
+                    }),
                     .declared_order = ctx.public_source.declared_order,
-                } };
+                });
             }
         };
         return try self.graph.addRecursiveNode(Context{
@@ -27588,7 +27842,7 @@ const BodyContext = struct {
                 def.iterator_kind = .forced_dynamic;
                 def.iterator_depth = 0;
                 def.iterator_topology = try ctx.body.iteratorRepresentationNames();
-                return .{ .named = .{
+                return try ctx.body.graph.namedContent(.{
                     .named_type = ctx.public_source.named_type,
                     .def = def,
                     .kind = ctx.public_source.kind,
@@ -27603,12 +27857,12 @@ const BodyContext = struct {
                         .use = ctx.public_source.backing.use,
                         .authority = .generated_private,
                     },
-                    .generated_iterator = .{
+                    .generated_iterator = try ctx.body.graph.generatedIterator(.{
                         .callable_evidence = null,
                         .public_source = ctx.public_source,
-                    },
+                    }),
                     .declared_order = ctx.public_source.declared_order,
-                } };
+                });
             }
         };
         return try self.graph.addRecursiveNode(Context{
@@ -33665,7 +33919,7 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         caller: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
-        target_ty: Type.TypeId,
+        target_node: NodeId,
         operands: []const static_dispatch.StaticDispatchOperand,
     ) Allocator.Error!NodeId {
         const function = self.checkedFunctionType(source_fn_ty);
@@ -33682,8 +33936,8 @@ const BodyContext = struct {
         }
         // The numeral expression's checked type is the converted value type;
         // the plan's checked structure relates it to the Try-shaped return.
-        try self.graph.unify(try caller.instNode(checked_ret_ty), try self.graph.importMono(target_ty));
-        try self.graph.unify(try self.instNode(checked_ret_ty), try self.graph.importMono(target_ty));
+        try self.graph.unify(try caller.instNode(checked_ret_ty), target_node);
+        try self.graph.unify(try self.instNode(checked_ret_ty), target_node);
         for (fn_graph.args, operands) |formal_node, operand| {
             try self.relateFormalToOperand(formal_node, caller, operand);
         }
@@ -34216,10 +34470,7 @@ const BodyContext = struct {
                 // final segment's relation is the trailing whole-expression
                 // constraint below.
                 .required => {
-                    const slot_node = switch (segment.backing_access) {
-                        .inspectable => try self.graph.requiredRecordFieldNode(field_node, mono_field_name),
-                        .opaque_definition_private => try self.graph.requiredOpaqueDefinitionFieldNode(field_node, mono_field_name),
-                    };
+                    const slot_node = try self.graph.requiredRecordFieldNode(field_node, mono_field_name);
                     if (!is_last) {
                         try self.constrainCheckedInterfaceToCell(
                             segment.success_ty,
@@ -34232,10 +34483,7 @@ const BodyContext = struct {
                 // value; the chain continues from the Present payload.
                 .optional => {
                     saw_optional = true;
-                    const field = switch (segment.backing_access) {
-                        .inspectable => try self.graph.optionalRecordFieldNodes(field_node, mono_field_name),
-                        .opaque_definition_private => try self.graph.optionalOpaqueDefinitionFieldNodes(field_node, mono_field_name),
-                    };
+                    const field = try self.graph.optionalRecordFieldNodes(field_node, mono_field_name);
                     const value_node = try self.instNode(segment.success_ty);
                     try self.graph.unify(field.value, value_node);
                     try self.graph.unify(field.slot, try self.optionalSlotNode(value_node));
@@ -39240,10 +39488,7 @@ const BodyContext = struct {
         var prefix_node = receiver_node;
         for (field.segments) |segment| {
             const field_name = try self.recordFieldName(self.view, segment.field_name);
-            prefix_node = switch (segment.backing_access) {
-                .inspectable => try self.graph.requiredRecordFieldNode(prefix_node, field_name),
-                .opaque_definition_private => try self.graph.requiredOpaqueDefinitionFieldNode(prefix_node, field_name),
-            };
+            prefix_node = try self.graph.requiredRecordFieldNode(prefix_node, field_name);
             self.draft.field_access_segments.appendAssumeCapacity(.{ .field = field_name });
         }
         try relateRequestComponent(self.graph, expected_node, prefix_node);
@@ -40170,10 +40415,7 @@ const BodyContext = struct {
         const field_name = try self.recordFieldName(self.view, segment.field_name);
         switch (segment.mode) {
             .required => {
-                const field_node = switch (segment.backing_access) {
-                    .inspectable => try self.graph.requiredRecordFieldNode(current_node, field_name),
-                    .opaque_definition_private => try self.graph.requiredOpaqueDefinitionFieldNode(current_node, field_name),
-                };
+                const field_node = try self.graph.requiredRecordFieldNode(current_node, field_name);
                 const field_expr = try self.addExprWithTypeCell(
                     DraftTypeCell.fromGraphNode(field_node),
                     .{ .field_access = .{
@@ -40190,10 +40432,7 @@ const BodyContext = struct {
                 );
             },
             .optional => {
-                const field = switch (segment.backing_access) {
-                    .inspectable => try self.graph.optionalRecordFieldNodes(current_node, field_name),
-                    .opaque_definition_private => try self.graph.optionalOpaqueDefinitionFieldNodes(current_node, field_name),
-                };
+                const field = try self.graph.optionalRecordFieldNodes(current_node, field_name);
                 const slot_cell = DraftTypeCell.fromGraphNode(field.slot);
                 const payload_cell = DraftTypeCell.fromGraphNode(field.value);
                 const slot_expr = try self.addExprWithTypeCell(slot_cell, .{ .field_access = .{
@@ -41906,6 +42145,21 @@ const BodyContext = struct {
         callable: CallableDispatchPlan,
         target_ty: Type.TypeId,
     ) Allocator.Error!NumeralCall {
+        const result = try self.lowerNumeralCallRawAtNode(checked_ret_ty, callable, try self.graph.importMono(target_ty));
+        return .{ .call = result.call, .try_ty = try self.activeTypeFromNode(result.try_node) };
+    }
+
+    const NumeralCallAtNode = struct {
+        call: DraftExprId,
+        try_node: NodeId,
+    };
+
+    fn lowerNumeralCallRawAtNode(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        callable: CallableDispatchPlan,
+        target_node: NodeId,
+    ) Allocator.Error!NumeralCallAtNode {
         const plan = callable.plan;
         const plan_args = callable.operands;
 
@@ -41918,21 +42172,74 @@ const BodyContext = struct {
         call_ctx.current_entry_root = self.current_entry_root;
         call_ctx.in_deferred_body = self.in_deferred_body;
 
-        const callable_node = try call_ctx.instantiateNumeralPlanCallNode(plan.callable_ty, self, checked_ret_ty, target_ty, plan_args);
+        const callable_node = try call_ctx.instantiateNumeralPlanCallNode(plan.callable_ty, self, checked_ret_ty, target_node, plan_args);
 
         const resolved = self.dispatchTarget(plan) orelse
             Common.invariant("checked from_numeral dispatch unexpectedly resolved to structural equality");
 
-        const target_node = try self.methodTargetNodeFromPlan(resolved, &call_ctx, plan.callable_ty);
-        try self.relateDispatchTargetRequestInterface(resolved, target_node, callable_node);
+        const method_node = try self.methodTargetNodeFromPlan(resolved, &call_ctx, plan.callable_ty);
+        try self.relateDispatchTargetRequestInterface(resolved, method_node, callable_node);
         const fn_nodes = try self.graph.functionNodes(callable_node);
-        const ret_ty = try self.activeTypeFromNode(fn_nodes.ret);
 
         const call_expr = try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(fn_nodes.ret),
             try self.lowerResolvedDispatchAtNode(plan, resolved, callable_node, self, &.{}),
         );
-        return .{ .call = call_expr, .try_ty = ret_ty };
+        return .{ .call = call_expr, .try_node = fn_nodes.ret };
+    }
+
+    /// Lower a literal conversion whose target still has open parts: the
+    /// target's `from_numeral`/`from_quote` dispatch call and the unwrap of
+    /// its `Try` result, all at graph nodes.
+    fn lowerLiteralConversionCallAtNode(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        expr: checked.CheckedExpr,
+        target_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        if (self.view.compile_time_roots.lookupNumeralRootByExpr(expr_id)) |root| switch (root.payload) {
+            .const_node => |node| return try self.restoreConstNodeAtNode(self.view, self.view, node, target_node),
+            .pending => {},
+            .fn_value, .discarded, .expect => Common.invariant("numeral conversion root stored a non-constant payload"),
+        };
+        const maybe_plan = switch (expr.data) {
+            .numeral => |numeral| numeral.plan,
+            .str_from_quote => |quote| quote.plan,
+            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("literal conversion call did not point at a conversion expression"),
+        };
+        const target_cell = DraftTypeCell.fromGraphNode(target_node);
+        const callable = switch (self.literalDispatchRuntimePlan(maybe_plan)) {
+            .callable => |callable| callable,
+            .crash => |reason| return try self.runtimeCrashExprAtCell(target_cell, dispatchCrashMessage(reason)),
+        };
+        const result = try self.lowerNumeralCallRawAtNode(expr.ty, callable, target_node);
+
+        const ok_name = try self.nameStoreMut().internTagLabel("Ok");
+        const err_name = try self.nameStoreMut().internTagLabel("Err");
+        const try_cell = DraftTypeCell.fromGraphNode(result.try_node);
+
+        const ok_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), target_cell, null);
+        const ok_pat = try self.addPatWithTypeCell(try_cell, .{ .tag = .{
+            .name = ok_name,
+            .payloads = try self.addPatSpan(&.{try self.addPatWithTypeCell(target_cell, .{ .bind = ok_local })}),
+        } });
+        const ok_body = try self.addExprWithTypeCell(target_cell, .{ .local = ok_local });
+
+        const err_payload_cell = DraftTypeCell.fromGraphNode(try self.graph.tagPayloadNode(result.try_node, err_name, 0));
+        const err_pat = try self.addPatWithTypeCell(try_cell, .{ .tag = .{
+            .name = err_name,
+            .payloads = try self.addPatSpan(&.{try self.addPatWithTypeCell(err_payload_cell, .wildcard)}),
+        } });
+        const err_body = try self.runtimeCrashExprAtCell(target_cell, "invalid numeric literal");
+
+        const branches = [_]DraftBranch{
+            .{ .pat = ok_pat, .body = ok_body },
+            .{ .pat = err_pat, .body = err_body },
+        };
+        return try self.addExprWithTypeCell(target_cell, .{ .match_ = .{
+            .scrutinee = result.call,
+            .branches = try self.addBranchSpan(&branches),
+        } });
     }
 
     fn lowerNumeralRootBody(
@@ -42876,8 +43183,9 @@ const BodyContext = struct {
 
     /// Stored functions have graph-free evidence. Recreate its lexical
     /// substitution in the restoration context, where saved callable and
-    /// capture interfaces will constrain the same checked identities. Hidden
-    /// receivers additionally consume their retained method contracts.
+    /// capture interfaces will constrain the same checked identities. Every
+    /// retained method contract also constrains the variables reached through
+    /// its signature, even when its receiver is reachable from the callable.
     fn restoreEvidenceFrame(
         self: *BodyContext,
         view: ModuleView,
@@ -42894,7 +43202,6 @@ const BodyContext = struct {
         var ctx: ?BodyContext = null;
         defer if (ctx) |*context| context.deinit();
         for (schema.params, vector) |param, entry| {
-            if (!evidenceParamRequiresConstraintRelation(param)) continue;
             switch (entry) {
                 .target => |target| {
                     if (ctx == null) {
@@ -42903,7 +43210,14 @@ const BodyContext = struct {
                     }
                     try self.relateTargetToConstraint(target, &ctx.?, param);
                 },
-                .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+                .structural => |structural| if (structural.checked) |checked_structural| {
+                    if (ctx == null) {
+                        ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, owner, self.graph, self.draft);
+                        try ctx.?.seedSubstitution(schema, subst);
+                    }
+                    try self.relateStructuralEvidenceToConstraint(checked_structural, &ctx.?, param);
+                },
+                .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
             }
         }
         return .{ .scope = .{ .owner = owner, .lexical = scope }, .schema = schema, .subst = subst, .vector = vector, .parent = parent };
@@ -43742,10 +44056,10 @@ const BodyContext = struct {
         // selected target to its constraint binds every quantified variable
         // only that callable reaches. Each such binding can resolve another
         // requirement's receiver, so the derivation runs to a fixpoint before
-        // any receiver is judged open. A checked instantiation record already
-        // binds every slot, hidden ones included, so its edge relates no
-        // target callable; nor does a requirement the site recorded as
-        // structural, unreachable, or rejected. A forwarded structural codec
+        // any receiver is judged open. A checked instantiation record binds
+        // slot identities, hidden ones included. Its complete checked evidence
+        // contract is related below after materialization, rather than using
+        // these intermediate target selections. A forwarded structural codec
         // carries its checked callable, which can reach variables its receiver
         // does not (a parser's error row), so it is related like a target.
         // The context is created by the first relation.
@@ -43831,6 +44145,12 @@ const BodyContext = struct {
                 .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
             };
         }
+        if (site_refs != null and purpose != .interface_summary_input) {
+            var checked_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, schema.view, self.method_scope, self.owner_template, self.graph, self.draft);
+            defer checked_ctx.deinit();
+            try checked_ctx.seedSubstitution(schema, subst);
+            try self.relateMaterializedEvidenceConstraints(&checked_ctx, schema, out);
+        }
         return out;
     }
 
@@ -43842,6 +44162,49 @@ const BodyContext = struct {
         scheme_ctx: *BodyContext,
         param: static_dispatch.EvidenceParamRecord,
     ) Allocator.Error!void {
+        const constraint_node = try scheme_ctx.instNode(param.callable_ty);
+        const root_view = if (target.instantiation) |instantiation| instantiation.view else target.view;
+        const root_fn_ty = if (target.instantiation) |instantiation| instantiation.callable_ty else target.target.callable_ty;
+        const reachability = dispatchTargetAdapterReachability(target.target);
+        const owner = switch (target.target.kind) {
+            .procedure => |procedure| procedure.template,
+            .local_proc => |local| self.localMethodOwnerTemplate(.{
+                .view = target.view,
+                .target = target.target,
+                .local_proc_context = target.local_proc_context,
+            }, local),
+            .structural => unreachable,
+        };
+        var scratch = std.heap.ArenaAllocator.init(self.allocator);
+        defer scratch.deinit();
+        const input = try InterfaceConstraints.capture(self.graph, scratch.allocator(), &.{constraint_node});
+        const request = try input.identityInto(self.graph, scratch.allocator());
+        // This relation consumes only the selected checked signature, not its
+        // nested dispatch evidence. Its source identity and adapter rule fully
+        // determine the operation over the complete input constraint.
+        const evidence: StoredConstFnEvidence = .{ .nodes = &.{}, .frames = &.{}, .head = null };
+        const address: InterfaceReplayAddress = .{
+            .kind = switch (reachability) {
+                .adapter_reachable => .method_contract,
+                .no_adapter => .local_method_contract,
+            },
+            .family = DraftTemplateFamilyAddress.init(owner, self.method_scope.key, root_view.types.rootKey(root_fn_ty)),
+            .evidence_digest = @splat(0),
+            .input_digest = TypeDigestHasher.hash(request.bytes),
+        };
+        const use_summaries = self.draft.interface_replay.use_finished_summaries;
+        if (use_summaries) {
+            if (try self.findInterfaceSummary(address, evidence, request)) |summary| {
+                switch (summary) {
+                    .unchanged => {},
+                    .constraints => |constraints| try self.graph.unify((try constraints.instantiate(self.graph))[0], constraint_node),
+                }
+                return;
+            }
+        }
+        // Relate an independent copy, so unrelated caller state cannot enter
+        // the retained result. Open variables remain fresh on each replay.
+        const detached = (try input.instantiate(self.graph))[0];
         const target_node = if (target.instantiation) |instantiation| blk: {
             var instantiation_ctx = try BodyContext.initWithMethodScope(
                 self.allocator,
@@ -43864,10 +44227,21 @@ const BodyContext = struct {
             defer target_ctx.deinit();
             break :blk try target_ctx.instNode(lookup.target.callable_ty);
         };
-        const constraint_node = try scheme_ctx.instNode(param.callable_ty);
-        const root_view = if (target.instantiation) |instantiation| instantiation.view else target.view;
-        const root_fn_ty = if (target.instantiation) |instantiation| instantiation.callable_ty else target.target.callable_ty;
-        try self.relateEvidenceTargetRootToRequest(root_view, root_fn_ty, target_node, constraint_node, dispatchTargetAdapterReachability(target.target));
+        try self.relateEvidenceTargetRootToRequest(root_view, root_fn_ty, target_node, detached, reachability);
+        if (use_summaries) {
+            const constraints = try InterfaceConstraints.capture(self.graph, scratch.allocator(), &.{detached});
+            const summary: InterfaceSummary = if (try (try constraints.identityInto(self.graph, scratch.allocator())).eql(request, self.typeStore(), self.nameStore()))
+                .unchanged
+            else
+                .{ .constraints = constraints };
+            _ = try self.insertInterfaceSummary(.{
+                .address = address,
+                .evidence = evidence,
+                .request = request,
+                .summary = summary,
+            });
+        }
+        try self.graph.unify(detached, constraint_node);
     }
 
     /// Relate a checked structural codec's callable to the scheme constraint
@@ -44561,7 +44935,7 @@ const BodyContext = struct {
     ) Allocator.Error!MethodLookup {
         return switch (purpose) {
             .body_lowering => try self.withLocalProcContext(lookup),
-            .specialization_interface => blk: {
+            .specialization_interface, .interface_summary_input => blk: {
                 if (lookup.local_proc_context != null) {
                     Common.invariant("checked specialization-interface evidence unexpectedly carried a draft-local context");
                 }
@@ -44961,6 +45335,30 @@ const BodyContext = struct {
         };
     }
 
+    fn relateMaterializedEvidenceConstraints(
+        self: *BodyContext,
+        target_ctx: *BodyContext,
+        schema: SchemeRequirements,
+        contract: []const SpecEvidence,
+    ) Allocator.Error!void {
+        if (contract.len != schema.params.len) {
+            Common.invariant("materialized target contract length differed from its scheme requirements");
+        }
+        for (schema.params, contract) |param, entry| {
+            // Even a callable-root receiver's method can bind variables
+            // reached only through its constraint signature. Every
+            // selected target supplies that relation exactly once;
+            // selection itself needs no graph-driven fixpoint here.
+            switch (entry) {
+                .target => |target| try self.relateTargetToConstraint(target, target_ctx, param),
+                .structural => |structural| if (structural.checked) |checked_structural| {
+                    try self.relateStructuralEvidenceToConstraint(checked_structural, target_ctx, param);
+                },
+                .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+            }
+        }
+    }
+
     /// The substitution and evidence a target scheme receives from a request
     /// its root was related to in `target_ctx`.
     fn deriveTargetEdge(
@@ -44986,22 +45384,7 @@ const BodyContext = struct {
                 .body_lowering,
             ),
             .materialized_contract => |contract| blk: {
-                if (contract.len != schema.params.len) {
-                    Common.invariant("materialized target contract length differed from its scheme requirements");
-                }
-                for (schema.params, contract) |param, entry| {
-                    // Even a callable-root receiver's method can bind variables
-                    // reached only through its constraint signature. Every
-                    // selected target supplies that relation exactly once;
-                    // selection itself needs no graph-driven fixpoint here.
-                    switch (entry) {
-                        .target => |target| try self.relateTargetToConstraint(target, target_ctx, param),
-                        .structural => |structural| if (structural.checked) |checked_structural| {
-                            try self.relateStructuralEvidenceToConstraint(checked_structural, target_ctx, param);
-                        },
-                        .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
-                    }
-                }
+                try self.relateMaterializedEvidenceConstraints(target_ctx, schema, contract);
                 // Reuse is authorized by the checked dispatch plan. Independent
                 // callables without that proof use .derive instead. This contract
                 // already supplies every target and terminal verdict, including
@@ -49350,7 +49733,7 @@ const BodyContext = struct {
             .named => |named| named,
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated codec protocol template was not a named graph node"),
         };
-        return try self.graph.newNode(.{ .named = .{
+        return try self.graph.newNode(try self.graph.namedContent(.{
             .named_type = template.named_type,
             .def = template.def,
             .kind = template.kind,
@@ -49362,7 +49745,7 @@ const BodyContext = struct {
                 .authority = authority,
             },
             .declared_order = template.declared_order,
-        } });
+        }));
     }
 
     fn cloneGraphNamedWithGeneratedBacking(
@@ -58811,30 +59194,30 @@ test "graph constructor representation follows aliases and preserves nominal lay
     const nominal_name = try name_store.internTypeName("Nominal");
     const outer_alias_name = try name_store.internTypeName("OuterAlias");
     const structural = try graph.newNode(.empty_tag_union);
-    const alias = try graph.newNode(.{ .named = .{
+    const alias = try graph.newNode(try graph.namedContent(.{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
         .def = .{ .module = module_identity, .type_name = alias_name },
         .kind = .alias,
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = structural, .use = .inspectable },
-    } });
-    const nominal = try graph.newNode(.{ .named = .{
+    }));
+    const nominal = try graph.newNode(try graph.namedContent(.{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
         .def = .{ .module = module_identity, .type_name = nominal_name },
         .kind = .nominal,
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = alias, .use = .inspectable },
-    } });
-    const outer_alias = try graph.newNode(.{ .named = .{
+    }));
+    const outer_alias = try graph.newNode(try graph.namedContent(.{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(3) },
         .def = .{ .module = module_identity, .type_name = outer_alias_name },
         .kind = .alias,
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = nominal, .use = .inspectable },
-    } });
+    }));
 
     var ctx: BodyContext = undefined;
     ctx.graph = graph;
@@ -60631,30 +61014,30 @@ test "hosted Try graph walk crosses transparent alias layers to the Try nominal"
 
     const ok_node = try graph.newNode(.{ .primitive = .str });
     const err_node = try graph.newNode(.empty_tag_union);
-    const try_node = try graph.newNode(.{ .named = .{
+    const try_node = try graph.newNode(try graph.namedContent(.{
         .named_type = try_named,
         .def = try_def,
         .kind = .nominal,
         .builtin_owner = null,
         .args = try graph.arena().dupe(NodeId, &.{ ok_node, err_node }),
         .backing = .{ .node = try graph.newNode(.empty_tag_union), .use = .inspectable },
-    } });
-    const alias_node = try graph.newNode(.{ .named = .{
+    }));
+    const alias_node = try graph.newNode(try graph.namedContent(.{
         .named_type = alias_named,
         .def = alias_def,
         .kind = .alias,
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = try_node, .use = .inspectable },
-    } });
-    const outer_alias_node = try graph.newNode(.{ .named = .{
+    }));
+    const outer_alias_node = try graph.newNode(try graph.namedContent(.{
         .named_type = outer_alias_named,
         .def = outer_alias_def,
         .kind = .alias,
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = alias_node, .use = .inspectable },
-    } });
+    }));
 
     const capability = HostedTryAdapterCapability{
         .def = try_def,
@@ -60678,14 +61061,14 @@ test "hosted Try graph walk crosses transparent alias layers to the Try nominal"
 
     // A nominal that is not the capability's `Try` is not crossed into: only a
     // transparent alias layer is followed.
-    const impostor_node = try graph.newNode(.{ .named = .{
+    const impostor_node = try graph.newNode(try graph.namedContent(.{
         .named_type = alias_named,
         .def = impostor_def,
         .kind = .nominal,
         .builtin_owner = null,
         .args = try graph.arena().dupe(NodeId, &.{ ok_node, err_node }),
         .backing = .{ .node = try_node, .use = .inspectable },
-    } });
+    }));
     try std.testing.expect(graphHostedTryInfoOrNull(graph, capability, impostor_node) == null);
 }
 
@@ -60853,7 +61236,7 @@ test "request component relation follows root authority before nested private ev
     const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(9) };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const inner_def: Type.TypeDef = .{ .module = module_identity, .type_name = inner_type_name };
-    const private_arg = try graph.newNode(.{ .named = .{
+    const private_arg = try graph.newNode(try graph.namedContent(.{
         .named_type = inner_named_type,
         .def = inner_def,
         .kind = .@"opaque",
@@ -60864,16 +61247,16 @@ test "request component relation follows root authority before nested private ev
             .use = .runtime_layout_only,
             .authority = .generated_private,
         },
-    } });
-    const public = try graph.newNode(.{ .named = .{
+    }));
+    const public = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = .fields,
         .args = try graph.arena().dupe(NodeId, &.{private_arg}),
         .backing = .{ .node = try graph.newNode(.empty_record), .use = .runtime_layout_only },
-    } });
-    const private = try graph.newNode(.{ .named = .{
+    }));
+    const private = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
@@ -60884,7 +61267,7 @@ test "request component relation follows root authority before nested private ev
             .use = .runtime_layout_only,
             .authority = .generated_private,
         },
-    } });
+    }));
 
     try relateRequestComponent(graph, public, private);
 
@@ -60912,7 +61295,7 @@ test "request component relation descends through matching private-bearing conta
     const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(11) };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const inner_def: Type.TypeDef = .{ .module = module_identity, .type_name = inner_type_name };
-    const shared_private_arg = try graph.newNode(.{ .named = .{
+    const shared_private_arg = try graph.newNode(try graph.namedContent(.{
         .named_type = inner_named_type,
         .def = inner_def,
         .kind = .@"opaque",
@@ -60923,16 +61306,16 @@ test "request component relation descends through matching private-bearing conta
             .use = .runtime_layout_only,
             .authority = .generated_private,
         },
-    } });
-    const public_elem = try graph.newNode(.{ .named = .{
+    }));
+    const public_elem = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = .fields,
         .args = try graph.arena().dupe(NodeId, &.{shared_private_arg}),
         .backing = .{ .node = try graph.newNode(.empty_record), .use = .runtime_layout_only },
-    } });
-    const private_elem = try graph.newNode(.{ .named = .{
+    }));
+    const private_elem = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
@@ -60943,7 +61326,7 @@ test "request component relation descends through matching private-bearing conta
             .use = .runtime_layout_only,
             .authority = .generated_private,
         },
-    } });
+    }));
     const public_list = try graph.newNode(.{ .list = public_elem });
     const private_list = try graph.newNode(.{ .list = private_elem });
 
@@ -60977,15 +61360,15 @@ test "checked-to-mono relation preserves generated-private evidence inside a com
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const checked_backing = try graph.newNode(.empty_record);
     const mono_backing = try graph.newNode(.empty_record);
-    const checked_opaque = try graph.newNode(.{ .named = .{
+    const checked_opaque = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = .fields,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = checked_backing, .use = .runtime_layout_only },
-    } });
-    const mono_opaque = try graph.newNode(.{ .named = .{
+    }));
+    const mono_opaque = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
@@ -60996,7 +61379,7 @@ test "checked-to-mono relation preserves generated-private evidence inside a com
             .use = .runtime_layout_only,
             .authority = .generated_private,
         },
-    } });
+    }));
     const checked_composite = try graph.newNode(.{ .list = checked_opaque });
     const mono_composite = try graph.newNode(.{ .list = mono_opaque });
 
@@ -61030,22 +61413,22 @@ test "checked-to-mono relation joins exact tag request roots without collapsing 
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const checked_backing = try graph.newNode(.empty_record);
     const mono_backing = try graph.newNode(.empty_record);
-    const checked_payload = try graph.newNode(.{ .named = .{
+    const checked_payload = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = .fields,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = checked_backing, .use = .runtime_layout_only },
-    } });
-    const mono_payload = try graph.newNode(.{ .named = .{
+    }));
+    const mono_payload = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = .fields,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = mono_backing, .use = .runtime_layout_only },
-    } });
+    }));
     const checked_row = try graph.newNode(.{ .tag_union = .{
         .tags = try graph.arena().dupe(InstTag, &.{.{
             .name = tag_name,
@@ -61124,22 +61507,22 @@ test "direct call request preserves generated-private return provenance" {
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
-    const public_opaque = try graph.newNode(.{ .named = .{
+    const public_opaque = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = public_backing, .use = .runtime_layout_only },
-    } });
-    const private_opaque = try graph.newNode(.{ .named = .{
+    }));
+    const private_opaque = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = private_backing, .use = .runtime_layout_only, .authority = .generated_private },
-    } });
+    }));
     const public_ret = try graph.newNode(.{ .list = public_opaque });
     const private_ret = try graph.newNode(.{ .list = private_opaque });
     const args = try graph.arena().alloc(NodeId, 0);
@@ -61171,22 +61554,22 @@ test "dispatch call target relation preserves generated-private return provenanc
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
-    const public_opaque = try graph.newNode(.{ .named = .{
+    const public_opaque = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = public_backing, .use = .runtime_layout_only },
-    } });
-    const private_opaque = try graph.newNode(.{ .named = .{
+    }));
+    const private_opaque = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = private_backing, .use = .runtime_layout_only, .authority = .generated_private },
-    } });
+    }));
     const public_ret = try graph.newNode(.{ .box = public_opaque });
     const private_ret = try graph.newNode(.{ .box = private_opaque });
     const args = try graph.arena().alloc(NodeId, 0);
@@ -61221,15 +61604,15 @@ test "iterator request nodes preserve generated-private operand and result prove
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
-    const public_opaque = try graph.newNode(.{ .named = .{
+    const public_opaque = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = public_backing, .use = .runtime_layout_only },
-    } });
-    const private_opaque = try graph.newNode(.{ .named = .{
+    }));
+    const private_opaque = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
@@ -61240,7 +61623,7 @@ test "iterator request nodes preserve generated-private operand and result prove
             .use = .runtime_layout_only,
             .authority = .generated_private,
         },
-    } });
+    }));
     const public_operand = try graph.newNode(.{ .list = public_opaque });
     const private_operand = try graph.newNode(.{ .list = private_opaque });
     const public_result = try graph.newNode(.{ .tuple = try graph.arena().dupe(NodeId, &.{public_opaque}) });
@@ -61275,15 +61658,15 @@ test "partial synthetic request nodes preserve generated-private argument and re
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
-    const public_opaque = try graph.newNode(.{ .named = .{
+    const public_opaque = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = public_backing, .use = .runtime_layout_only },
-    } });
-    const private_opaque = try graph.newNode(.{ .named = .{
+    }));
+    const private_opaque = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
@@ -61294,7 +61677,7 @@ test "partial synthetic request nodes preserve generated-private argument and re
             .use = .runtime_layout_only,
             .authority = .generated_private,
         },
-    } });
+    }));
     const public_arg = try graph.newNode(.{ .box = public_opaque });
     const private_arg = try graph.newNode(.{ .box = private_opaque });
     const public_ret = try graph.newNode(.{ .list = public_opaque });

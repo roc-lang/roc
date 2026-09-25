@@ -7181,7 +7181,6 @@ pub const Interpreter = struct {
             .num_acos => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .acos),
             .num_atan => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .atan),
             .num_log => self.evalNumLog(args[0], ll.ret_layout, arg_layout),
-            .num_round => self.evalNumRound(args[0], ll.ret_layout, arg_layout),
             .num_floor => self.evalNumFloor(args[0], ll.ret_layout, arg_layout),
             .num_ceiling => self.evalNumCeiling(args[0], ll.ret_layout, arg_layout),
 
@@ -8428,26 +8427,6 @@ pub const Interpreter = struct {
             .signed_int, .unsigned_int => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: integer num_{s} survived lowering for layout {d}",
                 .{ @tagName(op), @intFromEnum(arg_layout) },
-            ),
-        }
-        return val;
-    }
-
-    fn evalNumRound(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
-        const val = try self.alloc(ret_layout);
-        switch (try self.numericOperandKind(arg_layout)) {
-            .dec => {
-                const dec = RocDec{ .num = a.read(i128) };
-                val.write(i128, RocDec.round(dec, &self.roc_ops).num);
-            },
-            .float => |bits| switch (bits) {
-                32 => val.write(f32, @round(a.read(f32))),
-                64 => val.write(f64, @round(a.read(f64))),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float round width {d}", .{bits}),
-            },
-            .signed_int, .unsigned_int => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: integer num_round survived lowering for layout {d}",
-                .{@intFromEnum(arg_layout)},
             ),
         }
         return val;
@@ -10057,12 +10036,12 @@ test "interpreter float NaN mode preserves runtime payloads and normalizes compi
     defer runtime_env.deinit();
 
     const f32_local = try store.addLocal(.{ .layout_idx = .f32 });
-    const f32_ret = try store.addCFStmt(.{ .ret = .{ .value = f32_local } });
+    const f32_ret = try store.addCFStmt(.{ .ret = .{ .value = f32_local } }, .test_fixture);
     const f32_body = try store.addCFStmt(.{ .assign_literal = .{
         .target = f32_local,
         .value = .{ .f32_literal = @bitCast(@as(u32, 0xffc1_2345)) },
         .next = f32_ret,
-    } });
+    } }, .test_fixture);
     const f32_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(2),
@@ -10070,15 +10049,15 @@ test "interpreter float NaN mode preserves runtime payloads and normalizes compi
         .body = f32_body,
         .ret_layout = .f32,
         .frame_locals = try store.addLocalSpan(&.{f32_local}),
-    });
+    }, .none);
 
     const f64_local = try store.addLocal(.{ .layout_idx = .f64 });
-    const f64_ret = try store.addCFStmt(.{ .ret = .{ .value = f64_local } });
+    const f64_ret = try store.addCFStmt(.{ .ret = .{ .value = f64_local } }, .test_fixture);
     const f64_body = try store.addCFStmt(.{ .assign_literal = .{
         .target = f64_local,
         .value = .{ .f64_literal = @bitCast(@as(u64, 0xfff9_2345_6789_abcd)) },
         .next = f64_ret,
-    } });
+    } }, .test_fixture);
     const f64_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
@@ -10086,7 +10065,7 @@ test "interpreter float NaN mode preserves runtime payloads and normalizes compi
         .body = f64_body,
         .ret_layout = .f64,
         .frame_locals = try store.addLocalSpan(&.{f64_local}),
-    });
+    }, .none);
 
     var static_strings = try Interpreter.buildStaticStrings(allocator, &store);
     defer static_strings.deinit();
@@ -10117,12 +10096,12 @@ test "interpreter evaluates explicit static data by compact id" {
     try static_addresses.append(allocator, @intFromPtr(&static_value));
 
     const result_local = try store.addLocal(.{ .layout_idx = .u64 });
-    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = result_local } });
+    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = result_local } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_literal = .{
         .target = result_local,
         .value = .{ .static_data = static_data_id },
         .next = ret_stmt,
-    } });
+    } }, .test_fixture);
     const frame_locals = try store.addLocalSpan(&.{result_local});
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
@@ -10131,7 +10110,7 @@ test "interpreter evaluates explicit static data by compact id" {
         .body = body,
         .ret_layout = .u64,
         .frame_locals = frame_locals,
-    });
+    }, .none);
 
     var static_strings = try Interpreter.buildStaticStrings(allocator, &store);
     defer static_strings.deinit();

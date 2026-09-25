@@ -5427,7 +5427,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // not a missing feature.
                 // Unimplemented ops
                 .num_log,
-                .num_round,
                 => {
                     std.debug.panic("UNIMPLEMENTED low-level op: {s}", .{@tagName(ll.op)});
                 },
@@ -7488,7 +7487,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_atan2,
                 .num_rem_by,
                 .num_rem_by_checked,
-                .num_round,
                 .num_shift_left_by,
                 .num_shift_right_by,
                 .num_shift_right_zf_by,
@@ -22452,7 +22450,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.stmt_locations.put(stmt_key, self.codegen.currentOffset());
 
                     const stmt_loc = self.store.stmtLoc(stmt_id);
-                    if (stmt_loc.hasLocation()) {
+                    // ARC-inserted statements get no line-table row so they
+                    // do not affect stepping; see `OriginKind.isArcInserted`.
+                    if (stmt_loc.hasLocation() and !self.store.stmtOriginKind(stmt_id).isArcInserted()) {
                         try self.line_entries.append(self.allocator, .{
                             .offset = @intCast(self.codegen.currentOffset()),
                             .loc = stmt_loc,
@@ -25823,7 +25823,7 @@ fn addNoArgProc(store: *LirStore, body: CFStmtId, ret_layout: layout.Idx) Alloca
         .args = LocalSpan.empty(),
         .body = body,
         .ret_layout = ret_layout,
-    });
+    }, .none);
 }
 
 fn addProc(store: *LirStore, args: []const LocalId, body: CFStmtId, ret_layout: layout.Idx) Allocator.Error!lir.LIR.LirProcSpecId {
@@ -25833,24 +25833,24 @@ fn addProc(store: *LirStore, args: []const LocalId, body: CFStmtId, ret_layout: 
         .args = try store.addLocalSpan(args),
         .body = body,
         .ret_layout = ret_layout,
-    });
+    }, .none);
 }
 
 fn addLiteralProc(store: *LirStore, value: lir.LiteralValue, ret_layout: layout.Idx) Allocator.Error!lir.LIR.LirProcSpecId {
     const result = try addLocal(store, ret_layout);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const assign = try store.addCFStmt(.{ .assign_literal = .{
         .target = result,
         .value = value,
         .next = ret,
-    } });
+    } }, .test_fixture);
     return try addNoArgProc(store, assign, ret_layout);
 }
 
 fn addUnaryLowLevelProc(store: *LirStore, op: lir.LowLevel, operand_value: i64, operand_layout: layout.Idx, ret_layout: layout.Idx) Allocator.Error!lir.LIR.LirProcSpecId {
     const operand = try addLocal(store, operand_layout);
     const result = try addLocal(store, ret_layout);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const args = try store.addLocalSpan(&.{operand});
     const assign_op = try store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
@@ -25858,12 +25858,12 @@ fn addUnaryLowLevelProc(store: *LirStore, op: lir.LowLevel, operand_value: i64, 
         .rc_effect = op.rcEffect(),
         .args = args,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const assign_operand = try store.addCFStmt(.{ .assign_literal = .{
         .target = operand,
         .value = .{ .i64_literal = .{ .value = operand_value, .layout_idx = operand_layout } },
         .next = assign_op,
-    } });
+    } }, .test_fixture);
     return try addNoArgProc(store, assign_operand, ret_layout);
 }
 
@@ -25878,7 +25878,7 @@ fn addBinaryLowLevelProc(
     const lhs = try addLocal(store, operand_layout);
     const rhs = try addLocal(store, operand_layout);
     const result = try addLocal(store, ret_layout);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const args = try store.addLocalSpan(&.{ lhs, rhs });
     const assign_op = try store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
@@ -25886,17 +25886,17 @@ fn addBinaryLowLevelProc(
         .rc_effect = op.rcEffect(),
         .args = args,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const assign_rhs = try store.addCFStmt(.{ .assign_literal = .{
         .target = rhs,
         .value = .{ .i64_literal = .{ .value = rhs_value, .layout_idx = operand_layout } },
         .next = assign_op,
-    } });
+    } }, .test_fixture);
     const assign_lhs = try store.addCFStmt(.{ .assign_literal = .{
         .target = lhs,
         .value = .{ .i64_literal = .{ .value = lhs_value, .layout_idx = operand_layout } },
         .next = assign_rhs,
-    } });
+    } }, .test_fixture);
     return try addNoArgProc(store, assign_lhs, ret_layout);
 }
 
@@ -25904,7 +25904,7 @@ fn addBinaryF32LowLevelProc(store: *LirStore, op: lir.LowLevel, lhs_value: f32, 
     const lhs = try addLocal(store, .f32);
     const rhs = try addLocal(store, .f32);
     const result = try addLocal(store, .f32);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const args = try store.addLocalSpan(&.{ lhs, rhs });
     const assign_op = try store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
@@ -25912,17 +25912,17 @@ fn addBinaryF32LowLevelProc(store: *LirStore, op: lir.LowLevel, lhs_value: f32, 
         .rc_effect = op.rcEffect(),
         .args = args,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const assign_rhs = try store.addCFStmt(.{ .assign_literal = .{
         .target = rhs,
         .value = .{ .f32_literal = rhs_value },
         .next = assign_op,
-    } });
+    } }, .test_fixture);
     const assign_lhs = try store.addCFStmt(.{ .assign_literal = .{
         .target = lhs,
         .value = .{ .f32_literal = lhs_value },
         .next = assign_rhs,
-    } });
+    } }, .test_fixture);
     return try addNoArgProc(store, assign_lhs, .f32);
 }
 
@@ -25932,7 +25932,7 @@ fn addDeadTempChainProc(store: *LirStore, allocator: Allocator, temp_count: u32,
     const totals = try allocator.alloc(LocalId, temp_count + 1);
     defer allocator.free(totals);
     for (totals) |*total| total.* = try addLocal(store, .u64);
-    var stmt = try store.addCFStmt(.{ .ret = .{ .value = totals[temp_count] } });
+    var stmt = try store.addCFStmt(.{ .ret = .{ .value = totals[temp_count] } }, .test_fixture);
     var i: u32 = temp_count;
     while (i > 0) : (i -= 1) {
         stmt = try store.addCFStmt(.{ .assign_low_level = .{
@@ -25941,18 +25941,18 @@ fn addDeadTempChainProc(store: *LirStore, allocator: Allocator, temp_count: u32,
             .rc_effect = lir.LowLevel.num_int_add_wrap.rcEffect(),
             .args = try store.addLocalSpan(&.{ totals[i - 1], step }),
             .next = stmt,
-        } });
+        } }, .test_fixture);
     }
     stmt = try store.addCFStmt(.{ .assign_literal = .{
         .target = totals[0],
         .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
         .next = stmt,
-    } });
+    } }, .test_fixture);
     stmt = try store.addCFStmt(.{ .assign_literal = .{
         .target = step,
         .value = .{ .i64_literal = .{ .value = step_value, .layout_idx = .u64 } },
         .next = stmt,
-    } });
+    } }, .test_fixture);
     return try addNoArgProc(store, stmt, .u64);
 }
 
@@ -25978,17 +25978,17 @@ test "aggregate entrypoint wrappers own independent register scopes" {
     const record_layout = try state.layout_store.putCaptureStruct(&([_]layout.Idx{.u64} ** 16));
     const scalar = try addLocal(&store, .u64);
     const record = try addLocal(&store, record_layout);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = record } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = record } }, .test_fixture);
     const construct = try store.addCFStmt(.{ .assign_struct = .{
         .target = record,
         .fields = try store.addLocalSpan(&([_]LocalId{scalar} ** 16)),
         .next = ret,
-    } });
+    } }, .test_fixture);
     const entry = try store.addCFStmt(.{ .assign_literal = .{
         .target = scalar,
         .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
         .next = construct,
-    } });
+    } }, .test_fixture);
     const root = try addNoArgProc(&store, entry, record_layout);
     inline for (.{ RocTarget.x64linux, RocTarget.x64win, RocTarget.arm64mac, RocTarget.arm64win }) |target| {
         var cg = try LirCodeGen(target).init(allocator, &store, &state.layout_store, .{}, &.{}, .default);
@@ -26017,28 +26017,28 @@ test "aggregate parameter copy preserves following argument registers" {
     const record_layout = try state.layout_store.putCaptureStruct(&([_]layout.Idx{.u64} ** 16));
     const record_param = try addLocal(&store, record_layout);
     const scalar_param = try addLocal(&store, .u64);
-    const callee_return = try store.addCFStmt(.{ .ret = .{ .value = scalar_param } });
+    const callee_return = try store.addCFStmt(.{ .ret = .{ .value = scalar_param } }, .test_fixture);
     const callee = try addProc(&store, &.{ record_param, scalar_param }, callee_return, .u64);
     const scalar = try addLocal(&store, .u64);
     const record = try addLocal(&store, record_layout);
     const result = try addLocal(&store, .u64);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const call = try store.addCFStmt(.{ .assign_call = .{
         .target = result,
         .proc = callee,
         .args = try store.addLocalSpan(&.{ record, scalar }),
         .next = ret,
-    } });
+    } }, .test_fixture);
     const construct = try store.addCFStmt(.{ .assign_struct = .{
         .target = record,
         .fields = try store.addLocalSpan(&([_]LocalId{scalar} ** 16)),
         .next = call,
-    } });
+    } }, .test_fixture);
     const entry = try store.addCFStmt(.{ .assign_literal = .{
         .target = scalar,
         .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
         .next = construct,
-    } });
+    } }, .test_fixture);
     const root = try addNoArgProc(&store, entry, .u64);
     inline for (.{ RocTarget.x64linux, RocTarget.x64win, RocTarget.arm64mac, RocTarget.arm64win }) |target| {
         var cg = try LirCodeGen(target).init(allocator, &store, &state.layout_store, .{}, &.{}, .default);
@@ -26170,7 +26170,7 @@ fn addSineChainProc(store: *LirStore, allocator: Allocator, count: u32) Allocato
     const locals = try allocator.alloc(LocalId, count + 1);
     defer allocator.free(locals);
     for (locals) |*local| local.* = try addLocal(store, .f64);
-    var body = try store.addCFStmt(.{ .ret = .{ .value = locals[count] } });
+    var body = try store.addCFStmt(.{ .ret = .{ .value = locals[count] } }, .test_fixture);
     var i = count;
     while (i > 0) : (i -= 1) {
         body = try store.addCFStmt(.{ .assign_low_level = .{
@@ -26179,13 +26179,13 @@ fn addSineChainProc(store: *LirStore, allocator: Allocator, count: u32) Allocato
             .rc_effect = lir.LowLevel.num_sin.rcEffect(),
             .args = try store.addLocalSpan(&.{locals[i - 1]}),
             .next = body,
-        } });
+        } }, .test_fixture);
     }
     body = try store.addCFStmt(.{ .assign_literal = .{
         .target = locals[0],
         .value = .{ .f64_literal = 0.0 },
         .next = body,
-    } });
+    } }, .test_fixture);
     return try addNoArgProc(store, body, .f64);
 }
 
@@ -26202,8 +26202,8 @@ test "stack reuse does not allocate declaration-only join parameters" {
         const params = try allocator.alloc(LocalId, count);
         defer allocator.free(params);
         for (params) |*param| param.* = try addLocal(&store, .u64);
-        const body = try store.addCFStmt(.{ .ret = .{ .value = result } });
-        const remainder = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        const body = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+        const remainder = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
         var next_join_point: u32 = 0;
         // There is no incoming jump, so these parameters are never initialized
         // or read. The declaration must not create a storage lifetime.
@@ -26212,12 +26212,12 @@ test "stack reuse does not allocate declaration-only join parameters" {
             .params = try store.addLocalSpan(params),
             .body = body,
             .remainder = remainder,
-        } });
+        } }, .test_fixture);
         const entry = try store.addCFStmt(.{ .assign_literal = .{
             .target = result,
             .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
             .next = join,
-        } });
+        } }, .test_fixture);
         const proc = try addNoArgProc(&store, entry, .u64);
         var cg = try HostLirCodeGen.init(allocator, &store, &state.layout_store, .{}, &.{}, .default);
         defer cg.deinit();
@@ -26417,11 +26417,11 @@ test "dev lowering: init_uninitialized writes poison pattern" {
     defer test_state.deinit();
 
     const value = try addLocal(&store, .u64);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const init_stmt = try store.addCFStmt(.{ .init_uninitialized = .{
         .target = value,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const root_proc = try addNoArgProc(&store, init_stmt, .u64);
 
     try std.testing.expectEqual(@as(u64, 0xAAAAAAAAAAAAAAAA), try runRootU64(&store, &test_state.layout_store, root_proc, .u64));
@@ -26794,7 +26794,7 @@ test "proc params and mutable list cells use distinct stack slots" {
     const one = try addLocal(&store, .u32);
     const appended = try addLocal(&store, list_layout);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = appended } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = appended } }, .test_fixture);
     const append_args = try store.addLocalSpan(&.{ answer, one });
     const append_stmt = try store.addCFStmt(.{ .assign_low_level = .{
         .target = appended,
@@ -26802,18 +26802,18 @@ test "proc params and mutable list cells use distinct stack slots" {
         .rc_effect = lir.LowLevel.list_append_unsafe.rcEffect(),
         .args = append_args,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const one_stmt = try store.addCFStmt(.{ .assign_literal = .{
         .target = one,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u32 } },
         .next = append_stmt,
-    } });
+    } }, .test_fixture);
     const empty_elems = try store.addLocalSpan(&.{});
     const answer_stmt = try store.addCFStmt(.{ .assign_list = .{
         .target = answer,
         .elems = empty_elems,
         .next = one_stmt,
-    } });
+    } }, .test_fixture);
     const args = try store.addLocalSpan(&.{ start, end });
 
     var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
@@ -26855,38 +26855,38 @@ test "immutable aliases share storage but aliases of mutable locals do not" {
     const mutable_source = try addLocal(&store, .u64);
     const mutable_alias = try addLocal(&store, .u64);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = alias2 } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = alias2 } }, .test_fixture);
     const mutate = try store.addCFStmt(.{ .set_local = .{
         .target = mutable_source,
         .value = source,
         .mode = .initialize_join_param,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const mutable_alias_stmt = try store.addCFStmt(.{ .assign_ref = .{
         .target = mutable_alias,
         .op = .{ .local = mutable_source },
         .next = mutate,
-    } });
+    } }, .test_fixture);
     const mutable_source_stmt = try store.addCFStmt(.{ .assign_literal = .{
         .target = mutable_source,
         .value = .{ .i64_literal = .{ .value = 2, .layout_idx = .u64 } },
         .next = mutable_alias_stmt,
-    } });
+    } }, .test_fixture);
     const alias2_stmt = try store.addCFStmt(.{ .assign_ref = .{
         .target = alias2,
         .op = .{ .local = alias1 },
         .next = mutable_source_stmt,
-    } });
+    } }, .test_fixture);
     const alias1_stmt = try store.addCFStmt(.{ .assign_ref = .{
         .target = alias1,
         .op = .{ .local = source },
         .next = alias2_stmt,
-    } });
+    } }, .test_fixture);
     const source_stmt = try store.addCFStmt(.{ .assign_literal = .{
         .target = source,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
         .next = alias1_stmt,
-    } });
+    } }, .test_fixture);
 
     var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
     defer codegen.deinit();
@@ -27090,20 +27090,20 @@ test "two-arg proc list join loop returns full length" {
     var next_join_point: u32 = 0;
     const join_id = freshTestJoinPointId(&next_join_point);
 
-    const ret_acc = try store.addCFStmt(.{ .ret = .{ .value = acc } });
-    const loop_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const ret_acc = try store.addCFStmt(.{ .ret = .{ .value = acc } }, .test_fixture);
+    const loop_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const set_acc = try store.addCFStmt(.{ .set_local = .{
         .target = acc,
         .value = next_acc,
         .mode = .initialize_join_param,
         .next = loop_jump,
-    } });
+    } }, .test_fixture);
     const set_index = try store.addCFStmt(.{ .set_local = .{
         .target = index,
         .value = next_index,
         .mode = .initialize_join_param,
         .next = set_acc,
-    } });
+    } }, .test_fixture);
     const next_index_args = try store.addLocalSpan(&.{ index, one });
     const add_next_index = try store.addCFStmt(.{ .assign_low_level = .{
         .target = next_index,
@@ -27111,7 +27111,7 @@ test "two-arg proc list join loop returns full length" {
         .rc_effect = lir.LowLevel.num_int_add_crash_on_overflow.rcEffect(),
         .args = next_index_args,
         .next = set_index,
-    } });
+    } }, .test_fixture);
     const next_acc_args = try store.addLocalSpan(&.{ acc, one });
     const add_next_acc = try store.addCFStmt(.{ .assign_low_level = .{
         .target = next_acc,
@@ -27119,12 +27119,12 @@ test "two-arg proc list join loop returns full length" {
         .rc_effect = lir.LowLevel.num_int_add_crash_on_overflow.rcEffect(),
         .args = next_acc_args,
         .next = add_next_index,
-    } });
+    } }, .test_fixture);
     const one_stmt = try store.addCFStmt(.{ .assign_literal = .{
         .target = one,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
         .next = add_next_acc,
-    } });
+    } }, .test_fixture);
     const loop_branches = try store.addCFSwitchBranches(&.{.{
         .value = 1,
         .body = one_stmt,
@@ -27133,7 +27133,7 @@ test "two-arg proc list join loop returns full length" {
         .cond = cond,
         .branches = loop_branches,
         .default_branch = ret_acc,
-    } });
+    } }, .test_fixture);
     const cond_args = try store.addLocalSpan(&.{ index, len });
     const loop_body = try store.addCFStmt(.{ .assign_low_level = .{
         .target = cond,
@@ -27141,31 +27141,31 @@ test "two-arg proc list join loop returns full length" {
         .rc_effect = lir.LowLevel.num_is_lt.rcEffect(),
         .args = cond_args,
         .next = loop_switch,
-    } });
+    } }, .test_fixture);
 
-    const initial_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const initial_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const init_acc = try store.addCFStmt(.{ .set_local = .{
         .target = acc,
         .value = zero_acc,
         .mode = .initialize_join_param,
         .next = initial_jump,
-    } });
+    } }, .test_fixture);
     const init_index = try store.addCFStmt(.{ .set_local = .{
         .target = index,
         .value = zero_index,
         .mode = .initialize_join_param,
         .next = init_acc,
-    } });
+    } }, .test_fixture);
     const zero_acc_stmt = try store.addCFStmt(.{ .assign_literal = .{
         .target = zero_acc,
         .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
         .next = init_index,
-    } });
+    } }, .test_fixture);
     const zero_index_stmt = try store.addCFStmt(.{ .assign_literal = .{
         .target = zero_index,
         .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
         .next = zero_acc_stmt,
-    } });
+    } }, .test_fixture);
     const len_args = try store.addLocalSpan(&.{list_arg});
     const len_stmt = try store.addCFStmt(.{ .assign_low_level = .{
         .target = len,
@@ -27173,14 +27173,14 @@ test "two-arg proc list join loop returns full length" {
         .rc_effect = lir.LowLevel.list_len.rcEffect(),
         .args = len_args,
         .next = zero_index_stmt,
-    } });
+    } }, .test_fixture);
     const join_params = try store.addLocalSpan(&.{ index, acc });
     const join = try store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = join_params,
         .body = loop_body,
         .remainder = len_stmt,
-    } });
+    } }, .test_fixture);
     const len_proc = try addProc(&store, &.{ list_arg, ignored_arg }, join, .u64);
 
     const root_elems = [_]i64{ 10, 20, 30, 40, 50 };
@@ -27191,30 +27191,30 @@ test "two-arg proc list join loop returns full length" {
     const ignored = try addLocal(&store, .i64);
     const result = try addLocal(&store, .u64);
 
-    const ret_result = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret_result = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const drop_list = try store.addCFStmt(.{ .decref = .{
         .value = root_list,
         .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = list_layout }),
         .next = ret_result,
-    } });
+    } }, .test_fixture);
     const call_args = try store.addLocalSpan(&.{ root_list, ignored });
     const call_len = try store.addCFStmt(.{ .assign_call = .{
         .target = result,
         .proc = len_proc,
         .args = call_args,
         .next = drop_list,
-    } });
+    } }, .test_fixture);
     const ignored_stmt = try store.addCFStmt(.{ .assign_literal = .{
         .target = ignored,
         .value = .{ .i64_literal = .{ .value = 123, .layout_idx = .i64 } },
         .next = call_len,
-    } });
+    } }, .test_fixture);
     const list_elems = try store.addLocalSpan(&elem_locals);
     const list_stmt = try store.addCFStmt(.{ .assign_list = .{
         .target = root_list,
         .elems = list_elems,
         .next = ignored_stmt,
-    } });
+    } }, .test_fixture);
 
     var current = list_stmt;
     var i: usize = root_elems.len;
@@ -27224,7 +27224,7 @@ test "two-arg proc list join loop returns full length" {
             .target = elem_locals[i],
             .value = .{ .i64_literal = .{ .value = root_elems[i], .layout_idx = .i64 } },
             .next = current,
-        } });
+        } }, .test_fixture);
     }
     const root_proc = try addNoArgProc(&store, current, .u64);
 
@@ -27251,7 +27251,7 @@ test "ptr_alloca slot is zeroed and ptr_store/ptr_load round trip" {
     const post = try addLocal(&store, .u64);
     const sum = try addLocal(&store, .u64);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } }, .test_fixture);
     const add_args = try store.addLocalSpan(&.{ pre, post });
     const add = try store.addCFStmt(.{ .assign_low_level = .{
         .target = sum,
@@ -27259,7 +27259,7 @@ test "ptr_alloca slot is zeroed and ptr_store/ptr_load round trip" {
         .rc_effect = lir.LowLevel.num_int_add_crash_on_overflow.rcEffect(),
         .args = add_args,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const load_post_args = try store.addLocalSpan(&.{slot});
     const load_post = try store.addCFStmt(.{ .assign_low_level = .{
         .target = post,
@@ -27267,7 +27267,7 @@ test "ptr_alloca slot is zeroed and ptr_store/ptr_load round trip" {
         .rc_effect = lir.LowLevel.ptr_load.rcEffect(),
         .args = load_post_args,
         .next = add,
-    } });
+    } }, .test_fixture);
     const store_args = try store.addLocalSpan(&.{ slot, v });
     const store_v = try store.addCFStmt(.{ .assign_low_level = .{
         .target = st,
@@ -27275,12 +27275,12 @@ test "ptr_alloca slot is zeroed and ptr_store/ptr_load round trip" {
         .rc_effect = lir.LowLevel.ptr_store.rcEffect(),
         .args = store_args,
         .next = load_post,
-    } });
+    } }, .test_fixture);
     const v_lit = try store.addCFStmt(.{ .assign_literal = .{
         .target = v,
         .value = .{ .i64_literal = .{ .value = 41, .layout_idx = .u64 } },
         .next = store_v,
-    } });
+    } }, .test_fixture);
     // Loading before any store proves the alloca slot was zero-initialized.
     const load_pre_args = try store.addLocalSpan(&.{slot});
     const load_pre = try store.addCFStmt(.{ .assign_low_level = .{
@@ -27289,14 +27289,14 @@ test "ptr_alloca slot is zeroed and ptr_store/ptr_load round trip" {
         .rc_effect = lir.LowLevel.ptr_load.rcEffect(),
         .args = load_pre_args,
         .next = v_lit,
-    } });
+    } }, .test_fixture);
     const alloca = try store.addCFStmt(.{ .assign_low_level = .{
         .target = slot,
         .op = .ptr_alloca,
         .rc_effect = lir.LowLevel.ptr_alloca.rcEffect(),
         .args = try store.addLocalSpan(&.{}),
         .next = load_pre,
-    } });
+    } }, .test_fixture);
     const root_proc = try addNoArgProc(&store, alloca, .u64);
 
     try std.testing.expectEqual(@as(u64, 41), try runRootU64(&store, &test_state.layout_store, root_proc, .u64));
@@ -27324,14 +27324,14 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
     const post = try addLocal(&store, .u64);
     const sum = try addLocal(&store, .u64);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } }, .test_fixture);
     // The testing allocator behind TestRocOps fails the test on leaks, so this
     // decref also verifies the cell came from allocateWithRefcount with rc=1.
     const drop_cell = try store.addCFStmt(.{ .decref = .{
         .value = cell,
         .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = box_u64 }),
         .next = ret,
-    } });
+    } }, .test_fixture);
     const add_args = try store.addLocalSpan(&.{ pre, post });
     const add = try store.addCFStmt(.{ .assign_low_level = .{
         .target = sum,
@@ -27339,7 +27339,7 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
         .rc_effect = lir.LowLevel.num_int_add_crash_on_overflow.rcEffect(),
         .args = add_args,
         .next = drop_cell,
-    } });
+    } }, .test_fixture);
     const load_post_args = try store.addLocalSpan(&.{p});
     const load_post = try store.addCFStmt(.{ .assign_low_level = .{
         .target = post,
@@ -27347,7 +27347,7 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
         .rc_effect = lir.LowLevel.ptr_load.rcEffect(),
         .args = load_post_args,
         .next = add,
-    } });
+    } }, .test_fixture);
     const store_args = try store.addLocalSpan(&.{ p, v });
     const store_v = try store.addCFStmt(.{ .assign_low_level = .{
         .target = st,
@@ -27355,12 +27355,12 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
         .rc_effect = lir.LowLevel.ptr_store.rcEffect(),
         .args = store_args,
         .next = load_post,
-    } });
+    } }, .test_fixture);
     const v_lit = try store.addCFStmt(.{ .assign_literal = .{
         .target = v,
         .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u64 } },
         .next = store_v,
-    } });
+    } }, .test_fixture);
     // Loading before any store proves the heap cell payload was zero-filled.
     const load_pre_args = try store.addLocalSpan(&.{p});
     const load_pre = try store.addCFStmt(.{ .assign_low_level = .{
@@ -27369,7 +27369,7 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
         .rc_effect = lir.LowLevel.ptr_load.rcEffect(),
         .args = load_pre_args,
         .next = v_lit,
-    } });
+    } }, .test_fixture);
     const cast_args = try store.addLocalSpan(&.{cell});
     const cast = try store.addCFStmt(.{ .assign_low_level = .{
         .target = p,
@@ -27377,14 +27377,14 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
         .rc_effect = lir.LowLevel.ptr_cast.rcEffect(),
         .args = cast_args,
         .next = load_pre,
-    } });
+    } }, .test_fixture);
     const alloc = try store.addCFStmt(.{ .assign_low_level = .{
         .target = cell,
         .op = .box_alloc_zeroed,
         .rc_effect = lir.LowLevel.box_alloc_zeroed.rcEffect(),
         .args = try store.addLocalSpan(&.{}),
         .next = cast,
-    } });
+    } }, .test_fixture);
     const root_proc = try addNoArgProc(&store, alloc, .u64);
 
     try std.testing.expectEqual(@as(u64, 7), try runRootU64(&store, &test_state.layout_store, root_proc, .u64));
@@ -27417,14 +27417,14 @@ test "generate bool literal" {
     defer test_state.deinit();
 
     const result = try addLocal(&store, .bool);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const assign_true = try store.addCFStmt(.{ .assign_tag = .{
         .target = result,
         .variant_index = 1,
         .discriminant = 1,
         .payload = null,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const proc = try addNoArgProc(&store, assign_true, .bool);
 
     try std.testing.expectEqual(@as(u8, 1), try runRootU8(&store, &test_state.layout_store, proc, .bool));
@@ -27454,7 +27454,7 @@ test "tag payload bind invariant rejects mismatched pattern layout" {
     try std.testing.expectEqual(layout.Idx.u64, runtime_payload_layout);
     try std.testing.expect(runtime_payload_layout != store.getLocal(mismatched_target).layout_idx);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = mismatched_target } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = mismatched_target } }, .test_fixture);
     _ = try store.addCFStmt(.{ .assign_ref = .{
         .target = mismatched_target,
         .op = .{ .tag_payload = .{
@@ -27464,7 +27464,7 @@ test "tag payload bind invariant rejects mismatched pattern layout" {
             .tag_discriminant = 0,
         } },
         .next = ret,
-    } });
+    } }, .test_fixture);
 }
 
 test "generate addition" {
@@ -27516,7 +27516,7 @@ test "dev backend fuses overflow predicate with matching wrapping result" {
     const overflowed = try addLocal(&store, .bool);
     const result = try addLocal(&store, .u64);
 
-    const ret_result = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret_result = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const arithmetic_args = try store.addLocalSpan(&.{ lhs, rhs });
     const wrapping_result = try store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
@@ -27524,31 +27524,31 @@ test "dev backend fuses overflow predicate with matching wrapping result" {
         .rc_effect = lir.LowLevel.num_int_add_wrap.rcEffect(),
         .args = arithmetic_args,
         .next = ret_result,
-    } });
-    const ret_overflow = try store.addCFStmt(.{ .ret = .{ .value = lhs } });
+    } }, .test_fixture);
+    const ret_overflow = try store.addCFStmt(.{ .ret = .{ .value = lhs } }, .test_fixture);
     const branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = ret_overflow }});
     const choose = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = overflowed,
         .branches = branches,
         .default_branch = wrapping_result,
-    } });
+    } }, .test_fixture);
     const predicate = try store.addCFStmt(.{ .assign_low_level = .{
         .target = overflowed,
         .op = .num_int_add_overflows,
         .rc_effect = lir.LowLevel.num_int_add_overflows.rcEffect(),
         .args = arithmetic_args,
         .next = choose,
-    } });
+    } }, .test_fixture);
     const rhs_literal = try store.addCFStmt(.{ .assign_literal = .{
         .target = rhs,
         .value = .{ .i64_literal = .{ .value = 2, .layout_idx = .u64 } },
         .next = predicate,
-    } });
+    } }, .test_fixture);
     const lhs_literal = try store.addCFStmt(.{ .assign_literal = .{
         .target = lhs,
         .value = .{ .i64_literal = .{ .value = 40, .layout_idx = .u64 } },
         .next = rhs_literal,
-    } });
+    } }, .test_fixture);
     const proc = try addNoArgProc(&store, lhs_literal, .u64);
 
     const compiled = try compileRoot(&store, &test_state.layout_store, proc, .u64);
@@ -27604,7 +27604,7 @@ test "record equality uses layout-aware comparison" {
     const rhs_record = try addLocal(&store, record_layout);
     const eq_result = try addLocal(&store, .bool);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = eq_result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = eq_result } }, .test_fixture);
     const eq_args = try store.addLocalSpan(&.{ lhs_record, rhs_record });
     const eq_stmt = try store.addCFStmt(.{ .assign_low_level = .{
         .target = eq_result,
@@ -27612,39 +27612,39 @@ test "record equality uses layout-aware comparison" {
         .rc_effect = lir.LowLevel.num_is_eq.rcEffect(),
         .args = eq_args,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const rhs_fields = try store.addLocalSpan(&.{ rhs_small, rhs_large });
     const rhs_record_stmt = try store.addCFStmt(.{ .assign_struct = .{
         .target = rhs_record,
         .fields = rhs_fields,
         .next = eq_stmt,
-    } });
+    } }, .test_fixture);
     const lhs_fields = try store.addLocalSpan(&.{ lhs_small, lhs_large });
     const lhs_record_stmt = try store.addCFStmt(.{ .assign_struct = .{
         .target = lhs_record,
         .fields = lhs_fields,
         .next = rhs_record_stmt,
-    } });
+    } }, .test_fixture);
     const assign_rhs_large = try store.addCFStmt(.{ .assign_literal = .{
         .target = rhs_large,
         .value = .{ .i64_literal = .{ .value = 999, .layout_idx = .i64 } },
         .next = lhs_record_stmt,
-    } });
+    } }, .test_fixture);
     const assign_rhs_small = try store.addCFStmt(.{ .assign_literal = .{
         .target = rhs_small,
         .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u8 } },
         .next = assign_rhs_large,
-    } });
+    } }, .test_fixture);
     const assign_lhs_large = try store.addCFStmt(.{ .assign_literal = .{
         .target = lhs_large,
         .value = .{ .i64_literal = .{ .value = 999, .layout_idx = .i64 } },
         .next = assign_rhs_small,
-    } });
+    } }, .test_fixture);
     const assign_lhs_small = try store.addCFStmt(.{ .assign_literal = .{
         .target = lhs_small,
         .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u8 } },
         .next = assign_lhs_large,
-    } });
+    } }, .test_fixture);
     const proc = try addNoArgProc(&store, assign_lhs_small, .bool);
 
     try std.testing.expectEqual(@as(u8, 1), try runRootU8(&store, &test_state.layout_store, proc, .bool));
@@ -28127,20 +28127,20 @@ fn addHostedCallRoot(
         .args = try store.addLocalSpan(params),
         .ret_layout = .i64,
         .hosted = .{ .symbol = try store.insertString(symbol_name), .dispatch_index = 0 },
-    });
+    }, .none);
 
     const args = try allocator.alloc(LocalId, arg_layouts.len);
     defer allocator.free(args);
     for (arg_layouts, args) |arg_layout, *arg| arg.* = try addLocal(store, arg_layout);
 
     const observed = try addLocal(store, .i64);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = observed } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = observed } }, .test_fixture);
     var body = try store.addCFStmt(.{ .assign_call = .{
         .target = observed,
         .proc = hosted_proc,
         .args = try store.addLocalSpan(args),
         .next = ret,
-    } });
+    } }, .test_fixture);
 
     var i = arg_layouts.len;
     while (i > 0) {
@@ -28149,7 +28149,7 @@ fn addHostedCallRoot(
             .target = args[i],
             .value = .{ .i64_literal = .{ .value = values[i], .layout_idx = arg_layouts[i] } },
             .next = body,
-        } });
+        } }, .test_fixture);
     }
 
     return try addNoArgProc(store, body, .i64);
@@ -28226,9 +28226,9 @@ test "symbol producer caches reuse identities and reset with generated code" {
     defer store.deinit();
     const literal = try store.insertString("a readonly literal with more than twenty three bytes");
     const local = try store.addLocal(.{ .layout_idx = .str });
-    const end = try store.addCFStmt(.{ .ret = .{ .value = local } });
-    const body = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = literal, .offset = 0, .len = @intCast(store.getString(literal).len) } }, .next = end } });
-    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.LIR.ProcIdentity.forTest(11), .args = .empty(), .body = body, .ret_layout = .str });
+    const end = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = literal, .offset = 0, .len = @intCast(store.getString(literal).len) } }, .next = end } }, .test_fixture);
+    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.LIR.ProcIdentity.forTest(11), .args = .empty(), .body = body, .ret_layout = .str }, .none);
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
     inline for (.{ RocTarget.x64linux, RocTarget.arm64linux }) |target| {
@@ -28286,32 +28286,33 @@ test "independent fragment emits only requested procedure with unresolved self a
     inline for (.{ RocTarget.x64linux, RocTarget.arm64linux }) |target| {
         var store = LirStore.init(allocator);
         defer store.deinit();
-        store.current_loc = .{ .file = 0, .line = 11, .column = 2 };
+        var origin = LIR.StmtOrigin.test_fixture;
+        origin.loc = .{ .file = 0, .line = 11, .column = 2 };
         var layouts = try TestLayoutState.init(allocator);
         defer layouts.deinit();
         const other = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, .i64);
         const result = try addLocal(&store, .i64);
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, origin);
         const self_id: LIR.LirProcSpecId = @enumFromInt(store.procSpecCount());
         const recursive = try store.addCFStmt(.{ .assign_call = .{
             .target = result,
             .proc = self_id,
             .args = .empty(),
             .next = ret,
-        } });
+        } }, origin);
         const call = try store.addCFStmt(.{ .assign_call = .{
             .target = result,
             .proc = other,
             .args = .empty(),
             .next = recursive,
-        } });
+        } }, origin);
         const proc = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(81),
             .args = .empty(),
             .body = call,
             .ret_layout = .i64,
-        });
+        }, .none);
         var cg = try LirCodeGen(target).init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
         defer cg.deinit();
         try cg.emitProcFragment(proc);
@@ -28339,12 +28340,12 @@ test "independent fragment defers shared RC helper demand" {
     var layouts = try TestLayoutState.init(allocator);
     defer layouts.deinit();
     const string = try addLocal(&store, .str);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = string } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = string } }, .test_fixture);
     const drop = try store.addCFStmt(.{ .decref = .{
         .value = string,
         .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .str }),
         .next = ret,
-    } });
+    } }, .test_fixture);
     const proc = try addProc(&store, &.{string}, drop, .str);
     var cg = try HostLirCodeGen.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
     defer cg.deinit();
@@ -28380,20 +28381,20 @@ test "independent fragment symbolic calls resolve after all procedures are place
         defer layouts.deinit();
         const callee = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, .i64);
         const result = try addLocal(&store, .i64);
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
         const call = try store.addCFStmt(.{ .assign_call = .{
             .target = result,
             .proc = callee,
             .args = .empty(),
             .next = ret,
-        } });
+        } }, .test_fixture);
         const caller = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(99),
             .args = .empty(),
             .body = call,
             .ret_layout = .i64,
-        });
+        }, .none);
         var image = try CG.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
         defer image.deinit();
         for ([_]LIR.LirProcSpecId{ caller, callee }) |id| {
