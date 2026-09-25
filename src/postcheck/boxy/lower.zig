@@ -69,7 +69,7 @@ pub fn run(
 ) Common.LowerError!Output {
     var result = try LirProgram.Result.init(allocator, options.target_usize);
     errdefer result.deinit();
-    if (options.observe_expects) {
+    {
         var source_files = std.ArrayList(base.SourceFileEntry).empty;
         defer source_files.deinit(allocator);
         var seen_source_files = std.StringHashMapUnmanaged(void){};
@@ -1293,6 +1293,40 @@ const ProcedureBuilder = struct {
         boxyLowerInvariant("boxy expect source module was absent from the LIR source table");
     }
 
+    /// Origin for a body whose demanding construct has no checked source
+    /// region recorded in the plan (dictionary method slots).
+    fn constructlessOrigin(kind: LIR.OriginKind) LIR.StmtOrigin {
+        return .{
+            .loc = base.SourceLoc.none,
+            .region = base.Region.zero(),
+            .inline_scope = LIR.InlineScopeId.none,
+            .kind = kind,
+        };
+    }
+
+    /// Origin of a worker body's scaffolding. A checked-expression worker
+    /// names its root expression; generated and intrinsic workers are derived
+    /// code whose plan source records only types, so they carry no region.
+    fn workerOrigin(self: *ProcedureBuilder, resolved: ResolvedWorker) Allocator.Error!LIR.StmtOrigin {
+        return switch (resolved.body) {
+            .checked_expr => |body| blk: {
+                const region = resolved.module.checked_bodies.expr(body.root_expr).source_region;
+                break :blk .{
+                    .loc = try self.sourceLoc(resolved.module, region),
+                    .region = region,
+                    .inline_scope = LIR.InlineScopeId.none,
+                    .kind = .scaffold,
+                };
+            },
+            .hosted, .unimplemented => constructlessOrigin(.scaffold),
+            .intrinsic,
+            .generated_codec,
+            .generated_field_iterator,
+            .generated_interpolation_step,
+            => constructlessOrigin(.derived),
+        };
+    }
+
     fn expectSite(self: *ProcedureBuilder, module: ProcedureModuleView, region: base.Region) Allocator.Error!?LIR.ExpectSiteId {
         if (!self.options.observe_expects) return null;
         return try self.result.addExpectSite(try self.sourceLoc(module, region), region);
@@ -2205,10 +2239,13 @@ const ProcedureBuilder = struct {
         const saved_tail_builder = self.result.store.tail_call_builder;
         self.result.store.tail_call_builder = null;
         defer self.result.store.tail_call_builder = saved_tail_builder;
+        var worker_origin = try self.workerOrigin(resolved);
+        worker_origin.kind = .scaffold;
         var proc = ProcBodyBuilder.initSyntheticAdapter(
             self,
             resolved.module,
             self.layout_plan.workerLayoutFor(worker_id),
+            worker_origin,
         );
         defer proc.deinit();
 
@@ -2381,7 +2418,7 @@ const ProcedureBuilder = struct {
                 boxyLowerInvariant("static dictionary method adapter result had no descriptor output local")
         else
             null;
-        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = result } });
+        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = result } }, proc.origin);
         var continuation = if (concrete_function) |concrete| split: {
             const concrete_result = try proc.addFrameLocalForRep(concrete.ret);
             const detached = try proc.enterDetachedDescriptorScope(requirement_scope);
@@ -2402,7 +2439,7 @@ const ProcedureBuilder = struct {
             .args = try self.result.store.addLocalSpan(worker_call_args),
             .out_desc = raw_result_desc,
             .next = continuation,
-        } });
+        } }, proc.origin);
         var arg_index = worker_args.len;
         while (arg_index > 0) {
             arg_index -= 1;
@@ -2455,7 +2492,7 @@ const ProcedureBuilder = struct {
             .ret_layout = ret_layout,
             .boxy_runtime_entry = true,
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
-        });
+        }, proc.origin.loc);
         const proc_spec = self.result.store.getProcSpecPtr(proc_id);
         const return_desc = try self.returnDescriptorInfoForBody(
             continuation,
@@ -3928,6 +3965,7 @@ const ProcedureBuilder = struct {
             self,
             procedureModuleById(self.modules, source_rep.source_type.module),
             self.layout_plan.worker_layouts[0],
+            constructlessOrigin(.derived),
         );
         defer proc.deinit();
         const value = try proc.addArgLocalForRep(rep_id);
@@ -3943,8 +3981,8 @@ const ProcedureBuilder = struct {
             .ret_layout = ret_layout,
             .boxy_runtime_entry = true,
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
-        });
-        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = result } });
+        }, proc.origin.loc);
+        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = result } }, proc.derivedOrigin());
         const body = try proc.lowerHashRepLocalsInto(result, value, hasher, rep_id, ret_stmt);
         const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
         const proc_spec = self.result.store.getProcSpecPtr(proc_id);
@@ -3993,6 +4031,7 @@ const ProcedureBuilder = struct {
             self,
             procedureModuleById(self.modules, fn_type.module),
             self.layout_plan.worker_layouts[0],
+            constructlessOrigin(.scaffold),
         );
         defer proc.deinit();
         for (function_args) |arg| {
@@ -4004,7 +4043,7 @@ const ProcedureBuilder = struct {
         const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
         const body = try self.result.store.addCFStmt(.{ .crash = .{
             .msg = .{ .literal = try self.result.store.insertString("dispatch on a value that can never exist") },
-        } });
+        } }, proc.origin);
         const proc_symbol = self.symbols.fresh();
         const proc_id = try self.result.store.addProcSpec(.{
             .name = lirSymbol(proc_symbol),
@@ -4015,7 +4054,7 @@ const ProcedureBuilder = struct {
             .ret_layout = ret_layout,
             .boxy_runtime_entry = true,
             .stack_probe = self.stackProbeForProc(args_span, frame_span, ret_layout),
-        });
+        }, proc.origin.loc);
         return .{
             .method = requirement.fn_name,
             .proc = proc_id,
@@ -5366,7 +5405,7 @@ const ProcedureBuilder = struct {
         const saved_tail_builder = self.result.store.tail_call_builder;
         self.result.store.tail_call_builder = null;
         defer self.result.store.tail_call_builder = saved_tail_builder;
-        var proc = ProcBodyBuilder.init(self, resolved.module, self.layout_plan.workerLayoutFor(worker_id));
+        var proc = ProcBodyBuilder.init(self, resolved.module, self.layout_plan.workerLayoutFor(worker_id), try self.workerOrigin(resolved));
         defer proc.deinit();
 
         proc.erased_argument_descriptors = true;
@@ -5385,13 +5424,13 @@ const ProcedureBuilder = struct {
             .body = null,
             .ret_layout = ret_layout,
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
-        });
+        }, proc.origin.loc);
         self.worker_procs[index] = proc_id;
         var tail_builder = lir_core.TailCallBuilder.init(self.allocator, proc_id);
         defer tail_builder.deinit();
         self.result.store.tail_call_builder = &tail_builder;
         try self.setProcDebugName(proc_id, resolved);
-        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
+        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, proc.origin);
         var body_stmt = try self.lowerWorkerBodyInto(resolved, &proc, body_source, ret_local, ret_stmt);
         body_stmt = try proc.prependWorkerReturnDescriptorInitializers(body_stmt);
         body_stmt = try proc.prependStoredCaptureInitializers(body_stmt);
@@ -5413,7 +5452,7 @@ const ProcedureBuilder = struct {
         proc_spec.ret_desc = return_desc.external;
         proc_spec.runtime_ret_desc = return_desc.runtime_local;
         proc_spec.stack_probe = self.stackProbeForProc(args_span, frame_span, ret_layout);
-        self.resolvePendingDirectCallDescriptorAbis(proc_id, return_desc.runtime_local != null);
+        try self.resolvePendingDirectCallDescriptorAbis(proc_id, return_desc.runtime_local != null);
         // All self-call ABI fixups are resolved with this worker's signature.
         // Later descriptor capture finalization does not change continuations.
         tail_builder.adapters = self.result.boxy_adapters.items;
@@ -5445,7 +5484,7 @@ const ProcedureBuilder = struct {
         const saved_tail_builder = self.result.store.tail_call_builder;
         self.result.store.tail_call_builder = null;
         defer self.result.store.tail_call_builder = saved_tail_builder;
-        var proc = ProcBodyBuilder.init(self, resolved.module, self.layout_plan.workerLayoutFor(worker_id));
+        var proc = ProcBodyBuilder.init(self, resolved.module, self.layout_plan.workerLayoutFor(worker_id), try self.workerOrigin(resolved));
         defer proc.deinit();
 
         const body_source = try self.bodySourceForWorker(resolved, &proc);
@@ -5473,11 +5512,11 @@ const ProcedureBuilder = struct {
             ),
             .boxy_runtime_entry = true,
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
-        });
+        }, proc.origin.loc);
         self.erased_worker_procs[index] = proc_id;
         try self.setProcDebugName(proc_id, resolved);
 
-        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
+        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, proc.origin);
         var body_stmt = try self.lowerWorkerBodyInto(resolved, &proc, body_source, ret_local, ret_stmt);
         body_stmt = try proc.prependWorkerReturnDescriptorInitializers(body_stmt);
         body_stmt = try proc.prependStoredCaptureInitializers(body_stmt);
@@ -5562,7 +5601,7 @@ const ProcedureBuilder = struct {
             .ret_layout = ret_layout,
             .hosted = try self.lirHostedProcForTemplate(template_ref),
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
-        });
+        }, .none);
         self.hosted_external_procs[index] = proc_id;
         try self.setProcDebugName(proc_id, resolved);
         return proc_id;
@@ -5785,7 +5824,7 @@ const ProcedureBuilder = struct {
             .hosted => try self.lowerHostedWorkerBodyInto(resolved, proc, ret_local, ret_stmt),
             .unimplemented => try self.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.result.store.insertString(Common.unimplemented_declaration_crash) },
-            } }),
+            } }, proc.origin),
             .generated_codec => |source| try self.lowerGeneratedCodecWorkerInto(proc, source, ret_local, ret_stmt),
             .generated_field_iterator => |source| try self.lowerGeneratedFieldIteratorStepInto(proc, source, ret_local, ret_stmt),
             .generated_interpolation_step => |source| try self.lowerGeneratedInterpolationStepInto(proc, source, ret_local, ret_stmt),
@@ -5891,18 +5930,18 @@ const ProcedureBuilder = struct {
             };
             branch_index += 1;
         }
-        const invalid_plan = try self.result.store.addCFStmt(.runtime_error);
+        const invalid_plan = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         var continuation = try self.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = runtime_id,
             .branches = try self.result.store.addCFSwitchBranches(branches),
             .default_branch = invalid_plan,
             .continuation = null,
-        } });
+        } }, proc.derivedOrigin());
         continuation = try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = runtime_id,
             .op = .{ .field = .{ .source = proc.arg_locals.items[0], .field_idx = 1 } },
             .next = continuation,
-        } });
+        } }, proc.derivedOrigin());
         continuation = try proc.generatedParserReadRecordField(
             missing,
             missing_child.rep,
@@ -6275,7 +6314,7 @@ const ProcedureBuilder = struct {
             next,
         );
 
-        var initial_jump = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        var initial_jump = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, proc.derivedOrigin());
         initial_jump = try proc.setLocalInitializeJoinParam(longest, zero, initial_jump);
         initial_jump = try proc.setLocalInitializeJoinParam(shortest, initial_shortest, initial_jump);
         initial_jump = try proc.setLocalInitializeJoinParam(items, initial_items, initial_jump);
@@ -6288,14 +6327,14 @@ const ProcedureBuilder = struct {
             .target = source_items,
             .op = .{ .field = .{ .source = proc.arg_locals.items[0], .field_idx = 0 } },
             .next = initial_jump,
-        } });
+        } }, proc.derivedOrigin());
 
         return try self.result.store.addCFStmt(.{ .join = .{
             .id = join_id,
             .params = try proc.joinParamSpan(&.{ index, items, shortest, longest }),
             .body = body,
             .remainder = initial_jump,
-        } });
+        } }, proc.derivedOrigin());
     }
 
     fn lowerGeneratedFieldNamesRenameLoopBody(
@@ -6357,8 +6396,8 @@ const ProcedureBuilder = struct {
             .target = target,
             .fields = try self.result.store.addLocalSpan(&.{ items, final_shortest, longest }),
             .next = next,
-        } });
-        const jump = try self.result.store.addCFStmt(.{ .jump = .{ .target = finish_join } });
+        } }, proc.derivedOrigin());
+        const jump = try self.result.store.addCFStmt(.{ .jump = .{ .target = finish_join } }, proc.derivedOrigin());
         const empty = try proc.setLocalInitializeJoinParam(final_shortest, zero, jump);
         const nonempty = try proc.setLocalInitializeJoinParam(final_shortest, shortest, jump);
         const is_empty = try proc.addFrameLocal(.bool);
@@ -6369,7 +6408,7 @@ const ProcedureBuilder = struct {
             .params = try proc.joinParamSpan(&.{final_shortest}),
             .body = finish_body,
             .remainder = compare,
-        } });
+        } }, proc.derivedOrigin());
     }
 
     fn lowerGeneratedFieldNamesRenameStep(
@@ -6402,7 +6441,7 @@ const ProcedureBuilder = struct {
         const one = try proc.addFrameLocal(.u64);
         const next_index = try proc.addFrameLocal(.u64);
 
-        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, proc.derivedOrigin());
         continuation = try proc.setLocalInitializeJoinParam(longest, next_longest, continuation);
         continuation = try proc.setLocalInitializeJoinParam(shortest, next_shortest, continuation);
         continuation = try proc.setLocalInitializeJoinParam(items, next_items, continuation);
@@ -6412,7 +6451,7 @@ const ProcedureBuilder = struct {
             .target = renamed_field,
             .fields = try self.result.store.addLocalSpan(&.{ renamed, source_index, renamed_len }),
             .next = continuation,
-        } });
+        } }, proc.derivedOrigin());
         continuation = try proc.assignGeneratedParserU64Select(
             next_longest,
             renamed_len,
@@ -6441,12 +6480,12 @@ const ProcedureBuilder = struct {
             .target = source_index,
             .op = .{ .field = .{ .source = source_field, .field_idx = 1 } },
             .next = continuation,
-        } });
+        } }, proc.derivedOrigin());
         continuation = try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = source_name,
             .op = .{ .field = .{ .source = source_field, .field_idx = 0 } },
             .next = continuation,
-        } });
+        } }, proc.derivedOrigin());
         continuation = try proc.assignBinaryLowLevel(source_field, .list_get_unsafe, source_items, index, continuation);
         continuation = try proc.assignBinaryLowLevel(next_index, .num_int_add_crash_on_overflow, index, one, continuation);
         return try proc.assignIntLiteral(one, 1, continuation);
@@ -6509,7 +6548,7 @@ const ProcedureBuilder = struct {
             .target = items,
             .op = .{ .field = .{ .source = proc.arg_locals.items[0], .field_idx = 0 } },
             .next = continuation,
-        } });
+        } }, proc.derivedOrigin());
     }
 
     fn lowerGeneratedInterpolationIterInto(
@@ -6891,7 +6930,7 @@ const ProcedureBuilder = struct {
                 .target = name_len,
                 .op = .{ .field = .{ .source = item, .field_idx = 2 } },
                 .next = dispatch,
-            } });
+            } }, proc.derivedOrigin());
         }
 
         const next_index = try proc.addFrameLocal(.u64);
@@ -6926,7 +6965,7 @@ const ProcedureBuilder = struct {
             .target = items,
             .op = .{ .field = .{ .source = captures[0], .field_idx = 0 } },
             .next = dispatch,
-        } });
+        } }, proc.derivedOrigin());
         const at_end = try proc.addFrameLocal(.bool);
         const choose = try proc.boolSwitchNoContinuation(at_end, done_body, dispatch);
         return try proc.assignBinaryLowLevel(at_end, .num_is_eq, captures[1], captures[2], choose);
@@ -7035,7 +7074,7 @@ const ProcedureBuilder = struct {
         ok_body = try proc.generatedParserReadTagPayload(value, ok, ok_payload, ok_body);
 
         const err_payload = try proc.generatedParserSingleTagPayloadLocal(err);
-        const missing_body = try self.result.store.addCFStmt(.runtime_error);
+        const missing_body = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         const null_body = if (source.optional_null) blk: {
             const encoding_type = source.capture_type orelse
                 boxyLowerInvariant("generated optional encoder thunk had no encoding type");
@@ -7058,7 +7097,7 @@ const ProcedureBuilder = struct {
             const null_variant = proc.generatedParserTagVariant(err_payload.child.rep, "Null");
             const variants = [_]GeneratedParserTagVariant{ missing, null_variant };
             const bodies = [_]LIR.CFStmtId{ missing_body, null_body };
-            const impossible = try self.result.store.addCFStmt(.runtime_error);
+            const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
             break :blk try proc.generatedParserTagDispatch(
                 err_payload.local,
                 err_payload.child.rep,
@@ -7073,7 +7112,7 @@ const ProcedureBuilder = struct {
         const err_body = try proc.generatedParserReadTagPayload(value, err, err_payload, err_action);
         const variants = [_]GeneratedParserTagVariant{ ok, err };
         const bodies = [_]LIR.CFStmtId{ ok_body, err_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
+        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         return try proc.generatedParserTagDispatch(value, value_rep, &variants, &bodies, impossible);
     }
 
@@ -7310,7 +7349,7 @@ const ProcedureBuilder = struct {
         ok_body = try proc.generatedParserReadTagPayload(value, ok, ok_payload, ok_body);
 
         const err_payload = try proc.generatedParserSingleTagPayloadLocal(err);
-        const missing_body = try self.result.store.addCFStmt(.runtime_error);
+        const missing_body = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         const null_body = if (try_plan.null) blk: {
             const encoding_type = source.capture_type orelse
                 boxyLowerInvariant("generated Try encoder had no encoding type");
@@ -7333,7 +7372,7 @@ const ProcedureBuilder = struct {
             const null_variant = proc.generatedParserTagVariant(err_payload.child.rep, "Null");
             const error_variants = [_]GeneratedParserTagVariant{ missing, null_variant };
             const error_bodies = [_]LIR.CFStmtId{ missing_body, null_body };
-            const impossible = try self.result.store.addCFStmt(.runtime_error);
+            const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
             break :blk try proc.generatedParserTagDispatch(
                 err_payload.local,
                 err_payload.child.rep,
@@ -7348,7 +7387,7 @@ const ProcedureBuilder = struct {
         const err_body = try proc.generatedParserReadTagPayload(value, err, err_payload, err_action);
         const variants = [_]GeneratedParserTagVariant{ ok, err };
         const bodies = [_]LIR.CFStmtId{ ok_body, err_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
+        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         return try proc.generatedParserTagDispatch(value, value_rep, &variants, &bodies, impossible);
     }
 
@@ -7467,7 +7506,7 @@ const ProcedureBuilder = struct {
             const null_variant = proc.generatedParserTagVariant(err_payload.child.rep, "Null");
             const variants = [_]GeneratedParserTagVariant{ missing, null_variant };
             const bodies = [_]LIR.CFStmtId{ missing_body, continuation };
-            const impossible = try self.result.store.addCFStmt(.runtime_error);
+            const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
             break :blk try proc.generatedParserTagDispatch(
                 err_payload.local,
                 err_payload.child.rep,
@@ -7479,13 +7518,13 @@ const ProcedureBuilder = struct {
         const err_body = try proc.generatedParserReadTagPayload(field_value, err, err_payload, error_dispatch);
         const variants = [_]GeneratedParserTagVariant{ ok, err };
         const bodies = [_]LIR.CFStmtId{ continuation, err_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
+        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         const dispatch = try proc.generatedParserTagDispatch(field_value, field.rep, &variants, &bodies, impossible);
         return try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = field_value,
             .op = .{ .field = .{ .source = record_value, .field_idx = @intCast(field.index) } },
             .next = dispatch,
-        } });
+        } }, proc.derivedOrigin());
     }
 
     fn lowerGeneratedSequenceEncoderInto(
@@ -7966,7 +8005,7 @@ const ProcedureBuilder = struct {
         }
 
         const raw_target = try proc.addFrameLocalForRep(source_function.rep);
-        const placeholder = try proc.parent.result.store.addCFStmt(.runtime_error);
+        const placeholder = try proc.parent.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         return .{
             .target = raw_target,
             .next = placeholder,
@@ -7993,7 +8032,7 @@ const ProcedureBuilder = struct {
             adapter.source_function,
             adapter.next,
         );
-        proc.parent.result.store.getCFStmtPtr(adapter.placeholder).* = proc.parent.result.store.getCFStmt(adapted);
+        try proc.parent.result.store.replaceCFStmt(adapter.placeholder, proc.parent.result.store.getCFStmt(adapted), proc.parent.result.store.stmtOrigin(adapted));
     }
 
     fn generatedCodecCaptureValues(
@@ -8198,7 +8237,7 @@ const ProcedureBuilder = struct {
                 const null_variant = proc.generatedParserTagVariant(err_payload.child.rep, "Null");
                 const error_variants = [_]GeneratedParserTagVariant{ missing, null_variant };
                 const error_bodies = [_]LIR.CFStmtId{ skipped.?, continuation };
-                const impossible = try self.result.store.addCFStmt(.runtime_error);
+                const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
                 break :blk try proc.generatedParserTagDispatch(
                     err_payload.local,
                     err_payload.child.rep,
@@ -8210,7 +8249,7 @@ const ProcedureBuilder = struct {
             const err_body = try proc.generatedParserReadTagPayload(field_value, field_err, err_payload, err_dispatch);
             const optional_variants = [_]GeneratedParserTagVariant{ field_ok, field_err };
             const optional_bodies = [_]LIR.CFStmtId{ continuation, err_body };
-            const impossible = try self.result.store.addCFStmt(.runtime_error);
+            const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
             continuation = try proc.generatedParserTagDispatch(
                 field_value,
                 field_value_rep,
@@ -8223,7 +8262,7 @@ const ProcedureBuilder = struct {
             const present_body = try proc.generatedParserReadTagPayload(field_slot, slot.present, present_payload.?, continuation);
             const slot_variants = [_]GeneratedParserTagVariant{ slot.present, slot.missing };
             const slot_bodies = [_]LIR.CFStmtId{ present_body, skipped.? };
-            const impossible = try self.result.store.addCFStmt(.runtime_error);
+            const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
             continuation = try proc.generatedParserTagDispatch(
                 field_slot,
                 field.rep,
@@ -8236,7 +8275,7 @@ const ProcedureBuilder = struct {
             .target = field_slot,
             .op = .{ .field = .{ .source = record_value, .field_idx = @intCast(field.index) } },
             .next = continuation,
-        } });
+        } }, proc.derivedOrigin());
     }
 
     fn lowerGeneratedEncoderSequenceElementsInto(
@@ -8419,7 +8458,7 @@ const ProcedureBuilder = struct {
             join_id,
             next,
         );
-        var initial = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        var initial = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, proc.derivedOrigin());
         initial = try proc.setLocalInitializeJoinParamFromRep(state, initial_state, state_rep, initial);
         initial = try proc.setLocalInitializeJoinParam(index, zero, initial);
         initial = try proc.assignIntLiteral(zero, 0, initial);
@@ -8429,7 +8468,7 @@ const ProcedureBuilder = struct {
             .params = try proc.joinParamSpan(&.{ index, state }),
             .body = body,
             .remainder = initial,
-        } });
+        } }, proc.derivedOrigin());
     }
 
     fn lowerGeneratedEncoderListLoop(
@@ -8515,7 +8554,7 @@ const ProcedureBuilder = struct {
         const one = try proc.addFrameLocal(.u64);
         const next_index = try proc.addFrameLocal(.u64);
 
-        var success = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        var success = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, proc.derivedOrigin());
         success = try proc.setLocalInitializeJoinParamFromRep(state, ok_payload.local, ok_payload.child.rep, success);
         success = try proc.setLocalInitializeJoinParam(index, next_index, success);
         success = try proc.generatedParserReadTagPayload(result, ok, ok_payload, success);
@@ -8592,7 +8631,7 @@ const ProcedureBuilder = struct {
             join_id,
             next,
         );
-        var initial = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        var initial = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, proc.derivedOrigin());
         initial = try proc.setLocalInitializeJoinParamFromRep(state, proc.arg_locals.items[0], args[0].rep, initial);
         initial = try proc.setLocalInitializeJoinParam(index, zero, initial);
         initial = try proc.assignIntLiteral(zero, 0, initial);
@@ -8602,7 +8641,7 @@ const ProcedureBuilder = struct {
             .params = try proc.joinParamSpan(&.{ index, state }),
             .body = body,
             .remainder = initial,
-        } });
+        } }, proc.derivedOrigin());
     }
 
     fn lowerGeneratedEncoderDictLoop(
@@ -8705,7 +8744,7 @@ const ProcedureBuilder = struct {
         const one = try proc.addFrameLocal(.u64);
         const next_index = try proc.addFrameLocal(.u64);
 
-        var entry_success = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        var entry_success = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, proc.derivedOrigin());
         entry_success = try proc.setLocalInitializeJoinParamFromRep(state, ok_payload.local, ok_payload.child.rep, entry_success);
         entry_success = try proc.setLocalInitializeJoinParam(index, next_index, entry_success);
         entry_success = try proc.generatedParserReadTagPayload(entry_result, ok, ok_payload, entry_success);
@@ -8790,7 +8829,7 @@ const ProcedureBuilder = struct {
             const err_body = try proc.forwardGeneratedParserError(target, function.ret, opened, err, next);
             const variants = [_]GeneratedParserTagVariant{ ok, err };
             const bodies = [_]LIR.CFStmtId{ ok_body, err_body };
-            const impossible = try self.result.store.addCFStmt(.runtime_error);
+            const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
             const dispatch = try proc.generatedParserTagDispatch(opened, opened_rep, &variants, &bodies, impossible);
             return try self.lowerGeneratedCodecCallLocalsInto(proc, start_call, opened, &.{ encoding, state }, dispatch);
         }
@@ -9261,7 +9300,7 @@ const ProcedureBuilder = struct {
             parsed_success = try proc.generatedParserReadTagPayload(parsed, ok, ok_payload, parsed_success);
             const variants = [_]GeneratedParserTagVariant{ ok, err };
             const bodies = [_]LIR.CFStmtId{ parsed_success, err_body };
-            const impossible = try self.result.store.addCFStmt(.runtime_error);
+            const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
             const dispatch = try proc.generatedParserTagDispatch(parsed, parsed_rep, &variants, &bodies, impossible);
             if (constructor_call) |call| {
                 const callable_rep = proc.repForTypeRef(call.ret_type);
@@ -9433,7 +9472,7 @@ const ProcedureBuilder = struct {
         );
         const variants = [_]GeneratedParserTagVariant{ null_ok, null_err };
         const bodies = [_]LIR.CFStmtId{ null_body, child_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
+        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         const dispatch = try proc.generatedParserTagDispatch(parsed, parsed_rep, &variants, &bodies, impossible);
         return try self.lowerGeneratedCodecCallLocalsInto(
             proc,
@@ -9498,7 +9537,7 @@ const ProcedureBuilder = struct {
         ok_body = try proc.generatedParserReadTagPayload(parsed, ok, ok_payload, ok_body);
         const variants = [_]GeneratedParserTagVariant{ ok, err };
         const bodies = [_]LIR.CFStmtId{ ok_body, err_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
+        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         const dispatch = try proc.generatedParserTagDispatch(parsed, parsed_rep, &variants, &bodies, impossible);
         var continuation = try self.lowerGeneratedCodecCallLocalsInto(
             proc,
@@ -9543,12 +9582,12 @@ const ProcedureBuilder = struct {
             .target = spec,
             .fields = try self.result.store.addLocalSpan(&.{ evidence_list, runtime_id }),
             .next = next,
-        } });
+        } }, proc.derivedOrigin());
         continuation = try self.result.store.addCFStmt(.{ .assign_list = .{
             .target = evidence_list,
             .elems = try self.result.store.addLocalSpan(evidence),
             .next = continuation,
-        } });
+        } }, proc.derivedOrigin());
         continuation = try proc.assignIntLiteral(runtime_id, plan.runtime_id, continuation);
         var index = record_types.len;
         while (index > 0) {
@@ -9714,7 +9753,7 @@ const ProcedureBuilder = struct {
             .fields = try self.result.store.addLocalSpan(fields),
             .contents_desc = aggregate_desc.contents_desc,
             .next = success,
-        } });
+        } }, proc.derivedOrigin());
         continuation = try proc.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
         return try proc.prependDescriptorArgMaterializations(aggregate_desc.field_initializers, continuation);
     }
@@ -9807,7 +9846,7 @@ const ProcedureBuilder = struct {
 
         const variants = [_]GeneratedParserTagVariant{ counted_variant, uncounted_variant };
         const bodies = [_]LIR.CFStmtId{ counted_body, uncounted_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
+        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         const ok_body = try proc.generatedParserTagDispatch(event.local, event.child.rep, &variants, &bodies, impossible);
         var initial = try self.finishGeneratedParserTryCall(
             proc,
@@ -9824,7 +9863,7 @@ const ProcedureBuilder = struct {
             .params = try proc.joinParamSpan(&.{ loop.cursor, loop.acc, loop.counted, loop.remaining }),
             .body = loop_body,
             .remainder = initial,
-        } });
+        } }, proc.derivedOrigin());
     }
 
     /// Enter the list loop with an empty list reserved to `capacity` elements
@@ -9842,7 +9881,7 @@ const ProcedureBuilder = struct {
         const initial_list = try proc.addFrameLocal(self.result.store.getLocal(loop.acc).layout_idx);
         if (list_desc) |desc| self.result.store.setLocalBoxyDesc(initial_list, desc);
         const counted_value = try proc.addFrameLocal(.bool);
-        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = loop.join_id } });
+        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = loop.join_id } }, proc.derivedOrigin());
         continuation = try proc.setLocalInitializeJoinParam(loop.remaining, capacity, continuation);
         continuation = try proc.setLocalInitializeJoinParam(loop.counted, counted_value, continuation);
         continuation = try proc.setLocalInitializeJoinParam(loop.acc, initial_list, continuation);
@@ -9868,7 +9907,7 @@ const ProcedureBuilder = struct {
         if (self.result.store.getLocal(loop.acc).boxy_desc) |desc| self.result.store.setLocalBoxyDesc(next_acc, desc);
         const one = try proc.addFrameLocal(.u64);
         const next_remaining = try proc.addFrameLocal(.u64);
-        var element = try self.result.store.addCFStmt(.{ .jump = .{ .target = loop.join_id } });
+        var element = try self.result.store.addCFStmt(.{ .jump = .{ .target = loop.join_id } }, proc.derivedOrigin());
         element = try proc.setLocalInitializeJoinParam(loop.remaining, next_remaining, element);
         element = try proc.setLocalInitializeJoinParam(loop.acc, next_acc, element);
         element = try proc.setLocalInitializeJoinParamFromRep(loop.cursor, parsed_rest, context.state_rep, element);
@@ -10020,7 +10059,7 @@ const ProcedureBuilder = struct {
 
         const variants = [_]GeneratedParserTagVariant{ counted_variant, uncounted_variant };
         const bodies = [_]LIR.CFStmtId{ counted_body, uncounted_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
+        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         const ok_body = try proc.generatedParserTagDispatch(event.local, event.child.rep, &variants, &bodies, impossible);
         const initial = try self.finishGeneratedParserTryCall(
             proc,
@@ -10036,7 +10075,7 @@ const ProcedureBuilder = struct {
             .params = try proc.joinParamSpan(&.{ loop.cursor, loop.acc, loop.counted, loop.remaining }),
             .body = loop_body,
             .remainder = initial,
-        } });
+        } }, proc.derivedOrigin());
     }
 
     /// Enter the dictionary loop with an empty dictionary reserved to
@@ -10053,7 +10092,7 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const initial_dict = try proc.addFrameLocalForRep(loop.shape_rep);
         const counted_value = try proc.addFrameLocal(.bool);
-        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = loop.join_id } });
+        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = loop.join_id } }, proc.derivedOrigin());
         continuation = try proc.setLocalInitializeJoinParam(loop.remaining, capacity, continuation);
         continuation = try proc.setLocalInitializeJoinParam(loop.counted, counted_value, continuation);
         continuation = try proc.setLocalInitializeJoinParam(loop.acc, initial_dict, continuation);
@@ -10125,7 +10164,7 @@ const ProcedureBuilder = struct {
                 try self.lowerGeneratedDictDone(proc, context, loop, loop.acc, done_payload.local, done_payload.child.rep),
             ),
         };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
+        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         const ok_body = try proc.generatedParserTagDispatch(event.local, event.child.rep, &variants, &bodies, impossible);
         return try self.finishGeneratedParserTryCall(
             proc,
@@ -10202,7 +10241,7 @@ const ProcedureBuilder = struct {
                         try self.lowerGeneratedDictDone(proc, context, loop, next_acc, done_payload.local, done_payload.child.rep),
                     ),
                 };
-                const impossible = try self.result.store.addCFStmt(.runtime_error);
+                const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
                 const ok_body = try proc.generatedParserTagDispatch(event.local, event.child.rep, &variants, &bodies, impossible);
                 break :blk try self.finishGeneratedParserTryCall(
                     proc,
@@ -10250,7 +10289,7 @@ const ProcedureBuilder = struct {
         cursor: LIR.LocalId,
         cursor_rep: Plan.TypeRepId,
     ) Allocator.Error!LIR.CFStmtId {
-        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = loop.join_id } });
+        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = loop.join_id } }, proc.derivedOrigin());
         continuation = try proc.setLocalInitializeJoinParam(loop.acc, dict, continuation);
         return try proc.setLocalInitializeJoinParamFromRep(loop.cursor, cursor, cursor_rep, continuation);
     }
@@ -10435,12 +10474,12 @@ const ProcedureBuilder = struct {
         );
         const event_variants = [_]GeneratedParserTagVariant{ element, done };
         const event_bodies = [_]LIR.CFStmtId{ element_body, done_body };
-        const event_impossible = try self.result.store.addCFStmt(.runtime_error);
+        const event_impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         var ok_body = try proc.generatedParserTagDispatch(event, ok_payload.child.rep, &event_variants, &event_bodies, event_impossible);
         ok_body = try proc.generatedParserReadTagPayload(step, ok, ok_payload, ok_body);
         const variants = [_]GeneratedParserTagVariant{ ok, err };
         const bodies = [_]LIR.CFStmtId{ ok_body, err_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
+        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         const dispatch = try proc.generatedParserTagDispatch(step, step_rep, &variants, &bodies, impossible);
         return try self.lowerGeneratedCodecCallLocalsInto(proc, call, step, &.{ context.encoding, cursor }, dispatch);
     }
@@ -10541,12 +10580,12 @@ const ProcedureBuilder = struct {
         );
         const event_variants = [_]GeneratedParserTagVariant{ continue_variant, done };
         const event_bodies = [_]LIR.CFStmtId{ continue_body, done_body };
-        const event_impossible = try self.result.store.addCFStmt(.runtime_error);
+        const event_impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         var ok_body = try proc.generatedParserTagDispatch(event, ok_payload.child.rep, &event_variants, &event_bodies, event_impossible);
         ok_body = try proc.generatedParserReadTagPayload(step, ok, ok_payload, ok_body);
         const variants = [_]GeneratedParserTagVariant{ ok, err };
         const bodies = [_]LIR.CFStmtId{ ok_body, err_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
+        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         const dispatch = try proc.generatedParserTagDispatch(step, step_rep, &variants, &bodies, impossible);
         return try self.lowerGeneratedCodecCallLocalsInto(proc, call, step, &.{ context.encoding, state }, dispatch);
     }
@@ -10564,7 +10603,7 @@ const ProcedureBuilder = struct {
         const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
         const next_acc = try proc.addFrameLocal(self.result.store.getLocal(acc).layout_idx);
         if (self.result.store.getLocal(acc).boxy_desc) |desc| self.result.store.setLocalBoxyDesc(next_acc, desc);
-        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, proc.derivedOrigin());
         continuation = try proc.setLocalInitializeJoinParam(acc, next_acc, continuation);
         continuation = try proc.setLocalInitializeJoinParamFromRep(cursor, payload.local, payload.child.rep, continuation);
         continuation = try proc.assignListAppendGrowingMovingElement(next_acc, acc, elem, continuation);
@@ -10839,7 +10878,7 @@ const ProcedureBuilder = struct {
             .maybe_uninitialized_condition_masks = try self.result.store.addU64Span(maybe_masks),
             .body = loop_body,
             .remainder = initial,
-        } });
+        } }, proc.derivedOrigin());
         const with_evidence = try self.lowerGeneratedFieldNamesValue(proc, evidence, fields, join);
         return try self.lowerGeneratedRecordFieldNamesSource(
             proc,
@@ -10972,7 +11011,7 @@ const ProcedureBuilder = struct {
                 .target = fields[index].renamed,
                 .op = .{ .field = .{ .source = field, .field_idx = 0 } },
                 .next = continuation,
-            } });
+            } }, proc.derivedOrigin());
             continuation = try proc.assignBinaryLowLevel(field, .list_get_unsafe, items, field_index, continuation);
             continuation = try proc.assignIntLiteral(field_index, @intCast(index), continuation);
         }
@@ -10980,7 +11019,7 @@ const ProcedureBuilder = struct {
             .target = items,
             .op = .{ .field = .{ .source = field_names, .field_idx = 0 } },
             .next = continuation,
-        } });
+        } }, proc.derivedOrigin());
         const record_index = try proc.addFrameLocal(.u64);
         continuation = try proc.assignBinaryLowLevel(
             field_names,
@@ -10994,7 +11033,7 @@ const ProcedureBuilder = struct {
             .target = evidence_list,
             .op = .{ .field = .{ .source = tag_source.spec, .field_idx = 0 } },
             .next = continuation,
-        } });
+        } }, proc.derivedOrigin());
     }
 
     const GeneratedParserTryCall = struct {
@@ -11068,7 +11107,7 @@ const ProcedureBuilder = struct {
         const read_ok = try proc.generatedParserReadTagPayload(try_call.step, try_call.ok, try_call.ok_payload, ok_body);
         const variants = [_]GeneratedParserTagVariant{ try_call.ok, try_call.err };
         const bodies = [_]LIR.CFStmtId{ read_ok, err_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
+        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         return try proc.generatedParserTagDispatch(try_call.step, try_call.step_rep, &variants, &bodies, impossible);
     }
 
@@ -11102,7 +11141,7 @@ const ProcedureBuilder = struct {
 
         const variants = [_]GeneratedParserTagVariant{ counted_variant, uncounted_variant };
         const bodies = [_]LIR.CFStmtId{ counted_body, uncounted_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
+        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         const ok_body = try proc.generatedParserTagDispatch(event.local, event.child.rep, &variants, &bodies, impossible);
         return try self.finishGeneratedParserTryCall(
             proc,
@@ -11129,7 +11168,7 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const counted_value = try proc.addFrameLocal(.bool);
         const pending_value = try proc.addFrameLocal(.bool);
-        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = context.join_id } });
+        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = context.join_id } }, proc.derivedOrigin());
         continuation = try proc.setLocalInitializeJoinParam(context.entry_pending, pending_value, continuation);
         continuation = try proc.setLocalInitializeJoinParam(context.remaining, remaining, continuation);
         continuation = try proc.setLocalInitializeJoinParam(context.counted, counted_value, continuation);
@@ -11179,7 +11218,7 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const step_join = proc.freshJoinPointId();
         const read_event = try self.lowerGeneratedRecordReadEvent(proc, context, parse_call);
-        const jump_step = try self.result.store.addCFStmt(.{ .jump = .{ .target = step_join } });
+        const jump_step = try self.result.store.addCFStmt(.{ .jump = .{ .target = step_join } }, proc.derivedOrigin());
 
         const finish = try self.lowerGeneratedRecordFinish(proc, context);
         const remaining_is_zero = try proc.addFrameLocal(.bool);
@@ -11187,7 +11226,7 @@ const ProcedureBuilder = struct {
         var counted_head = try proc.boolSwitchNoContinuation(remaining_is_zero, finish, jump_step);
         counted_head = try proc.assignBinaryLowLevel(remaining_is_zero, .num_is_eq, context.remaining, zero, counted_head);
         counted_head = try proc.assignIntLiteral(zero, 0, counted_head);
-        const jump_step_uncounted = try self.result.store.addCFStmt(.{ .jump = .{ .target = step_join } });
+        const jump_step_uncounted = try self.result.store.addCFStmt(.{ .jump = .{ .target = step_join } }, proc.derivedOrigin());
         const head = try proc.boolSwitchNoContinuation(context.counted, counted_head, jump_step_uncounted);
 
         const entry_end = try self.lowerGeneratedRecordEntryEnd(proc, context);
@@ -11197,7 +11236,7 @@ const ProcedureBuilder = struct {
             .params = LIR.LocalSpan.empty(),
             .body = read_event,
             .remainder = dispatch,
-        } });
+        } }, proc.derivedOrigin());
     }
 
     /// End the entry whose value (or skip) just completed: a counted record
@@ -11232,7 +11271,7 @@ const ProcedureBuilder = struct {
                 try self.lowerGeneratedRecordDoneJump(proc, context, done_payload.local, done_payload.child.rep),
             ),
         };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
+        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         const ok_body = try proc.generatedParserTagDispatch(event.local, event.child.rep, &variants, &bodies, impossible);
         const uncounted_body = try self.finishGeneratedParserTryCall(
             proc,
@@ -11292,7 +11331,7 @@ const ProcedureBuilder = struct {
             try self.lowerGeneratedRecordNamedFieldEvent(proc, context, event, try_field_variant, .str_is_eq),
             try self.lowerGeneratedRecordNamedFieldEvent(proc, context, event, caseless_variant, .str_caseless_ascii_equals),
         };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
+        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         return try proc.generatedParserTagDispatch(event, event_child.rep, &variants, &bodies, impossible);
     }
 
@@ -11331,18 +11370,18 @@ const ProcedureBuilder = struct {
                 .body = try self.lowerGeneratedMatchedRecordField(proc, context, field_index, rest),
             };
         }
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
+        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         const field_switch = try self.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = index,
             .branches = try self.result.store.addCFSwitchBranches(branches),
             .default_branch = impossible,
             .continuation = null,
-        } });
+        } }, proc.derivedOrigin());
         var continuation = try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = index,
             .op = .{ .field = .{ .source = field_handle, .field_idx = 1 } },
             .next = field_switch,
-        } });
+        } }, proc.derivedOrigin());
         continuation = try proc.generatedParserReadRecordField(
             rest,
             context.state_rep,
@@ -11489,7 +11528,7 @@ const ProcedureBuilder = struct {
         cursor_rep: Plan.TypeRepId,
     ) Allocator.Error!LIR.CFStmtId {
         const pending_value = try proc.addFrameLocal(.bool);
-        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = context.join_id } });
+        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = context.join_id } }, proc.derivedOrigin());
         continuation = try proc.setLocalInitializeJoinParam(context.entry_pending, pending_value, continuation);
         continuation = try proc.setLocalInitializeJoinParamFromRep(context.cursor, cursor, cursor_rep, continuation);
         return try proc.assignBoolLiteral(pending_value, true, continuation);
@@ -11518,7 +11557,7 @@ const ProcedureBuilder = struct {
         success = try proc.generatedParserReadTagPayload(skipped, ok, ok_payload, success);
         const variants = [_]GeneratedParserTagVariant{ ok, err };
         const bodies = [_]LIR.CFStmtId{ success, err_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
+        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         const dispatch = try proc.generatedParserTagDispatch(skipped, skipped_rep, &variants, &bodies, impossible);
         return try self.lowerGeneratedCodecCallLocalsInto(
             proc,
@@ -11564,7 +11603,7 @@ const ProcedureBuilder = struct {
                 },
                 .initialized_branch = continuation,
                 .uninitialized_branch = missing,
-            } });
+            } }, proc.derivedOrigin());
         }
         return continuation;
     }
@@ -11667,7 +11706,7 @@ const ProcedureBuilder = struct {
             .fields = try self.result.store.addLocalSpan(shape_fields),
             .contents_desc = aggregate_desc.contents_desc,
             .next = continuation,
-        } });
+        } }, proc.derivedOrigin());
         continuation = try proc.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
         return try proc.prependDescriptorArgMaterializations(aggregate_desc.field_initializers, continuation);
     }
@@ -11693,12 +11732,12 @@ const ProcedureBuilder = struct {
             .target = evidence,
             .fields = try self.result.store.addLocalSpan(&.{ items, shortest, longest }),
             .next = next,
-        } });
+        } }, proc.derivedOrigin());
         continuation = try self.result.store.addCFStmt(.{ .assign_list = .{
             .target = items,
             .elems = try self.result.store.addLocalSpan(field_values),
             .next = continuation,
-        } });
+        } }, proc.derivedOrigin());
 
         if (fields.len == 0) {
             continuation = try proc.assignIntLiteral(longest, 0, continuation);
@@ -11751,7 +11790,7 @@ const ProcedureBuilder = struct {
                 .target = field_values[index],
                 .fields = try self.result.store.addLocalSpan(&.{ fields[index].renamed, field_index, lengths[index] }),
                 .next = continuation,
-            } });
+            } }, proc.derivedOrigin());
             continuation = try proc.assignIntLiteral(field_index, @intCast(index), continuation);
             continuation = try proc.assignUnaryLowLevel(lengths[index], .str_count_utf8_bytes, fields[index].renamed, continuation);
         }
@@ -11967,7 +12006,7 @@ const ProcedureBuilder = struct {
             .args = try self.result.store.addLocalSpan(host_arg_locals),
             .result_desc = host_result_desc,
             .next = continuation,
-        } });
+        } }, proc.origin);
 
         var index = host_function.arg_count;
         while (index > 0) {
@@ -11993,7 +12032,9 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!LIR.LirProcSpecId {
         const root_plan = self.plan.roots.items[@intFromEnum(root_layout.root)];
         const resolved = self.resolved_workers.items[@intFromEnum(root_plan.worker)];
-        var proc = ProcBodyBuilder.initSyntheticAdapter(self, resolved.module, worker_layout);
+        var host_origin = try self.workerOrigin(resolved);
+        host_origin.kind = .scaffold;
+        var proc = ProcBodyBuilder.initSyntheticAdapter(self, resolved.module, worker_layout, host_origin);
         defer proc.deinit();
         const host_rep = self.plan.hostRepFor(root_plan.host_rep);
         const host_function = proc.functionChildrenForRep(host_rep);
@@ -12066,7 +12107,7 @@ const ProcedureBuilder = struct {
         else
             null;
         const ret_local = if (!worker_returns_desc and proc.representationBoundaryIsDirect(host_ret_rep, worker_ret_rep)) raw_result else try proc.addFrameLocalForRep(host_ret_rep);
-        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
+        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, proc.origin);
         var continuation = if (ret_local == raw_result) ret_stmt else try proc.assignRepresentationBoundary(ret_local, raw_result, host_ret_rep, worker_ret_rep, ret_stmt);
         continuation = try self.result.store.addCFStmt(.{ .assign_call = .{
             .target = raw_result,
@@ -12075,7 +12116,7 @@ const ProcedureBuilder = struct {
             .result_desc = external_result_desc,
             .out_desc = ret_desc_local,
             .next = continuation,
-        } });
+        } }, proc.origin);
         if (host_function) |function| {
             const host_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
             const worker_fn = worker_function.?;
@@ -12108,7 +12149,7 @@ const ProcedureBuilder = struct {
                 .target = call_locals[host_args.len + hidden_desc_params.len + dict_index],
                 .dict = dict,
                 .next = continuation,
-            } });
+            } }, proc.origin);
         }
         var desc_index = hidden_desc_params.len;
         while (desc_index > 0) {
@@ -12118,7 +12159,7 @@ const ProcedureBuilder = struct {
                 .target = call_locals[host_args.len + desc_index],
                 .desc = try self.staticDescRefForWorkerRepWithSourceMap(param.rep, null, &descriptor_sources, &desc_context),
                 .next = continuation,
-            } });
+            } }, proc.origin);
         }
         const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
         const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
@@ -12131,7 +12172,7 @@ const ProcedureBuilder = struct {
             .body = continuation,
             .ret_layout = host_ret.layoutIdx(),
             .stack_probe = self.stackProbeForProc(args_span, frame_span, host_ret.layoutIdx()),
-        });
+        }, proc.origin.loc);
     }
 
     const ReturnDescriptorState = union(enum) {
@@ -12298,7 +12339,7 @@ const ProcedureBuilder = struct {
                 const runtime_local = try self.addLocal(.opaque_ptr);
                 try frame_locals.append(self.allocator, runtime_local);
                 for (return_edges.items) |edge| {
-                    const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = edge.value } });
+                    const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = edge.value } }, self.result.store.stmtOrigin(edge.stmt));
                     self.result.store.getCFStmtPtr(edge.stmt).* = .{ .assign_boxy_desc_ref = .{
                         .target = runtime_local,
                         .desc = edge.desc orelse default_desc.?,
@@ -12509,12 +12550,15 @@ const ProcedureBuilder = struct {
         self: *ProcedureBuilder,
         callee: LIR.LirProcSpecId,
         has_runtime_output: bool,
-    ) void {
+    ) Allocator.Error!void {
         for (self.pending_direct_call_descriptor_abis.items) |*pending| {
             if (pending.callee != callee or pending.resolved) continue;
             if (!has_runtime_output) {
-                self.result.store.getCFStmtPtr(pending.provisional_call).* =
-                    self.result.store.getCFStmt(pending.static_replacement);
+                try self.result.store.replaceCFStmt(
+                    pending.provisional_call,
+                    self.result.store.getCFStmt(pending.static_replacement),
+                    self.result.store.stmtOrigin(pending.static_replacement),
+                );
                 pending.uses_static_replacement = true;
             }
             pending.resolved = true;
@@ -12601,6 +12645,12 @@ const ProcBodyBuilder = struct {
     structural_eq_active_reps: std.ArrayList(Plan.TypeRepId),
     next_join_point: u32,
     current_lambda: ?checked.CheckedExprId,
+    /// Provenance of the construct this builder is currently lowering. The
+    /// body's creator states it explicitly (scaffold or derived, naming the
+    /// construct that demanded the body), and `lowerExprInto`/`lowerStatement`
+    /// restate it as `source` for the checked node they lower, restoring the
+    /// enclosing origin when that node is done.
+    origin: LIR.StmtOrigin,
 
     const LoopContext = struct {
         join_id: LIR.JoinPointId,
@@ -12971,8 +13021,9 @@ const ProcBodyBuilder = struct {
         return .{ .query = self.repQuery(), .modules = self };
     }
 
-    fn init(parent: *ProcedureBuilder, module: ProcedureModuleView, worker_layout: Layouts.WorkerLayouts) ProcBodyBuilder {
+    fn init(parent: *ProcedureBuilder, module: ProcedureModuleView, worker_layout: Layouts.WorkerLayouts, origin: LIR.StmtOrigin) ProcBodyBuilder {
         return .{
+            .origin = origin,
             .parent = parent,
             .module = module,
             .worker_layout = worker_layout,
@@ -13016,11 +13067,46 @@ const ProcBodyBuilder = struct {
         };
     }
 
-    fn initSyntheticAdapter(parent: *ProcedureBuilder, module: ProcedureModuleView, worker_layout: Layouts.WorkerLayouts) ProcBodyBuilder {
-        var builder = ProcBodyBuilder.init(parent, module, worker_layout);
+    fn initSyntheticAdapter(parent: *ProcedureBuilder, module: ProcedureModuleView, worker_layout: Layouts.WorkerLayouts, origin: LIR.StmtOrigin) ProcBodyBuilder {
+        var builder = ProcBodyBuilder.init(parent, module, worker_layout, origin);
         builder.synthetic_adapter = true;
         builder.erased_argument_descriptors = true;
         return builder;
+    }
+
+    /// Origin of a checked source node lowered by this builder.
+    fn sourceOrigin(self: *ProcBodyBuilder, region: base.Region) Allocator.Error!LIR.StmtOrigin {
+        return .{
+            .loc = try self.parent.sourceLoc(self.module, region),
+            .region = region,
+            .inline_scope = LIR.InlineScopeId.none,
+            .kind = .source,
+        };
+    }
+
+    /// Origin of control-flow, representation, descriptor, or iterator glue
+    /// introduced for the construct currently being lowered. Glue inside a
+    /// scaffold or derived body belongs to that body and keeps its kind.
+    fn glueOrigin(self: *const ProcBodyBuilder) LIR.StmtOrigin {
+        var origin = self.origin;
+        if (origin.kind == .source) origin.kind = .lowering_glue;
+        return origin;
+    }
+
+    /// Origin of compiler-derived code (inspect, equality, hashing, generated
+    /// codecs) demanded by the construct currently being lowered.
+    fn derivedOrigin(self: *const ProcBodyBuilder) LIR.StmtOrigin {
+        var origin = self.origin;
+        origin.kind = .derived;
+        return origin;
+    }
+
+    /// Origin of procedure scaffolding (adapters, compile-time constant value
+    /// reconstruction) demanded by the construct currently being lowered.
+    fn scaffoldOrigin(self: *const ProcBodyBuilder) LIR.StmtOrigin {
+        var origin = self.origin;
+        origin.kind = .scaffold;
+        return origin;
     }
 
     fn deinit(self: *ProcBodyBuilder) void {
@@ -14075,7 +14161,7 @@ const ProcBodyBuilder = struct {
             .rc_effect = LIR.LowLevel.erased_capture_load.rcEffect(),
             .args = try self.parent.result.store.addLocalSpan(&args),
             .next = continuation,
-        } });
+        } }, self.scaffoldOrigin());
     }
 
     fn prependWorkerArgumentDescriptorInitializers(
@@ -14103,7 +14189,7 @@ const ProcBodyBuilder = struct {
                 .field_idx = field_index,
             } },
             .next = next,
-        } });
+        } }, self.scaffoldOrigin());
     }
 
     fn erasedCaptureSlotLayout(self: *ProcBodyBuilder, capture: Plan.ErasedCapture) layout.Idx {
@@ -14143,9 +14229,9 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const expr = self.module.checked_bodies.expr(expr_id);
-        const saved_region = self.parent.result.store.current_region;
-        defer self.parent.result.store.current_region = saved_region;
-        self.parent.result.store.current_region = expr.source_region;
+        const saved_origin = self.origin;
+        defer self.origin = saved_origin;
+        self.origin = try self.sourceOrigin(expr.source_region);
 
         return switch (expr.data) {
             .numeral => |numeral| if (numeral.plan) |plan|
@@ -14200,7 +14286,7 @@ const ProcBodyBuilder = struct {
                     .payload_desc = payload_desc,
                     .payload_mode = .move,
                     .next = next,
-                } });
+                } }, self.origin);
                 break :blk try self.lowerIteratorForInto(unit_local, for_, box);
             },
             .run_low_level => |run_low_level| try self.lowerLowLevelInto(target, expr.ty, run_low_level.op, run_low_level.args, next),
@@ -14216,7 +14302,7 @@ const ProcBodyBuilder = struct {
                 }
                 try self.reserveBlockBindings(live_statements);
                 var continuation = if (block_diverges)
-                    try self.parent.result.store.addCFStmt(.runtime_error)
+                    try self.parent.result.store.addCFStmt(.runtime_error, self.origin)
                 else
                     try self.lowerExprInto(target, block.final_expr, next);
                 var index = live_statements.len;
@@ -14231,13 +14317,13 @@ const ProcBodyBuilder = struct {
             .expect_err => |expect_err| try self.lowerExpectErrInto(expect_err.expr, expect_err.snippet),
             .crash => |msg| try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString(self.module.checked_bodies.stringLiteral(msg)) },
-            } }),
+            } }, self.origin),
             .ellipsis => try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString("not implemented") },
-            } }),
+            } }, self.origin),
             .break_ => try self.lowerBreak(),
             .return_ => |ret| try self.lowerReturn(ret.expr, ret.lambda),
-            .runtime_error => try self.parent.result.store.addCFStmt(.runtime_error),
+            .runtime_error => try self.parent.result.store.addCFStmt(.runtime_error, self.origin),
             .lambda,
             .closure,
             => if (try self.nestedCallableUseTypeForCurrentWorker(expr_id)) |use_type|
@@ -14380,7 +14466,7 @@ const ProcBodyBuilder = struct {
             );
         const invalid = try self.parent.result.store.addCFStmt(.{ .crash = .{
             .msg = .{ .literal = try self.parent.result.store.insertString(invalid_message) },
-        } });
+        } }, self.origin);
 
         if (tag_rep.kind == .dynamic) {
             return try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
@@ -14389,7 +14475,7 @@ const ProcBodyBuilder = struct {
                 .tag_name = try self.parent.result.store.insertBoxyName("Ok"),
                 .on_match = read_ok,
                 .on_miss = invalid,
-            } });
+            } }, self.origin);
         }
 
         const discriminant = try self.addFrameLocal(.u16);
@@ -14399,12 +14485,12 @@ const ProcBodyBuilder = struct {
             .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
             .default_branch = invalid,
             .continuation = null,
-        } });
+        } }, self.origin);
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
             .op = .{ .discriminant = .{ .source = source } },
             .next = switch_stmt,
-        } });
+        } }, self.origin);
     }
 
     fn lowerNumeralConversionInto(
@@ -14966,12 +15052,12 @@ const ProcBodyBuilder = struct {
                     .branches = try self.parent.result.store.addCFSwitchBranches(branches),
                     .default_branch = default_branch,
                     .continuation = null,
-                } });
+                } }, self.derivedOrigin());
                 break :blk try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                     .target = discriminant,
                     .op = .{ .discriminant = .{ .source = source } },
                     .next = switch_stmt,
-                } });
+                } }, self.derivedOrigin());
             },
             .dynamic_box => blk: {
                 const source_desc = try self.descriptorRefForLocalOrKnownRep(source, source_rep);
@@ -14985,7 +15071,7 @@ const ProcBodyBuilder = struct {
                         .tag_name = try self.lirTagNameForVariant(variants[index].variant),
                         .on_match = bodies[index],
                         .on_miss = dispatch,
-                    } });
+                    } }, self.derivedOrigin());
                 }
                 break :blk dispatch;
             },
@@ -15175,7 +15261,7 @@ const ProcBodyBuilder = struct {
             .target = target,
             .op = .{ .field = .{ .source = self.arg_locals.items[0], .field_idx = 0 } },
             .next = next,
-        } });
+        } }, self.derivedOrigin());
     }
 
     fn lowerGeneratedFieldNamesBoundInto(
@@ -15194,7 +15280,7 @@ const ProcBodyBuilder = struct {
             .target = target,
             .op = .{ .field = .{ .source = self.arg_locals.items[0], .field_idx = field_index } },
             .next = next,
-        } });
+        } }, self.derivedOrigin());
     }
 
     fn generatedParserReadRecordField(
@@ -15257,7 +15343,7 @@ const ProcBodyBuilder = struct {
                     .discriminant = variant.index,
                     .payload = payload_storage,
                     .next = next,
-                } });
+                } }, self.derivedOrigin());
                 var continuation = try self.prependOptionalDescriptorMaterialization(tag_desc.materialize, assign);
                 continuation = try self.assignGeneratedParserValueToStorage(
                     payload_storage,
@@ -15293,7 +15379,7 @@ const ProcBodyBuilder = struct {
                     .payload_desc = payload_desc,
                     .payload_mode = .move,
                     .next = next,
-                } });
+                } }, self.derivedOrigin());
                 var continuation = try self.prependConstructedDescriptorRebindForRep(target_rep, assign);
                 continuation = try self.prependOptionalDescriptorMaterialization(tag_desc.materialize, continuation);
                 continuation = try self.assignGeneratedParserValueToStorage(
@@ -15344,7 +15430,7 @@ const ProcBodyBuilder = struct {
                     .discriminant = variant.index,
                     .payload = payload.local,
                     .next = next,
-                } }),
+                } }, self.derivedOrigin()),
             .dynamic_box => blk: {
                 try self.bindConstructedTargetDescriptor(target, target_rep);
                 const target_desc = tag_desc.desc orelse try self.constructedTargetDescForRep(target_rep);
@@ -15361,7 +15447,7 @@ const ProcBodyBuilder = struct {
                     .payload_desc = payload_desc,
                     .payload_mode = .move,
                     .next = next,
-                } });
+                } }, self.derivedOrigin());
             },
         };
         var continuation = if (self.workerRuntimeLayoutForRep(variant.tag_rep) == .dynamic_box)
@@ -15397,7 +15483,7 @@ const ProcBodyBuilder = struct {
                     .discriminant = variant.index,
                     .payload = null,
                     .next = next,
-                } });
+                } }, self.derivedOrigin());
                 break :blk try self.prependOptionalDescriptorMaterialization(desc_info.materialize, assign);
             },
             .dynamic_box => blk: {
@@ -15408,7 +15494,7 @@ const ProcBodyBuilder = struct {
                     .target_desc = target_desc,
                     .tag_name = try self.lirTagNameForVariant(variant.variant),
                     .next = next,
-                } });
+                } }, self.derivedOrigin());
             },
         };
     }
@@ -15509,7 +15595,7 @@ const ProcBodyBuilder = struct {
                     .payload_desc = payload_desc,
                     .payload_mode = .move,
                     .next = next,
-                } });
+                } }, self.derivedOrigin());
             },
         };
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
@@ -15517,7 +15603,7 @@ const ProcBodyBuilder = struct {
             .fields = try self.parent.result.store.addLocalSpan(&fields),
             .contents_desc = aggregate_desc.contents_desc,
             .next = continuation,
-        } });
+        } }, self.derivedOrigin());
         var index = fields.len;
         while (index > 0) {
             index -= 1;
@@ -15598,7 +15684,7 @@ const ProcBodyBuilder = struct {
                     .payload_desc = payload_desc,
                     .payload_mode = .move,
                     .next = next,
-                } });
+                } }, self.derivedOrigin());
             },
         };
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
@@ -15606,7 +15692,7 @@ const ProcBodyBuilder = struct {
             .fields = try self.parent.result.store.addLocalSpan(&.{field}),
             .contents_desc = aggregate_desc.contents_desc,
             .next = continuation,
-        } });
+        } }, self.derivedOrigin());
         continuation = try self.assignGeneratedParserValueToStorage(
             field,
             child.rep,
@@ -15633,7 +15719,7 @@ const ProcBodyBuilder = struct {
             .target = target,
             .op = .{ .local = source },
             .next = next,
-        } });
+        } }, self.origin);
     }
 
     fn assignGeneratedParserU64Select(
@@ -15645,7 +15731,7 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const done = self.freshJoinPointId();
-        const jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = done } });
+        const jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = done } }, self.derivedOrigin());
         const selected = try self.assignLocalRef(target, candidate, jump);
         const retained = try self.assignLocalRef(target, current, jump);
         const cond = try self.addFrameLocal(.bool);
@@ -15656,7 +15742,7 @@ const ProcBodyBuilder = struct {
             .params = try self.joinParamSpan(&.{target}),
             .body = next,
             .remainder = compare,
-        } });
+        } }, self.derivedOrigin());
     }
 
     fn restoreConstUseInto(
@@ -15680,7 +15766,7 @@ const ProcBodyBuilder = struct {
             .eval_template => |eval| return try self.lowerConstEvalTemplateUseInto(target, checked_ty, requested_ty, eval, next),
             .unimplemented => return try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString(Common.unimplemented_declaration_crash) },
-            } }),
+            } }, self.scaffoldOrigin()),
             .stored_const => {},
         }
         const stored = template.state.stored_const;
@@ -15793,7 +15879,7 @@ const ProcBodyBuilder = struct {
             .str => |str| try self.assignStringBytesView(target, store_module.const_store.blobData(str.data), str.offset, str.len, next),
             .crash => |str| try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
-            } }),
+            } }, self.scaffoldOrigin()),
             .list => |items| try self.restoreConstListInto(target, store_module, type_module, items, checked_ty, next),
             .box => |payload| try self.restoreConstBoxInto(target, store_module, type_module, payload, checked_ty, next),
             .tuple => |items| try self.restoreConstTupleInto(target, store_module, type_module, items, checked_ty, next),
@@ -15878,7 +15964,7 @@ const ProcBodyBuilder = struct {
             .str => |str| try self.assignStringBytesView(target, store_module.const_store.blobData(str.data), str.offset, str.len, next),
             .crash => |str| try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
-            } }),
+            } }, self.scaffoldOrigin()),
             .list => |items| try self.restoreStoredConstListInto(target, store_module, items, stored_type, rep_id, next),
             .box => |payload| try self.restoreStoredConstBoxInto(target, store_module, payload, stored_type, rep_id, next),
             .tuple, .record => |items| try self.restoreStoredConstAggregateInto(target, store_module, items, stored_type, rep_id, next),
@@ -15965,7 +16051,7 @@ const ProcBodyBuilder = struct {
         if (data.len == 0) return try self.assignList(target, &.{}, after);
         const literal = try self.packedListLiteral(module, data, source_layout);
         if (source_layout == target_layout and self.representationBoundaryIsDirect(target_rep, source_rep)) {
-            return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = .{ .bytes_literal = literal }, .next = after } });
+            return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = .{ .bytes_literal = literal }, .next = after } }, self.scaffoldOrigin());
         }
         const list_layout = self.parent.result.store.getLocal(target).layout_idx;
         const source_list_layout = try self.parent.result.layouts.insertLayout(layout.Layout.list(source_layout));
@@ -15985,7 +16071,7 @@ const ProcBodyBuilder = struct {
         const item = try self.addFrameLocalForRep(source_rep);
         const stored = try self.addFrameLocal(target_layout);
         const join_id = self.freshJoinPointId();
-        var step = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        var step = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, self.scaffoldOrigin());
         step = try self.setLocalInitializeJoinParam(acc, next_acc, step);
         step = try self.setLocalInitializeJoinParam(index, next_index, step);
         step = try self.assignListAppendMovingElement(next_acc, acc, stored, step);
@@ -15995,15 +16081,15 @@ const ProcBodyBuilder = struct {
         const finish = try self.assignLocal(target, acc, after);
         const choose = try self.boolSwitchNoContinuation(done, finish, step);
         const body = try self.assignBinaryLowLevel(done, .num_is_eq, index, len, choose);
-        var initial_jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        var initial_jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, self.scaffoldOrigin());
         initial_jump = try self.setLocalInitializeJoinParam(acc, initial, initial_jump);
         initial_jump = try self.setLocalInitializeJoinParam(index, zero, initial_jump);
         initial_jump = try self.assignUnaryLowLevel(initial, .list_with_capacity, len, initial_jump);
         initial_jump = try self.assignU64Literal(len, data.len, initial_jump);
         initial_jump = try self.assignU64Literal(one, 1, initial_jump);
         initial_jump = try self.assignU64Literal(zero, 0, initial_jump);
-        initial_jump = try self.parent.result.store.addCFStmt(.{ .assign_literal = .{ .target = source, .value = .{ .bytes_literal = literal }, .next = initial_jump } });
-        return try self.parent.result.store.addCFStmt(.{ .join = .{ .id = join_id, .params = try self.joinParamSpan(&.{ index, acc }), .body = body, .remainder = initial_jump } });
+        initial_jump = try self.parent.result.store.addCFStmt(.{ .assign_literal = .{ .target = source, .value = .{ .bytes_literal = literal }, .next = initial_jump } }, self.scaffoldOrigin());
+        return try self.parent.result.store.addCFStmt(.{ .join = .{ .id = join_id, .params = try self.joinParamSpan(&.{ index, acc }), .body = body, .remainder = initial_jump } }, self.scaffoldOrigin());
     }
 
     fn restoreStoredConstListInto(
@@ -16101,7 +16187,7 @@ const ProcBodyBuilder = struct {
             .target = target,
             .fields = try self.parent.result.store.addLocalSpan(locals),
             .next = next,
-        } });
+        } }, self.scaffoldOrigin());
         var index = items.len;
         while (index > 0) {
             index -= 1;
@@ -16171,7 +16257,7 @@ const ProcBodyBuilder = struct {
                 .discriminant = selected.index,
                 .payload = null,
                 .next = next,
-            } });
+            } }, self.scaffoldOrigin());
         }
 
         const payload_layout = self.tagUnionPayloadLayout(
@@ -16185,7 +16271,7 @@ const ProcBodyBuilder = struct {
             .discriminant = selected.index,
             .payload = payload,
             .next = next,
-        } });
+        } }, self.scaffoldOrigin());
         if (tag.payloads.len == 1) {
             return try self.restoreStoredConstIntoStorageRep(
                 payload,
@@ -16204,7 +16290,7 @@ const ProcBodyBuilder = struct {
             .target = payload,
             .fields = try self.parent.result.store.addLocalSpan(fields),
             .next = assign_tag,
-        } });
+        } }, self.scaffoldOrigin());
         var index = tag.payloads.len;
         while (index > 0) {
             index -= 1;
@@ -16376,7 +16462,7 @@ const ProcBodyBuilder = struct {
             .payload_desc = payload_desc,
             .payload_mode = .move,
             .next = continuation,
-        } });
+        } }, self.scaffoldOrigin());
     }
 
     fn restoreConstBoxInto(
@@ -16423,7 +16509,7 @@ const ProcBodyBuilder = struct {
             .target = target,
             .fields = try self.parent.result.store.addLocalSpan(field_locals),
             .next = next,
-        } });
+        } }, self.scaffoldOrigin());
         var index = items.len;
         while (index > 0) {
             index -= 1;
@@ -16480,7 +16566,7 @@ const ProcBodyBuilder = struct {
                     .payload_desc = payload_desc,
                     .payload_mode = .move,
                     .next = next,
-                } });
+                } }, self.scaffoldOrigin());
                 break :blk .{ payload, try self.prependOptionalDescriptorMaterialization(payload_desc_info.materialize, assign_box) };
             },
             .in_progress, .primitive, .bool_tag_union, .erased_callable, .alias, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("ConstStore record restored with a non-record boxy representation"),
@@ -16535,7 +16621,7 @@ const ProcBodyBuilder = struct {
             .fields = try self.parent.result.store.addLocalSpan(field_locals),
             .contents_desc = aggregate_desc.contents_desc,
             .next = record_next,
-        } });
+        } }, self.scaffoldOrigin());
         continuation = try self.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
         var source_index = items.len;
         while (source_index > 0) {
@@ -16664,7 +16750,7 @@ const ProcBodyBuilder = struct {
                 .target_desc = target_desc,
                 .tag_name = try self.lirTagName(checked_tag.name),
                 .next = next,
-            } });
+            } }, self.scaffoldOrigin());
             return try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, assign_tag);
         }
 
@@ -16683,7 +16769,7 @@ const ProcBodyBuilder = struct {
             .payload_desc = payload_desc,
             .payload_mode = .move,
             .next = next,
-        } });
+        } }, self.scaffoldOrigin());
         var continuation = try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, assign_tag);
 
         if (tag.payloads.len == 1) {
@@ -16699,7 +16785,7 @@ const ProcBodyBuilder = struct {
             .target = payload.local,
             .fields = try self.parent.result.store.addLocalSpan(field_locals),
             .next = continuation,
-        } });
+        } }, self.scaffoldOrigin());
         var index = tag.payloads.len;
         while (index > 0) {
             index -= 1;
@@ -16806,7 +16892,7 @@ const ProcBodyBuilder = struct {
                 .discriminant = variant.index,
                 .payload = null,
                 .next = next,
-            } });
+            } }, self.scaffoldOrigin());
         }
 
         const payload_layout = if (self.isZstLocal(target))
@@ -16827,7 +16913,7 @@ const ProcBodyBuilder = struct {
                 .discriminant = variant.index,
                 .payload = payload_local,
                 .next = next,
-            } });
+            } }, self.scaffoldOrigin());
 
         if (tag.payloads.len == 1) {
             return try self.restoreConstIntoStorageRep(payload_local, store_module, type_module, tag.payloads[0], payload_tys[0], payload_children[0].rep, assign_tag);
@@ -16843,7 +16929,7 @@ const ProcBodyBuilder = struct {
             .target = payload_local,
             .fields = try self.parent.result.store.addLocalSpan(field_locals),
             .next = assign_tag,
-        } });
+        } }, self.scaffoldOrigin());
         var index = tag.payloads.len;
         while (index > 0) {
             index -= 1;
@@ -17217,7 +17303,7 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("boxy callable worker was not an erased-callable representation");
         if (try self.callableBoundaryNeedsAdapter(value_function, worker_function)) {
             const raw_target = try self.addFrameLocalForRep(worker_function.rep);
-            const boundary_placeholder = try self.parent.result.store.addCFStmt(.runtime_error);
+            const boundary_placeholder = try self.parent.result.store.addCFStmt(.runtime_error, self.origin);
             const raw_entry = try self.lowerRawWorkerValueInto(
                 raw_target,
                 source,
@@ -17239,7 +17325,7 @@ const ProcBodyBuilder = struct {
                 worker_function,
                 next,
             );
-            self.parent.result.store.getCFStmtPtr(boundary_placeholder).* = self.parent.result.store.getCFStmt(adapted);
+            try self.parent.result.store.replaceCFStmt(boundary_placeholder, self.parent.result.store.getCFStmt(adapted), self.parent.result.store.stmtOrigin(adapted));
             return raw_entry;
         }
 
@@ -17291,7 +17377,7 @@ const ProcBodyBuilder = struct {
                 .on_drop = .none,
                 .result_desc = result_desc.desc,
                 .next = next,
-            } });
+            } }, self.origin);
         }
 
         const field_locals = try self.parent.allocator.alloc(LIR.LocalId, captures.len);
@@ -17465,7 +17551,7 @@ const ProcBodyBuilder = struct {
             .on_drop = on_drop,
             .result_desc = result_desc.desc,
             .next = next,
-        } });
+        } }, self.origin);
 
         var continuation = if (self.isZstLocal(capture_local))
             try self.assignZst(capture_local, assign)
@@ -17475,7 +17561,7 @@ const ProcBodyBuilder = struct {
                 .fields = try self.parent.result.store.addLocalSpan(capture_fields),
                 .contents_desc = capture_contents_desc,
                 .next = assign,
-            } });
+            } }, self.origin);
         continuation = try self.prependDescriptorArgMaterializations(result_desc_initializers.items, continuation);
         continuation = try self.prependOptionalDescriptorMaterialization(capture_desc_initializer, continuation);
         continuation = try self.prependDescriptorArgMaterializations(descriptor_initializers.items, continuation);
@@ -17800,7 +17886,7 @@ const ProcBodyBuilder = struct {
             .dict = dict_ref.dict,
             .captures = dict_ref.captures,
             .next = next,
-        } });
+        } }, self.glueOrigin());
     }
 
     fn erasedCaptureNeedsContentsDescriptor(
@@ -18000,7 +18086,7 @@ const ProcBodyBuilder = struct {
             .on_drop = on_drop,
             .result_desc = result_desc.desc,
             .next = next,
-        } });
+        } }, self.derivedOrigin());
         var continuation = if (self.isZstLocal(capture_local))
             try self.assignZst(capture_local, pack)
         else
@@ -18009,7 +18095,7 @@ const ProcBodyBuilder = struct {
                 .fields = try self.parent.result.store.addLocalSpan(capture_fields),
                 .contents_desc = capture_contents_desc,
                 .next = pack,
-            } });
+            } }, self.derivedOrigin());
         continuation = try self.prependDescriptorArgMaterializations(result_desc_initializers.items, continuation);
         continuation = try self.prependOptionalDescriptorMaterialization(capture_desc_initializer, continuation);
         return try self.prependDescriptorArgMaterializations(descriptor_initializers.items, continuation);
@@ -18434,7 +18520,7 @@ const ProcBodyBuilder = struct {
             .reuse_closure = false,
             .reuse_source = null,
             .next = continuation,
-        } });
+        } }, self.origin);
         continuation = try self.prependDescriptorArgMaterializations(arg_desc_initializers.items, continuation);
 
         var index = args.len;
@@ -18563,7 +18649,7 @@ const ProcBodyBuilder = struct {
             .reuse_closure = false,
             .reuse_source = null,
             .next = continuation,
-        } });
+        } }, self.origin);
         continuation = try self.prependDescriptorArgMaterializations(descriptor_initializers.items, continuation);
 
         var index = args.len;
@@ -18800,7 +18886,7 @@ const ProcBodyBuilder = struct {
                     .rc_effect = LIR.LowLevel.bool_not.rcEffect(),
                     .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{raw}),
                     .next = next,
-                } });
+                } }, self.origin);
                 call_target = raw;
             },
             .value,
@@ -18871,7 +18957,7 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         return try self.parent.result.store.addCFStmt(.{ .crash = .{
             .msg = .{ .literal = try self.parent.result.store.insertString(message) },
-        } });
+        } }, self.origin);
     }
 
     fn lowerStructuralEqDispatchInto(
@@ -19049,7 +19135,7 @@ const ProcBodyBuilder = struct {
                     .rc_effect = LIR.LowLevel.bool_not.rcEffect(),
                     .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{raw}),
                     .next = next,
-                } });
+                } }, self.origin);
                 call_target = raw;
             },
             .value,
@@ -19099,7 +19185,7 @@ const ProcBodyBuilder = struct {
             .hidden_args = try self.parent.result.store.addLocalSpan(hidden_arg_locals),
             .result_desc = result_desc_info.desc,
             .next = continuation,
-        } });
+        } }, self.origin);
         if (result_desc_info.materialize) |materialize| {
             const desc = materialize.materialize orelse
                 boxyLowerInvariant("boxy dictionary call result descriptor materialization had no descriptor");
@@ -19295,7 +19381,7 @@ const ProcBodyBuilder = struct {
             break :blk exact_target;
         };
 
-        const call_placeholder = try self.parent.result.store.addCFStmt(.runtime_error);
+        const call_placeholder = try self.parent.result.store.addCFStmt(.runtime_error, self.origin);
         const operands_entry = try self.prependLoweredCallOperandsExpected(
             operands,
             operand_types,
@@ -19318,7 +19404,7 @@ const ProcBodyBuilder = struct {
             hidden_dict_args,
             continuation,
         );
-        try self.parent.result.store.replaceCFStmt(call_placeholder, self.parent.result.store.getCFStmt(call_entry));
+        try self.parent.result.store.replaceCFStmt(call_placeholder, self.parent.result.store.getCFStmt(call_entry), self.parent.result.store.stmtOrigin(call_entry));
         for (self.parent.pending_direct_call_descriptor_abis.items) |*pending| {
             if (pending.provisional_call == call_entry) {
                 pending.provisional_call = call_placeholder;
@@ -19560,7 +19646,7 @@ const ProcBodyBuilder = struct {
             .result_desc = result_desc,
             .out_desc = out_desc,
             .next = call_next,
-        } });
+        } }, self.origin);
         if (provisional_runtime_result_desc) {
             const provisional_call = continuation;
             const static_call = try self.parent.result.store.addCFStmt(.{ .assign_call = .{
@@ -19570,7 +19656,7 @@ const ProcBodyBuilder = struct {
                 .result_desc = static_result_desc_info.desc,
                 .out_desc = null,
                 .next = call_next,
-            } });
+            } }, self.origin);
             var static_replacement = static_call;
             if (static_result_desc_info.materialize) |materialize| {
                 const desc = materialize.materialize orelse
@@ -19763,7 +19849,7 @@ const ProcBodyBuilder = struct {
             .target_desc = target_desc,
             .source_mode = source_mode,
             .next = continuation,
-        } });
+        } }, self.glueOrigin());
         continuation = try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, continuation);
         continuation = try self.prependDescriptorArgMaterializations(target_desc_prerequisites.items, continuation);
         continuation = try self.prependOptionalDescriptorMaterialization(target_desc_info.prerequisite, continuation);
@@ -20977,7 +21063,7 @@ const ProcBodyBuilder = struct {
             .params = try self.joinParamSpan(&params),
             .body = next,
             .remainder = current,
-        } });
+        } }, self.glueOrigin());
     }
 
     fn lowerMatchInto(
@@ -21005,7 +21091,7 @@ const ProcBodyBuilder = struct {
         defer outer_descriptors.deinit(self.parent.allocator);
         const done = self.freshJoinPointId();
 
-        var current = try self.parent.result.store.addCFStmt(.runtime_error);
+        var current = try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin());
         var index = branches.len;
         while (index > 0) {
             index -= 1;
@@ -21020,7 +21106,7 @@ const ProcBodyBuilder = struct {
             .params = try self.joinParamSpan(&params),
             .body = next,
             .remainder = remainder,
-        } });
+        } }, self.glueOrigin());
         self.restoreDescriptorBindings(outer_descriptors);
         return match_stmt;
     }
@@ -21323,7 +21409,7 @@ const ProcBodyBuilder = struct {
                     .params = LIR.LocalSpan.empty(),
                     .body = current,
                     .remainder = branch_start,
-                } })
+                } }, self.glueOrigin())
             else
                 branch_start;
         }
@@ -21555,7 +21641,7 @@ const ProcBodyBuilder = struct {
             .fields = try self.parent.result.store.addLocalSpan(field_locals),
             .contents_desc = aggregate_desc.contents_desc,
             .next = next,
-        } });
+        } }, self.origin);
         continuation = try self.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
         var index = items.len;
         while (index > 0) {
@@ -21646,7 +21732,7 @@ const ProcBodyBuilder = struct {
             .discriminant = variant_index,
             .payload = null,
             .next = next,
-        } });
+        } }, self.origin);
     }
 
     fn lowerPlannedTagInto(
@@ -21711,7 +21797,7 @@ const ProcBodyBuilder = struct {
                     .target_desc = target_desc,
                     .tag_name = try self.lirTagNameForLookup(variant),
                     .next = next,
-                } });
+                } }, self.origin);
             } else try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
                 .target = target,
                 .target_desc = target_desc_ref,
@@ -21719,7 +21805,7 @@ const ProcBodyBuilder = struct {
                 .discriminant = variant.index,
                 .payload = null,
                 .next = next,
-            } });
+            } }, self.origin);
             return try self.prependOptionalDescriptorMaterialization(target_desc_materialize, assign_tag);
         }
 
@@ -21755,7 +21841,7 @@ const ProcBodyBuilder = struct {
                     .discriminant = variant.index,
                     .payload = payload_local,
                     .next = next,
-                } });
+                } }, self.origin);
             const construct_tag = try self.prependOptionalDescriptorMaterialization(tag_desc.materialize, assign_tag);
             const lower_payload = try self.lowerExprIntoTagPayloadStorage(payload_local, payload_children[0].rep, args[0], construct_tag);
             return try self.prependDescriptorArgMaterializations(tag_desc.field_initializers, lower_payload);
@@ -21794,13 +21880,13 @@ const ProcBodyBuilder = struct {
                 .discriminant = variant.index,
                 .payload = payload_local,
                 .next = next,
-            } });
+            } }, self.origin);
         var continuation = try self.prependOptionalDescriptorMaterialization(tag_desc.materialize, assign_tag);
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = payload_local,
             .fields = try self.parent.result.store.addLocalSpan(field_locals),
             .next = continuation,
-        } });
+        } }, self.origin);
         var index = args.len;
         while (index > 0) {
             index -= 1;
@@ -21832,7 +21918,7 @@ const ProcBodyBuilder = struct {
                 .target_desc = target_desc,
                 .tag_name = try self.lirTagName(name),
                 .next = next,
-            } });
+            } }, self.origin);
             return try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, assign_tag);
         }
 
@@ -21875,7 +21961,7 @@ const ProcBodyBuilder = struct {
             .payload_desc = payload_desc,
             .payload_mode = .move,
             .next = next,
-        } });
+        } }, self.origin);
         var construct_tag = try self.prependOptionalDescriptorMaterialization(tag_desc.materialize, assign_tag);
 
         if (args.len == 1) {
@@ -21886,7 +21972,7 @@ const ProcBodyBuilder = struct {
             .target = payload.local,
             .fields = try self.parent.result.store.addLocalSpan(field_locals.?),
             .next = construct_tag,
-        } });
+        } }, self.origin);
         var index = args.len;
         while (index > 0) {
             index -= 1;
@@ -22314,12 +22400,12 @@ const ProcBodyBuilder = struct {
                     .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
                     .default_branch = missing_body,
                     .continuation = null,
-                } });
+                } }, self.origin);
                 const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                     .target = discriminant,
                     .op = .{ .discriminant = .{ .source = slot_local } },
                     .next = switch_stmt,
-                } });
+                } }, self.origin);
                 break :blk try self.lowerRecordFieldFromLocalInto(
                     slot_local,
                     slot_rep,
@@ -22449,7 +22535,7 @@ const ProcBodyBuilder = struct {
                 .field_idx = access.field_idx,
             } },
             .next = after_read,
-        } });
+        } }, self.origin);
         const before_read = if (field_desc_local) |desc_local| blk: {
             if (self.localIsReadOnlyDescriptorInput(desc_local)) break :blk read;
             break :blk try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
@@ -22458,7 +22544,7 @@ const ProcBodyBuilder = struct {
                     boxyLowerInvariant("record field descriptor bind had no source descriptor"),
                 .nested_index = nested_desc_index.?,
                 .next = read,
-            } });
+            } }, self.origin);
         } else read;
         const after_receiver = switch (receiver_layout) {
             .concrete => before_read,
@@ -22472,7 +22558,7 @@ const ProcBodyBuilder = struct {
                     .target_layout = self.parent.result.store.getLocal(read_source).layout_idx,
                     .source_mode = .borrow,
                     .next = before_read,
-                } });
+                } }, self.origin);
                 break :blk try self.prependOptionalDescriptorMaterialization(unboxed_receiver_desc_info.materialize, unbox);
             },
         };
@@ -22499,7 +22585,7 @@ const ProcBodyBuilder = struct {
             .desc = record_desc,
             .nested_index = nested_desc_index,
             .next = next,
-        } });
+        } }, self.glueOrigin());
     }
 
     fn lowerTupleAccessInto(
@@ -22542,7 +22628,7 @@ const ProcBodyBuilder = struct {
                 .field_idx = elem_index,
             } },
             .next = next,
-        } });
+        } }, self.origin);
         const tuple_rep = self.tupleRepForBoundary(source_rep) orelse
             boxyLowerInvariant("tuple field read source did not have a tuple representation");
         const nested_index = self.tupleElemNestedDescriptorIndex(tuple_rep, elem_index) orelse return read;
@@ -22555,7 +22641,7 @@ const ProcBodyBuilder = struct {
             .desc = try self.descriptorRefForLocalOrKnownRep(source, tuple_rep),
             .nested_index = nested_index,
             .next = read,
-        } });
+        } }, self.origin);
     }
 
     fn lowerStrInto(
@@ -22611,7 +22697,7 @@ const ProcBodyBuilder = struct {
                 .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
                 .args = try self.parent.result.store.addLocalSpan(&args),
                 .next = continuation,
-            } });
+            } }, self.origin);
             continuation = try self.lowerExprIntoRep(rhs, string_rep, segments[concat_index + 1], continuation);
             if (concat_index == 0) {
                 continuation = try self.lowerExprIntoRep(lhs, string_rep, segments[0], continuation);
@@ -22635,7 +22721,7 @@ const ProcBodyBuilder = struct {
             .target = target_desc_local,
             .desc = source_desc,
             .next = next,
-        } });
+        } }, self.glueOrigin());
     }
 
     fn lowerRecordInto(
@@ -22790,7 +22876,7 @@ const ProcBodyBuilder = struct {
                 .desc = materialization.desc,
                 .captures = materialization.captures,
                 .next = continuation,
-            } });
+            } }, self.glueOrigin());
         }
         self.dropNominalBackingFormalScope(scope);
         return continuation;
@@ -23012,7 +23098,7 @@ const ProcBodyBuilder = struct {
             .fields = try self.parent.result.store.addLocalSpan(field_locals),
             .contents_desc = aggregate_desc.contents_desc,
             .next = next,
-        } });
+        } }, self.origin);
         continuation = try self.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
         var field_index = field_sources.len;
         while (field_index > 0) {
@@ -23275,7 +23361,7 @@ const ProcBodyBuilder = struct {
             .payload_desc = payload_desc,
             .payload_mode = .move,
             .next = next,
-        } });
+        } }, self.origin);
         return try self.lowerRecordPayloadInto(
             payload,
             record_expr,
@@ -23372,13 +23458,13 @@ const ProcBodyBuilder = struct {
             const matched = try self.lowerPatternThen(pattern_id, source, next, miss, &.{});
             const crash = try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString("pattern match failed") },
-            } });
+            } }, self.origin);
             break :blk try self.parent.result.store.addCFStmt(.{ .join = .{
                 .id = miss.join_id,
                 .params = LIR.LocalSpan.empty(),
                 .body = crash,
                 .remainder = matched,
-            } });
+            } }, self.origin);
         } else try self.bindPatternFromLocal(pattern_id, source, next);
         return try self.lowerExprInto(source, expr_id, bound);
     }
@@ -23705,7 +23791,7 @@ const ProcBodyBuilder = struct {
             .tag_name = try self.lirTagName(name),
             .on_match = payloads_bound,
             .on_miss = try self.patternMissJump(miss),
-        } });
+        } }, self.origin);
     }
 
     fn lowerTuplePatternThen(
@@ -23805,7 +23891,7 @@ const ProcBodyBuilder = struct {
             .target_layout = unbox.target_layout,
             .source_mode = .copy,
             .next = next,
-        } });
+        } }, self.origin);
         return try self.prependOptionalDescriptorMaterialization(field_read.materialize, stmt);
     }
 
@@ -23842,7 +23928,7 @@ const ProcBodyBuilder = struct {
                     .field_idx = access.field_idx,
                 } },
                 .next = after_read,
-            } });
+            } }, self.origin);
         if (nested_desc_index) |index| {
             if (self.parent.result.store.getLocal(read_target).boxy_desc) |desc| {
                 if (desc.localOrNull() == null) return read;
@@ -23855,7 +23941,7 @@ const ProcBodyBuilder = struct {
                     boxyLowerInvariant("record pattern field descriptor bind had no source descriptor"),
                 .nested_index = index,
                 .next = read,
-            } });
+            } }, self.origin);
         }
         return read;
     }
@@ -24076,7 +24162,7 @@ const ProcBodyBuilder = struct {
             .end = arm.end,
             .on_match = arm.on_match,
             .on_miss = try self.patternMissJump(miss),
-        } });
+        } }, self.origin);
     }
 
     fn lowerStrPatternArm(
@@ -24196,7 +24282,7 @@ const ProcBodyBuilder = struct {
                     .tag_name = try self.lirTagName(name),
                     .on_match = payloads_bound,
                     .on_miss = try self.patternMissJump(miss),
-                } });
+                } }, self.origin);
             },
             .alias => return try self.lowerAppliedTagPatternRepThen(
                 tag_ty,
@@ -24465,7 +24551,7 @@ const ProcBodyBuilder = struct {
             .payload_index = payload_index,
             .source_mode = .copy,
             .next = next,
-        } });
+        } }, self.origin);
     }
 
     fn lowerTagDiscriminantSwitch(
@@ -24489,12 +24575,12 @@ const ProcBodyBuilder = struct {
             .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
             .default_branch = try self.patternMissJump(miss),
             .continuation = null,
-        } });
+        } }, self.glueOrigin());
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
             .op = .{ .discriminant = .{ .source = source } },
             .next = switch_stmt,
-        } });
+        } }, self.glueOrigin());
     }
 
     /// Bind the matched value before evaluating its checker-selected equality
@@ -24562,7 +24648,7 @@ const ProcBodyBuilder = struct {
 
     fn patternMissJump(self: *ProcBodyBuilder, miss: ?PatternMiss) Allocator.Error!LIR.CFStmtId {
         const miss_info = miss orelse boxyLowerInvariant("refutable checked match pattern reached boxy lowering without a miss target");
-        return try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = miss_info.join_id } });
+        return try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = miss_info.join_id } }, self.glueOrigin());
     }
 
     fn assignU64Literal(
@@ -24575,7 +24661,7 @@ const ProcBodyBuilder = struct {
             .target = target,
             .value = .{ .i64_literal = .{ .value = value, .layout_idx = .u64 } },
             .next = next,
-        } });
+        } }, self.origin);
     }
 
     fn assignDecLiteral(
@@ -24593,7 +24679,7 @@ const ProcBodyBuilder = struct {
                     .default_layout = .dec,
                 } },
                 .next = next,
-            } });
+            } }, self.origin);
             return try self.prependLiteralTargetDescriptorMaterialization(target, literal);
         }
         if (self.dynamicLiteralTarget(target)) |info| {
@@ -24606,13 +24692,13 @@ const ProcBodyBuilder = struct {
                 .target = payload,
                 .value = .{ .dec_literal = value.num },
                 .next = box,
-            } });
+            } }, self.origin);
         }
         return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
             .value = .{ .dec_literal = value.num },
             .next = next,
-        } });
+        } }, self.origin);
     }
 
     fn assignUnaryLowLevel(
@@ -24652,7 +24738,7 @@ const ProcBodyBuilder = struct {
             .rc_effect = LIR.LowLevel.RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(0b11, 0),
             .args = try self.parent.result.store.addLocalSpan(&args),
             .next = next,
-        } });
+        } }, self.origin);
     }
 
     fn assignListAppendGrowingMovingElement(
@@ -24685,7 +24771,7 @@ const ProcBodyBuilder = struct {
             .rc_effect = op.rcEffect(),
             .args = try self.parent.result.store.addLocalSpan(args),
             .next = next,
-        } });
+        } }, self.origin);
     }
 
     fn lenMinusConst(
@@ -25066,7 +25152,7 @@ const ProcBodyBuilder = struct {
             .target = target,
             .fields = try self.parent.result.store.addLocalSpan(field_locals),
             .next = next,
-        } });
+        } }, self.origin);
         var index = field_count;
         while (index > 0) {
             index -= 1;
@@ -25263,7 +25349,7 @@ const ProcBodyBuilder = struct {
         return try self.parent.result.store.addCFStmt(.{ .init_uninitialized = .{
             .target = target,
             .next = next,
-        } });
+        } }, self.glueOrigin());
     }
 
     fn lowerStatement(
@@ -25272,9 +25358,9 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const statement = self.module.checked_bodies.statement(statement_id);
-        const saved_region = self.parent.result.store.current_region;
-        defer self.parent.result.store.current_region = saved_region;
-        self.parent.result.store.current_region = statement.source_region;
+        const saved_origin = self.origin;
+        defer self.origin = saved_origin;
+        self.origin = try self.sourceOrigin(statement.source_region);
 
         const rhs: ?checked.CheckedExprId = switch (statement.data) {
             .decl => |decl| decl.expr,
@@ -25302,7 +25388,7 @@ const ProcBodyBuilder = struct {
             => null,
         };
         if (rhs) |expr| if (self.module.checked_bodies.expr(expr).data == .runtime_error) {
-            return try self.parent.result.store.addCFStmt(.runtime_error);
+            return try self.parent.result.store.addCFStmt(.runtime_error, self.origin);
         };
         return switch (statement.data) {
             .decl => |decl| try self.lowerDeclPattern(decl.pattern, decl.expr, next),
@@ -25329,13 +25415,13 @@ const ProcBodyBuilder = struct {
                 const debug_stmt = try self.parent.result.store.addCFStmt(.{ .debug = .{
                     .message = message,
                     .next = next,
-                } });
+                } }, self.origin);
                 break :blk try self.lowerInspectExprInto(message, expr_id, debug_stmt);
             },
             .crash => |msg| try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString(self.module.checked_bodies.stringLiteral(msg)) },
-            } }),
-            .runtime_error => try self.parent.result.store.addCFStmt(.runtime_error),
+            } }, self.origin),
+            .runtime_error => try self.parent.result.store.addCFStmt(.runtime_error, self.origin),
             .import_,
             .alias_decl,
             .nominal_decl,
@@ -25364,7 +25450,7 @@ const ProcBodyBuilder = struct {
         const loop_result = try self.addFrameLocal(.zst);
 
         const join_id = self.freshJoinPointId();
-        const unreachable_exit = if (can_exit) null else try self.parent.result.store.addCFStmt(.runtime_error);
+        const unreachable_exit = if (can_exit) null else try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin());
         const after_loop = unreachable_exit orelse next;
         self.parent.result.store.shapes.loop = true;
         try self.loop_stack.append(self.parent.allocator, .{
@@ -25374,18 +25460,18 @@ const ProcBodyBuilder = struct {
         });
         defer _ = self.loop_stack.pop();
 
-        const continue_stmt = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        const continue_stmt = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, self.glueOrigin());
         const body = try self.lowerExprInto(body_result, body_id, continue_stmt);
         const switch_stmt = try self.boolSwitchNoContinuation(cond_local, body, after_loop);
         const header = try self.lowerExprInto(cond_local, cond_id, switch_stmt);
-        const initial_jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        const initial_jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, self.glueOrigin());
 
         return try self.parent.result.store.addCFStmt(.{ .join = .{
             .id = join_id,
             .params = LIR.LocalSpan.empty(),
             .body = header,
             .remainder = initial_jump,
-        } });
+        } }, self.glueOrigin());
     }
 
     const IteratorStepShape = struct {
@@ -25468,7 +25554,7 @@ const ProcBodyBuilder = struct {
         });
         defer _ = self.loop_stack.pop();
 
-        var initial_jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        var initial_jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, self.glueOrigin());
         initial_jump = try self.setLocalInitializeJoinParam(iterator_param, initial_iterator, initial_jump);
         initial_jump = try self.lowerIteratorDispatchCallInto(initial_iterator, plan_id, .iter, plan, plan.iter, null, initial_jump);
         if (self.localDescriptorEnvironmentForLocal(initial_iterator)) |env| {
@@ -25481,7 +25567,7 @@ const ProcBodyBuilder = struct {
             .params = try self.joinParamSpan(&[_]LIR.LocalId{iterator_param}),
             .body = body,
             .remainder = initial_jump,
-        } });
+        } }, self.glueOrigin());
     }
 
     fn lowerIteratorLoopBody(
@@ -25505,28 +25591,28 @@ const ProcBodyBuilder = struct {
             const one_body = try self.lowerIteratorOneBranch(for_, step, step_local, null, iterator_param, join_id);
             const skip_body = try self.lowerIteratorSkipBranch(step, step_local, null, iterator_param, join_id);
             const source_desc = try self.descriptorRefForSourceLocalRep(step_local, step_rep);
-            const impossible = try self.parent.result.store.addCFStmt(.runtime_error);
+            const impossible = try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin());
             const skip_match = try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                 .source = step_local,
                 .source_desc = source_desc,
                 .tag_name = try self.parent.result.store.insertBoxyName(step.module.canonical_names.tagLabelText(step.skip_tag)),
                 .on_match = skip_body,
                 .on_miss = impossible,
-            } });
+            } }, self.glueOrigin());
             const one_match = try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                 .source = step_local,
                 .source_desc = source_desc,
                 .tag_name = try self.parent.result.store.insertBoxyName(step.module.canonical_names.tagLabelText(step.one_tag)),
                 .on_match = one_body,
                 .on_miss = skip_match,
-            } });
+            } }, self.glueOrigin());
             const done_match = try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                 .source = step_local,
                 .source_desc = source_desc,
                 .tag_name = try self.parent.result.store.insertBoxyName(step.module.canonical_names.tagLabelText(step.done_tag)),
                 .on_match = done_body,
                 .on_miss = one_match,
-            } });
+            } }, self.glueOrigin());
             return try self.lowerIteratorDispatchCallInto(step_local, plan_id, .next, plan, plan.next, iterator_param, done_match);
         }
 
@@ -25547,14 +25633,14 @@ const ProcBodyBuilder = struct {
         const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = discriminant,
             .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
-            .default_branch = try self.parent.result.store.addCFStmt(.runtime_error),
+            .default_branch = try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin()),
             .continuation = null,
-        } });
+        } }, self.glueOrigin());
         const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
             .op = .{ .discriminant = .{ .source = step_local } },
             .next = switch_stmt,
-        } });
+        } }, self.glueOrigin());
         return try self.lowerIteratorDispatchCallInto(step_local, plan_id, .next, plan, plan.next, iterator_param, read_discriminant);
     }
 
@@ -25575,7 +25661,7 @@ const ProcBodyBuilder = struct {
         const body_expr = self.module.checked_bodies.expr(for_.body);
         const body_result = try self.addFrameLocalForType(body_expr.ty);
 
-        var continuation = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        var continuation = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, self.glueOrigin());
         continuation = try self.setLocalInitializeJoinParam(iterator_param, rest, continuation);
         continuation = try self.lowerExprInto(body_result, for_.body, continuation);
 
@@ -25588,9 +25674,9 @@ const ProcBodyBuilder = struct {
             continuation = try self.parent.result.store.addCFStmt(.{ .join = .{
                 .id = miss_info.join_id,
                 .params = LIR.LocalSpan.empty(),
-                .body = try self.parent.result.store.addCFStmt(.runtime_error),
+                .body = try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin()),
                 .remainder = continuation,
-            } });
+            } }, self.glueOrigin());
         }
 
         continuation = try self.lowerRecordFieldFromLocalInto(rest, self.repForTypeRef(.{ .module = step.one_payload_ty.module, .ty = step.one_rest.ty }), payload, self.repForTypeRef(step.one_payload_ty), step.module, step.one_rest.name, continuation);
@@ -25611,7 +25697,7 @@ const ProcBodyBuilder = struct {
         const payload_desc = try self.ensureTagPayloadTargetDescriptorLocal(payload, payload_rep);
         const rest = try self.addFrameLocalForRepWithFreshDescriptor(self.repForTypeRef(.{ .module = step.skip_payload_ty.module, .ty = step.skip_rest.ty }));
 
-        var continuation = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        var continuation = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, self.glueOrigin());
         continuation = try self.setLocalInitializeJoinParam(iterator_param, rest, continuation);
         continuation = try self.lowerRecordFieldFromLocalInto(rest, self.repForTypeRef(.{ .module = step.skip_payload_ty.module, .ty = step.skip_rest.ty }), payload, self.repForTypeRef(step.skip_payload_ty), step.module, step.skip_rest.name, continuation);
         return try self.readTagPayloadStructInto(payload, payload_rep, payload_desc, step_local, self.repForTypeRef(step.step_ty), step.skip_tag, variant_index, continuation);
@@ -25891,7 +25977,7 @@ const ProcBodyBuilder = struct {
             .hidden_args = try self.parent.result.store.addLocalSpan(hidden_arg_locals),
             .result_desc = result_desc_info.desc,
             .next = next,
-        } });
+        } }, self.glueOrigin());
         if (result_desc_info.materialize) |materialize| {
             const desc = materialize.materialize orelse
                 boxyLowerInvariant("boxy iterator dictionary call result descriptor materialization had no descriptor");
@@ -26031,7 +26117,7 @@ const ProcBodyBuilder = struct {
             defer self.parent.allocator.free(lowered);
             const crash = try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .local = lowered[0] },
-            } });
+            } }, self.origin);
             return try self.prependLoweredExprs(args, lowered, crash);
         }
 
@@ -26092,14 +26178,14 @@ const ProcBodyBuilder = struct {
                 .rc_effect = lowered_op.rcEffect(),
                 .args = try self.parent.result.store.addLocalSpan(lowered),
                 .next = continuation,
-            } });
+            } }, self.origin);
             if (source_desc_local) |local| {
                 continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                     .target = local,
                     .desc = source_materialization.desc,
                     .captures = source_materialization.captures,
                     .next = continuation,
-                } });
+                } }, self.origin);
             }
             return try self.prependLoweredExprs(args, lowered, continuation);
         }
@@ -26126,7 +26212,7 @@ const ProcBodyBuilder = struct {
                 .rc_effect = op.rcEffect(),
                 .args = try self.parent.result.store.addLocalSpan(&arg_locals),
                 .next = result_next,
-            } });
+            } }, self.origin);
             continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_unbox = .{
                 .target = concrete,
                 .source = lowered[1],
@@ -26135,7 +26221,7 @@ const ProcBodyBuilder = struct {
                 .target_layout = record_layout,
                 .source_mode = .copy,
                 .next = continuation,
-            } });
+            } }, self.origin);
             sublist_record_adapt = continuation;
         }
 
@@ -26162,7 +26248,7 @@ const ProcBodyBuilder = struct {
                 .payload_desc = payload_desc,
                 .payload_mode = .move,
                 .next = next,
-            } });
+            } }, self.origin);
             const box_with_desc = try self.prependOptionalDescriptorMaterialization(payload_desc_info.materialize, box);
             replace_result_box = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
                 .target = concrete,
@@ -26170,7 +26256,7 @@ const ProcBodyBuilder = struct {
                 .rc_effect = op.rcEffect(),
                 .args = try self.parent.result.store.addLocalSpan(lowered),
                 .next = box_with_desc,
-            } });
+            } }, self.origin);
         }
 
         var continuation = replace_result_box orelse sublist_record_adapt orelse try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
@@ -26179,7 +26265,7 @@ const ProcBodyBuilder = struct {
             .rc_effect = lowered_op.rcEffect(),
             .args = try self.parent.result.store.addLocalSpan(lowered),
             .next = result_next,
-        } });
+        } }, self.origin);
         if (replace_result_box == null and op != .list_sublist and
             self.parent.result.store.getLocal(target).boxy_desc != null)
         {
@@ -26233,7 +26319,7 @@ const ProcBodyBuilder = struct {
                     .target = target,
                     .op = .{ .local = source },
                     .next = next,
-                } });
+                } }, self.glueOrigin());
                 switch (op) {
                     .box_box => {
                         const materialization = try self.descriptorMaterializationForExactRep(target_rep);
@@ -26257,7 +26343,7 @@ const ProcBodyBuilder = struct {
                                 .desc = resolved_source_desc,
                                 .box_payload_layout = source_layout,
                                 .next = assign,
-                            } });
+                            } }, self.glueOrigin());
                         }
                         return assign;
                     },
@@ -26313,7 +26399,7 @@ const ProcBodyBuilder = struct {
                     .layout_idx = self.parent.result.store.getLocal(target).layout_idx,
                 } },
                 .next = next,
-            } });
+            } }, self.origin);
         }
 
         const lowered = try self.lowerExprsToTemps(args);
@@ -26326,7 +26412,7 @@ const ProcBodyBuilder = struct {
             .args = try self.parent.result.store.addLocalSpan(lowered),
             .interchangeable = interchangeable,
             .next = next,
-        } });
+        } }, self.origin);
         continuation = try self.prependLoweredExprs(args, lowered, continuation);
         return continuation;
     }
@@ -27578,7 +27664,7 @@ const ProcBodyBuilder = struct {
                 .target_layout = target_layout,
                 .source_mode = .borrow,
                 .next = next,
-            } });
+            } }, self.glueOrigin());
             return try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, unbox);
         }
 
@@ -27596,7 +27682,7 @@ const ProcBodyBuilder = struct {
                 .payload_desc = target_desc,
                 .payload_mode = .borrow,
                 .next = next,
-            } });
+            } }, self.glueOrigin());
             return try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, box);
         }
 
@@ -28315,7 +28401,7 @@ const ProcBodyBuilder = struct {
             .desc = materialization.desc,
             .captures = materialization.captures,
             .next = next,
-        } });
+        } }, self.glueOrigin());
     }
 
     fn initDescriptorTemplateContext(self: *ProcBodyBuilder, exact_storage: bool) Allocator.Error!DescriptorTemplateContext {
@@ -29038,7 +29124,7 @@ const ProcBodyBuilder = struct {
                 .tag_residual_for = hidden.tag_residual_for,
                 .captures = hidden.captures,
                 .next = next,
-            } });
+            } }, self.glueOrigin());
         }
         if (hidden.nested_index != null or hidden.tag_ext or hidden.tag_residual_for != null) {
             boxyLowerInvariant("boxy descriptor materialization combined a read_path path with a legacy read_path");
@@ -29086,7 +29172,7 @@ const ProcBodyBuilder = struct {
                 },
                 .captures = if (read_index == 0) hidden.captures else LIR.LocalSpan.empty(),
                 .next = continuation,
-            } });
+            } }, self.glueOrigin());
         }
         return continuation;
     }
@@ -29183,7 +29269,7 @@ const ProcBodyBuilder = struct {
                     .dict = dict,
                     .captures = hidden.captures,
                     .next = continuation,
-                } });
+                } }, self.glueOrigin());
             }
         }
         return continuation;
@@ -29260,7 +29346,7 @@ const ProcBodyBuilder = struct {
             .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
             .default_branch = false_body,
             .continuation = null,
-        } });
+        } }, self.glueOrigin());
     }
 
     fn lowerDbgExprInto(
@@ -29274,7 +29360,7 @@ const ProcBodyBuilder = struct {
         const debug_stmt = try self.parent.result.store.addCFStmt(.{ .debug = .{
             .message = message,
             .next = after_dbg,
-        } });
+        } }, self.origin);
         return try self.lowerInspectExprInto(message, child, debug_stmt);
     }
 
@@ -29297,9 +29383,9 @@ const ProcBodyBuilder = struct {
         const cond = try self.addFrameLocalForType(child_expr.ty);
         const expect_stmt = try self.parent.result.store.addCFStmt(.{ .expect = .{
             .condition = cond,
-            .site = try self.parent.expectSite(self.module, self.parent.result.store.current_region),
+            .site = try self.parent.expectSite(self.module, self.origin.region),
             .next = next,
-        } });
+        } }, self.origin);
         return try self.lowerExprInto(cond, child, expect_stmt);
     }
 
@@ -29330,8 +29416,8 @@ const ProcBodyBuilder = struct {
 
         var continuation = try self.parent.result.store.addCFStmt(.{ .expect_err = .{
             .message = message,
-            .region = self.parent.result.store.current_region,
-        } });
+            .region = self.origin.region,
+        } }, self.origin);
         continuation = try self.assignStrConcat(message, with_value, suffix, continuation);
         continuation = try self.assignStringBytesLiteral(suffix, ")", continuation);
         continuation = try self.assignStrConcat(with_value, prefix, rendered, continuation);
@@ -29393,7 +29479,7 @@ const ProcBodyBuilder = struct {
             .empty_record => try self.assignStringBytesLiteral(target, "{}", next),
             .empty_tag_union => try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString("uninhabited value reached Str.inspect") },
-            } }),
+            } }, self.derivedOrigin()),
             .alias => try self.lowerInspectRepLocalInto(target, source, self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep, next),
             .nominal => |kind| switch (kind) {
                 .transparent => if (try self.lowerToInspectMethodInto(target, source, rep_id, next)) |method_call|
@@ -29478,7 +29564,7 @@ const ProcBodyBuilder = struct {
             .source_desc = source_desc,
             .source_mode = .borrow,
             .next = next,
-        } });
+        } }, self.derivedOrigin());
     }
 
     fn tagUnionRepHasExtension(self: *const ProcBodyBuilder, rep: Plan.TypeRepresentation) bool {
@@ -29531,7 +29617,7 @@ const ProcBodyBuilder = struct {
             .rc_effect = op.rcEffect(),
             .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{source}),
             .next = next,
-        } });
+        } }, self.derivedOrigin());
     }
 
     fn lowerBoolInspectLocalsInto(
@@ -29549,12 +29635,12 @@ const ProcBodyBuilder = struct {
             .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
             .default_branch = false_body,
             .continuation = null,
-        } });
+        } }, self.derivedOrigin());
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
             .op = .{ .discriminant = .{ .source = source } },
             .next = switch_stmt,
-        } });
+        } }, self.derivedOrigin());
     }
 
     fn lowerRecordInspectLocalsInto(
@@ -29638,7 +29724,7 @@ const ProcBodyBuilder = struct {
         if (variants.len == 0) {
             return try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString("uninhabited value reached Str.inspect") },
-            } });
+            } }, self.derivedOrigin());
         }
         if (variants.len == 1 and self.isZstLocal(source)) {
             return try self.lowerTagInspectVariant(target, source, variants[0], 0, next);
@@ -29657,18 +29743,18 @@ const ProcBodyBuilder = struct {
             };
         }
 
-        const bad_discriminant = try self.parent.result.store.addCFStmt(.runtime_error);
+        const bad_discriminant = try self.parent.result.store.addCFStmt(.runtime_error, self.derivedOrigin());
         const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = discriminant,
             .branches = try self.parent.result.store.addCFSwitchBranches(branches),
             .default_branch = bad_discriminant,
             .continuation = null,
-        } });
+        } }, self.derivedOrigin());
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
             .op = .{ .discriminant = .{ .source = source } },
             .next = switch_stmt,
-        } });
+        } }, self.derivedOrigin());
     }
 
     fn lowerPresenceSlotInspectLocalsInto(
@@ -29717,14 +29803,14 @@ const ProcBodyBuilder = struct {
         const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = discriminant,
             .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
-            .default_branch = try self.parent.result.store.addCFStmt(.runtime_error),
+            .default_branch = try self.parent.result.store.addCFStmt(.runtime_error, self.derivedOrigin()),
             .continuation = null,
-        } });
+        } }, self.derivedOrigin());
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
             .op = .{ .discriminant = .{ .source = source } },
             .next = switch_stmt,
-        } });
+        } }, self.derivedOrigin());
     }
 
     fn lowerBoxInspectLocalsInto(
@@ -29771,7 +29857,7 @@ const ProcBodyBuilder = struct {
         const join_id = self.freshJoinPointId();
 
         const body = try self.lowerListInspectLoopBody(target, source, elem_rep, len, index, out, join_id, next);
-        var initial_jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        var initial_jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, self.derivedOrigin());
         initial_jump = try self.setLocalInitializeJoinParam(out, initial_out, initial_jump);
         initial_jump = try self.setLocalInitializeJoinParam(index, zero_index, initial_jump);
         initial_jump = try self.assignStringBytesLiteral(initial_out, "[", initial_jump);
@@ -29783,7 +29869,7 @@ const ProcBodyBuilder = struct {
             .params = try self.joinParamSpan(&[_]LIR.LocalId{ index, out }),
             .body = body,
             .remainder = initial_jump,
-        } });
+        } }, self.derivedOrigin());
     }
 
     fn lowerListInspectLoopBody(
@@ -29833,7 +29919,7 @@ const ProcBodyBuilder = struct {
         const one = try self.addFrameLocal(.u64);
         const next_index = try self.addFrameLocal(.u64);
 
-        var continuation = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        var continuation = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, self.derivedOrigin());
         continuation = try self.setLocalInitializeJoinParam(out, next_out, continuation);
         continuation = try self.setLocalInitializeJoinParam(index, next_index, continuation);
         continuation = try self.assignBinaryLowLevel(next_index, .num_int_add_crash_on_overflow, index, one, continuation);
@@ -29935,7 +30021,7 @@ const ProcBodyBuilder = struct {
                             .field_idx = field.field_index,
                         } },
                         .next = continuation,
-                    } });
+                    } }, self.derivedOrigin());
                 }
                 break :blk continuation;
             },
@@ -29956,7 +30042,7 @@ const ProcBodyBuilder = struct {
                             .tag_discriminant = payload.variant_index,
                         } },
                         .next = continuation,
-                    } });
+                    } }, self.derivedOrigin());
                 }
                 break :blk continuation;
             },
@@ -30006,7 +30092,7 @@ const ProcBodyBuilder = struct {
             .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
             .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ lhs, rhs }),
             .next = next,
-        } });
+        } }, self.origin);
     }
 
     fn lowerReturn(
@@ -30036,7 +30122,7 @@ const ProcBodyBuilder = struct {
         {
             boxyLowerInvariant("boxy explicit return boundary layout disagreed with its planned representations");
         }
-        const ret_stmt = try self.parent.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
+        const ret_stmt = try self.parent.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, self.origin);
         const assign_ret = try self.assignRepresentationBoundary(ret_local, expr_local, ret_rep, expr_rep, ret_stmt);
         return try self.lowerExprInto(expr_local, expr_id, assign_ret);
     }
@@ -30238,7 +30324,7 @@ const ProcBodyBuilder = struct {
                 .rc_effect = LIR.LowLevel.bool_not.rcEffect(),
                 .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{raw}),
                 .next = next,
-            } });
+            } }, self.derivedOrigin());
             eq_target = raw;
         }
 
@@ -30267,14 +30353,14 @@ const ProcBodyBuilder = struct {
             .source_desc = source_desc,
             .source_mode = .borrow,
             .next = continuation,
-        } });
+        } }, self.derivedOrigin());
         const local = desc_local orelse return eq;
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
             .target = local,
             .desc = materialization.?.desc,
             .captures = materialization.?.captures,
             .next = eq,
-        } });
+        } }, self.derivedOrigin());
     }
 
     fn lowerNominalBackingEqLocalsInto(
@@ -30334,14 +30420,14 @@ const ProcBodyBuilder = struct {
                     .rc_effect = LIR.LowLevel.simd_to_u128_bits.rcEffect(),
                     .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{rhs}),
                     .next = compare,
-                } });
+                } }, self.derivedOrigin());
                 return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
                     .target = lhs_bits,
                     .op = .simd_to_u128_bits,
                     .rc_effect = LIR.LowLevel.simd_to_u128_bits.rcEffect(),
                     .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{lhs}),
                     .next = lower_rhs,
-                } });
+                } }, self.derivedOrigin());
             },
             .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => {},
         }
@@ -30381,7 +30467,7 @@ const ProcBodyBuilder = struct {
                 .rc_effect = eq_op.rcEffect(),
                 .args = try self.parent.result.store.addLocalSpan(&args),
                 .next = next,
-            } });
+            } }, self.derivedOrigin());
         }
 
         const raw = try self.addFrameLocal(.bool);
@@ -30391,14 +30477,14 @@ const ProcBodyBuilder = struct {
             .rc_effect = LIR.LowLevel.bool_not.rcEffect(),
             .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{raw}),
             .next = next,
-        } });
+        } }, self.derivedOrigin());
         return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = raw,
             .op = eq_op,
             .rc_effect = eq_op.rcEffect(),
             .args = try self.parent.result.store.addLocalSpan(&args),
             .next = not_stmt,
-        } });
+        } }, self.derivedOrigin());
     }
 
     fn lowerBoolEqLocalsInto(
@@ -30416,12 +30502,12 @@ const ProcBodyBuilder = struct {
             .target = rhs_disc,
             .op = .{ .discriminant = .{ .source = rhs } },
             .next = compare,
-        } });
+        } }, self.derivedOrigin());
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = lhs_disc,
             .op = .{ .discriminant = .{ .source = lhs } },
             .next = read_rhs,
-        } });
+        } }, self.derivedOrigin());
     }
 
     fn lowerRecordEqLocalsInto(
@@ -30505,7 +30591,7 @@ const ProcBodyBuilder = struct {
                     .field_idx = field_index,
                 } },
                 .next = current,
-            } });
+            } }, self.derivedOrigin());
         }
         if (!self.isZstLocal(lhs_field)) {
             current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
@@ -30515,7 +30601,7 @@ const ProcBodyBuilder = struct {
                     .field_idx = field_index,
                 } },
                 .next = current,
-            } });
+            } }, self.derivedOrigin());
         }
         return current;
     }
@@ -30559,7 +30645,7 @@ const ProcBodyBuilder = struct {
             .branches = try self.parent.result.store.addCFSwitchBranches(branches),
             .default_branch = failed,
             .continuation = null,
-        } });
+        } }, self.derivedOrigin());
         const disc_switch = try self.boolSwitchNoContinuation(same_disc, payload_switch, failed);
         const compare_disc = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = same_disc,
@@ -30567,17 +30653,17 @@ const ProcBodyBuilder = struct {
             .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
             .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ lhs_disc, rhs_disc }),
             .next = disc_switch,
-        } });
+        } }, self.derivedOrigin());
         const read_rhs = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = rhs_disc,
             .op = .{ .discriminant = .{ .source = rhs } },
             .next = compare_disc,
-        } });
+        } }, self.derivedOrigin());
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = lhs_disc,
             .op = .{ .discriminant = .{ .source = lhs } },
             .next = read_rhs,
-        } });
+        } }, self.derivedOrigin());
     }
 
     fn lowerTagPayloadEqVariant(
@@ -30738,7 +30824,7 @@ const ProcBodyBuilder = struct {
             .rc_effect = op.rcEffect(),
             .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ hasher, value }),
             .next = next,
-        } });
+        } }, self.derivedOrigin());
     }
 
     const HashComponent = struct {
@@ -30841,7 +30927,7 @@ const ProcBodyBuilder = struct {
                         .field_idx = component.field_index,
                     } },
                     .next = current,
-                } });
+                } }, self.derivedOrigin());
             }
         }
         return current;
@@ -30872,18 +30958,18 @@ const ProcBodyBuilder = struct {
                 .body = try self.lowerTagPayloadHashVariant(target, value, hasher, variant, @intCast(index), next),
             };
         }
-        const bad_discriminant = try self.parent.result.store.addCFStmt(.runtime_error);
+        const bad_discriminant = try self.parent.result.store.addCFStmt(.runtime_error, self.derivedOrigin());
         const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = discriminant,
             .branches = try self.parent.result.store.addCFSwitchBranches(branches),
             .default_branch = bad_discriminant,
             .continuation = null,
-        } });
+        } }, self.derivedOrigin());
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
             .op = .{ .discriminant = .{ .source = value } },
             .next = switch_stmt,
-        } });
+        } }, self.derivedOrigin());
     }
 
     fn lowerTagPayloadHashVariant(
@@ -30925,7 +31011,7 @@ const ProcBodyBuilder = struct {
             .rc_effect = LIR.LowLevel.hasher_write_u64.rcEffect(),
             .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ hasher, discriminant_value }),
             .next = current,
-        } });
+        } }, self.derivedOrigin());
         return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
             .target = discriminant_value,
             .value = .{ .i128_literal = .{
@@ -30933,7 +31019,7 @@ const ProcBodyBuilder = struct {
                 .layout_idx = .u64,
             } },
             .next = current,
-        } });
+        } }, self.derivedOrigin());
     }
 
     fn lowerTagPayloadHashComponentsInto(
@@ -30980,7 +31066,7 @@ const ProcBodyBuilder = struct {
                         .tag_discriminant = variant_index,
                     } },
                     .next = current,
-                } });
+                } }, self.derivedOrigin());
             }
         }
         return current;
@@ -30999,7 +31085,7 @@ const ProcBodyBuilder = struct {
     }
 
     fn joinJump(self: *ProcBodyBuilder, join_id: LIR.JoinPointId) Allocator.Error!LIR.CFStmtId {
-        return try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        return try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, self.glueOrigin());
     }
 
     fn freshJoinPointId(self: *ProcBodyBuilder) LIR.JoinPointId {
@@ -31086,7 +31172,7 @@ const ProcBodyBuilder = struct {
             .payload_desc = info.payload_desc,
             .payload_mode = .move,
             .next = next,
-        } });
+        } }, self.origin);
     }
 
     fn assignCheckedNumeralLiteral(
@@ -31116,7 +31202,7 @@ const ProcBodyBuilder = struct {
                 .target = target,
                 .value = value,
                 .next = next,
-            } });
+            } }, self.origin);
             return try self.prependLiteralTargetDescriptorMaterialization(target, assigned);
         }
         if (self.dynamicLiteralTarget(target)) |info| {
@@ -31148,7 +31234,7 @@ const ProcBodyBuilder = struct {
                     .target = target,
                     .value = .{ .i128_literal = .{ .value = value, .layout_idx = payload_layout } },
                     .next = next,
-                } });
+                } }, self.origin);
             },
             .f32 => try self.assignF32Literal(target, try exact_numeral.floatBits(f32, self.parent.allocator, exact), next),
             .f64 => try self.assignF64Literal(target, try exact_numeral.floatBits(f64, self.parent.allocator, exact), next),
@@ -31164,7 +31250,7 @@ const ProcBodyBuilder = struct {
     fn invalidNumeralLiteral(self: *ProcBodyBuilder) Allocator.Error!LIR.CFStmtId {
         return try self.parent.result.store.addCFStmt(.{ .crash = .{
             .msg = .{ .literal = try self.parent.result.store.insertString("invalid numeric literal") },
-        } });
+        } }, self.origin);
     }
 
     fn appendLiteralPayloadDesc(
@@ -31337,7 +31423,7 @@ const ProcBodyBuilder = struct {
                     .payload_desc = payload_desc,
                     .payload_mode = .move,
                     .next = next,
-                } });
+                } }, self.derivedOrigin());
             },
         };
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
@@ -31345,7 +31431,7 @@ const ProcBodyBuilder = struct {
             .fields = try self.parent.result.store.addLocalSpan(&fields),
             .contents_desc = aggregate_desc.contents_desc,
             .next = continuation,
-        } });
+        } }, self.derivedOrigin());
 
         const before = self.module.module_env.numeralDigitsBefore(literal);
         const after = self.module.module_env.numeralDigitsAfter(literal);
@@ -31426,7 +31512,7 @@ const ProcBodyBuilder = struct {
                 .target = target,
                 .value = value,
                 .next = next,
-            } });
+            } }, self.origin);
             return try self.prependLiteralTargetDescriptorMaterialization(target, assigned);
         }
         if (self.dynamicLiteralTarget(target)) |info| {
@@ -31474,7 +31560,7 @@ const ProcBodyBuilder = struct {
                     .default_layout = .dec,
                 } },
                 .next = next,
-            } });
+            } }, self.origin);
             return try self.prependLiteralTargetDescriptorMaterialization(target, literal);
         }
         if (self.dynamicLiteralTarget(target)) |info| {
@@ -31487,7 +31573,7 @@ const ProcBodyBuilder = struct {
                     .layout_idx = info.payload_layout,
                 } },
                 .next = box,
-            } });
+            } }, self.origin);
         }
         return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
@@ -31496,7 +31582,7 @@ const ProcBodyBuilder = struct {
                 .layout_idx = self.parent.result.store.getLocal(target).layout_idx,
             } },
             .next = next,
-        } });
+        } }, self.origin);
     }
 
     fn assignF32Literal(self: *ProcBodyBuilder, target: LIR.LocalId, value: f32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
@@ -31510,14 +31596,14 @@ const ProcBodyBuilder = struct {
                 .target = payload,
                 .value = .{ .f32_literal = value },
                 .next = box,
-            } });
+            } }, self.origin);
             return try self.prependLiteralTargetDescriptorMaterialization(target, literal);
         }
         return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
             .value = .{ .f32_literal = value },
             .next = next,
-        } });
+        } }, self.origin);
     }
 
     fn assignF64Literal(self: *ProcBodyBuilder, target: LIR.LocalId, value: f64, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
@@ -31531,14 +31617,14 @@ const ProcBodyBuilder = struct {
                 .target = payload,
                 .value = .{ .f64_literal = value },
                 .next = box,
-            } });
+            } }, self.origin);
             return try self.prependLiteralTargetDescriptorMaterialization(target, literal);
         }
         return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
             .value = .{ .f64_literal = value },
             .next = next,
-        } });
+        } }, self.origin);
     }
 
     fn assignConstScalar(
@@ -31609,13 +31695,13 @@ const ProcBodyBuilder = struct {
                 .target = payload,
                 .value = .{ .str_literal = try self.parent.result.store.insertStringView(backing, offset, len) },
                 .next = box,
-            } });
+            } }, self.origin);
         }
         return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
             .value = .{ .str_literal = try self.parent.result.store.insertStringView(backing, offset, len) },
             .next = next,
-        } });
+        } }, self.origin);
     }
 
     fn assignBoolLiteral(
@@ -31631,7 +31717,7 @@ const ProcBodyBuilder = struct {
             .discriminant = variant,
             .payload = null,
             .next = next,
-        } });
+        } }, self.origin);
     }
 
     fn assignZst(self: *ProcBodyBuilder, target: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
@@ -31639,7 +31725,7 @@ const ProcBodyBuilder = struct {
             .target = target,
             .fields = LIR.LocalSpan.empty(),
             .next = next,
-        } });
+        } }, self.origin);
     }
 
     fn assignList(
@@ -31652,7 +31738,7 @@ const ProcBodyBuilder = struct {
             .target = target,
             .elems = try self.parent.result.store.addLocalSpan(elems),
             .next = next,
-        } });
+        } }, self.origin);
     }
 
     fn assignLocal(
@@ -31666,7 +31752,7 @@ const ProcBodyBuilder = struct {
             .target = target,
             .op = .{ .local = source },
             .next = next,
-        } });
+        } }, self.origin);
         var transferred = try self.prependSetLocalDescriptorTransfer(target, source, .replace_existing, assign);
         transferred = try self.prependLocalDescriptorEnvironmentTransfer(target, source, .replace_existing, transferred);
         try self.recordTransferredLocalDescriptorEnvironment(target, source);
@@ -31723,7 +31809,7 @@ const ProcBodyBuilder = struct {
             .target_desc = target_desc,
             .source_mode = .move,
             .next = next,
-        } });
+        } }, self.glueOrigin());
     }
 
     fn assignNominalBoundary(
@@ -31767,14 +31853,14 @@ const ProcBodyBuilder = struct {
                 .payload_desc = payload_desc,
                 .payload_mode = .move,
                 .next = next,
-            } });
+            } }, self.glueOrigin());
         }
 
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
             .op = .{ .nominal = .{ .backing_ref = source } },
             .next = next,
-        } });
+        } }, self.glueOrigin());
     }
 
     fn assignErasedCallableBoundary(
@@ -31934,13 +32020,13 @@ const ProcBodyBuilder = struct {
             .on_drop = self.erasedCallableOnDrop(adapter.capture_layout),
             .result_desc = result_desc.desc,
             .next = next,
-        } });
+        } }, self.glueOrigin());
 
         var continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = capture_local,
             .fields = try self.parent.result.store.addLocalSpan(capture_fields),
             .next = assign_callable,
-        } });
+        } }, self.glueOrigin());
         continuation = try self.prependDescriptorArgMaterializations(result_desc_initializers.items, continuation);
 
         return try self.prependHiddenDescriptorArgMaterialization(descriptor_materializations.items, continuation);
@@ -32062,7 +32148,7 @@ const ProcBodyBuilder = struct {
         const saved_tail_builder = self.parent.result.store.tail_call_builder;
         self.parent.result.store.tail_call_builder = null;
         defer self.parent.result.store.tail_call_builder = saved_tail_builder;
-        var adapter_proc = ProcBodyBuilder.initSyntheticAdapter(self.parent, self.module, self.worker_layout);
+        var adapter_proc = ProcBodyBuilder.initSyntheticAdapter(self.parent, self.module, self.worker_layout, self.scaffoldOrigin());
         defer adapter_proc.deinit();
 
         const source_closure = try adapter_proc.addFrameLocal(source_closure_layout);
@@ -32109,7 +32195,7 @@ const ProcBodyBuilder = struct {
             .erased_call_args = try adapter_proc.erasedCallArgsPlan(target_arg_locals),
             .boxy_runtime_entry = true,
             .stack_probe = self.parent.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
-        });
+        }, adapter_proc.origin.loc);
         const cache_len = self.parent.callable_adapter_cache.items.len;
         errdefer self.parent.callable_adapter_cache.shrinkRetainingCapacity(cache_len);
         const cache_entry = CallableAdapterCacheEntry{
@@ -32121,7 +32207,7 @@ const ProcBodyBuilder = struct {
         };
         try self.parent.callable_adapter_cache.append(self.parent.allocator, cache_entry);
 
-        const ret_stmt = try self.parent.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
+        const ret_stmt = try self.parent.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, adapter_proc.origin);
         var continuation = ret_stmt;
 
         const raw_ret = try adapter_proc.addFrameLocalForRepWithFreshDescriptor(source_function.ret);
@@ -32148,7 +32234,7 @@ const ProcBodyBuilder = struct {
                 try adapter_proc.addFrameBoundaryTargetLocalForRep(source_arg.rep);
         }
 
-        const call_placeholder = try self.parent.result.store.addCFStmt(.runtime_error);
+        const call_placeholder = try self.parent.result.store.addCFStmt(.runtime_error, adapter_proc.origin);
         var call_with_args = call_placeholder;
         var arg_index = source_function.arg_count;
         while (arg_index > 0) {
@@ -32190,9 +32276,9 @@ const ProcBodyBuilder = struct {
                 .reuse_source = null,
                 .next = continuation,
             },
-        });
+        }, adapter_proc.origin);
         const call_entry = try adapter_proc.prependDescriptorArgMaterializations(arg_desc_initializers.items, call_stmt);
-        try self.parent.result.store.replaceCFStmt(call_placeholder, self.parent.result.store.getCFStmt(call_entry));
+        try self.parent.result.store.replaceCFStmt(call_placeholder, self.parent.result.store.getCFStmt(call_entry), self.parent.result.store.stmtOrigin(call_entry));
         continuation = call_with_args;
 
         continuation = try adapter_proc.prependStaticDescriptorMaterializationsForSlots(continuation);
@@ -32383,7 +32469,7 @@ const ProcBodyBuilder = struct {
             .rc_effect = LIR.LowLevel.erased_capture_load.rcEffect(),
             .args = try self.parent.result.store.addLocalSpan(&args),
             .next = continuation,
-        } });
+        } }, self.scaffoldOrigin());
     }
 
     fn bindDescriptorCaptureSourceLocal(
@@ -33193,7 +33279,7 @@ const ProcBodyBuilder = struct {
                 .target_desc = target_desc,
                 .source_mode = dynamic_box_source_mode,
                 .next = next,
-            } });
+            } }, self.glueOrigin());
         }
 
         if (target_layout == source_layout) {
@@ -33295,7 +33381,7 @@ const ProcBodyBuilder = struct {
                         .payload_desc = payload_desc,
                         .payload_mode = .move,
                         .next = next,
-                    } });
+                    } }, self.glueOrigin());
                     var continuation = box;
                     if (writable_target_desc) |desc| {
                         if (!std.meta.eql(desc, desc_for_payload)) {
@@ -33304,7 +33390,7 @@ const ProcBodyBuilder = struct {
                                     boxyLowerInvariant("boxy target descriptor local disappeared"),
                                 .desc = desc_for_payload,
                                 .next = continuation,
-                            } });
+                            } }, self.glueOrigin());
                         }
                     }
                     if (source_info.materialize) |materialize| {
@@ -33317,7 +33403,7 @@ const ProcBodyBuilder = struct {
                             .tag_residual_for = materialize.tag_residual_for,
                             .captures = materialize.captures,
                             .next = continuation,
-                        } });
+                        } }, self.glueOrigin());
                     }
                     break :blk continuation;
                 },
@@ -33486,7 +33572,7 @@ const ProcBodyBuilder = struct {
             .target_desc = target_desc,
             .source_mode = source_mode,
             .next = next,
-        } });
+        } }, self.glueOrigin());
     }
 
     fn assignDynamicBoxToDynamicBoundary(
@@ -33507,7 +33593,7 @@ const ProcBodyBuilder = struct {
                             .target = target_desc_local,
                             .desc = source_desc,
                             .next = next,
-                        } });
+                        } }, self.glueOrigin());
                     }
                     if (self.parent.result.store.getLocal(source).boxy_desc == null) {
                         self.parent.result.store.setLocalBoxyDesc(source, source_desc);
@@ -33531,7 +33617,7 @@ const ProcBodyBuilder = struct {
                     .target = target_desc,
                     .desc = source_desc,
                     .next = if (target == source) next else try self.assignLocal(target, source, next),
-                } });
+                } }, self.glueOrigin());
                 return rebind;
             }
         }
@@ -33633,7 +33719,7 @@ const ProcBodyBuilder = struct {
             .fields = try self.parent.result.store.addLocalSpan(target_fields),
             .contents_desc = aggregate_desc.contents_desc,
             .next = next,
-        } });
+        } }, self.glueOrigin());
         continuation = try self.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
 
         var index = target_field_count;
@@ -33654,7 +33740,7 @@ const ProcBodyBuilder = struct {
                     .field_idx = source_field_indices[index],
                 } },
                 .next = continuation,
-            } });
+            } }, self.glueOrigin());
             continuation = try self.prependRecordFieldDescriptorBind(
                 source_fields[index],
                 source_payload,
@@ -33674,7 +33760,7 @@ const ProcBodyBuilder = struct {
             .target_layout = source_payload_layout,
             .source_mode = .borrow,
             .next = continuation,
-        } });
+        } }, self.glueOrigin());
         return try self.prependDescriptorArgMaterializations(aggregate_desc.field_initializers, unbox_source);
     }
 
@@ -33740,7 +33826,7 @@ const ProcBodyBuilder = struct {
                 .target_layout = target_layout,
                 .source_mode = .move,
                 .next = next,
-            } });
+            } }, self.glueOrigin());
             continuation = try self.prependConstructedDescriptorRebindForRep(target_rep, continuation);
             return try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                 .target = boxed_source,
@@ -33749,7 +33835,7 @@ const ProcBodyBuilder = struct {
                 .payload_desc = source_desc,
                 .payload_mode = .borrow,
                 .next = continuation,
-            } });
+            } }, self.glueOrigin());
         }
 
         const target_field_count = self.recordFieldCount(self.parent.plan.childSlice(target_record.children));
@@ -33811,7 +33897,7 @@ const ProcBodyBuilder = struct {
             .fields = try self.parent.result.store.addLocalSpan(target_fields),
             .contents_desc = aggregate_desc.contents_desc,
             .next = next,
-        } });
+        } }, self.glueOrigin());
         continuation = try self.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
 
         var index = target_field_count;
@@ -33832,7 +33918,7 @@ const ProcBodyBuilder = struct {
                     .field_idx = source_field_indices[index],
                 } },
                 .next = continuation,
-            } });
+            } }, self.glueOrigin());
             continuation = try self.prependRecordFieldDescriptorBind(
                 source_fields[index],
                 source,
@@ -33917,7 +34003,7 @@ const ProcBodyBuilder = struct {
             next,
         );
 
-        var initial_jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        var initial_jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, self.glueOrigin());
         initial_jump = try self.setLocalInitializeJoinParam(acc, initial_list, initial_jump);
         initial_jump = try self.setLocalInitializeJoinParam(index, zero, initial_jump);
         initial_jump = try self.assignU64Literal(zero, 0, initial_jump);
@@ -33932,7 +34018,7 @@ const ProcBodyBuilder = struct {
                 .target = elem_desc_local,
                 .desc = target_elem_desc,
                 .next = initial_jump,
-            } });
+            } }, self.glueOrigin());
             initial_jump = try self.prependDescriptorArgMaterializations(elem_desc_initializers.items, initial_jump);
         }
         initial_jump = try self.prependConstructedDescriptorRebindForRep(source_rep, initial_jump);
@@ -33942,7 +34028,7 @@ const ProcBodyBuilder = struct {
             .params = try self.joinParamSpan(&[_]LIR.LocalId{ index, acc }),
             .body = body,
             .remainder = initial_jump,
-        } });
+        } }, self.glueOrigin());
     }
 
     fn assignListRepresentationBoundaryLoopBody(
@@ -34024,7 +34110,7 @@ const ProcBodyBuilder = struct {
         const one = try self.addFrameLocal(.u64);
         const next_index = try self.addFrameLocal(.u64);
 
-        var continuation = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        var continuation = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, self.glueOrigin());
         continuation = try self.setLocalInitializeJoinParam(acc, next_acc, continuation);
         continuation = try self.setLocalInitializeJoinParam(index, next_index, continuation);
         continuation = try self.assignListAppendMovingElement(next_acc, acc, target_elem, continuation);
@@ -34043,7 +34129,7 @@ const ProcBodyBuilder = struct {
                 .target_desc = if (target_elem_desc_local) |local| .{ .local = local } else try self.parent.staticDescRefForRep(target_elem_rep),
                 .source_mode = .move,
                 .next = continuation,
-            } });
+            } }, self.glueOrigin());
         } else if (target_elem != source_elem) {
             continuation = try self.assignRepresentationBoundary(target_elem, source_elem, target_elem_rep, source_elem_rep, continuation);
         }
@@ -34125,7 +34211,7 @@ const ProcBodyBuilder = struct {
                 .discriminant = @intCast(index),
                 .payload = null,
                 .next = next,
-            } });
+            } }, self.glueOrigin());
         }
 
         return null;
@@ -34192,7 +34278,7 @@ const ProcBodyBuilder = struct {
         // wrappers `tagVariantRepForBoundary` passed through.
         const scope = try self.enterNominalWrapperFormalScopes(target_rep);
         defer self.dropNominalBackingFormalScope(scope);
-        const unreachable_source_variant = try self.parent.result.store.addCFStmt(.runtime_error);
+        const unreachable_source_variant = try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin());
         const branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, source_variants.len);
         defer self.parent.allocator.free(branches);
         for (source_variants, branches, 0..) |source_variant, *branch, source_index| {
@@ -34239,12 +34325,12 @@ const ProcBodyBuilder = struct {
             .branches = try self.parent.result.store.addCFSwitchBranches(branches),
             .default_branch = unreachable_source_variant,
             .continuation = null,
-        } });
+        } }, self.glueOrigin());
         const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
             .op = .{ .discriminant = .{ .source = source } },
             .next = switch_stmt,
-        } });
+        } }, self.glueOrigin());
         return try self.leaveNominalBackingFormalScope(scope, read_discriminant);
     }
 
@@ -34299,23 +34385,23 @@ const ProcBodyBuilder = struct {
                         .layout_idx = target_layout,
                     } },
                     .next = next,
-                } }),
+                } }, self.glueOrigin()),
             };
         }
 
-        const bad_discriminant = try self.parent.result.store.addCFStmt(.runtime_error);
+        const bad_discriminant = try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin());
         const discriminant = try self.addFrameLocal(.u16);
         const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = discriminant,
             .branches = try self.parent.result.store.addCFSwitchBranches(branches),
             .default_branch = bad_discriminant,
             .continuation = null,
-        } });
+        } }, self.glueOrigin());
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
             .op = .{ .discriminant = .{ .source = source } },
             .next = switch_stmt,
-        } });
+        } }, self.glueOrigin());
     }
 
     /// The number of tags in the checked tag-union type behind this
@@ -34382,7 +34468,7 @@ const ProcBodyBuilder = struct {
                 .discriminant = target_variant_index,
                 .payload = null,
                 .next = next,
-            } });
+            } }, self.glueOrigin());
             return try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, assign_tag);
         }
 
@@ -34397,7 +34483,7 @@ const ProcBodyBuilder = struct {
                 .discriminant = target_variant_index,
                 .payload = null,
                 .next = next,
-            } });
+            } }, self.glueOrigin());
             return try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, assign_tag);
         }
 
@@ -34421,7 +34507,7 @@ const ProcBodyBuilder = struct {
                 .discriminant = target_variant_index,
                 .payload = target_payload,
                 .next = next,
-            } });
+            } }, self.glueOrigin());
             var continuation = try self.prependOptionalDescriptorMaterialization(tag_desc.materialize, assign_tag);
             continuation = try self.assignRepresentationBoundary(
                 target_payload,
@@ -34511,13 +34597,13 @@ const ProcBodyBuilder = struct {
             .discriminant = target_variant_index,
             .payload = target_payload,
             .next = next,
-        } });
+        } }, self.glueOrigin());
         var continuation = try self.prependOptionalDescriptorMaterialization(tag_desc.materialize, assign_tag);
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = target_payload,
             .fields = try self.parent.result.store.addLocalSpan(target_fields),
             .next = continuation,
-        } });
+        } }, self.glueOrigin());
 
         var index = target_payloads.len;
         while (index > 0) {
@@ -34607,7 +34693,7 @@ const ProcBodyBuilder = struct {
                     .payload_desc = target_desc,
                     .payload_mode = .move,
                     .next = next,
-                } });
+                } }, self.glueOrigin());
                 return try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, box);
             }
         }
@@ -34624,19 +34710,19 @@ const ProcBodyBuilder = struct {
             };
         }
 
-        const bad_discriminant = try self.parent.result.store.addCFStmt(.runtime_error);
+        const bad_discriminant = try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin());
         const discriminant = try self.addFrameLocal(.u16);
         const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = discriminant,
             .branches = try self.parent.result.store.addCFSwitchBranches(branches),
             .default_branch = bad_discriminant,
             .continuation = null,
-        } });
+        } }, self.glueOrigin());
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
             .op = .{ .discriminant = .{ .source = source } },
             .next = switch_stmt,
-        } });
+        } }, self.glueOrigin());
     }
 
     fn concreteTagUnionBoundaryCanReuseSourceDescriptor(
@@ -34968,7 +35054,7 @@ const ProcBodyBuilder = struct {
                 .target_desc = target_desc,
                 .tag_name = tag_name,
                 .next = next,
-            } });
+            } }, self.glueOrigin());
             return try self.prependConstructedDescriptorRebindForRep(target_rep, assign_tag);
         }
 
@@ -34983,7 +35069,7 @@ const ProcBodyBuilder = struct {
             .payload_desc = payload_desc,
             .payload_mode = .move,
             .next = next,
-        } });
+        } }, self.glueOrigin());
         var continuation = try self.prependConstructedDescriptorRebindForRep(target_rep, assign_tag);
         const source_has_payload_desc = self.parent.plan.representations.items[@intFromEnum(source_tag_rep)].descriptor != null or
             self.parent.result.store.getLocal(source).boxy_desc != null;
@@ -35020,7 +35106,7 @@ const ProcBodyBuilder = struct {
             .target = payload.local,
             .fields = try self.parent.result.store.addLocalSpan(target_fields),
             .next = continuation,
-        } });
+        } }, self.glueOrigin());
         var payload_index = source_payloads.len;
         while (payload_index > 0) {
             payload_index -= 1;
@@ -35085,7 +35171,7 @@ const ProcBodyBuilder = struct {
                 .payload_index = payload_index,
                 .source_mode = .copy,
                 .next = after_read,
-            } });
+            } }, self.glueOrigin());
         }
 
         if (self.isZstLocal(target)) return try self.assignZst(target, after_read);
@@ -35098,7 +35184,7 @@ const ProcBodyBuilder = struct {
                     .tag_discriminant = variant_index,
                 } },
                 .next = after_read,
-            } });
+            } }, self.glueOrigin());
         }
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
@@ -35109,7 +35195,7 @@ const ProcBodyBuilder = struct {
                 .tag_discriminant = variant_index,
             } },
             .next = after_read,
-        } });
+        } }, self.glueOrigin());
     }
 
     fn setLocalReplace(
@@ -35127,7 +35213,7 @@ const ProcBodyBuilder = struct {
             .value = source,
             .mode = .replace_existing,
             .next = next,
-        } });
+        } }, self.origin);
         var transferred = try self.prependSetLocalDescriptorTransfer(target, source, .replace_existing, write_value);
         transferred = try self.prependLocalDescriptorEnvironmentTransfer(target, source, .replace_existing, transferred);
         try self.recordTransferredLocalDescriptorEnvironment(target, source);
@@ -35148,7 +35234,7 @@ const ProcBodyBuilder = struct {
             .value = source,
             .mode = .initialize_join_param,
             .next = next,
-        } });
+        } }, self.glueOrigin());
         var transferred = try self.prependSetLocalDescriptorTransfer(target, source, .initialize_join_param, write_value);
         transferred = try self.prependLocalDescriptorEnvironmentTransfer(target, source, .initialize_join_param, transferred);
         try self.recordTransferredLocalDescriptorEnvironment(target, source);
@@ -35209,7 +35295,7 @@ const ProcBodyBuilder = struct {
                 .value = value,
                 .mode = mode,
                 .next = continuation,
-            } });
+            } }, self.glueOrigin());
         }
         return continuation;
     }
@@ -35264,12 +35350,12 @@ const ProcBodyBuilder = struct {
                 .value = local,
                 .mode = mode,
                 .next = next,
-            } });
+            } }, self.glueOrigin());
             return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = local,
                 .desc = source_desc,
                 .next = transfer,
-            } });
+            } }, self.glueOrigin());
         };
         try self.recordDescriptorTransferAlias(source_desc_local, target_desc_local);
         return try self.parent.result.store.addCFStmt(.{ .set_local = .{
@@ -35277,7 +35363,7 @@ const ProcBodyBuilder = struct {
             .value = source_desc_local,
             .mode = mode,
             .next = next,
-        } });
+        } }, self.glueOrigin());
     }
 
     fn recordDescriptorTransferAlias(
@@ -36078,7 +36164,7 @@ const ProcBodyBuilder = struct {
             .desc = materialization.desc,
             .captures = materialization.captures,
             .next = next,
-        } });
+        } }, self.glueOrigin());
     }
 
     fn prependStaticDescriptorMaterializationsForSlots(
@@ -36115,7 +36201,7 @@ const ProcBodyBuilder = struct {
                     context,
                 ),
                 .next = continuation,
-            } });
+            } }, self.glueOrigin());
         }
         return continuation;
     }
@@ -36146,7 +36232,7 @@ const ProcBodyBuilder = struct {
                 .desc = materialization.desc,
                 .captures = materialization.captures,
                 .next = continuation,
-            } });
+            } }, self.glueOrigin());
         }
         return continuation;
     }
@@ -38444,12 +38530,12 @@ test "descriptor materialization captures close over recursive template graphs" 
         },
     });
 
-    const ret = try result.store.addCFStmt(.{ .ret = .{ .value = target } });
+    const ret = try result.store.addCFStmt(.{ .ret = .{ .value = target } }, ProcedureBuilder.constructlessOrigin(.scaffold));
     const materialize = try result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
         .target = target,
         .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
         .next = ret,
-    } });
+    } }, ProcedureBuilder.constructlessOrigin(.scaffold));
     _ = try result.store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(0),
         .identity = LIR.ProcIdentity.forTest(1),
@@ -38457,7 +38543,7 @@ test "descriptor materialization captures close over recursive template graphs" 
         .frame_locals = try result.store.addLocalSpan(&.{ captured, target }),
         .body = materialize,
         .ret_layout = .opaque_ptr,
-    });
+    }, .none);
 
     var builder = ProcedureBuilder.init(gpa, undefined, undefined, undefined, undefined, &result, .{});
     try builder.finalizeDescriptorMaterializationCaptures();
@@ -38471,10 +38557,48 @@ test "descriptor materialization captures close over recursive template graphs" 
 test "boxy lowerer returns an empty LIR program for an empty plan" {
     const gpa = std.testing.allocator;
 
+    var canonical_names = names.CanonicalNameStore.init(gpa);
+    const module_name = try canonical_names.internModuleName("Test");
+    var module_env = try can.ModuleEnv.init(gpa, "");
+    defer module_env.deinit();
+    var artifact = checked.CheckedModuleArtifact{
+        .key = .{},
+        .canonical_names = canonical_names,
+        .module_identity = .{
+            .module_idx = 0,
+            .module_name = module_name,
+            .display_module_name = module_name,
+            .qualified_module_name = module_name,
+            .kind = .package,
+        },
+        .checking_context_identity = .{},
+        .module_env = .{ .checked_source = &module_env },
+        .exports = .{},
+        .provides_requires = .{},
+        .method_registry = .{},
+        .static_dispatch_plans = .{},
+        .resolved_value_refs = .{},
+        .checked_procedure_templates = .{},
+        .top_level_procedure_bindings = .{},
+        .root_requests = .{},
+        .hosted_procs = .{},
+        .platform_required_declarations = .{},
+        .platform_required_bindings = .{},
+        .interface_capabilities = .{},
+        .compile_time_roots = .{},
+        .top_level_values = .{},
+        .hoisted_constants = .{},
+        .const_templates = .{},
+        .const_store = check.ConstStore.ConstStore.init(gpa),
+    };
+    defer {
+        artifact.const_store.deinit();
+        artifact.canonical_names.deinit();
+    }
     var plan = Plan.ProgramPlan.init(gpa);
     defer plan.deinit();
 
-    var out = try run(gpa, .{ .root = undefined }, .{}, &plan, .{});
+    var out = try run(gpa, .{ .root = .{ .module = &artifact, .roots = &artifact.root_requests } }, .{}, &plan, .{});
     defer out.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), out.lir_result.store.procSpecCount());

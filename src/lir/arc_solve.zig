@@ -7220,11 +7220,11 @@ const UniquenessTest = struct {
     }
 
     fn ret(self: *@This(), value: LIR.LocalId) SolveError!LIR.CFStmtId {
-        return self.store.addCFStmt(.{ .ret = .{ .value = value } });
+        return self.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     }
 
     fn call(self: *@This(), target: LIR.LocalId, callee: LIR.LirProcSpecId, args: []const LIR.LocalId, next: LIR.CFStmtId) SolveError!LIR.CFStmtId {
-        return self.store.addCFStmt(.{ .assign_call = .{ .target = target, .proc = callee, .args = try self.store.addLocalSpan(args), .next = next } });
+        return self.store.addCFStmt(.{ .assign_call = .{ .target = target, .proc = callee, .args = try self.store.addLocalSpan(args), .next = next } }, .test_fixture);
     }
 
     fn proc(self: *@This(), args: []const LIR.LocalId, body: ?LIR.CFStmtId, layout: layout_mod.Idx) SolveError!LIR.LirProcSpecId {
@@ -7234,7 +7234,7 @@ const UniquenessTest = struct {
             .args = try self.store.addLocalSpan(args),
             .body = body,
             .ret_layout = layout,
-        });
+        }, .none);
     }
 
     fn expectSame(expected: Uniqueness, actual: Uniqueness) error{TestExpectedEqual}!void {
@@ -7311,17 +7311,17 @@ test "per-procedure use orders in a shared scratch match standalone orders and r
     var bodies: [4]LIR.CFStmtId = undefined;
     for (bodies[0..3], 0..) |*body, index| {
         const id: LIR.JoinPointId = @enumFromInt(index);
-        const left = try f.store.addCFStmt(.{ .assign_ref = .{ .target = y, .op = .{ .local = x }, .next = try f.store.addCFStmt(.{ .jump = .{ .target = id } }) } });
-        const right = try f.store.addCFStmt(.{ .assign_ref = .{ .target = y, .op = .{ .local = x }, .next = try f.store.addCFStmt(.{ .jump = .{ .target = id } }) } });
+        const left = try f.store.addCFStmt(.{ .assign_ref = .{ .target = y, .op = .{ .local = x }, .next = try f.store.addCFStmt(.{ .jump = .{ .target = id } }, .test_fixture) } }, .test_fixture);
+        const right = try f.store.addCFStmt(.{ .assign_ref = .{ .target = y, .op = .{ .local = x }, .next = try f.store.addCFStmt(.{ .jump = .{ .target = id } }, .test_fixture) } }, .test_fixture);
         const branch = try f.store.addCFStmt(.{ .switch_stmt = .{
             .cond = cond,
             .branches = try f.store.addCFSwitchBranches(&.{.{ .value = 1, .body = left }}),
             .default_branch = right,
-        } });
-        body.* = try f.store.addCFStmt(.{ .join = .{ .id = id, .params = LIR.LocalSpan.empty(), .body = try f.ret(y), .remainder = branch } });
+        } }, .test_fixture);
+        body.* = try f.store.addCFStmt(.{ .join = .{ .id = id, .params = LIR.LocalSpan.empty(), .body = try f.ret(y), .remainder = branch } }, .test_fixture);
     }
     // A jump to no join in its procedure has unknown successors.
-    bodies[3] = try f.store.addCFStmt(.{ .assign_ref = .{ .target = y, .op = .{ .local = x }, .next = try f.store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(9) } }) } });
+    bodies[3] = try f.store.addCFStmt(.{ .assign_ref = .{ .target = y, .op = .{ .local = x }, .next = try f.store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(9) } }, .test_fixture) } }, .test_fixture);
     var lists: [4]std.ArrayList(LIR.CFStmtId) = @splat(.empty);
     defer for (&lists) |*list| list.deinit(allocator);
     for (bodies, &lists) |body, *list| {
@@ -7377,9 +7377,9 @@ test "uniqueness workspace reuses topology and exact use queries across signatur
     const taken = try f.local(f.list);
     const proc = try f.proc(&.{param}, null, f.list);
     const ret = try f.ret(taken);
-    const read = try f.store.addCFStmt(.{ .assign_ref = .{ .target = taken, .op = .{ .field = .{ .source = pair, .field_idx = 0 } }, .next = ret } });
-    const store = try f.store.addCFStmt(.{ .assign_struct = .{ .target = pair, .fields = try f.store.addLocalSpan(&.{alias}), .next = read } });
-    const alias_stmt = try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .{ .local = result }, .next = store } });
+    const read = try f.store.addCFStmt(.{ .assign_ref = .{ .target = taken, .op = .{ .field = .{ .source = pair, .field_idx = 0 } }, .next = ret } }, .test_fixture);
+    const store = try f.store.addCFStmt(.{ .assign_struct = .{ .target = pair, .fields = try f.store.addLocalSpan(&.{alias}), .next = read } }, .test_fixture);
+    const alias_stmt = try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .{ .local = result }, .next = store } }, .test_fixture);
     const call = try f.call(result, proc, &.{param}, alias_stmt);
     f.store.setProcSpecBody(proc, call);
     var statements = [_]std.ArrayList(LIR.CFStmtId){.empty};
@@ -7443,8 +7443,8 @@ test "uniqueness workspace reanalyzes read-only signatures through borrowed view
     const callee = try f.proc(&.{param}, null, .i64);
     const ret = try f.ret(source);
     const call = try f.call(ignored, callee, &.{view}, ret);
-    const alias = try f.store.addCFStmt(.{ .assign_ref = .{ .target = view, .op = .{ .local = source }, .next = call } });
-    const body = try f.store.addCFStmt(.{ .assign_list = .{ .target = source, .elems = try f.store.addLocalSpan(&.{}), .next = alias } });
+    const alias = try f.store.addCFStmt(.{ .assign_ref = .{ .target = view, .op = .{ .local = source }, .next = call } }, .test_fixture);
+    const body = try f.store.addCFStmt(.{ .assign_list = .{ .target = source, .elems = try f.store.addLocalSpan(&.{}), .next = alias } }, .test_fixture);
     _ = try f.proc(&.{}, body, f.list);
     var statements = [_]std.ArrayList(LIR.CFStmtId){ .empty, .empty };
     defer for (&statements) |*stmts| stmts.deinit(allocator);
@@ -7505,11 +7505,11 @@ fn aliasBornUniqueAfterRepeatedDefinitions(sequential: bool) SolveError!bool {
     const alias = try f.local(f.list);
     const ret = try f.ret(alias);
     const body = if (sequential) blk: {
-        const second = try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .{ .local = list }, .next = ret } });
-        break :blk try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .{ .local = list }, .next = second } });
+        const second = try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .{ .local = list }, .next = ret } }, .test_fixture);
+        break :blk try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .{ .local = list }, .next = second } }, .test_fixture);
     } else blk: {
-        const first = try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .{ .local = list }, .next = ret } });
-        const second = try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .{ .local = list }, .next = try f.ret(alias) } });
+        const first = try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .{ .local = list }, .next = ret } }, .test_fixture);
+        const second = try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .{ .local = list }, .next = try f.ret(alias) } }, .test_fixture);
         const branches = try f.store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{.{ .value = 1, .body = first }});
         break :blk try f.store.addCFStmt(.{ .switch_stmt = .{
             .cond = flag,
@@ -7517,9 +7517,9 @@ fn aliasBornUniqueAfterRepeatedDefinitions(sequential: bool) SolveError!bool {
             .default_branch = second,
             .default_is_cold = false,
             .continuation = null,
-        } });
+        } }, .test_fixture);
     };
-    const entry = try f.store.addCFStmt(.{ .assign_list = .{ .target = list, .elems = LIR.LocalSpan.empty(), .next = body } });
+    const entry = try f.store.addCFStmt(.{ .assign_list = .{ .target = list, .elems = LIR.LocalSpan.empty(), .next = body } }, .test_fixture);
     _ = try f.proc(&.{flag}, entry, f.list);
     const rc = [_]bool{ false, true, true };
     var sigs = [_]arc_sig.RcSig{.all_owned};
@@ -7548,7 +7548,7 @@ test "uniqueness fixed point propagates fresh returns through a call diamond and
     defer f.deinit();
     const fresh = try f.local(f.list);
     const leaf_ret = try f.ret(fresh);
-    const leaf_body = try f.store.addCFStmt(.{ .assign_list = .{ .target = fresh, .elems = try f.store.addLocalSpan(&.{}), .next = leaf_ret } });
+    const leaf_body = try f.store.addCFStmt(.{ .assign_list = .{ .target = fresh, .elems = try f.store.addLocalSpan(&.{}), .next = leaf_ret } }, .test_fixture);
     const leaf = try f.proc(&.{}, leaf_body, f.list);
     var branches: [2]LIR.LirProcSpecId = undefined;
     for (&branches) |*branch| {
@@ -7559,7 +7559,7 @@ test "uniqueness fixed point propagates fresh returns through a call diamond and
     const right = try f.local(f.list);
     const pair = try f.local(f.pair);
     const ret = try f.ret(pair);
-    const make_pair = try f.store.addCFStmt(.{ .assign_struct = .{ .target = pair, .fields = try f.store.addLocalSpan(&.{ left, right }), .next = ret } });
+    const make_pair = try f.store.addCFStmt(.{ .assign_struct = .{ .target = pair, .fields = try f.store.addLocalSpan(&.{ left, right }), .next = ret } }, .test_fixture);
     const right_call = try f.call(right, branches[1], &.{}, make_pair);
     var chain = try f.proc(&.{}, try f.call(left, branches[0], &.{}, right_call), f.pair);
     for (0..8) |_| {
@@ -7664,7 +7664,7 @@ test "component uniqueness preserves shared RC definitions shared statements and
             .target = shared,
             .elems = try f.store.addLocalSpan(&.{}),
             .next = try f.ret(shared),
-        } });
+        } }, .test_fixture);
         _ = try f.proc(&.{}, body, f.list);
     }
     _ = try f.proc(&.{ scalar, shared }, null, f.list);
@@ -7715,7 +7715,7 @@ test "component uniqueness revisits only dirty callers along a long chain" {
         .target = leaf,
         .elems = try f.store.addLocalSpan(&.{}),
         .next = try f.ret(leaf),
-    } });
+    } }, .test_fixture);
     var callee = try f.proc(&.{}, birth, f.list);
     for (0..6) |_| {
         const local = try f.local(f.list);
@@ -7727,7 +7727,7 @@ test "component uniqueness revisits only dirty callers along a long chain" {
             .target = local,
             .elems = try f.store.addLocalSpan(&.{}),
             .next = try f.ret(local),
-        } });
+        } }, .test_fixture);
         _ = try f.proc(&.{}, body, f.list);
     }
     const rc = [_]bool{true} ** 17;
@@ -7797,15 +7797,15 @@ test "component uniqueness read-only return refinement revives a borrowed-view l
         .target = scalar,
         .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .i64 } },
         .next = try f.ret(scalar),
-    } });
+    } }, .test_fixture);
     const callee = try f.proc(&.{param}, callee_body, .i64);
     const call = try f.call(ignored, callee, &.{view}, try f.ret(source));
-    const alias = try f.store.addCFStmt(.{ .assign_ref = .{ .target = view, .op = .{ .local = source }, .next = call } });
+    const alias = try f.store.addCFStmt(.{ .assign_ref = .{ .target = view, .op = .{ .local = source }, .next = call } }, .test_fixture);
     const body = try f.store.addCFStmt(.{ .assign_list = .{
         .target = source,
         .elems = try f.store.addLocalSpan(&.{}),
         .next = alias,
-    } });
+    } }, .test_fixture);
     _ = try f.proc(&.{}, body, f.list);
     const rc = [_]bool{ true, true, false, true, false };
     var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
@@ -7836,12 +7836,12 @@ test "component uniqueness recursive conditional fields restart after committed 
         .target = taken,
         .op = .{ .field = .{ .source = pair, .field_idx = 0 } },
         .next = ret,
-    } });
+    } }, .test_fixture);
     const aggregate = try f.store.addCFStmt(.{ .assign_struct = .{
         .target = pair,
         .fields = try f.store.addLocalSpan(&.{ called, scalar }),
         .next = read,
-    } });
+    } }, .test_fixture);
     f.store.setProcSpecBody(proc, try f.call(called, proc, &.{param}, aggregate));
     // The aggregate-producing peer exercises semantic field rows separately.
     const field_param = try f.local(f.list);
@@ -7850,7 +7850,7 @@ test "component uniqueness recursive conditional fields restart after committed 
         .target = returned_pair,
         .fields = try f.store.addLocalSpan(&.{ field_param, scalar }),
         .next = try f.ret(returned_pair),
-    } });
+    } }, .test_fixture);
     const field_proc = try f.proc(&.{field_param}, field_body, f.pair);
     const rc = [_]bool{ true, true, true, true, false, true, true };
     var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
@@ -7900,23 +7900,23 @@ test "component uniqueness inventories join parameters incoming transfers and no
         .rc_effect = LIR.LowLevel.RcEffect.runtimeUniqueness(1),
         .args = try f.store.addLocalSpan(&.{joined}),
         .next = try f.ret(result),
-    } });
+    } }, .test_fixture);
     var join_ids = body_clone.JoinParamIndex.init(allocator);
     defer join_ids.deinit();
     const join_id = join_ids.freshJoinPoint();
-    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const incoming = try f.store.addCFStmt(.{ .set_local = .{
         .target = joined,
         .value = param,
         .mode = .initialize_join_param,
         .next = jump,
-    } });
+    } }, .test_fixture);
     const body = try f.store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try f.store.addLocalSpan(&.{joined}),
         .body = mutate,
         .remainder = incoming,
-    } });
+    } }, .test_fixture);
     const proc = try f.proc(&.{param}, body, f.list);
     const rc = [_]bool{true} ** 3;
     var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
@@ -7950,13 +7950,13 @@ test "uniqueness gives a tail loop parameter no field origins from its back edge
         .target = taken,
         .op = .{ .field = .{ .source = param, .field_idx = 0 } },
         .next = try f.ret(taken),
-    } });
+    } }, .test_fixture);
     const back_edge = try f.store.addCFStmt(.{ .set_local = .{
         .target = param,
         .value = next,
         .mode = .initialize_join_param,
-        .next = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }),
-    } });
+        .next = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture),
+    } }, .test_fixture);
     const rebuild = try f.store.addCFStmt(.{ .assign_list = .{
         .target = fresh,
         .elems = try f.store.addLocalSpan(&.{}),
@@ -7967,21 +7967,21 @@ test "uniqueness gives a tail loop parameter no field origins from its back edge
                 .target = next,
                 .fields = try f.store.addLocalSpan(&.{ fresh, other }),
                 .next = back_edge,
-            } }),
-        } }),
-    } });
+            } }, .test_fixture),
+        } }, .test_fixture),
+    } }, .test_fixture);
     const body = try f.store.addCFStmt(.{ .switch_stmt = .{
         .cond = flag,
         .branches = try f.store.addCFSwitchBranches(&.{.{ .value = 1, .body = read }}),
         .default_branch = rebuild,
         .continuation = null,
-    } });
+    } }, .test_fixture);
     const loop = try f.store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try f.store.addLocalSpan(&.{param}),
         .body = body,
-        .remainder = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }),
-    } });
+        .remainder = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture),
+    } }, .test_fixture);
     _ = try f.proc(&.{ param, flag }, loop, f.list);
     const rc = [_]bool{ true, false, true, true, true, true };
     var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);

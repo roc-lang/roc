@@ -10057,12 +10057,12 @@ test "interpreter float NaN mode preserves runtime payloads and normalizes compi
     defer runtime_env.deinit();
 
     const f32_local = try store.addLocal(.{ .layout_idx = .f32 });
-    const f32_ret = try store.addCFStmt(.{ .ret = .{ .value = f32_local } });
+    const f32_ret = try store.addCFStmt(.{ .ret = .{ .value = f32_local } }, .test_fixture);
     const f32_body = try store.addCFStmt(.{ .assign_literal = .{
         .target = f32_local,
         .value = .{ .f32_literal = @bitCast(@as(u32, 0xffc1_2345)) },
         .next = f32_ret,
-    } });
+    } }, .test_fixture);
     const f32_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(2),
@@ -10070,15 +10070,15 @@ test "interpreter float NaN mode preserves runtime payloads and normalizes compi
         .body = f32_body,
         .ret_layout = .f32,
         .frame_locals = try store.addLocalSpan(&.{f32_local}),
-    });
+    }, .none);
 
     const f64_local = try store.addLocal(.{ .layout_idx = .f64 });
-    const f64_ret = try store.addCFStmt(.{ .ret = .{ .value = f64_local } });
+    const f64_ret = try store.addCFStmt(.{ .ret = .{ .value = f64_local } }, .test_fixture);
     const f64_body = try store.addCFStmt(.{ .assign_literal = .{
         .target = f64_local,
         .value = .{ .f64_literal = @bitCast(@as(u64, 0xfff9_2345_6789_abcd)) },
         .next = f64_ret,
-    } });
+    } }, .test_fixture);
     const f64_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
@@ -10086,7 +10086,7 @@ test "interpreter float NaN mode preserves runtime payloads and normalizes compi
         .body = f64_body,
         .ret_layout = .f64,
         .frame_locals = try store.addLocalSpan(&.{f64_local}),
-    });
+    }, .none);
 
     var static_strings = try Interpreter.buildStaticStrings(allocator, &store);
     defer static_strings.deinit();
@@ -10117,12 +10117,12 @@ test "interpreter evaluates explicit static data by compact id" {
     try static_addresses.append(allocator, @intFromPtr(&static_value));
 
     const result_local = try store.addLocal(.{ .layout_idx = .u64 });
-    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = result_local } });
+    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = result_local } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_literal = .{
         .target = result_local,
         .value = .{ .static_data = static_data_id },
         .next = ret_stmt,
-    } });
+    } }, .test_fixture);
     const frame_locals = try store.addLocalSpan(&.{result_local});
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
@@ -10131,7 +10131,7 @@ test "interpreter evaluates explicit static data by compact id" {
         .body = body,
         .ret_layout = .u64,
         .frame_locals = frame_locals,
-    });
+    }, .none);
 
     var static_strings = try Interpreter.buildStaticStrings(allocator, &store);
     defer static_strings.deinit();

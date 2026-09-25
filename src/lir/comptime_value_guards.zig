@@ -67,29 +67,36 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result) std.mem.Al
         const record = try store.addLocal(.{ .layout_idx = failure.layout_idx });
         const failed = try store.addLocal(.{ .layout_idx = .u8 });
         const message = try store.addLocal(.{ .layout_idx = .str });
-        const success = try store.addCFStmt(store.getCFStmt(use.stmt));
-        const crash = try store.addCFStmt(.{ .crash = .{ .msg = .{ .local = message } } });
+        // The success path is a copy of the guarded use and keeps its origin;
+        // the guard glue carries the use's location with the guard kind. The
+        // entry statement becomes guard glue; `completeSuccessfulSlot` later
+        // restores the use there with the success copy's (the use's) origin.
+        const use_origin = store.stmtOrigin(use.stmt);
+        var guard_origin = use_origin;
+        guard_origin.kind = .comptime_value_guard;
+        const success = try store.addCFStmt(store.getCFStmt(use.stmt), use_origin);
+        const crash = try store.addCFStmt(.{ .crash = .{ .msg = .{ .local = message } } }, guard_origin);
         const load_message = try store.addCFStmt(.{ .assign_ref = .{
             .target = message,
             .op = .{ .field = .{ .source = record, .field_idx = @intCast(fields.message_field) } },
             .next = crash,
-        } });
+        } }, guard_origin);
         const branch = try store.addCFStmt(.{ .switch_stmt = .{
             .cond = failed,
             .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = success }}),
             .default_branch = load_message,
             .default_is_cold = true,
-        } });
+        } }, guard_origin);
         const load_failed = try store.addCFStmt(.{ .assign_ref = .{
             .target = failed,
             .op = .{ .field = .{ .source = record, .field_idx = @intCast(fields.failed_field) } },
             .next = branch,
-        } });
-        store.getCFStmtPtr(use.stmt).* = .{ .assign_literal = .{
+        } }, guard_origin);
+        try store.replaceCFStmt(use.stmt, .{ .assign_literal = .{
             .target = record,
             .value = .{ .static_data = failure_slot },
             .next = load_failed,
-        } };
+        } }, guard_origin);
         try guards.put(use.stmt, .{ .locals = .{ record, failed, message }, .success = success, .crash = crash });
     }
     // Preserve each owner discovered before rewriting shared statements.
@@ -135,10 +142,10 @@ fn localLessThan(_: void, a: LIR.LocalId, b: LIR.LocalId) bool {
 }
 
 /// Caller has explicit successful evaluation evidence for this root's slot.
-pub fn completeSuccessfulSlot(program: *Program.Result, slot: LIR.StaticDataId) void {
+pub fn completeSuccessfulSlot(program: *Program.Result, slot: LIR.StaticDataId) std.mem.Allocator.Error!void {
     for (program.comptime_value_guards.items) |*guard| {
         if (guard.value_slot != slot or guard.completed) continue;
-        program.store.getCFStmtPtr(guard.entry).* = program.store.getCFStmt(guard.success);
+        try program.store.replaceCFStmt(guard.entry, program.store.getCFStmt(guard.success), program.store.stmtOrigin(guard.success));
         program.store.getProcSpecPtr(guard.owner).native_code_revision += 1;
         guard.completed = true;
     }
@@ -187,14 +194,14 @@ fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || er
         },
     });
     const target = try program.store.addLocal(.{ .layout_idx = .u8 });
-    const ret = try program.store.addCFStmt(.{ .ret = .{ .value = target } });
-    const load = try program.store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = .{ .static_data = slot }, .next = ret } });
+    const ret = try program.store.addCFStmt(.{ .ret = .{ .value = target } }, .test_fixture);
+    const load = try program.store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = .{ .static_data = slot }, .next = ret } }, .test_fixture);
     const frame = try program.store.addLocalSpan(&.{target});
     var owners: [2]LIR.LirProcSpecId = undefined; // Both entries are assigned by addProcSpec before use.
     for (&owners, 0..) |*owner, i| {
-        owner.* = try program.store.addProcSpec(.{ .name = .fromRaw(i), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = frame, .body = load, .ret_layout = .u8 });
+        owner.* = try program.store.addProcSpec(.{ .name = .fromRaw(i), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = frame, .body = load, .ret_layout = .u8 }, .none);
     }
-    const unrelated = try program.store.addProcSpec(.{ .name = .fromRaw(2), .identity = LIR.ProcIdentity.forTest(2), .args = .empty(), .frame_locals = frame, .body = ret, .ret_layout = .u8 });
+    const unrelated = try program.store.addProcSpec(.{ .name = .fromRaw(2), .identity = LIR.ProcIdentity.forTest(2), .args = .empty(), .frame_locals = frame, .body = ret, .ret_layout = .u8 }, .none);
     try insert(allocator, &program);
     try std.testing.expectEqual(@as(usize, 2), program.comptime_value_guards.items.len);
     const guard = program.comptime_value_guards.items[0];
@@ -209,12 +216,12 @@ fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || er
     }
     // Completion restores the producer-recorded edge, including its original
     // target and suffix, without examining the emitted guard's shape.
-    completeSuccessfulSlot(&program, slot);
+    try completeSuccessfulSlot(&program, slot);
     const restored = program.store.getCFStmt(load).assign_literal;
     try std.testing.expectEqual(target, restored.target);
     try std.testing.expectEqual(slot, restored.value.static_data);
     try std.testing.expectEqual(ret, restored.next);
-    completeSuccessfulSlot(&program, slot);
+    try completeSuccessfulSlot(&program, slot);
     for (owners) |owner| {
         const proc = program.store.getProcSpec(owner);
         try std.testing.expectEqual(@as(u64, 1), proc.native_code_revision);
