@@ -404,6 +404,7 @@ const CustomCase = enum {
     native_build_artifact_round_trip,
     native_build_pack_objects,
     native_build_pack_hits,
+    issue_11673_callable_cache,
     issue_10733_wasm_boxy_dev_sealed_object,
     issue_10827_private_compiler_support,
     issue_11134_wasm_post_llvm_pipeline,
@@ -946,6 +947,9 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: statically dispatched, propagated, open error union does not crash (regression test #9588)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/echo/issue_9588.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11217 Boxy polymorphic captures and aliases (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11217.roc", .stdout_exact = "ok\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11217 Boxy polymorphic captures and aliases (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/issue_11217.roc", .stdout_exact = "ok\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11590 tail-recursive parameter's field is not written in place during compile-time evaluation (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/echo/issue_11590.roc", .stdout_exact = "1" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11590 tail-recursive parameter's field is not written in place during compile-time evaluation (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/issue_11590.roc", .stdout_exact = "1" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11590 tail-recursive parameter's field is not written in place during compile-time evaluation (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/echo/issue_11590.roc", .stdout_exact = "1" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11217 Boxy polymorphic captures and aliases (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no" }, .roc_file = "test/echo/issue_11217.roc", .stdout_exact = issue_11217_size_expected_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11351 Boxy unbound type variables use their sealed default (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11351.roc", .stdout_exact = issue_11351_expected_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11351 Boxy unbound type variables use their sealed default (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/issue_11351.roc", .stdout_exact = issue_11351_expected_stdout } } },
@@ -1131,6 +1135,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11352: nested nominal descriptors (boxy, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/postcheck/issue_11352_nested_nominal_descriptors/main.roc", .contains = &.{.{ .stream = .stdout, .text = "All (11) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11352: nested Dict descriptors (boxy, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/postcheck/issue_11352_nested_nominal_descriptors/dict.roc", .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11352: nested Dict descriptors (boxy, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/postcheck/issue_11352_nested_nominal_descriptors/dict.roc", .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11559: container inside generic type (boxy, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/postcheck/issue_11559_container_in_generic_type/main.roc", .contains = &.{.{ .stream = .stdout, .text = "All (18) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11559: container inside generic type (boxy, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/postcheck/issue_11559_container_in_generic_type/main.roc", .contains = &.{.{ .stream = .stdout, .text = "All (18) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11550: unconstrained type variable descriptor (boxy, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/postcheck/issue_11550_unconstrained_type_variable/main.roc", .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11550: unconstrained type variable descriptor (boxy, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/postcheck/issue_11550_unconstrained_type_variable/main.roc", .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11356: derived JSON parsers follow the checked parse protocol (specialized)", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/BoxyDerivedJsonParsers.roc", .contains = &.{.{ .stream = .stdout, .text = "All (13) tests passed" }} } } },
@@ -1717,6 +1723,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output is identical across thread counts and repeated builds", .timeout_ms = 600_000, .body = .{ .custom = .native_build_thread_count_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output assembled from its own procedure artifacts is identical", .timeout_ms = 600_000, .body = .{ .custom = .native_build_artifact_round_trip } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev pack programs are deterministic and round-trip through artifacts", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_objects } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11673: imported callable identity survives cold warm and sibling builds", .timeout_ms = 600_000, .body = .{ .custom = .issue_11673_callable_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev serves closed specializations from a previous build's packs", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_hits } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build macOS output basename does not affect bytes", .body = .{ .custom = .macos_output_basename_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on x64musl", .body = .{ .custom = .default_platform_crash_x64musl } },
@@ -3348,6 +3355,7 @@ fn runCustomCase(
         .native_build_thread_count_reproducible => customNativeBuildThreadCountReproducible(io, allocator, &env, &timer, timeout_ms),
         .native_build_artifact_round_trip => customNativeBuildArtifactRoundTrip(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_objects => customNativeBuildPackObjects(io, allocator, &env, &timer, timeout_ms),
+        .issue_11673_callable_cache => customIssue11673CallableCache(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_hits => customNativeBuildPackHits(io, allocator, &env, &timer, timeout_ms),
         .issue_10733_wasm_boxy_dev_sealed_object => customIssue10733WasmBoxyDevSealedObject(io, allocator, &env, &timer, timeout_ms),
         .issue_10827_private_compiler_support => customIssue10827PrivateCompilerSupport(io, allocator, &env, &timer, timeout_ms),
@@ -6172,6 +6180,38 @@ fn customNativeBuildPackHits(
     return null;
 }
 
+// Both caller orders share one cache, so the second app also consumes packs
+// produced under a different root. Each app has an uncached execution oracle.
+fn customIssue11673CallableCache(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var trace_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone callable-cache test environment: {}", .{err}),
+    };
+    defer trace_env.env_map.deinit();
+    for ([_][]const u8{ "ROC_SPEC_CENSUS", "ROC_PACK_TRACE" }) |key| {
+        trace_env.env_map.put(key, "1") catch |err|
+            return customInfraFailure(allocator, timer, "failed to enable callable-cache tracing: {}", .{err});
+    }
+    const apps = [_]struct { path: []const u8, prefix: []const u8, expect: StoreExpectations }{
+        .{ .path = "test/cli/issue_11673_callable_cache/main.roc", .prefix = "main", .expect = .{ .uncached_baseline = true, .stdout = "differs\na\n", .pack_hit_proc = "Eq.same" } },
+        // This caller order evaluates Eq.same while checking. Its first
+        // cached build consumes the sibling's object pack; the next reuses
+        // the checked constant and no longer needs that procedure.
+        .{ .path = "test/cli/issue_11673_callable_cache/reversed.roc", .prefix = "reversed", .expect = .{ .uncached_baseline = true, .stdout = "a\ndiffers\n", .cache_hit_build = .first_cached, .pack_hit_proc = "Eq.same" } },
+    };
+    for (apps) |app| {
+        if (storeBuildsBehaveIdentically(io, allocator, &trace_env, timer, timeout_ms, app.path, env.dirs.work_dir, app.prefix, app.expect)) |failure| return failure;
+    }
+    return null;
+}
+
 /// Copies the compile-time object-cache app into the case's work directory,
 /// with its platform path pointing back at the repository, so the case can
 /// edit it between builds.
@@ -6204,18 +6244,28 @@ fn stageComptimeApp(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer
     return null;
 }
 
-/// What the second of two store builds must report beyond pack hits.
+/// Expected cache consumption and behavior across store builds.
 const StoreExpectations = struct {
     /// Append a comment to the app between the builds, so the second build
     /// checks it again instead of reusing its cached checked artifact.
     edit_between_builds: bool = false,
     /// The compile-time evaluator spliced at least one entry.
     evaluator_artifacts: bool = false,
+    /// Run an uncached build before populating the store.
+    uncached_baseline: bool = false,
+    /// Which cached build must consume an object pack. Later checked-cache
+    /// hits can already contain evaluated constants and need no procedure.
+    cache_hit_build: enum { first_cached, last } = .last,
+    /// Require a hit for this procedure's census key, not just an aggregate hit.
+    /// The case must enable ROC_SPEC_CENSUS and ROC_PACK_TRACE.
+    pack_hit_proc: ?[]const u8 = null,
+    /// Require every execution to produce this exact output.
+    stdout: ?[]const u8 = null,
 };
 
 /// Builds `roc_file` twice with the object cache on under the case's cache
-/// root, requires the second build to report pack hits and whatever
-/// `expect` asks, and requires both programs to behave identically.
+/// root, optionally after an uncached baseline. Requires the selected build
+/// to report pack hits and every execution to succeed and behave identically.
 fn storeBuildsBehaveIdentically(
     io: std.Io,
     allocator: Allocator,
@@ -6229,8 +6279,8 @@ fn storeBuildsBehaveIdentically(
 ) ?TestResult {
     const hits_marker = "pack hits: ";
     const evaluator_marker = "evaluator artifacts: ";
-    const store_exes = [_][]const u8{ "a", "b" };
-    var store_runs: [store_exes.len]std.process.RunResult = undefined;
+    const store_exes: []const []const u8 = if (expect.uncached_baseline) &.{ "uncached", "a", "b" } else &.{ "a", "b" };
+    var store_runs: [3]std.process.RunResult = undefined;
     for (store_exes, 0..) |name, index| {
         const exe = std.fmt.allocPrint(allocator, "{s}/{s}_{s}", .{ out_dir, prefix, name }) catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
@@ -6247,15 +6297,23 @@ fn storeBuildsBehaveIdentically(
             std.Io.Dir.cwd().writeFile(io, .{ .sub_path = roc_file, .data = edited }) catch |err|
                 return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ roc_file, err });
         }
-        const built = runRocInEnv(io, allocator, env, &.{ "build", "--opt=dev", out_arg }, roc_file, .relative, &.{}, null, build_timeout) catch |err|
+        const build_args: []const []const u8 = if (expect.uncached_baseline and index == 0) &.{ "build", "--no-cache", "--opt=dev", out_arg } else &.{ "build", "--opt=dev", out_arg };
+        const built = runRocInEnv(io, allocator, env, build_args, roc_file, .relative, &.{}, null, build_timeout) catch |err|
             return customInfraFailure(allocator, timer, "store build spawn error: {}", .{err});
         if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
             return failureFromRun(allocator, timer, built, "build with the object cache did not succeed");
         }
-        if (last) {
+        const require_hits = switch (expect.cache_hit_build) {
+            .first_cached => index == @intFromBool(expect.uncached_baseline),
+            .last => last,
+        };
+        if (require_hits) {
             const at = std.mem.find(u8, built.stderr, hits_marker) orelse
                 return failureFromRun(allocator, timer, built, "build with the object cache did not report pack hits");
-            if (countAfterMarker(built.stderr[at + hits_marker.len ..]) == 0) return failureFromRun(allocator, timer, built, "second build with the object cache reported no pack hits");
+            if (countAfterMarker(built.stderr[at + hits_marker.len ..]) == 0) return failureFromRun(allocator, timer, built, "expected object-cache consumer reported no pack hits");
+            if (expect.pack_hit_proc) |procedure| {
+                if (!hasNamedPackHit(built.stderr, procedure)) return failureFromRun(allocator, timer, built, "expected procedure's specialization key had no object-cache hit");
+            }
             if (expect.evaluator_artifacts) {
                 const evaluator_at = std.mem.find(u8, built.stderr, evaluator_marker) orelse
                     return failureFromRun(allocator, timer, built, "build with the object cache did not report evaluator artifacts");
@@ -6267,10 +6325,46 @@ fn storeBuildsBehaveIdentically(
         store_runs[index] = runRawInEnv(io, allocator, env, &.{exe}, env.dirs.work_dir, "", exe_timeout) catch |err|
             return customInfraFailure(allocator, timer, "store program spawn error: {}", .{err});
     }
-    if (!std.meta.eql(store_runs[0].term, store_runs[1].term) or !std.mem.eql(u8, store_runs[0].stdout, store_runs[1].stdout)) {
-        return failureFromRun(allocator, timer, store_runs[1], "program served from the object cache behaves differently from the build that filled it");
+    for (store_runs[0..store_exes.len]) |run| {
+        if (!processSucceeded(run.term) or !std.mem.eql(u8, store_runs[0].stdout, run.stdout)) {
+            return failureFromRun(allocator, timer, run, "program served from the object cache failed or behaves differently from the baseline");
+        }
+        if (expect.stdout) |expected| if (!std.mem.eql(u8, expected, run.stdout)) {
+            return failureFromRun(allocator, timer, run, "object-cache program output disagrees with the expected result");
+        };
     }
     return null;
+}
+
+/// Join the producer's named specialization key to the cache lookup trace.
+/// A hit for an unrelated procedure or an identity mismatch cannot satisfy it.
+fn hasNamedPackHit(stderr: []const u8, procedure: []const u8) bool {
+    var census_lines = std.mem.splitScalar(u8, stderr, '\n');
+    while (census_lines.next()) |line| {
+        var fields = std.mem.splitScalar(u8, line, '\t');
+        if (!std.mem.eql(u8, fields.next() orelse continue, "CENSUS_KEY")) continue;
+        if (!std.mem.eql(u8, fields.next() orelse continue, procedure)) continue;
+        const key = fields.next() orelse continue;
+        var trace_lines = std.mem.splitScalar(u8, stderr, '\n');
+        while (trace_lines.next()) |trace| {
+            for ([_][]const u8{ "lookup monotype key=", "lookup direct-lir key=" }) |prefix| {
+                if (!std.mem.startsWith(u8, trace, prefix)) continue;
+                const lookup = trace[prefix.len..];
+                if (std.mem.startsWith(u8, lookup, key) and std.mem.eql(u8, lookup[key.len..], " hit")) return true;
+            }
+        }
+    }
+    return false;
+}
+
+test "named pack hit requires the selected procedure's key and a successful lookup" {
+    const census = "CENSUS_KEY\tEq.same\t1234\tev=abcd\nCENSUS_KEY\tOther.same\t5678\tev=abcd\n";
+    try std.testing.expect(hasNamedPackHit(census ++ "lookup monotype key=1234 hit\n", "Eq.same"));
+    try std.testing.expect(hasNamedPackHit(census ++ "lookup direct-lir key=1234 hit\n", "Eq.same"));
+    try std.testing.expect(!hasNamedPackHit(census ++ "lookup monotype key=5678 hit\npack hits: 1\n", "Eq.same"));
+    try std.testing.expect(!hasNamedPackHit(census ++ "lookup direct-lir key=1234 identity-mismatch\n", "Eq.same"));
+    try std.testing.expect(!hasNamedPackHit(census ++ "lookup monotype key=12345 hit\n", "Eq.same"));
+    try std.testing.expect(!hasNamedPackHit("lookup monotype key=1234 hit\n", "Eq.same"));
 }
 
 /// The decimal number at the start of `text`, or zero when it starts with none.
