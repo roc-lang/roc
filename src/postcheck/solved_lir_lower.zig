@@ -264,6 +264,7 @@ pub fn runBorrowed(
     lowerer.source_digests = source_digests;
 
     try lowerer.result.store.setSourceFiles(solved.lifted.sourceFiles());
+    try lowerer.result.setLoweringModules(solved.lifted.loweringModules());
     try lowerer.prepareExpectSites();
     try lowerer.lowerInlineScopes();
     try lowerer.lower();
@@ -485,6 +486,8 @@ const FnBodyTaskContext = struct {
 const RootEntry = struct {
     fn_id: Type.FnId,
     request: check.CheckedModule.RootRequest,
+    /// See `Lifted.Root.owner`.
+    owner: Common.LoweringModuleId,
     /// Position of this root in the producer's root plan. A consumer that
     /// lowers a subset keeps the producer's positions, which is what
     /// command-level root metadata is keyed by.
@@ -1189,6 +1192,7 @@ const Lowerer = struct {
                 try self.roots.append(self.allocator, .{
                     .fn_id = fn_id,
                     .request = root.request,
+                    .owner = root.owner,
                     .request_index = position,
                 });
             }
@@ -1199,6 +1203,7 @@ const Lowerer = struct {
                 try self.roots.append(self.allocator, .{
                     .fn_id = fn_id,
                     .request = root.request,
+                    .owner = root.owner,
                     .request_index = @intCast(position),
                 });
             }
@@ -2873,7 +2878,7 @@ const Lowerer = struct {
         if (try self.captureBindingForLocal(local)) |capture| {
             return try self.lowerCaptureBindingInto(target, capture, next);
         }
-        const source = try self.bindUnboundLocalForTarget(local, ty, target);
+        const source = try self.bindUnboundLocal(local);
         const source_ty = try self.lowerLocalTy(local);
         try self.noteReturnForwardingLocal(target, source);
         return try self.assignTypedBoundary(target, ty, source, source_ty, next);
@@ -3221,22 +3226,30 @@ const Lowerer = struct {
             self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared capture record type");
         }
 
+        // Captures can contain a callable whose lambda set refers back to
+        // this capture span. Reserve the record before lowering its fields so
+        // that recursive references use the same type and layout commitment.
+        const ty = try self.types.add(.zst);
+        try self.capture_types.put(captures, ty);
+        errdefer {
+            if (self.capture_types.get(captures) == ty) _ = self.capture_types.remove(captures);
+        }
+
         const capture_items = self.captureSpan(captures);
         const fields = try self.allocator.alloc(Type.CaptureField, capture_items.len);
         defer self.allocator.free(fields);
         for (capture_items, 0..) |capture, i| {
-            const ty = try self.lowerType(capture.ty);
+            const capture_ty = try self.lowerType(capture.ty);
             fields[i] = .{
                 .symbol = capture.symbol,
                 .binder = capture.binder,
                 .capture_id = capture.capture_id,
                 .checked_capture_id = capture.checked_capture_id,
-                .ty = ty,
-                .storage_ty = try self.captureFieldStorageType(capture, ty),
+                .ty = capture_ty,
+                .storage_ty = try self.captureFieldStorageType(capture, capture_ty),
             };
         }
-        const ty = try self.types.add(.{ .capture_record = try self.types.addCaptureFields(fields) });
-        try self.capture_types.put(captures, ty);
+        self.types.set(ty, .{ .capture_record = try self.types.addCaptureFields(fields) });
         return ty;
     }
 
@@ -3501,7 +3514,7 @@ const Lowerer = struct {
             .match => .match,
             .destructure => .destructure,
             .if_ => .if_,
-        }, source.region, source.checked_site, proc, source.branch_regions);
+        }, source.owner, source.region, source.checked_site, proc, source.branch_regions);
         self.comptime_site_map[index] = lowered;
         return lowered;
     }
@@ -3574,6 +3587,7 @@ const Lowerer = struct {
                 const ret_layout = try self.layoutOfType(entry.ret);
                 try self.result.const_roots.append(self.allocator, .{
                     .root_order = root.request.order,
+                    .owner = root.owner,
                     .request = root.request,
                     .proc = proc,
                     .ret_layout = ret_layout,
@@ -3594,7 +3608,7 @@ const Lowerer = struct {
                 break :blk proc;
             } else null;
             try self.result.requested_layouts.append(self.allocator, .{
-                .ty = self.types.typeDigest(&self.solved.lifted.names, request.ty),
+                .ty = try self.types.typeDigest(&self.solved.lifted.names, request.ty),
                 .checked_type = request.checked_type,
                 .const_locator = request.const_locator,
                 .layout_idx = try self.layoutOfType(request.ty),
@@ -4534,7 +4548,7 @@ const Lowerer = struct {
         const key = ComptimeRootKey{
             .module = value_root.module,
             .root = value_root.root,
-            .ty = self.types.typeDigest(&self.solved.lifted.names, ty),
+            .ty = try self.types.typeDigest(&self.solved.lifted.names, ty),
         };
         if (self.comptime_root_slots.get(key)) |existing| {
             // The digest selects the candidate; equivalence decides. Sharing
@@ -10058,13 +10072,12 @@ const Lowerer = struct {
         return lir_local;
     }
 
-    fn bindUnboundLocalForTarget(
+    fn bindUnboundLocal(
         self: *Lowerer,
         local: Lifted.LocalId,
-        ty: Type.TypeId,
-        target: LIR.LocalId,
     ) Common.LowerError!LIR.LocalId {
         if (self.local_map.contains(local)) Common.invariant("unbound local destination was already bound");
+        const ty = try self.lowerLocalTy(local);
 
         // Recursive values have an explicit slot representation selected before
         // ordinary value lowering. A backwards-built lookup must reserve that
@@ -10077,12 +10090,10 @@ const Lowerer = struct {
             return binding.slot;
         }
 
-        // LIR chains are built backwards, so the first use can reach an
-        // unbound local before its producer. Preserve that use's committed
-        // destination layout in a distinct local; direct let lowering later
-        // writes the producer into this exact slot.
-        const target_layout = self.result.store.getLocal(target).layout_idx;
-        const source = try self.addLocalForLayout(target_layout);
+        // LIR chains are built backwards, so a use can precede its producer.
+        // Reserve the producer's solved representation; the use's destination
+        // may have a different row and is converted at its typed boundary.
+        const source = try self.addTemp(ty);
         try self.local_map.put(local, source);
         try self.typed_local_map.put(.{ .local = local, .ty = ty }, source);
         try self.local_types.put(source, ty);
@@ -10234,11 +10245,22 @@ const Lowerer = struct {
         source_ty: Type.TypeId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
+        const source_runtime_ty = self.runtimeBackingType(source_ty);
+        const source_runtime_content = self.types.get(source_runtime_ty);
+        // The sealed empty row is uninhabited. A boundary may mention it in
+        // an impossible variant such as Err in Try(Str, []), but there is no
+        // payload to copy or convert, regardless of its zero-sized layout.
+        if (source_runtime_content == .tag_union and source_runtime_content.tag_union.len == 0) {
+            return try self.result.store.addCFStmt(.{ .runtime_error = {} });
+        }
         if (target == source) return next;
-        if (try self.maybeAssignDirectLayoutBoundary(target, source, next)) |stmt| return stmt;
+        var equivalent_pairs = std.AutoHashMap(u64, void).init(self.allocator);
+        defer equivalent_pairs.deinit();
+        if (try self.typesEquivalentInMode(.value_encoding, target_ty, source_ty, &equivalent_pairs)) {
+            if (try self.maybeAssignDirectLayoutBoundary(target, source, next)) |stmt| return stmt;
+        }
 
         const target_runtime_ty = self.runtimeBackingType(target_ty);
-        const source_runtime_ty = self.runtimeBackingType(source_ty);
         if (target_runtime_ty != target_ty or source_runtime_ty != source_ty) {
             return try self.assignTypedBoundary(target, target_runtime_ty, source, source_runtime_ty, next);
         }
@@ -11160,7 +11182,7 @@ const Lowerer = struct {
     /// member sets) to match, which is what shared-layout reuse must key on:
     /// a layout's field slots, discriminant space, and dispatch targets are
     /// functions of the representation, not of the public interface.
-    const EquivalenceMode = enum { public, representation };
+    const EquivalenceMode = enum { public, representation, value_encoding };
 
     fn publicTypesEquivalent(
         self: *Lowerer,
@@ -11206,9 +11228,9 @@ const Lowerer = struct {
             .record => |fields| try self.fieldsEquivalentInMode(mode, fields, rhs.record, visited),
             .capture_record => |fields| try self.captureFieldsEquivalentInMode(mode, fields, rhs.capture_record, visited),
             .tag_union => |tags| try self.tagsEquivalentInMode(mode, tags, rhs.tag_union, visited),
-            .callable => |variants| try self.fnVariantsEquivalentInMode(mode, variants, rhs.callable, visited),
+            .callable => |variants| try self.fnVariantsEquivalentInMode(mode, mode != .value_encoding, variants, rhs.callable, visited),
             .erased_fn => |erased| std.mem.eql(u8, erased.source_fn_ty.bytes[0..], rhs.erased_fn.source_fn_ty.bytes[0..]) and
-                try self.fnVariantsEquivalentInMode(mode, erased.members, rhs.erased_fn.members, visited),
+                try self.fnVariantsEquivalentInMode(mode, true, erased.members, rhs.erased_fn.members, visited),
             .named => |named| try self.namedTypesEquivalentInMode(mode, named, rhs.named, visited),
         };
     }
@@ -11246,7 +11268,7 @@ const Lowerer = struct {
             }
         }
 
-        if (mode == .representation) {
+        if (mode != .public) {
             const lhs_backing = lhs.backing orelse return rhs.backing == null;
             const rhs_backing = rhs.backing orelse return false;
             if (lhs_backing.use != rhs_backing.use) return false;
@@ -11340,6 +11362,7 @@ const Lowerer = struct {
     fn fnVariantsEquivalentInMode(
         self: *Lowerer,
         comptime mode: EquivalenceMode,
+        comptime compare_targets: bool,
         lhs_span: Type.Span,
         rhs_span: Type.Span,
         visited: *std.AutoHashMap(u64, void),
@@ -11351,7 +11374,11 @@ const Lowerer = struct {
             const lhs_variant = GuardedList.at(lhs, index);
             const rhs_variant = GuardedList.at(rhs, index);
             if (lhs_variant.source != rhs_variant.source) return false;
-            if (lhs_variant.target != rhs_variant.target) return false;
+            // A finite callable stores its variant tag and captures. The
+            // specialization target belongs to its consumer, not its bytes.
+            // Erased entries retain the full comparison because they store
+            // an actual code pointer.
+            if (compare_targets and lhs_variant.target != rhs_variant.target) return false;
             if (!std.meta.eql(lhs_variant.capture_ty, rhs_variant.capture_ty)) {
                 if (lhs_variant.capture_ty == null or rhs_variant.capture_ty == null) return false;
                 if (!try self.typesEquivalentInMode(mode, lhs_variant.capture_ty.?, rhs_variant.capture_ty.?, visited)) return false;
@@ -12235,6 +12262,8 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
     errdefer static_data_values.deinit(allocator);
     var comptime_value_roots = try clonedLiftedProgramList(Common.ComptimeValueRoot, "comptime_value_roots", allocator, view.comptime_value_roots);
     errdefer comptime_value_roots.deinit(allocator);
+    var lowering_modules = try clonedLiftedProgramList(check.CheckedModule.ModuleId, "lowering_modules", allocator, view.lowering_modules);
+    errdefer lowering_modules.deinit(allocator);
     var expr_locs = try clonedLiftedProgramList(base.SourceLoc, "expr_locs", allocator, view.expr_locs);
     errdefer expr_locs.deinit(allocator);
     var expr_regions = try clonedLiftedProgramList(base.Region, "expr_regions", allocator, view.expr_regions);
@@ -12291,6 +12320,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .static_data_values = static_data_values,
         .comptime_value_roots = comptime_value_roots,
         .comptime_sites = Lifted.ProgramList(Lifted.ComptimeSite, "comptime_sites").fromArrayList(comptime_sites),
+        .lowering_modules = lowering_modules,
         .source_files = Lifted.ProgramList(base.SourceFileEntry, "source_files").fromArrayList(source_files),
         .expr_locs = expr_locs,
         .expr_regions = expr_regions,
@@ -12338,6 +12368,7 @@ fn cloneComptimeSites(allocator: std.mem.Allocator, source: []const Lifted.Compt
     for (source) |site| {
         cloned.appendAssumeCapacity(.{
             .kind = site.kind,
+            .owner = site.owner,
             .region = site.region,
             .checked_site = site.checked_site,
             .branch_regions = try allocator.dupe(base.Region, site.branch_regions),
@@ -12748,7 +12779,7 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
             .body = .{ .roc = body },
             .ret = bool_ty,
         });
-        try solved.lifted.addRoot(.{ .fn_id = fn_id, .request = undefined });
+        try solved.lifted.addRoot(.{ .fn_id = fn_id, .request = undefined, .owner = .first });
     }
     solved.lifted.next_symbol = 2;
     const field = try solved.lifted.names.internRecordFieldLabel("field");
@@ -13291,4 +13322,63 @@ fn rootRunsAtCompileTime(request: check.CheckedModule.RootRequest) bool {
         .compile_time_constant, .compile_time_callable => true,
         .runtime_entrypoint, .provided_export, .platform_required_binding, .hosted_export, .test_expect, .repl_expr, .dev_expr => false,
     };
+}
+
+test "value encoding preserves tag identities but excludes finite call targets" {
+    const allocator = std.testing.allocator;
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+    const a = try solved.lifted.names.internTagLabel("A");
+    const b = try solved.lifted.names.internTagLabel("B");
+    var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+    defer lowerer.deinit();
+    const lhs_members = try lowerer.types.addFnVariants(&.{.{
+        .id = undefined,
+        .source = @enumFromInt(1),
+        .target = @enumFromInt(2),
+        .capture_ty = null,
+    }});
+    const rhs_members = try lowerer.types.addFnVariants(&.{.{
+        .id = undefined,
+        .source = @enumFromInt(1),
+        .target = @enumFromInt(3),
+        .capture_ty = null,
+    }});
+    const lhs = try lowerer.types.add(.{ .callable = lhs_members });
+    const rhs = try lowerer.types.add(.{ .callable = rhs_members });
+    var visited = std.AutoHashMap(u64, void).init(allocator);
+    defer visited.deinit();
+    try std.testing.expect(try lowerer.typesEquivalentInMode(.value_encoding, lhs, rhs, &visited));
+    visited.clearRetainingCapacity();
+    try std.testing.expect(!try lowerer.representationTypesEquivalent(lhs, rhs, &visited));
+
+    const lhs_erased = try lowerer.types.add(.{ .erased_fn = .{ .source_fn_ty = .{}, .members = lhs_members } });
+    const rhs_erased = try lowerer.types.add(.{ .erased_fn = .{ .source_fn_ty = .{}, .members = rhs_members } });
+    visited.clearRetainingCapacity();
+    try std.testing.expect(!try lowerer.typesEquivalentInMode(.value_encoding, lhs_erased, rhs_erased, &visited));
+
+    const tag_a: Type.Tag = .{ .name = a, .checked_name = a, .payloads = .empty() };
+    const tag_b: Type.Tag = .{ .name = b, .checked_name = b, .payloads = .empty() };
+    const ab = try lowerer.types.add(.{ .tag_union = try lowerer.types.addTags(&.{ tag_a, tag_b }) });
+    const ba = try lowerer.types.add(.{ .tag_union = try lowerer.types.addTags(&.{ tag_b, tag_a }) });
+    try std.testing.expectEqual(try lowerer.layoutOfType(ab), try lowerer.layoutOfType(ba));
+    visited.clearRetainingCapacity();
+    try std.testing.expect(!try lowerer.typesEquivalentInMode(.value_encoding, ab, ba, &visited));
+}
+
+test "typed boundaries from empty rows are terminal even with matching layouts" {
+    const allocator = std.testing.allocator;
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+    var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+    defer lowerer.deinit();
+    const empty = try lowerer.types.add(.{ .tag_union = .empty() });
+    const u64_ty = try lowerer.types.add(.{ .primitive = .u64 });
+    const source = try lowerer.result.store.addLocal(.{ .layout_idx = .zst });
+    for ([_]Type.TypeId{ empty, u64_ty }, [_]layout.Idx{ .zst, .u64 }) |target_ty, target_layout| {
+        const target = try lowerer.result.store.addLocal(.{ .layout_idx = target_layout });
+        const next = try lowerer.result.store.addCFStmt(.{ .ret = .{ .value = target } });
+        const boundary = try lowerer.assignTypedBoundary(target, target_ty, source, empty, next);
+        try std.testing.expect(lowerer.result.store.getCFStmt(boundary) == .runtime_error);
+    }
 }

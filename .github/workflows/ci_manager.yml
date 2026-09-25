@@ -1,5 +1,8 @@
 on:
   pull_request:
+    # `ready_for_review` re-runs CI when a draft PR is marked ready, because
+    # draft PRs skip the macOS and Windows lanes (see `minici-build-macos`).
+    types: [opened, synchronize, reopened, ready_for_review]
 
 # cancel current runs when a new commit is pushed
 concurrency:
@@ -11,16 +14,134 @@ permissions: {}
 
 name: CI Manager
 
+# Job graph:
+#
+#   static-checks ────────────────────────────┐ (gates macOS + Windows)
+#   check-changes ─┬─> linux-extra-checks     │
+#                  ├─> minici-build-linux ───>│ minici-linux   (3 shards)
+#                  ├─> minici-build-macos <───┤ minici-macos   (2 shards)
+#                  └─> minici-build-windows <─┘ minici-windows (3 shards)
+#   everything above ─> finish (the only required check)
+#
+# `static-checks` runs on every PR, including docs-only ones. The MiniCI lanes
+# run only when `check-changes` finds a file outside the docs-only allowlist.
+# Each OS's shards wait only for that OS's build. macOS and Windows are the
+# scarce runners, so their lanes also wait for `static-checks` to pass and are
+# skipped on draft PRs.
+#
+# Which MiniCI jobs each shard runs is defined in src/build/minici.zig
+# (`shards`); `static-checks` verifies that this file names every shard exactly
+# once through the `minici_shard:` matrix keys.
+#
+# The full suite (LLVM eval, valgrind, cross-compile, nix, the wider OS matrix,
+# ...) runs daily on main via nightly_gate.yml.
+
 jobs:
   check-changes:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       pull-requests: read
     outputs:
-      zig: ${{ steps.filter.outputs.zig }}
-      other_than_zig: ${{ steps.other_filter.outputs.other_than_zig }}
+      heavy: ${{ steps.classify.outputs.heavy }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      # Needed to find the Markdown files that Roc sources import (see below).
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+
+      # The MiniCI lanes run unless every changed path is on the docs-only
+      # allowlist below. An allowlist of what is safe to skip fails safe: a new
+      # code path, script, or config file runs the lanes until someone decides
+      # it doesn't need them. Renames count both their old and new paths.
+      - name: Classify changed files
+        id: classify
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+        run: |
+          set -euo pipefail
+
+          # Markdown files that Roc sources import (`import "x.md" as x : Str`)
+          # are test inputs, not prose: e.g. test/echo/all_syntax_test.roc
+          # imports the root README.md. Paths are relative to the repo root.
+          # `git grep` exits 1 when nothing matches, which is not an error here.
+          consumed_md="$({ git grep -l -E '^[[:space:]]*import "[^"]+\.md"' -- '*.roc' || [ "$?" -eq 1 ]; } |
+            while IFS= read -r roc; do
+              sed -nE 's/^[[:space:]]*import "([^"]+\.md)".*/\1/p' "$roc" |
+                while IFS= read -r rel; do
+                  realpath -m --relative-to=. "$(dirname "$roc")/$rel"
+                done
+            done | sort -u)"
+          echo "Markdown imported by Roc sources: ${consumed_md:-none}"
+
+          # Paths whose content no MiniCI lane builds, runs, or reads.
+          # `static-checks` (tidy, actionlint, ...) still runs on every PR, so
+          # these files are checked there.
+          is_docs_only() {
+            case "$1" in
+              # Snapshot `.md` files are test inputs and expected outputs.
+              test/*) return 1 ;;
+              # Prose, unless a Roc source imports it. Nothing else embeds or
+              # tests Markdown outside test/ (the langref under docs/ is read
+              # only by `roc docs --with-lang-ref`, which no test runs).
+              *.md) ! grep -Fxq -- "$1" <<< "$consumed_md" ;;
+              LICENSE | authors | .reuse | .rules) return 0 ;;
+              # Configs read only by alwayscheck.yml / markdown_link_check.yml.
+              typos.toml | mlc_config.json) return 0 ;;
+              # Workflow files no MiniCI lane runs; actionlint in
+              # `static-checks` validates them.
+              .github/workflows/alwayscheck.yml | .github/workflows/markdown_link_check.yml | \
+              .github/workflows/nightly_gate.yml | .github/workflows/ci_zig.yml | \
+              .github/workflows/ci_zig_nix.yml | .github/workflows/ci_cross_compile.yml | \
+              .github/workflows/ci_zig_benchmarks.yml | .github/workflows/stale.yml | \
+              .github/workflows/zulip_bot_high_p_issues.yml | .github/dependabot.yml | \
+              .github/FUNDING.yml | .github/actionlint.yaml) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          paths="$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
+            --jq '.[] | .filename, (.previous_filename // empty)')"
+          listed="$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename' | wc -l)"
+
+          heavy=false
+          # The files API lists at most 3000 files. A PR whose listing is short
+          # of its changed-file count cannot be proven docs-only.
+          if [ "$listed" -lt "$CHANGED_FILES" ]; then
+            echo "Listed $listed of $CHANGED_FILES changed files; running the MiniCI lanes."
+            heavy=true
+          fi
+
+          while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            if ! is_docs_only "$path"; then
+              echo "needs MiniCI: $path"
+              heavy=true
+            fi
+          done <<< "$paths"
+
+          echo "heavy=$heavy"
+          echo "heavy=$heavy" >> "$GITHUB_OUTPUT"
+
+  # Checks that read only tracked sources run once, here, instead of on every
+  # OS: their result cannot depend on the host. They are quick, so they gate the
+  # scarce macOS and Windows runners.
+  static-checks:
+    name: static-checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        # A one-entry matrix so the source shard is named through the same
+        # `minici_shard:` key as every other shard (see the verify step).
+        include:
+          - minici_shard: source
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
 
       - name: Check no tracked plan.md files
         shell: bash
@@ -34,97 +155,68 @@ jobs:
             exit 1
           fi
 
-      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # 4.0.1
-        id: filter
+      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          filters: |
-            zig:
-              - 'src/**'
-              - 'test/**'
-              - 'build.zig'
-              - 'build.zig.zon'
-              - '.github/workflows/ci_manager.yml'
-              - '.github/workflows/nightly_gate.yml'
-              - '.github/workflows/ci_zig.yml'
-              - '.github/workflows/ci_zig_nix.yml'
-              - '.github/workflows/ci_cross_compile.yml'
-              - '.github/workflows/ci_zig_benchmarks.yml'
-              - '.github/actions/flaky-retry/action.yml'
-              - 'ci/zig_lints.sh'
-              - 'ci/tidy.zig'
-              - 'ci/check_test_wiring.zig'
-              - 'ci/custom_valgrind.sh'
-              - 'ci/valgrind_snapshots.sh'
-              - 'ci/zig_nix_ci.sh'
-              - 'ci/valgrind.supp'
-      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # 4.0.1
-        id: other_filter
-        with:
-          # Makes it so that every pattern below must match.
-          # This enables the negative patterns to disable this job.
-          predicate-quantifier: 'every'
-          filters: |
-            other_than_zig:
-              - '**/*'
-              - '!src/**'
-              - '!test/**'
-              - '!build.zig'
-              - '!build.zig.zon'
-              - '!.github/workflows/ci_manager.yml'
-              - '!.github/workflows/nightly_gate.yml'
-              - '!.github/workflows/ci_zig.yml'
-              - '!.github/workflows/ci_zig_nix.yml'
-              - '!.github/workflows/ci_cross_compile.yml'
-              - '!.github/workflows/ci_zig_benchmarks.yml'
-              - '!.github/actions/flaky-retry/action.yml'
-              - '!ci/zig_lints.sh'
-              - '!ci/check_test_wiring.zig'
-              - '!ci/custom_valgrind.sh'
-              - '!ci/valgrind_snapshots.sh'
-              - '!ci/zig_nix_ci.sh'
-              - '!ci/valgrind.supp'
-              - '!ci/tidy.zig'
-              # Files that ci manager workflows should not run on.
-              - '!.gitignore'
-              - '!.reuse'
-              - '!.rules'
-              - '!authors'
-              - '!legal_details'
-              - '!LICENSE'
-              - '!*.md'
-              - '!src/**/*.md'
-              - '!design/**'
-              - '!examples/**'
-              - '!docs/langref/**'
+          version: 0.16.0
+          use-cache: false
 
-  # PRs run only `zig build minici` per OS; the full suite (LLVM eval,
-  # valgrind, cross-compile, nix, the 6-OS matrix, ...) runs daily on main via
-  # nightly_gate.yml, which gates the `nightly` branch.
-  zig-minici-build:
+      - name: Cache Zig dependency packages
+        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
+        with:
+          # See `minici-build-linux`.
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
+          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-deps-${{ runner.os }}-${{ runner.arch }}-
+
+      # The source lane runs every source check and reports all failures,
+      # rather than stopping at the first one.
+      - name: Run MiniCI source checks
+        run: zig build minici -- --minici-shard ${{ matrix.minici_shard }}
+
+      # Each step below also runs when an earlier one failed, so one push
+      # reports every static problem.
+      - name: Check this workflow runs every MiniCI shard
+        if: ${{ !cancelled() }}
+        run: zig build minici -- --minici-verify-workflow .github/workflows/ci_manager.yml
+
+      # Not a MiniCI job; covers ci/tidy.zig itself.
+      - name: Run tidy unit tests
+        if: ${{ !cancelled() }}
+        run: zig build run-test-zig-tidy-unit
+
+      - name: Install actionlint
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSfL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
+          echo "${ACTIONLINT_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" actionlint
+
+      # Lints every workflow, running shellcheck (preinstalled on the image)
+      # over `run:` scripts, with the repo's .github/actionlint.yaml.
+      - name: Lint GitHub Actions workflows
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: '"$RUNNER_TEMP/actionlint" -color'
+
+  # Keeps the fuzz and Tracy build configurations compiling on every PR (this
+  # used to run only nightly). Kept out of `static-checks` because it analyses
+  # the whole compiler, which would delay the macOS and Windows lanes that wait
+  # on `static-checks`. The 32-bit `-Dno-bin` checks stay nightly-only
+  # (ci_zig.yml `zig-cross-compile`): analysing `roc` for a 32-bit target peaks
+  # around 15 GB, too close to a standard runner's 16 GB to gate PRs on.
+  linux-extra-checks:
     needs: check-changes
-    if: needs.check-changes.outputs.zig == 'true'
-    name: zig-minici-build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            build_jobs_flag: ''
-          # Hosted arm64 runners drop off the network mid-`build-ci` at full
-          # parallelism ("The hosted runner lost communication with the
-          # server", no logs preserved). Debug builds fall back to LLVM on
-          # aarch64 -- Zig only self-hosts x86_64 ELF/Mach-O -- so this runner
-          # compiles ~13 artifacts through LLVM at once where the x86_64 one
-          # does not, and starves itself. Same throttle as `release_jobs_flag`
-          # in ci_zig.yml.
-          # - os: ubuntu-24.04-arm
-          #   build_jobs_flag: '-j2'
-          - os: macos-15
-            build_jobs_flag: ''
-          - os: windows-2025
-            build_jobs_flag: ''
+    if: needs.check-changes.outputs.heavy == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
@@ -133,6 +225,52 @@ jobs:
         with:
           version: 0.16.0
           use-cache: false
+
+      - name: Cache Zig dependency packages
+        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
+        with:
+          # See `minici-build-linux`.
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
+          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-deps-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Checkout Tracy
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+        with:
+          path: tracy
+          repository: wolfpld/tracy
+          ref: v0.11.0
+
+      # Keeps the fuzz and Tracy build configurations compiling.
+      - name: Check the fuzz and Tracy configurations
+        run: zig build -Dno-bin -Dfuzz -Dtracy=./tracy
+
+  # One build job per OS, so each OS's shards need only that OS's build and a
+  # slow or queued runner on one OS never delays another OS's tests. The three
+  # build jobs share one step list (`&minici_build_steps`); OS differences are
+  # `if:` conditions on its steps.
+  minici-build-linux:
+    needs: check-changes
+    if: needs.check-changes.outputs.heavy == 'true'
+    name: minici-build (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps: &minici_build_steps
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+
+      # `use-tool-cache` installs Zig at $RUNNER_TOOL_CACHE/zig/<version>/<arch>,
+      # the same path in this build job and in every shard of its OS. Without
+      # it Zig lands in a random per-job directory, and Run steps that invoke
+      # the zig executable (the wasm32 builtins `zig wasm-ld -r` merge) hash
+      # that absolute path, so every shard would miss the restored cache and
+      # rebuild everything that embeds the wasm32 builtins through eval.
+      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
+        with:
+          version: 0.16.0
+          use-cache: false
+          use-tool-cache: 'true'
 
       - name: Install Rust wasm target
         run: rustup target add wasm32-unknown-unknown
@@ -143,17 +281,6 @@ jobs:
       - name: Install Rust musl target (Linux)
         if: runner.os == 'Linux'
         run: rustup target add ${{ runner.arch == 'ARM64' && 'aarch64-unknown-linux-musl' || 'x86_64-unknown-linux-musl' }}
-
-      # `build-ci` depends on `build-coverage-tools`, and build.zig only
-      # compiles kcov on Linux arm64 (see `is_coverage_supported`), so arm64 is
-      # the only runner here that needs kcov's headers. Without them the
-      # `kcov_system_lib` link (-lz -lcurl) fails. Mirrors ci_zig.yml's nightly
-      # coverage setup.
-      - name: Install kcov dependencies (Linux arm64)
-        if: runner.os == 'Linux' && runner.arch == 'ARM64'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libdw-dev libcurl4-openssl-dev
 
       - name: Cache Zig dependency packages
         uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
@@ -178,7 +305,17 @@ jobs:
         with:
           arch: x64
 
-      # Dep fetching and compilation happen here, where network flakes surface
+      # The eval runner and eval unit tests each link the embedded LLVM libraries.
+      # Building the runner first keeps their large Windows link processes from
+      # overlapping in build-ci, which exhausted the hosted runner's memory.
+      - name: Build eval runner first (Windows)
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build build-test-eval-runner
+          retry_count: 3
+
+      # The remaining compilation happens here, where network flakes surface
       # on stdout for flaky-retry to match. The minici shards below then consume
       # the build artifact and go straight to the run steps, so their failures
       # are genuine and never retried.
@@ -190,29 +327,23 @@ jobs:
       - name: Build MiniCI binaries
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build ${{ matrix.build_jobs_flag }} build-ci
+          command: zig build build-ci
           retry_count: 3
 
-      - name: Check ReleaseSafe machine-code shim support ownership
-        if: runner.os == 'Linux' && runner.arch == 'X64'
-        run: zig build ${{ matrix.build_jobs_flag }} run-check-machine-code-shim-archive -Doptimize=ReleaseSafe
-
+      # zstd on all cores, instead of upload-artifact's single-threaded zip
+      # deflate, which was the bottleneck (~40-50 MB/s of input). The upload
+      # below stores the already-compressed file as-is (`compression-level: 0`).
+      # Streaming tar into zstd also avoids writing an uncompressed tar the size
+      # of `.zig-cache` next to it. zstd is preinstalled on all three runner
+      # images.
       - name: Pack MiniCI build artifact
         shell: bash
         run: |
           set -euo pipefail
-          tar -cf minici-build.tar .zig-cache zig-out/bin zig-out/lib
+          tar -cf - .zig-cache zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
 
-      # Packing is the disk high-water mark of this job: `minici-build.tar` is a
-      # second full copy of `.zig-cache` in the same workspace, and
-      # upload-artifact then stages a zip of that. Report free space and the
-      # packed size here, where the peak actually is.
-      #
-      # No threshold on the tar yet, deliberately. The only figures we have are
-      # the *compressed* uploads (2.1-2.7 GB across the four runners on
-      # 2026-07-26), and a limit invented from those would either fire on
-      # healthy runs or never fire at all. A few runs of this line give the
-      # baseline to set one from.
+      # Packing is the disk high-water mark of this job. Report free space and
+      # the packed size here, where the peak actually is.
       - name: Report disk headroom and packed artifact size
         if: always()
         continue-on-error: true
@@ -220,106 +351,96 @@ jobs:
         run: |
           set -uo pipefail
           df -h "$GITHUB_WORKSPACE" || true
-          if [ -f minici-build.tar ]; then
+          if [ -f minici-build.tar.zst ]; then
             # `wc -c` over `du`: apparent size, comparable across filesystems
             # and to the uploaded artifact size the log reports later.
-            bytes="$(wc -c < minici-build.tar)"
-            awk -v b="$bytes" 'BEGIN { printf "minici-build.tar %.1f MB (%d bytes)\n", b/1048576, b }'
+            bytes="$(wc -c < minici-build.tar.zst)"
+            awk -v b="$bytes" 'BEGIN { printf "minici-build.tar.zst %.1f MB (%d bytes)\n", b/1048576, b }'
           else
-            echo "(no minici-build.tar -- packing did not complete)"
+            echo "(no minici-build.tar.zst -- packing did not complete)"
           fi
 
       - name: Upload MiniCI build artifact
         uses: actions/upload-artifact@v7.0.1 # ratchet:actions/upload-artifact@v7.0.1
         with:
           name: minici-build-${{ runner.os }}-${{ runner.arch }}
-          path: minici-build.tar
+          path: minici-build.tar.zst
           if-no-files-found: error
           retention-days: 1
           overwrite: true
+          compression-level: 0
 
-  zig-minici:
-    needs: [check-changes, zig-minici-build]
-    if: needs.check-changes.outputs.zig == 'true'
-    name: zig-minici (${{ matrix.shard }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.timeout_minutes }}
-    env:
+  minici-build-macos:
+    # macOS and Windows runners are the scarce ones: their lanes wait for the
+    # quick `static-checks` to pass and are skipped on draft PRs
+    # (`ready_for_review` re-runs CI when the PR is marked ready).
+    needs: [check-changes, static-checks]
+    if: needs.check-changes.outputs.heavy == 'true' && !github.event.pull_request.draft
+    name: minici-build (macos-15)
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps: *minici_build_steps
+
+  minici-build-windows:
+    # See `minici-build-macos`.
+    needs: [check-changes, static-checks]
+    if: needs.check-changes.outputs.heavy == 'true' && !github.event.pull_request.draft
+    name: minici-build (windows-2025)
+    runs-on: windows-2025
+    timeout-minutes: 120
+    steps: *minici_build_steps
+
+  # Each shard runs the MiniCI jobs that src/build/minici.zig assigns to its
+  # `minici_shard`. The three OS shard jobs share one step list
+  # (`&minici_shard_steps`); per-shard extras are matrix flags:
+  #   valgrind         - install Valgrind (for run-check-str-eq-same-allocation)
+  #   shim_archive     - the ReleaseSafe machine-code shim archive check
+  #   llvm_float_bits  - the focused LLVM exact-float-bits eval check (on the
+  #                      shard that runs run-test-eval)
+  minici-linux:
+    needs: [check-changes, minici-build-linux]
+    if: needs.check-changes.outputs.heavy == 'true'
+    name: minici (${{ matrix.minici_shard }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env: &minici_shard_env
       # Warning threshold for `.zig-cache` as it stands *after* a shard runs:
       # the cache restored from the build artifact plus everything the shard's
-      # own run-time compilation added. It is not the artifact size -- the
-      # packed artifact is measured in `zig-minici-build` -- and it is not a
-      # setup-zig setting.
-      #
-      # Observed on 2026-07-26 (roc-lang/roc run 30212177851), post-shard:
-      #   ubuntu-full 22.3 GB (unsharded, so it runs every phase and is
-      #   structurally the largest), ubuntu-arm-zig 11.4 GB, macos-core
-      #   10.8 GB, ubuntu-arm-harness 10.1 GB, macos-zig 9.6 GB,
-      #   macos-harness 8.4 GB.
-      #
-      # The previous 10240 threshold sat below four of those, so it fired every
-      # run on shards that were behaving normally and flagged nothing. This one
-      # sits ~28% above the largest observed shard: high enough to stay quiet
-      # while things are healthy, low enough that a real blowup still trips it.
+      # own run-time compilation added. The packed artifact is measured in the
+      # build job. Observed post-shard sizes (2026-07-26, run 30212177851) were
+      # 8.4-22.3 GB, the largest being the then-unsharded Linux lane; this sits
+      # ~28% above that, quiet while healthy but tripped by a real blowup.
       MINICI_SHARD_ZIG_CACHE_WARN_MB: '28672'
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-24.04
-            shard: ubuntu-full
-            # This unsharded lane includes both exhaustive evaluator corpora,
-            # so keep enough headroom for the remaining integration tests.
-            timeout_minutes: 180
-            minici_args: []
-          - os: macos-15
-            shard: macos-core
-            timeout_minutes: 120
-            minici_args: ["--minici-to", &minici_core_boundary run-test-zig-module-roc_target]
-          - os: macos-15
-            shard: macos-zig
-            timeout_minutes: 120
-            minici_args: ["--minici-after", *minici_core_boundary, "--minici-before", &minici_harness_boundary run-test-eval]
-          - os: macos-15
-            shard: macos-harness
-            timeout_minutes: 120
-            minici_args: ["--minici-from", *minici_harness_boundary]
-          - os: windows-2025
-            shard: windows-core
-            timeout_minutes: 120
-            minici_args: ["--minici-to", *minici_core_boundary]
-          - os: windows-2025
-            shard: windows-zig
-            timeout_minutes: 120
-            minici_args: ["--minici-after", *minici_core_boundary, "--minici-before", *minici_harness_boundary]
-          - os: windows-2025
-            shard: windows-harness
-            timeout_minutes: 120
-            minici_args: ["--minici-from", *minici_harness_boundary]
-          # arm64 Linux runs no `core` shard: those are early-module Zig unit
-          # tests, which are arch-independent and already covered on arm64 by
-          # the macos-15 shards. The unique arm64+ELF+glibc signal (linking,
-          # host builds, native codegen) lives in `zig` and `harness`.
-          #
-          # These entries must stay below the macOS ones: they alias anchors
-          # that the macOS entries define, and YAML requires the definition to
-          # come first.
-          # - os: ubuntu-24.04-arm
-          #   shard: ubuntu-arm-zig
-          #   timeout_minutes: 120
-          #   minici_args: ["--minici-after", *minici_core_boundary, "--minici-before", *minici_harness_boundary]
-          # - os: ubuntu-24.04-arm
-          #   shard: ubuntu-arm-harness
-          #   timeout_minutes: 120
-          #   minici_args: ["--minici-from", *minici_harness_boundary]
-    steps:
+          - minici_shard: linux-core
+            valgrind: true
+            shim_archive: true
+            llvm_float_bits: false
+            web_wasm: false
+          - minici_shard: linux-eval
+            valgrind: false
+            shim_archive: false
+            llvm_float_bits: true
+            web_wasm: true
+          - minici_shard: linux-harness
+            valgrind: false
+            shim_archive: false
+            llvm_float_bits: false
+            web_wasm: false
+    steps: &minici_shard_steps
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
 
+      # Same deterministic Zig path as the build job (see `use-tool-cache` in
+      # `minici-build-linux`), so the restored cache hits.
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.16.0
           use-cache: false
+          use-tool-cache: 'true'
 
       - name: Download MiniCI build artifact
         uses: actions/download-artifact@v8.0.1 # ratchet:actions/download-artifact@v8.0.1
@@ -331,8 +452,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tar -xf minici-build.tar
-          rm minici-build.tar
+          zstd -dc minici-build.tar.zst | tar -xf -
+          rm minici-build.tar.zst
 
       - name: Install Rust wasm target
         run: rustup target add wasm32-unknown-unknown
@@ -344,17 +465,8 @@ jobs:
         if: runner.os == 'Linux'
         run: rustup target add ${{ runner.arch == 'ARM64' && 'aarch64-unknown-linux-musl' || 'x86_64-unknown-linux-musl' }}
 
-      # `run-coverage-parser` is the last MiniCI job, so the harness shard runs
-      # the kcov that `build-ci` compiled. This is a different runner than the
-      # build job, so kcov's shared libraries have to be present here too.
-      - name: Install kcov dependencies (Linux arm64)
-        if: runner.os == 'Linux' && runner.arch == 'ARM64'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libdw-dev libcurl4-openssl-dev
-
-      - name: Install Valgrind (Ubuntu full)
-        if: matrix.shard == 'ubuntu-full'
+      - name: Install Valgrind
+        if: matrix.valgrind
         run: |
           # libc6-dbg is required for Valgrind's function redirections.
           sudo apt-get update && sudo apt-get install -y libc6-dbg
@@ -371,20 +483,37 @@ jobs:
           arch: x64
 
       - name: Run MiniCI
-        run: zig build minici -- --minici-skip-build ${{ join(matrix.minici_args, ' ') }}
+        run: zig build minici -- --minici-skip-build --minici-shard ${{ matrix.minici_shard }}
+
+      # Compiles its own ReleaseSafe shim rather than shipping ReleaseSafe
+      # outputs in the build artifact, which is otherwise all Debug.
+      - name: Check ReleaseSafe machine-code shim support ownership
+        if: matrix.shim_archive
+        run: zig build run-check-machine-code-shim-archive -Doptimize=ReleaseSafe
 
       # LLVM evaluation is deliberately excluded from the general MiniCI eval
       # suite for speed. Keep the exact-bit float contract PR-gated with a
       # focused invocation so backend drift cannot wait for the nightly suite.
       - name: Check exact float bits with LLVM
-        if: matrix.shard == 'ubuntu-full' || matrix.shard == 'ubuntu-arm-harness' || matrix.shard == 'macos-harness' || matrix.shard == 'windows-harness'
+        if: matrix.llvm_float_bits
         run: zig build run-test-eval -- --llvm --threads 1 --filter "exact bits agree across backends"
+
+      # The REPL and echo WebAssembly modules are built by `build-ci` (its web
+      # step), so these reuse the artifact instead of compiling cold. Used to
+      # run only nightly.
+      - name: Run dedicated REPL WebAssembly tests
+        if: matrix.web_wasm
+        run: zig build run-test-repl-wasm
+
+      - name: Run echo.wasm integration test
+        if: matrix.web_wasm
+        run: zig build run-test-echo-wasm
 
       # `.zig-cache` doubles as Zig's global cache, its local cache, and the
       # build temp dir. It is restored from the MiniCI build artifact, so the
       # composition after each shard is the restored cache plus whatever the
       # shard's own run-time builds added on top. The packed artifact itself is
-      # measured in `zig-minici-build`, at pack time.
+      # measured in the build job, at pack time.
       # One level deep on purpose: o/, h/, p/, tmp/ is the whole question.
       #
       # `df` first: the cache lives next to the unpacked artifact, and a runner
@@ -454,105 +583,127 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7.0.1 # ratchet:actions/upload-artifact@v7.0.1
         with:
-          name: minici-${{ matrix.shard }}
+          name: minici-${{ matrix.minici_shard }}
           path: zig-out/minici/
 
-  # The only aarch64 Linux job that runs on a PR. Deliberately not a MiniCI
-  # shard: the `ubuntu-24.04-arm` entries above are commented out because
-  # hosted arm64 runners lose network mid-`build-ci` at full parallelism, and
-  # that is a property of `build-ci` compiling ~13 artifacts through LLVM at
-  # once. This builds one binary and one host lib, so it stays clear of the
-  # failure those entries were disabled for.
-  #
-  arm64-linux-hello-world:
-    needs: check-changes
-    if: needs.check-changes.outputs.zig == 'true'
-    runs-on: ubuntu-26.04-arm
+  minici-macos:
+    needs: [check-changes, minici-build-macos]
+    if: needs.check-changes.outputs.heavy == 'true'
+    name: minici (${{ matrix.minici_shard }})
+    runs-on: macos-15
     timeout-minutes: 120
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+    env: *minici_shard_env
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - minici_shard: macos-core
+            valgrind: false
+            shim_archive: false
+            llvm_float_bits: true
+            web_wasm: false
+          - minici_shard: macos-harness
+            valgrind: false
+            shim_archive: false
+            llvm_float_bits: false
+            web_wasm: false
+    steps: *minici_shard_steps
 
-      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
-        with:
-          version: 0.16.0
-          use-cache: false
+  minici-windows:
+    needs: [check-changes, minici-build-windows]
+    if: needs.check-changes.outputs.heavy == 'true'
+    name: minici (${{ matrix.minici_shard }})
+    runs-on: windows-2025
+    timeout-minutes: 120
+    env: *minici_shard_env
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - minici_shard: windows-core
+            valgrind: false
+            shim_archive: false
+            llvm_float_bits: false
+            web_wasm: false
+          - minici_shard: windows-zig
+            valgrind: false
+            shim_archive: false
+            llvm_float_bits: true
+            web_wasm: false
+          - minici_shard: windows-harness
+            valgrind: false
+            shim_archive: false
+            llvm_float_bits: false
+            web_wasm: false
+    steps: *minici_shard_steps
 
-      - name: Cache Zig dependency packages
-        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
-        with:
-          # Zig stores fetched packages in the `p/` subdir of the global cache.
-          # Caching just that under a stable build.zig.zon-hash key keeps deps
-          # present across runs: it is read every run, so it stays warm and is
-          # not evicted by the setup action's churnier per-run cache. A cold runner then no
-          # longer re-downloads deps from GitHub and hits HttpConnectionClosing.
-          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
-          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
-          restore-keys: |
-            zig-deps-${{ runner.os }}-${{ runner.arch }}-
-
-      # temp fix, see https://roc.zulipchat.com/#narrow/channel/395097-compiler-development/topic/CI/near/542085291
-      # `-f` because the LLVM version on the runner image is not this job's to
-      # depend on; there being no llvm-config to remove is fine.
-      - name: delete llvm-config
-        run: sudo rm -f /usr/lib/llvm-18/bin/llvm-config
-
-      # `build-release` rather than a plain `zig build`, so this runs the binary
-      # shape that ships: musl, and pinned to the aarch64 baseline CPU by
-      # getReleaseTargetQuery. That pin is precisely why the compiler cannot
-      # read its own CPU features out of `builtin.cpu` and has to ask the
-      # machine at runtime.
-      - name: build release roc
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: zig build build-release
-          retry_count: 3
-
-      # The fx platform ships `crt1.o` and `libc.a` for each target but builds
-      # `libhost.a`, so the arm64musl inputs dir is incomplete until this runs.
-      - name: build the fx platform host
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: zig build build-test-hosts -Dplatform=fx
-          retry_count: 3
-
-      - name: Test native instruction-cache publication
-        run: zig test src/machine_code_shim/instruction_cache.zig -O ReleaseSafe
-
-      - name: run hello_world.roc
-        run: |
-          set -euo pipefail
-
-          output="$(./zig-out/bin/roc test/fx/hello_world.roc)"
-          echo "$output"
-
-          if [ "$output" != "Hello, world!" ]; then
-            echo "Expected 'Hello, world!' but got '$output'."
-            exit 1
-          fi
+  # No arm64 Linux lane: hosted arm64 runners lose network mid-`build-ci` at
+  # full parallelism. arm64 Linux is covered nightly (ci_zig.yml).
 
   finish:
-    needs: [check-changes, zig-minici-build, zig-minici, arm64-linux-hello-world]
-    runs-on: ubuntu-latest
+    needs:
+      - check-changes
+      - static-checks
+      - linux-extra-checks
+      - minici-build-linux
+      - minici-linux
+      - minici-build-macos
+      - minici-macos
+      - minici-build-windows
+      - minici-windows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     if: always()
     steps:
+      # Every needed job must end with exactly the expected result, so a
+      # cancelled or unexpectedly skipped job fails this check. The macOS and
+      # Windows lanes may be skipped only on a draft PR.
       - name: Check workflow results
+        shell: bash
+        env:
+          CHECK_CHANGES: ${{ needs.check-changes.result }}
+          HEAVY: ${{ needs.check-changes.outputs.heavy }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          STATIC_CHECKS: ${{ needs.static-checks.result }}
+          LINUX_EXTRA_CHECKS: ${{ needs.linux-extra-checks.result }}
+          BUILD_LINUX: ${{ needs.minici-build-linux.result }}
+          MINICI_LINUX: ${{ needs.minici-linux.result }}
+          BUILD_MACOS: ${{ needs.minici-build-macos.result }}
+          MINICI_MACOS: ${{ needs.minici-macos.result }}
+          BUILD_WINDOWS: ${{ needs.minici-build-windows.result }}
+          MINICI_WINDOWS: ${{ needs.minici-windows.result }}
         run: |
-          if [[ "${{ needs.check-changes.result }}" != "success" ]]; then
-            echo "check-changes failed."
-            exit 1
+          set -euo pipefail
+          failed=0
+          expect() {
+            local job="$1" actual="$2" expected="$3"
+            if [ "$actual" = "$expected" ]; then
+              echo "$job: $actual"
+            else
+              echo "::error::$job is '$actual', expected '$expected'."
+              failed=1
+            fi
+          }
+
+          expect check-changes "$CHECK_CHANGES" success
+          expect static-checks "$STATIC_CHECKS" success
+
+          if [ "$CHECK_CHANGES" = success ] && [ "$HEAVY" = true ]; then
+            expect linux-extra-checks "$LINUX_EXTRA_CHECKS" success
+            expect minici-build-linux "$BUILD_LINUX" success
+            expect minici-linux "$MINICI_LINUX" success
+
+            if [ "$DRAFT" = true ]; then
+              scarce=skipped
+            else
+              scarce=success
+            fi
+            expect minici-build-macos "$BUILD_MACOS" "$scarce"
+            expect minici-macos "$MINICI_MACOS" "$scarce"
+            expect minici-build-windows "$BUILD_WINDOWS" "$scarce"
+            expect minici-windows "$MINICI_WINDOWS" "$scarce"
+          elif [ "$CHECK_CHANGES" = success ]; then
+            echo "Docs-only change: the MiniCI lanes are not required."
           fi
-          if [[ "${{ needs.check-changes.outputs.zig }}" == "true" ]]; then
-            if [[ "${{ needs.zig-minici-build.result }}" != "success" ]]; then
-              echo "zig-minici-build failed."
-              exit 1
-            fi
-            if [[ "${{ needs.zig-minici.result }}" != "success" ]]; then
-              echo "zig-minici failed."
-              exit 1
-            fi
-            if [[ "${{ needs.arm64-linux-hello-world.result }}" != "success" ]]; then
-              echo "arm64-linux-hello-world failed."
-              exit 1
-            fi
-          fi
+
+          exit "$failed"

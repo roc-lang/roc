@@ -91,11 +91,20 @@ pub const UseOrder = struct {
         }
     };
 
-    /// Immutable store-wide CSR and control-flow topology. Component orders
-    /// borrow these slices; all marking and query-cache state lives separately.
+    /// Immutable control-flow and ordered-use topology over a set of
+    /// statement inventories. Component orders borrow it; all marking and
+    /// query-cache state lives separately.
     pub const Topology = struct {
         store: *const LirStore,
-        domain: ?*Domain = null,
+        /// Store-indexed tables holding this topology's entries.
+        tables: *Scratch,
+        /// Whether `tables` belongs to this topology alone. Otherwise they are
+        /// a caller's reusable scratch, and releasing the topology resets
+        /// exactly the entries it wrote.
+        owns_tables: bool,
+        /// Each inventoried statement once, retained only to reset a
+        /// caller's scratch on release.
+        members: []u32,
         /// Statements reading and defining each local.
         reads_of: Rows,
         defs_of: Rows,
@@ -105,39 +114,157 @@ pub const UseOrder = struct {
         preds: Rows,
         /// Unknown successors conservatively count as used.
         unresolved: std.bit_set.DynamicBitSetUnmanaged,
+        unresolved_list: []u32,
 
         pub fn deinit(self: *@This(), allocator: Allocator) void {
+            if (self.owns_tables) {
+                if (self.tables.domain) |domain| domain.destroy(allocator);
+                self.tables.deinit(allocator);
+                allocator.destroy(self.tables);
+            } else {
+                for (self.members) |stmt| {
+                    self.tables.jump_join[self.tables.stmtIndex(stmt)] = no_local;
+                    self.tables.mark_gen[self.tables.stmtIndex(stmt)] = 0;
+                    self.tables.unresolved.unset(self.tables.stmtIndex(stmt));
+                }
+                self.reads_of.clearIndex();
+                self.defs_of.clearIndex();
+                self.preds.clearIndex();
+            }
             self.reads_of.deinit(allocator);
             self.defs_of.deinit(allocator);
             self.preds.deinit(allocator);
-            self.unresolved.deinit(allocator);
-            allocator.free(self.jump_join);
-            if (self.domain) |domain| domain.destroy(allocator);
+            allocator.free(self.unresolved_list);
+            allocator.free(self.members);
         }
     };
 
-    /// CSR rows of statement ids per key, each row sorted.
+    /// Store-indexed tables for building topologies. A caller that builds
+    /// many small topologies over one store (one per procedure) allocates
+    /// these once; each build writes and later resets only its own entries,
+    /// so its cost is proportional to its inventories, not to the store.
+    /// Between builds every row is empty, every jump is unresolved, and
+    /// every mark is zero.
+    pub const Scratch = struct {
+        domain: ?*Domain = null,
+        jump_join: []u32,
+        reads_index: RowIndex,
+        defs_index: RowIndex,
+        preds_index: RowIndex,
+        seen: std.bit_set.DynamicBitSetUnmanaged,
+        unresolved: std.bit_set.DynamicBitSetUnmanaged,
+        mark_gen: []u32,
+
+        pub fn init(allocator: Allocator, store: *const LirStore) Allocator.Error!Scratch {
+            return initTables(allocator, store, .with_marks);
+        }
+
+        /// Component orders keep their own compact marks, so a topology built
+        /// only for them needs no store-indexed marks.
+        fn initTables(allocator: Allocator, store: *const LirStore, marks: Marks) Allocator.Error!Scratch {
+            return initTablesInDomain(allocator, store, marks, null);
+        }
+
+        fn stmtIndex(self: *const Scratch, raw: u32) u32 {
+            return if (self.domain) |domain| domain.stmts.get(@enumFromInt(raw)).? else raw;
+        }
+
+        fn initTablesInDomain(allocator: Allocator, store: *const LirStore, marks: Marks, domain: ?*Domain) Allocator.Error!Scratch {
+            const stmt_count = if (domain) |d| d.stmts.count() else store.cfStmtCount();
+            const local_count = if (domain) |d| d.locals.count() else store.localCount();
+            const jump_join = try allocator.alloc(u32, stmt_count);
+            errdefer allocator.free(jump_join);
+            @memset(jump_join, no_local);
+            var reads_index = try RowIndex.init(allocator, local_count, domain, false);
+            errdefer reads_index.deinit(allocator);
+            var defs_index = try RowIndex.init(allocator, local_count, domain, false);
+            errdefer defs_index.deinit(allocator);
+            var preds_index = try RowIndex.init(allocator, stmt_count, domain, true);
+            errdefer preds_index.deinit(allocator);
+            var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, stmt_count);
+            errdefer seen.deinit(allocator);
+            var unresolved = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, stmt_count);
+            errdefer unresolved.deinit(allocator);
+            const mark_gen = try allocator.alloc(u32, if (marks == .with_marks) stmt_count else 0);
+            @memset(mark_gen, 0);
+            return .{
+                .domain = domain,
+                .jump_join = jump_join,
+                .reads_index = reads_index,
+                .defs_index = defs_index,
+                .preds_index = preds_index,
+                .seen = seen,
+                .unresolved = unresolved,
+                .mark_gen = mark_gen,
+            };
+        }
+
+        pub fn deinit(self: *Scratch, allocator: Allocator) void {
+            allocator.free(self.jump_join);
+            self.reads_index.deinit(allocator);
+            self.defs_index.deinit(allocator);
+            self.preds_index.deinit(allocator);
+            self.seen.deinit(allocator);
+            self.unresolved.deinit(allocator);
+            allocator.free(self.mark_gen);
+        }
+    };
+
+    /// Key-indexed row placement; a key with no statements has length zero.
+    pub const RowIndex = struct {
+        start: []u32,
+        len: []u32,
+        domain: ?*const Domain,
+        statement_keys: bool,
+
+        fn keyIndex(self: *const RowIndex, raw: u32) ?u32 {
+            return if (self.domain) |domain|
+                if (self.statement_keys) domain.stmts.get(@enumFromInt(raw)) else domain.locals.get(@enumFromInt(raw))
+            else
+                raw;
+        }
+
+        pub fn init(allocator: Allocator, key_count: usize, domain: ?*const Domain, statement_keys: bool) Allocator.Error!RowIndex {
+            const start = try allocator.alloc(u32, key_count);
+            errdefer allocator.free(start);
+            const len = try allocator.alloc(u32, key_count);
+            @memset(start, 0);
+            @memset(len, 0);
+            return .{ .start = start, .len = len, .domain = domain, .statement_keys = statement_keys };
+        }
+
+        pub fn deinit(self: *RowIndex, allocator: Allocator) void {
+            allocator.free(self.start);
+            allocator.free(self.len);
+        }
+    };
+
+    /// Sorted rows of statement ids per key, placed through a shared index.
     pub const Rows = struct {
-        offsets: []u32,
+        index: *RowIndex,
+        /// The keys whose rows are nonempty.
+        keys: []u32,
         stmts: []u32,
-        domain: ?*const Domain = null,
-        statement_keys: bool = false,
 
         pub fn row(self: *const Rows, local: LIR.LocalId) []const u32 {
             return self.rowAt(@intFromEnum(local));
         }
 
         pub fn rowAt(self: *const Rows, key: u32) []const u32 {
-            const index = if (self.domain) |domain|
-                (if (self.statement_keys) domain.stmts.get(@enumFromInt(key)) else domain.locals.get(@enumFromInt(key))) orelse return &.{}
-            else
-                key;
-            if (index + 1 >= self.offsets.len) return &.{};
-            return self.stmts[self.offsets[index]..self.offsets[index + 1]];
+            const dense = self.index.keyIndex(key) orelse return &.{};
+            if (dense >= self.index.len.len) return &.{};
+            // An empty row's start is not maintained.
+            const len = self.index.len[dense];
+            if (len == 0) return &.{};
+            return self.stmts[self.index.start[dense]..][0..len];
+        }
+
+        fn clearIndex(self: *Rows) void {
+            for (self.keys) |key| self.index.len[key] = 0;
         }
 
         pub fn deinit(self: *Rows, allocator: Allocator) void {
-            allocator.free(self.offsets);
+            allocator.free(self.keys);
             allocator.free(self.stmts);
         }
     };
@@ -145,14 +272,20 @@ pub const UseOrder = struct {
     const RowKind = enum { reads, defs };
 
     pub fn init(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId) Allocator.Error!UseOrder {
-        var topology = try initTopology(allocator, store, lists);
-        errdefer topology.deinit(allocator);
-        const mark_gen = try allocator.alloc(u32, store.cfStmtCount());
-        @memset(mark_gen, 0);
+        return fromTopology(allocator, try initTopology(allocator, store, lists, .{ .owned = .with_marks }));
+    }
+
+    /// An order over `lists` whose store-indexed tables are the caller's
+    /// reusable `scratch`, which must outlive the order.
+    pub fn initInScratch(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId, scratch: *Scratch) Allocator.Error!UseOrder {
+        return fromTopology(allocator, try initTopology(allocator, store, lists, .{ .scratch = scratch }));
+    }
+
+    fn fromTopology(allocator: Allocator, topology: Topology) UseOrder {
         return .{
             .allocator = allocator,
             .topology = topology,
-            .mark_gen = mark_gen,
+            .mark_gen = topology.tables.mark_gen,
             .generation = 0,
             .marked_local = no_local,
             .marked_uses = false,
@@ -160,24 +293,58 @@ pub const UseOrder = struct {
         };
     }
 
-    pub fn initTopology(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId) Allocator.Error!Topology {
-        return initTopologyInDomain(allocator, store, lists, null);
-    }
+    /// Whether a topology's tables include store-indexed marks for a whole order.
+    pub const Marks = enum { with_marks, without_marks };
 
-    fn stmtIndex(domain: ?*const Domain, raw: u32) u32 {
-        return if (domain) |d| d.stmts.get(@enumFromInt(raw)).? else raw;
-    }
+    /// Where a topology's store-indexed tables come from: fresh tables it
+    /// owns, or a caller's reusable scratch.
+    pub const Tables = union(enum) {
+        owned: Marks,
+        scratch: *Scratch,
+        compact: *Domain,
+    };
 
-    fn localIndex(domain: ?*const Domain, local: LIR.LocalId) u32 {
-        return if (domain) |d| d.locals.get(local).? else @intFromEnum(local);
-    }
-
-    fn initTopologyInDomain(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId, domain: ?*Domain) Allocator.Error!Topology {
+    pub fn initTopology(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId, source: Tables) Allocator.Error!Topology {
         if (builtin.is_test) topology_builds += 1;
-        const stmt_count = if (domain) |d| d.stmts.count() else store.cfStmtCount();
-        const jump_join = try allocator.alloc(u32, stmt_count);
-        errdefer allocator.free(jump_join);
-        @memset(jump_join, no_local);
+        const scratch: ?*Scratch = switch (source) {
+            .owned, .compact => null,
+            .scratch => |tables| tables,
+        };
+        const tables = scratch orelse owned: {
+            const owned = try allocator.create(Scratch);
+            errdefer allocator.destroy(owned);
+            owned.* = switch (source) {
+                .owned => |marks| try Scratch.initTables(allocator, store, marks),
+                .compact => |domain| try Scratch.initTablesInDomain(allocator, store, .with_marks, domain),
+                .scratch => unreachable,
+            };
+            break :owned owned;
+        };
+        errdefer if (scratch == null) {
+            tables.deinit(allocator);
+            allocator.destroy(tables);
+        };
+
+        var member_list = std.ArrayList(u32).empty;
+        defer member_list.deinit(allocator);
+        {
+            errdefer for (member_list.items) |stmt| tables.seen.unset(tables.stmtIndex(stmt));
+            for (lists) |list| {
+                for (list) |stmt_id| {
+                    const index = @intFromEnum(stmt_id);
+                    if (tables.seen.isSet(tables.stmtIndex(index))) continue;
+                    try member_list.append(allocator, index);
+                    tables.seen.set(tables.stmtIndex(index));
+                }
+            }
+        }
+        for (member_list.items) |stmt| tables.seen.unset(tables.stmtIndex(stmt));
+        const members = try allocator.dupe(u32, member_list.items);
+        errdefer allocator.free(members);
+        errdefer if (scratch != null) for (members) |stmt| {
+            tables.jump_join[tables.stmtIndex(stmt)] = no_local;
+        };
+
         var joins = collections.DenseMap(LIR.JoinPointId, u32).init(allocator);
         defer joins.deinit();
         for (lists) |list| {
@@ -190,28 +357,49 @@ pub const UseOrder = struct {
                 const stmt = store.getCFStmt(stmt_id);
                 if (stmt != .jump) continue;
                 if (joins.get(stmt.jump.target)) |join_stmt| {
-                    jump_join[stmtIndex(domain, @intFromEnum(stmt_id))] = join_stmt;
+                    tables.jump_join[tables.stmtIndex(@intFromEnum(stmt_id))] = join_stmt;
                 }
             }
         }
 
-        var reads_of = try buildRows(allocator, store, lists, domain, .reads);
-        errdefer reads_of.deinit(allocator);
-        var defs_of = try buildRows(allocator, store, lists, domain, .defs);
-        errdefer defs_of.deinit(allocator);
-
-        var unresolved = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, stmt_count);
-        errdefer unresolved.deinit(allocator);
-        var preds = try buildPreds(allocator, store, lists, domain, jump_join, &unresolved);
-        errdefer preds.deinit(allocator);
+        var reads_of = try buildRows(allocator, store, members, &tables.reads_index, .reads);
+        errdefer {
+            reads_of.clearIndex();
+            reads_of.deinit(allocator);
+        }
+        var defs_of = try buildRows(allocator, store, members, &tables.defs_index, .defs);
+        errdefer {
+            defs_of.clearIndex();
+            defs_of.deinit(allocator);
+        }
+        var unresolved_list = std.ArrayList(u32).empty;
+        errdefer unresolved_list.deinit(allocator);
+        errdefer for (unresolved_list.items) |stmt| tables.unresolved.unset(tables.stmtIndex(stmt));
+        var preds = try buildPreds(allocator, store, members, tables, &unresolved_list);
+        errdefer {
+            preds.clearIndex();
+            preds.deinit(allocator);
+        }
+        const owned_unresolved = try allocator.dupe(u32, unresolved_list.items);
+        unresolved_list.deinit(allocator);
+        // Only a reusable scratch needs `seen` for a later build, or the
+        // member inventory to reset its entries on release.
+        if (scratch == null) {
+            tables.seen.deinit(allocator);
+            tables.seen = .{};
+            allocator.free(members);
+        }
         return .{
             .store = store,
-            .domain = domain,
+            .tables = tables,
+            .owns_tables = scratch == null,
+            .members = if (scratch == null) &.{} else members,
             .reads_of = reads_of,
             .defs_of = defs_of,
-            .jump_join = jump_join,
+            .jump_join = tables.jump_join,
             .preds = preds,
-            .unresolved = unresolved,
+            .unresolved = tables.unresolved,
+            .unresolved_list = owned_unresolved,
         };
     }
 
@@ -268,133 +456,121 @@ pub const UseOrder = struct {
         };
     }
 
-    fn buildRows(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId, domain: ?*const Domain, comptime kind: RowKind) Allocator.Error!Rows {
-        const stmt_count = if (domain) |d| d.stmts.count() else store.cfStmtCount();
-        const local_count = if (domain) |d| d.locals.count() else store.localCount();
-        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, stmt_count);
-        defer seen.deinit(allocator);
-        const offsets = try allocator.alloc(u32, local_count + 1);
-        errdefer allocator.free(offsets);
-        @memset(offsets, 0);
-        const Count = struct {
-            offsets: []u32,
-            domain: ?*const Domain,
-            fn note(self: *@This(), local: LIR.LocalId) void {
-                self.offsets[localIndex(self.domain, local) + 1] += 1;
+    /// Counts, places, and sorts one row per key reached from `members`.
+    /// Only reached keys are written, so the index's other entries stay empty.
+    fn RowBuilder(comptime Key: type, comptime keyIndex: fn (Key) u32) type {
+        return struct {
+            allocator: Allocator,
+            index: *RowIndex,
+            keys: std.ArrayList(u32) = .empty,
+            stmts: []u32 = &.{},
+            stmt: u32 = 0,
+            failed: bool = false,
+
+            fn count(self: *@This(), key: Key) void {
+                const raw = self.index.keyIndex(keyIndex(key)).?;
+                if (self.index.len[raw] == 0) {
+                    self.keys.append(self.allocator, raw) catch {
+                        self.failed = true;
+                        return;
+                    };
+                }
+                self.index.len[raw] += 1;
+            }
+
+            fn place(self: *@This()) Allocator.Error!void {
+                if (self.failed) return error.OutOfMemory;
+                var total: u32 = 0;
+                for (self.keys.items) |raw| {
+                    self.index.start[raw] = total;
+                    total += self.index.len[raw];
+                    self.index.len[raw] = 0;
+                }
+                self.stmts = try self.allocator.alloc(u32, total);
+            }
+
+            fn fill(self: *@This(), key: Key) void {
+                const raw = self.index.keyIndex(keyIndex(key)).?;
+                self.stmts[self.index.start[raw] + self.index.len[raw]] = self.stmt;
+                self.index.len[raw] += 1;
+            }
+
+            fn finish(self: *@This()) Allocator.Error!Rows {
+                for (self.keys.items) |raw| {
+                    std.mem.sortUnstable(u32, self.stmts[self.index.start[raw]..][0..self.index.len[raw]], {}, std.sort.asc(u32));
+                }
+                return .{
+                    .index = self.index,
+                    .keys = try self.keys.toOwnedSlice(self.allocator),
+                    .stmts = self.stmts,
+                };
+            }
+
+            fn abandon(self: *@This()) void {
+                for (self.keys.items) |raw| self.index.len[raw] = 0;
+                self.keys.deinit(self.allocator);
+                self.allocator.free(self.stmts);
             }
         };
-        var count = Count{ .offsets = offsets, .domain = domain };
-        for (lists) |list| {
-            for (list) |stmt_id| {
-                const index = stmtIndex(domain, @intFromEnum(stmt_id));
-                if (seen.isSet(index)) continue;
-                seen.set(index);
-                const stmt = store.getCFStmt(stmt_id);
-                if (!rowsInclude(stmt, kind)) continue;
-                switch (kind) {
-                    .reads => body_clone.forEachStmtRead(store, stmt, &count, Count.note),
-                    .defs => body_clone.forEachStmtDef(store, stmt, &count, Count.note),
-                }
-            }
-        }
-        for (0..local_count) |local| offsets[local + 1] += offsets[local];
-        const stmts = try allocator.alloc(u32, offsets[local_count]);
-        errdefer allocator.free(stmts);
-        const fill = try allocator.dupe(u32, offsets[0..local_count]);
-        defer allocator.free(fill);
-        const Fill = struct {
-            fill: []u32,
-            stmts: []u32,
-            stmt: u32,
-            domain: ?*const Domain,
-            fn note(self: *@This(), local: LIR.LocalId) void {
-                const raw = localIndex(self.domain, local);
-                self.stmts[self.fill[raw]] = self.stmt;
-                self.fill[raw] += 1;
-            }
-        };
-        var filler = Fill{ .fill = fill, .stmts = stmts, .stmt = 0, .domain = domain };
-        seen.setRangeValue(.{ .start = 0, .end = stmt_count }, false);
-        for (lists) |list| {
-            for (list) |stmt_id| {
-                const index = stmtIndex(domain, @intFromEnum(stmt_id));
-                if (seen.isSet(index)) continue;
-                seen.set(index);
-                filler.stmt = @intFromEnum(stmt_id);
-                const stmt = store.getCFStmt(stmt_id);
-                if (!rowsInclude(stmt, kind)) continue;
-                switch (kind) {
-                    .reads => body_clone.forEachStmtRead(store, stmt, &filler, Fill.note),
-                    .defs => body_clone.forEachStmtDef(store, stmt, &filler, Fill.note),
-                }
-            }
-        }
-        for (0..local_count) |local| {
-            std.mem.sort(u32, stmts[offsets[local]..offsets[local + 1]], {}, std.sort.asc(u32));
-        }
-        return .{ .offsets = offsets, .stmts = stmts, .domain = domain };
     }
 
-    /// Predecessor rows over the successor edges of every statement in the
-    /// inventories, and the set of statements whose successors are unknown.
+    fn localKey(local: LIR.LocalId) u32 {
+        return @intFromEnum(local);
+    }
+
+    fn stmtKey(stmt: u32) u32 {
+        return stmt;
+    }
+
+    fn buildRows(allocator: Allocator, store: *const LirStore, members: []const u32, index: *RowIndex, comptime kind: RowKind) Allocator.Error!Rows {
+        const Builder = RowBuilder(LIR.LocalId, localKey);
+        var builder = Builder{ .allocator = allocator, .index = index };
+        errdefer builder.abandon();
+        for (members) |raw| {
+            const stmt = store.getCFStmt(@enumFromInt(raw));
+            if (!rowsInclude(stmt, kind)) continue;
+            switch (kind) {
+                .reads => body_clone.forEachStmtRead(store, stmt, &builder, Builder.count),
+                .defs => body_clone.forEachStmtDef(store, stmt, &builder, Builder.count),
+            }
+        }
+        try builder.place();
+        for (members) |raw| {
+            const stmt = store.getCFStmt(@enumFromInt(raw));
+            if (!rowsInclude(stmt, kind)) continue;
+            builder.stmt = raw;
+            switch (kind) {
+                .reads => body_clone.forEachStmtRead(store, stmt, &builder, Builder.fill),
+                .defs => body_clone.forEachStmtDef(store, stmt, &builder, Builder.fill),
+            }
+        }
+        return try builder.finish();
+    }
+
+    /// Predecessor rows over the successor edges of every member, and the
+    /// members whose successors are unknown.
     fn buildPreds(
         allocator: Allocator,
         store: *const LirStore,
-        lists: []const []const LIR.CFStmtId,
-        domain: ?*const Domain,
-        jump_join: []const u32,
-        unresolved: *std.bit_set.DynamicBitSetUnmanaged,
+        members: []const u32,
+        tables: *Scratch,
+        unresolved: *std.ArrayList(u32),
     ) Allocator.Error!Rows {
-        const stmt_count = if (domain) |d| d.stmts.count() else store.cfStmtCount();
-        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, stmt_count);
-        defer seen.deinit(allocator);
-        const offsets = try allocator.alloc(u32, stmt_count + 1);
-        errdefer allocator.free(offsets);
-        @memset(offsets, 0);
-        const Count = struct {
-            offsets: []u32,
-            domain: ?*const Domain,
-            fn note(self: *@This(), succ: u32) void {
-                self.offsets[stmtIndex(self.domain, succ) + 1] += 1;
-            }
-        };
-        var count = Count{ .offsets = offsets, .domain = domain };
-        for (lists) |list| {
-            for (list) |stmt_id| {
-                const index = stmtIndex(domain, @intFromEnum(stmt_id));
-                if (seen.isSet(index)) continue;
-                seen.set(index);
-                if (forEachSuccessor(store, domain, jump_join, @intFromEnum(stmt_id), &count, Count.note)) unresolved.set(index);
+        const Builder = RowBuilder(u32, stmtKey);
+        var builder = Builder{ .allocator = allocator, .index = &tables.preds_index };
+        errdefer builder.abandon();
+        for (members) |stmt| {
+            if (forEachSuccessor(store, tables, stmt, &builder, Builder.count)) {
+                try unresolved.append(allocator, stmt);
+                tables.unresolved.set(tables.stmtIndex(stmt));
             }
         }
-        for (0..stmt_count) |index| offsets[index + 1] += offsets[index];
-        const stmts = try allocator.alloc(u32, offsets[stmt_count]);
-        errdefer allocator.free(stmts);
-        const fill = try allocator.dupe(u32, offsets[0..stmt_count]);
-        defer allocator.free(fill);
-        const Fill = struct {
-            fill: []u32,
-            stmts: []u32,
-            stmt: u32,
-            domain: ?*const Domain,
-            fn note(self: *@This(), succ: u32) void {
-                const index = stmtIndex(self.domain, succ);
-                self.stmts[self.fill[index]] = self.stmt;
-                self.fill[index] += 1;
-            }
-        };
-        var filler = Fill{ .fill = fill, .stmts = stmts, .stmt = 0, .domain = domain };
-        seen.setRangeValue(.{ .start = 0, .end = stmt_count }, false);
-        for (lists) |list| {
-            for (list) |stmt_id| {
-                const index = stmtIndex(domain, @intFromEnum(stmt_id));
-                if (seen.isSet(index)) continue;
-                seen.set(index);
-                filler.stmt = @intFromEnum(stmt_id);
-                _ = forEachSuccessor(store, domain, jump_join, @intFromEnum(stmt_id), &filler, Fill.note);
-            }
+        try builder.place();
+        for (members) |stmt| {
+            builder.stmt = stmt;
+            _ = forEachSuccessor(store, tables, stmt, &builder, Builder.fill);
         }
-        return .{ .offsets = offsets, .stmts = stmts, .domain = domain, .statement_keys = true };
+        return try builder.finish();
     }
 
     /// Statement inventories walked structurally from each procedure body,
@@ -431,27 +607,12 @@ pub const UseOrder = struct {
         if (only_proc == null) return init(allocator, store, lists.items);
         const domain = try Domain.create(allocator, store, lists.items);
         errdefer domain.destroy(allocator);
-        var topology = try initTopologyInDomain(allocator, store, lists.items, domain);
-        errdefer {
-            topology.domain = null;
-            topology.deinit(allocator);
-        }
-        const marks = try allocator.alloc(u32, domain.stmts.count());
-        @memset(marks, 0);
-        return .{
-            .allocator = allocator,
-            .topology = topology,
-            .mark_gen = marks,
-            .generation = 0,
-            .marked_local = no_local,
-            .marked_uses = false,
-            .work = .empty,
-        };
+        return fromTopology(allocator, try initTopology(allocator, store, lists.items, .{ .compact = domain }));
     }
 
     pub fn deinit(self: *UseOrder) void {
-        if (self.component == null) self.topology.deinit(self.allocator);
-        self.allocator.free(self.mark_gen);
+        // A whole order's marks live in its topology's tables.
+        if (self.component == null) self.topology.deinit(self.allocator) else self.allocator.free(self.mark_gen);
         self.work.deinit(self.allocator);
     }
 
@@ -460,7 +621,7 @@ pub const UseOrder = struct {
             std.debug.assert(component.stmt_owner[stmt] == component.id);
             return component.stmt_to_dense[stmt];
         }
-        return stmtIndex(self.topology.domain, stmt);
+        return self.topology.tables.stmtIndex(stmt);
     }
 
     fn contains(row: []const u32, stmt: u32) bool {
@@ -474,11 +635,11 @@ pub const UseOrder = struct {
         return false;
     }
 
-    fn reads(self: *const UseOrder, stmt: u32, local: LIR.LocalId) bool {
+    pub fn reads(self: *const UseOrder, stmt: u32, local: LIR.LocalId) bool {
         return contains(self.topology.reads_of.row(local), stmt);
     }
 
-    fn defines(self: *const UseOrder, stmt: u32, local: LIR.LocalId) bool {
+    pub fn defines(self: *const UseOrder, stmt: u32, local: LIR.LocalId) bool {
         return contains(self.topology.defs_of.row(local), stmt);
     }
 
@@ -508,7 +669,7 @@ pub const UseOrder = struct {
 
     /// Whether a marked statement can execute after `stmt`.
     pub fn after(self: *const UseOrder, stmt: u32, local: LIR.LocalId) bool {
-        if (self.topology.unresolved.isSet(stmtIndex(self.topology.domain, stmt))) return true;
+        if (self.topology.unresolved.isSet(self.topology.tables.stmtIndex(stmt))) return true;
         const Probe = struct {
             order: *const UseOrder,
             stmt: u32,
@@ -520,7 +681,7 @@ pub const UseOrder = struct {
             }
         };
         var probe = Probe{ .order = self, .stmt = stmt, .local = local, .hit = false };
-        _ = forEachSuccessor(self.topology.store, self.topology.domain, self.topology.jump_join, stmt, &probe, Probe.note);
+        _ = forEachSuccessor(self.topology.store, self.topology.tables, stmt, &probe, Probe.note);
         return probe.hit;
     }
 
@@ -538,15 +699,7 @@ pub const UseOrder = struct {
         if (self.component) |component| {
             for (component.unresolved) |stmt| try self.mark(stmt);
         } else {
-            var unresolved_iter = self.topology.unresolved.iterator(.{});
-            if (self.topology.domain) |domain| {
-                var it = domain.stmts.iterator();
-                while (it.next()) |entry| if (self.topology.unresolved.isSet(entry.value_ptr.*)) {
-                    try self.mark(@intFromEnum(entry.key_ptr.*));
-                };
-            } else {
-                while (unresolved_iter.next()) |stmt| try self.mark(@intCast(stmt));
-            }
+            for (self.topology.unresolved_list) |stmt| try self.mark(stmt);
         }
         while (self.work.pop()) |stmt| {
             if (builtin.is_test) self.backward_visits += 1;
@@ -571,7 +724,7 @@ pub const UseOrder = struct {
     fn cutEdge(self: *const UseOrder, from: u32, to: u32, local: LIR.LocalId) bool {
         const node = self.topology.store.getCFStmt(@enumFromInt(from));
         if (node != .jump) return false;
-        const join_stmt = self.topology.jump_join[stmtIndex(self.topology.domain, from)];
+        const join_stmt = self.topology.jump_join[self.topology.tables.stmtIndex(from)];
         if (join_stmt == no_local) return false;
         const join = self.topology.store.getCFStmt(@enumFromInt(join_stmt)).join;
         if (@intFromEnum(join.body) != to) return false;
@@ -584,7 +737,7 @@ pub const UseOrder = struct {
 
     /// Calls `note(ctx, successor)` for each control-flow successor of
     /// `stmt`; returns true when an edge cannot be resolved.
-    fn forEachSuccessor(store: *const LirStore, domain: ?*const Domain, jump_join: []const u32, stmt: u32, ctx: anytype, comptime note: fn (@TypeOf(ctx), u32) void) bool {
+    fn forEachSuccessor(store: *const LirStore, tables: *const Scratch, stmt: u32, ctx: anytype, comptime note: fn (@TypeOf(ctx), u32) void) bool {
         switch (store.getCFStmt(@enumFromInt(stmt))) {
             inline .init_uninitialized,
             .assign_ref,
@@ -649,7 +802,7 @@ pub const UseOrder = struct {
             // continues with its remainder.
             .join => |node| note(ctx, @intFromEnum(node.remainder)),
             .jump => {
-                const join_stmt = jump_join[stmtIndex(domain, stmt)];
+                const join_stmt = tables.jump_join[tables.stmtIndex(stmt)];
                 if (join_stmt == no_local) return true;
                 note(ctx, @intFromEnum(store.getCFStmt(@enumFromInt(join_stmt)).join.body));
             },
@@ -774,8 +927,8 @@ test "use order compact procedure domain matches dense queries and excludes unre
     var dense = try UseOrder.init(allocator, &store, &.{&.{ alias, done }});
     defer dense.deinit();
     try testing.expectEqual(@as(usize, 2), compact.mark_gen.len);
-    try testing.expectEqual(@as(usize, 3), compact.topology.reads_of.offsets.len);
-    try testing.expectEqual(@as(usize, 3), compact.topology.preds.offsets.len);
+    try testing.expectEqual(@as(usize, 2), compact.topology.reads_of.index.len.len);
+    try testing.expectEqual(@as(usize, 2), compact.topology.preds.index.len.len);
     for ([_]LIR.CFStmtId{ alias, done }) |stmt| {
         for ([_]LIR.LocalId{ input, view }) |local| {
             try testing.expectEqual(try dense.usesAfter(@intFromEnum(stmt), local), try compact.usesAfter(@intFromEnum(stmt), local));
@@ -783,4 +936,15 @@ test "use order compact procedure domain matches dense queries and excludes unre
     }
     try testing.expect(try compact.usesAfter(@intFromEnum(alias), view));
     try testing.expect(!try compact.usesAfter(@intFromEnum(alias), input));
+
+    // Compact domains own both their remapping and topology storage. Every
+    // partial construction and query must release both after allocation failure.
+    const Probe = struct {
+        fn run(probe_allocator: Allocator, source: *const LirStore, id: LIR.LirProcSpecId, stmt: LIR.CFStmtId, local: LIR.LocalId) Allocator.Error!void {
+            var order = try UseOrder.initFromStore(probe_allocator, source, id);
+            defer order.deinit();
+            _ = try order.usesAfter(@intFromEnum(stmt), local);
+        }
+    };
+    try testing.checkAllAllocationFailures(allocator, Probe.run, .{ &store, proc, alias, view });
 }

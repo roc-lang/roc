@@ -294,6 +294,110 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"passes 10: 0 1 2 3 4 5 6 7 8 9\"" },
     },
     .{
+        .name = "issue 11632: annotated Try parser keeps its listed tags",
+        .source_kind = .module,
+        .source =
+        \\parse : Str -> Try([A, B], _)
+        \\parse = |json| Json.parse(json)
+        \\main = match parse("\"C\"") {
+        \\    Ok(_) => False
+        \\    Err(_) => True
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "issue 11632: single inferred tag still derives",
+        .source_kind = .module,
+        .source =
+        \\main = Ok(Friendly) == Json.parse("\"Friendly\"")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "issue 11632: nested inferred encoder row",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    value = { tags: [A] }
+        \\    encoded = Json.to_str(value)
+        \\    all_a = List.all(value.tags, |tag| match tag {
+        \\        A => True
+        \\        B => False
+        \\    })
+        \\    encoded == "{\"tags\":[\"A\"]}" and all_a
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "issue 11632: parser branch order A then B",
+        .source_kind = .module,
+        .source =
+        \\run = |json| {
+        \\    w = Json.parse(json)
+        \\    match w {
+        \\        Ok(A(s)) => s == ""
+        \\        Ok(B) => True
+        \\        Err(_) => False
+        \\    }
+        \\}
+        \\main = run("\"B\"") and run("{\"A\":\"\"}")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "issue 11632: parser branch order B then A",
+        .source_kind = .module,
+        .source =
+        \\run = |json| {
+        \\    w = Json.parse(json)
+        \\    match w {
+        \\        Ok(B) => True
+        \\        Ok(A(s)) => s == ""
+        \\        Err(_) => False
+        \\    }
+        \\}
+        \\main = run("\"B\"") and run("{\"A\":\"\"}")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "issue 11632: encoder before later match",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    v = if 1 == 1 A else B
+        \\    s = Json.to_str(v)
+        \\    extra = match v {
+        \\        A => 1
+        \\        B => 2
+        \\        C => 3
+        \\    }
+        \\    s == "\"A\"" and extra == 1
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "issue 11632: fresh caller openness remains inferred",
+        .source_kind = .module,
+        .source =
+        \\make : {} -> [A, B]
+        \\make = |_| A
+        \\main = {
+        \\    value = make({})
+        \\    encoded = Json.to_str(value)
+        \\    match value {
+        \\        A => encoded == "\"A\""
+        \\        B => False
+        \\        C => False
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "issue 11377: nested nominal alias applications retain outer parameters",
         .source_kind = .module,
         .source =
@@ -351,6 +455,46 @@ pub const tests = [_]TestCase{
         .source_kind = .module,
         .source = issue11377GenericNominalCollectionSource,
         .expected = .{ .inspect_str = "\"same\"" },
+    },
+    .{
+        .name = "issue 11626: different tags keep independent return rows",
+        .source_kind = .module,
+        .source = @import("issue_11626_source.zig").source ++ "\nmain = (stats_page(\"\"), lead_page(\"\"), stats_page(\"ok\"), lead_page(\"ok\"))\n",
+        .expected = .{ .inspect_str = "(Err(NotFound(IndexStats)), Err(NotFound(LeadMissing)), Ok(\"stats\"), Ok(\"lead\"))" },
+    },
+    .{
+        .name = "issue 11626: different base types keep independent return rows",
+        .source_kind = .module,
+        .source = @import("issue_11626_source.zig").source ++ "\nmain = (text_page(\"\"), number_page(\"\"), text_page(\"ok\"), number_page(\"ok\"))\n",
+        .expected = .{ .inspect_str = "(Err(NotFound(\"owned error payload longer than an inline string\")), Err(NotFound(7)), Ok(\"text\"), Ok(\"number\"))" },
+    },
+    .{
+        .name = "issue 11626: higher order calls keep independent return rows",
+        .source_kind = .module,
+        .source = @import("issue_11626_source.zig").source ++ "\nmain = (run(\"\", stats_page), run(\"\", lead_page), run(\"ok\", stats_page), run(\"ok\", lead_page))\n",
+        .expected = .{ .inspect_str = "(Err(NotFound(IndexStats)), Err(NotFound(LeadMissing)), Ok(\"stats\"), Ok(\"lead\"))" },
+    },
+    .{
+        .name = "issue 11626: composed returns carry captured callable payloads",
+        .source_kind = .module,
+        .source =
+        \\find = |text, what| if text == "" Err(NotFound(what)) else Ok(text)
+        \\respond = |text| Ok(|{}| text)
+        \\stats_page = |text| {
+        \\    _ = find(text, IndexStats)?
+        \\    respond(text)
+        \\}
+        \\lead_page = |text| {
+        \\    _ = find(text, LeadMissing)?
+        \\    respond(text)
+        \\}
+        \\call = |result| match result {
+        \\    Ok(f) => f({})
+        \\    Err(_) => "missing"
+        \\}
+        \\main = (call(stats_page("owned stats response longer than an inline string")), call(lead_page("owned lead response longer than an inline string")))
+        ,
+        .expected = .{ .inspect_str = "(\"owned stats response longer than an inline string\", \"owned lead response longer than an inline string\")" },
     },
     .{
         .name = "issue 11470: imported polymorphic error composition preserves shared tails",
@@ -2733,6 +2877,271 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "\"{\\\"inner\\\":{\\\"n\\\":\\\"x\\\"},\\\"m\\\":null}\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        // A record with two fields of one record-backed derived nominal: the
+        // generated codec calls for both fields must compile and parse, with
+        // each field resolved through the nominal's own derivation.
+        .name = "issue 11563: Json.parse one derived nominal record in two fields of a record",
+        .source_kind = .module,
+        .source =
+        \\Plain := { name : Str }.{ parser_for : _ }
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try({ c : Plain, d : Plain }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse("{\"c\":{\"name\":\"a\"},\"d\":{\"name\":\"b\"}}")
+        \\    match decoded {
+        \\        Ok({ c: Plain.({ name: n1 }), d: Plain.({ name: n2 }) }) => "${n1}${n2}"
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"ab\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        // Both fields of one derived nominal encode through the one derivation
+        // that covers the nominal.
+        .name = "issue 11563: Json.to_str one derived nominal record in two fields of a record",
+        .source_kind = .module,
+        .source =
+        \\Plain := { name : Str }.{ encoder_for : _ }
+        \\
+        \\main : Str
+        \\main = Json.to_str({ c: Plain.({ name: "a" }), d: Plain.({ name: "b" }) })
+        ,
+        .expected = .{ .inspect_str = "\"{\\\"c\\\":{\\\"name\\\":\\\"a\\\"},\\\"d\\\":{\\\"name\\\":\\\"b\\\"}}\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        .name = "issue 11563: Json.parse one derived tag-union nominal in two fields of a record",
+        .source_kind = .module,
+        .source =
+        \\P := [A, B(Str)].{ parser_for : _ }
+        \\
+        \\describe : P -> Str
+        \\describe = |p|
+        \\    match p {
+        \\        A => "A"
+        \\        B(s) => s
+        \\    }
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try({ c : P, d : P }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse("{\"c\":\"A\",\"d\":{\"B\":\"x\"}}")
+        \\    match decoded {
+        \\        Ok({ c, d }) => "${describe(c)}${describe(d)}"
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"Ax\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        // The nominal is reached first as a list element and then as a field.
+        .name = "issue 11563: Json.parse one derived nominal as a list element and as a field",
+        .source_kind = .module,
+        .source =
+        \\Plain := { name : Str }.{ parser_for : _ }
+        \\
+        \\name_of : Plain -> Str
+        \\name_of = |Plain.({ name })| name
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try({ c : List(Plain), d : Plain }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse("{\"c\":[{\"name\":\"a\"},{\"name\":\"b\"}],\"d\":{\"name\":\"c\"}}")
+        \\    match decoded {
+        \\        Ok({ c, d }) => Str.concat(Str.join_with(List.map(c, name_of), ""), name_of(d))
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"abc\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        // A recursive derived nominal reaches its own application inside its
+        // backing; that occurrence resolves to the nominal's own derivation.
+        .name = "issue 11563: Json.parse recursive derived nominal record",
+        .source_kind = .module,
+        .source =
+        \\Node := { name : Str, kids : List(Node) }.{ parser_for : _ }
+        \\
+        \\names : Node -> Str
+        \\names = |Node.({ name, kids })|
+        \\    List.fold(kids, name, |acc, kid| Str.concat(acc, names(kid)))
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try(Node, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse("{\"name\":\"a\",\"kids\":[{\"name\":\"b\",\"kids\":[{\"name\":\"c\",\"kids\":[]}]},{\"name\":\"d\",\"kids\":[]}]}")
+        \\    match decoded {
+        \\        Ok(node) => names(node)
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"abcd\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        // The outer union's payloads hold no records, so its spec precomputes
+        // nothing; the nested union still builds its own spec.
+        .name = "issue 11563: Json.parse derived tag union in a list payload of a derived tag union",
+        .source_kind = .module,
+        .source =
+        \\Inner := [Leaf(Str), Stop].{ parser_for : _ }
+        \\Outer := [Wrap(List(Inner))].{ parser_for : _ }
+        \\
+        \\describe : Inner -> Str
+        \\describe = |inner|
+        \\    match inner {
+        \\        Leaf(s) => s
+        \\        Stop => "."
+        \\    }
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try(Outer, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse("{\"Wrap\":[{\"Leaf\":\"a\"},\"Stop\",{\"Leaf\":\"b\"}]}")
+        \\    match decoded {
+        \\        Ok(Wrap(items)) => Str.join_with(List.map(items, describe), "")
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"a.b\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        .name = "issue 11563: Json.parse derived tag union with a record payload in a list payload of a derived tag union",
+        .source_kind = .module,
+        .source =
+        \\Inner := [Leaf({ x : Str }), Stop].{ parser_for : _ }
+        \\Outer := [Wrap(List(Inner))].{ parser_for : _ }
+        \\
+        \\describe : Inner -> Str
+        \\describe = |inner|
+        \\    match inner {
+        \\        Leaf({ x }) => x
+        \\        Stop => "."
+        \\    }
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try(Outer, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse("{\"Wrap\":[{\"Leaf\":{\"x\":\"a\"}},\"Stop\"]}")
+        \\    match decoded {
+        \\        Ok(Wrap(items)) => Str.join_with(List.map(items, describe), "")
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"a.\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        .name = "issue 11563: Json round trip of recursive derived tag-union nominal",
+        .source_kind = .module,
+        .source =
+        \\Tree := [Leaf(Str), Node(List(Tree))].{
+        \\    encoder_for : _
+        \\    parser_for : _
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    encoded = Json.to_str(Tree.Node([Tree.Leaf("a"), Tree.Node([Tree.Leaf("b")]), Tree.Node([])]))
+        \\    decoded : Try(Tree, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse(encoded)
+        \\    match decoded {
+        \\        Ok(tree) => Str.concat(encoded, if Json.to_str(tree) == encoded "=" else "!=")
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"{\\\"Node\\\":[{\\\"Leaf\\\":\\\"a\\\"},{\\\"Node\\\":[{\\\"Leaf\\\":\\\"b\\\"}]},{\\\"Node\\\":[]}]}=\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        .name = "issue 11563: Json.to_str mutually recursive derived nominals",
+        .source_kind = .module,
+        .source =
+        \\A := { b : List(B) }.{ encoder_for : _ }
+        \\B := { a : List(A), name : Str }.{ encoder_for : _ }
+        \\
+        \\main : Str
+        \\main = Json.to_str(A.({ b: [B.({ a: [A.({ b: [] })], name: "x" })] }))
+        ,
+        .expected = .{ .inspect_str = "\"{\\\"b\\\":[{\\\"a\\\":[{\\\"b\\\":[]}],\\\"name\\\":\\\"x\\\"}]}\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        // Two fields of one nominal with a hand-written parser each record
+        // their own checked edge in one method role; the edges' evidence
+        // nodes are distinct allocations with equal content.
+        .name = "issue 11563: Json.parse one custom-codec nominal in two fields of a record",
+        .source_kind = .module,
+        .source =
+        \\Opt(a) := [
+        \\    None,
+        \\    Has(a),
+        \\].{
+        \\    map : Opt(a), (a -> b) -> Opt(b)
+        \\    map = |o, f|
+        \\        match o {
+        \\            Has(a) => Has(f(a))
+        \\            None => None
+        \\        }
+        \\
+        \\    with_default : Opt(a), a -> a
+        \\    with_default = |o, default|
+        \\        match o {
+        \\            Has(a) => a
+        \\            None => default
+        \\        }
+        \\
+        \\    parser_for : encoding -> (state -> Try({ value : Opt(a), rest : state }, [InvalidJson(Str), MissingRequiredField(Str), ..]))
+        \\        where [
+        \\            a.parser_for : encoding -> (state -> Try({ value : a, rest : state }, [InvalidJson(Str), MissingRequiredField(Str)])),
+        \\            encoding.parse_null : encoding, state -> Try(state, [InvalidJson(Str)]),
+        \\        ]
+        \\    parser_for = |encoding| {
+        \\        Elem : a
+        \\        parse_elem = Elem.parser_for(encoding)
+        \\
+        \\        |state|
+        \\            match encoding.parse_null(state) {
+        \\                Ok(rest) => Ok({ value: None, rest })
+        \\                Err(InvalidJson(_)) =>
+        \\                    match parse_elem(state) {
+        \\                        Ok(parsed) => Ok({ value: Has(parsed.value), rest: parsed.rest })
+        \\                        Err(InvalidJson(e)) => Err(InvalidJson(e))
+        \\                        Err(MissingRequiredField(f)) => Err(MissingRequiredField(f))
+        \\                    }
+        \\            }
+        \\    }
+        \\}
+        \\
+        \\show : Opt(Str) -> Str
+        \\show = |o| Opt.with_default(o, "none")
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try({ a : Opt(Str), b : Opt(Str) }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse("{\"a\":\"x\",\"b\":null}")
+        \\    match decoded {
+        \\        Ok({ a, b }) => "${show(a)}/${show(b)}"
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"x/none\"" },
     },
     .{
         // repro for https://github.com/roc-lang/roc/issues/11549

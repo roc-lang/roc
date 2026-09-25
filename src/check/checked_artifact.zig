@@ -161,6 +161,12 @@ pub const CheckedModuleArtifactKey = extern struct {
     direct_import_artifact_keys_hash: [32]u8 = [_]u8{0} ** 32,
     bytes: [32]u8 = [_]u8{0} ** 32,
 
+    /// Integer equality over the key's identity bytes, which name the key
+    /// wholly: a single 256-bit compare, never a byte-wise comparison.
+    pub fn eql(a: CheckedModuleArtifactKey, b: CheckedModuleArtifactKey) bool {
+        return @as(u256, @bitCast(a.bytes)) == @as(u256, @bitCast(b.bytes));
+    }
+
     pub fn compute(
         source: []const u8,
         module_identity: ModuleIdentity,
@@ -4889,7 +4895,8 @@ pub const CheckedTypeStore = struct {
         for (module_env.scheme_uses.items.items) |record| {
             if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.dispatch_target) or
                 record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.recursive_dispatch_target) or
-                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use))
+                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
+                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.nested_function_use))
             {
                 _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @enumFromInt(record.slot_data));
             }
@@ -10534,6 +10541,25 @@ pub const CheckedStrPatternStep = struct {
     delimiter: CheckedStringLiteralId,
 };
 
+/// Ordered mutation identities for a loop body, published from checked
+/// assignments and explicit dispatch operands. Both ranges use the body's
+/// pattern-binder pool; expect-only identities are disjoint from always.
+pub const CheckedLoopMutations = struct {
+    always: CheckedBodyRange,
+    expect_only: CheckedBodyRange,
+};
+
+/// Dense identity in a checked body's loop mutation table.
+pub const LoopMutationPlanId = enum(u32) { _ };
+
+/// Condition-driven loop statement. The condition runs on every iteration,
+/// so its mutations belong to the loop's published mutation plan.
+pub const CheckedConditionLoop = struct {
+    cond: CheckedExprId,
+    body: CheckedExprId,
+    mutations: ?LoopMutationPlanId = null,
+};
+
 /// Public `CheckedStatementData` declaration.
 pub const CheckedStatementData = union(enum) {
     pending,
@@ -10550,10 +10576,11 @@ pub const CheckedStatementData = union(enum) {
         expr: CheckedExprId,
         body: CheckedExprId,
         plan: ?static_dispatch.IteratorForPlanId,
+        mutations: ?LoopMutationPlanId = null,
     },
-    while_: struct { cond: CheckedExprId, body: CheckedExprId },
-    infinite_loop: struct { cond: CheckedExprId, body: CheckedExprId },
-    breakable_loop: struct { cond: CheckedExprId, body: CheckedExprId },
+    while_: CheckedConditionLoop,
+    infinite_loop: CheckedConditionLoop,
+    breakable_loop: CheckedConditionLoop,
     break_,
     return_: struct { expr: CheckedExprId, lambda: CheckedExprId },
     import_,
@@ -10635,6 +10662,19 @@ pub const CheckedFieldBackingAccess = enum(u8) {
     inspectable,
     opaque_definition_private,
 };
+
+/// Checker-authored plan for equality against one payload-free tag.
+pub const CheckedTagDiscriminantEquality = struct {
+    value: CheckedExprId,
+    tag: canonical.TagLabelId,
+};
+
+fn zeroPayloadTagIdent(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
+    const data = module.expr(expr_idx).data;
+    if (data == .e_zero_argument_tag) return data.e_zero_argument_tag.name;
+    if (data == .e_tag and data.e_tag.args.span.len == 0) return data.e_tag.name;
+    return null;
+}
 
 /// Public `CheckedExprData` declaration.
 pub const CheckedExprData = union(enum) {
@@ -10728,6 +10768,9 @@ pub const CheckedExprData = union(enum) {
         lhs: CheckedExprId,
         rhs: CheckedExprId,
         negated: bool,
+        /// Explicit checker decision that this equality only compares a tag
+        /// discriminant. Null means ordinary structural equality.
+        discriminant: ?CheckedTagDiscriminantEquality = null,
     },
     structural_hash: struct {
         value: CheckedExprId,
@@ -10761,6 +10804,7 @@ pub const CheckedExprData = union(enum) {
         expr: CheckedExprId,
         body: CheckedExprId,
         plan: ?static_dispatch.IteratorForPlanId,
+        mutations: ?LoopMutationPlanId = null,
     },
     hosted_lambda: struct {
         symbol_name: canonical.ExternalSymbolNameId,
@@ -10890,6 +10934,7 @@ pub const StoredCheckedExprData = union(enum) {
         lhs: CheckedExprId,
         rhs: CheckedExprId,
         negated: bool,
+        discriminant: ?CheckedTagDiscriminantEquality = null,
     },
     structural_hash: struct {
         value: CheckedExprId,
@@ -10922,6 +10967,7 @@ pub const StoredCheckedExprData = union(enum) {
         expr: CheckedExprId,
         body: CheckedExprId,
         plan: ?static_dispatch.IteratorForPlanId,
+        mutations: ?LoopMutationPlanId = null,
     },
     hosted_lambda: struct {
         symbol_name: canonical.ExternalSymbolNameId,
@@ -10989,10 +11035,11 @@ pub const StoredCheckedStatementData = union(enum) {
         expr: CheckedExprId,
         body: CheckedExprId,
         plan: ?static_dispatch.IteratorForPlanId,
+        mutations: ?LoopMutationPlanId = null,
     },
-    while_: struct { cond: CheckedExprId, body: CheckedExprId },
-    infinite_loop: struct { cond: CheckedExprId, body: CheckedExprId },
-    breakable_loop: struct { cond: CheckedExprId, body: CheckedExprId },
+    while_: CheckedConditionLoop,
+    infinite_loop: CheckedConditionLoop,
+    breakable_loop: CheckedConditionLoop,
     break_,
     return_: struct { expr: CheckedExprId, lambda: CheckedExprId },
     import_,
@@ -11130,7 +11177,7 @@ fn reconstructCheckedExprData(pool_owner: anytype, stored: StoredCheckedExprData
             .parts = pool_owner.interpolationPartPool()[i.parts.start .. i.parts.start + i.parts.len],
             .step_fn_ty = i.step_fn_ty,
         } },
-        .structural_eq => |e| .{ .structural_eq = .{ .lhs = e.lhs, .rhs = e.rhs, .negated = e.negated } },
+        .structural_eq => |e| .{ .structural_eq = .{ .lhs = e.lhs, .rhs = e.rhs, .negated = e.negated, .discriminant = e.discriminant } },
         .structural_hash => |h| .{ .structural_hash = .{ .value = h.value, .hasher = h.hasher } },
         .method_eq => |p| .{ .method_eq = p },
         .type_dispatch_call => |p| .{ .type_dispatch_call = p },
@@ -11141,7 +11188,7 @@ fn reconstructCheckedExprData(pool_owner: anytype, stored: StoredCheckedExprData
         .expect => |e| .{ .expect = e },
         .break_ => .break_,
         .return_ => |r| .{ .return_ = .{ .expr = r.expr, .lambda = r.lambda, .context = r.context } },
-        .for_ => |f| .{ .for_ = .{ .pattern = f.pattern, .expr = f.expr, .body = f.body, .plan = f.plan } },
+        .for_ => |f| .{ .for_ = .{ .pattern = f.pattern, .expr = f.expr, .body = f.body, .plan = f.plan, .mutations = f.mutations } },
         .hosted_lambda => |h| .{ .hosted_lambda = .{
             .symbol_name = h.symbol_name,
             .args = pool_owner.patternIdPool()[h.args.start .. h.args.start + h.args.len],
@@ -11212,10 +11259,10 @@ fn reconstructCheckedStatementData(pool_owner: anytype, stored: StoredCheckedSta
         .dbg => |e| .{ .dbg = e },
         .expr => |e| .{ .expr = e },
         .expect => |e| .{ .expect = e },
-        .for_ => |s| .{ .for_ = .{ .pattern = s.pattern, .expr = s.expr, .body = s.body, .plan = s.plan } },
-        .while_ => |s| .{ .while_ = .{ .cond = s.cond, .body = s.body } },
-        .infinite_loop => |s| .{ .infinite_loop = .{ .cond = s.cond, .body = s.body } },
-        .breakable_loop => |s| .{ .breakable_loop = .{ .cond = s.cond, .body = s.body } },
+        .for_ => |s| .{ .for_ = .{ .pattern = s.pattern, .expr = s.expr, .body = s.body, .plan = s.plan, .mutations = s.mutations } },
+        .while_ => |s| .{ .while_ = s },
+        .infinite_loop => |s| .{ .infinite_loop = s },
+        .breakable_loop => |s| .{ .breakable_loop = s },
         .return_ => |s| .{ .return_ = .{ .expr = s.expr, .lambda = s.lambda } },
     };
 }
@@ -11314,6 +11361,7 @@ pub const CheckedBodyStoreView = struct {
     pattern_id_pool: []const CheckedPatternId = &.{},
     statement_id_pool: []const CheckedStatementId = &.{},
     pattern_binder_id_pool: []const PatternBinderId = &.{},
+    loop_mutations: []const CheckedLoopMutations = &.{},
     record_expr_field_pool: []const CheckedRecordExprField = &.{},
     record_unset_label_pool: []const canonical.RecordFieldLabelId = &.{},
     field_access_segment_pool: []const CheckedFieldAccessSegment = &.{},
@@ -11352,6 +11400,10 @@ pub const CheckedBodyStoreView = struct {
     }
     pub fn patternBinderIdPool(self: CheckedBodyStoreView) []const PatternBinderId {
         return self.pattern_binder_id_pool;
+    }
+
+    pub fn loopMutations(self: CheckedBodyStoreView, id: LoopMutationPlanId) CheckedLoopMutations {
+        return self.loop_mutations[@intFromEnum(id)];
     }
     pub fn recordExprFieldPool(self: CheckedBodyStoreView) []const CheckedRecordExprField {
         return self.record_expr_field_pool;
@@ -12005,6 +12057,216 @@ const CheckedSourceNodes = struct {
     }
 };
 
+/// Publish loop mutation summaries once; nested loops reuse their published
+/// ranges instead of revisiting bodies for each enclosing loop.
+const CheckedLoopMutationPublisher = struct {
+    const Mutation = struct { binder: PatternBinderId, expect_only: bool };
+
+    allocator: Allocator,
+    store: *CheckedBodyStore,
+    dispatch_operands: []const []const CheckedExprId,
+    scratch: std.ArrayList(Mutation) = .empty,
+    positions: []usize = &.{},
+
+    fn publish(allocator: Allocator, store: *CheckedBodyStore, dispatch_operands: []const []const CheckedExprId) Allocator.Error!void {
+        // Mutation-free modules need no traversal or binder-sized scratch.
+        if (store.pattern_binder_id_pool.items.len == 0) {
+            var empty_plan: ?LoopMutationPlanId = null;
+            for (store.stored_exprs.items) |*expr| if (expr.data == .for_) {
+                if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .always = .{}, .expect_only = .{} });
+                expr.data.for_.mutations = empty_plan;
+            };
+            for (store.stored_statements.items) |*stmt| switch (stmt.data) {
+                inline .for_, .while_, .infinite_loop, .breakable_loop => |*loop_| {
+                    if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .always = .{}, .expect_only = .{} });
+                    loop_.mutations = empty_plan;
+                },
+                .pending, .decl, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
+            };
+            return;
+        }
+        var self = CheckedLoopMutationPublisher{ .allocator = allocator, .store = store, .dispatch_operands = dispatch_operands };
+        defer self.scratch.deinit(allocator);
+        defer allocator.free(self.positions);
+        for (store.stored_exprs.items) |*expr| if (expr.data == .for_) {
+            _ = try self.loop(&expr.data.for_);
+        };
+        for (store.stored_statements.items) |*stmt| switch (stmt.data) {
+            inline .for_, .while_, .infinite_loop, .breakable_loop => |*loop_| _ = try self.loop(loop_),
+            .pending, .decl, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
+        };
+    }
+
+    /// A `for` iterable evaluates once before the loop, so only its body is
+    /// part of the loop's plan; a condition loop's condition runs every iteration.
+    fn loop(self: *@This(), loop_: anytype) Allocator.Error!CheckedLoopMutations {
+        if (loop_.mutations) |published| return self.store.loopMutations(published);
+        if (self.positions.len == 0) {
+            self.positions = try self.allocator.alloc(usize, self.store.pattern_binders.items.len);
+            @memset(self.positions, std.math.maxInt(usize));
+        }
+        const start = self.scratch.items.len;
+        defer self.scratch.shrinkRetainingCapacity(start);
+        if (@TypeOf(loop_.*) == CheckedConditionLoop) try self.collectExpr(loop_.cond, false);
+        try self.collectExpr(loop_.body, false);
+
+        // Nested loops publish before this deduplication begins, so one dense
+        // position table serves every loop without per-loop clearing or hashing.
+        var end = start;
+        const count = self.scratch.items.len;
+        for (start..count) |i| {
+            const mutation = self.scratch.items[i];
+            const position = &self.positions[@intFromEnum(mutation.binder)];
+            if (position.* == std.math.maxInt(usize)) {
+                position.* = end;
+                self.scratch.items[end] = mutation;
+                end += 1;
+            } else {
+                self.scratch.items[position.*].expect_only = self.scratch.items[position.*].expect_only and mutation.expect_only;
+            }
+        }
+        defer for (self.scratch.items[start..end]) |mutation| {
+            self.positions[@intFromEnum(mutation.binder)] = std.math.maxInt(usize);
+        };
+        const always_start: u32 = @intCast(self.store.pattern_binder_id_pool.items.len);
+        for (self.scratch.items[start..end]) |mutation| if (!mutation.expect_only) {
+            try self.store.pattern_binder_id_pool.append(self.allocator, mutation.binder);
+        };
+        const expect_start: u32 = @intCast(self.store.pattern_binder_id_pool.items.len);
+        for (self.scratch.items[start..end]) |mutation| if (mutation.expect_only) {
+            try self.store.pattern_binder_id_pool.append(self.allocator, mutation.binder);
+        };
+        const result: CheckedLoopMutations = .{
+            .always = .{ .start = always_start, .len = expect_start - always_start },
+            .expect_only = .{ .start = expect_start, .len = @as(u32, @intCast(self.store.pattern_binder_id_pool.items.len)) - expect_start },
+        };
+        loop_.mutations = try self.store.appendLoopMutations(self.allocator, result);
+        return result;
+    }
+
+    fn appendRange(self: *@This(), range: CheckedBodyRange, expect_only: bool) Allocator.Error!void {
+        for (self.store.pattern_binder_id_pool.items[range.start..][0..range.len]) |binder| {
+            try self.scratch.append(self.allocator, .{ .binder = binder, .expect_only = expect_only });
+        }
+    }
+
+    fn appendLoop(self: *@This(), loop_: anytype, expect_only: bool) Allocator.Error!void {
+        const mutations = try self.loop(loop_);
+        if (@TypeOf(loop_.*) != CheckedConditionLoop) try self.collectExpr(loop_.expr, expect_only);
+        try self.appendRange(mutations.always, expect_only);
+        try self.appendRange(mutations.expect_only, true);
+    }
+
+    fn collectExpr(self: *@This(), id: CheckedExprId, expect_only: bool) Allocator.Error!void {
+        const data = self.store.expr(id).data;
+        switch (data) {
+            .str, .list, .tuple => |items| for (items) |item| try self.collectExpr(item, expect_only),
+            .match_ => |match| {
+                try self.collectExpr(match.cond, expect_only);
+                for (match.branches) |branch| {
+                    if (branch.guard) |guard| try self.collectExpr(guard, expect_only);
+                    try self.collectExpr(branch.value, expect_only);
+                }
+            },
+            .if_ => |if_| {
+                for (if_.branches) |branch| {
+                    try self.collectExpr(branch.cond, expect_only);
+                    try self.collectExpr(branch.body, expect_only);
+                }
+                try self.collectExpr(if_.final_else, expect_only);
+            },
+            .call => |call| {
+                try self.collectExpr(call.func, expect_only);
+                for (call.args) |arg| try self.collectExpr(arg, expect_only);
+            },
+            .record => |record| {
+                if (record.ext) |ext| try self.collectExpr(ext, expect_only);
+                for (record.fields) |field| try self.collectExpr(field.value, expect_only);
+            },
+            .block => |block| {
+                for (block.statements) |statement| try self.collectStatement(statement, expect_only);
+                try self.collectExpr(block.final_expr, expect_only);
+            },
+            .tag => |tag| for (tag.args) |arg| try self.collectExpr(arg, expect_only),
+            .nominal => |nominal| try self.collectExpr(nominal.backing_expr, expect_only),
+            .binop => |binop| {
+                try self.collectExpr(binop.lhs, expect_only);
+                try self.collectExpr(binop.rhs, expect_only);
+            },
+            .unary_minus, .unary_not, .dbg => |child| try self.collectExpr(child, expect_only),
+            .expect => |child| try self.collectExpr(child, true),
+            .expect_err => |child| try self.collectExpr(child.expr, expect_only),
+            .field_access => |field| try self.collectExpr(field.receiver, expect_only),
+            .structural_eq => |eq| {
+                try self.collectExpr(eq.lhs, expect_only);
+                try self.collectExpr(eq.rhs, expect_only);
+            },
+            .structural_hash => |hash| {
+                try self.collectExpr(hash.value, expect_only);
+                try self.collectExpr(hash.hasher, expect_only);
+            },
+            .interpolation => |interpolation| {
+                try self.collectExpr(interpolation.first, expect_only);
+                for (interpolation.parts) |part| {
+                    try self.collectExpr(part.value, expect_only);
+                    try self.collectExpr(part.following_segment, expect_only);
+                }
+            },
+            .tuple_access => |access| try self.collectExpr(access.tuple, expect_only),
+            .return_ => |ret| try self.collectExpr(ret.expr, expect_only),
+            .for_ => try self.appendLoop(&self.store.stored_exprs.items[@intFromEnum(id)].data.for_, expect_only),
+            .run_low_level => |low| for (low.args) |arg| try self.collectExpr(arg, expect_only),
+            // A lambda's body executes at invocation, not at this expression.
+            .lambda,
+            .closure,
+            .hosted_lambda,
+            .numeral,
+            .str_from_quote,
+            .str_segment,
+            .bytes_literal,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .empty_list,
+            .empty_record,
+            .zero_argument_tag,
+            .runtime_error,
+            .crash,
+            .ellipsis,
+            .anno_only,
+            .break_,
+            => {},
+            .dispatch_call, .method_eq, .type_dispatch_call => {
+                for (self.dispatch_operands[@intFromEnum(id)]) |operand| try self.collectExpr(operand, expect_only);
+            },
+            .pending => checkedArtifactInvariant("pending expression in loop mutation publication", .{}),
+        }
+    }
+
+    fn collectStatement(self: *@This(), id: CheckedStatementId, expect_only: bool) Allocator.Error!void {
+        switch (self.store.statement(id).data) {
+            .decl => |decl| try self.collectExpr(decl.expr, expect_only),
+            .var_ => |decl| try self.collectExpr(decl.expr, expect_only),
+            .reassign => |reassign| {
+                for (reassign.reassigned_binders) |binder| try self.scratch.append(self.allocator, .{
+                    .binder = binder,
+                    .expect_only = expect_only,
+                });
+                try self.collectExpr(reassign.expr, expect_only);
+            },
+            .dbg, .expr => |child| try self.collectExpr(child, expect_only),
+            .expect => |child| try self.collectExpr(child, true),
+            inline .for_, .while_, .infinite_loop, .breakable_loop => |_, tag| try self.appendLoop(
+                &@field(self.store.stored_statements.items[@intFromEnum(id)].data, @tagName(tag)),
+                expect_only,
+            ),
+            .return_ => |ret| try self.collectExpr(ret.expr, expect_only),
+            .var_uninitialized, .crash, .break_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
+            .pending => checkedArtifactInvariant("pending statement in loop mutation publication", .{}),
+        }
+    }
+};
+
 /// Public `CheckedBodyStore` declaration.
 pub const CheckedBodyStore = struct {
     bodies: std.ArrayList(CheckedBody) = .empty,
@@ -12023,6 +12285,7 @@ pub const CheckedBodyStore = struct {
     statement_id_pool: std.ArrayList(CheckedStatementId) = .empty,
     /// Flat pool of `PatternBinderId`s backing reassign reassigned_binders.
     pattern_binder_id_pool: std.ArrayList(PatternBinderId) = .empty,
+    loop_mutations: std.ArrayList(CheckedLoopMutations) = .empty,
     /// Flat pool of record expression fields backing record payloads.
     record_expr_field_pool: std.ArrayList(CheckedRecordExprField) = .empty,
     record_unset_label_pool: std.ArrayList(canonical.RecordFieldLabelId) = .empty,
@@ -12325,6 +12588,7 @@ pub const CheckedBodyStore = struct {
             .pattern_id_pool = self.pattern_id_pool.items,
             .statement_id_pool = self.statement_id_pool.items,
             .pattern_binder_id_pool = self.pattern_binder_id_pool.items,
+            .loop_mutations = self.loop_mutations.items,
             .record_expr_field_pool = self.record_expr_field_pool.items,
             .record_unset_label_pool = self.record_unset_label_pool.items,
             .field_access_segment_pool = self.field_access_segment_pool.items,
@@ -12496,6 +12760,16 @@ pub const CheckedBodyStore = struct {
     pub fn patternBinderIdPool(self: *const CheckedBodyStore) []const PatternBinderId {
         return self.pattern_binder_id_pool.items;
     }
+
+    pub fn loopMutations(self: *const CheckedBodyStore, id: LoopMutationPlanId) CheckedLoopMutations {
+        return self.loop_mutations.items[@intFromEnum(id)];
+    }
+
+    fn appendLoopMutations(self: *CheckedBodyStore, allocator: Allocator, mutations: CheckedLoopMutations) Allocator.Error!LoopMutationPlanId {
+        const id: LoopMutationPlanId = @enumFromInt(@as(u32, @intCast(self.loop_mutations.items.len)));
+        try self.loop_mutations.append(allocator, mutations);
+        return id;
+    }
     pub fn recordExprFieldPool(self: *const CheckedBodyStore) []const CheckedRecordExprField {
         return self.record_expr_field_pool.items;
     }
@@ -12660,7 +12934,7 @@ pub const CheckedBodyStore = struct {
                 .parts = try self.appendInterpolationParts(allocator, i.parts),
                 .step_fn_ty = i.step_fn_ty,
             } },
-            .structural_eq => |e| .{ .structural_eq = .{ .lhs = e.lhs, .rhs = e.rhs, .negated = e.negated } },
+            .structural_eq => |e| .{ .structural_eq = .{ .lhs = e.lhs, .rhs = e.rhs, .negated = e.negated, .discriminant = e.discriminant } },
             .structural_hash => |h| .{ .structural_hash = .{ .value = h.value, .hasher = h.hasher } },
             .method_eq => |p| .{ .method_eq = p },
             .type_dispatch_call => |p| .{ .type_dispatch_call = p },
@@ -12671,7 +12945,7 @@ pub const CheckedBodyStore = struct {
             .expect => |e| .{ .expect = e },
             .break_ => .break_,
             .return_ => |r| .{ .return_ = .{ .expr = r.expr, .lambda = r.lambda, .context = r.context } },
-            .for_ => |f| .{ .for_ = .{ .pattern = f.pattern, .expr = f.expr, .body = f.body, .plan = f.plan } },
+            .for_ => |f| .{ .for_ = .{ .pattern = f.pattern, .expr = f.expr, .body = f.body, .plan = f.plan, .mutations = f.mutations } },
             .hosted_lambda => |h| .{ .hosted_lambda = .{
                 .symbol_name = h.symbol_name,
                 .args = try self.appendPatternIds(allocator, h.args),
@@ -12725,10 +12999,10 @@ pub const CheckedBodyStore = struct {
             .dbg => |e| .{ .dbg = e },
             .expr => |e| .{ .expr = e },
             .expect => |e| .{ .expect = e },
-            .for_ => |s| .{ .for_ = .{ .pattern = s.pattern, .expr = s.expr, .body = s.body, .plan = s.plan } },
-            .while_ => |s| .{ .while_ = .{ .cond = s.cond, .body = s.body } },
-            .infinite_loop => |s| .{ .infinite_loop = .{ .cond = s.cond, .body = s.body } },
-            .breakable_loop => |s| .{ .breakable_loop = .{ .cond = s.cond, .body = s.body } },
+            .for_ => |s| .{ .for_ = .{ .pattern = s.pattern, .expr = s.expr, .body = s.body, .plan = s.plan, .mutations = s.mutations } },
+            .while_ => |s| .{ .while_ = s },
+            .infinite_loop => |s| .{ .infinite_loop = s },
+            .breakable_loop => |s| .{ .breakable_loop = s },
             .return_ => |s| .{ .return_ = .{ .expr = s.expr, .lambda = s.lambda } },
         };
     }
@@ -13194,6 +13468,7 @@ pub const CheckedBodyStore = struct {
             self.pattern_id_pool.deinit(allocator);
             self.statement_id_pool.deinit(allocator);
             self.pattern_binder_id_pool.deinit(allocator);
+            self.loop_mutations.deinit(allocator);
             self.record_expr_field_pool.deinit(allocator);
             self.record_unset_label_pool.deinit(allocator);
             self.field_access_segment_pool.deinit(allocator);
@@ -13230,6 +13505,7 @@ pub const CheckedBodyStore = struct {
         pattern_id_pool: SerializedSlice(CheckedPatternId) = .{},
         statement_id_pool: SerializedSlice(CheckedStatementId) = .{},
         pattern_binder_id_pool: SerializedSlice(PatternBinderId) = .{},
+        loop_mutations: SerializedSlice(CheckedLoopMutations) = .{},
         record_expr_field_pool: SerializedSlice(CheckedRecordExprField) = .{},
         record_unset_label_pool: SerializedSlice(canonical.RecordFieldLabelId) = .{},
         field_access_segment_pool: SerializedSlice(CheckedFieldAccessSegment) = .{},
@@ -13247,9 +13523,9 @@ pub const CheckedBodyStore = struct {
         record_omitted_defaults: SerializedSlice(CheckedRecordOmittedDefault) = .{},
 
         comptime {
-            // 25 SerializedSlice fields → 25 base-pointer fixups, independent of
+            // 26 SerializedSlice fields → 26 base-pointer fixups, independent of
             // stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 25);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 26);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(CheckedBodyStore, @This());
@@ -14602,6 +14878,7 @@ const CheckedBodyPayloadCopier = struct {
                 .lhs = self.checkedExpr(eq.lhs),
                 .rhs = self.checkedExpr(eq.rhs),
                 .negated = eq.negated,
+                .discriminant = try self.checkedTagDiscriminantEquality(eq.lhs, eq.rhs),
             } },
             .e_structural_hash => |h| .{ .structural_hash = .{
                 .value = self.checkedExpr(h.value),
@@ -15418,6 +15695,26 @@ const CheckedBodyPayloadCopier = struct {
         unreachable;
     }
 
+    fn checkedTagDiscriminantEquality(
+        self: *@This(),
+        lhs: CIR.Expr.Idx,
+        rhs: CIR.Expr.Idx,
+    ) Allocator.Error!?CheckedTagDiscriminantEquality {
+        if (zeroPayloadTagIdent(self.module, rhs)) |tag| {
+            return .{
+                .value = self.checkedExpr(lhs),
+                .tag = try self.names.internTagIdent(self.module.identStoreConst(), tag),
+            };
+        }
+        if (zeroPayloadTagIdent(self.module, lhs)) |tag| {
+            return .{
+                .value = self.checkedExpr(rhs),
+                .tag = try self.names.internTagIdent(self.module.identStoreConst(), tag),
+            };
+        }
+        return null;
+    }
+
     fn checkedTypeForRequiredVar(
         self: *@This(),
         var_: Var,
@@ -15647,7 +15944,14 @@ fn verifyCheckedExprDataComplete(
         .interpolation => |interpolation| std.debug.assert(interpolation.plan != null),
         .method_eq => |plan| std.debug.assert(plan != null),
         .type_dispatch_call => |plan| std.debug.assert(plan != null),
-        .for_ => |for_| std.debug.assert(for_.plan != null),
+        .for_ => |for_| {
+            std.debug.assert(for_.plan != null);
+            std.debug.assert(for_.mutations != null);
+            const mutations = checked_bodies.loopMutations(for_.mutations.?);
+            for ([_]CheckedBodyRange{ mutations.always, mutations.expect_only }) |range| {
+                std.debug.assert(@as(usize, range.start) + range.len <= checked_bodies.pattern_binder_id_pool.items.len);
+            }
+        },
         .field_access => |field_access| {
             if (field_access.segments.len == 0) {
                 checkedArtifactInvariant("checked field-access path had no stored segments", .{});
@@ -15679,7 +15983,11 @@ fn verifyCheckedPatternDataComplete(data: StoredCheckedPatternData) void {
 fn verifyCheckedStatementDataComplete(data: StoredCheckedStatementData) void {
     switch (data) {
         .pending => std.debug.panic("checked artifact invariant violated: checked statement payload was not filled", .{}),
-        .for_ => |for_| std.debug.assert(for_.plan != null),
+        .for_ => |for_| {
+            std.debug.assert(for_.plan != null);
+            std.debug.assert(for_.mutations != null);
+        },
+        inline .while_, .infinite_loop, .breakable_loop => |loop_| std.debug.assert(loop_.mutations != null),
         .decl,
         .var_,
         .var_uninitialized,
@@ -15688,9 +15996,6 @@ fn verifyCheckedStatementDataComplete(data: StoredCheckedStatementData) void {
         .dbg,
         .expr,
         .expect,
-        .while_,
-        .infinite_loop,
-        .breakable_loop,
         .break_,
         .return_,
         .import_,
@@ -18302,6 +18607,7 @@ const EvidencePass = struct {
                     .len = spans.refs.len,
                     .subst_start = spans.subst.start,
                     .subst_len = spans.subst.len,
+                    .instance_ty = self.siteInstanceType(deferred.record_idx),
                 });
             }
         }
@@ -18326,6 +18632,34 @@ const EvidencePass = struct {
         self.plan_table.site_substitutions = try self.site_substitutions.toOwnedSlice(self.allocator);
         self.plan_table.template_root_evidence = try self.allocator.dupe(?artifact_serialize.Span, self.template_root_evidence);
         try @import("codec_identity.zig").intern(self.allocator, self.checked_types.store.view(), self.plan_table);
+        if (builtin.mode == .Debug) try self.debugVerifyGeneratedCodecRoleAgreement();
+    }
+
+    /// A generated body records one checked edge per source occurrence.
+    /// Repeated fields whose subjects denote one type share a role, and so one
+    /// prepared target, which is sound only when every edge in the role agrees
+    /// on its complete callable relation and proof. Runs once the evidence
+    /// graph is published, since that proof spans the plan table.
+    fn debugVerifyGeneratedCodecRoleAgreement(self: *EvidencePass) Allocator.Error!void {
+        if (builtin.mode != .Debug) return;
+        const type_view = self.checked_types.store.view();
+        for (self.plan_table.generated_codec_derivations) |derivation| {
+            const calls = derivation.callsSlice(self.plan_table);
+            for (calls, 0..) |call, index| {
+                for (calls[0..index]) |previous| {
+                    if (previous.method != call.method or previous.method_role != call.method_role) continue;
+                    if (!try @import("codec_identity.zig").callsEquivalent(self.allocator, type_view, self.plan_table, previous, call)) {
+                        checkedArtifactInvariant(
+                            "checked generated codec method role contained ambiguous calls",
+                            .{},
+                        );
+                    }
+                    // Every call in a role agrees with its first, so the rest
+                    // of the role needs no further comparison.
+                    break;
+                }
+            }
+        }
     }
 
     /// The solver root of the scheme a compile-time root evaluates: the
@@ -18742,33 +19076,6 @@ const EvidencePass = struct {
                             );
                         }
                     }
-                    // A generated body records one checked edge per source
-                    // occurrence. Repeated fields whose subjects denote one
-                    // type share a role, and may share one prepared target,
-                    // only when the complete callable relation agrees modulo
-                    // transparent aliases and the fresh variable names
-                    // allocated for each method instantiation.
-                    const call_types_equal = if (call.subject_ty) |subject_ty|
-                        try type_view.rootsAliasTransparentAlphaEql(
-                            self.allocator,
-                            &.{ previous.subject_ty.?, previous.dispatcher_ty, previous.callable_ty },
-                            &.{ subject_ty, call.dispatcher_ty, call.callable_ty },
-                        )
-                    else
-                        try type_view.rootsAliasTransparentAlphaEql(
-                            self.allocator,
-                            &.{ previous.dispatcher_ty, previous.callable_ty },
-                            &.{ call.dispatcher_ty, call.callable_ty },
-                        );
-                    if (previous.conditional != call.conditional or
-                        !call_types_equal or
-                        !self.generatedCodecCallResolutionsEql(previous.resolution, call.resolution))
-                    {
-                        checkedArtifactInvariant(
-                            "checked generated codec method role contained ambiguous calls",
-                            .{},
-                        );
-                    }
                 }
                 if (!has_previous_role) {
                     checkedArtifactInvariant(
@@ -18778,48 +19085,6 @@ const EvidencePass = struct {
                 }
             }
         }
-    }
-
-    fn generatedCodecCallResolutionsEql(
-        self: *const EvidencePass,
-        left: static_dispatch.GeneratedCodecCallResolution,
-        right: static_dispatch.GeneratedCodecCallResolution,
-    ) bool {
-        return switch (left) {
-            .pending => right == .pending,
-            .checked_error => right == .checked_error,
-            .structural => |left_id| switch (right) {
-                .structural => |right_id| left_id == right_id,
-                .pending, .checked_error, .callable => false,
-            },
-            .callable => |left_id| switch (right) {
-                .callable => |right_id| blk: {
-                    const left_node = self.evidence_nodes.items[@intFromEnum(left_id)];
-                    const right_node = self.evidence_nodes.items[@intFromEnum(right_id)];
-                    if (!std.meta.eql(left_node.target, right_node.target) or
-                        left_node.generated_codec_derivation != right_node.generated_codec_derivation)
-                    {
-                        break :blk false;
-                    }
-                    break :blk switch (left_node.nested) {
-                        .from_callable => right_node.nested == .from_callable,
-                        .resolved => |left_span| switch (right_node.nested) {
-                            .from_callable => false,
-                            .resolved => |right_span| refs: {
-                                const left_refs = self.evidence_refs.items[left_span.start .. left_span.start + left_span.len];
-                                const right_refs = self.evidence_refs.items[right_span.start .. right_span.start + right_span.len];
-                                if (left_refs.len != right_refs.len) break :refs false;
-                                for (left_refs, right_refs) |left_ref, right_ref| {
-                                    if (!std.meta.eql(left_ref, right_ref)) break :refs false;
-                                }
-                                break :refs true;
-                            },
-                        },
-                    };
-                },
-                .pending, .checked_error, .structural => false,
-            },
-        };
     }
 
     fn schemeSchema(self: *EvidencePass, root: Var) Allocator.Error!SchemeSchema {
@@ -19824,13 +20089,12 @@ const EvidencePass = struct {
             entries.appendAssumeCapacity(evidence);
         }
 
-        // A nested-function-use record's scheme root is the stored
-        // expression's own type; only a value use instantiates a referenced
-        // scheme, so only value uses carry a substitution for one.
-        const nested = record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.nested_function_use);
+        // A value use instantiates the referenced scheme; a nested-function use
+        // instantiates the stored expression's own scheme for the value that
+        // stores it. Either way the pairs name each quantified variable's copy.
         return .{
             .refs = try self.appendEvidenceRefs(entries.items),
-            .subst = if (nested) .{} else try self.appendSiteSubstitution(@enumFromInt(record.scheme_root), pairs),
+            .subst = try self.appendSiteSubstitution(@enumFromInt(record.scheme_root), pairs),
         };
     }
 
@@ -20127,7 +20391,20 @@ const EvidencePass = struct {
             .len = spans.refs.len,
             .subst_start = spans.subst.start,
             .subst_len = spans.subst.len,
+            .instance_ty = self.siteInstanceType(record_idx),
         });
+    }
+
+    /// The instance a stored nested-function use places into its containing
+    /// value, as a `SiteEvidenceEntry.instance_ty`.
+    fn siteInstanceType(self: *EvidencePass, record_idx: u32) u32 {
+        const record = self.module.moduleEnvConst().scheme_uses.items.items[record_idx];
+        if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.nested_function_use)) {
+            return static_dispatch.SiteEvidenceEntry.no_site_instance;
+        }
+        const instance = self.checked_types.rootForSourceVar(self.module, @enumFromInt(record.slot_data)) orelse
+            checkedArtifactInvariant("stored nested function instance type was not published", .{});
+        return @intFromEnum(instance);
     }
 
     /// Publish the complete construction recipe for a generalized nested
@@ -32294,6 +32571,7 @@ pub const DispatchEvidenceFailure = struct {
         site_evidence_key_out_of_bounds,
         site_evidence_refs_out_of_bounds,
         site_substitution_out_of_bounds,
+        site_instance_type_out_of_bounds,
         scheme_vars_out_of_bounds,
         evidence_param_slot_out_of_bounds,
         site_evidence_keys_unsorted,
@@ -32624,8 +32902,8 @@ pub const CheckedModuleArtifact = struct {
             // add three pointers beyond the current-main count, and the
             // record-unset label pool one more. Ordered debug entries and their
             // byte pool add two explicit relocation pointers, and the
-            // checked-error template list one more.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 229);
+            // checked-error template list one more. Loop mutation plans add one.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 230);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -33657,6 +33935,11 @@ pub const CheckedModuleArtifact = struct {
             }
             if (@as(u64, entry.subst_start) + entry.subst_len > table.site_substitutions.len) {
                 return .{ .kind = .site_substitution_out_of_bounds, .index = @intCast(i) };
+            }
+            if (entry.instance_ty != static_dispatch.SiteEvidenceEntry.no_site_instance and
+                entry.instance_ty >= self.checked_types.payloadCount())
+            {
+                return .{ .kind = .site_instance_type_out_of_bounds, .index = @intCast(i) };
             }
             if (i > 0 and table.site_evidence[i - 1].key >= entry.key) {
                 return .{ .kind = .site_evidence_keys_unsorted, .index = @intCast(i) };
@@ -36836,6 +37119,7 @@ pub fn publishFromTypedModule(
 
     const dispatch_operands = try checkedDispatchOperands(allocator, checked_bodies.exprCount(), &static_dispatch_plans, null);
     defer freeCheckedDispatchOperands(allocator, dispatch_operands);
+    try CheckedLoopMutationPublisher.publish(allocator, checked_bodies, dispatch_operands);
     var any_diagnostic_error = try checked_bodies.publishDiagnosticErrorFacts(allocator, checked_types, dispatch_operands, null);
     excludeErroneousCompileTimeRootRequests(checked_bodies, compile_time_roots.roots);
 
@@ -39132,6 +39416,98 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     try std.testing.expectEqual(@as(usize, 2), v.nominalDeclarationById(loaded.nominal_declarations.items[0].id).declaredRecordFields(v).len);
 }
 
+/// Convert an intentional fixture-table position while preserving enum inference.
+fn fixtureTableIndex(comptime index: u32) u32 {
+    return index;
+}
+
+test "loop mutation plans preserve expect mode, dispatch operands, nesting, condition loops and serialization" {
+    // Loop-only metadata must not widen the expression union's existing call payload.
+    try std.testing.expect(@sizeOf(@TypeOf(@as(StoredCheckedExprData, undefined).for_)) <= @sizeOf(@TypeOf(@as(StoredCheckedExprData, undefined).call)));
+    const gpa = std.testing.allocator;
+    var store = CheckedBodyStore{};
+    defer store.deinit(gpa);
+    const Fixture = struct {
+        fn expression(id: u32, data: CheckedExprData) CheckedExpr {
+            return .{ .id = @enumFromInt(id), .ty = @enumFromInt(fixtureTableIndex(0)), .source_region = base.Region.from_raw_offsets(0, 0), .data = data };
+        }
+        fn statement(id: u32, data: CheckedStatementData) CheckedStatement {
+            return .{ .id = @enumFromInt(id), .source_region = base.Region.from_raw_offsets(0, 0), .data = data };
+        }
+    };
+    const e0: CheckedExprId = @enumFromInt(fixtureTableIndex(0));
+    const p0: CheckedPatternId = @enumFromInt(fixtureTableIndex(0));
+    const b0: PatternBinderId = @enumFromInt(fixtureTableIndex(0));
+    const b1: PatternBinderId = @enumFromInt(1);
+    const b2: PatternBinderId = @enumFromInt(2);
+    for ([_]PatternBinderId{ b0, b1, b2 }) |binder| try store.pattern_binders.append(gpa, .{
+        .id = binder,
+        .pattern = p0,
+        .reassignable = true,
+    });
+    try store.commitExprs(gpa, &.{
+        Fixture.expression(0, .empty_record),
+        Fixture.expression(1, .{ .block = .{ .statements = &.{ @enumFromInt(1), @enumFromInt(2) }, .final_expr = e0 } }),
+        Fixture.expression(2, .{ .expect = @enumFromInt(1) }),
+        Fixture.expression(3, .{ .lambda = .{ .args = &.{}, .body = @enumFromInt(6) } }),
+        Fixture.expression(4, .{ .block = .{ .statements = &.{ @enumFromInt(fixtureTableIndex(0)), @enumFromInt(3), @enumFromInt(4) }, .final_expr = e0 } }),
+        Fixture.expression(5, .{ .for_ = .{ .pattern = p0, .expr = e0, .body = @enumFromInt(7), .plan = null } }),
+        Fixture.expression(6, .{ .block = .{ .statements = &.{@enumFromInt(5)}, .final_expr = e0 } }),
+        Fixture.expression(7, .{ .dispatch_call = @enumFromInt(fixtureTableIndex(0)) }),
+        Fixture.expression(8, .{ .for_ = .{ .pattern = p0, .expr = e0, .body = @enumFromInt(5), .plan = null } }),
+        Fixture.expression(9, .{ .block = .{ .statements = &.{@enumFromInt(7)}, .final_expr = e0 } }),
+        Fixture.expression(10, .{ .block = .{ .statements = &.{@enumFromInt(fixtureTableIndex(0))}, .final_expr = e0 } }),
+        Fixture.expression(11, .{ .for_ = .{ .pattern = p0, .expr = e0, .body = @enumFromInt(9), .plan = null } }),
+    });
+    try store.commitStatements(gpa, &.{
+        Fixture.statement(0, .{ .reassign = .{ .pattern = p0, .expr = e0, .reassigned_binders = &.{b0} } }),
+        Fixture.statement(1, .{ .reassign = .{ .pattern = p0, .expr = e0, .reassigned_binders = &.{b1} } }),
+        Fixture.statement(2, .{ .reassign = .{ .pattern = p0, .expr = e0, .reassigned_binders = &.{b0} } }),
+        Fixture.statement(3, .{ .expr = @enumFromInt(2) }),
+        Fixture.statement(4, .{ .expr = @enumFromInt(3) }),
+        Fixture.statement(5, .{ .reassign = .{ .pattern = p0, .expr = e0, .reassigned_binders = &.{b2} } }),
+        Fixture.statement(6, .{ .for_ = .{ .pattern = p0, .expr = e0, .body = @enumFromInt(5), .plan = null } }),
+        // The condition runs every iteration, so its mutation joins the body's.
+        Fixture.statement(7, .{ .while_ = .{ .cond = @enumFromInt(10), .body = @enumFromInt(6) } }),
+    });
+    const operands = [_][]const CheckedExprId{ &.{}, &.{}, &.{}, &.{}, &.{}, &.{}, &.{}, &.{@enumFromInt(4)}, &.{}, &.{}, &.{}, &.{} };
+    try CheckedLoopMutationPublisher.publish(gpa, &store, &operands);
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    var writer = CompactWriter.init();
+    const header = try writer.appendAlloc(arena.allocator(), CheckedBodyStore.Serialized);
+    try header.serialize(&store, arena.allocator(), &writer);
+    const bytes = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+    defer gpa.free(bytes);
+    _ = try writer.writeToBuffer(bytes);
+    const serialized: *const CheckedBodyStore.Serialized = @ptrCast(@alignCast(bytes.ptr));
+    var loaded = serialized.deserialize(@intFromPtr(bytes.ptr));
+    defer loaded.deinit(gpa);
+
+    for ([_]*const CheckedBodyStore{ &store, &loaded }) |body| {
+        const plans = [_]CheckedLoopMutations{
+            body.loopMutations(body.expr(@enumFromInt(5)).data.for_.mutations.?),
+            body.loopMutations(body.expr(@enumFromInt(8)).data.for_.mutations.?),
+            body.loopMutations(body.statement(@enumFromInt(6)).data.for_.mutations.?),
+        };
+        for (plans) |plan| {
+            const pool = body.patternBinderIdPool();
+            try std.testing.expectEqualSlices(PatternBinderId, &.{b0}, pool[plan.always.start..][0..plan.always.len]);
+            try std.testing.expectEqualSlices(PatternBinderId, &.{b1}, pool[plan.expect_only.start..][0..plan.expect_only.len]);
+        }
+        const condition_plans = [_]CheckedLoopMutations{
+            body.loopMutations(body.statement(@enumFromInt(7)).data.while_.mutations.?),
+            body.loopMutations(body.expr(@enumFromInt(11)).data.for_.mutations.?),
+        };
+        for (condition_plans) |plan| {
+            const pool = body.patternBinderIdPool();
+            try std.testing.expectEqualSlices(PatternBinderId, &.{ b0, b2 }, pool[plan.always.start..][0..plan.always.len]);
+            try std.testing.expectEqual(@as(u32, 0), plan.expect_only.len);
+        }
+    }
+}
+
 test "CheckedBodyStore: POD round-trip preserves exprs, paths, match branches, string literals" {
     const gpa = std.testing.allocator;
     const CW = collections.CompactWriter;
@@ -39596,8 +39972,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x64, 0xD0, 0x16, 0xC7, 0x59, 0xDA, 0x77, 0xD7, 0xF3, 0xF1, 0xD0, 0xDE, 0x5C, 0x0E, 0xBA, 0xA8,
-        0xE5, 0x23, 0x29, 0x25, 0xBE, 0x89, 0xA9, 0x3D, 0x66, 0xBB, 0xFE, 0xF0, 0xAD, 0x9E, 0xD8, 0xE8,
+        0x14, 0xB9, 0x46, 0x76, 0xEA, 0x9F, 0x35, 0xA6, 0x9C, 0xE8, 0x91, 0x43, 0xF3, 0x89, 0xD8, 0xF6,
+        0x69, 0xA7, 0xC7, 0xB4, 0xD1, 0xE1, 0x42, 0x26, 0x2F, 0xA2, 0x40, 0xF3, 0x46, 0x32, 0x42, 0x83,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

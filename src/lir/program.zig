@@ -321,6 +321,13 @@ pub const BoxyTypeDesc = struct {
     structural_eq: ?LIR.LirProcSpecId = null,
     structural_hash: ?LIR.LirProcSpecId = null,
     inspect_method: ?BoxyMethodSlotId = null,
+    /// The hidden descriptors `inspect_method`'s worker receives, in worker
+    /// parameter order. They describe this descriptor's own type arguments,
+    /// so a runtime-instantiated descriptor carries its own copies.
+    inspect_hidden_descs: BoxySpan = .{},
+    /// One descriptor: this value in the storage of `inspect_method`'s
+    /// worker parameter, instantiated at this descriptor's type arguments.
+    inspect_arg_descs: BoxySpan = .{},
     debug_checked_type: ?checked.CheckedTypeId = null,
 };
 
@@ -342,6 +349,8 @@ pub const BoxyMethodAdapter = struct {
 
 /// Origin of a hidden descriptor argument passed to a dictionary method.
 pub const BoxyMethodHiddenDescSource = union(enum) {
+    /// Index into the slot's `hidden_descs`; for a descriptor-carried inspect
+    /// method, into the inspected descriptor's `inspect_hidden_descs`.
     slot: u32,
     call: u32,
     argument: u32,
@@ -368,8 +377,9 @@ pub const BoxyMethodSlot = struct {
 pub const BoxyDict = struct {
     debug_dispatch_plan: ?dispatch.StaticDispatchPlanId = null,
     method_slots: BoxySpan = .{},
-    hidden_descs: BoxySpan = .{},
-    nested_dicts: BoxySpan = .{},
+    /// The method slots name frame locals (`.local` descriptor and dictionary
+    /// references); an `assign_boxy_dict_ref` with captures materializes it.
+    template: bool = false,
 };
 
 /// Tag variant in a constant storage plan.
@@ -405,6 +415,10 @@ pub const ConstPlan = union(enum) {
 /// Constant root metadata needed after LIR interpretation finishes.
 pub const ConstRootPlan = struct {
     root_order: u32,
+    /// Checked module that owns this root's compile-time root id, checked
+    /// types and diagnostics. One lowered program unions several modules'
+    /// root requests, so position in the root plan is not an owner.
+    owner: LIR.LoweringModuleId,
     request: check.CheckedModule.RootRequest,
     proc: LIR.LirProcSpecId,
     ret_layout: layout.Idx,
@@ -515,6 +529,11 @@ pub const Result = struct {
     static_data_values: std.ArrayList(StaticDataValue),
     comptime_value_guards: std.ArrayList(ComptimeValueGuard),
     comptime_sites: std.ArrayList(LIR.ComptimeSite),
+    /// Checked modules of the lowering this program came from, addressed by
+    /// `LIR.LoweringModuleId`. Rows that retain a module-local checked id
+    /// name their owner through this table; nothing resolves an owner from
+    /// row order or from the procedure a row ended up in.
+    lowering_modules: std.ArrayList(checked.ModuleId),
     expect_sites: std.ArrayList(LIR.ExpectSite),
     expect_site_ids: std.AutoHashMapUnmanaged(ExpectSiteKey, LIR.ExpectSiteId),
 
@@ -553,6 +572,7 @@ pub const Result = struct {
             .static_data_values = .empty,
             .comptime_value_guards = .empty,
             .comptime_sites = .empty,
+            .lowering_modules = .empty,
             .expect_sites = .empty,
             .expect_site_ids = .empty,
         };
@@ -564,6 +584,7 @@ pub const Result = struct {
             allocator.free(site.branch_regions);
         }
         self.comptime_sites.deinit(allocator);
+        self.lowering_modules.deinit(allocator);
         self.expect_site_ids.deinit(allocator);
         self.expect_sites.deinit(allocator);
         self.static_data_values.deinit(allocator);
@@ -613,6 +634,7 @@ pub const Result = struct {
     pub fn addComptimeSite(
         self: *Result,
         kind: LIR.ComptimeSiteKind,
+        owner: LIR.LoweringModuleId,
         region: base.Region,
         checked_site: ?LIR.CheckedExhaustivenessSiteId,
         proc: LIR.LirProcSpecId,
@@ -623,12 +645,38 @@ pub const Result = struct {
         const id: LIR.ComptimeSiteId = @enumFromInt(@as(u32, @intCast(self.comptime_sites.items.len)));
         try self.comptime_sites.append(self.store.allocator, .{
             .kind = kind,
+            .owner = owner,
             .region = region,
             .checked_site = checked_site,
             .proc = proc,
             .branch_regions = owned_branch_regions,
         });
         return id;
+    }
+
+    /// Publish the lowering's checked module table. The producer writes it
+    /// once, before any consumer resolves an owner out of it.
+    pub fn setLoweringModules(self: *Result, modules: []const checked.ModuleId) Allocator.Error!void {
+        self.lowering_modules.clearRetainingCapacity();
+        try self.lowering_modules.appendSlice(self.store.allocator, modules);
+    }
+
+    /// The checked module a `LIR.LoweringModuleId` names.
+    pub fn loweringModuleKey(self: *const Result, id: LIR.LoweringModuleId) checked.ModuleId {
+        const raw = @intFromEnum(id);
+        if (raw >= self.lowering_modules.items.len) {
+            @panic("LIR program invariant violated: lowering module id has no published checked module");
+        }
+        return self.lowering_modules.items[raw];
+    }
+
+    /// The dense id this program gave a checked module, when the module was
+    /// part of its lowering input.
+    pub fn loweringModuleId(self: *const Result, key: checked.ModuleId) ?LIR.LoweringModuleId {
+        for (self.lowering_modules.items, 0..) |candidate, index| {
+            if (std.mem.eql(u8, &candidate.bytes, &key.bytes)) return @enumFromInt(@as(u32, @intCast(index)));
+        }
+        return null;
     }
 
     /// Intern one source `expect` so generated code can use a dense counter.
@@ -713,6 +761,36 @@ fn fixtureTableIndex(comptime index: u32) u32 {
     return index;
 }
 
+test "lowering module table resolves checked module provenance both ways" {
+    const allocator = std.testing.allocator;
+    var result = try Result.init(allocator, .u64);
+    defer result.deinit();
+
+    var keys: [3]checked.ModuleId = .{ .{}, .{}, .{} };
+    keys[0].bytes[0] = 7;
+    keys[1].bytes[0] = 8;
+    keys[2].bytes[0] = 9;
+    try result.setLoweringModules(&keys);
+
+    for (keys, 0..) |key, index| {
+        const id: LIR.LoweringModuleId = @enumFromInt(@as(u32, @intCast(index)));
+        try std.testing.expectEqualSlices(u8, &key.bytes, &result.loweringModuleKey(id).bytes);
+        try std.testing.expectEqual(id, result.loweringModuleId(key).?);
+    }
+
+    var absent: checked.ModuleId = .{};
+    absent.bytes[0] = 10;
+    try std.testing.expectEqual(@as(?LIR.LoweringModuleId, null), result.loweringModuleId(absent));
+
+    // A site keeps the owner its producer recorded, not the procedure's owner.
+    const owner: LIR.LoweringModuleId = @enumFromInt(2);
+    const site = try result.addComptimeSite(.destructure, owner, base.Region.zero(), @enumFromInt(41), .first, &.{});
+    const stored = result.comptime_sites.items[@intFromEnum(site)];
+    try std.testing.expectEqual(owner, stored.owner);
+    try std.testing.expectEqual(@as(?LIR.CheckedExhaustivenessSiteId, @enumFromInt(41)), stored.checked_site);
+    try std.testing.expectEqualSlices(u8, &keys[2].bytes, &result.loweringModuleKey(stored.owner).bytes);
+}
+
 test "boxy side tables initialize empty and use flat pools" {
     const allocator = std.testing.allocator;
     var result = try Result.init(allocator, .u64);
@@ -784,13 +862,10 @@ test "boxy side tables initialize empty and use flat pools" {
     });
     const method_slots = BoxySpan{ .start = @intCast(method_slots_start), .len = 1 };
 
-    const hidden_descs_start = result.boxy_desc_refs.items.len;
     try result.boxy_desc_refs.append(allocator, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
-    const hidden_descs = BoxySpan{ .start = @intCast(hidden_descs_start), .len = 1 };
 
     try result.boxy_dicts.append(allocator, .{
         .method_slots = method_slots,
-        .hidden_descs = hidden_descs,
     });
 
     const adapt_steps_start = result.boxy_adapt_steps.items.len;

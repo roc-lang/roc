@@ -725,6 +725,7 @@ const Solver = struct {
                 const stmt = self.lifted.stmts[@intFromEnum(stmt_id)];
                 if (frame.cursor != 0) {
                     if (stmt == .let_) try self.bindPattern(stmt.let_.pat, self.inferredExpr(stmt.let_.value));
+                    if (stmt == .return_) try self.relateReturnedExpr(stmt.return_.value, try self.returnTargetTy(stmt.return_.target));
                     return null;
                 }
                 frame.cursor = 1;
@@ -736,7 +737,7 @@ const Solver = struct {
                     },
                     .let_ => |let_| return .{ .expr = .{ .id = let_.value } },
                     .expr, .expect, .dbg => |expr| return .{ .expr = .{ .id = expr } },
-                    .return_ => |ret| return .{ .expr = .{ .id = ret.value, .expected = try self.returnTargetTy(ret.target) } },
+                    .return_ => |ret| return .{ .expr = .{ .id = ret.value } },
                     .crash => return null,
                 }
             },
@@ -1038,7 +1039,8 @@ const Solver = struct {
                 if (cursor - args.len < values.len) return .{ .expr = .{ .id = values[cursor - args.len], .expected = self.localTy(loop_params[cursor - args.len].local) } };
             },
             .return_ => |ret| {
-                if (cursor == 0) return .{ .expr = .{ .id = ret.value, .expected = try self.returnTargetTy(ret.target) } };
+                if (cursor == 0) return .{ .expr = .{ .id = ret.value } };
+                try self.relateReturnedExpr(ret.value, try self.returnTargetTy(ret.target));
             },
             .dbg, .expect => |child| {
                 if (cursor == 0) return .{ .expr = .{ .id = child } };
@@ -1051,6 +1053,57 @@ const Solver = struct {
             },
         }
         return null;
+    }
+
+    /// Terminal expressions retain their checked type for structural consumers,
+    /// but produce no value that can flow into a return destination.
+    fn relateReturnedExpr(self: *Solver, value: Lifted.ExprId, target: Type.TypeVarId) Allocator.Error!void {
+        const tag = std.meta.activeTag(self.lifted.exprs[@intFromEnum(value)].data);
+        if (tag == .crash or tag == .comptime_exhaustiveness_failed or tag == .@"unreachable") return;
+        try self.relateReturn(self.inferredExpr(value), target);
+    }
+
+    /// A checked return boundary carries a value from its source row into
+    /// the enclosing result row. Relate payload flow without identifying the
+    /// rows: a shared callee must retain its own result on every return path.
+    fn relateReturn(self: *Solver, source: Type.TypeVarId, target: Type.TypeVarId) Allocator.Error!void {
+        var work = std.ArrayList(UnifyPair).empty;
+        defer work.deinit(self.allocator);
+        var visited = std.AutoHashMap(UnifyPair, void).init(self.allocator);
+        defer visited.deinit();
+        // These pairs are directed, unlike ordinary unification pairs.
+        try work.append(self.allocator, .{ .first = source, .second = target });
+        while (work.pop()) |pair| {
+            const src = self.program.types.rootCompressed(pair.first);
+            const dst = self.program.types.rootCompressed(pair.second);
+            if (src == dst) continue;
+            const entry = try visited.getOrPut(.{ .first = src, .second = dst });
+            if (entry.found_existing) continue;
+            const source_content = try self.shapeContent(src);
+            if (source_content != .tag_union) {
+                try self.unify(src, dst);
+                continue;
+            }
+            // The empty row is uninhabited, including when the destination
+            // payload is a primitive rather than another row.
+            if (source_content.tag_union.count() == 0) continue;
+            const target_content = try self.shapeContent(dst);
+            if (target_content != .tag_union) Common.invariant("return tag row had a non-row destination");
+            const target_index = try self.tagRowIndex(target_content.tag_union);
+            for (0..source_content.tag_union.count()) |source_index| {
+                const source_tag = self.program.types.tagItem(source_content.tag_union, source_index);
+                const target_position = target_index.by_name.get(source_tag.name) orelse
+                    Common.invariant("return source tag was absent from its destination row");
+                const target_payloads = self.program.types.tagItem(target_content.tag_union, target_position).payloads;
+                if (source_tag.payloads.count() != target_payloads.count()) Common.invariant("return tag payload arity differed");
+                for (0..source_tag.payloads.count()) |payload_index| {
+                    try work.append(self.allocator, .{
+                        .first = self.program.types.spanItem(source_tag.payloads, payload_index),
+                        .second = self.program.types.spanItem(target_payloads, payload_index),
+                    });
+                }
+            }
+        }
     }
 
     /// Only unchanged fields flow from the base. Replacement fields may have
@@ -3707,4 +3760,69 @@ test "lambda solved compact record updates relate only unchanged field represent
     const solved_update = solver.inferredExpr(update);
     try std.testing.expectEqual(try solver.recordField(solved_base, a), try solver.recordField(solved_update, a));
     try std.testing.expect((try solver.recordField(solved_base, b)) != (try solver.recordField(solved_update, b)));
+}
+
+test "lambda solved return boundaries preserve rows and propagate callable payloads" {
+    const allocator = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(allocator);
+    const ok_name = try lifted.names.internTagLabel("Ok");
+    const err_name = try lifted.names.internTagLabel("Err");
+    var program = Ast.Program.init(allocator, lifted);
+    defer program.deinit();
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+
+    const empty = try program.types.add(.{ .tag_union = .empty() });
+    const str = try program.types.add(.{ .primitive = .str });
+    const u64_ty = try program.types.add(.{ .primitive = .u64 });
+    const source_callable = try program.types.add(.{ .lambda_set = .empty() });
+    const source_fn = try program.types.add(.{ .func = .{
+        .args = .empty(),
+        .callable = source_callable,
+        .ret = str,
+    } });
+    const source = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+        .{ .name = ok_name, .checked_name = ok_name, .payloads = try program.types.addSpan(&.{source_fn}) },
+        .{ .name = err_name, .checked_name = err_name, .payloads = try program.types.addSpan(&.{empty}) },
+    }) });
+    // Two destinations disagree even on the base type of Err's payload.
+    // Neither destination may pollute the shared empty source error row.
+    for ([_]Type.TypeVarId{ str, u64_ty }) |payload| {
+        const err_row = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+            .{ .name = err_name, .checked_name = err_name, .payloads = try program.types.addSpan(&.{payload}) },
+        }) });
+        const target_callable = try program.types.add(.unbound);
+        const target_fn = try program.types.add(.{ .func = .{
+            .args = .empty(),
+            .callable = target_callable,
+            .ret = str,
+        } });
+        const target = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+            .{ .name = ok_name, .checked_name = ok_name, .payloads = try program.types.addSpan(&.{target_fn}) },
+            .{ .name = err_name, .checked_name = err_name, .payloads = try program.types.addSpan(&.{err_row}) },
+        }) });
+        try solver.relateReturn(source, target);
+        try std.testing.expectEqual(program.types.rootCompressed(source_callable), program.types.rootCompressed(target_callable));
+        try std.testing.expect(program.types.rootCompressed(source) != program.types.rootCompressed(target));
+        try std.testing.expectEqual(@as(usize, 0), (try solver.shapeContent(empty)).tag_union.count());
+        try std.testing.expectEqual(@as(usize, 1), (try solver.shapeContent(err_row)).tag_union.count());
+    }
+
+    try solver.relateReturn(empty, str);
+    try solver.relateReturn(empty, u64_ty);
+    try std.testing.expectEqual(@as(usize, 0), (try solver.shapeContent(empty)).tag_union.count());
+
+    // A recursive payload follows the same directed pair only once.
+    const source_cycle = try program.types.add(.unbound);
+    const target_cycle = try program.types.add(.unbound);
+    program.types.set(source_cycle, .{ .tag_union = try program.types.addTags(&.{
+        .{ .name = ok_name, .checked_name = ok_name, .payloads = try program.types.addSpan(&.{source_cycle}) },
+    }) });
+    program.types.set(target_cycle, .{ .tag_union = try program.types.addTags(&.{
+        .{ .name = ok_name, .checked_name = ok_name, .payloads = try program.types.addSpan(&.{target_cycle}) },
+        .{ .name = err_name, .checked_name = err_name, .payloads = .empty() },
+    }) });
+    try solver.relateReturn(source_cycle, target_cycle);
+    try std.testing.expectEqual(@as(usize, 1), (try solver.shapeContent(source_cycle)).tag_union.count());
+    try std.testing.expectEqual(@as(usize, 2), (try solver.shapeContent(target_cycle)).tag_union.count());
 }

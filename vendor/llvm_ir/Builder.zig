@@ -10622,7 +10622,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
                 => |kind| {
                     const extra = self.metadataExtraData(Metadata.CompileUnit, metadata_item.data);
                     try metadata_formatter.specialized(.@"distinct !", .DICompileUnit, .{
-                        .language = .DW_LANG_C99,
+                        .language = 0x49, // TODO: When vendored LLVM version supports DW_LANG_Roc, use that instead.
                         .file = extra.file,
                         .producer = extra.producer,
                         .isOptimized = switch (kind) {
