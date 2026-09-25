@@ -392,7 +392,7 @@ pub const InterfaceConstraints = struct {
                 .open => |index| self.open_nodes[index],
             };
             _ = try graph.replaceContentWithoutSnapshotInvalidation(id, try mapValue(&instance, InstNode, node.content));
-            if (node.finished) |ty| try graph.recordImportedMono(id, ty);
+            if (node.finished) |ty| try graph.registerImportedMono(id, ty);
             graph.private_backing_roots.items[@intFromEnum(id)] = graph.private_backing_roots.items[@intFromEnum(id)] or node.private_backing;
             if (node.recursive_slot) graph.markRecursiveValueSlot(id);
             if (node.forced_dynamic) graph.markForcedDynamicIteratorRoot(id);
@@ -595,7 +595,7 @@ pub const InterfaceConstraints = struct {
             captured.forced_dynamic = membership.forced_dynamic;
             captured.constructor_evidence = self.graph.requestPropagatesConstructorEvidence(raw);
             captured.private_backing = self.graph.private_backing_roots.items[@intFromEnum(root)];
-            if (self.graph.classImportedMono(root)) |ty| captured.finished = try self.retained.sealType(ty);
+            if (self.graph.classFinishedMono(root)) |ty| captured.finished = try self.retained.sealType(ty);
             if (self.graph.content(root) == .named and self.graph.related_named_instances.contains(root)) {
                 const named = self.graph.content(root).named;
                 const next_group: u32 = @intCast(self.related_ids.count());
@@ -874,6 +874,7 @@ pub const GraphDiagnostics = struct {
     generated_private_nodes_visited: u64 = 0,
     finished_mono_scans: u64 = 0,
     finished_mono_nodes_visited: u64 = 0,
+    finished_mono_witness_queries: u64 = 0,
     /// Declaration-backed nominal instantiation cache probes, and the
     /// candidate instances those probes examined. Scanned candidates must
     /// stay proportional to lookups rather than to instances created, or
@@ -1282,10 +1283,10 @@ pub const InstGraph = struct {
     /// imported request use the exact finished TypeId rather than reconstructing
     /// an equivalent public shape.
     imported_monos: collections.DenseMap(NodeId, Type.TypeId),
-    /// Per class root: the imported Monotype of the first class member, in
-    /// member order, that has one. Unions keep the winner's, whose members
-    /// precede the loser's.
-    class_imported_monos: std.ArrayList(?Type.TypeId),
+    /// First imported witness in each representative's permanent-member list.
+    /// Registration precedes all joins; unions preserve winner-before-loser
+    /// order. Null is exact absence, independent of class history length.
+    class_finished_monos: std.ArrayList(?Type.TypeId),
     /// Exact declaration-plus-current-argument-roots index for instantiated
     /// nominal backings. Keys point into the stable argument storage owned by
     /// `nominal_backing_instances`.
@@ -1386,6 +1387,7 @@ pub const InstGraph = struct {
             .active_snapshot_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
             .imported_type_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
             .imported_monos = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
+            .class_finished_monos = .empty,
             .nominal_backing_index = NominalBackingIndex.init(allocator, .{}),
             .nominal_backing_instances = .empty,
             .nominal_backings_by_root = collections.DenseMap(NodeId, std.ArrayList(NominalBackingOccurrence)).init(allocator),
@@ -1398,7 +1400,6 @@ pub const InstGraph = struct {
             .constructor_evidence_requests = .empty,
             .private_backing_roots = .empty,
             .representation_membership = .empty,
-            .class_imported_monos = .empty,
             .containment_pending = .empty,
             .containment_visit_epochs = .empty,
             .containment_visit_epoch = 0,
@@ -1447,6 +1448,7 @@ pub const InstGraph = struct {
         self.active_snapshot_nodes.clearRetainingCapacity();
         self.imported_type_nodes.clearRetainingCapacity();
         self.imported_monos.clearRetainingCapacity();
+        self.class_finished_monos.clearRetainingCapacity();
         self.nominal_backing_index.clearRetainingCapacity();
         self.nominal_backing_instances.clearRetainingCapacity();
         var backing_occurrences = self.nominal_backings_by_root.valueIterator();
@@ -1461,7 +1463,6 @@ pub const InstGraph = struct {
         self.constructor_evidence_requests.clearRetainingCapacity();
         self.private_backing_roots.clearRetainingCapacity();
         self.representation_membership.clearRetainingCapacity();
-        self.class_imported_monos.clearRetainingCapacity();
         self.containment_pending.clearRetainingCapacity();
         self.containment_visit_epochs.clearRetainingCapacity();
         self.containment_visit_epoch = 0;
@@ -1528,7 +1529,6 @@ pub const InstGraph = struct {
         self.constructor_evidence_requests.deinit(allocator);
         self.private_backing_roots.deinit(allocator);
         self.representation_membership.deinit(allocator);
-        self.class_imported_monos.deinit(allocator);
         self.containment_pending.deinit(allocator);
         self.containment_visit_epochs.deinit(allocator);
         self.current_durable.deinit();
@@ -1543,6 +1543,7 @@ pub const InstGraph = struct {
         }
         self.containment_cache.deinit();
         self.imported_monos.deinit();
+        self.class_finished_monos.deinit(allocator);
         self.active_snapshot_nodes.deinit();
         self.imported_type_nodes.deinit();
         self.related_named_backings.deinit();
@@ -2077,30 +2078,6 @@ pub const InstGraph = struct {
     fn markForcedDynamicIteratorRoot(self: *InstGraph, node: NodeId) void {
         self.requireRelationProduction();
         self.representation_membership.items[@intFromEnum(self.find(node))].forced_dynamic = true;
-    }
-
-    /// Record `node`'s finished Monotype and keep its class's first imported
-    /// member current. A node that already shares its class may follow a
-    /// member that imported earlier, so only then is the class order read.
-    fn recordImportedMono(self: *InstGraph, node: NodeId, ty: Type.TypeId) Allocator.Error!void {
-        try self.imported_monos.put(node, ty);
-        const root = self.find(node);
-        if (self.class_member_head.items[@intFromEnum(root)] == node) {
-            self.class_imported_monos.items[@intFromEnum(root)] = ty;
-            return;
-        }
-        var members = self.classMemberIterator(root);
-        while (members.next()) |member| {
-            if (self.imported_monos.get(member)) |first| {
-                self.class_imported_monos.items[@intFromEnum(root)] = first;
-                return;
-            }
-        }
-    }
-
-    /// The imported Monotype of the first member of `node`'s class that has one.
-    fn classImportedMono(self: *InstGraph, node: NodeId) ?Type.TypeId {
-        return self.class_imported_monos.items[@intFromEnum(self.find(node))];
     }
 
     const generated_iterator_mint_depth_limit: u8 = 16;
@@ -2770,7 +2747,7 @@ pub const InstGraph = struct {
         std.debug.assert(self.constructor_evidence_requests.items.len == self.nodes.items.len);
         std.debug.assert(self.private_backing_roots.items.len == self.nodes.items.len);
         std.debug.assert(self.representation_membership.items.len == self.nodes.items.len);
-        std.debug.assert(self.class_imported_monos.items.len == self.nodes.items.len);
+        std.debug.assert(self.class_finished_monos.items.len == self.nodes.items.len);
     }
 
     pub fn newNode(self: *InstGraph, node_content: InstNode) Allocator.Error!NodeId {
@@ -2787,7 +2764,7 @@ pub const InstGraph = struct {
         try self.constructor_evidence_requests.ensureUnusedCapacity(self.allocator, 1);
         try self.private_backing_roots.ensureUnusedCapacity(self.allocator, 1);
         try self.representation_membership.ensureUnusedCapacity(self.allocator, 1);
-        try self.class_imported_monos.ensureUnusedCapacity(self.allocator, 1);
+        try self.class_finished_monos.ensureUnusedCapacity(self.allocator, 1);
         try self.updateGeneratedIterator(id, node_content);
         if (contentHasGeneratedPrivateBacking(node_content)) self.generated_private_nodes += 1;
         self.nodes.appendAssumeCapacity(node_content);
@@ -2800,7 +2777,7 @@ pub const InstGraph = struct {
         self.constructor_evidence_requests.appendAssumeCapacity(false);
         self.private_backing_roots.appendAssumeCapacity(false);
         self.representation_membership.appendAssumeCapacity(.{});
-        self.class_imported_monos.appendAssumeCapacity(null);
+        self.class_finished_monos.appendAssumeCapacity(null);
         self.markPrivateBacking(node_content);
         if (node_content == .named and node_content.named.generated_iterator != null) self.generated_iterator_nodes += 1;
         self.countDiagnostic("nodes_created");
@@ -3600,7 +3577,7 @@ pub const InstGraph = struct {
             const entry = try seen.getOrPut(node);
             if (entry.found_existing) continue;
             self.countDiagnostic("finished_mono_nodes_visited");
-            if (self.classImportedMono(node) != null) return true;
+            if (self.classFinishedMono(node) != null) return true;
             switch (self.nodes.items[@intFromEnum(node)]) {
                 .redirect => unreachable,
                 .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
@@ -4910,12 +4887,11 @@ pub const InstGraph = struct {
         const loser_head = self.class_member_head.items[@intFromEnum(loser)];
         self.class_member_next.items[@intFromEnum(winner_tail)] = loser_head;
         self.class_member_tail.items[@intFromEnum(winner)] = self.class_member_tail.items[@intFromEnum(loser)];
+        const winner_finished = &self.class_finished_monos.items[@intFromEnum(winner)];
+        if (winner_finished.* == null) winner_finished.* = self.class_finished_monos.items[@intFromEnum(loser)];
         const winner_content = self.nodes.items[@intFromEnum(winner)];
         const loser_content = self.nodes.items[@intFromEnum(loser)];
         self.private_backing_roots.items[@intFromEnum(winner)] = self.private_backing_roots.items[@intFromEnum(winner)] or self.private_backing_roots.items[@intFromEnum(loser)];
-        if (self.class_imported_monos.items[@intFromEnum(winner)] == null) {
-            self.class_imported_monos.items[@intFromEnum(winner)] = self.class_imported_monos.items[@intFromEnum(loser)];
-        }
         self.constructor_evidence_requests.items[@intFromEnum(winner)] =
             self.constructor_evidence_requests.items[@intFromEnum(winner)] or
             self.constructor_evidence_requests.items[@intFromEnum(loser)];
@@ -6239,6 +6215,30 @@ pub const InstGraph = struct {
         return try self.importMonoInner(ty, &imported);
     }
 
+    /// Register producer-owned provenance before this cell can participate
+    /// in a relation. Both import and summary replay author singleton cells.
+    /// Keeping the original-node association separate preserves exact views
+    /// of each imported occurrence after its class chooses another witness.
+    fn registerImportedMono(self: *InstGraph, node: NodeId, ty: Type.TypeId) Allocator.Error!void {
+        self.requireRelationProduction();
+        self.assertPermanentNode(node);
+        const index = @intFromEnum(node);
+        std.debug.assert(self.nodes.items[index] != .redirect);
+        std.debug.assert(self.class_member_head.items[index] == node);
+        std.debug.assert(self.class_member_tail.items[index] == node);
+        std.debug.assert(self.class_finished_monos.items[index] == null);
+        try self.imported_monos.putNoClobber(node, ty);
+        self.class_finished_monos.items[index] = ty;
+    }
+
+    /// The caller has resolved the representative. No history traversal or
+    /// type reconstruction is needed, including when no witness exists.
+    fn classFinishedMono(self: *InstGraph, root: NodeId) ?Type.TypeId {
+        std.debug.assert(self.nodes.items[@intFromEnum(root)] != .redirect);
+        self.countDiagnostic("finished_mono_witness_queries");
+        return self.class_finished_monos.items[@intFromEnum(root)];
+    }
+
     fn importMonoInner(
         self: *InstGraph,
         ty: Type.TypeId,
@@ -6267,7 +6267,7 @@ pub const InstGraph = struct {
         } else {
             try self.imported_type_nodes.put(ty, node);
         }
-        try self.recordImportedMono(node, ty);
+        try self.registerImportedMono(node, ty);
 
         const types = self.types;
         const imported: InstNode = switch (types.get(ty)) {
@@ -12001,4 +12001,139 @@ test "interface constraints representation membership survives unions replay and
     graph.assertPermanentNode(fresh);
     try std.testing.expect(!graph.iteratorRootRequiresForcedDynamic(fresh));
     try std.testing.expect(!graph.representation_membership.items[@intFromEnum(fresh)].recursive_slot);
+}
+
+test "finished witness capture work is independent of permanent class history" {
+    const allocator = std.testing.allocator;
+    for ([_]bool{ false, true }) |with_witness| {
+        for ([_]usize{ 1, 32, 128 }) |capture_count| {
+            var expected_resolutions: ?u64 = null;
+            for ([_]usize{ 1, 32, 256, 1024 }) |member_count| {
+                var types = Type.Store.init(allocator);
+                defer types.deinit();
+                var name_store = names.NameStore.init(allocator);
+                defer name_store.deinit();
+                const graph = try InstGraph.create(allocator, &types, &name_store);
+                defer graph.destroy();
+                const root = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+                for (1..member_count) |_| {
+                    const alias = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+                    try graph.unify(root, alias);
+                }
+                if (with_witness) {
+                    // Put the witness last, even though ordinary unification
+                    // of this unresolved class would make the import win.
+                    const ty = try types.add(.{ .primitive = .str });
+                    const imported = try graph.importMono(ty);
+                    const representative = graph.find(root);
+                    try graph.setContent(representative, .{ .primitive = .str });
+                    try graph.union_(representative, imported);
+                    graph.markRecursiveValueSlot(root);
+                }
+                var diagnostics: GraphDiagnostics = .{};
+                graph.setDiagnostics(&diagnostics);
+                for (0..capture_count) |_| {
+                    var scratch = std.heap.ArenaAllocator.init(allocator);
+                    defer scratch.deinit();
+                    const captured = try InterfaceConstraints.capture(graph, scratch.allocator(), &.{root});
+                    try std.testing.expectEqual(@as(usize, 1), captured.open_nodes.len);
+                    try std.testing.expectEqual(with_witness, captured.open_nodes[0].finished != null);
+                }
+                try std.testing.expectEqual(capture_count, diagnostics.finished_mono_witness_queries);
+                if (expected_resolutions) |expected| try std.testing.expectEqual(expected, diagnostics.union_find_resolutions);
+                expected_resolutions = diagnostics.union_find_resolutions;
+                try std.testing.expect(diagnostics.union_find_resolutions <= capture_count * 10);
+            }
+        }
+    }
+}
+
+test "finished witnesses preserve member order and original occurrence views through unions and replay" {
+    const allocator = std.testing.allocator;
+    var types = Type.Store.init(allocator);
+    defer types.deinit();
+    var name_store = names.NameStore.init(allocator);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(allocator, &types, &name_store);
+    defer graph.destroy();
+    // Equal finished shapes retain distinct source-store identities. Class
+    // selection follows concatenation order, not age or TypeId ordering.
+    const first_ty = try types.add(.{ .primitive = .str });
+    const second_ty = try types.add(.{ .primitive = .str });
+    try std.testing.expect(first_ty != second_ty);
+    for ([_]bool{ false, true }) |first_wins| {
+        const first = try graph.importMonoIndependent(first_ty);
+        const second = try graph.importMonoIndependent(second_ty);
+        const first_prefix = try graph.newNode(.{ .primitive = .str });
+        const second_prefix = try graph.newNode(.{ .primitive = .str });
+        try graph.union_(first_prefix, first);
+        try graph.union_(second_prefix, second);
+        if (first_wins) {
+            try graph.union_(first_prefix, second_prefix);
+        } else {
+            try graph.union_(second_prefix, first_prefix);
+        }
+        const new_root = try graph.newNode(.{ .primitive = .str });
+        try graph.union_(new_root, first);
+        const expected = if (first_wins) first_ty else second_ty;
+        try std.testing.expectEqual(expected, graph.classFinishedMono(graph.find(second)).?);
+        try std.testing.expectEqual(first_ty, try graph.activeTypeViewForNode(first));
+        try std.testing.expectEqual(second_ty, try graph.activeTypeViewForNode(second));
+        // The permanent list and its first-witness semantics remain intact.
+        var members = graph.classMemberIterator(first);
+        while (members.next()) |member| {
+            if (graph.imported_monos.get(member)) |ty| {
+                try std.testing.expectEqual(expected, ty);
+                break;
+            }
+        } else return error.TestExpectedEqual;
+        graph.markRecursiveValueSlot(second);
+        const captured = try InterfaceConstraints.capture(graph, graph.arena(), &.{ first, second });
+        try std.testing.expectEqual(@as(usize, 1), captured.open_nodes.len);
+        try std.testing.expect(captured.open_nodes[0].finished != null);
+        const replayed = try captured.instantiate(graph);
+        try std.testing.expect(graph.sameClass(replayed[0], replayed[1]));
+        try std.testing.expect(!graph.sameClass(first, replayed[0]));
+        try std.testing.expect(try graph.containsFinishedMono(replayed[0]));
+        const recaptured = try InterfaceConstraints.capture(graph, graph.arena(), replayed);
+        try std.testing.expectEqual(captured.open_nodes[0].finished, recaptured.open_nodes[0].finished);
+    }
+}
+
+test "finished witness absence updates after registration and import and resets with the graph" {
+    const allocator = std.testing.allocator;
+    var types = Type.Store.init(allocator);
+    defer types.deinit();
+    var name_store = names.NameStore.init(allocator);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(allocator, &types, &name_store);
+    defer graph.destroy();
+    const slot = try graph.newNode(.{ .primitive = .str });
+    graph.markRecursiveValueSlot(slot);
+    const parent = try graph.newNode(.{ .list = slot });
+    const before = try InterfaceConstraints.capture(graph, graph.arena(), &.{slot});
+    try std.testing.expect(before.open_nodes[0].finished == null);
+    try std.testing.expect(!try graph.containsFinishedMono(parent));
+    const ty = try types.add(.{ .primitive = .str });
+    try graph.registerImportedMono(slot, ty);
+    const after = try InterfaceConstraints.capture(graph, graph.arena(), &.{slot});
+    try std.testing.expect(after.open_nodes[0].finished != null);
+    try std.testing.expect(try graph.containsFinishedMono(parent));
+    try std.testing.expect(before.open_nodes[0].finished == null);
+
+    const plain = try graph.newNode(.{ .primitive = .str });
+    graph.markRecursiveValueSlot(plain);
+    try std.testing.expect(!try graph.containsFinishedMono(plain));
+    try graph.unify(plain, try graph.importMonoIndependent(ty));
+    try std.testing.expect(try graph.containsFinishedMono(plain));
+    const joined = try InterfaceConstraints.capture(graph, graph.arena(), &.{plain});
+    try std.testing.expect(joined.open_nodes[0].finished != null);
+
+    graph.reset();
+    const fresh = try graph.newNode(.{ .primitive = .str });
+    graph.assertPermanentNode(fresh);
+    graph.markRecursiveValueSlot(fresh);
+    try std.testing.expect(!try graph.containsFinishedMono(fresh));
+    const reset_capture = try InterfaceConstraints.capture(graph, graph.arena(), &.{fresh});
+    try std.testing.expect(reset_capture.open_nodes[0].finished == null);
 }
