@@ -192,6 +192,15 @@ fn hostedFallibleNotFound() callconv(.c) NotFoundResult {
     };
 }
 
+/// Hosted function: FallibleEcho.echo!
+/// Returns Err with the tag it was given.
+fn hostedFallibleEcho(err: NotFoundErr) callconv(.c) NotFoundResult {
+    return .{
+        .payload = .{ .err = err },
+        .tag = .err,
+    };
+}
+
 // --- Symbol-ABI runtime exports
 // The fixed runtime symbols every symbol-ABI host defines, plus this
 // platform's hosted function symbols. All hidden: they are link-time plumbing
@@ -202,6 +211,7 @@ fn getOps() *RocOps {
 }
 
 comptime {
+    @export(&hostedFallibleEcho, .{ .name = "roc_fallible_echo", .visibility = .hidden });
     @export(&hostedFallibleNotFound, .{ .name = "roc_fallible_not_found", .visibility = .hidden });
     @export(&hostedFallibleStrOk, .{ .name = "roc_fallible_str_ok", .visibility = .hidden });
     @export(&hostedFallibleStrOk, .{ .name = "roc_fallible_str_ok_str_err", .visibility = .hidden });

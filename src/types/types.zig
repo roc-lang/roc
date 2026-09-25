@@ -359,75 +359,71 @@ pub const Alias = struct {
     /// this alias came from a concrete source declaration. A decl LOCATOR for
     /// resolving method tables in the owning env—never part of identity.
     source_decl: SourceDecl = .none,
-    /// Whether this instance's backing is still exactly its declaration's
-    /// body under its arguments (`.declared`), or a copy opened something
-    /// inside it: a polarity marker resolved open, a result-row twin
-    /// substituted for an argument, or a coerced row re-opened. Only a
-    /// `.declared` instance may be related to another application of its
-    /// alias by its arguments; an opened one is related by its backing
-    /// (design.md "Opened Alias Instances"). No default: every producer
-    /// states which it built.
-    backing: AliasBacking,
-    /// Which of the declaration's first 16 formals its body uses: bit `i`
-    /// is set when formal `i` occurs in the body. Unification relates an
-    /// opened instance by its backing, which carries every formal the body
-    /// uses; a formal the body does not use (a phantom parameter, `P(a) :
-    /// Base`) is carried only by the argument list, so its argument is
-    /// related exactly. A formal past the first 16 is related exactly too,
-    /// the stricter answer (design.md "Opened Alias Instances").
-    body_formals: AliasBodyFormals,
-};
+    /// How many of `vars`' arguments are the declaration's own formals, in
+    /// order: the arguments written at the application. Every argument after
+    /// them is HIDDEN: a variable of the declaration's body that no formal
+    /// names (design.md "Hidden Alias Arguments"). The body's only variables
+    /// are its formals and its hidden arguments, so an instance's backing is
+    /// always its declaration's body under ALL its arguments, and two
+    /// applications of one alias are related by their arguments alone.
+    declared_arity: u16,
+    /// Where the declaration's result spine ends, when that end is a slot:
+    /// the one argument a result-row twin or a coerced re-open replaces
+    /// (`Store.aliasSpineSlotIndex`).
+    spine: AliasSpine,
 
-/// See `Alias.body_formals`.
-pub const AliasBodyFormals = packed struct(u16) {
-    bits: u16,
-
-    /// Every formal the mask can name is used by the body (the answer for an
-    /// alias with no declaration to read, such as a synthetic test alias).
-    pub const all: AliasBodyFormals = .{ .bits = std.math.maxInt(u16) };
-    pub const none: AliasBodyFormals = .{ .bits = 0 };
-    pub const tracked: usize = 16;
-
-    pub fn with(self: AliasBodyFormals, index: usize) AliasBodyFormals {
-        if (index >= tracked) return self;
-        return .{ .bits = self.bits | (@as(u16, 1) << @intCast(index)) };
-    }
-
-    /// Whether the body carries formal `index`, so its argument needs no
-    /// relation beyond the backing's.
-    pub fn uses(self: AliasBodyFormals, index: usize) bool {
-        if (index >= tracked) return false;
-        return self.bits & (@as(u16, 1) << @intCast(index)) != 0;
+    /// Check the two arity fields against an argument list, refusing
+    /// (rather than truncating) an arity past what they hold or a spine slot
+    /// the list does not have.
+    pub fn checkedArity(declared_arity: usize, arg_count: usize, spine: AliasSpine) std.mem.Allocator.Error!u16 {
+        if (declared_arity > arg_count) return error.OutOfMemory;
+        if (declared_arity > std.math.maxInt(u16)) return error.OutOfMemory;
+        switch (spine.kind) {
+            .none => {},
+            .marker => if (arg_count <= declared_arity) return error.OutOfMemory,
+            .formal => if (arg_count <= declared_arity or spine.base >= declared_arity) return error.OutOfMemory,
+            .declared => if (spine.base >= declared_arity) return error.OutOfMemory,
+        }
+        return @intCast(declared_arity);
     }
 };
 
-/// See `Alias.backing`.
-pub const AliasBacking = enum(u8) {
-    /// The backing is the declaration's body under the arguments.
-    declared,
-    /// Opened by the annotation walk that generated this instance: it is
-    /// part of a definition's own declared type.
-    opened_by_annotation,
-    /// Opened at a use: a scheme instantiated where a definition is used, a
-    /// coerced row re-opened there, or a copy of such an instance. The
-    /// widening it may carry belongs to that use, so it never replaces the
-    /// other side of a merge (design.md "Opened Alias Instances").
-    opened_at_use,
+/// See `Alias.spine`. A declaration's result spine is the one path from its
+/// body's root through alias backings, the root function's return, a builtin
+/// `Try`'s error argument, and tag-union extensions
+/// (`AdapterReachPosition.step`); it ends at one position.
+pub const AliasSpine = packed struct(u16) {
+    kind: Kind,
+    /// For `.formal`: the declared formal the end slot stands for (`e` of the
+    /// hidden `e⁺`). Zero otherwise.
+    base: u14,
 
-    pub fn isOpened(self: AliasBacking) bool {
-        return self != .declared;
-    }
+    pub const Kind = enum(u2) {
+        /// The spine ends at no slot: nothing a twin or re-open replaces.
+        none,
+        /// The spine ends at a polarity marker of the body. The slot is the
+        /// hidden argument at `declared_arity`.
+        marker,
+        /// The spine ends at one occurrence of formal `base`, which the body
+        /// also uses elsewhere. That occurrence is its own hidden formal
+        /// (`e⁺`, the hidden argument at `declared_arity`), so it can differ
+        /// from the others.
+        formal,
+        /// The spine ends at formal `base`, which the body uses nowhere else.
+        /// The slot is that declared argument itself: splitting it off would
+        /// leave the declared formal with no body position, an argument only
+        /// the argument list carries.
+        declared,
+    };
 
-    /// Which instance's content a merge of two views keeps: the higher one.
-    /// A declared instance's arguments are exact; an annotation's opened
-    /// instance is still what the annotation states; a use's opened
-    /// instance is never authoritative.
-    pub fn mergePriority(self: AliasBacking) u8 {
-        return switch (self) {
-            .declared => 2,
-            .opened_by_annotation => 1,
-            .opened_at_use => 0,
-        };
+    pub const none: AliasSpine = .{ .kind = .none, .base = 0 };
+    pub const marker: AliasSpine = .{ .kind = .marker, .base = 0 };
+
+    /// The spine ending at formal `base`, refusing an index past what the
+    /// field holds.
+    pub fn formalChecked(kind: Kind, formal_index: usize) std.mem.Allocator.Error!AliasSpine {
+        if (formal_index > std.math.maxInt(u14)) return error.OutOfMemory;
+        return .{ .kind = kind, .base = @intCast(formal_index) };
     }
 };
 

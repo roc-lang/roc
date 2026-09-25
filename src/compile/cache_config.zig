@@ -277,7 +277,12 @@ pub const Constants = struct {
     /// 118: Every alias instance records which of its declaration's formals
     ///      the body uses (`Alias.body_formals`), and an opened instance's
     ///      phantom arguments are related exactly.
-    pub const CACHE_VERSION = 118;
+    /// 119: An alias instance carries its declaration's hidden arguments
+    ///      after its declared ones (`Alias.declared_arity`) and where its
+    ///      result spine ends (`Alias.spine`), replacing `Alias.backing` and
+    ///      `Alias.body_formals`; checked aliases record their declared
+    ///      arity.
+    pub const CACHE_VERSION = 119;
 };
 
 /// Configuration for the Roc cache system.

@@ -9741,7 +9741,9 @@ test "check type - polarity - a coerced Try error row whose extension is an alia
         \\wider : Try(U64, Errs) -> Try(U64, [HostErr(U64), Other, Widened])
         \\wider = |t| fwd(t)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, Errs) -> Try(U64, [HostErr(U64), Other, Widened])");
+    // The body's `Try` is the use's, whose widened `Errs` presents as its
+    // backing (design.md "Hidden Alias Arguments").
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, Errs) -> Try(U64, Wrap([Other, Widened]))");
 }
 
 test "check type - polarity - a coerced direct row whose extension is an alias coerces" {
@@ -9792,7 +9794,7 @@ test "check type - polarity - an alias applied at the result row whose formal is
         \\wider : Try(U64, [HostErr(U64), Other]) -> Try(U64, [HostErr(U64), Other, Widened])
         \\wider = |t| fwd(t)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, [HostErr(U64), Other]) -> Try(U64, [HostErr(U64), Other, Widened])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, [HostErr(U64), Other]) -> Try(U64, Wrap([Other, Widened]))");
 }
 
 test "check type - polarity - an identity alias applied at the result row coerces" {
@@ -9846,7 +9848,7 @@ test "check type - polarity - a function alias Try error argument whose row cont
         \\wider : Try(U64, Errs) -> Try(U64, [Aborted, HostErr(U64), Other])
         \\wider = |t| fwd(t)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, Errs) -> Try(U64, [Aborted, HostErr(U64), Other])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, Errs) -> Try(U64, Wrap([Aborted, Other]))");
 }
 
 test "check type - polarity - a function alias argument continuing through an alias link keeps its input closed" {
@@ -9867,11 +9869,11 @@ test "check type - polarity - a function alias argument continuing through an al
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check type - polarity - an alias whose formal stands only on the result row presents its twin as its argument" {
-    // `Id([A, B])` at the result is `.opened` and related by its backing,
-    // but its argument list still reads as the row that backing uses—the
-    // twin, which the forwarding body closed—not a second copy of the
-    // argument that nothing constrains.
+test "check type - polarity - an alias whose formal stands only on the result row takes its twin at its hidden argument" {
+    // `Id(a) : a` is `Id(a; a⁺) : a⁺`. `Id([A, B])` at the result keeps its
+    // layer: the written argument at `a`, and at the hidden `a⁺` the twin,
+    // which is its backing and which the forwarding body closed (design.md
+    // "Hidden Alias Arguments").
     const source =
         \\Id(a) : a
         \\
@@ -9882,13 +9884,13 @@ test "check type - polarity - an alias whose formal stands only on the result ro
 
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
-    try expectResultAliasArgIsItsBacking(&test_env, "fwd");
+    try expectResultAliasSpineSlotIsItsBacking(&test_env, "fwd");
 }
 
 /// Assert that `def_name`'s type is a function whose result is a
-/// one-argument alias application whose argument IS its backing (one
-/// variable), as it is for an alias like `Id(a) : a`.
-fn expectResultAliasArgIsItsBacking(test_env: *TestEnv, def_name: []const u8) error{TestUnexpectedResult}!void {
+/// one-argument alias application whose hidden spine slot IS its backing
+/// (one variable), as it is for an alias like `Id(a) : a`.
+fn expectResultAliasSpineSlotIsItsBacking(test_env: *TestEnv, def_name: []const u8) error{TestUnexpectedResult}!void {
     const types_store = &test_env.module_env.types;
     const idents = test_env.module_env.getIdentStoreConst();
     for (test_env.module_env.store.sliceDefs(test_env.module_env.all_defs)) |def_idx| {
@@ -9910,9 +9912,9 @@ fn expectResultAliasArgIsItsBacking(test_env: *TestEnv, def_name: []const u8) er
         const ret_content = types_store.resolveVar(func.ret).desc.content;
         if (ret_content != .alias) return error.TestUnexpectedResult;
         const alias = ret_content.alias;
-        const args = types_store.sliceAliasArgs(alias);
-        if (args.len != 1) return error.TestUnexpectedResult;
-        const arg_root = types_store.resolveVar(args[0]).var_;
+        if (types_store.sliceAliasDeclaredArgs(alias).len != 1) return error.TestUnexpectedResult;
+        const slot = types_store.aliasSpineSlot(alias) orelse return error.TestUnexpectedResult;
+        const arg_root = types_store.resolveVar(slot).var_;
         const backing_root = types_store.resolveVar(types_store.getAliasBackingVar(alias)).var_;
         if (arg_root != backing_root) return error.TestUnexpectedResult;
         return;
@@ -9933,12 +9935,13 @@ test "check type - polarity - an alias whose formal stands only on the result ro
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check type - polarity - an alias using its formal at the input and the result keeps its alias layer, opened" {
+test "check type - polarity - an alias using its formal at the input and the result keeps its alias layer" {
     // The input occurrence of `e` keeps the shared closed argument and the
-    // result occurrence takes the opened twin. The alias layer is kept and
-    // reads as its argument list, but it is `.opened`: its backing is no
-    // longer its declaration's body under that list, so unification relates
-    // it by its backing (design.md "Opened Alias Instances").
+    // result occurrence, the declaration's hidden `e⁺`, takes the opened
+    // twin. The alias layer is kept and reads as its declared arguments; its
+    // hidden argument is the twin, so its backing is still its
+    // declaration's body under all its arguments (design.md "Hidden Alias
+    // Arguments").
     const source =
         \\Fwd(e) : e -> e
         \\
@@ -9949,12 +9952,14 @@ test "check type - polarity - an alias using its formal at the input and the res
 
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
-    try expectDefAliasBacking(&test_env, "fwd", .opened_by_annotation);
+    try expectDefAliasSpineSplit(&test_env, "fwd");
 }
 
-/// Assert that `def_name`'s type is an alias application whose backing is
-/// `backing`.
-fn expectDefAliasBacking(test_env: *TestEnv, def_name: []const u8, backing: types.AliasBacking) error{TestUnexpectedResult}!void {
+/// Assert that `def_name`'s type is an alias application whose spine ends at
+/// a hidden formal holding a different variable than the declared argument
+/// it stands for. The forwarding body may since have unified the two; the
+/// layer still lists them as two arguments.
+fn expectDefAliasSpineSplit(test_env: *TestEnv, def_name: []const u8) error{TestUnexpectedResult}!void {
     const types_store = &test_env.module_env.types;
     const idents = test_env.module_env.getIdentStoreConst();
     for (test_env.module_env.store.sliceDefs(test_env.module_env.all_defs)) |def_idx| {
@@ -9964,16 +9969,21 @@ fn expectDefAliasBacking(test_env: *TestEnv, def_name: []const u8, backing: type
         if (!std.mem.eql(u8, def_name, idents.getText(ptrn.assign.ident))) continue;
         const content = types_store.resolveVar(ModuleEnv.varFrom(def_idx)).desc.content;
         if (content != .alias) return error.TestUnexpectedResult;
-        if (content.alias.backing != backing) return error.TestUnexpectedResult;
+        const alias = content.alias;
+        if (alias.spine.kind != .formal) return error.TestUnexpectedResult;
+        const declared = types_store.sliceAliasDeclaredArgs(alias)[alias.spine.base];
+        const hidden = types_store.aliasSpineSlot(alias) orelse return error.TestUnexpectedResult;
+        if (declared == hidden) return error.TestUnexpectedResult;
         return;
     }
     return error.TestUnexpectedResult;
 }
 
 test "check type - polarity - a zero-argument alias opened at the result is related by its backing" {
-    // `mk`'s result opens `Base`'s row, so the instance is `.opened`, and the
-    // widened `z` is related to `take`'s closed `Base` by backing, not by the
-    // (empty) argument list.
+    // `mk`'s result opens `Base`'s row at its hidden marker slot, so the
+    // widened `z` is related to `take`'s closed `Base` through that hidden
+    // argument, not by the (empty) declared argument list (design.md "Hidden
+    // Alias Arguments").
     const source =
         \\Base : [Other]
         \\
@@ -10145,9 +10155,10 @@ test "check type - polarity - a Try error twin still bounds a widened use" {
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check type - polarity - a re-opened use keeps its alias layers, opened" {
+test "check type - polarity - a re-opened use keeps its alias layers" {
     // The use `g = fwd` re-opens the coerced result row. The copy keeps the
-    // alias names along its spine (`Errs`), each `.opened`.
+    // alias names along its spine (`Errs`), each with its spine slot
+    // re-pointed at the re-opened row.
     const source =
         \\Errs : [A, B]
         \\
@@ -10160,8 +10171,9 @@ test "check type - polarity - a re-opened use keeps its alias layers, opened" {
 }
 
 test "check type - polarity - a mismatch between two opened alias instances shows their backings" {
-    // Two `.opened` instances of different aliases relate by backing and
-    // neither absorbs the other, so the widened `Base` reaches `take`.
+    // Two widened instances of different aliases relate by backing, so the
+    // widened `Base` reaches `take`; the error report shows each one's
+    // backing next to its name.
     const source =
         \\Base : [Other]
         \\
@@ -10201,9 +10213,9 @@ test "check type - polarity - a mismatch between two opened alias instances show
 }
 
 test "check type - polarity - an annotated def whose body widens a coerced call keeps its annotation" {
-    // Widening happens at the use: the `.opened` instances a re-opened call
-    // brings into the body never replace what the annotation states
-    // (design.md "Opened Alias Instances").
+    // Widening happens at the use: the annotation's rows are opened, and the
+    // re-opened call's widened instances relate to them through their hidden
+    // arguments (design.md "Hidden Alias Arguments").
     const inline_row =
         \\Errs : [A, B]
         \\
@@ -10254,9 +10266,10 @@ test "check type - polarity - an annotated def whose body widens a coerced call 
 }
 
 test "check type - polarity - an absorbed opened alias never becomes its own backing" {
-    // `x`'s opened `Base` meets `Id(a)` whose backing `a` is already `x`'s
-    // class: absorbing it would make `Id` its own backing and lose `[Other]`
-    // (design.md "Opened Alias Instances"). Both argument orders.
+    // `x`'s widened `Base` meets `Id(a)` whose backing `a` is already `x`'s
+    // class: a merge never makes an alias its own backing, so `[Other]` stays
+    // (`contentForMerge`, design.md "Hidden Alias Arguments"). Both argument
+    // orders.
     const alias_second =
         \\Base : [Other]
         \\
@@ -10311,8 +10324,9 @@ test "check type - polarity - a flex never takes an alias view whose backing is 
 }
 
 test "check type - polarity - a phantom parameter of an opened alias is related exactly" {
-    // `P(a) : Base` never uses `a`, so no opening touches it: an opened
-    // `P(Str)` still differs from `P(U64)`.
+    // `P(a) : Base` never uses `a`, so only its declared argument carries
+    // it and it is related exactly: a widened `P(Str)` still differs from
+    // `P(U64)`.
     const opened_vs_declared =
         \\Base : [Other]
         \\
@@ -10357,6 +10371,405 @@ test "check type - polarity - a phantom parameter of an opened alias is related 
         \\r = f(g({}))
     ;
     try checkTypesModule(matching, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - hidden alias arguments - a re-open through merged marker slots keeps the layer" {
+    // `F : Base -> Base` lists both of `Base`'s markers as hidden
+    // arguments; `fwd = |x| x` merges them into one closed class. A use
+    // re-opens only the spine slot (the output's), so the output widens,
+    // the input stays closed, and the layer is kept (design.md "Hidden Alias
+    // Arguments").
+    const widened =
+        \\Base : [A, B]
+        \\
+        \\F : Base -> Base
+        \\
+        \\fwd : F
+        \\fwd = |x| x
+        \\
+        \\wider : Base -> [A, B, C]
+        \\wider = |x| fwd(x)
+    ;
+    try checkTypesModule(widened, .{ .pass = .last_def }, "Base -> [A, B, C]");
+
+    const input_stays_closed =
+        \\Base : [A, B]
+        \\
+        \\F : Base -> Base
+        \\
+        \\fwd : F
+        \\fwd = |x| x
+        \\
+        \\bad : [A, B, C] -> Base
+        \\bad = |x| fwd(x)
+    ;
+    try checkTypesModule(input_stays_closed, .fail, "Type Mismatch");
+
+    const layer_kept =
+        \\Base : [A, B]
+        \\
+        \\F : Base -> Base
+        \\
+        \\fwd : F
+        \\fwd = |x| x
+        \\
+        \\r = fwd
+    ;
+    try checkTypesModule(layer_kept, .{ .pass = .last_def }, "F");
+}
+
+test "check type - hidden alias arguments - an alias past sixteen formals relates its twin" {
+    // No bound on formals: the twin of the extension formal at index 16 is
+    // the hidden argument that relates the widened row.
+    const accepted =
+        \\Wrap(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15, p16, ext) : [HostErr(U64), ..ext]
+        \\
+        \\Mk(e) : Str -> e
+        \\
+        \\mk : Mk(Wrap(U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, [Other]))
+        \\mk = |_| Other
+        \\
+        \\x : Wrap(U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, [Other, Aborted])
+        \\x = if Bool.True mk("") else Aborted
+    ;
+    try checkTypesModule(accepted, .{ .pass = .last_def }, "Wrap(U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, [Aborted, Other])");
+
+    // A phantom formal at index 16 is carried only by the argument list and
+    // is related exactly.
+    const phantom_differs =
+        \\Wrap(ext, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15, p16) : [HostErr(U64), ..ext]
+        \\
+        \\Mk(e) : Str -> e
+        \\
+        \\mk : Mk(Wrap([Other], U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8))
+        \\mk = |_| Other
+        \\
+        \\x : Wrap([Other, Aborted], U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, Str)
+        \\x = if Bool.True mk("") else Aborted
+    ;
+    try checkTypesModule(phantom_differs, .fail, "Type Mismatch");
+}
+
+test "check type - hidden alias arguments - a spine through a nested alias's composite argument opens like the inline spelling" {
+    // `O(e) : N([A, ..e])` with `N(x) : Str -> x`: the spine runs through
+    // `N`'s slot into the argument `[A, ..e]` and ends at `e`.
+    const composite =
+        \\N(x) : Str -> x
+        \\
+        \\O(e) : N([A, ..e])
+        \\
+        \\mk : O([B])
+        \\mk = |_| A
+        \\
+        \\wider : Str -> [A, B, C]
+        \\wider = |s| mk(s)
+    ;
+    try checkTypesModule(composite, .{ .pass = .last_def }, "Str -> [A, B, C]");
+
+    const inline_spelling =
+        \\mk : Str -> [A, B]
+        \\mk = |_| A
+        \\
+        \\wider : Str -> [A, B, C]
+        \\wider = |s| mk(s)
+    ;
+    try checkTypesModule(inline_spelling, .{ .pass = .last_def }, "Str -> [A, B, C]");
+}
+
+test "check type - hidden alias arguments - an output reached through a nested alias's split formal opens apart from its input" {
+    // Declared verdict change (design.md "Hidden Alias Arguments"): in
+    // `O : N([A])` with `N(x) : x -> x`, the one argument `[A]` stands at
+    // `N`'s input and output. The output is `N`'s hidden `x⁺`, so `O`'s
+    // spine is copied down to a marker of its own: the output opens as the
+    // inline `[A] -> [A]` does, and the input stays closed.
+    const output_widens =
+        \\N(x) : x -> x
+        \\
+        \\O : N([A])
+        \\
+        \\idf : O
+        \\idf = |x| x
+        \\
+        \\wider : [A] -> [A, B]
+        \\wider = |x| idf(x)
+    ;
+    try checkTypesModule(output_widens, .{ .pass = .last_def }, "[A] -> [A, B]");
+
+    const input_stays_closed =
+        \\N(x) : x -> x
+        \\
+        \\O : N([A])
+        \\
+        \\idf : O
+        \\idf = |x| x
+        \\
+        \\bad : [A, B] -> [A, B]
+        \\bad = |x| idf(x)
+    ;
+    try checkTypesModule(input_stays_closed, .fail, "Type Mismatch");
+
+    const inline_spelling =
+        \\idf : [A] -> [A]
+        \\idf = |x| x
+        \\
+        \\wider : [A] -> [A, B]
+        \\wider = |x| idf(x)
+    ;
+    try checkTypesModule(inline_spelling, .{ .pass = .last_def }, "[A] -> [A, B]");
+}
+
+test "check type - hidden alias arguments - a function-typed body keeps its input closed and opens its output" {
+    // `H : [A] -> [B]` has two marker slots: the input's closes, the
+    // output's is the spine slot.
+    const output_widens =
+        \\H : [A] -> [B]
+        \\
+        \\h : H
+        \\h = |_| B
+        \\
+        \\wider : [A] -> [B, C]
+        \\wider = |x| h(x)
+    ;
+    try checkTypesModule(output_widens, .{ .pass = .last_def }, "[A] -> [B, C]");
+
+    const input_stays_closed =
+        \\H : [A] -> [B]
+        \\
+        \\h : H
+        \\h = |_| B
+        \\
+        \\bad : [A, C] -> [B]
+        \\bad = |x| h(x)
+    ;
+    try checkTypesModule(input_stays_closed, .fail, "Type Mismatch");
+
+    // Double negation: the inner function's argument is an output position,
+    // exactly as in the inline spelling.
+    const double_negation =
+        \\K : ([A] -> Str) -> Str
+        \\
+        \\k : K
+        \\k = |f| f(A)
+        \\
+        \\r = k(|t| match t { A => "a", B => "b" })
+    ;
+    const double_negation_inline =
+        \\k : ([A] -> Str) -> Str
+        \\k = |f| f(A)
+        \\
+        \\r = k(|t| match t { A => "a", B => "b" })
+    ;
+    try checkTypesModule(double_negation, .{ .pass = .last_def }, "Str");
+    try checkTypesModule(double_negation_inline, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - hidden alias arguments - a nested alias under a List behaves like the inline spelling" {
+    const aliased =
+        \\Inner : [A, B]
+        \\
+        \\Outer : List(Inner)
+        \\
+        \\xs : Outer
+        \\xs = [A]
+    ;
+    try checkTypesModule(aliased, .{ .pass = .last_def }, "Outer");
+
+    const widened_inner =
+        \\Inner : [A, B]
+        \\
+        \\Outer : List(Inner)
+        \\
+        \\xs : Outer
+        \\xs = [C]
+    ;
+    try checkTypesModule(widened_inner, .fail, "Type Mismatch");
+}
+
+test "check type - hidden alias arguments - a derived map reads only an alias's declared arguments" {
+    // `W(a) : [Found(a), Missing]` carries its marker as a hidden argument,
+    // which at this use is an open row tail; read as an argument it would be
+    // a second payload candidate and defeat the derivation.
+    const source =
+        \\W(a) : [Found(a), Missing]
+        \\
+        \\wrap : Str -> W(Str)
+        \\wrap = |_| Missing
+        \\
+        \\out = wrap("x").map(|s| Str.count_utf8_bytes(s))
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[Found(U64), Missing]");
+}
+
+test "check type - hidden alias arguments - a local's alias result whose only free variable is hidden stays polymorphic" {
+    // `g`'s result is a `Base` instance whose only free variable is its
+    // hidden marker slot, an open row tail, and each use widens it
+    // independently. The rank rule itself is pinned by the generalizer's
+    // "an alias is ranked by its hidden arguments too".
+    const source =
+        \\Base : [A]
+        \\
+        \\mk : Str -> Base
+        \\mk = |_| A
+        \\
+        \\take_b : [A, B] -> Str
+        \\take_b = |t| match t { A => "a", B => "b" }
+        \\
+        \\take_c : [A, C] -> Str
+        \\take_c = |t| match t { A => "a", C => "c" }
+        \\
+        \\r = {
+        \\    g = |s| mk(s)
+        \\    Str.concat(take_b(g("x")), take_c(g("y")))
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - hidden alias arguments - an arity error counts only the declared arguments" {
+    // `Base : [Other]` has one hidden argument, its marker; its arity is 0.
+    const source =
+        \\Base : [Other]
+        \\
+        \\x : Base(Str)
+        \\x = Other
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    const problems = test_env.checker.problems.problems.items;
+    for (problems) |problem| {
+        if (problem != .type_apply_mismatch_arities) continue;
+        const arities = problem.type_apply_mismatch_arities;
+        try std.testing.expectEqual(@as(u32, 0), arities.num_expected_args);
+        try std.testing.expectEqual(@as(u32, 1), arities.num_actual_args);
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "check type - hidden alias arguments - every alias instance is its declaration's body under all its arguments" {
+    // The R3 harness (design.md "Hidden Alias Arguments"): after checking,
+    // every alias instance reachable from any expression is re-instantiated
+    // from its declaration with all its arguments and related to its own
+    // backing. Twins, re-opens through merged slots and alias links, rows a
+    // merge flattened (`fwd(1, B)` restructures the shared `[B, C]` into a
+    // chain), and a spine copied through a nested alias's split formal.
+    const programs = [_][]const u8{
+        \\Base : [A, B]
+        \\
+        \\F : Base -> Base
+        \\
+        \\fwd : F
+        \\fwd = |x| x
+        \\
+        \\wider : Base -> [A, B, C]
+        \\wider = |x| fwd(x)
+        \\
+        \\r = fwd
+        ,
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\fwd : Try(U64, Errs) -> Try(U64, Errs)
+        \\fwd = |t| t
+        \\
+        \\wider : Try(U64, Errs) -> Try(U64, [HostErr(U64), Other, Widened])
+        \\wider = |t| fwd(t)
+        ,
+        \\Fwd(e) : e -> e
+        \\
+        \\fwd : Fwd([NotFound])
+        \\fwd = |t| t
+        \\
+        \\wider : [NotFound] -> [Gone, NotFound]
+        \\wider = |t| fwd(t)
+        ,
+        \\Errs : [B, C]
+        \\
+        \\fwd : a, Errs -> Errs
+        \\fwd = |_, t| t
+        \\
+        \\r1 = fwd(1, B)
+        \\
+        \\r2 : [B, C, D]
+        \\r2 = fwd(1, B)
+        ,
+        \\N(x) : x -> x
+        \\
+        \\O : N([A])
+        \\
+        \\idf : O
+        \\idf = |x| x
+        \\
+        \\wider : [A] -> [A, B]
+        \\wider = |x| idf(x)
+        ,
+        \\Id(a) : a
+        \\
+        \\mk : Str -> Id([A, B])
+        \\mk = |_| A
+        \\
+        \\use : Str -> [A, B, C]
+        \\use = |s| mk(s)
+        ,
+    };
+    for (programs) |source| {
+        var test_env = try TestEnv.init("Test", source);
+        defer test_env.deinit();
+        try expectEveryAliasInstanceFaithful(&test_env);
+    }
+}
+
+/// Every alias instance reachable from any expression's type in the module
+/// passes `Check.aliasInstanceIsFaithful`.
+fn expectEveryAliasInstanceFaithful(test_env: *TestEnv) (std.mem.Allocator.Error || error{TestUnexpectedResult})!void {
+    const gpa = std.testing.allocator;
+    const types_store = &test_env.module_env.types;
+    var seen = std.AutoHashMap(types.Var, void).init(gpa);
+    defer seen.deinit();
+    var stack = std.ArrayList(types.Var).empty;
+    defer stack.deinit(gpa);
+    var checked: usize = 0;
+    const node_count = test_env.module_env.store.nodes.len();
+    var node: u32 = 0;
+    while (node < node_count) : (node += 1) {
+        if (node >= types_store.len()) break;
+        try stack.append(gpa, @enumFromInt(node));
+        while (stack.pop()) |current| {
+            const resolved = types_store.resolveVar(current);
+            const entry = try seen.getOrPut(resolved.var_);
+            if (entry.found_existing) continue;
+            switch (resolved.desc.content) {
+                .alias => |alias| {
+                    if (try test_env.checker.aliasInstanceIsFaithful(resolved.var_)) |faithful| {
+                        if (!faithful) return error.TestUnexpectedResult;
+                        checked += 1;
+                    }
+                    try stack.appendSlice(gpa, types_store.sliceAliasArgs(alias));
+                    try stack.append(gpa, types_store.getAliasBackingVar(alias));
+                },
+                .structure => |flat| switch (flat) {
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                        try stack.appendSlice(gpa, types_store.sliceVars(func.args));
+                        try stack.append(gpa, func.ret);
+                    },
+                    .tag_union => |tag_union| {
+                        for (types_store.getTagsSlice(tag_union.tags).items(.args)) |args| {
+                            try stack.appendSlice(gpa, types_store.sliceVars(args));
+                        }
+                        try stack.append(gpa, tag_union.ext);
+                    },
+                    .nominal_type => |nominal| try stack.appendSlice(gpa, types_store.sliceNominalArgs(nominal)),
+                    .tuple => |tuple| try stack.appendSlice(gpa, types_store.sliceVars(tuple.elems)),
+                    .record, .empty_record, .empty_tag_union => {},
+                },
+                .flex, .rigid, .field_presence, .err => {},
+            }
+        }
+    }
+    if (checked == 0) return error.TestUnexpectedResult;
 }
 
 test "check type - polarity - a method used before its body is checked relates its opened result by backing" {

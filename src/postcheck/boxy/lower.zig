@@ -4674,10 +4674,15 @@ const ProcedureBuilder = struct {
         const identity_rep = self.descriptorIdentityRep(rep_id);
         const worker_layout = self.layout_plan.rep_layouts[@intFromEnum(rep_id)].worker.layoutIdx();
         const identity_worker_layout = self.layout_plan.rep_layouts[@intFromEnum(identity_rep)].worker.layoutIdx();
+        // Stored the same way, the value is described by its identity
+        // representation, as `typeDescForRep` describes it: an alias over a
+        // dynamic row carries no descriptor requirement of its own, so its
+        // own descriptor payload layout would be the row's erased storage,
+        // which lists none of the row's tags.
         return if (worker_layout != identity_worker_layout)
             worker_layout
         else
-            self.descriptorPayloadLayoutForRep(rep_id);
+            self.descriptorPayloadLayoutForRep(identity_rep);
     }
 
     fn layoutIsBoxStorage(self: *const ProcedureBuilder, layout_idx: layout.Idx) bool {

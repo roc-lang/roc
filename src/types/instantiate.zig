@@ -177,8 +177,6 @@ pub fn instantiateNominalBacking(
         .var_map = var_map,
         .current_rank = current_rank,
         .purpose = purpose,
-        // A nominal application's backing is opened for one use.
-        .opening_site = .use,
         // Rigids naming a formal take that formal's arg; any other rigid
         // (impossible in a well-formed template) stays rigid rather than
         // silently flexing.
@@ -206,11 +204,6 @@ pub const Scratch = struct {
     reach_heads: std.AutoHashMapUnmanaged(Var, u32) = .empty,
     reach_stack: std.ArrayListUnmanaged(Var) = .empty,
     reach_state: std.AutoHashMapUnmanaged(Var, bool) = .empty,
-    /// Per alias frame, the `ResultRowTwin` counters (`taken`, `shared`, per
-    /// twin) as they stood when the frame began, so the frame can tell which
-    /// occurrences of a twinned formal its own backing and arguments made
-    /// (see `stepAlias`). Only used while an instantiation carries twins.
-    twin_marks: std.ArrayListUnmanaged(u32) = .empty,
 
     pub fn deinit(self: *Scratch, gpa: std.mem.Allocator) void {
         self.frames.deinit(gpa);
@@ -223,7 +216,6 @@ pub const Scratch = struct {
         self.reach_heads.deinit(gpa);
         self.reach_stack.deinit(gpa);
         self.reach_state.deinit(gpa);
-        self.twin_marks.deinit(gpa);
     }
 };
 
@@ -298,12 +290,6 @@ const AliasFrame = struct {
     /// The adapter reach surrounding this alias. An alias is transparent, so
     /// its backing keeps the reach; its type arguments are nested positions.
     saved_reach: AdapterReachPosition,
-    /// Base of this frame's snapshot in `Scratch.twin_marks`; meaningful only
-    /// when the instantiation carries result-row twins.
-    twin_marks_base: u32,
-    /// `Instantiator.openings` when the frame began, so the frame can tell
-    /// whether copying its backing and arguments opened anything.
-    openings_base: u32,
 };
 
 const TupleFrame = struct {
@@ -449,28 +435,15 @@ pub const Instantiator = struct {
     /// learn which of those closed rows stands at the result row the Monotype
     /// result-row widening adapter re-tags (`Check.recordClosedMarkerReaches`).
     closed_marker_reaches: ?*std.ArrayListUnmanaged(AdapterReachPosition) = null,
-    /// Per-occurrence rows for the arguments of a declaration standing on the
-    /// result row (see `ResultRowTwin`). A substituted formal reached at a
-    /// positive `.result` or `.try_row` position takes its twin instead of
-    /// the shared argument, and the twin records where it was taken.
-    result_row_twins: []ResultRowTwin = &.{},
-    /// Builds a twin the first time one is taken (see `ResultRowTwinBuilder`).
-    /// Required whenever `result_row_twins` is non-empty.
+    /// The result-row twin of the declaration this instantiation copies (see
+    /// `ResultRowTwin`), when the referencing annotation stands on the result
+    /// row. The declaration's hidden `e⁺` reached at a positive `.result` or
+    /// `.try_row` position takes the twin instead of its argument, and the
+    /// twin records where it was taken.
+    result_row_twin: ?*ResultRowTwin = null,
+    /// Builds the twin the first time it is taken (see
+    /// `ResultRowTwinBuilder`). Required whenever `result_row_twin` is set.
     result_row_twin_builder: ?ResultRowTwinBuilder = null,
-    /// How many openings this instantiation has made so far: polarity
-    /// markers resolved open, result-row twins taken that open their row,
-    /// opened aliases copied, and reuses of an opened alias copy. An
-    /// alias frame whose count grew while it copied its backing and arguments
-    /// is opened (design.md "Opened Alias Instances").
-    openings: u32 = 0,
-    /// Where this instantiation happens, which decides how an alias it opens
-    /// or copies is marked (`types.AliasBacking`): an annotation walk
-    /// generating a definition's own declared type, or a copy standing for an
-    /// annotation or expected type, which keeps every copied mark as it is
-    /// (`.annotation`); or a use of a definition (`.use`: a scheme
-    /// instantiated where it is used, whose opened copies are the use's). No
-    /// default: every instantiation states which it is.
-    opening_site: OpeningSite,
     /// How to resolve polarity vars (see `PolarityVarBehavior`). `.close`
     /// reproduces the written (closed) row and is the safe default.
     polarity_var_behavior: PolarityVarBehavior = .close,
@@ -500,6 +473,15 @@ pub const Instantiator = struct {
     pub const TryNominalIdent = struct {
         short: Ident.Idx,
         qualified: Ident.Idx,
+
+        /// Whether `nominal` is the builtin `Try`. The one test every walk
+        /// of the result spine uses, the instantiator's and the checker's
+        /// declaration-time walk alike.
+        pub fn matches(self: TryNominalIdent, nominal: NominalType) bool {
+            if (!nominal.originIsBuiltin()) return false;
+            const name = nominal.ident.ident_idx;
+            return name.eql(self.short) or name.eql(self.qualified);
+        }
     };
 
     /// A second copy of one declaration argument's row, for the one
@@ -509,54 +491,39 @@ pub const Instantiator = struct {
     /// formal, but a row written in place is decided per position: in
     /// `Fwd(e) : Try(Str, e) -> Try(Str, e)`, the inline spelling
     /// `Try(Str, [NotFound]) -> Try(Str, [NotFound])` closes the input row and
-    /// opens the result row, and one variable cannot be both. The caller
-    /// builds the twin (the argument's row with its own extension, opened the
-    /// way a row written at the result is); every other occurrence keeps the
-    /// argument as generated. The instantiator decides which occurrence is the
-    /// result by the reach it already computes while walking the declaration,
-    /// so a local and an imported declaration are answered identically.
+    /// opens the result row, and one variable cannot be both. The declaration
+    /// gives the occurrence at the end of its result spine its own hidden
+    /// formal `e⁺` (`types.Alias.spine`), which an ordinary reference
+    /// substitutes by name exactly like `e`; this twin is what `e⁺` takes
+    /// instead when the walk reaches it on the result row, found by the
+    /// template variable's identity, never by name. Every other occurrence
+    /// keeps the argument as generated. The instantiator decides by the reach
+    /// it already computes while walking the declaration, so a local and an
+    /// imported declaration are answered identically.
     ///
-    /// The twin is built only when an occurrence takes it
-    /// (`ResultRowTwinBuilder`), so a signature whose formal never reaches the
+    /// The copied alias keeps its layer: its argument list carries the
+    /// argument at `e` and the twin at `e⁺`, so its backing is still its
+    /// declaration's body under its arguments (design.md "Hidden Alias
+    /// Arguments"). The twin is built only when it is taken
+    /// (`ResultRowTwinBuilder`), so a signature whose spine never reaches the
     /// result row mints nothing.
-    ///
-    /// An alias whose backing took a twin is no longer its declaration's body
-    /// under its arguments, so `stepAlias` makes it opened: unification
-    /// relates it to another application of the alias by its backing, never
-    /// by its arguments (design.md "Opened Alias Instances"). The alias layer
-    /// is kept. Its arguments are presentation: a twinned formal's argument
-    /// reads as the twin when every occurrence of the formal in that alias
-    /// took the twin (`Id([A, B])`), and as the shared argument when the
-    /// alias also uses that (`Fwd(e) : e -> e` reads `Fwd([NotFound])`).
     pub const ResultRowTwin = struct {
-        /// The declaration formal's rigid name.
-        formal: Ident.Idx,
-        /// The built twin; null until an occurrence first takes it.
+        /// The declaration's hidden `e⁺` template variable (resolved root).
+        slot: Var,
+        /// The built twin; null until the slot first takes it.
         twin: ?Var = null,
-        /// Where the twin was taken; null when no occurrence of the formal
-        /// stood on the result row.
+        /// Where the twin was taken; null when the slot did not stand on the
+        /// result row.
         consumed_at: ?AdapterReachPosition = null,
-        /// Whether the twin opens the argument's row. A host-boundary
-        /// annotation's twin is the argument itself, as written, so taking
-        /// it opens nothing.
-        opens: bool,
-        /// How many occurrences of the formal took the twin.
-        taken: u32 = 0,
-        /// How many occurrences of the formal were copied as the shared
-        /// argument.
-        shared: u32 = 0,
     };
 
-    /// Builds the twin of `result_row_twins[index]` in the caller's store,
-    /// with the caller's bookkeeping for fresh variables (ranks, regions).
-    /// Called at most once per twin, during the instantiation walk.
+    /// Builds the twin in the caller's store, with the caller's bookkeeping
+    /// for fresh variables (ranks, regions). Called at most once, during the
+    /// instantiation walk.
     pub const ResultRowTwinBuilder = struct {
         ctx: *anyopaque,
-        build: *const fn (ctx: *anyopaque, index: usize) std.mem.Allocator.Error!Var,
+        build: *const fn (ctx: *anyopaque) std.mem.Allocator.Error!Var,
     };
-
-    /// See `opening_site`.
-    pub const OpeningSite = enum { annotation, use };
 
     /// Re-exported so callers name one enum: `Instantiator.AdapterReach`.
     pub const AdapterReach = AdapterReachPosition;
@@ -668,34 +635,11 @@ pub const Instantiator = struct {
     /// `Try` keeps every one of its type arguments a nested position.
     fn nominalIsBuiltinTry(self: *const Self, nominal: NominalType) bool {
         const try_nominal = self.try_nominal orelse return false;
-        if (!nominal.originIsBuiltin()) return false;
-        const name = nominal.ident.ident_idx;
-        return name.eql(try_nominal.short) or name.eql(try_nominal.qualified);
+        return try_nominal.matches(nominal);
     }
 
     fn scratch(self: *Self) *Scratch {
         return &self.store.instantiate_scratch;
-    }
-
-    /// The twin whose formal is `name`, if any.
-    fn resultRowTwinIndex(self: *const Self, name: Ident.Idx) ?usize {
-        for (self.result_row_twins, 0..) |twin, index| {
-            if (twin.formal.eql(name)) return index;
-        }
-        return null;
-    }
-
-    /// Take `result_row_twins[index]` for one occurrence, building it on its
-    /// first take.
-    fn takeResultRowTwin(self: *Self, index: usize) std.mem.Allocator.Error!Var {
-        const twin = &self.result_row_twins[index];
-        twin.taken += 1;
-        if (twin.opens) self.openings += 1;
-        if (twin.twin) |built| return built;
-        const builder = self.result_row_twin_builder.?;
-        const built = try builder.build(builder.ctx, index);
-        twin.twin = built;
-        return built;
     }
 
     // instantiation //
@@ -877,7 +821,6 @@ pub const Instantiator = struct {
         const fields_base = machine.pending_fields.items.len;
         const constraints_base = machine.pending_constraints.items.len;
         const parts_base = machine.pending_parts.items.len;
-        const twin_marks_base = machine.twin_marks.items.len;
         errdefer {
             machine.frames.items.len = frames_base;
             machine.value_stack.items.len = values_base;
@@ -885,7 +828,6 @@ pub const Instantiator = struct {
             machine.pending_fields.items.len = fields_base;
             machine.pending_constraints.items.len = constraints_base;
             machine.pending_parts.items.len = parts_base;
-            machine.twin_marks.items.len = twin_marks_base;
         }
 
         if (!try self.requestVar(initial_var, force_root_copy)) {
@@ -958,13 +900,20 @@ pub const Instantiator = struct {
             }
         }
 
-        // A formal standing on the result row takes its argument's twin.
-        // Checked before the memo: the formal's other occurrences memoise the
-        // shared argument, and the twin is deliberately not memoised, so the
-        // two never answer for each other. Every other occurrence is counted
-        // as shared, for `stepAlias`.
-        if (self.result_row_twins.len > 0 and resolved.desc.content == .rigid) {
-            if (self.resultRowTwinIndex(resolved.desc.content.rigid.name)) |index| {
+        // Check if we've already instantiated this variable
+        if (self.var_map.count() > 0) {
+            if (self.var_map.get(resolved_var)) |fresh_var| {
+                try machine.value_stack.append(self.store.gpa, fresh_var);
+                return true;
+            }
+        }
+
+        // The declaration's hidden `e⁺` standing on the result row takes its
+        // argument's twin. It has one position in the body, which the walk
+        // reaches before the alias's argument list (`stepAlias`), so the
+        // memo entry made here is what the argument list reads.
+        if (self.result_row_twin) |twin| {
+            if (resolved_var == twin.slot) {
                 const at_result_row = self.current_polarity == .pos and switch (self.current_reach) {
                     .result, .try_row => true,
                     // A bare value annotation's root row and root `Try` error
@@ -975,32 +924,17 @@ pub const Instantiator = struct {
                     .nested => false,
                 };
                 if (at_result_row) {
-                    self.result_row_twins[index].consumed_at = self.current_reach;
-                    try machine.value_stack.append(self.store.gpa, try self.takeResultRowTwin(index));
+                    twin.consumed_at = self.current_reach;
+                    const built = twin.twin orelse built: {
+                        const builder = self.result_row_twin_builder.?;
+                        const built = try builder.build(builder.ctx);
+                        twin.twin = built;
+                        break :built built;
+                    };
+                    try self.var_map.put(resolved_var, built);
+                    try machine.value_stack.append(self.store.gpa, built);
                     return true;
                 }
-                self.result_row_twins[index].shared += 1;
-            }
-        }
-
-        // Check if we've already instantiated this variable
-        if (self.var_map.count() > 0) {
-            if (self.var_map.get(resolved_var)) |fresh_var| {
-                // Reusing an opened alias copy is an opening for every alias
-                // frame enclosing this visit; the mark is on the var itself,
-                // however long ago (or in whichever walk) the copy was made.
-                // Any other reused copy needs no count: an enclosing
-                // `.declared` source alias's backing is its body under its
-                // arguments, so opened content reused inside it arrives
-                // through an argument, whose own mark says so.
-                switch (self.store.resolveVar(fresh_var).desc.content) {
-                    .alias => |alias| if (alias.backing.isOpened()) {
-                        self.openings += 1;
-                    },
-                    .flex, .rigid, .field_presence, .structure, .err => {},
-                }
-                try machine.value_stack.append(self.store.gpa, fresh_var);
-                return true;
             }
         }
 
@@ -1035,7 +969,6 @@ pub const Instantiator = struct {
                         };
                         const marker_var = try self.store.freshFromContentWithRank(marker_content, self.current_rank);
                         if (opened) {
-                            self.openings += 1;
                             if (self.opened_marker_exts) |sink| try sink.append(self.store.gpa, .{
                                 .ext = marker_var,
                                 .reach = self.current_reach,
@@ -1164,10 +1097,6 @@ pub const Instantiator = struct {
 
                 var arg_span = alias.vars.nonempty;
                 arg_span.dropFirstElem();
-                const twin_marks_base: u32 = @intCast(machine.twin_marks.items.len);
-                for (self.result_row_twins) |twin| {
-                    try machine.twin_marks.appendSlice(self.store.gpa, &.{ twin.taken, twin.shared });
-                }
                 try machine.frames.append(self.store.gpa, .{ .alias = .{
                     .common = .{
                         .fresh_var = fresh_var,
@@ -1178,8 +1107,6 @@ pub const Instantiator = struct {
                     .args_count = arg_span.count,
                     .vars_base = @intCast(machine.value_stack.items.len),
                     .saved_reach = self.current_reach,
-                    .twin_marks_base = twin_marks_base,
-                    .openings_base = self.openings,
                 } });
                 return false;
             },
@@ -1438,29 +1365,6 @@ pub const Instantiator = struct {
         }
     }
 
-    /// How many times twin `index` was taken, and copied shared, since
-    /// `frame` began.
-    fn twinCountsInAlias(self: *Self, frame: *const AliasFrame, index: usize) struct { taken: u32, shared: u32 } {
-        const marks = self.scratch().twin_marks.items[frame.twin_marks_base + 2 * index ..][0..2];
-        const twin = self.result_row_twins[index];
-        return .{ .taken = twin.taken - marks[0], .shared = twin.shared - marks[1] };
-    }
-
-    /// The twin to present for `arg_var`, an argument of `frame`'s alias: set
-    /// when the argument is a twinned formal whose twin the alias took.
-    fn twinTakenInAlias(self: *Self, frame: *const AliasFrame, arg_var: Var) ?usize {
-        if (self.result_row_twins.len == 0) return null;
-        const resolved = self.store.resolveVar(arg_var);
-        const rigid = switch (resolved.desc.content) {
-            .rigid => |rigid| rigid,
-            .flex, .alias, .structure, .field_presence, .err => return null,
-        };
-        const index = self.resultRowTwinIndex(rigid.name) orelse return null;
-        const counts = self.twinCountsInAlias(frame, index);
-        if (counts.taken == 0 or counts.shared > 0) return null;
-        return index;
-    }
-
     fn stepAlias(self: *Self, frame: *AliasFrame) std.mem.Allocator.Error!bool {
         const machine = self.scratch();
         while (true) {
@@ -1487,14 +1391,10 @@ pub const Instantiator = struct {
             }
             if (arrived < frame.args_count + 1) {
                 const arg_var = self.store.vars.items.items[frame.args_start + arrived - 1];
-                // An argument that is a twinned formal whose twin this alias
-                // took at every occurrence is presented as that twin, so the
-                // argument list reads as the row the backing uses (see
-                // `ResultRowTwin`).
-                if (self.twinTakenInAlias(frame, arg_var)) |index| {
-                    try machine.value_stack.append(self.store.gpa, try self.takeResultRowTwin(index));
-                    continue;
-                }
+                // Every argument, declared or hidden, is a variable of the
+                // backing just copied (or a phantom formal), so the memo
+                // hands it the copy its backing position made: a hidden
+                // marker slot its resolved row tail, a hidden `e⁺` its twin.
                 self.current_reach = .nested;
                 if (!try self.requestVar(arg_var, false)) return false;
                 continue;
@@ -1502,20 +1402,6 @@ pub const Instantiator = struct {
             const values = machine.value_stack.items;
             const fresh_backing_var = values[frame.vars_base];
             const fresh_args = values[frame.vars_base + 1 ..][0..frame.args_count];
-            // A copy of an opened alias stays opened, and is itself an
-            // opening for every alias frame enclosing it. A copy that opened
-            // anything inside its backing or arguments is opened too: its
-            // backing is no longer its declaration's body under its
-            // arguments (design.md "Opened Alias Instances"). It is opened
-            // by the annotation walk when that walk made it, and at a use
-            // otherwise; a use's instance stays a use's instance.
-            if (frame.alias.backing.isOpened()) self.openings += 1;
-            const backing: types_mod.AliasBacking = if (self.openings == frame.openings_base)
-                .declared
-            else switch (self.opening_site) {
-                .use => .opened_at_use,
-                .annotation => if (frame.alias.backing == .opened_at_use) .opened_at_use else .opened_by_annotation,
-            };
             const fresh_content = try self.store.mkAliasWithSourceDeclAndBuiltinOrigin(
                 frame.alias.ident,
                 fresh_backing_var,
@@ -1523,11 +1409,10 @@ pub const Instantiator = struct {
                 frame.alias.origin_module,
                 frame.alias.source_decl.toOptional(),
                 frame.alias.source_decl.originIsBuiltin(),
-                backing,
-                frame.alias.body_formals,
+                frame.alias.declared_arity,
+                frame.alias.spine,
             );
             machine.value_stack.items.len = frame.vars_base;
-            if (self.result_row_twins.len > 0) machine.twin_marks.items.len = frame.twin_marks_base;
             try self.finishFrame(frame.common, fresh_content);
             return true;
         }

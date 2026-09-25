@@ -928,8 +928,8 @@ pub const Store = struct {
             origin_module,
             source_decl,
             false,
-            .declared,
-            .all,
+            args.len,
+            .none,
         );
     }
 
@@ -941,10 +941,13 @@ pub const Store = struct {
         origin_module: base.ModuleIdentity.Idx,
         source_decl: ?u32,
         builtin_origin: bool,
-        backing: types.AliasBacking,
-        body_formals: types.AliasBodyFormals,
+        /// How many of `args` are the declaration's formals; the rest are
+        /// hidden (`Alias.declared_arity`).
+        declared_arity: usize,
+        spine: types.AliasSpine,
     ) std.mem.Allocator.Error!Content {
         const packed_source_decl = try SourceDecl.fromOptionalWithBuiltinOriginChecked(source_decl, builtin_origin);
+        const packed_declared_arity = try Alias.checkedArity(declared_arity, args.len, spine);
         const backing_idx = try self.appendVar(backing_var);
         var span = try self.appendVars(args);
 
@@ -958,8 +961,8 @@ pub const Store = struct {
                 .vars = .{ .nonempty = span },
                 .origin_module = origin_module,
                 .source_decl = packed_source_decl,
-                .backing = backing,
-                .body_formals = body_formals,
+                .declared_arity = packed_declared_arity,
+                .spine = spine,
             },
         };
     }
@@ -1232,13 +1235,31 @@ pub const Store = struct {
     /// the declaration's order: what arity checks, positional readers and
     /// presentation read.
     pub fn sliceAliasDeclaredArgs(self: *const Self, alias: Alias) []Var {
-        return self.sliceAliasArgs(alias);
+        return self.sliceAliasArgs(alias)[0..alias.declared_arity];
     }
 
-    /// The arguments the declaration added after its declared formals.
+    /// The arguments the declaration added after its declared formals
+    /// (`Alias.declared_arity`): the spine slot first when it is hidden
+    /// (`Alias.spine`), then the body's other polarity markers.
     pub fn aliasHiddenArgs(self: *const Self, alias: Alias) []Var {
-        const args = self.sliceAliasArgs(alias);
-        return args[args.len..];
+        return self.sliceAliasArgs(alias)[alias.declared_arity..];
+    }
+
+    /// Which argument the result spine ends at, when the declaration's spine
+    /// ends at a slot (`Alias.spine`): the first hidden argument, or, for a
+    /// formal the body uses nowhere else, that declared argument.
+    pub fn aliasSpineSlotIndex(_: *const Self, alias: Alias) ?usize {
+        return switch (alias.spine.kind) {
+            .none => null,
+            .marker, .formal => alias.declared_arity,
+            .declared => alias.spine.base,
+        };
+    }
+
+    /// The argument the result spine ends at (`aliasSpineSlotIndex`).
+    pub fn aliasSpineSlot(self: *const Self, alias: Alias) ?Var {
+        const index = self.aliasSpineSlotIndex(alias) orelse return null;
+        return self.sliceAliasArgs(alias)[index];
     }
 
     /// Get the an iterator arg vars for this alias type

@@ -1776,7 +1776,7 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
         .empty_record,
         .empty_tag_union,
         => true,
-        .alias => |alias| (try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, alias.args, quantified_row, active)) and
+        .alias => |alias| (try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, alias.declaredArgs(), quantified_row, active)) and
             try checkedTypeIsConcreteCompileTimeRootInner(walk, position, checked_types, alias.backing, quantified_row, active),
         .record => |record| (try checkedFieldTypesAreConcreteCompileTimeRoots(walk, checked_types, record.fields, quantified_row, active)) and
             try checkedTypeIsConcreteCompileTimeRootInner(walk, .record_extension, checked_types, record.ext, quantified_row, active),
@@ -1903,6 +1903,55 @@ test "compile-time roots accept a quantified row extension and report it" {
     var value_quantified_row = false;
     try std.testing.expect(!try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, value_position, &value_quantified_row));
     try std.testing.expect(!value_quantified_row);
+}
+
+test "compile-time roots read an alias's declared arguments, not its hidden ones" {
+    // `v : Base` with `Base : [Other]`: the alias's one hidden argument is
+    // its row's tail (design.md "Hidden Alias Arguments"), a row position
+    // the backing already walks. Walked as an argument, at a value position,
+    // it would make the root ineligible.
+    const allocator = std.testing.allocator;
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    const ext: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .flex = .{ .row_default = .empty_tag_union } }));
+
+    const tags = try allocator.alloc(CheckedTagBuild, 1);
+    tags[0] = .{ .name = testIndexId(canonical.TagLabelId, 3) };
+    const row: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .tag_union = .{
+        .tags = tags,
+        .ext = ext,
+    } }));
+
+    const hidden_args = try allocator.dupe(CheckedTypeId, &.{ext});
+    const hidden: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .alias = .{
+        .name = testIndexId(canonical.TypeNameId, 1),
+        .origin_module = testIndexId(canonical.ModuleIdentityId, 1),
+        .owner_module = testCheckedModuleKey(106),
+        .backing = row,
+        .args = hidden_args,
+        .declared_arity = 0,
+    } }));
+    var hidden_quantified_row = false;
+    try std.testing.expect(try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, hidden, &hidden_quantified_row));
+    try std.testing.expect(hidden_quantified_row);
+
+    // The same variable written as a declared argument is a value position.
+    const declared_args = try allocator.dupe(CheckedTypeId, &.{ext});
+    const declared: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .alias = .{
+        .name = testIndexId(canonical.TypeNameId, 1),
+        .origin_module = testIndexId(canonical.ModuleIdentityId, 1),
+        .owner_module = testCheckedModuleKey(106),
+        .backing = row,
+        .args = declared_args,
+        .declared_arity = 1,
+    } }));
+    var declared_quantified_row = false;
+    try std.testing.expect(!try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, declared, &declared_quantified_row));
 }
 
 test "compile-time roots reject a row extension whose default is missing or names the other row" {
@@ -2986,6 +3035,15 @@ pub const CheckedAliasType = struct {
     builtin_origin: bool = false,
     backing: CheckedTypeId,
     args: []const CheckedTypeId = &.{},
+    /// How many of `args` are the declaration's formals, the arguments
+    /// written at the application; the rest are the hidden arguments the
+    /// checker's alias carried (`types.Alias.declared_arity`). Readers that
+    /// read arguments by the declaration's positions read only these.
+    declared_arity: u32,
+
+    pub fn declaredArgs(self: CheckedAliasType) []const CheckedTypeId {
+        return self.args[0..self.declared_arity];
+    }
 };
 
 /// Public `CheckedNominalDeclarationId` declaration.
@@ -3177,6 +3235,7 @@ pub const StoredAlias = struct {
     builtin_origin: bool = false,
     backing: CheckedTypeId,
     args: CheckedTypeRange = .{},
+    declared_arity: u32,
 };
 
 /// POD form of `CheckedNominalType`: `args` and `padding_field_types` are ranges
@@ -3261,6 +3320,7 @@ fn reconstructCheckedTypePayload(pool_owner: anytype, stored: StoredCheckedTypeP
             .builtin_origin = a.builtin_origin,
             .backing = a.backing,
             .args = pool_owner.typeIdPool()[a.args.start .. a.args.start + a.args.len],
+            .declared_arity = a.declared_arity,
         } },
         .record => |r| .{ .record = .{
             .fields = pool_owner.recordFieldPool()[r.fields.start .. r.fields.start + r.fields.len],
@@ -4689,6 +4749,7 @@ pub const CheckedTypeStore = struct {
                     .builtin_origin = a.builtin_origin,
                     .backing = a.backing,
                     .args = args,
+                    .declared_arity = a.declared_arity,
                 } };
             },
             .record => |r| blk: {
@@ -5740,6 +5801,7 @@ pub const CheckedTypeStore = struct {
                 .builtin_origin = a.builtin_origin,
                 .backing = a.backing,
                 .args = try allocator.dupe(CheckedTypeId, a.args),
+                .declared_arity = a.declared_arity,
             } },
             .record => |r| .{ .record = .{
                 .fields = try allocator.dupe(CheckedRecordField, r.fields),
@@ -5812,6 +5874,7 @@ pub const CheckedTypeStore = struct {
                 .builtin_origin = alias.builtin_origin,
                 .backing = try self.cloneCheckedTypeRootSubstituting(allocator, names, alias.backing, formals, actuals, active),
                 .args = try self.cloneCheckedTypeIdSliceSubstituting(allocator, names, alias.args, formals, actuals, active),
+                .declared_arity = alias.declared_arity,
             } },
             .record => |record| .{ .record = .{
                 .fields = try self.cloneCheckedRecordFieldsSubstituting(allocator, names, record.fields, formals, actuals, active),
@@ -6629,12 +6692,17 @@ fn appendInstantiatedNamedApplicationFromTemplate(
     const generic_payload = store.payload(generic_root);
     return switch (generic_payload) {
         .alias => |alias| blk: {
-            if (alias.args.len != actual_args.len) {
+            // The template's declared arguments are its formals; its hidden
+            // arguments are variables of its backing, which the same
+            // substitution carries over (`types.Alias.declared_arity`).
+            if (alias.declared_arity != actual_args.len) {
                 checkedArtifactInvariant("checked declaration template alias application arity mismatch", .{});
             }
 
-            const formals = try allocator.dupe(CheckedTypeId, alias.args);
+            const formals = try allocator.dupe(CheckedTypeId, alias.declaredArgs());
             defer allocator.free(formals);
+            const hidden = try allocator.dupe(CheckedTypeId, alias.args[alias.declared_arity..]);
+            defer allocator.free(hidden);
 
             var active = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator);
             defer active.deinit();
@@ -6648,7 +6716,14 @@ fn appendInstantiatedNamedApplicationFromTemplate(
             );
 
             // The payload owns `payload_args` and releases it on failure.
-            const payload_args = if (actual_args.len == 0) &.{} else try allocator.dupe(CheckedTypeId, actual_args);
+            const payload_args = try allocator.alloc(CheckedTypeId, actual_args.len + hidden.len);
+            var payload_args_owned = true;
+            errdefer if (payload_args_owned) allocator.free(payload_args);
+            @memcpy(payload_args[0..actual_args.len], actual_args);
+            for (hidden, payload_args[actual_args.len..]) |hidden_arg, *out| {
+                out.* = try store.cloneCheckedTypeRootSubstituting(allocator, names, hidden_arg, formals, actual_args, &active);
+            }
+            payload_args_owned = false;
 
             break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .alias = .{
                 .name = alias.name,
@@ -6658,6 +6733,7 @@ fn appendInstantiatedNamedApplicationFromTemplate(
                 .builtin_origin = alias.builtin_origin,
                 .backing = backing,
                 .args = payload_args,
+                .declared_arity = alias.declared_arity,
             } });
         },
         .nominal => |nominal| blk: {
@@ -6825,6 +6901,9 @@ fn appendInstantiatedAliasDeclarationApplication(
     // The payload owns `payload_args` and releases it on failure.
     const payload_args = if (actual_args.len == 0) &.{} else try allocator.dupe(CheckedTypeId, actual_args);
 
+    // Built from the declaration's syntax under its actual arguments: the
+    // declared arguments alone. Nothing after checking relates alias
+    // applications by their arguments, so no hidden argument is needed.
     return try appendExplicitCheckedTypePayload(allocator, names, store, .{ .alias = .{
         .name = alias_name,
         .origin_module = origin_module,
@@ -6833,6 +6912,7 @@ fn appendInstantiatedAliasDeclarationApplication(
         .builtin_origin = builtin_origin,
         .backing = backing,
         .args = payload_args,
+        .declared_arity = @intCast(actual_args.len),
     } });
 }
 
@@ -8797,6 +8877,7 @@ fn copyCheckedTypePayload(
             .builtin_origin = alias.source_decl.originIsBuiltin(),
             .backing = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, module.typeStoreConst().getAliasBackingVar(alias)),
             .args = try copyCheckedTypeRange(allocator, module, names, imports, store, active, module.typeStoreConst().sliceAliasArgs(alias)),
+            .declared_arity = alias.declared_arity,
         } },
         // The checked artifact models required fields only, so a presence
         // variable never becomes a standalone checked type. Poison to err if one
@@ -21535,6 +21616,7 @@ test "hosted Try adapter capability recognizes only closed structural error rows
         .origin_module = module_identity,
         .owner_module = testCheckedModuleKey(105),
         .backing = closed_row,
+        .declared_arity = 0,
     } });
 
     try std.testing.expect(checkedTypeIsClosedTagRow(&store, empty_row));
@@ -35433,6 +35515,7 @@ pub const CheckedTypeProjector = struct {
                 .builtin_origin = alias.builtin_origin,
                 .backing = try self.projectCheckedTypeViewRootInner(source, source_names, alias.backing, active),
                 .args = try self.projectCheckedTypeViewIds(source, source_names, alias.args, active),
+                .declared_arity = alias.declared_arity,
             } },
             .record => |record| .{ .record = .{
                 .fields = try self.projectCheckedTypeViewRecordFields(source, source_names, record.fields, active),
@@ -35850,6 +35933,7 @@ pub const CheckedTypeProjector = struct {
             .builtin_origin = alias.builtin_origin,
             .backing = try self.projectImportedCheckedType(imported, alias.backing),
             .args = args,
+            .declared_arity = alias.declared_arity,
         } };
     }
 
@@ -36183,6 +36267,7 @@ const CheckedTypeStoreImportProjector = struct {
                 .builtin_origin = alias.builtin_origin,
                 .backing = try self.project(alias.backing),
                 .args = try self.projectIds(alias.args),
+                .declared_arity = alias.declared_arity,
             } },
             .record => |record| blk: {
                 const fields = try self.projectRecordFields(record.fields);
@@ -38855,6 +38940,7 @@ test "checked type identity scan terminates on self-referential alias backing" {
         .origin_module = module_identity,
         .owner_module = testCheckedModuleKey(90),
         .backing = root,
+        .declared_arity = 0,
     } });
 
     try std.testing.expect(!try store.checkedTypeContainsIdentityVariables(allocator, root));
@@ -39484,6 +39570,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         .builtin_origin = false,
         .backing = b,
         .args = alias_args,
+        .declared_arity = 2,
     } });
     try store.roots.append(gpa, .{ .id = c, .key = .{ .bytes = [_]u8{4} ** 32 } });
     try store.payloads.append(gpa, alias_stored);
@@ -40162,14 +40249,13 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, replace the golden bytes below with the assertion output. Bump
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
-    // Updated for the intentional layout change that gave `ConstTemplate` a
-    // `coerced_row` and a constant use (`ConstUseTemplate`) and resolved value
-    // reference (`ResolvedValueRefRecord`) a `coerced_result_row`, so lowering
-    // restores a coerced top-level value at its declared row and re-tags it
-    // for a use that re-opened that row (design.md "Row Subsumption").
+    // Updated for the intentional layout change that gave a checked alias
+    // (`StoredAlias`) its `declared_arity`: the checker's alias instances
+    // carry hidden arguments after their declared ones (design.md "Hidden
+    // Alias Arguments").
     const golden: [32]u8 = .{
-        0xEE, 0x5A, 0x6C, 0x1B, 0xEF, 0x43, 0x1D, 0x2C, 0xAC, 0x55, 0xC2, 0x46, 0x81, 0x26, 0x10, 0x77,
-        0x3A, 0x2C, 0x88, 0xB5, 0xD1, 0x85, 0x2D, 0x1A, 0x68, 0xEC, 0xB2, 0xD1, 0xD0, 0xED, 0x7A, 0xA6,
+        0xF1, 0x18, 0xD2, 0xD4, 0x85, 0xEC, 0x6F, 0xF5, 0x74, 0x8E, 0xAF, 0x58, 0xB3, 0xA0, 0xE9, 0xDA,
+        0x55, 0xC4, 0xA6, 0xAE, 0xF8, 0xDA, 0xAC, 0xFB, 0x02, 0xEB, 0x7B, 0x8F, 0xA2, 0x29, 0x27, 0x51,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

@@ -623,8 +623,19 @@ annotation_implicit_open_exts: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, Impl
 /// written inline or contributed by an alias it names. Scratch for one
 /// `generateAnnotationType` call.
 written_result_rows: std.ArrayListUnmanaged(ResultRowSite),
-/// Worklist for `aliasBodyFormals`, empty between calls.
-alias_body_formal_stack: std.ArrayListUnmanaged(CIR.TypeAnno.Idx),
+/// The copies one result-spine copy has made so far, by source root
+/// (`spineCopiedAlias`). Each copy uses the run past its own base and
+/// truncates it on the way out, so the list is empty between copies.
+spine_copies: std.ArrayListUnmanaged(SpineCopy),
+/// Scratch for collecting an alias declaration's hidden arguments
+/// (`generateAliasDecl`): the walk's worklist and visited roots, and the
+/// argument list being built. Empty between declarations.
+alias_slot_stack: std.ArrayListUnmanaged(Var),
+alias_slot_seen: std.AutoHashMapUnmanaged(Var, void),
+alias_decl_args: std.ArrayListUnmanaged(Var),
+/// The resolved vars of one alias body's result spine, root first
+/// (`aliasFormalOccursOffSpine`). Empty between declarations.
+alias_spine_path: std.ArrayListUnmanaged(Var),
 /// Per host-boundary annotation: the one adapter-reachable result row its
 /// generation closed as written, or `.none`. A hosted function's row is closed
 /// by declaration rather than by a body, so this is the whole producer answer
@@ -2979,7 +2990,11 @@ fn initAssumePrepared(
         .implicit_open_exts = .empty,
         .annotation_implicit_open_exts = .empty,
         .written_result_rows = .empty,
-        .alias_body_formal_stack = .empty,
+        .spine_copies = .empty,
+        .alias_slot_stack = .empty,
+        .alias_slot_seen = .empty,
+        .alias_decl_args = .empty,
+        .alias_spine_path = .empty,
         .host_annotation_result_rows = .empty,
         .unquantified_value_implicit_open_ext_ranges = .empty,
         .late_implicit_open_ext_audits = .empty,
@@ -3066,10 +3081,11 @@ pub fn fixupTypeWriter(self: *Self) void {
     // Defaulted fields render their default's source snippet when it was
     // declared in this module (design.md "Defaulted Fields").
     self.type_writer.setDefaultSourceResolver(self.cir, ModuleEnv.typeWriterDefaultSource);
-    // This writer renders the types of reported errors: an opened alias
-    // shows its backing too, so two instances of one alias never read alike
-    // when their types differ (design.md "Opened Alias Instances").
-    self.type_writer.opened_aliases = .name_and_backing;
+    // This writer renders the types of reported errors: a widened alias
+    // instance shows its declared arguments and its backing, so two
+    // instances of one alias never read alike when their types differ
+    // (design.md "Hidden Alias Arguments").
+    self.type_writer.widened_aliases = .name_and_backing;
 }
 
 /// Deinit owned fields
@@ -3125,7 +3141,11 @@ pub fn deinit(self: *Self) void {
     self.implicit_open_exts.deinit(self.gpa);
     self.annotation_implicit_open_exts.deinit(self.gpa);
     self.written_result_rows.deinit(self.gpa);
-    self.alias_body_formal_stack.deinit(self.gpa);
+    self.spine_copies.deinit(self.gpa);
+    self.alias_slot_stack.deinit(self.gpa);
+    self.alias_slot_seen.deinit(self.gpa);
+    self.alias_decl_args.deinit(self.gpa);
+    self.alias_spine_path.deinit(self.gpa);
     self.host_annotation_result_rows.deinit(self.gpa);
     self.unquantified_value_implicit_open_ext_ranges.deinit(self.gpa);
     self.late_implicit_open_ext_audits.deinit(self.gpa);
@@ -7353,7 +7373,6 @@ fn instantiateVar(
     defer trace.end();
 
     var instantiate_ctx = Instantiator{
-        .opening_site = .use,
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
@@ -7388,7 +7407,6 @@ fn instantiateWhereMethodForUse(self: *Self, signature_var: Var, env: *Env, regi
     defer trace.end();
 
     var instantiator = Instantiator{
-        .opening_site = .use,
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
@@ -7525,7 +7543,6 @@ fn instantiateVarPolarized(
     var closed_marker_reaches: std.ArrayListUnmanaged(Instantiator.AdapterReach) = .empty;
     defer closed_marker_reaches.deinit(self.gpa);
     var instantiate_ctx = Instantiator{
-        .opening_site = .annotation,
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
@@ -7572,32 +7589,21 @@ fn recordOpenedMarkerExts(self: *Self, opened: []const Instantiator.OpenedMarker
     }
 }
 
-/// The per-occurrence result rows one declaration application may build
-/// (`Instantiator.ResultRowTwin`), with what the checker needs to build one
-/// when the instantiation first takes it and to record a consumed one.
-/// Stack-held: a declaration has at most `max_tracked_alias_formals` formals
-/// this walk tracks, and an application past that arity builds no twin, which
-/// keeps every argument shared exactly as before (the conservative answer).
-const ResultRowTwins = struct {
-    twins: [max_tracked_alias_formals]Instantiator.ResultRowTwin = undefined,
-    rows: [max_tracked_alias_formals]Row = undefined,
-    len: usize = 0,
-
-    const Row = struct {
-        /// The shared argument the twin is a copy of.
-        arg: Var,
-        region: Region,
-        /// The argument's row as it qualified (`resultRowTwinRow`).
-        source: TwinRow,
-        /// Set when the twin is built: its extension and the union that
-        /// extension opens (the chain's innermost link).
-        ext: Var = undefined,
-        union_var: Var = undefined,
-    };
-
-    fn slice(self: *ResultRowTwins) []Instantiator.ResultRowTwin {
-        return self.twins[0..self.len];
-    }
+/// The result-row twin one declaration application may build
+/// (`Instantiator.ResultRowTwin`), with what the checker needs to build it
+/// when the instantiation first takes it and to record it once consumed.
+const ResultRowTwinSite = struct {
+    twin: Instantiator.ResultRowTwin,
+    /// The shared argument the twin is a copy of: the one substituted for
+    /// the formal the declaration's spine ends at.
+    arg: Var,
+    region: Region,
+    /// The argument's row as it qualified (`resultRowTwinRow`).
+    source: TwinRow,
+    /// Set when the twin is built: its extension and the union that
+    /// extension opens (the chain's innermost link).
+    ext: Var = undefined,
+    union_var: Var = undefined,
 };
 
 /// A row an argument qualifies for a twin with: where its extension chain
@@ -7608,54 +7614,60 @@ const TwinRow = struct {
     innermost_tags: types_mod.Tag.SafeMultiList.Range,
 };
 
-/// Register the result-row twin of one argument of a declaration standing on
-/// the result row (`Instantiator.ResultRowTwin`), when the argument is a row
-/// that the inline spelling would open there. Nothing is built here: the
-/// instantiation builds the twin when an occurrence first takes it
-/// (`buildResultRowTwin`).
+/// The result-row twin of a declaration application standing on the result
+/// row (`Instantiator.ResultRowTwin`), when the argument its spine ends at is
+/// a row that the inline spelling would open there. Nothing is built here:
+/// the instantiation builds the twin when the declaration's spine slot
+/// first takes it (`buildResultRowTwin`); the instantiator finds that slot by
+/// the template variable's identity.
 ///
 /// A declaration qualifies when it stands at the whole signature, at the
-/// signature's direct result, or at a result `Try`'s error row: those are the
-/// positions whose declaration can put a formal on the result row, whether as
+/// signature's direct result, or at a result `Try`'s error row, and its
+/// result spine ends at one of its formals (`types.Alias.spine`): its hidden
+/// `e⁺` when the body uses the formal elsewhere too, the declared formal
+/// itself when not. Whether as
 /// the function's return (`Fwd(e) : Try(Str, e) -> Try(Str, e)`) or as the
 /// row's own extension (`Wrap(ext) : [HostErr(U64), ..ext]` in
-/// `Try(U64, Wrap(Base))`). An argument the application already generated at
-/// a reachable position (a `Try`'s error argument, `applyTryErrorArgIndex`)
-/// opens there in place and needs no twin; a second opened row would make the
-/// signature decline to coerce.
+/// `Try(U64, Wrap(Base))`). The spine ends at one place, so an application
+/// has at most one twin. An argument the application already generated at a
+/// reachable position (a `Try`'s error argument, `applyTryErrorArgIndex`)
+/// opens there in place and needs no twin; a second opened row would make
+/// the signature decline to coerce.
 ///
 /// The argument qualifies as `resultRowTwinRow` says.
-fn addResultRowTwin(
+fn resultRowTwinSite(
     self: *Self,
-    twins: *ResultRowTwins,
+    decl_alias: types_mod.Alias,
     ctx: GenTypeAnnoCtx,
     polarity: Polarity,
-    formal: Ident.Idx,
-    arg_var: Var,
-    region: Region,
-    arg_reached: bool,
-) void {
+    arg_vars: []const Var,
+    arg_annos: []const CIR.TypeAnno.Idx,
+    reached_arg_index: ?usize,
+) ?ResultRowTwinSite {
     const anno_ctx = switch (ctx) {
         .annotation => |anno_ctx| anno_ctx,
-        .type_decl => return,
+        .type_decl => return null,
     };
     switch (anno_ctx.adapter_reach) {
         .signature, .result, .try_row, .value_try_row => {},
-        .nested => return,
+        .nested => return null,
     }
-    if (arg_reached or polarity != .pos) return;
-    if (twins.len == max_tracked_alias_formals) return;
-    const source = self.resultRowTwinRow(arg_var) orelse return;
-    twins.twins[twins.len] = .{
-        .formal = formal,
-        // A host-boundary twin is the argument itself (`buildResultRowTwin`).
-        .opens = switch (anno_ctx.opening) {
-            .implicit_open, .per_use => true,
-            .as_written => false,
-        },
+    if (polarity != .pos) return null;
+    switch (decl_alias.spine.kind) {
+        .formal, .declared => {},
+        .none, .marker => return null,
+    }
+    const formal_index: usize = decl_alias.spine.base;
+    if (reached_arg_index == formal_index) return null;
+    const arg_var = arg_vars[formal_index];
+    const source = self.resultRowTwinRow(arg_var) orelse return null;
+    const slot = self.types.aliasSpineSlot(decl_alias).?;
+    return .{
+        .twin = .{ .slot = self.types.resolveVar(slot).var_ },
+        .arg = arg_var,
+        .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(arg_annos[formal_index])),
+        .source = source,
     };
-    twins.rows[twins.len] = .{ .arg = arg_var, .region = region, .source = source };
-    twins.len += 1;
 }
 
 /// The row `arg_var` qualifies for a result-row twin with, if it does: through
@@ -7667,8 +7679,10 @@ fn addResultRowTwin(
 /// for a covariant formal). Any other tail was written (`..r`) and means the
 /// same thing at every occurrence, and a row with no tags asserts
 /// uninhabitedness; neither is reopened by position, so neither gets a twin.
-/// Past `max_result_row_twin_alias_layers` alias layers and links the
-/// argument gets no twin, the conservative answer.
+/// An alias layer or link whose declaration's spine ends at no slot
+/// (`types.AliasSpine.none`) fixes its row's end as written, so a row through
+/// one gets no twin either. Past `max_result_row_twin_alias_layers` alias
+/// layers and links the argument gets no twin, the conservative answer.
 fn resultRowTwinRow(self: *Self, arg_var: Var) ?TwinRow {
     var alias_layers: usize = 0;
     var has_tags = false;
@@ -7679,6 +7693,10 @@ fn resultRowTwinRow(self: *Self, arg_var: Var) ?TwinRow {
         switch (resolved.desc.content) {
             .alias => |alias| {
                 if (alias_layers == max_result_row_twin_alias_layers) return null;
+                switch (alias.spine.kind) {
+                    .marker, .formal, .declared => {},
+                    .none => return null,
+                }
                 alias_layers += 1;
                 current = self.types.getAliasBackingVar(alias);
                 continue;
@@ -7708,26 +7726,27 @@ fn resultRowTwinRow(self: *Self, arg_var: Var) ?TwinRow {
 /// through. Deeper is declined (no twin), the conservative answer.
 const max_result_row_twin_alias_layers: usize = 8;
 
-/// What the instantiator calls to build a twin on its first take.
+/// What the instantiator calls to build the twin on its first take.
 const ResultRowTwinBuild = struct {
     check: *Self,
-    twins: *ResultRowTwins,
+    site: *ResultRowTwinSite,
     opening: GenTypeAnnoCtx.AnnotationGenCtx.OpeningBehavior,
     env: *Env,
 
-    fn build(ctx: *anyopaque, index: usize) std.mem.Allocator.Error!Var {
+    fn build(ctx: *anyopaque) std.mem.Allocator.Error!Var {
         const self: *ResultRowTwinBuild = @ptrCast(@alignCast(ctx));
-        return self.check.buildResultRowTwin(self.twins, index, self.opening, self.env);
+        return self.check.buildResultRowTwin(self.site, self.opening, self.env);
     }
 };
 
-/// Build twin `index`: the argument's row with its own extension, opened the
-/// way a row written at the result is. The row is copied down its whole
-/// extension chain with the tail replaced, keeping every alias layer and
-/// link, so it is presented as the inline spelling's row is; tag payloads
-/// stay shared. A where-method signature's twin takes the deferral marker as
-/// its extension, decided per use rather than audited, exactly as a row
-/// written at its result does.
+/// Build the twin: the argument's row with its own extension, opened the way
+/// a row written at the result is. The row is copied down its whole extension
+/// chain with the tail replaced (`copiedTagRowChain`), keeping every alias
+/// layer and link with its spine slot re-pointed at the copy, so it is
+/// presented as the inline spelling's row is; tag payloads stay shared. A
+/// where-method signature's twin takes the deferral marker as its extension,
+/// decided per use rather than audited, exactly as a row written at its
+/// result does.
 ///
 /// A host-boundary annotation keeps its rows as written, so its "twin" is the
 /// argument itself: substituting it changes nothing, and taking it only
@@ -7735,61 +7754,55 @@ const ResultRowTwinBuild = struct {
 /// exactly as a row the declaration's own marker closes there reports it.
 fn buildResultRowTwin(
     self: *Self,
-    twins: *ResultRowTwins,
-    index: usize,
+    site: *ResultRowTwinSite,
     opening: GenTypeAnnoCtx.AnnotationGenCtx.OpeningBehavior,
     env: *Env,
 ) std.mem.Allocator.Error!Var {
-    const row = &twins.rows[index];
     if (opening == .as_written) {
-        row.ext = row.source.tail;
-        row.union_var = row.source.innermost_union;
-        return row.arg;
+        site.ext = site.source.tail;
+        site.union_var = site.source.innermost_union;
+        return site.arg;
     }
     const ext = switch (opening) {
         .implicit_open => blk: {
-            const open_ext = try self.fresh(env, row.region);
+            const open_ext = try self.fresh(env, site.region);
             try self.types.markAnnotationTagExt(open_ext);
             break :blk open_ext;
         },
-        .per_use => try self.freshFromContent(.{ .rigid = Rigid.init(self.cir.idents.polarity_var) }, env, row.region),
+        .per_use => try self.freshFromContent(.{ .rigid = Rigid.init(self.cir.idents.polarity_var) }, env, site.region),
         .as_written => unreachable, // handled above
     };
+    var copy = self.beginSpineCopy(ext);
+    defer self.endSpineCopy(copy);
     var innermost: ?Var = null;
-    const twin = try self.copiedTagRowChain(row.arg, ext, .opened_by_annotation, &innermost, env, row.region);
-    row.ext = ext;
-    row.union_var = innermost.?;
+    const twin = try self.copiedTagRowChain(site.arg, &copy, &innermost, env, site.region);
+    site.ext = ext;
+    site.union_var = innermost.?;
     return twin;
 }
 
-/// Record each twin the instantiation took as the implicitly opened result
-/// row it now is, at the site its reach names, exactly as a row written
-/// there is recorded. A host-boundary twin reports the site its as-written
-/// row stands on instead. A where-method twin's row is a deferral marker,
-/// decided per use rather than audited, so it records nothing, like the
-/// inline spelling's.
-fn recordConsumedResultRowTwins(self: *Self, twins: *const ResultRowTwins, ctx: GenTypeAnnoCtx) std.mem.Allocator.Error!void {
+/// Record the twin, when the instantiation took it, as the implicitly opened
+/// result row it now is, at the site its reach names, exactly as a row
+/// written there is recorded. A host-boundary twin reports the site its
+/// as-written row stands on instead. A where-method twin's row is a deferral
+/// marker, decided per use rather than audited, so it records nothing, like
+/// the inline spelling's.
+fn recordConsumedResultRowTwin(self: *Self, site: *const ResultRowTwinSite, ctx: GenTypeAnnoCtx) std.mem.Allocator.Error!void {
     const opening = switch (ctx) {
         .annotation => |anno_ctx| anno_ctx.opening,
         .type_decl => return,
     };
-    if (opening == .as_written) {
-        for (twins.twins[0..twins.len]) |twin| {
-            const reach = twin.consumed_at orelse continue;
-            try self.recordClosedMarkerReaches(&.{reach});
-        }
-        return;
-    }
-    if (opening != .implicit_open) return;
-    for (twins.twins[0..twins.len], twins.rows[0..twins.len]) |twin, row| {
-        const reach = twin.consumed_at orelse continue;
-        try self.implicit_open_exts.append(self.gpa, .{
-            .var_ = row.ext,
-            .region = row.region,
-            .listed_tags = row.source.innermost_tags,
-            .union_var = row.union_var,
+    const reach = site.twin.consumed_at orelse return;
+    switch (opening) {
+        .as_written => try self.recordClosedMarkerReaches(&.{reach}),
+        .implicit_open => try self.implicit_open_exts.append(self.gpa, .{
+            .var_ = site.ext,
+            .region = site.region,
+            .listed_tags = site.source.innermost_tags,
+            .union_var = site.union_var,
             .result_row = CoercibleRow.forReach(reach),
-        });
+        }),
+        .per_use => {},
     }
 }
 
@@ -7822,7 +7835,6 @@ fn instantiateTypeScheme(
     std.debug.assert(self.isBindingSchemeVar(var_to_instantiate));
 
     var instantiate_ctx = Instantiator{
-        .opening_site = .use,
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
@@ -7883,13 +7895,11 @@ fn instantiateVarOrphan(
     env: *Env,
     rank: Rank,
     region_behavior: InstantiateRegionBehavior,
-    opening_site: Instantiator.OpeningSite,
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
     std.debug.assert(@intFromEnum(rank) <= @intFromEnum(env.rank()));
     var instantiate_ctx = Instantiator{
-        .opening_site = opening_site,
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
@@ -7920,7 +7930,6 @@ fn instantiateVarOrphanSharingVars(
     defer trace.end();
     std.debug.assert(@intFromEnum(rank) <= @intFromEnum(env.rank()));
     var instantiate_ctx = Instantiator{
-        .opening_site = .annotation,
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
@@ -7970,7 +7979,6 @@ fn instantiateVarOrphanFlexed(
     const trace = tracy.trace(@src());
     defer trace.end();
     var instantiate_ctx = Instantiator{
-        .opening_site = .annotation,
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
@@ -7998,9 +8006,8 @@ fn instantiateVarWithSubs(
     subs: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
-    opening_site: Instantiator.OpeningSite,
 ) std.mem.Allocator.Error!Var {
-    return self.instantiateVarWithSubsPolarized(var_to_instantiate, subs, env, region_behavior, .close, .pos, .nested, .ignore, null, opening_site);
+    return self.instantiateVarWithSubsPolarized(var_to_instantiate, subs, env, region_behavior, .close, .pos, .nested, .ignore, null);
 }
 
 /// `instantiateVarWithSubs` with explicit polarity var handling; see
@@ -8016,7 +8023,6 @@ fn instantiateVarWithSubsPolarized(
     reach: Instantiator.AdapterReach,
     written_rows: WrittenResultRows,
     twin_build: ?*ResultRowTwinBuild,
-    opening_site: Instantiator.OpeningSite,
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -8026,7 +8032,6 @@ fn instantiateVarWithSubsPolarized(
     var closed_marker_reaches: std.ArrayListUnmanaged(Instantiator.AdapterReach) = .empty;
     defer closed_marker_reaches.deinit(self.gpa);
     var instantiate_ctx = Instantiator{
-        .opening_site = opening_site,
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
@@ -8044,7 +8049,7 @@ fn instantiateVarWithSubsPolarized(
             .record => &closed_marker_reaches,
             .ignore => null,
         },
-        .result_row_twins = if (twin_build) |build| build.twins.slice() else &.{},
+        .result_row_twin = if (twin_build) |build| &build.site.twin else null,
         .result_row_twin_builder = if (twin_build) |build| .{ .ctx = build, .build = ResultRowTwinBuild.build } else null,
     };
     const instantiated = try self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false, .none);
@@ -9866,10 +9871,11 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         const stmt_var = ModuleEnv.varFrom(stmt_idx);
 
         switch (stmt) {
-            .s_alias_decl => |alias| {
-                try self.setVarRank(stmt_var, &env);
-                try self.predeclareAliasDecl(stmt_var, alias, &env);
-            },
+            // An alias reserves no shell: its content is installed once its
+            // body is generated, since its hidden arguments are variables of
+            // that body (`generateAliasDecl`). Every reference generates it
+            // first (`ensureTypeDeclGenerated`).
+            .s_alias_decl => try self.setVarRank(stmt_var, &env),
             .s_nominal_decl => |nominal| {
                 try self.setVarRank(stmt_var, &env);
                 try self.predeclareNominalDecl(stmt_var, nominal, &env);
@@ -14147,7 +14153,7 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
                         self.aliasOriginModule(),
                         @intFromEnum(type_alias.alias_stmt_idx),
                         self.cir.module_role == .builtin,
-                        .declared,
+                        0,
                         .none,
                     ),
                     env,
@@ -14689,8 +14695,10 @@ fn generateForClauseAliasApplication(
             decl_alias.origin_module,
             decl_alias.source_decl.toOptional(),
             decl_alias.source_decl.originIsBuiltin(),
-            .declared,
-            decl_alias.body_formals,
+            // A for-clause alias's body is its rigid alone: no hidden
+            // arguments.
+            anno_arg_vars.len,
+            .none,
         ),
         env,
     );
@@ -15215,7 +15223,6 @@ fn predeclareAnnotationSchemeHelp(
             env,
             env.rank(),
             .use_last_var,
-            .annotation,
         );
 
     if (hole_rank) |hr| {
@@ -16381,7 +16388,6 @@ fn replayPredeclaredSchemeUse(
     }
 
     var instantiator = Instantiator{
-        .opening_site = .use,
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
@@ -16688,87 +16694,6 @@ fn aliasOriginModule(self: *const Self) base.ModuleIdentity.Idx {
     return self.cir.selfModuleIdentity();
 }
 
-fn predeclareAliasDecl(
-    self: *Self,
-    decl_var: Var,
-    alias: std.meta.fieldInfo(CIR.Statement, .s_alias_decl).type,
-    env: *Env,
-) std.mem.Allocator.Error!void {
-    const header = self.cir.store.getTypeHeader(alias.header);
-    const header_args = self.cir.store.sliceTypeAnnos(header.args);
-    const header_vars = try self.generateHeaderVars(header_args, env);
-    const backing_var: Var = ModuleEnv.varFrom(alias.anno);
-
-    try self.unifyWithTargetRank(
-        decl_var,
-        try self.types.mkAliasWithSourceDeclAndBuiltinOrigin(
-            .{ .ident_idx = header.relative_name },
-            backing_var,
-            header_vars,
-            self.aliasOriginModule(),
-            @intFromEnum(decl_var),
-            self.cir.module_role == .builtin,
-            .declared,
-            try self.aliasBodyFormals(header_args, alias.anno),
-        ),
-        env,
-    );
-}
-
-/// Which of an alias declaration's formals its body uses
-/// (`types.Alias.body_formals`), read from the declaration's canonical
-/// annotation: a formal is used when the body refers to it anywhere, through
-/// any constructor, argument, field, payload or extension. A formal the body
-/// refers to only as another alias's argument is still used here; that
-/// alias's own formals decide how its argument is related.
-fn aliasBodyFormals(self: *Self, header_args: []const CIR.TypeAnno.Idx, body: CIR.TypeAnno.Idx) std.mem.Allocator.Error!types_mod.AliasBodyFormals {
-    var used = types_mod.AliasBodyFormals.none;
-    if (header_args.len == 0 or body == .placeholder) return used;
-    const stack = &self.alias_body_formal_stack;
-    std.debug.assert(stack.items.len == 0);
-    defer stack.clearRetainingCapacity();
-    try stack.append(self.gpa, body);
-    while (stack.pop()) |anno_idx| {
-        switch (self.cir.store.getTypeAnno(anno_idx)) {
-            .rigid_var_lookup => |lookup| {
-                for (header_args, 0..) |header_arg, index| {
-                    if (header_arg == lookup.ref) used = used.with(index);
-                }
-            },
-            .rigid_var => |rigid| {
-                for (header_args, 0..) |header_arg, index| {
-                    switch (self.cir.store.getTypeAnno(header_arg)) {
-                        .rigid_var => |formal| if (formal.name.eql(rigid.name)) {
-                            used = used.with(index);
-                        },
-                        .apply, .rigid_var_lookup, .underscore, .lookup, .tag_union, .tag, .tuple, .record, .@"fn", .parens, .malformed => {},
-                    }
-                }
-            },
-            .apply => |apply| try stack.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(apply.args)),
-            .tag_union => |tag_union| {
-                try stack.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tag_union.tags));
-                if (tag_union.ext) |ext| try stack.append(self.gpa, ext);
-            },
-            .tag => |tag| try stack.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tag.args)),
-            .tuple => |tuple| try stack.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tuple.elems)),
-            .record => |record| {
-                for (self.cir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
-                    try stack.append(self.gpa, self.cir.store.getAnnoRecordField(field_idx).ty);
-                }
-                if (record.ext) |ext| try stack.append(self.gpa, ext);
-            },
-            .@"fn" => |func| {
-                try stack.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(func.args));
-                try stack.append(self.gpa, func.ret);
-            },
-            .parens => |parens| try stack.append(self.gpa, parens.anno),
-            .underscore, .lookup, .malformed => {},
-        }
-    }
-    return used;
-}
-
 fn predeclareNominalDecl(
     self: *Self,
     decl_var: Var,
@@ -16829,19 +16754,21 @@ fn registerLocalNominalDecl(
     });
 }
 
-fn predeclaredAliasArgs(self: *const Self, decl_var: Var) ?[]Var {
-    const resolved = self.types.resolveVar(decl_var).desc.content;
-    if (resolved != .alias) return null;
-    return self.types.sliceAliasDeclaredArgs(resolved.alias);
-}
-
 fn predeclaredNominalArgs(self: *const Self, decl_var: Var) ?[]Var {
     const resolved = self.types.resolveVar(decl_var).desc.content;
     if (resolved != .structure or resolved.structure != .nominal_type) return null;
     return self.types.sliceNominalArgs(resolved.structure.nominal_type);
 }
 
-/// Generate types for an alias type declaration
+/// Generate types for an alias type declaration.
+///
+/// The declaration's content is installed only once its body is generated:
+/// its HIDDEN arguments (`types.Alias.declared_arity`) are variables of the
+/// body, which exist only then (design.md "Hidden Alias Arguments"). Every
+/// reference to an alias declaration generates it first
+/// (`ensureTypeDeclGenerated`), so nothing reads the declaration var before
+/// this installs it; a platform's for-clause aliases are built separately
+/// (`processRequiresTypes`).
 fn generateAliasDecl(
     self: *Self,
     decl_idx: CIR.Statement.Idx,
@@ -16868,28 +16795,11 @@ fn generateAliasDecl(
     const header_args = self.cir.store.sliceTypeAnnos(header.args);
 
     // Next, generate the provided arg types and build the map of rigid variables in the header
-    const predeclared_header_vars = self.predeclaredAliasArgs(decl_var);
-    const header_vars = if (predeclared_header_vars) |vars| vars else try self.generateHeaderVars(header_args, env);
+    const header_vars = try self.generateHeaderVars(header_args, env);
     for (header_args) |header_arg_idx| {
         if (self.cir.store.getTypeAnno(header_arg_idx) == .malformed) {
             self.markTypeDeclInvalid(decl_idx);
         }
-    }
-    if (predeclared_header_vars == null) {
-        try self.unifyWithTargetRank(
-            decl_var,
-            try self.types.mkAliasWithSourceDeclAndBuiltinOrigin(
-                .{ .ident_idx = header.relative_name },
-                ModuleEnv.varFrom(alias.anno),
-                header_vars,
-                self.aliasOriginModule(),
-                @intFromEnum(decl_idx),
-                self.cir.module_role == .builtin,
-                .declared,
-                try self.aliasBodyFormals(header_args, alias.anno),
-            ),
-            env,
-        );
     }
 
     self.type_decl_rigid_vars.clearRetainingCapacity();
@@ -16904,20 +16814,420 @@ fn generateAliasDecl(
     // Now we have a built of list of rigid variables for the decl lhs (header).
     // With this in hand, we can now generate the type for the lhs (body).
     self.seen_annos.unsetAll();
-    const backing_var: Var = ModuleEnv.varFrom(alias.anno);
+    const body_var: Var = ModuleEnv.varFrom(alias.anno);
+    const body_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(alias.anno));
     try self.generateAnnoTypeInPlace(alias.anno, env, .{ .type_decl = .{
         .idx = decl_idx,
         .name = header.relative_name,
         .type_ = .alias,
-        .backing_var = backing_var,
+        .backing_var = body_var,
         .is_opaque = false,
         .num_args = @intCast(header_args.len),
     } }, .pos);
 
-    if (!try self.validateAliasRows(backing_var, env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(alias.anno)))) {
+    const spine = try self.aliasDeclSpine(body_var, header_vars, env, body_region);
+
+    if (!try self.validateAliasRows(spine.backing, env, body_region)) {
         self.markTypeDeclInvalid(decl_idx);
         try self.markErroneous(decl_var);
         return;
+    }
+
+    // The argument list: the declared formals, then the hidden ones.
+    const args = &self.alias_decl_args;
+    std.debug.assert(args.items.len == 0);
+    defer args.clearRetainingCapacity();
+    try args.appendSlice(self.gpa, header_vars);
+    try self.appendAliasHiddenArgs(spine, args);
+
+    try self.unifyWithTargetRank(
+        decl_var,
+        try self.types.mkAliasWithSourceDeclAndBuiltinOrigin(
+            .{ .ident_idx = header.relative_name },
+            spine.backing,
+            args.items,
+            self.aliasOriginModule(),
+            @intFromEnum(decl_idx),
+            self.cir.module_role == .builtin,
+            header_vars.len,
+            spine.spine,
+        ),
+        env,
+    );
+}
+
+/// An alias declaration's backing and the end of its result spine, as
+/// `generateAliasDecl` installs them.
+const AliasDeclSpine = struct {
+    /// The declaration's backing: its generated body, or a copy of the body
+    /// along its result spine whose end is `slot`.
+    backing: Var,
+    spine: types_mod.AliasSpine,
+    /// The hidden argument the spine ends at: set for `.marker` and
+    /// `.formal`.
+    slot: ?Var,
+};
+
+/// The reaches a declaration body's result spine can be walked at: its root
+/// can stand anywhere a use stands on the result spine
+/// (`Instantiator.AdapterReach.onSpine`). Stepped member-wise through
+/// `Instantiator.AdapterReach.step`, dropping every member that leaves the
+/// spine.
+const SpineReaches = std.EnumSet(Instantiator.AdapterReach);
+
+fn spineRootReaches() SpineReaches {
+    return SpineReaches.initMany(&.{ .signature, .result, .try_row, .value_try_row });
+}
+
+fn stepSpineReaches(reaches: SpineReaches, edge: Instantiator.AdapterReach.Edge) SpineReaches {
+    var stepped = SpineReaches.initEmpty();
+    var iter = reaches.iterator();
+    while (iter.next()) |reach| {
+        const next = reach.step(edge);
+        if (next.onSpine()) stepped.insert(next);
+    }
+    return stepped;
+}
+
+/// Where a declaration body's result spine ends: the one path from its root
+/// through alias backings, the root function's return, a builtin `Try`'s
+/// error argument and tag-union extensions, stepped by the same grammar the
+/// instantiator's frames step by (`Instantiator.AdapterReach.step`). It is
+/// one path: at every position each reach either continues along the same
+/// edge or leaves the spine. The path's vars are left in
+/// `alias_spine_path`, root first, end last.
+const SpineEnd = struct {
+    end: Var,
+    /// Whether the path passed through an alias layer whose own spine ends at
+    /// one of its formals. Everything past that layer's slot is the argument
+    /// the application substituted there, which the application also
+    /// substitutes at the formal's other occurrences.
+    through_formal: bool,
+};
+
+/// Whether `formal_root` occurs in `body_var` anywhere but at the end of its
+/// result spine: some edge other than the spine's own reaches it. The spine
+/// is the path `aliasSpineEnd` left in `alias_spine_path`; along it, each
+/// link's spine child is not counted, and neither is each alias layer's own
+/// spine slot, which a copy of the spine replaces with it
+/// (`spineCopiedAlias`).
+fn aliasFormalOccursOffSpine(self: *Self, formal_root: Var) std.mem.Allocator.Error!bool {
+    const path = self.alias_spine_path.items;
+    const stack = &self.alias_slot_stack;
+    const seen = &self.alias_slot_seen;
+    std.debug.assert(stack.items.len == 0 and seen.count() == 0);
+    defer {
+        stack.clearRetainingCapacity();
+        seen.clearRetainingCapacity();
+    }
+    // Every link of the spine but its end is visited; the edge from one to
+    // the next is the spine's own.
+    for (path[0 .. path.len - 1]) |link| try stack.append(self.gpa, link);
+    while (stack.pop()) |current| {
+        const resolved = self.types.resolveVar(current);
+        if (resolved.var_ == formal_root) return true;
+        const entry = try seen.getOrPut(self.gpa, resolved.var_);
+        if (entry.found_existing) continue;
+        const on_path_at: ?usize = for (path[0 .. path.len - 1], 0..) |link, index| {
+            if (link == resolved.var_) break index;
+        } else null;
+        const spine_child: ?Var = if (on_path_at) |index| path[index + 1] else null;
+        switch (resolved.desc.content) {
+            .rigid, .flex, .field_presence, .err => {},
+            .alias => |alias| {
+                const slot_index: ?usize = if (on_path_at != null) self.types.aliasSpineSlotIndex(alias) else null;
+                for (self.types.sliceAliasArgs(alias), 0..) |arg, index| {
+                    if (slot_index == index) continue;
+                    try stack.append(self.gpa, arg);
+                }
+                if (spine_child == null) try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+            },
+            .structure => |flat| switch (flat) {
+                .empty_record, .empty_tag_union => {},
+                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| for (self.types.sliceNominalArgs(nominal), 0..) |arg, index| {
+                    if (spine_child != null and index == try_error_type_arg_index and self.types.resolveVar(arg).var_ == spine_child.?) continue;
+                    try stack.append(self.gpa, arg);
+                },
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
+                    if (spine_child == null) try stack.append(self.gpa, func.ret);
+                },
+                .record => |record| {
+                    try stack.append(self.gpa, record.ext);
+                    for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                        if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
+                        try stack.append(self.gpa, presence.typeVar());
+                    }
+                },
+                .tag_union => |tag_union| {
+                    for (self.types.getTagsSlice(tag_union.tags).items(.args)) |args| {
+                        try stack.appendSlice(self.gpa, self.types.sliceVars(args));
+                    }
+                    if (spine_child == null) try stack.append(self.gpa, tag_union.ext);
+                },
+            },
+        }
+    }
+    return false;
+}
+
+fn aliasSpineEnd(self: *Self, root: Var) std.mem.Allocator.Error!SpineEnd {
+    const path = &self.alias_spine_path;
+    path.clearRetainingCapacity();
+    var current = root;
+    var reaches = spineRootReaches();
+    var through_formal = false;
+    const try_ident = self.tryNominalIdent();
+    var guard = types_mod.debug.IterationGuard.init("aliasSpineEnd");
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current);
+        try path.append(self.gpa, resolved.var_);
+        const next: ?struct { var_: Var, reaches: SpineReaches } = switch (resolved.desc.content) {
+            .alias => |alias| blk: {
+                switch (alias.spine.kind) {
+                    // A hidden `e⁺` is the argument the application also
+                    // substitutes at `e`'s other positions.
+                    .formal => through_formal = true,
+                    .none, .marker, .declared => {},
+                }
+                break :blk .{ .var_ = self.types.getAliasBackingVar(alias), .reaches = stepSpineReaches(reaches, .alias_backing) };
+            },
+            .structure => |flat| switch (flat) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| .{ .var_ = func.ret, .reaches = stepSpineReaches(reaches, .func_return) },
+                .nominal_type => |nominal| blk: {
+                    if (!try_ident.matches(nominal)) break :blk null;
+                    const args = self.types.sliceNominalArgs(nominal);
+                    if (args.len <= try_error_type_arg_index) break :blk null;
+                    break :blk .{ .var_ = args[try_error_type_arg_index], .reaches = stepSpineReaches(reaches, .try_error_arg) };
+                },
+                .tag_union => |tag_union| .{ .var_ = tag_union.ext, .reaches = stepSpineReaches(reaches, .tag_ext) },
+                .record, .tuple, .empty_record, .empty_tag_union => null,
+            },
+            .flex, .rigid, .field_presence, .err => null,
+        };
+        const step = next orelse return .{ .end = resolved.var_, .through_formal = through_formal };
+        if (step.reaches.count() == 0) return .{ .end = resolved.var_, .through_formal = through_formal };
+        current = step.var_;
+        reaches = step.reaches;
+    }
+}
+
+/// Decide where a freshly generated alias body's result spine ends and give
+/// that end its own hidden argument (design.md "Hidden Alias Arguments"):
+///
+/// - An occurrence of formal `e` that the body also uses elsewhere gets a
+///   hidden formal `e⁺`, a rigid named `e`, in place of that one occurrence.
+///   The body is copied along its spine down to `e⁺` (`copiedSpine`); every
+///   other position keeps `e`. An ordinary reference substitutes both by
+///   name, to the same argument; a result-row twin replaces only `e⁺`.
+/// - A formal the body uses nowhere else is the slot itself (`.declared`):
+///   splitting it would leave the declared `e` with no body position,
+///   related only through the argument list, which over-constrains every
+///   same-alias relation the inline spelling does not make.
+/// - A polarity marker of this body is the spine slot itself. When the path
+///   reached it through another alias's formal slot, the marker came in
+///   with that application's argument, which the application also
+///   substitutes at the formal's other occurrences (`N(x) : x -> x` applied
+///   to `[A]`), so the spine is copied down to a fresh marker of its own and
+///   the output row is decided apart from the input one, as the inline
+///   spelling decides it.
+/// - Any other end (a row written closed, a nominal, a non-`Try` function
+///   result, an error) is no slot: nothing re-opens it.
+fn aliasDeclSpine(
+    self: *Self,
+    body_var: Var,
+    header_vars: []const Var,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!AliasDeclSpine {
+    const found = try self.aliasSpineEnd(body_var);
+    defer self.alias_spine_path.clearRetainingCapacity();
+    const end = self.types.resolveVar(found.end);
+    const rigid = switch (end.desc.content) {
+        .rigid => |rigid| rigid,
+        .flex, .alias, .structure, .field_presence, .err => return .{ .backing = body_var, .spine = .none, .slot = null },
+    };
+    if (rigid.name.eql(self.cir.idents.polarity_var)) {
+        if (!found.through_formal) return .{ .backing = body_var, .spine = .marker, .slot = end.var_ };
+        const marker = try self.freshFromContent(.{ .rigid = Rigid.init(self.cir.idents.polarity_var) }, env, region);
+        return .{
+            .backing = try self.copiedSpineFromRoot(body_var, marker, env, region),
+            .spine = .marker,
+            .slot = marker,
+        };
+    }
+    for (header_vars, 0..) |header_var, formal_index| {
+        if (self.types.resolveVar(header_var).var_ != end.var_) continue;
+        // A formal the body uses nowhere else is its own slot: a hidden `e⁺`
+        // would leave the declared `e` with no body position, related only
+        // through the argument list, which no inline spelling relates.
+        if (!try self.aliasFormalOccursOffSpine(end.var_)) return .{
+            .backing = body_var,
+            .spine = try types_mod.AliasSpine.formalChecked(.declared, formal_index),
+            .slot = null,
+        };
+        const hidden_formal = try self.freshFromContent(.{ .rigid = Rigid.init(rigid.name) }, env, region);
+        return .{
+            .backing = try self.copiedSpineFromRoot(body_var, hidden_formal, env, region),
+            .spine = try types_mod.AliasSpine.formalChecked(.formal, formal_index),
+            .slot = hidden_formal,
+        };
+    }
+    return .{ .backing = body_var, .spine = .none, .slot = null };
+}
+
+/// `root` copied along its result spine (`aliasSpineEnd`) with `end` in
+/// place of the spine's end.
+fn copiedSpineFromRoot(self: *Self, root: Var, end: Var, env: *Env, region: Region) std.mem.Allocator.Error!Var {
+    var copy = self.beginSpineCopy(end);
+    defer self.endSpineCopy(copy);
+    return try self.copiedSpine(root, spineRootReaches(), &copy, env, region);
+}
+
+/// A copy of `var_` along its result spine at `reaches`, down to the copy's
+/// end: the links on the spine are copied with their other children shared,
+/// and each alias layer on it keeps its arguments with its spine slot
+/// re-pointed at the copy (`spineCopiedAlias`). Stops exactly where
+/// `aliasSpineEnd` stops.
+fn copiedSpine(
+    self: *Self,
+    var_: Var,
+    reaches: SpineReaches,
+    copy: *SpineCopyCtx,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!Var {
+    if (self.spineCopyOf(copy, var_)) |copied| return copied;
+    const resolved = self.types.resolveVar(var_);
+    switch (resolved.desc.content) {
+        .alias => |alias| {
+            const next = stepSpineReaches(reaches, .alias_backing);
+            if (next.count() != 0) {
+                const backing = try self.copiedSpine(self.types.getAliasBackingVar(alias), next, copy, env, region);
+                return try self.spineCopiedAlias(alias, resolved.var_, backing, copy, env, region);
+            }
+        },
+        .structure => |flat| switch (flat) {
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                const next = stepSpineReaches(reaches, .func_return);
+                if (next.count() != 0) {
+                    const ret = try self.copiedSpine(func.ret, next, copy, env, region);
+                    return try self.copiedFuncWithRet(switch (flat) {
+                        .fn_pure => .pure,
+                        .fn_effectful => .effectful,
+                        .fn_unbound => .unbound,
+                        .nominal_type, .tag_union, .record, .tuple, .empty_record, .empty_tag_union => unreachable,
+                    }, resolved.var_, func, ret, env, region);
+                }
+            },
+            .nominal_type => |nominal| {
+                const next = stepSpineReaches(reaches, .try_error_arg);
+                const args = self.types.sliceNominalArgs(nominal);
+                if (self.tryNominalIdent().matches(nominal) and args.len > try_error_type_arg_index and next.count() != 0) {
+                    const err = try self.copiedSpine(args[try_error_type_arg_index], next, copy, env, region);
+                    return try self.copiedTryWithErrorRow(resolved.var_, nominal, err, env, region);
+                }
+            },
+            .tag_union => |link| {
+                const ext = try self.copiedSpine(link.ext, stepSpineReaches(reaches, .tag_ext), copy, env, region);
+                const copied = try self.freshFromContent(
+                    .{ .structure = .{ .tag_union = .{ .tags = link.tags, .ext = ext } } },
+                    env,
+                    region,
+                );
+                try self.recordSpineCopy(resolved.var_, copied);
+                return copied;
+            },
+            .record, .tuple, .empty_record, .empty_tag_union => {},
+        },
+        .flex, .rigid, .field_presence, .err => {},
+    }
+    const end = copy.end.?;
+    try self.recordSpineCopy(resolved.var_, end);
+    return end;
+}
+
+/// Append an alias declaration's hidden arguments to `args`: the hidden
+/// spine slot first (`AliasDeclSpine.slot`), then every other polarity marker the
+/// backing reaches, each once, in walk order. Formals and markers are the
+/// only variables an alias body has (`..` and `_` are rejected in a type
+/// declaration), and a nested application's markers are this body's own
+/// (`PolarityVarBehavior.preserve`), so after this every variable of the
+/// backing is an argument.
+fn appendAliasHiddenArgs(
+    self: *Self,
+    spine: AliasDeclSpine,
+    args: *std.ArrayListUnmanaged(Var),
+) std.mem.Allocator.Error!void {
+    const stack = &self.alias_slot_stack;
+    const seen = &self.alias_slot_seen;
+    std.debug.assert(stack.items.len == 0 and seen.count() == 0);
+    defer {
+        stack.clearRetainingCapacity();
+        seen.clearRetainingCapacity();
+    }
+    if (spine.slot) |slot| {
+        const root = self.types.resolveVar(slot).var_;
+        try args.append(self.gpa, root);
+        try seen.put(self.gpa, root, {});
+    }
+    try stack.append(self.gpa, spine.backing);
+    while (stack.pop()) |current| {
+        const resolved = self.types.resolveVar(current);
+        const entry = try seen.getOrPut(self.gpa, resolved.var_);
+        if (entry.found_existing) continue;
+        switch (resolved.desc.content) {
+            .rigid => |rigid| if (rigid.name.eql(self.cir.idents.polarity_var)) {
+                try args.append(self.gpa, resolved.var_);
+            },
+            .flex, .field_presence, .err => {},
+            .alias => |alias| {
+                try self.pushAliasSlotWalkReversed(self.types.sliceAliasArgs(alias));
+                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+            },
+            .structure => |flat| switch (flat) {
+                .empty_record, .empty_tag_union => {},
+                .tuple => |tuple| try self.pushAliasSlotWalkReversed(self.types.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| try self.pushAliasSlotWalkReversed(self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try self.pushAliasSlotWalkReversed(self.types.sliceVars(func.effect_deps));
+                    try stack.append(self.gpa, func.ret);
+                    try self.pushAliasSlotWalkReversed(self.types.sliceVars(func.args));
+                },
+                .record => |record| {
+                    try stack.append(self.gpa, record.ext);
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    var i = fields.len;
+                    while (i > 0) {
+                        i -= 1;
+                        const presence = fields.items(.presence)[i];
+                        if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
+                        try stack.append(self.gpa, presence.typeVar());
+                    }
+                },
+                .tag_union => |tag_union| {
+                    try stack.append(self.gpa, tag_union.ext);
+                    const tag_args = self.types.getTagsSlice(tag_union.tags).items(.args);
+                    var i = tag_args.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try self.pushAliasSlotWalkReversed(self.types.sliceVars(tag_args[i]));
+                    }
+                },
+            },
+        }
+    }
+}
+
+/// Push `vars` onto the hidden-argument walk so they pop in order.
+fn pushAliasSlotWalkReversed(self: *Self, vars: []const Var) std.mem.Allocator.Error!void {
+    var i = vars.len;
+    while (i > 0) {
+        i -= 1;
+        try self.alias_slot_stack.append(self.gpa, vars[i]);
     }
 }
 
@@ -17640,10 +17950,14 @@ fn reopenCoercedResultRow(
     region: Region,
 ) std.mem.Allocator.Error!?Var {
     if (row.site == .none) return null;
+    // The copy's new end is minted once the tail is known to be closed
+    // (`reopenedTagRow`).
+    var copy = self.beginSpineCopy(null);
+    defer self.endSpineCopy(copy);
     return switch (row.subject) {
-        .function_result => try self.reopenCoercedSignature(use_var, row.site, env, region),
+        .function_result => try self.reopenCoercedSignature(use_var, row.site, &copy, env, region),
         // A value's row stands at its root: the copy starts at the cell.
-        .value => try self.reopenCoercedResultCell(use_var, row.site, env, region),
+        .value => try self.reopenCoercedResultCell(use_var, row.site, &copy, env, region),
     };
 }
 
@@ -17673,16 +17987,16 @@ fn reopenCoercedLookup(
 /// and effect kind are the use's own and only its return is copied.
 ///
 /// Every alias layer on the spine, here and in the cell, error-row and
-/// extension layers below, is kept around its copied backing and is
-/// `.opened_at_use` (`copiedAliasWithBacking`). Such an alias names the NARROW type
-/// the definition closed (`Errs`, `IoResult(Str)`, `Fwd`) while its copied
-/// backing is the wider type the use may widen it to, so it is no longer its
-/// declaration's body under its arguments: unification relates it by its
-/// backing, never by its arguments (design.md "Opened Alias Instances").
+/// extension layers below, is kept around its copied backing with its spine
+/// slot re-pointed at the copy (`spineCopiedAlias`), so each layer is still
+/// its declaration's body under its arguments: `Fwd(e; e⁺) : e -> e⁺` keeps
+/// the use's `e` and takes the re-opened row at `e⁺` (design.md "Hidden
+/// Alias Arguments").
 fn reopenCoercedSignature(
     self: *Self,
     var_: Var,
     site: ResultRowSite,
+    copy: *SpineCopyCtx,
     env: *Env,
     region: Region,
 ) std.mem.Allocator.Error!?Var {
@@ -17692,15 +18006,16 @@ fn reopenCoercedSignature(
             const backing = (try self.reopenCoercedSignature(
                 self.types.getAliasBackingVar(alias),
                 site,
+                copy,
                 env,
                 region,
             )) orelse return null;
-            return try self.copiedAliasWithBacking(alias, backing, .opened_at_use, env, region);
+            return try self.spineCopiedAlias(alias, resolved.var_, backing, copy, env, region);
         },
         .structure => |flat| switch (flat) {
-            .fn_pure => |func| return try self.copiedFuncWithResult(.pure, func, site, env, region),
-            .fn_effectful => |func| return try self.copiedFuncWithResult(.effectful, func, site, env, region),
-            .fn_unbound => |func| return try self.copiedFuncWithResult(.unbound, func, site, env, region),
+            .fn_pure => |func| return try self.copiedFuncWithResult(.pure, resolved.var_, func, site, copy, env, region),
+            .fn_effectful => |func| return try self.copiedFuncWithResult(.effectful, resolved.var_, func, site, copy, env, region),
+            .fn_unbound => |func| return try self.copiedFuncWithResult(.unbound, resolved.var_, func, site, copy, env, region),
             .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => return null,
         },
         .flex, .rigid, .field_presence, .err => return null,
@@ -17708,15 +18023,35 @@ fn reopenCoercedSignature(
 }
 
 /// `reopenCoercedSignature`'s function layer.
+/// Which function constructor a spine copy rebuilds.
+const SpineFuncKind = enum { pure, effectful, unbound };
+
 fn copiedFuncWithResult(
     self: *Self,
-    kind: enum { pure, effectful, unbound },
+    kind: SpineFuncKind,
+    source: Var,
     func: types_mod.Func,
     site: ResultRowSite,
+    copy: *SpineCopyCtx,
     env: *Env,
     region: Region,
 ) std.mem.Allocator.Error!?Var {
-    const ret = (try self.reopenCoercedResultCell(func.ret, site, env, region)) orelse return null;
+    const ret = (try self.reopenCoercedResultCell(func.ret, site, copy, env, region)) orelse return null;
+    return try self.copiedFuncWithRet(kind, source, func, ret, env, region);
+}
+
+/// `func` (the function at `source`) copied with `ret` as its return, its
+/// arguments, effect dependencies and effect kind shared, recorded as
+/// `source`'s spine copy.
+fn copiedFuncWithRet(
+    self: *Self,
+    kind: SpineFuncKind,
+    source: Var,
+    func: types_mod.Func,
+    ret: Var,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!Var {
     // `appendVars` refuses a slice that lives in the var list it appends to,
     // and the copy above may have grown that list, so both spans are copied out
     // first.
@@ -17731,7 +18066,37 @@ fn copiedFuncWithResult(
         .effectful => try self.types.mkFuncEffectful(args, ret),
         .unbound => try self.types.mkFuncUnboundWithEffectDeps(args, ret, effect_deps),
     };
-    return try self.freshFromContent(content, env, region);
+    const copied = try self.freshFromContent(content, env, region);
+    try self.recordSpineCopy(source, copied);
+    return copied;
+}
+
+/// `nominal` (the application at `source`) copied with `err` as its
+/// `Try` error argument, recorded as `source`'s spine copy.
+fn copiedTryWithErrorRow(
+    self: *Self,
+    source: Var,
+    nominal: types_mod.NominalType,
+    err: Var,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!Var {
+    var args_sfa = std.heap.stackFallback(8 * @sizeOf(Var), self.gpa);
+    const args_alloc = args_sfa.get();
+    const args = try args_alloc.dupe(Var, self.types.sliceNominalArgs(nominal));
+    defer args_alloc.free(args);
+    args[try_error_type_arg_index] = err;
+    const content = try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
+        nominal.ident,
+        args,
+        nominal.origin_module,
+        nominal.sourceDeclOptional(),
+        nominal.isOpaque(),
+        nominal.originIsBuiltin(),
+    );
+    const copied = try self.freshFromContent(content, env, region);
+    try self.recordSpineCopy(source, copied);
+    return copied;
 }
 
 /// The result cell of `reopenCoercedResultRow`: the row itself, or the `Try`
@@ -17740,6 +18105,7 @@ fn reopenCoercedResultCell(
     self: *Self,
     var_: Var,
     site: ResultRowSite,
+    copy: *SpineCopyCtx,
     env: *Env,
     region: Region,
 ) std.mem.Allocator.Error!?Var {
@@ -17749,37 +18115,28 @@ fn reopenCoercedResultCell(
             const backing = (try self.reopenCoercedResultCell(
                 self.types.getAliasBackingVar(alias),
                 site,
+                copy,
                 env,
                 region,
             )) orelse return null;
-            return try self.copiedAliasWithBacking(alias, backing, .opened_at_use, env, region);
+            return try self.spineCopiedAlias(alias, resolved.var_, backing, copy, env, region);
         },
         .structure => |flat| switch (flat) {
             .tag_union => |tag_union| {
                 if (site != .direct) return null;
-                return try self.reopenedTagRow(tag_union, env, region);
+                return try self.reopenedTagRow(resolved.var_, tag_union, copy, env, region);
             },
             .nominal_type => |nominal| {
                 if (site != .try_error_row) return null;
-                var args_sfa = std.heap.stackFallback(8 * @sizeOf(Var), self.gpa);
-                const args_alloc = args_sfa.get();
-                const args = try args_alloc.dupe(Var, self.types.sliceNominalArgs(nominal));
-                defer args_alloc.free(args);
+                const args = self.types.sliceNominalArgs(nominal);
                 if (args.len <= try_error_type_arg_index) return null;
-                args[try_error_type_arg_index] = (try self.reopenCoercedErrorRow(
+                const err = (try self.reopenCoercedErrorRow(
                     args[try_error_type_arg_index],
+                    copy,
                     env,
                     region,
                 )) orelse return null;
-                const content = try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
-                    nominal.ident,
-                    args,
-                    nominal.origin_module,
-                    nominal.sourceDeclOptional(),
-                    nominal.isOpaque(),
-                    nominal.originIsBuiltin(),
-                );
-                return try self.freshFromContent(content, env, region);
+                return try self.copiedTryWithErrorRow(resolved.var_, nominal, err, env, region);
             },
             .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .empty_record, .empty_tag_union => return null,
         },
@@ -17791,6 +18148,7 @@ fn reopenCoercedResultCell(
 fn reopenCoercedErrorRow(
     self: *Self,
     var_: Var,
+    copy: *SpineCopyCtx,
     env: *Env,
     region: Region,
 ) std.mem.Allocator.Error!?Var {
@@ -17799,13 +18157,14 @@ fn reopenCoercedErrorRow(
         .alias => |alias| {
             const backing = (try self.reopenCoercedErrorRow(
                 self.types.getAliasBackingVar(alias),
+                copy,
                 env,
                 region,
             )) orelse return null;
-            return try self.copiedAliasWithBacking(alias, backing, .opened_at_use, env, region);
+            return try self.spineCopiedAlias(alias, resolved.var_, backing, copy, env, region);
         },
         .structure => |flat| switch (flat) {
-            .tag_union => |tag_union| return try self.reopenedTagRow(tag_union, env, region),
+            .tag_union => |tag_union| return try self.reopenedTagRow(resolved.var_, tag_union, copy, env, region),
             .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => return null,
         },
         .flex, .rigid, .field_presence, .err => return null,
@@ -17824,7 +18183,8 @@ fn reopenCoercedErrorRow(
 /// leave every later use closed. So every link of the chain is copied
 /// (`copiedTagRowChain`) and only the tail is replaced. The tail rule is
 /// explicit:
-/// - `[]` is the closed tail the coercion re-opens: it becomes a fresh flex.
+/// - `[]` is the closed tail the coercion re-opens: it becomes a fresh flex,
+///   the copy's new end.
 /// - An error tail means the row already took part in a reported type error;
 ///   the use is left unchanged (returns null) so checking recovers without a
 ///   second diagnostic.
@@ -17833,16 +18193,18 @@ fn reopenCoercedErrorRow(
 ///   host boundary), and unification can restructure a closed row but never
 ///   re-open it.
 ///
-/// An alias link is read through its backing and kept, `.opened_at_use`, around its
-/// copy, exactly as the alias layers above the row are (see
-/// `reopenCoercedSignature`). A row's extension can be an alias the
-/// annotation names: `Errs : Wrap(Base)` with `Wrap(ext) : [HostErr(U64),
+/// An alias link is read through its backing and kept around its copy, its
+/// spine slot re-pointed at the copy, exactly as the alias layers above the
+/// row are (see `reopenCoercedSignature`). A row's extension can be an alias
+/// the annotation names: `Errs : Wrap(Base)` with `Wrap(ext) : [HostErr(U64),
 /// ..ext]` continues `Errs`'s row through `Base`, whose own marker is the
 /// row's tail. A hosted annotation closes that tail as written and no body
 /// ever unifies it, so the link survives to every use.
 fn reopenedTagRow(
     self: *Self,
+    source: Var,
     tag_union: types_mod.TagUnion,
+    copy: *SpineCopyCtx,
     env: *Env,
     region: Region,
 ) std.mem.Allocator.Error!?Var {
@@ -17855,14 +18217,16 @@ fn reopenedTagRow(
         .err => return null,
         .alias, .flex, .rigid, .field_presence => std.debug.panic("type checker invariant violated: a coerced result row's extension chain did not end in a closed tail", .{}),
     }
-    const fresh_tail = try self.fresh(env, region);
+    copy.end = try self.fresh(env, region);
     var innermost: ?Var = null;
-    const ext = try self.copiedTagRowChain(tag_union.ext, fresh_tail, .opened_at_use, &innermost, env, region);
-    return try self.freshFromContent(
+    const ext = try self.copiedTagRowChain(tag_union.ext, copy, &innermost, env, region);
+    const copied = try self.freshFromContent(
         .{ .structure = .{ .tag_union = .{ .tags = tag_union.tags, .ext = ext } } },
         env,
         region,
     );
+    try self.recordSpineCopy(source, copied);
+    return copied;
 }
 
 /// The var a tag row's extension chain ends in: `var_` followed through
@@ -17882,59 +18246,128 @@ fn tagRowChainTail(self: *Self, var_: Var) Var {
     }
 }
 
-/// A copy of the tag row `var_` down its whole extension chain with `tail` in
-/// place of the chain's tail (`tagRowChainTail`). Every `tag_union` link is
-/// copied with its own tags, whose payloads stay shared, as they are off the
-/// spine. Alias layers and links are kept around their copied backing, and
-/// are opened (`opened`: by the annotation walk building a twin, or at the
-/// use re-opening a coerced row) since that backing now ends in `tail`
-/// (`copiedAliasWithBacking`). `innermost` receives the copy of the chain's
-/// last `tag_union` link, the one `tail` extends.
+/// One copy of a result spine in progress (`spineCopiedAlias`): where its
+/// entries in `Check.spine_copies` start, and the new end every copied link
+/// shares. A re-open learns its end once it has checked the tail
+/// (`reopenedTagRow`); a twin and a declaration's spine copy know it up
+/// front.
+const SpineCopyCtx = struct {
+    base: usize,
+    end: ?Var,
+};
+
+/// One var a spine copy copied: `source` is the resolved root of the
+/// original, `copy` what the copy put in its place.
+const SpineCopy = struct {
+    source: Var,
+    copy: Var,
+};
+
+fn beginSpineCopy(self: *Self, end: ?Var) SpineCopyCtx {
+    return .{ .base = self.spine_copies.items.len, .end = end };
+}
+
+fn endSpineCopy(self: *Self, copy: SpineCopyCtx) void {
+    self.spine_copies.shrinkRetainingCapacity(copy.base);
+}
+
+fn recordSpineCopy(self: *Self, source: Var, copied: Var) std.mem.Allocator.Error!void {
+    try self.spine_copies.append(self.gpa, .{ .source = self.types.resolveVar(source).var_, .copy = copied });
+}
+
+/// What the spine copy in progress put in `source`'s place, when it has
+/// reached `source` (by resolved root).
+fn spineCopyOf(self: *Self, copy: *const SpineCopyCtx, source: Var) ?Var {
+    const root = self.types.resolveVar(source).var_;
+    for (self.spine_copies.items[copy.base..]) |entry| {
+        if (entry.source == root) return entry.copy;
+    }
+    return null;
+}
+
+/// A copy of the tag row `var_` down its whole extension chain with the
+/// copy's end in place of the chain's tail (`tagRowChainTail`). Every
+/// `tag_union` link is copied with its own tags, whose payloads stay shared,
+/// as they are off the spine. Alias layers and links are kept around their
+/// copied backing with their spine slot re-pointed at the copy
+/// (`spineCopiedAlias`). `innermost` receives the copy of the chain's last
+/// `tag_union` link, the one the end extends.
 fn copiedTagRowChain(
     self: *Self,
     var_: Var,
-    tail: Var,
-    opened: types_mod.AliasBacking,
+    copy: *SpineCopyCtx,
     innermost: *?Var,
     env: *Env,
     region: Region,
 ) std.mem.Allocator.Error!Var {
+    if (self.spineCopyOf(copy, var_)) |copied| return copied;
     const resolved = self.types.resolveVar(var_);
     switch (resolved.desc.content) {
         .alias => |alias| {
-            const backing = try self.copiedTagRowChain(self.types.getAliasBackingVar(alias), tail, opened, innermost, env, region);
-            return try self.copiedAliasWithBacking(alias, backing, opened, env, region);
+            const backing = try self.copiedTagRowChain(self.types.getAliasBackingVar(alias), copy, innermost, env, region);
+            return try self.spineCopiedAlias(alias, resolved.var_, backing, copy, env, region);
         },
         .structure => |flat| switch (flat) {
             .tag_union => |link| {
-                const ext = try self.copiedTagRowChain(link.ext, tail, opened, innermost, env, region);
-                const copy = try self.freshFromContent(
+                const ext = try self.copiedTagRowChain(link.ext, copy, innermost, env, region);
+                const copied = try self.freshFromContent(
                     .{ .structure = .{ .tag_union = .{ .tags = link.tags, .ext = ext } } },
                     env,
                     region,
                 );
-                if (innermost.* == null) innermost.* = copy;
-                return copy;
+                try self.recordSpineCopy(resolved.var_, copied);
+                if (innermost.* == null) innermost.* = copied;
+                return copied;
             },
-            .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => return tail,
+            .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => {},
         },
-        .flex, .rigid, .field_presence, .err => return tail,
+        .flex, .rigid, .field_presence, .err => {},
     }
+    const end = copy.end.?;
+    try self.recordSpineCopy(resolved.var_, end);
+    return end;
 }
 
-/// `alias` with a copied backing and its own arguments, every identity bit
-/// preserved. The backing is a copy that opened a row the declaration's body
-/// closes, so the alias is opened (`opened` says where: by the annotation
-/// walk, or at a use): its arguments are presentation, and unification
-/// relates it by its backing (design.md "Opened Alias Instances").
-fn copiedAliasWithBacking(
+/// `alias` (the layer at `source`) rebuilt around `backing`, a copy of its
+/// old backing along the result spine. Only its spine slot
+/// (`types.Alias.spine`, `Store.aliasSpineSlotIndex`) changes: it takes
+/// what the copy put in the slot's place, so the layer is still its
+/// declaration's body under its arguments. Every other argument stays, the
+/// declared `e` too when it was the same variable as the hidden `e⁺`; that
+/// split is the point (design.md "Hidden Alias Arguments").
+///
+/// The slot is found on the copied path by identity. A row merge can flatten
+/// the chain the backing reaches, so that the slot's own links are no longer
+/// on it; the slot is then a row whose tail the path's tail shares, and it is
+/// copied down its own chain to the same end (`copiedTagRowChain`), so
+/// `backing ≅ body[args]` still holds as types.
+///
+/// A layer whose declaration's spine ends at no slot cannot be on a copied
+/// spine: its row's end is written in its body, so no annotation opens it,
+/// no twin qualifies through it (`resultRowTwinRow`), and no coerced re-open
+/// reaches it.
+fn spineCopiedAlias(
     self: *Self,
     alias: types_mod.Alias,
+    source: Var,
     backing: Var,
-    opened: types_mod.AliasBacking,
+    copy: *SpineCopyCtx,
     env: *Env,
     region: Region,
 ) std.mem.Allocator.Error!Var {
+    const slot_index = self.types.aliasSpineSlotIndex(alias) orelse std.debug.panic(
+        "type checker invariant violated: a result-spine copy passed through an alias layer whose declaration's spine ends at no slot",
+        .{},
+    );
+    const slot = self.types.sliceAliasArgs(alias)[slot_index];
+    const slot_copy = self.spineCopyOf(copy, slot) orelse off_path: {
+        switch (self.types.resolveVar(slot).desc.content) {
+            .alias, .structure, .flex, .rigid, .err => {},
+            .field_presence => std.debug.panic("type checker invariant violated: an alias spine slot was a field presence", .{}),
+        }
+        var innermost: ?Var = null;
+        break :off_path try self.copiedTagRowChain(slot, copy, &innermost, env, region);
+    };
     // `appendVars` refuses a slice that lives in the var list it appends to,
     // and the copy above may have grown that list, so the args are copied out
     // first.
@@ -17942,6 +18375,7 @@ fn copiedAliasWithBacking(
     const args_alloc = args_sfa.get();
     const args = try args_alloc.dupe(Var, self.types.sliceAliasArgs(alias));
     defer args_alloc.free(args);
+    args[slot_index] = slot_copy;
     const content = try self.types.mkAliasWithSourceDeclAndBuiltinOrigin(
         alias.ident,
         backing,
@@ -17949,10 +18383,12 @@ fn copiedAliasWithBacking(
         alias.origin_module,
         alias.source_decl.toOptional(),
         alias.source_decl.originIsBuiltin(),
-        opened,
-        alias.body_formals,
+        alias.declared_arity,
+        alias.spine,
     );
-    return try self.freshFromContent(content, env, region);
+    const copied = try self.freshFromContent(content, env, region);
+    try self.recordSpineCopy(source, copied);
+    return copied;
 }
 
 /// One extension the post-body audit cleared, kept for the late audit, with
@@ -19776,7 +20212,7 @@ fn instantiateWhereAliasConstraint(
         // A faithful copy: the declaration's where-method signatures keep
         // their polarity markers, which the referencing annotation's own body
         // uses and obligations resolve.
-        .fn_var = try self.instantiateVarWithSubsPolarized(constraint.fn_var, subs, env, .{ .explicit = region }, .preserve, .pos, .nested, .ignore, null, .annotation),
+        .fn_var = try self.instantiateVarWithSubsPolarized(constraint.fn_var, subs, env, .{ .explicit = region }, .preserve, .pos, .nested, .ignore, null),
         .origin = .{ .where_clause = .{} },
     };
 }
@@ -20444,9 +20880,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
                     // Then, built the map of applied variables
                     self.rigid_var_substitutions.clearRetainingCapacity();
-                    var result_row_twins: ResultRowTwins = .{};
-                    var twin_build: ResultRowTwinBuild = undefined;
-                    for (decl_arg_vars, anno_arg_vars, 0..) |decl_arg_var, anno_arg_var, arg_index| {
+                    for (decl_arg_vars, anno_arg_vars) |decl_arg_var, anno_arg_var| {
                         const decl_arg_resolved = self.types.resolveVar(decl_arg_var).desc.content;
 
                         if (decl_arg_resolved == .err) {
@@ -20457,16 +20891,16 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         const decl_arg_rigid = decl_arg_resolved.rigid;
 
                         try self.rigid_var_substitutions.put(self.gpa, decl_arg_rigid.name, anno_arg_var);
-                        if (decl_is_alias) self.addResultRowTwin(
-                            &result_row_twins,
-                            ctx,
-                            polarity,
-                            decl_arg_rigid.name,
-                            anno_arg_var,
-                            self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(anno_args[arg_index])),
-                            try_error_row_reachable and arg_index == try_error_arg_index.?,
-                        );
                     }
+                    var twin_site: ?ResultRowTwinSite = if (decl_is_alias) self.resultRowTwinSite(
+                        decl_resolved.alias,
+                        ctx,
+                        polarity,
+                        anno_arg_vars,
+                        anno_args,
+                        if (try_error_row_reachable) try_error_arg_index.? else null,
+                    ) else null;
+                    var twin_build: ResultRowTwinBuild = undefined;
 
                     // Then instantiate the variable, substituting the rigid
                     // variables in the definition with the applied args from
@@ -20481,13 +20915,12 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         ctx.instantiationReach(),
                         ctx.writtenResultRows(),
                         twin_blk: {
-                            if (result_row_twins.len == 0) break :twin_blk null;
-                            twin_build = .{ .check = self, .twins = &result_row_twins, .opening = ctx.annotation.opening, .env = env };
+                            const site = if (twin_site) |*site| site else break :twin_blk null;
+                            twin_build = .{ .check = self, .site = site, .opening = ctx.annotation.opening, .env = env };
                             break :twin_blk &twin_build;
                         },
-                        .annotation,
                     );
-                    try self.recordConsumedResultRowTwins(&result_row_twins, ctx);
+                    if (twin_site) |*site| try self.recordConsumedResultRowTwin(site, ctx);
                     if (decl_is_alias and !try self.validateAliasRows(instantiated_var, env, anno_region)) {
                         try self.markErroneous(anno_var);
                         return;
@@ -20547,9 +20980,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
                         // Then, built the map of applied variables
                         self.rigid_var_substitutions.clearRetainingCapacity();
-                        var result_row_twins: ResultRowTwins = .{};
-                        var twin_build: ResultRowTwinBuild = undefined;
-                        for (ext_arg_vars, anno_arg_vars, 0..) |decl_arg_var, anno_arg_var, arg_index| {
+                        for (ext_arg_vars, anno_arg_vars) |decl_arg_var, anno_arg_var| {
                             const decl_arg_resolved = self.types.resolveVar(decl_arg_var).desc.content;
 
                             if (decl_arg_resolved == .err) {
@@ -20560,16 +20991,16 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             const decl_arg_rigid = decl_arg_resolved.rigid;
 
                             try self.rigid_var_substitutions.put(self.gpa, decl_arg_rigid.name, anno_arg_var);
-                            if (ext_is_alias) self.addResultRowTwin(
-                                &result_row_twins,
-                                ctx,
-                                polarity,
-                                decl_arg_rigid.name,
-                                anno_arg_var,
-                                self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(anno_args[arg_index])),
-                                try_error_row_reachable and arg_index == try_error_arg_index.?,
-                            );
                         }
+                        var twin_site: ?ResultRowTwinSite = if (ext_is_alias) self.resultRowTwinSite(
+                            ext_resolved.alias,
+                            ctx,
+                            polarity,
+                            anno_arg_vars,
+                            anno_args,
+                            if (try_error_row_reachable) try_error_arg_index.? else null,
+                        ) else null;
+                        var twin_build: ResultRowTwinBuild = undefined;
 
                         // Then instantiate the variable, substituting the rigid
                         // variables in the definition with the applied args from
@@ -20584,13 +21015,12 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             ctx.instantiationReach(),
                             ctx.writtenResultRows(),
                             twin_blk: {
-                                if (result_row_twins.len == 0) break :twin_blk null;
-                                twin_build = .{ .check = self, .twins = &result_row_twins, .opening = ctx.annotation.opening, .env = env };
+                                const site = if (twin_site) |*site| site else break :twin_blk null;
+                                twin_build = .{ .check = self, .site = site, .opening = ctx.annotation.opening, .env = env };
                                 break :twin_blk &twin_build;
                             },
-                            .annotation,
                         );
-                        try self.recordConsumedResultRowTwins(&result_row_twins, ctx);
+                        if (twin_site) |*site| try self.recordConsumedResultRowTwin(site, ctx);
                         if (ext_is_alias and !try self.validateAliasRows(instantiated_var, env, anno_region)) {
                             try self.markErroneous(anno_var);
                             return;
@@ -22499,7 +22929,6 @@ fn checkStoredValueExpr(
 /// neither attached constraints nor off-root scheme requirements are copied.
 fn copyExpectedShape(self: *Self, source: Var, env: *Env) Allocator.Error!Var {
     var instantiator = Instantiator{
-        .opening_site = .annotation,
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
@@ -22909,7 +23338,7 @@ fn beginExprCheckFrame(
             try self.generateAnnotationType(annotation_idx, env);
             try self.recordPredeclaredBodySlots(annotation_idx);
             const anno_var = ModuleEnv.varFrom(annotation_idx);
-            const anno_var_backup = try self.instantiateVarOrphan(anno_var, env, env.rank(), .use_last_var, .annotation);
+            const anno_var_backup = try self.instantiateVarOrphan(anno_var, env, env.rank(), .use_last_var);
             break :blk .{
                 try self.fresh(env, expr_region),
                 AnnoVars{
@@ -22923,7 +23352,7 @@ fn beginExprCheckFrame(
                 }).withBranchResult(anno_var),
             };
         } else if (expected.expected_type) |expected_type| {
-            const expected_var_backup = try self.instantiateVarOrphan(expected_type.var_, env, env.rank(), .use_last_var, .annotation);
+            const expected_var_backup = try self.instantiateVarOrphan(expected_type.var_, env, env.rank(), .use_last_var);
             break :blk .{
                 try self.fresh(env, expr_region),
                 AnnoVars{
@@ -23983,7 +24412,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 else
                     false;
                 const copied_var = if (checked_ground_def)
-                    try self.instantiateVarOrphan(pat_var, env, env.rank(), .use_last_var, .use)
+                    try self.instantiateVarOrphan(pat_var, env, env.rank(), .use_last_var)
                 else
                     pat_var;
                 // A coerced definition is ground—its result row was closed by
@@ -29637,13 +30066,11 @@ fn openNominalBackingForApp(
         try self.rigid_var_substitutions.put(self.gpa, formal_resolved.rigid.name, arg_var);
     }
 
-    // The backing is opened for this one use of the nominal application.
     return try self.instantiateVarWithSubs(
         decl.backing,
         &self.rigid_var_substitutions,
         env,
         .{ .explicit = region },
-        .use,
     );
 }
 
@@ -30209,6 +30636,53 @@ fn beginCommitProbe(self: *Self, env: *Env) std.mem.Allocator.Error!CommitProbe 
         .snapshots_mark = self.snapshots.mark(),
         .probe = try self.beginProbe(env),
     };
+}
+
+/// Test harness for the hidden-argument invariant (design.md "Hidden Alias
+/// Arguments"): whether `instance_var`, an instance of a declaration of this
+/// module, is its declaration's body under ALL of its arguments. The
+/// declaration's backing is re-instantiated with every template argument,
+/// declared and hidden, mapped to the instance's argument at the same index,
+/// and the copy is unified with the instance's backing in a rolled-back
+/// probe. A template variable that is no argument would reach the rigid
+/// substitution below with no entry for it, which asserts. Returns null for an
+/// alias this module did not declare.
+pub fn aliasInstanceIsFaithful(self: *Self, instance_var: Var) Allocator.Error!?bool {
+    const instance = switch (self.types.resolveVar(instance_var).desc.content) {
+        .alias => |alias| alias,
+        .flex, .rigid, .structure, .field_presence, .err => return null,
+    };
+    if (instance.origin_module != self.cir.selfModuleIdentity()) return null;
+    const decl_stmt = instance.source_decl.toOptional() orelse return null;
+    const decl = switch (self.types.resolveVar(ModuleEnv.varFrom(@as(CIR.Statement.Idx, @enumFromInt(decl_stmt)))).desc.content) {
+        .alias => |alias| alias,
+        .flex, .rigid, .structure, .field_presence, .err => return null,
+    };
+    const template_args = self.types.sliceAliasArgs(decl);
+    const instance_args = self.types.sliceAliasArgs(instance);
+    if (template_args.len != instance_args.len or decl.declared_arity != instance.declared_arity) return false;
+
+    var savepoint = try self.types.createSavepoint();
+    defer self.types.rollbackToSavepoint(&savepoint);
+    self.var_map.clearRetainingCapacity();
+    for (template_args, instance_args) |template_arg, instance_arg| {
+        try self.var_map.put(self.types.resolveVar(template_arg).var_, instance_arg);
+    }
+    var no_rigids: std.AutoHashMapUnmanaged(Ident.Idx, Var) = .empty;
+    var instantiator = Instantiator{
+        .store = self.types,
+        .idents = self.cir.getIdentStoreConst(),
+        .var_map = &self.var_map,
+        .current_rank = .outermost,
+        .rigid_behavior = .{ .substitute_rigids = &no_rigids },
+        .rank_behavior = .ignore_rank,
+        .polarity_var_ident = self.cir.idents.polarity_var,
+        .anonymous_ext_ident = self.cir.idents.open_ext,
+        .polarity_var_behavior = .preserve,
+    };
+    const copy = try instantiator.instantiateVar(self.types.getAliasBackingVar(decl));
+    self.var_map.clearRetainingCapacity();
+    return try self.probeUnifyWithoutRecordingProblems(copy, self.types.getAliasBackingVar(instance));
 }
 
 fn probeUnifyWithoutRecordingProblems(
@@ -36004,15 +36478,9 @@ fn dispatchEmbedCoupleGrade(
     const small_content = small.desc.content;
     const big_content = big.desc.content;
 
-    // An opened alias's arguments are presentation, not the substitution
-    // of its backing, so it is graded as its backing alone (design.md
-    // "Opened Alias Instances"). A `.declared` pair of one alias is graded by
-    // backing and arguments together.
-    if (small_content == .alias and small_content.alias.backing.isOpened()) {
-        return try self.dispatchReceiverEmbedGrade(self.types.getAliasBackingVar(small_content.alias), big.var_);
-    }
+    // A pair of one alias is graded by backing and declared arguments
+    // together; a hidden argument is a variable of the backing already.
     if (small_content == .alias and big_content == .alias and
-        big_content.alias.backing == .declared and
         dispatchSameAliasIdentity(small_content.alias, big_content.alias))
     {
         const small_alias = small_content.alias;
@@ -36291,9 +36759,6 @@ fn dispatchEmbedDivesIntoChild(
         .flex, .rigid, .field_presence, .err => return false,
         .alias => |alias| {
             if (try self.dispatchEmbedsInto(small_var, self.types.getAliasBackingVar(alias))) return true;
-            // An opened alias's arguments are presentation; its structure
-            // is its backing alone, as `dispatchReceiverSizeInner` counts it.
-            if (alias.backing.isOpened()) return false;
             for (self.types.sliceAliasDeclaredArgs(alias)) |arg| {
                 if (try self.dispatchEmbedsInto(small_var, arg)) return true;
             }
@@ -36458,9 +36923,6 @@ fn dispatchReceiverSizeInner(
         .flex, .rigid, .field_presence, .err => {},
         .alias => |alias| {
             try self.dispatchReceiverSizeInner(active, self.types.getAliasBackingVar(alias), result);
-            // An opened alias's arguments are presentation, not structure
-            // (design.md "Opened Alias Instances").
-            if (alias.backing.isOpened()) return;
             for (self.types.sliceAliasDeclaredArgs(alias)) |arg| {
                 try self.dispatchReceiverSizeInner(active, arg, result);
             }
@@ -42367,7 +42829,6 @@ fn recordGeneratedCodecDerivationSnapshot(
     );
     self.var_map.clearRetainingCapacity();
     var instantiator = Instantiator{
-        .opening_site = .annotation,
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,

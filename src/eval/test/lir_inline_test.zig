@@ -9297,10 +9297,11 @@ test "row subsumption re-tags a function alias argument whose row continues thro
 }
 
 test "row subsumption - an opened alias application widens into a wider application of its alias" {
-    // `mk`'s result is a twin copied through the alias link `Wrap`, an
-    // `.opened` instance. It meets `Wrap([Aborted, Other])` by its backing
-    // (design.md "Opened Alias Instances"), as the inline spelling
-    // `[Aborted, HostErr(U64), Other]` does.
+    // `mk`'s result is a twin copied through the alias link `Wrap`, which
+    // keeps its layer with the twin at its spine slot. It meets
+    // `Wrap([Aborted, Other])` through that argument (design.md "Hidden Alias
+    // Arguments"), as the inline spelling `[Aborted, HostErr(U64), Other]`
+    // does.
     try expectRowSubsumptionProgram(
         \\Wrap(ext) : [HostErr(U64), ..ext]
         \\
@@ -9321,8 +9322,9 @@ test "row subsumption - an opened alias application widens into a wider applicat
 }
 
 test "row subsumption - a re-opened alias application widens into a wider application of its alias" {
-    // The use's re-opened result keeps its alias layers, `.opened`, and meets
-    // the wider application of the same alias by backing.
+    // The use's re-opened result keeps its alias layers, each with its spine
+    // slot re-pointed at the re-opened row, and meets the wider application
+    // of the same alias through that argument.
     try expectRowSubsumptionProgram(
         \\Base : [Other]
         \\

@@ -2320,135 +2320,154 @@ the named method's static-dispatch constraint is preserved even when its type
 is incomplete.
 
 
-### Opened Alias Instances
+### Hidden Alias Arguments
 
-An alias instance records whether its backing is still exactly its
-declaration's body under its arguments (`Alias.backing == .declared`) or a copy
-opened something inside it. Unification substitutes into shared vars only, so
-it keeps a `.declared` instance's backing and arguments in agreement; only
-copying can separate them, which is why the mark lives on the alias content
-and not on a merged descriptor flag. An instance is opened when its copy:
+Every alias instance is its declaration's body under ALL of its arguments. An
+alias's argument list is its declared arguments, one per formal in the
+declaration's order, followed by its HIDDEN arguments (`Alias.declared_arity`
+marks where they start): the variables of the declaration's body that no
+formal names. A declaration's body has no other variables (`..` and `_` are
+rejected in a type declaration), so after its hidden arguments are added every
+variable of the backing is an argument, and a copy that replaces a hidden
+argument replaces the backing position with it. Two applications of one alias
+are therefore related by their arguments alone, exactly as the inline spelling
+of the same types is related: a widened row a copy put in a hidden argument is
+compared by comparing that argument.
 
-- resolved a polarity marker OPEN (`PolarityVarBehavior.resolve_by_polarity`
-  in a positive position), anywhere in its backing, including inside a nested
-  alias. A marker closed as written (`.close`, a negative position) or kept for
-  a later decision (`.preserve`, `.defer_open`) is not an opening: a later
-  per-use instantiation that opens it marks the alias then;
-- substituted a result-row twin for an argument (`ResultRowTwin`), except a
-  host-boundary twin, which is the argument itself as written;
-- copied an alias that is already opened, or reused (through the
-  instantiation memo) a copy that is an opened alias. The mark is read from
-  the reused var itself, so a memo seeded with an earlier walk's copies (the
-  delayed predeclared-use replay) is answered the same; any other reused copy
-  inside a `.declared` source alias reaches it through that alias's arguments,
-  whose own marks say so;
-- is a layer or link a result-row twin or a coerced re-open copies around its
-  widened backing (`copiedAliasWithBacking`).
+The hidden arguments are:
 
-WHERE it was opened is part of the mark. The annotation walk generating a
-definition's own declared type makes `.opened_by_annotation` instances
-(`Instantiator.opening_site = .annotation`, and the twins it builds): they are
-what the annotation states. A copy standing for an annotation or an expected
-type (orphan copies of annotations, expected shapes, the branch accumulator)
-is also `.annotation` and keeps every mark it copies as it is. Every
-instantiator states its site; there is no default. Everything else happens at a USE and makes
-`.opened_at_use` instances: a scheme instantiated where a definition is used
-(including a copy of an annotation's instance), a coerced row re-opened there,
-and a where-method signature's per-use copy. Widening happens only at a use,
-so a use's instance is never authoritative.
+- Marker slots. Every polarity marker the backing reaches is one: each
+  extensionless tag union the body writes, and each marker of a nested alias
+  application, which the declaration's own instantiation copies as a marker of
+  this body (`PolarityVarBehavior.preserve`). A use resolves each marker where
+  it stands in the backing, and the argument list receives the same variable
+  through the instantiation memo, since the backing is copied before the
+  arguments.
+- At most one spine slot. The declaration's RESULT SPINE is the one path from
+  its body's root through alias backings, the root function's return, a
+  builtin `Try`'s error argument and tag-union extensions
+  (`AdapterReachPosition.step`, the one grammar the instantiator's frames and
+  the declaration-time walk `Check.aliasSpineEnd` both step by; the latter
+  walks the generated type, not the CIR). It ends at one position, and when
+  that position is a slot, `Alias.spine` says which:
+  - `.marker`: a marker of this body. When the path reached it through
+    another alias's hidden formal (below), the marker came in with that
+    application's argument, which the application also substitutes at the
+    formal's other occurrences, so the spine is copied down to a fresh marker
+    of its own (`Check.copiedSpine`): the output row is decided apart from the
+    input one, as the inline spelling decides it.
+  - `.formal`: an occurrence of formal `e` that the body also uses
+    elsewhere. That occurrence becomes a hidden formal `e⁺`, a rigid named
+    `e`, and the body is copied along its spine down to it; every other
+    position keeps `e`. An ordinary reference substitutes both by name, to the
+    same argument, so `Fwd(e) : e -> e` still relates `e` at both positions.
+  - `.declared`: a formal the body uses nowhere else (`Id(a) : a`,
+    `Wrap(ext) : [HostErr(U64), ..ext]`). The declared argument is the slot
+    itself. Splitting such a formal would leave the declared `e` with no body
+    position, related only through the argument list: a forwarder's body
+    closes it, and a caller's wider same-alias annotation then fails to
+    relate it, which the inline spelling never asks.
 
-Every copy carries the mark: instantiation, `copy_import` (an importer relates
-the copy exactly as the exporter relates the original), and the serialized
-module environment.
+  The spine slot is the argument at `declared_arity` for `.marker` and
+  `.formal`, and the declared argument `spine.base` for `.declared`
+  (`Store.aliasSpineSlotIndex`).
 
-The unification rule for two applications of one alias: when both are
-`.declared`, their arguments decide, and a disagreement of their backings is
-not reported (the backing is the body under the arguments, so it would be
-surfaced from the arguments). When EITHER is opened, the backings are related,
-and their disagreement is the relation's mismatch, reported once as the
-enclosing relation's error. This is the relation the inline spelling gets, so
-identical types spelled through an alias or written in place decide
-identically. The arguments are related only where the backing does not carry
-them: a formal the declaration's body never uses (a phantom parameter, `P(a) :
-Base`) exists only in the argument list, no opening ever touches it, and its
-arguments are related exactly, so an opened `P(Str)` still differs from
-`P(U64)`. Which formals the body uses is read once from the declaration's
-annotation and carried on every instance (`Alias.body_formals`); a formal past
-the first 16 is related exactly, the stricter answer.
+A declaration's content is installed only once its body is generated, since
+its hidden arguments are variables of that body (`Check.generateAliasDecl`).
+Nothing reads an alias declaration variable earlier: every reference generates
+the declaration first (`ensureTypeDeclGenerated`), a type-dispatch owner is read
+after declarations are generated, and a platform's for-clause aliases are built
+separately (`processRequiresTypes`), with no hidden arguments.
 
-An alias is never its own backing. Absorbing a use's opened instance can
-otherwise produce one: when its class already holds the other alias's backing
-(`Id(a)` meeting an opened `Base` that `a` already is), relating the backings
-absorbs the opened instance into its row first, and the pending absorb into
-`Id` then finds no opened alias left and does nothing. Independently, a merge
-never takes an alias view whose backing is one of the two classes being merged
-(`contentForMerge`): the merged class keeps the backing's own content. This
-also closes a flex meeting `Id(a)` whose backing `a` is that flex.
+Where the spine slot takes something other than the argument:
 
-The merge rule: a use's instance never wins a merge. Once the backings agree,
-two applications of one alias merge keeping the side with the higher
-`AliasBacking.mergePriority` (`.declared`, then `.opened_by_annotation`, then
-`.opened_at_use`; b's on a tie). An `.opened_at_use` instance meeting a
-structure, or a different alias that is not a use's, is related through its
-backing and then merged INTO the other side, whose content stays
-(`Unifier.scheduleAbsorbOpenedAlias`, run after the backing relation and
-reading the other side's content as it then stands). So an annotation stays
-exactly as written when its body widens a coerced call: `wider : Try(U64,
-Errs) -> Try(U64, [Aborted, HostErr(U64), Other])` with `wider = |t| fwd(t)`
-keeps that type, including the `Try`'s error argument, rather than taking the
-re-opened `Errs` the use of `fwd` brought in. Two use instances of different
-aliases, and an annotation's instance meeting a structure, are related through
-the backing and left as they are (the transparent view the alias always was).
+- A result-row twin (Row Subsumption) is what the declaration's spine slot
+  takes when the instantiation reaches it on the result row. The instantiator
+  finds the slot by its template variable's identity (`ResultRowTwin.slot`),
+  never by name, and memoises the twin there, so the argument list reads the
+  same variable. The spine is unique, so an application has at most one twin.
+- A copy along the spine, for a coerced re-open or a twin copied through an
+  alias layer or link, rebuilds each alias layer on the path with only its
+  spine slot re-pointed at the copy (`Check.spineCopiedAlias`); every other
+  argument stays, the declared `e` too when it was the same variable as `e⁺`.
+  A row merge can flatten the chain a backing reaches so that the slot's own
+  links are no longer on it; the slot is then copied down its own chain to the
+  same end, so the layer's backing and its arguments still agree as types. A
+  layer whose declaration's spine ends at no slot fixes its row's end in its
+  body, so no annotation opens it and no twin qualifies through it
+  (`resultRowTwinRow`); a copy passing through one is an invariant violation.
 
-The two sides this rule decides:
+Unification relates two applications of one alias by all their arguments,
+pairwise; their backings, being the body under those arguments, are then
+related without a separate report (`unifyTwoAliases`). Merges keep one side's
+content with no preference between a use's instance and an annotation's, so a
+body's type can present the use's alias spelling where the annotation wrote a
+structure; the type is the same. A merge never makes an alias its own backing
+(`contentForMerge`): when the backing of the alias view being merged is one of
+the two classes, the merged class keeps the backing's own content, which also
+covers a flex meeting `Id(a)` whose backing `a` is that flex.
 
-- rejected—a zero-argument alias opened at a result then widened
-  (`mk : Str -> Base` with `Base : [Other]`, `take(if c mk("") else Aborted)`
-  for `take : Base -> Str`), where comparing the empty argument lists accepted
-  the program and Monotype then found a widened closed row; a twin copied
-  through an alias link (`mk : Mk(Wrap([Other]))`) or down an alias chain
-  (`Mk(Errs)`, `Mk(Wrap(Base))`), and an alias argument opened in place
-  (`Str -> Wrap(Base)`), each widened the same way;
-- accepted—an opened instance meeting a wider application of its alias
-  (`x : Wrap([Other, Aborted])` from `mk : Mk(Wrap([Other]))` widened by
-  `Aborted`, and a re-opened `Wrap(Base)` use at `Wrap([Aborted, Other])`),
-  decided by the backings exactly as the inline spelling
-  `[Aborted, HostErr(U64), Other]` is; and an annotated definition whose body
-  widens a coerced call keeps its annotation as its type, for an inline row, a
-  `Try` error row, a different alias and the same alias.
+Readers of alias arguments fall in two groups. A graph walk visits every
+argument, since each is a variable of the graph: rank (generalization ranks an
+alias by the max over all its arguments, now exactly its body's variables),
+occurs, reachability, copying, `copy_import`, checked module data
+(`CheckedAliasType` carries every argument and its `declared_arity`), dispatch
+evidence, and every post-check stage, which reads the backing. A reader that
+reads arguments by the declaration's positions reads only the declared ones
+(`Store.sliceAliasDeclaredArgs`, `CheckedAliasType.declaredArgs`): arity
+checks and the reference's substitution zip, derived `map` eligibility, the
+record-builder wrapper payload, compile-time root and hoisted-constant
+concreteness, settled value rows, host-boundary rules, static-dispatch
+receiver embedding and size, and every presentation (the TypeWriter, error
+snapshots, docs, and the package API's arity and references). Boxy describes an
+alias by its backing's representation, including in a descriptor template
+(`descriptorTemplatePayloadLayoutForRep`).
 
-Checker decisions other than unification that grade an alias by its
-arguments read an opened instance as its backing alone: static-dispatch
-receiver embedding and size (`dispatchEmbedCoupleGrade`,
-`dispatchEmbedDivesIntoChild`, `dispatchReceiverSizeInner`). Every other
-reader of alias arguments is unaffected: graph walks (rank, generalization,
-occurs, reachability, concreteness) visit the arguments as the vars of the
-graph they are; the record-builder `map2` wrapper payload is a non-row formal,
-which neither a twin nor a re-open ever replaces; host-boundary row rules read
-annotations generated as written, which never hold an opened instance; and
-literal-target identity finds no identity variable in an opened instance's
-arguments that its backing lacks (a twin or re-open replaces a row the
-arguments present closed).
+Presentation reads the hidden arguments to decide whether an instance is
+WIDENED (`TypeWriter.aliasIsWidened`): a marker slot resolves, through alias
+layers, to a tag union listing a tag, or the `e⁺` slot's tags differ from its
+formal's argument's. A widened instance prints its backing in place of its
+name and arguments, and in an error report its name, its declared arguments
+and its backing (`Base (opened: [Aborted, Other])`), so a mismatch between two
+instances of one alias never reads `Base` against `Base`. An unwidened split
+reads as its declared arguments (`Fwd([NotFound])`).
 
-An opened instance keeps its alias name in presentation (`Fwd([NotFound])`),
-so the checker's error-report writer prints its backing next to it (`Base
-(opened: [Aborted, Other])`), and a mismatch between two instances of one
-alias never reads `Base` against `Base`.
+One verdict changes, declared here and under Polarity: in `O : N([A])` with
+`N(x) : x -> x`, `O`'s output is `N`'s hidden `x⁺`, so `O`'s spine is copied
+to its own marker and the output opens as the inline `[A] -> [A]` does, while
+the input stays closed. Before, the output shared the input's marker and closed
+with it.
 
-The sides are pinned in `src/check/test/type_checking_integration.zig` ("a
-zero-argument alias opened at the result is related by its backing", "a twin
-copied through an alias link widens to a wider application", "an imported
-opened alias instance is related by its backing", "an annotated def whose body
-widens a coerced call keeps its annotation", "a phantom parameter of an opened
-alias is related exactly", "an absorbed opened alias never becomes its own
-backing", ...), `unify_test.zig` ("an opened alias application is related to
-its alias by backing", "a use's opened alias never replaces the structure it
-meets", "a use's opened alias application never replaces an annotation's", "an
-absorbed opened alias never makes another alias its own backing", "a flex
-never takes an alias view whose backing is that flex"),
-`test_rigid_instantiation.zig`,
-and the LIR tests "row subsumption - an opened alias application widens into a
-wider application of its alias" and "... a re-opened alias application ...".
+`Alias` stays 24 bytes: `declared_arity` (u16) and `spine` (u16, a kind and a
+formal index) replace the per-instance opening mark and body-formal mask, and
+both have checked constructors that refuse rather than truncate.
+
+The sides are pinned in `src/check/test/type_checking_integration.zig`
+(accepted—"an output reached through a nested alias's split formal opens apart
+from its input", "a spine through a nested alias's composite argument opens
+like the inline spelling", "a re-open through merged marker slots keeps the
+layer", "an alias past sixteen formals relates its twin", "a function-typed
+body keeps its input closed and opens its output", "an annotated def whose body
+widens a coerced call keeps its annotation", "a derived map reads only an
+alias's declared arguments"; rejected—the same tests' input sides, "a phantom
+formal at index 16", "a zero-argument alias opened at the result is related by
+its backing", "a twin copied down an alias chain is related by its backing", "an
+imported opened alias instance is related by its backing", "an alias whose
+formal stands only on the result row still bounds its row"), "every alias
+instance is its declaration's body under all its arguments" (the faithfulness
+harness `Check.aliasInstanceIsFaithful`), `unify_test.zig` ("a hidden argument
+carries a widened row into the relation", "an open hidden slot meets a closed
+one through the arguments", "a declared argument the body does not use is
+related exactly", "a flex never takes an alias view whose backing is that
+flex"), `test_rigid_instantiation.zig`, the generalizer's "an alias is ranked
+by its hidden arguments too", the checked module data test "compile-time roots
+read an alias's declared arguments, not its hidden ones", the LIR tests "row
+subsumption - an opened alias application widens into a wider application of
+its alias" and "... a re-opened alias application ...", and the CLI fixtures
+`test/fx-open/hosted_repeated_formal.roc` (a hosted `H(e) : e => Try(Str, e)`
+widening its error row on every backend while its input keeps the declared
+row), `test/echo/boxy_alias_open_row_retag.roc`, `test/bump/alias_hidden_args_*`
+and the checked-module cache round trip.
 
 ## Nominal Constructor Backing Relation
 
@@ -6741,10 +6760,10 @@ The same union in a negative position stays closed as written. A union with no
 tags (`[]`) is exempt: it asserts uninhabitedness (`Try(a, [])` needs no
 `Err` branch), which opening would destroy. Polarity is walk state only
 (`types.Polarity`); no new content kind exists. A union written in an alias
-declaration defers the decision to a marker its uses resolve; an alias instance
-whose copy resolved a marker open is an OPENED instance, related by its
-backing ("Opened Alias Instances" under "Type Alias Invariant"), while a
-marker closed or kept deferred leaves the instance `.declared`.
+declaration defers the decision to a marker its uses resolve; each marker is
+also one of the alias's hidden arguments, so an instance's argument list
+carries what its copy resolved ("Hidden Alias Arguments" under "Type Alias
+Invariant").
 
 What that opening MEANS depends on what is annotated. One spelling, two
 rules:
@@ -6878,6 +6897,18 @@ positions, `[]` in negative ones—negating through functions embedded in the
 alias body (`Instantiator.PolarityVarBehavior`). Nominal declaration bodies
 close as written.
 
+A row an alias's body receives through ANOTHER alias's argument is decided by
+where that argument lands in the inner declaration, like the inline spelling:
+in `O : N([A])` with `N(x) : x -> x`, the one written `[A]` stands at `N`'s
+input and at its output, and the output is `N`'s hidden `x⁺`, so `O` takes a
+marker of its own there ("Hidden Alias Arguments"). A signature `f : O`
+therefore opens its result and keeps its input closed, exactly as `f : [A] ->
+[A]`. This is a declared verdict change: the output used to share the input's
+marker and close with it. Pinned in `src/check/test/type_checking_integration.zig`
+("an output reached through a nested alias's split formal opens apart from its
+input": accepted `wider = |x| idf(x)` at `[A] -> [A, B]`, rejected `[A, B]`
+passed to the input).
+
 A row the reference itself WRITES as a type argument is decided the same way,
 by composition rather than by inheritance. A declaration's formal stands
 wherever the declaration's body puts it, so the argument substituted for it is
@@ -7002,6 +7033,13 @@ consumer treats as `.nested`, so a where-method row there closes as written.
 generated at, by reading the VARIANCE of the formal it is substituted for out
 of the referenced declaration's own annotation, so `Handler([A, B])` composes
 instead of inheriting.
+
+Not among them: where a declaration's own result spine ends ("Hidden Alias
+Arguments"). That is read from the declaration's generated TYPE once it exists
+(`Check.aliasSpineEnd`), stepping by the instantiator's own grammar
+(`AdapterReachPosition.step`), so it cannot drift from what a use's
+instantiation reaches, and it is recorded on the declaration (`Alias.spine`)
+for every use, local or imported.
 
 `Check.annotationOpensValueRow` answers whether generating this annotation
 will mint an implicitly opened extension at all, which is what makes an
@@ -7236,12 +7274,15 @@ link reaches every use.
 
 The copy keeps every alias layer on its spine: the signature's (`Fwd`), the
 result cell's (`IoResult(Str)`), the row's (`Errs`), and every extension link.
-Each of those aliases names the NARROW type the definition closed while its
-copied backing is the wider type a use may widen it to, so each copied layer
-is a use's OPENED instance (see "Opened Alias Instances" under "Type Alias
-Invariant"): unification relates it by its backing, never by its arguments,
-it never replaces what the other side of a merge states, and an error report
-prints its backing next to its name.
+Each copied layer keeps its arguments with its spine slot re-pointed at the
+copy (`Check.spineCopiedAlias`, "Hidden Alias Arguments" under "Type Alias
+Invariant"), so it is still its declaration's body under its arguments: the
+re-opened row is compared wherever the layer is compared, and once widened the
+layer presents its backing (in an error report, next to its name).
+`F : Base -> Base` with `fwd : F; fwd = |x| x` merges the input's and the
+output's marker slots into one closed class; the re-open replaces only the
+output's, which is `F`'s spine slot, so the output widens and the input stays
+closed.
 
 A `[]` result row (`Try(U64, [])`) is never re-opened: `[]` asserts
 uninhabitedness, the annotation walk opens no such row, and the re-open finds
@@ -7277,26 +7318,31 @@ occurrence of its formal.
 Substitution shares one var at every occurrence of a formal, but a row written
 in place is decided per position, and one variable cannot be closed at the
 input and open at the result (`Fwd(e) : Try(Str, e) -> Try(Str, e)` with
-`fwd : Fwd([NotFound])`). So for a declaration standing as the signature, at
-the signature's direct result, or at a result `Try`'s error row, the
-annotation walk builds a twin of each argument that is a row it generated—the
-same tags behind a fresh extension, opened exactly as a row written at the
-result is—and the instantiator substitutes the twin at the occurrence it
-reaches as `.result` or `.try_row`, and the shared argument everywhere else
-(`Instantiator.ResultRowTwin`). The twin is built when an occurrence first
-takes it, so a signature whose formal never reaches the result row mints
-nothing. The instantiator finds that occurrence by the same reach it already
-computes while walking the declaration's type, so an imported alias is
-answered exactly as a local one, with no recorded axis. An argument's row is
-read down its whole extension chain, as a re-open reads a coerced row, so an
-argument whose row continues through an alias link (`Fwd(Errs)` with
-`Errs : Wrap(Base)`) gets a twin copied down that link, exactly as
-`Errs -> Errs` opens `Base`'s row. A where-method signature's twin carries the
-deferral marker instead, decided per use like the inline row. The twin shares
-the argument's payloads, so a row nested inside it keeps the argument's
-generation (fail-closed where the inline spelling would open a payload row); a
-written extension (`..r`) and `[]` get no twin, since neither is reopened by
-position. The same rule covers a formal the declaration puts on the row's own
+`fwd : Fwd([NotFound])`). The declaration gives the occurrence at the end of
+its result spine its own slot ("Hidden Alias Arguments": a hidden `e⁺` when
+the body uses `e` elsewhere, the declared `e` itself when not). So for a
+declaration standing as the signature, at the signature's direct result, or at
+a result `Try`'s error row, the annotation walk builds a twin of the argument
+substituted for that formal when it is a row the walk generated—the same tags
+behind a fresh extension, opened exactly as a row written at the result is—and
+the instantiator substitutes the twin at the slot when it reaches it as
+`.result` or `.try_row` (`Instantiator.ResultRowTwin`, found by the slot's
+template variable), and the shared argument everywhere else. The spine ends at
+one place, so an application has at most one twin, and a declaration of any
+arity qualifies. The twin is built when the slot first takes it, so a
+signature whose spine never reaches the result row mints nothing. The
+instantiator finds that position by the same reach it already computes while
+walking the declaration's type, so an imported alias is answered exactly as a
+local one. An argument's row is read down its whole extension chain, as a
+re-open reads a coerced row, so an argument whose row continues through an
+alias link (`Fwd(Errs)` with `Errs : Wrap(Base)`) gets a twin copied down that
+link, exactly as `Errs -> Errs` opens `Base`'s row. A where-method signature's
+twin carries the deferral marker instead, decided per use like the inline row.
+The twin shares the argument's payloads, so a row nested inside it keeps the
+argument's generation (fail-closed where the inline spelling would open a
+payload row); a written extension (`..r`), `[]`, and a row through an alias
+whose spine ends at no slot get no twin, since none is reopened by position.
+The same rule covers a formal the declaration puts on the row's own
 EXTENSION: `Try(U64, Wrap(Base))` written in place opens `Base`'s row exactly
 as `Try(U64, Errs)` with `Errs : Wrap(Base)` does, and `Id([A, B])` at the
 result opens like `[A, B]`. An argument the application already generated at
@@ -7305,20 +7351,18 @@ gets no twin, since a second opened row would make the signature decline. A
 host-boundary annotation's twin is the argument itself, still closed as
 written: taking it only reports the site its row stands on, so a hosted
 `Try(U64, Wrap(Base))` records the same coercion as `Try(U64, Errs)`. The walk
-tracks at most `max_tracked_alias_formals` (8) formals of one declaration and
 reads at most `max_result_row_twin_alias_layers` (8) alias layers and links of
-one argument's row; beyond either bound the argument gets no twin and its
-result occurrence stays closed, the conservative answer.
+one argument's row; beyond that the argument gets no twin and its result
+occurrence stays closed, the conservative answer.
 
-An alias whose backing took a twin, and every alias layer a twin is copied
-through, is an OPENED instance ("Opened Alias Instances"): its backing is no
-longer its declaration's body under its arguments, so unification relates it
-by its backing. The layer is kept, and its arguments are presentation: where
-every occurrence of a twinned formal in an alias took the twin (`Id([A, B])`
-at the result, or `Res(e)` standing on a function alias's result), the alias
-reads the twin as that argument; where the alias also used the shared
-argument (`Fwd(e) : e -> e` with `fwd : Fwd([NotFound])`, closed at the input
-and open at the result), it reads the shared argument, `Fwd([NotFound])`.
+The alias layer is kept: its argument list holds the written argument at the
+declared formal and the twin at the slot, so its backing is still its
+declaration's body under its arguments ("Hidden Alias Arguments"). Where the
+slot is the declared argument itself (`Id([A, B])` at the result, or `Res(e)`
+standing on a function alias's result), the alias reads the twin as that
+argument; where it is a hidden `e⁺` (`Fwd(e) : e -> e` with `fwd :
+Fwd([NotFound])`, closed at the input and open at the result), it reads the
+written argument, `Fwd([NotFound])`, until a use widens the twin.
 
 Every use of a coerced definition re-opens its row, however it names it: a
 local or external lookup, an associated lookup (`Type.item`, including through
@@ -9583,12 +9627,15 @@ update probe (see the record-update bullet in Field Kinds).
 Every solver-mutating rewrite in checking, classified. A change that adds a
 site to any family below must classify it here.
 
-Not listed, because it is not a rewrite: the "Opened Alias Instances" rule
-(under "Type Alias Invariant") is a rule of ordinary unification, deciding how
-two applications of one alias are related. It changes verdicts (programs
-whose widened row slipped past an argument comparison are now rejected), so it
-is declared there with both sides pinned, but it writes the solved graph only
-through unification's own merges.
+Not listed, because it is not a rewrite: the "Hidden Alias Arguments" rule
+(under "Type Alias Invariant") is a rule of ordinary unification and of what an
+alias declaration contains, deciding how two applications of one alias are
+related. It changes verdicts (programs whose widened row slipped past an
+argument comparison are rejected; an output reached through a nested alias's
+split formal opens), so it is declared there with both sides pinned, but it
+writes the solved graph only through unification's own merges. A declaration's
+content is installed by unifying its fresh declaration variable with the built
+alias (`generateAliasDecl`), no store set.
 
 `dangerousSetVarRedirect` call sites (all in src/check/Check.zig; the
 `RedirectRule` member at each site is the citation):
@@ -9728,7 +9775,7 @@ Other solved-graph mutations:
   and a static-dispatch use (`reopenCoercedDispatchTarget`) re-open like a
   local or external lookup. A signature naming a parameterised function
   alias opens its formal's result occurrence through a twin row
-  (`addResultRowTwin`, `Instantiator.ResultRowTwin`). Pinned in
+  (`resultRowTwinSite`, `Instantiator.ResultRowTwin`). Pinned in
   src/check/test/type_checking_integration.zig: accepted—"a parameterised
   function alias's Try error row coerces", "... whose formal is only the
   result coerces", "an imported parameterised function alias coerces its
@@ -9744,9 +9791,9 @@ Other solved-graph mutations:
   row whose formal is the row's extension coerces", "an identity alias
   applied at the result row coerces", "a function alias argument whose row
   continues through an alias link coerces" (and its Try error variant), "an
-  alias whose formal stands only on the result row presents its twin as its
-  argument", "an alias using its formal at the input and the result keeps
-  its alias layer, opened";
+  alias whose formal stands only on the result row takes its twin at its
+  hidden argument", "an alias using its formal at the input and the result
+  keeps its alias layer";
   rejected—"a parameterised function alias keeps its input occurrence
   closed", "... does not reach a nested occurrence", "an alias argument
   nested through a function alias stays closed", "a function alias argument

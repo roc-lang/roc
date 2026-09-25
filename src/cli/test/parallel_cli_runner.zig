@@ -958,6 +958,10 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11590 tail-recursive parameter's field is not written in place during compile-time evaluation (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/echo/issue_11590.roc", .stdout_exact = "1" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11663 record update after recursive return (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/issue_11663_dev_stack_overflow.roc", .stdout_exact = "1" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11217 Boxy polymorphic captures and aliases (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no" }, .roc_file = "test/echo/issue_11217.roc", .stdout_exact = issue_11217_size_expected_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: a zero-sized alias row re-tagged into an open result row (boxy, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/echo/boxy_alias_open_row_retag.roc", .stdout_exact = "Other Other Other\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: a zero-sized alias row re-tagged into an open result row (boxy, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/echo/boxy_alias_open_row_retag.roc", .stdout_exact = "Other Other Other\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: a zero-sized alias row re-tagged into an open result row (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/echo/boxy_alias_open_row_retag.roc", .stdout_exact = "Other Other Other\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: a zero-sized alias row re-tagged into an open result row (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/boxy_alias_open_row_retag.roc", .stdout_exact = "Other Other Other\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: row subsumption through an effectful where-clause forwarder (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/echo/row_subsumption_effectful_where.roc", .stdout_exact = "ok\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: row subsumption through an effectful where-clause forwarder (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/row_subsumption_effectful_where.roc", .stdout_exact = "ok\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11351 Boxy unbound type variables use their sealed default (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11351.roc", .stdout_exact = issue_11351_expected_stdout } } },
@@ -2125,6 +2129,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc --opt=dev returns exit code 2 for warnings", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/fx/run_warning_only.roc", .exit = .{ .code = 2 }, .contains_any = &.{.{ .needles = &warning_needles }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc rejects the reserved 0.0.0 platform URL", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/reserved_version_platform.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "uses the reserved version 0.0.0" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bump reports patch when nothing changed", .body = .{ .command = .{ .args = &.{ "bump", "--no-cache", "--old", "test/bump/parser_v1", "--old-version", "1.2.3" }, .roc_file = "test/bump/parser_v1/main.roc", .contains = &.{ .{ .stream = .stdout, .text = "No API changes detected." }, .{ .stream = .stdout, .text = "This is a PATCH change." }, .{ .stream = .stdout, .text = "1.2.3 -> 1.2.4" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc bump renders an alias with hidden arguments at its declared arity", .body = .{ .command = .{ .args = &.{ "bump", "--no-cache", "--old", "test/bump/alias_hidden_args_v1", "--old-version", "1.2.3" }, .roc_file = "test/bump/alias_hidden_args_v2/main.roc", .contains = &.{ .{ .stream = .stdout, .text = "- Errs.fwd : Str -> Errs.Base\n" }, .{ .stream = .stdout, .text = "+ Errs.fwd : Num.U64 -> Errs.Base\n" }, .{ .stream = .stdout, .text = "1.2.3 -> 2.0.0" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bump extracts a platform root alias", .body = .{ .command = .{ .args = &.{ "bump", "--no-cache", "--old", "test/bump/platform_root_alias_v1", "--old-version", "1.2.3" }, .roc_file = "test/bump/platform_root_alias_v2/main.roc", .contains = &.{ .{ .stream = .stdout, .text = "No API changes detected." }, .{ .stream = .stdout, .text = "This is a PATCH change." } }, .not_contains = &.{ .{ .stream = .stderr, .text = "No Exposed Modules" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bump does not overflow on exposed empty tag unions", .body = .{ .command = .{ .args = &.{ "bump", "--no-cache", "--old", "test/bump/empty_union", "--old-version", "1.2.3" }, .roc_file = "test/bump/empty_union/main.roc", .contains = &.{ .{ .stream = .stdout, .text = "No API changes detected." }, .{ .stream = .stdout, .text = "This is a PATCH change." } }, .not_contains = &.{ .{ .stream = .stderr, .text = "overflowed its stack" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bump extracts Try over transitive public type", .body = .{ .command = .{ .args = &.{ "bump", "--no-cache", "--old", "test/bump/api_origin_try_v1", "--old-version", "1.2.3" }, .roc_file = "test/bump/api_origin_try_v2/main.roc", .contains = &.{ .{ .stream = .stdout, .text = "No API changes detected." }, .{ .stream = .stdout, .text = "This is a PATCH change." }, .{ .stream = .stdout, .text = "1.2.3 -> 1.2.4" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "CANNOT EXTRACT PUBLIC API" }, .{ .stream = .stderr, .text = "does not belong to any package" } } } } },
@@ -2384,6 +2389,15 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "hosted results survive every widening channel (boxy, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/hosted_widening_channels.roc", .exit = .success, .contains = &.{ .{ .stream = .stdout, .text = "annotation: ok" }, .{ .stream = .stdout, .text = "argument: ok" }, .{ .stream = .stdout, .text = "record field: ok" }, .{ .stream = .stdout, .text = "value: ok" }, .{ .stream = .stdout, .text = "higher order: ok" }, .{ .stream = .stdout, .text = "box: ok" }, .{ .stream = .stdout, .text = "unannotated question: ok" }, .{ .stream = .stdout, .text = "alias owner: ok" }, .{ .stream = .stdout, .text = "open box: ok" }, .{ .stream = .stdout, .text = "alias both: ok" }, .{ .stream = .stdout, .text = "host err: NotFound" } }, .not_contains = &.{ .{ .stream = .stdout, .text = "misread" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "hosted results survive every widening channel (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/fx-open/hosted_widening_channels.roc", .exit = .success, .contains = &.{ .{ .stream = .stdout, .text = "annotation: ok" }, .{ .stream = .stdout, .text = "argument: ok" }, .{ .stream = .stdout, .text = "record field: ok" }, .{ .stream = .stdout, .text = "value: ok" }, .{ .stream = .stdout, .text = "higher order: ok" }, .{ .stream = .stdout, .text = "box: ok" }, .{ .stream = .stdout, .text = "unannotated question: ok" }, .{ .stream = .stdout, .text = "alias owner: ok" }, .{ .stream = .stdout, .text = "open box: ok" }, .{ .stream = .stdout, .text = "alias both: ok" }, .{ .stream = .stdout, .text = "host err: NotFound" } }, .not_contains = &.{ .{ .stream = .stdout, .text = "misread" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "hosted results survive every widening channel (boxy, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/fx-open/hosted_widening_channels.roc", .exit = .success, .contains = &.{ .{ .stream = .stdout, .text = "annotation: ok" }, .{ .stream = .stdout, .text = "argument: ok" }, .{ .stream = .stdout, .text = "record field: ok" }, .{ .stream = .stdout, .text = "value: ok" }, .{ .stream = .stdout, .text = "higher order: ok" }, .{ .stream = .stdout, .text = "box: ok" }, .{ .stream = .stdout, .text = "unannotated question: ok" }, .{ .stream = .stdout, .text = "alias owner: ok" }, .{ .stream = .stdout, .text = "open box: ok" }, .{ .stream = .stdout, .text = "alias both: ok" }, .{ .stream = .stdout, .text = "host err: NotFound" } }, .not_contains = &.{ .{ .stream = .stdout, .text = "misread" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    // A hosted function named through `H(e) : e => Try(Str, e)`, whose formal
+    // stands at its argument and at its result's error row (design.md "Hidden
+    // Alias Arguments"): the error row widens at a use while the argument keeps
+    // the declared row, and the `H` layer is kept.
+    .{ .id = 0, .suite = .subcommands, .name = "a hosted alias whose formal stands at its argument and error row widens only the error row (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/hosted_repeated_formal.roc", .exit = .success, .contains = &.{ .{ .stream = .stdout, .text = "echo wide: NotFound" }, .{ .stream = .stdout, .text = "echo declared: PermissionDenied" } }, .not_contains = &.{ .{ .stream = .stdout, .text = "misread" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "a hosted alias whose formal stands at its argument and error row widens only the error row (boxy, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/hosted_repeated_formal.roc", .exit = .success, .contains = &.{ .{ .stream = .stdout, .text = "echo wide: NotFound" }, .{ .stream = .stdout, .text = "echo declared: PermissionDenied" } }, .not_contains = &.{ .{ .stream = .stdout, .text = "misread" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "a hosted alias whose formal stands at its argument and error row widens only the error row (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/fx-open/hosted_repeated_formal.roc", .exit = .success, .contains = &.{ .{ .stream = .stdout, .text = "echo wide: NotFound" }, .{ .stream = .stdout, .text = "echo declared: PermissionDenied" } }, .not_contains = &.{ .{ .stream = .stdout, .text = "misread" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "a hosted alias whose formal stands at its argument and error row widens only the error row (boxy, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/fx-open/hosted_repeated_formal.roc", .exit = .success, .contains = &.{ .{ .stream = .stdout, .text = "echo wide: NotFound" }, .{ .stream = .stdout, .text = "echo declared: PermissionDenied" } }, .not_contains = &.{ .{ .stream = .stdout, .text = "misread" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "a hosted alias whose formal stands at its argument and error row keeps its argument row and its layer", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/fx-open/hosted_repeated_formal_input.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "[NotFound, PermissionDenied]" }, .{ .stream = .stderr, .text = "H([NotFound, PermissionDenied])" } }, .occurrences = &.{.{ .stream = .stderr, .text = "type mismatch", .count = 2 }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "[ROC CRASHED]" } } } } },
     // The #9966 failure mode, pinned by what the app receives: the host always
     // returns Ok, and a use site that widened the hosted row must not turn that
     // into Err. Run at both native and interpreter execution, since each reaches
@@ -11165,6 +11179,18 @@ fn customRowSubsumptionCacheRoundTrip(
         \\
         \\    lib_show : {} -> Str
         \\    lib_show = |_| show_wide(lib_value)
+        \\
+        \\    Fwd(e) : e -> e
+        \\
+        \\    lib_split : Fwd([NotFound])
+        \\    lib_split = |t| t
+        \\
+        \\    Base : [Other]
+        \\
+        \\    F : Base -> Base
+        \\
+        \\    lib_merged : F
+        \\    lib_merged = |x| x
         \\}
         \\
     ;
@@ -11181,6 +11207,26 @@ fn customRowSubsumptionCacheRoundTrip(
         \\expect RowSubsumptionCacheLib.show_wide(RowSubsumptionCacheLib.lib_fwd(D)) == "D"
         \\expect RowSubsumptionCacheLib.lib_show({}) == "B(lib)"
         \\
+        \\wide_split : [NotFound] -> [Gone, NotFound]
+        \\wide_split = |t| RowSubsumptionCacheLib.lib_split(t)
+        \\
+        \\expect match wide_split(NotFound) { Gone => "Gone", NotFound => "NotFound" } == "NotFound"
+        \\
+        \\wide_merged : [Other] -> [Aborted, Other]
+        \\wide_merged = |t| RowSubsumptionCacheLib.lib_merged(t)
+        \\
+        \\expect match wide_merged(Other) { Aborted => "Aborted", Other => "Other" } == "Other"
+        \\
+        \\Hold := { f : RowSubsumptionCacheLib.Fwd([NotFound]) }
+        \\
+        \\call_held : Hold -> Str
+        \\call_held = |held| {
+        \\    run = held.f
+        \\    match run(NotFound) { NotFound => "NotFound" }
+        \\}
+        \\
+        \\expect call_held(Hold.{ f: RowSubsumptionCacheLib.lib_split }) == "NotFound"
+        \\
     ;
     if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "RowSubsumptionCacheLib.roc", lib_source)) |failure| return failure;
     if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "RowSubsumptionCacheMain.roc", main_body)) |failure| return failure;
@@ -11188,7 +11234,7 @@ fn customRowSubsumptionCacheRoundTrip(
         return customInfraFailure(allocator, timer, "failed to allocate row-subsumption cache app path: {}", .{err});
     defer allocator.free(main_path);
 
-    const all_passed: OutputNeedle = .{ .stream = .stdout, .text = "All (4) tests passed" };
+    const all_passed: OutputNeedle = .{ .stream = .stdout, .text = "All (7) tests passed" };
     const ran: []const OutputNeedle = &.{
         .{ .stream = .stdout, .text = "(cached)" },
         .{ .stream = .stderr, .text = "compiler bug" },

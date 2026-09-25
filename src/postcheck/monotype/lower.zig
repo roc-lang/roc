@@ -63633,6 +63633,7 @@ test "issue 11362: checked instantiation reserves only recursive node identities
         .owner_module = .{},
         .args = try gpa.dupe(checked.CheckedTypeId, &.{variable}),
         .backing = function,
+        .declared_arity = 1,
     } });
     const recursive = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(1) }, false);
     try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ recursive, recursive }) });
@@ -63836,6 +63837,7 @@ fn testLazyCheckedInstantiationAliases(gpa: Allocator) (Allocator.Error || error
         .origin_module = try name_store.internModuleIdentity(&([_]u8{0} ** 32)),
         .owner_module = .{},
         .backing = acyclic,
+        .declared_arity = 0,
     } });
     var builder: Builder = undefined;
     builder.next_instantiation_scope = 0;
@@ -63912,6 +63914,7 @@ test "issue 11362: checked instantiation allocates placeholders only for recursi
         .origin_module = try name_store.internModuleIdentity(&([_]u8{0x62} ** 32)),
         .owner_module = .{},
         .backing = pair,
+        .declared_arity = 0,
     } });
     const recursive = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, false);
     try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ recursive, recursive }) });
@@ -64109,6 +64112,7 @@ test "lazy checked instantiation allocates only recursive placeholders and clear
                 .owner_module = .{},
                 .backing = function,
                 .args = try std.testing.allocator.dupe(checked.CheckedTypeId, &.{variable}),
+                .declared_arity = 1,
             } });
 
             var builder: Builder = undefined;
@@ -64218,6 +64222,7 @@ test "issue 11453: direct alias lowering shares runtime types without wrapper al
             .source_decl = @intCast(index),
             .args = try gpa.dupe(checked.CheckedTypeId, &.{unit}),
             .backing = previous,
+            .declared_arity = 1,
         } });
         previous = alias.*;
     }
@@ -64243,6 +64248,7 @@ test "issue 11453: direct alias lowering shares runtime types without wrapper al
         .origin_module = origin,
         .owner_module = .{},
         .backing = nominals[0],
+        .declared_arity = 0,
     } });
     const recursive = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(72) }, false);
     const recursive_alias = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(73) }, false);
@@ -64251,6 +64257,7 @@ test "issue 11453: direct alias lowering shares runtime types without wrapper al
         .origin_module = origin,
         .owner_module = .{},
         .backing = recursive,
+        .declared_arity = 0,
     } });
     try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{recursive_alias}) });
     const aliased_function = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(74) }, false);
