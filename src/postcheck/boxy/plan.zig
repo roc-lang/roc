@@ -761,10 +761,27 @@ pub const WorkerSource = union(enum) {
 /// row. Its scheme is the one of the binding the lookup is the whole
 /// right-hand side of (a callable alias `run = base`), so every use of that
 /// binding instantiates the adapter as it instantiates the binding. Keyed by
-/// the lookup; the target, the coerced cell, and the scheme are all read from
-/// the checked module data for it.
+/// the lookup; the target and the coerced cell are read from the checked
+/// module data for it, and the scheme is resolved from that data once, when
+/// the lookup's source is built (`Builder.coercedUseAdapterForRef`), so no
+/// later query about the worker searches for it again.
 pub const CoercedUseAdapterSource = struct {
     use: CheckedExprIdentity,
+    scheme: CoercedUseAdapterScheme,
+};
+
+/// The scheme a coerced-use adapter is generalized at: that of the binding
+/// whose whole right-hand side is the adapter's lookup, if any.
+pub const CoercedUseAdapterScheme = union(enum) {
+    /// The lookup is not the whole right-hand side of a generalizing
+    /// callable binding: the adapter quantifies nothing of its own.
+    none,
+    /// The right-hand side of a local callable alias, whose generalized
+    /// scope (in the lookup's module) the adapter owns.
+    alias_scope: checked.DispatchScopeId,
+    /// The compile-time root of a top-level callable binding, whose entry
+    /// wrapper template carries the binding's scheme.
+    binding_root: checked_names.ProcedureTemplateRef,
 };
 
 /// Const-store identity of a function value persisted into runtime code.
@@ -7184,9 +7201,12 @@ const Builder = struct {
                 }
                 break :blk null;
             },
-            .coerced_use_adapter => |adapter| switch (self.coercedUseAdapterScheme(adapter)) {
+            .coerced_use_adapter => |adapter| switch (adapter.scheme) {
                 .none => null,
-                .alias_scope => |scope| .{ .view = scope.view, .vars = scope.view.checked_procedure_templates.scopeSchemeVars(scope.scope) },
+                .alias_scope => |scope_id| blk: {
+                    const view = self.moduleForId(adapter.use.module);
+                    break :blk .{ .view = view, .vars = view.checked_procedure_templates.scopeSchemeVars(dispatchScope(view, scope_id)) };
+                },
                 .binding_root => |template| self.templateSchemeVars(template),
             },
             .generated_codec,
@@ -7342,9 +7362,12 @@ const Builder = struct {
                 const site_expr = self.nestedCallableSiteExprForExpr(view, expr_ref.expr) orelse expr_ref.expr;
                 break :blk self.nestedExprEvidenceParams(view, site_expr);
             },
-            .coerced_use_adapter => |adapter| switch (self.coercedUseAdapterScheme(adapter)) {
+            .coerced_use_adapter => |adapter| switch (adapter.scheme) {
                 .none => null,
-                .alias_scope => |scope| self.nestedExprEvidenceParams(scope.view, adapter.use.expr),
+                .alias_scope => |scope_id| blk: {
+                    const view = self.moduleForId(adapter.use.module);
+                    break :blk scopeEvidenceParams(view, dispatchScope(view, scope_id));
+                },
                 .binding_root => |template| self.templateEvidenceParams(template),
             },
             .generated_codec,
@@ -7372,18 +7395,32 @@ const Builder = struct {
         view: ModuleView,
         expr: checked.CheckedExprId,
     ) ?WorkerEvidenceParams {
-        for (view.checked_procedure_templates.dispatch_scopes) |scope| {
+        for (view.checked_procedure_templates.dispatch_scopes) |*scope| {
             if (scope.checked_expr != expr) continue;
-            const start: usize = scope.evidence_params.start;
-            const len: usize = scope.evidence_params.len;
-            if (start > view.checked_procedure_templates.evidence_params_pool.len or
-                len > view.checked_procedure_templates.evidence_params_pool.len - start)
-            {
-                boxyPlanInvariant("nested procedure evidence span was outside the checked parameter pool");
-            }
-            return .{ .view = view, .start = @intCast(start), .params = view.checked_procedure_templates.evidence_params_pool[start..][0..len] };
+            return scopeEvidenceParams(view, scope);
         }
         return null;
+    }
+
+    /// A generalized local scope's ordered evidence parameters.
+    fn scopeEvidenceParams(view: ModuleView, scope: *const checked.DispatchRefScope) WorkerEvidenceParams {
+        const start: usize = scope.evidence_params.start;
+        const len: usize = scope.evidence_params.len;
+        if (start > view.checked_procedure_templates.evidence_params_pool.len or
+            len > view.checked_procedure_templates.evidence_params_pool.len - start)
+        {
+            boxyPlanInvariant("nested procedure evidence span was outside the checked parameter pool");
+        }
+        return .{ .view = view, .start = @intCast(start), .params = view.checked_procedure_templates.evidence_params_pool[start..][0..len] };
+    }
+
+    /// The generalized local scope `scope_id` of `view`'s module.
+    fn dispatchScope(view: ModuleView, scope_id: checked.DispatchScopeId) *const checked.DispatchRefScope {
+        const scopes = view.checked_procedure_templates.dispatch_scopes;
+        if (@intFromEnum(scope_id) >= scopes.len) {
+            boxyPlanInvariant("coerced-use adapter scope was outside its module's dispatch scopes");
+        }
+        return &scopes[@intFromEnum(scope_id)];
     }
 
     fn bindingEvidenceParams(
@@ -13412,7 +13449,10 @@ const Builder = struct {
             .platform_required_const,
             => return null,
         }
-        return .{ .coerced_use_adapter = .{ .use = .{ .module = view.key, .expr = record.expr } } };
+        return .{ .coerced_use_adapter = .{
+            .use = .{ .module = view.key, .expr = record.expr },
+            .scheme = coercedUseAdapterScheme(view, record.expr),
+        } };
     }
 
     /// The coerced-use adapter a top-level callable binding stands for, when
@@ -13443,28 +13483,16 @@ const Builder = struct {
         return record;
     }
 
-    const CoercedUseAdapterScheme = union(enum) {
-        /// The lookup is not the whole right-hand side of a generalizing
-        /// callable binding: the adapter quantifies nothing of its own.
-        none,
-        /// The right-hand side of a local callable alias, whose generalized
-        /// scope the adapter owns.
-        alias_scope: struct { view: ModuleView, scope: *const checked.DispatchRefScope },
-        /// The compile-time root of a top-level callable binding, whose entry
-        /// wrapper template carries the binding's scheme.
-        binding_root: checked_names.ProcedureTemplateRef,
-    };
-
     /// The scheme a coerced-use adapter is generalized at: the binding whose
     /// whole right-hand side is its lookup, read from that binding's recorded
-    /// scope or compile-time root.
-    fn coercedUseAdapterScheme(self: *Builder, adapter: CoercedUseAdapterSource) CoercedUseAdapterScheme {
-        const view = self.moduleForId(adapter.use.module);
-        for (view.checked_procedure_templates.dispatch_scopes) |*scope| {
-            if (scope.checked_expr == adapter.use.expr) return .{ .alias_scope = .{ .view = view, .scope = scope } };
+    /// scope or compile-time root. Resolved once, when the adapter's source
+    /// is built.
+    fn coercedUseAdapterScheme(view: ModuleView, use_expr: checked.CheckedExprId) CoercedUseAdapterScheme {
+        for (view.checked_procedure_templates.dispatch_scopes, 0..) |scope, index| {
+            if (scope.checked_expr == use_expr) return .{ .alias_scope = @enumFromInt(@as(u32, @intCast(index))) };
         }
         for (view.compile_time_roots.roots) |root| {
-            if (root.kind != .callable_binding or root.expr != adapter.use.expr) continue;
+            if (root.kind != .callable_binding or root.expr != use_expr) continue;
             const wrapper = view.entry_wrappers.lookupByRoot(root.id) orelse
                 boxyPlanInvariant("top-level callable binding root had no entry wrapper");
             return .{ .binding_root = wrapper.template };

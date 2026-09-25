@@ -503,6 +503,7 @@ const CustomCase = enum {
     roc_test_skips_url_dependency_expects,
     roc_test_caches_local_dependency_expects,
     roc_test_counts_checking_errors_with_cached_results,
+    row_subsumption_cache_round_trip,
 };
 
 const Skip = union(enum) {
@@ -1369,20 +1370,21 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "polarity W6b: closed implementation with rigid payloads narrows from the request (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/WidenRigidPayloadClosedImpl.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "row subsumption: non-hosted closed forwarder widened by its callers (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionForwarder.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (9) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "row subsumption: non-hosted closed forwarder widened by its callers (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionForwarder.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (9) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: where-clause forwarder with local evidence widened by its callers (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionWhereForwarder.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (7) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: where-clause forwarder with local evidence widened by its callers (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionWhereForwarder.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (7) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: where-clause forwarder with local evidence widened by its callers (boxy, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionWhereForwarder.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (7) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: where-clause forwarder with local evidence widened by its callers (boxy, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionWhereForwarder.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (7) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: where-clause forwarder with local evidence widened by its callers (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionWhereForwarder.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (8) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: where-clause forwarder with local evidence widened by its callers (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionWhereForwarder.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (8) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: where-clause forwarder with local evidence widened by its callers (boxy, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionWhereForwarder.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (8) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: where-clause forwarder with local evidence widened by its callers (boxy, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionWhereForwarder.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (8) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "row subsumption: non-hosted closed forwarder widened by its callers (boxy, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionForwarder.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (9) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "row subsumption: non-hosted closed forwarder widened by its callers (boxy, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionForwarder.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (9) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: forwarded top-level values widened by their uses (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (11) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: forwarded top-level values widened by their uses (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (11) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: forwarded top-level values widened by their uses (boxy, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (11) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: forwarded top-level values widened by their uses (boxy, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (11) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: coerced functions used as values (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionCallableValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (11) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "boxy plan invariant violated" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: coerced functions used as values (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionCallableValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (11) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "boxy plan invariant violated" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: coerced functions used as values (boxy, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionCallableValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (11) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "boxy plan invariant violated" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: coerced functions used as values (boxy, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionCallableValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (11) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "boxy plan invariant violated" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: forwarded top-level values widened by their uses (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (16) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: forwarded top-level values widened by their uses (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (16) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: forwarded top-level values widened by their uses (boxy, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (16) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: forwarded top-level values widened by their uses (boxy, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (16) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: coercion records survive the checked-module cache", .timeout_ms = 600_000, .body = .{ .custom = .row_subsumption_cache_round_trip } },
+    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: coerced functions used as values (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionCallableValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (15) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "boxy plan invariant violated" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: coerced functions used as values (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionCallableValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (15) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "boxy plan invariant violated" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: coerced functions used as values (boxy, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionCallableValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (15) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "boxy plan invariant violated" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "row subsumption: coerced functions used as values (boxy, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/RowSubsumptionCallableValue.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (15) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "boxy plan invariant violated" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
     // The declared row reached through a transparent alias: `IoResult(Str)` is
     // an alias for a `Try` whose error row is closed, so the mono side has to
     // cross the alias to find the `Try` nominal the checker published the
@@ -3530,6 +3532,7 @@ fn runCustomCase(
         .roc_test_skips_url_dependency_expects => customRocTestSkipsUrlDependencyExpects(io, allocator, &env, &timer, timeout_ms),
         .roc_test_caches_local_dependency_expects => customRocTestCachesLocalDependencyExpects(io, allocator, &env, &timer, timeout_ms),
         .roc_test_counts_checking_errors_with_cached_results => customRocTestCountsCheckingErrorsWithCachedResults(io, allocator, &env, &timer, timeout_ms),
+        .row_subsumption_cache_round_trip => customRowSubsumptionCacheRoundTrip(io, allocator, &env, &timer, timeout_ms),
     };
 
     if (result) |failure| {
@@ -11127,6 +11130,110 @@ fn customRocTestCachesLocalDependencyExpects(
         .contains = &.{ all_three_passed, cached_marker },
         .not_contains = reused_results,
     });
+}
+
+/// Row subsumption's checked data—a value's coercion record
+/// (`ResultRowCoercion.is_value`), each use's re-open record
+/// (`ResultRowReopen`, carried as `coerced_result_row`), and a constant's
+/// `ConstTemplate.coerced_row`—must survive the checked-module cache
+/// (design.md "Row Subsumption"). The library is checked once, cold; every
+/// later run edits only the importer and first checks it, so the tests that
+/// follow lower BOTH modules from their cached data, under each
+/// specialization strategy and backend.
+fn customRowSubsumptionCacheRoundTrip(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const lib_source =
+        \\RowSubsumptionCacheLib := [].{
+        \\    Holder := { d : [B(Str), D], r : Try(Str, [NotFound]) }
+        \\
+        \\    lib_value : [B(Str), D]
+        \\    lib_value = Holder.{ d: B("lib"), r: Ok("x") }.d
+        \\
+        \\    lib_try : Try(Str, [NotFound])
+        \\    lib_try = Holder.{ d: D, r: Err(NotFound) }.r
+        \\
+        \\    lib_fwd : [B(Str), D] -> [B(Str), D]
+        \\    lib_fwd = |t| t
+        \\
+        \\    show_wide : [A, B(Str), C, D] -> Str
+        \\    show_wide = |v| match v { A => "A", B(s) => "B(${s})", C => "C", D => "D" }
+        \\
+        \\    lib_show : {} -> Str
+        \\    lib_show = |_| show_wide(lib_value)
+        \\}
+        \\
+    ;
+    const main_body =
+        \\RowSubsumptionCacheMain := {}
+        \\
+        \\import RowSubsumptionCacheLib
+        \\
+        \\show_try : Try(Str, [Gone, NotFound]) -> Str
+        \\show_try = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(NotFound) => "NotFound" }
+        \\
+        \\expect RowSubsumptionCacheLib.show_wide(RowSubsumptionCacheLib.lib_value) == "B(lib)"
+        \\expect show_try(RowSubsumptionCacheLib.lib_try) == "NotFound"
+        \\expect RowSubsumptionCacheLib.show_wide(RowSubsumptionCacheLib.lib_fwd(D)) == "D"
+        \\expect RowSubsumptionCacheLib.lib_show({}) == "B(lib)"
+        \\
+    ;
+    if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "RowSubsumptionCacheLib.roc", lib_source)) |failure| return failure;
+    if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "RowSubsumptionCacheMain.roc", main_body)) |failure| return failure;
+    const main_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "RowSubsumptionCacheMain.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate row-subsumption cache app path: {}", .{err});
+    defer allocator.free(main_path);
+
+    const all_passed: OutputNeedle = .{ .stream = .stdout, .text = "All (4) tests passed" };
+    const ran: []const OutputNeedle = &.{
+        .{ .stream = .stdout, .text = "(cached)" },
+        .{ .stream = .stderr, .text = "compiler bug" },
+        .{ .stream = .stderr, .text = "invariant violated" },
+        .{ .stream = .stderr, .text = "panic" },
+    };
+
+    // Cold: both modules are checked and stored.
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{"test"},
+        .roc_file = main_path,
+        .exit = .success,
+        .contains = &.{all_passed},
+        .not_contains = ran,
+    })) |failure| return failure;
+
+    const warm_runs = [_]struct { edit: []const u8, args: []const []const u8 }{
+        .{ .edit = "# warm, specialized\n", .args = &.{"test"} },
+        .{ .edit = "# warm, boxy\n", .args = &.{ "test", "--specialize=no" } },
+        .{ .edit = "# warm, specialized dev\n", .args = &.{ "test", "--opt=dev" } },
+        .{ .edit = "# warm, boxy dev\n", .args = &.{ "test", "--specialize=no", "--opt=dev" } },
+    };
+    for (warm_runs) |warm| {
+        // A new importer source: its tests have no stored result, so they run.
+        const edited = std.mem.concat(allocator, u8, &.{ warm.edit, main_body }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate edited importer: {}", .{err});
+        defer allocator.free(edited);
+        if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "RowSubsumptionCacheMain.roc", edited)) |failure| return failure;
+        // The library comes from the cache and the importer is checked and
+        // stored, so the test run below restores both.
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "check", "--verbose" },
+            .roc_file = main_path,
+            .exit = .success,
+            .contains = &.{.{ .stream = .stdout, .text = "Modules: 2 total, 1 cached, 1 built" }},
+        })) |failure| return failure;
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = warm.args,
+            .roc_file = main_path,
+            .exit = .success,
+            .contains = &.{all_passed},
+            .not_contains = ran,
+        })) |failure| return failure;
+    }
+    return null;
 }
 
 /// Write one file of a case's fixture, reporting the path in any failure.

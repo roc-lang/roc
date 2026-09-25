@@ -11155,6 +11155,35 @@ test "check type - polarity - a value alias of a closed value coerces" {
     try checkTypesModule(source, .{ .pass = .last_def }, "[A, B, C]");
 }
 
+test "check type - polarity - a value alias of a coerced value is quantified, not coerced" {
+    // `vd`'s use in `alias = vd` re-opens `vd`'s row, so `alias`'s annotated
+    // row meets an open row and is never closed: `alias` generalizes it and
+    // records no coercion, and its own uses instantiate that scheme rather
+    // than re-opening anything. Only `vd` is coerced, and only the lookup of
+    // `vd` re-opens.
+    const source =
+        \\Closed := { v : [A, B] }
+        \\
+        \\c : Closed
+        \\c = { v: A }
+        \\
+        \\vd : [A, B]
+        \\vd = c.v
+        \\
+        \\alias : [A, B]
+        \\alias = vd
+        \\
+        \\wide : [A, B, C]
+        \\wide = alias
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertLastDefType("[A, B, C]");
+    try std.testing.expectEqual(@as(u64, 1), test_env.module_env.result_row_coercions.len());
+    try std.testing.expectEqual(@as(u64, 1), test_env.module_env.result_row_reopens.len());
+}
+
 test "check type - polarity - a value's coerced error row and quantified ok row compose" {
     // `Err(e)` forwards a closed error row, so the root `Try`'s error row is
     // coerced; `Ok(X)` constructs, so the ok row is quantified. Each widens

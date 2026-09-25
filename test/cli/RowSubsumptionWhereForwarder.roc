@@ -153,3 +153,14 @@ expect check_rec({})
 expect check_twice({})
 expect check_let({})
 expect check_try_twice({})
+
+# A top-level callable alias of a where-clause forwarder, used with a
+# top-level evidence type at the wider row.
+TopLoc := [T].{
+    get : TopLoc -> Str
+    get = |_| "top"
+}
+
+run_where = fwd_direct
+
+expect show_direct(run_where(TopLoc.T, B("w"))) == "B(w)" and show_direct(run_where(TopLoc.T, D)) == "D"

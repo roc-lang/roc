@@ -9,6 +9,8 @@
 # misordered re-tag shows up as a wrong answer through `show*`.
 RowSubsumptionCallableValue := {}
 
+import RowSubsumptionValueLib
+
 fwd : [B(Str), D] -> [B(Str), D]
 fwd = |t| t
 
@@ -78,3 +80,18 @@ expect {
     rec = { f: fwd }
     show_wide((rec.f)(B("r"))) == "B(r)"
 }
+
+# Stored in a top-level constant: a record field and a box, each read back and
+# called at the wider row.
+rec_top = { f: fwd }
+boxed_top = Box.box(fwd)
+
+expect show_wide((rec_top.f)(B("t"))) == "B(t)"
+expect show_wide(Box.unbox(boxed_top)(D)) == "D"
+
+# Imported: a top-level callable alias another module defines, and one this
+# module defines over an imported coerced function, each used at two widths.
+run_imported = RowSubsumptionValueLib.lib_fwd
+
+expect show_wide(RowSubsumptionValueLib.lib_run(B("i"))) == "B(i)" and show_narrow(RowSubsumptionValueLib.lib_run(D)) == "D"
+expect show_wide(run_imported(D)) == "D" and show_narrow(run_imported(B("j"))) == "B(j)"

@@ -40162,10 +40162,11 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, replace the golden bytes below with the assertion output. Bump
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
-    // Updated for the intentional layout change that gave `CompileTimeRoot` a
-    // `representation` and `StoredConstTemplate` an `other_row_template`, so a
-    // constant evaluated at its sealed row can say so and keep the eval
-    // template a use at another row lowers instead.
+    // Updated for the intentional layout change that gave `ConstTemplate` a
+    // `coerced_row` and a constant use (`ConstUseTemplate`) and resolved value
+    // reference (`ResolvedValueRefRecord`) a `coerced_result_row`, so lowering
+    // restores a coerced top-level value at its declared row and re-tags it
+    // for a use that re-opened that row (design.md "Row Subsumption").
     const golden: [32]u8 = .{
         0xEE, 0x5A, 0x6C, 0x1B, 0xEF, 0x43, 0x1D, 0x2C, 0xAC, 0x55, 0xC2, 0x46, 0x81, 0x26, 0x10, 0x77,
         0x3A, 0x2C, 0x88, 0xB5, 0xD1, 0x85, 0x2D, 0x1A, 0x68, 0xEC, 0xB2, 0xD1, 0xD0, 0xED, 0x7A, 0xA6,

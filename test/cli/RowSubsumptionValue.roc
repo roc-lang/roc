@@ -45,8 +45,10 @@ show_try = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(NotFound)
 expect show_try(vr) == "NotFound"
 expect show_try(vo) == "Ok(y)"
 
-# A value alias of a coerced value is itself coerced, and a constant whose
-# body is a widened use stores the wider value.
+# An alias of a COERCED value is not itself coerced: its lookup of `vd`
+# re-opens `vd`'s row, so `alias`'s annotated row stays open and is
+# quantified, and each use of `alias` instantiates it. A constant whose body
+# is a widened use stores the wider value.
 alias : [B(Str), D]
 alias = vd
 
@@ -55,6 +57,33 @@ wide = alias
 
 expect show_direct(alias) == "B(x)"
 expect show_direct(wide) == "B(x)"
+
+# A value alias of a CLOSED value is coerced: `closed_d` is unannotated and
+# reads a closed nominal field, so forwarding it closes `aliased`'s row.
+closed_d = source.d
+
+aliased : [B(Str), D]
+aliased = closed_d
+
+expect show_direct(aliased) == "B(x)"
+
+# A root `Try` named through an alias coerces its error row as the inline
+# spelling does.
+IoRes : Try(Str, [NotFound])
+
+via_alias : IoRes
+via_alias = source.r
+
+expect show_try(via_alias) == "NotFound"
+
+# A coerced value used inside unannotated functions that generalize: each
+# call's use of `vd` re-opens its own copy of the row.
+pick = |b| if b vd else C
+pick2 = |_| vd
+
+expect show_direct(pick(Bool.True)) == "B(x)"
+expect show_direct(pick(Bool.False)) == "C"
+expect show_direct(pick2({})) == "B(x)"
 
 # A use at exactly the declared row.
 show_narrow : [B(Str), D] -> Str

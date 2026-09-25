@@ -7355,8 +7355,13 @@ lambda, a value row for any other non-hosted definition. So a value binding
 whose annotation is a function type (`f : S -> [A, B]` with `f = r.f`)
 records nothing: it has no procedure template of its own for an adapter to
 complete, and its result row keeps closing by body. A value alias (`v = u`)
-coerces like any forwarding value, although it generalizes whatever its
-annotation. A use re-opens a value's copy from its root
+coerces exactly when forwarding `u` closes its row, although it generalizes
+whatever its annotation: `u` unannotated with a closed row (`u = c.f` reading
+a closed nominal field) closes `v`'s row and `v` is coerced, but an alias of a
+COERCED value (`alias = vd`) is not—the lookup of `vd` re-opens `vd`'s row,
+so `alias`'s annotated row meets an open row, stays open, and is quantified,
+and `alias`'s uses instantiate that scheme with nothing to re-open. A use
+re-opens a value's copy from its root
 (`reopenCoercedResultCell`), not down a function's spine.
 
 A value has no call boundary, so a widened use is served where the constant
@@ -7386,9 +7391,15 @@ descriptor-driven boundary a direct call's result crosses
 finalizer of a constant whose body is a widened use (`w = v`) goes through the
 same restore and stores the wider value. Pinned by the "row subsumption -
 value ..." tests in src/eval/test/lir_inline_test.zig and by
-`test/cli/RowSubsumptionValue.roc` (a direct row, a `Try` error row, a value
-alias, a sealed-row value, and an imported value, on every backend and both
-specialization strategies).
+`test/cli/RowSubsumptionValue.roc` (a direct row, a `Try` error row, a root
+`Try` named through an alias, a value alias of a closed value, an alias of a
+coerced value, a sealed-row value, a coerced value used inside unannotated
+generalized functions, and an imported value, on every backend and both
+specialization strategies). The coercion and re-open records and
+`ConstTemplate.coerced_row` survive the checked-module cache: the
+"row subsumption: coercion records survive the checked-module cache" CLI
+test lowers an importer and its library from their cached data under both
+strategies.
 
 A LOCAL binding is not coerced: a local value is lowered inline, with no
 stored constant to restore, and a local function's callee is a local
@@ -7817,10 +7828,16 @@ right-hand side the lookup is—a local callable alias's generalized scope, or a
 top-level callable binding's compile-time root—because that binding
 generalizes the re-opened tail and its uses supply a substitution for it,
 which the target's own worker, quantifying no such variable, could not take.
-Any other adapter quantifies nothing and captures a re-opened tail its
+That scheme is resolved once, when the lookup's worker source is built
+(`Plan.CoercedUseAdapterSource.scheme`), and every later query about the
+worker reads it from there. Any other adapter quantifies nothing and captures a re-opened tail its
 creating frame leaves open, as a nested callable does. Pinned by
 `src/compile/test/row_subsumption_boxy_adapter_test.zig`,
-`test/cli/RowSubsumptionCallableValue.roc`, and the `--specialize=no` runs of
+`test/cli/RowSubsumptionCallableValue.roc` (including a coerced function
+stored in a top-level constant's record field and box, and top-level callable
+aliases imported from and defined over another module),
+`test/cli/RowSubsumptionWhereForwarder.roc` (a top-level callable alias of a
+`where`-clause forwarder), and the `--specialize=no` runs of
 `test/fx-open/hosted_widening_channels.roc`. A LOCAL callable alias of a
 `where`-clause function is not yet lowered by Boxy, coerced or not: static
 dictionary planning cannot resolve the method a use of the alias supplies. A
@@ -9657,7 +9674,7 @@ Other solved-graph mutations:
   forwarded closed value binding coerces at its uses", "a forwarded closed
   value binding's Try error row coerces", "a constructed and a forwarded value
   with one annotation are used identically", "a value alias of a closed value
-  coerces", "a value's coerced error row and quantified ok row compose", "an
+  coerces", "a value alias of a coerced value is quantified, not coerced", "a value's coerced error row and quantified ok row compose", "an
   imported forwarded value's row coerces at the use", "every lookup that
   re-opens a coerced row is recorded with its subject"; rejected—"a
   forwarding value is still bounded by its annotation", "value coercion does
