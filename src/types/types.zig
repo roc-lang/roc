@@ -108,7 +108,10 @@ pub const DescriptorFlags = packed struct(u8) {
     /// the same class reports the same rejection. See design.md's "Static
     /// Dispatch In Monotype" section.
     static_dispatch_rejected: bool = false,
-    _unused: u6 = 0,
+    /// Definition-site implicit annotation openness. Codec derivation may
+    /// close this tail before generalization; fresh uses do not inherit it.
+    annotation_tag_ext: bool = false,
+    _unused: u5 = 0,
 };
 
 /// A type descriptor

@@ -264,6 +264,7 @@ pub fn runBorrowed(
     lowerer.source_digests = source_digests;
 
     try lowerer.result.store.setSourceFiles(solved.lifted.sourceFiles());
+    try lowerer.result.setLoweringModules(solved.lifted.loweringModules());
     try lowerer.prepareExpectSites();
     try lowerer.lowerInlineScopes();
     try lowerer.lower();
@@ -485,6 +486,8 @@ const FnBodyTaskContext = struct {
 const RootEntry = struct {
     fn_id: Type.FnId,
     request: check.CheckedModule.RootRequest,
+    /// See `Lifted.Root.owner`.
+    owner: Common.LoweringModuleId,
     /// Position of this root in the producer's root plan. A consumer that
     /// lowers a subset keeps the producer's positions, which is what
     /// command-level root metadata is keyed by.
@@ -1189,6 +1192,7 @@ const Lowerer = struct {
                 try self.roots.append(self.allocator, .{
                     .fn_id = fn_id,
                     .request = root.request,
+                    .owner = root.owner,
                     .request_index = position,
                 });
             }
@@ -1199,6 +1203,7 @@ const Lowerer = struct {
                 try self.roots.append(self.allocator, .{
                     .fn_id = fn_id,
                     .request = root.request,
+                    .owner = root.owner,
                     .request_index = @intCast(position),
                 });
             }
@@ -3221,22 +3226,30 @@ const Lowerer = struct {
             self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared capture record type");
         }
 
+        // Captures can contain a callable whose lambda set refers back to
+        // this capture span. Reserve the record before lowering its fields so
+        // that recursive references use the same type and layout commitment.
+        const ty = try self.types.add(.zst);
+        try self.capture_types.put(captures, ty);
+        errdefer {
+            if (self.capture_types.get(captures) == ty) _ = self.capture_types.remove(captures);
+        }
+
         const capture_items = self.captureSpan(captures);
         const fields = try self.allocator.alloc(Type.CaptureField, capture_items.len);
         defer self.allocator.free(fields);
         for (capture_items, 0..) |capture, i| {
-            const ty = try self.lowerType(capture.ty);
+            const capture_ty = try self.lowerType(capture.ty);
             fields[i] = .{
                 .symbol = capture.symbol,
                 .binder = capture.binder,
                 .capture_id = capture.capture_id,
                 .checked_capture_id = capture.checked_capture_id,
-                .ty = ty,
-                .storage_ty = try self.captureFieldStorageType(capture, ty),
+                .ty = capture_ty,
+                .storage_ty = try self.captureFieldStorageType(capture, capture_ty),
             };
         }
-        const ty = try self.types.add(.{ .capture_record = try self.types.addCaptureFields(fields) });
-        try self.capture_types.put(captures, ty);
+        self.types.set(ty, .{ .capture_record = try self.types.addCaptureFields(fields) });
         return ty;
     }
 
@@ -3501,7 +3514,7 @@ const Lowerer = struct {
             .match => .match,
             .destructure => .destructure,
             .if_ => .if_,
-        }, source.region, source.checked_site, proc, source.branch_regions);
+        }, source.owner, source.region, source.checked_site, proc, source.branch_regions);
         self.comptime_site_map[index] = lowered;
         return lowered;
     }
@@ -3574,6 +3587,7 @@ const Lowerer = struct {
                 const ret_layout = try self.layoutOfType(entry.ret);
                 try self.result.const_roots.append(self.allocator, .{
                     .root_order = root.request.order,
+                    .owner = root.owner,
                     .request = root.request,
                     .proc = proc,
                     .ret_layout = ret_layout,
@@ -3594,7 +3608,7 @@ const Lowerer = struct {
                 break :blk proc;
             } else null;
             try self.result.requested_layouts.append(self.allocator, .{
-                .ty = self.types.typeDigest(&self.solved.lifted.names, request.ty),
+                .ty = try self.types.typeDigest(&self.solved.lifted.names, request.ty),
                 .checked_type = request.checked_type,
                 .const_locator = request.const_locator,
                 .layout_idx = try self.layoutOfType(request.ty),
@@ -4534,7 +4548,7 @@ const Lowerer = struct {
         const key = ComptimeRootKey{
             .module = value_root.module,
             .root = value_root.root,
-            .ty = self.types.typeDigest(&self.solved.lifted.names, ty),
+            .ty = try self.types.typeDigest(&self.solved.lifted.names, ty),
         };
         if (self.comptime_root_slots.get(key)) |existing| {
             // The digest selects the candidate; equivalence decides. Sharing
@@ -12235,6 +12249,8 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
     errdefer static_data_values.deinit(allocator);
     var comptime_value_roots = try clonedLiftedProgramList(Common.ComptimeValueRoot, "comptime_value_roots", allocator, view.comptime_value_roots);
     errdefer comptime_value_roots.deinit(allocator);
+    var lowering_modules = try clonedLiftedProgramList(check.CheckedModule.ModuleId, "lowering_modules", allocator, view.lowering_modules);
+    errdefer lowering_modules.deinit(allocator);
     var expr_locs = try clonedLiftedProgramList(base.SourceLoc, "expr_locs", allocator, view.expr_locs);
     errdefer expr_locs.deinit(allocator);
     var expr_regions = try clonedLiftedProgramList(base.Region, "expr_regions", allocator, view.expr_regions);
@@ -12291,6 +12307,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .static_data_values = static_data_values,
         .comptime_value_roots = comptime_value_roots,
         .comptime_sites = Lifted.ProgramList(Lifted.ComptimeSite, "comptime_sites").fromArrayList(comptime_sites),
+        .lowering_modules = lowering_modules,
         .source_files = Lifted.ProgramList(base.SourceFileEntry, "source_files").fromArrayList(source_files),
         .expr_locs = expr_locs,
         .expr_regions = expr_regions,
@@ -12338,6 +12355,7 @@ fn cloneComptimeSites(allocator: std.mem.Allocator, source: []const Lifted.Compt
     for (source) |site| {
         cloned.appendAssumeCapacity(.{
             .kind = site.kind,
+            .owner = site.owner,
             .region = site.region,
             .checked_site = site.checked_site,
             .branch_regions = try allocator.dupe(base.Region, site.branch_regions),
@@ -12748,7 +12766,7 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
             .body = .{ .roc = body },
             .ret = bool_ty,
         });
-        try solved.lifted.addRoot(.{ .fn_id = fn_id, .request = undefined });
+        try solved.lifted.addRoot(.{ .fn_id = fn_id, .request = undefined, .owner = .first });
     }
     solved.lifted.next_symbol = 2;
     const field = try solved.lifted.names.internRecordFieldLabel("field");

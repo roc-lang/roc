@@ -14,9 +14,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macOS is build-only: ci_zig.yml's zig-tests macos-15 leg already
+          # runs snapshots and run-test-zig on this OS, and macOS runners are
+          # the scarce resource PR CI queues on.
           - os: macos-15
             target_flag: ''
-            nix_ci_mode: ''
+            nix_ci_mode: --build-only
           - os: ubuntu-24.04
             target_flag: -Dtarget=x86_64-linux-musl
             nix_ci_mode: --build-only
@@ -31,7 +34,7 @@ jobs:
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.16.0
-          use-cache: true
+          use-cache: false
 
       - name: Restore Zig dependency packages
         id: zig-deps-cache

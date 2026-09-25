@@ -731,6 +731,14 @@ pub fn addStackPointerImportWithSymbol(self: *Self) Allocator.Error!SymbolIndex 
     return imported.symbol;
 }
 
+/// Import a PIC base global (`__memory_base`, `__table_base`) for a generated
+/// relocatable object. The consuming linker defines these; a static final link
+/// resolves them to zero.
+pub fn addPicBaseImportWithSymbol(self: *Self, field_name: []const u8) Allocator.Error!SymbolIndex {
+    const imported = try self.addGlobalImportWithSymbol("env", field_name, .i32, false);
+    return imported.symbol;
+}
+
 /// Import linear memory for a generated relocatable object.
 pub fn addMemoryImport(self: *Self) void {
     self.has_memory = true;
