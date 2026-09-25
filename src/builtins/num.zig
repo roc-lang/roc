@@ -1413,6 +1413,12 @@ const NumTestHelperError = error{
     TestExpectedEqual,
 };
 
+/// Errors raised by the numeric prefix-parse test helpers.
+pub const PrefixTestError = error{
+    TestExpectedEqual,
+    TestUnexpectedResult,
+};
+
 fn expectParseIntText(comptime T: type, text: []const u8, expected: T, roc_ops: *RocOps) NumTestHelperError!void {
     const roc_str = @import("str.zig").RocStr.fromSlice(text, roc_ops);
     defer roc_str.decref(roc_ops);
@@ -2022,7 +2028,7 @@ pub const prefix_parse_testing = struct {
 
     /// Check the prefix-parse properties of one generated input against the
     /// whole-string parser of the same type.
-    pub fn expectProperties(comptime T: type, text: []const u8, comptime prefixLen: fn ([]const u8) usize, comptime parsePrefix: fn ([]const u8) NumPrefixParseResult(T), comptime parseWhole: fn ([]const u8) ?T) !void {
+    pub fn expectProperties(comptime T: type, text: []const u8, comptime prefixLen: fn ([]const u8) usize, comptime parsePrefix: fn ([]const u8) NumPrefixParseResult(T), comptime parseWhole: fn ([]const u8) ?T) PrefixTestError!void {
         const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
         const result = parsePrefix(text);
         const consumed: usize = @intCast(result.consumed);
@@ -2064,7 +2070,7 @@ pub const prefix_parse_testing = struct {
     }
 };
 
-fn expectPrefixOk(comptime T: type, result: NumPrefixParseResult(T), expected: T, consumed: usize) !void {
+fn expectPrefixOk(comptime T: type, result: NumPrefixParseResult(T), expected: T, consumed: usize) PrefixTestError!void {
     try std.testing.expectEqual(@as(u8, 0), result.errorcode);
     try std.testing.expectEqual(@as(u64, consumed), result.consumed);
     if (@typeInfo(T) == .float) {
@@ -2075,24 +2081,23 @@ fn expectPrefixOk(comptime T: type, result: NumPrefixParseResult(T), expected: T
     }
 }
 
-fn expectPrefixErr(comptime T: type, result: NumPrefixParseResult(T), errorcode: u8, consumed: usize) !void {
+fn expectPrefixErr(comptime T: type, result: NumPrefixParseResult(T), errorcode: u8, consumed: usize) PrefixTestError!void {
     try std.testing.expectEqual(errorcode, result.errorcode);
     try std.testing.expectEqual(@as(u64, consumed), result.consumed);
 }
 
 test "parseIntPrefix width boundaries and overflow by one digit" {
-    inline for (.{ u8, u16, u32, u64, u128, i8, i16, i32, i64, i128 }) |T| {
-        var buf: [64]u8 = undefined;
-        const max_text = try std.fmt.bufPrint(&buf, "{d},", .{std.math.maxInt(T)});
-        try expectPrefixOk(T, parseIntPrefix(T, max_text), std.math.maxInt(T), max_text.len - 1);
-
-        var over_buf: [64]u8 = undefined;
-        const over_text = try std.fmt.bufPrint(&over_buf, "{d}0]", .{std.math.maxInt(T)});
-        try expectPrefixErr(T, parseIntPrefix(T, over_text), prefix_parse_out_of_range, over_text.len - 1);
-
-        var min_buf: [64]u8 = undefined;
-        const min_text = try std.fmt.bufPrint(&min_buf, "{d} ", .{std.math.minInt(T)});
-        try expectPrefixOk(T, parseIntPrefix(T, min_text), std.math.minInt(T), min_text.len - 1);
+    inline for (.{ u8, u16, u32, u64, u128 }) |T| {
+        const max_text = comptime unsignedMaxText(T);
+        try expectPrefixOk(T, parseIntPrefix(T, max_text ++ ","), std.math.maxInt(T), max_text.len);
+        try expectPrefixErr(T, parseIntPrefix(T, comptime unsignedMaxPlusOneText(T) ++ "]"), prefix_parse_out_of_range, comptime unsignedMaxPlusOneText(T).len);
+        try expectPrefixErr(T, parseIntPrefix(T, max_text ++ "0 "), prefix_parse_out_of_range, max_text.len + 1);
+    }
+    inline for (.{ i8, i16, i32, i64, i128 }) |T| {
+        try expectPrefixOk(T, parseIntPrefix(T, comptime signedMaxText(T) ++ ","), std.math.maxInt(T), comptime signedMaxText(T).len);
+        try expectPrefixOk(T, parseIntPrefix(T, comptime signedMinText(T) ++ " "), std.math.minInt(T), comptime signedMinText(T).len);
+        try expectPrefixErr(T, parseIntPrefix(T, comptime signedMaxPlusOneText(T) ++ "]"), prefix_parse_out_of_range, comptime signedMaxPlusOneText(T).len);
+        try expectPrefixErr(T, parseIntPrefix(T, comptime signedMinMinusOneText(T) ++ "\n"), prefix_parse_out_of_range, comptime signedMinMinusOneText(T).len);
     }
 
     try expectPrefixErr(u8, parseIntPrefix(u8, "256,"), prefix_parse_out_of_range, 3);

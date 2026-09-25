@@ -2965,14 +2965,14 @@ test "Dec atan2 f128 oracle within 64 attos across full coordinate range" {
     try std.testing.expectEqual(RocDec.pi.num, RocDec.atan2(.{ .num = 0 }, .{ .num = -1 }, env.getOps()).num);
 }
 
-fn expectDecPrefixOk(text: []const u8, expected_text: []const u8, consumed: usize) !void {
+fn expectDecPrefixOk(text: []const u8, expected_text: []const u8, consumed: usize) (@import("num.zig").PrefixTestError || error{InvalidExpectedDecimal})!void {
     const result = parsePrefix(text);
     try std.testing.expectEqual(@as(u8, 0), result.errorcode);
     try std.testing.expectEqual(@as(u64, consumed), result.consumed);
     try std.testing.expectEqual(try decFromText(expected_text), RocDec{ .num = result.value });
 }
 
-fn expectDecPrefixErr(text: []const u8, errorcode: u8, consumed: usize) !void {
+fn expectDecPrefixErr(text: []const u8, errorcode: u8, consumed: usize) @import("num.zig").PrefixTestError!void {
     const result = parsePrefix(text);
     try std.testing.expectEqual(errorcode, result.errorcode);
     try std.testing.expectEqual(@as(u64, consumed), result.consumed);
