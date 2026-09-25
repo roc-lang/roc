@@ -42031,7 +42031,8 @@ const BodyContext = struct {
         const try_ty = self.literalConversionTryType(plan);
         const try_node = try self.instNode(try_ty);
         const try_cell = DraftTypeCell.fromGraphNode(try_node);
-        const try_value = if (self.builder.comptimeValueReadDeclared(self.view, root_id))
+        const declared = self.builder.comptimeValueReadDeclared(self.view, root_id);
+        const try_value = if (declared)
             try self.declaredComptimeValueRead(self.view, root_id, try_cell, null)
         else
             try self.lowerDispatchExprAtType(try_ty, plan, try_cell);
@@ -42041,7 +42042,12 @@ const BodyContext = struct {
             .quote => .quote,
         };
         if (site.kind != expected_kind) Common.invariant("literal conversion root kind differed from its literal");
-        return try self.unwrapLiteralConversionAtNode(try_value, try_node, request_node, site);
+        const value = try self.unwrapLiteralConversionAtNode(try_value, try_node, request_node, site);
+        // A conversion root no evaluation requested (its type holds a
+        // callable, so the checker left it specialization-owned) is still
+        // hoisted, as a literal root of this program.
+        if (declared or !self.builder.literal_roots) return value;
+        return try self.literalRootRead(expr_id, site, value, request_node);
     }
 
     /// The value of a literal conversion's `Try` result: its `Ok` payload, or,
