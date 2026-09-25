@@ -124,6 +124,7 @@ pub const DefinitionCommit = struct {
 pub const LanguageStepResult = union(enum) {
     expression: []u8,
     definition: DefinitionCommit,
+    statement,
     diagnostic: LanguageDiagnostic,
     runtime_crash: []u8,
     none,
@@ -132,7 +133,7 @@ pub const LanguageStepResult = union(enum) {
         switch (self) {
             .expression, .runtime_crash => |bytes| allocator.free(bytes),
             .diagnostic => |diagnostic| allocator.free(diagnostic.message),
-            .definition, .none => {},
+            .definition, .statement, .none => {},
         }
     }
 };
@@ -307,7 +308,7 @@ pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: repo
         },
         .diagnostic => |diagnostic| .{ .diagnostic = diagnostic.message },
         .runtime_crash => |message| .{ .runtime_crash = message },
-        .none => .none,
+        .statement, .none => .none,
     };
 }
 
@@ -351,7 +352,7 @@ pub fn stepLanguageWithConfig(self: *ReplSession, input: []const u8, report_conf
             return switch (result) {
                 .output => |output| blk: {
                     self.allocator.free(output);
-                    break :blk .none;
+                    break :blk .statement;
                 },
                 .diagnostic => |message| .{ .diagnostic = .{
                     .kind = .compile_error,
@@ -2703,7 +2704,7 @@ test "Repl - language stepping returns structured definition metadata" {
             try testing.expectEqualStrings("answer", definition.name);
             try testing.expectEqual(DefinitionKind.value, definition.kind);
         },
-        .expression, .diagnostic, .runtime_crash, .none => return error.TestUnexpectedResult,
+        .expression, .statement, .diagnostic, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 }
 
@@ -2721,7 +2722,7 @@ test "Repl - compile-time evaluation rejects one-way effects" {
             std.debug.print("Repl import failed:\n{s}\n", .{diagnostic.message});
             return error.TestUnexpectedResult;
         },
-        .expression, .runtime_crash, .none => return error.TestUnexpectedResult,
+        .expression, .statement, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 
     const inspected = try repl.inspectExpressionType(
@@ -2749,7 +2750,7 @@ test "Repl - compile-time evaluation rejects one-way effects" {
             try testing.expect(std.mem.find(u8, diagnostic.message, "Effectful Compile Time Expression") != null);
             try testing.expect(std.mem.find(u8, diagnostic.message, "REPL expressions are evaluated at compile time") != null);
         },
-        .expression, .definition, .runtime_crash, .none => return error.TestUnexpectedResult,
+        .expression, .definition, .statement, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 
     const events = repl.takeEvents();
@@ -2775,7 +2776,7 @@ test "Repl - compile-time evaluation records dbg events" {
     defer result.deinit(testing.allocator);
     switch (result) {
         .expression => |output| try testing.expectEqualStrings("42.0", output),
-        .definition, .diagnostic, .runtime_crash, .none => return error.TestUnexpectedResult,
+        .definition, .statement, .diagnostic, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 
     const events = repl.takeEvents();
@@ -2803,12 +2804,12 @@ test "Repl - passing expect statement produces no output" {
     const result = try repl.stepLanguageWithConfig("expect 10 == (2 + 8)", reporting.ReportingConfig.initForTesting());
     defer result.deinit(testing.allocator);
     switch (result) {
-        .none => {},
+        .statement => {},
         .diagnostic => |diagnostic| {
             std.debug.print("Repl expect failed:\n{s}\n", .{diagnostic.message});
             return error.TestUnexpectedResult;
         },
-        .expression, .definition, .runtime_crash => return error.TestUnexpectedResult,
+        .expression, .definition, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 }
 
@@ -2823,7 +2824,7 @@ test "Repl - failing expect statement is reported" {
             try testing.expectEqual(LanguageDiagnosticKind.compile_error, diagnostic.kind);
             try testing.expect(std.mem.find(u8, diagnostic.message, "Compile Time Expect Failed") != null);
         },
-        .expression, .definition, .runtime_crash, .none => return error.TestUnexpectedResult,
+        .expression, .definition, .statement, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 }
 
@@ -2838,8 +2839,8 @@ test "Repl - expect statement sees stored definitions" {
     const result = try repl.stepLanguageWithConfig("expect x + 1 == 6", config);
     defer result.deinit(testing.allocator);
     switch (result) {
-        .none => {},
-        .expression, .definition, .diagnostic, .runtime_crash => return error.TestUnexpectedResult,
+        .statement => {},
+        .expression, .definition, .diagnostic, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 }
 
@@ -2850,12 +2851,12 @@ test "Repl - for loop statement runs" {
     const result = try repl.stepLanguageWithConfig("for n in [1, 2, 3] { expect n > 0 }", reporting.ReportingConfig.initForTesting());
     defer result.deinit(testing.allocator);
     switch (result) {
-        .none => {},
+        .statement => {},
         .diagnostic => |diagnostic| {
             std.debug.print("Repl for failed:\n{s}\n", .{diagnostic.message});
             return error.TestUnexpectedResult;
         },
-        .expression, .definition, .runtime_crash => return error.TestUnexpectedResult,
+        .expression, .definition, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 }
 
@@ -2868,14 +2869,14 @@ test "Repl - failed annotated value restores the exact pending annotation state"
     defer annotation.deinit(testing.allocator);
     switch (annotation) {
         .definition => |definition| try testing.expectEqual(DefinitionKind.annotation, definition.kind),
-        .expression, .diagnostic, .runtime_crash, .none => return error.TestUnexpectedResult,
+        .expression, .statement, .diagnostic, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 
     const failed_value = try repl.stepLanguageWithConfig("pending = 42", config);
     defer failed_value.deinit(testing.allocator);
     switch (failed_value) {
         .diagnostic => |diagnostic| try testing.expectEqual(LanguageDiagnosticKind.compile_error, diagnostic.kind),
-        .expression, .definition, .runtime_crash, .none => return error.TestUnexpectedResult,
+        .expression, .definition, .statement, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 
     const stored = try repl.storedDefinitions();
