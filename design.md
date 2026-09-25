@@ -10053,8 +10053,8 @@ authorities.
 A Roc template without evidence parameters cannot dispatch on its quantified
 variables, so its interface relates a quantified variable only by unification
 when every occurrence of that variable in its checked function type is a value
-position: a function argument or result, a tuple element, a record field, a tag
-payload, or the element of `List` or `Box`. A row tail, or an argument of any
+position: a function argument or result, a tuple item, a record field, a tag
+payload, or the item of `List` or `Box`. A row tail, or an argument of any
 other nominal type, is not a value position. A request captures such a
 variable's substitution cell as a parametric hole, an unconstrained variable,
 when the cell is resolved and nothing it reaches carries private backing,
