@@ -380,13 +380,13 @@ const RuntimeFrozenMaterializer = struct {
         return transcodeCompletedSlots(allocator, self.source, target, &self.successful_roots);
     }
 
-    fn completeGuards(context: *anyopaque, target: *LirProgram.Result) void {
+    fn completeGuards(context: *anyopaque, target: *LirProgram.Result) Allocator.Error!void {
         const self: *RuntimeFrozenMaterializer = @ptrCast(@alignCast(context));
         for (self.successful_roots.items) |successful| {
             for (target.static_data_values.items, 0..) |value, index| {
                 const root = value.compile_time_root orelse continue;
                 if (root.role != .value or !std.meta.eql(root.module, successful.module) or root.root != successful.root) continue;
-                lir.ComptimeValueGuards.completeSuccessfulSlot(target, @enumFromInt(index));
+                try lir.ComptimeValueGuards.completeSuccessfulSlot(target, @enumFromInt(index));
                 break;
             } else finalizationInvariant("successful completed root was removed before guard completion");
         }
@@ -2323,7 +2323,7 @@ const StaticSlotEnvironment = struct {
             const slot: lir.LIR.StaticDataId = @enumFromInt(index);
             const exports = try NativeRootExport.freezeRootIntoSlot(self.allocator, &lowered.lir_result, slot, plan, value, callables, destination_layout);
             try self.installExports(lowered, slot, exports, functions);
-            lir.ComptimeValueGuards.completeSuccessfulSlot(&lowered.lir_result, slot);
+            try lir.ComptimeValueGuards.completeSuccessfulSlot(&lowered.lir_result, slot);
         }
     }
 
@@ -4073,8 +4073,8 @@ test "CTFE native emission uses worker callbacks and retains reusable code witho
     var program = try LirProgram.Result.init(allocator, .native);
     defer program.deinit();
     const answer = try program.store.addLocal(.{ .layout_idx = .u64 });
-    const ret = try program.store.addCFStmt(.{ .ret = .{ .value = answer } });
-    const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = answer, .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } }, .next = ret } });
+    const ret = try program.store.addCFStmt(.{ .ret = .{ .value = answer } }, .test_fixture);
+    const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = answer, .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } }, .next = ret } }, .test_fixture);
     const proc = try program.store.addProcSpec(.{
         .name = .fromRaw(0),
         .identity = lir.LIR.ProcIdentity.forTest(901),
@@ -4082,7 +4082,7 @@ test "CTFE native emission uses worker callbacks and retains reusable code witho
         .frame_locals = try program.store.addLocalSpan(&.{answer}),
         .body = body,
         .ret_layout = .u64,
-    });
+    }, .none);
     var timing = Timing.init(std.testing.io);
     var retained = block: {
         var executor = ExecutorFixture{ .lane = tasks.LaneState.init(allocator) };
@@ -4256,15 +4256,15 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     });
     const text = "a dependent root borrows this frozen string after its producer is dropped";
     const source_local = try result.store.addLocal(.{ .layout_idx = .str });
-    const source_ret = try result.store.addCFStmt(.{ .ret = .{ .value = source_local } });
+    const source_ret = try result.store.addCFStmt(.{ .ret = .{ .value = source_local } }, .test_fixture);
     const source_body = try result.store.addCFStmt(.{ .assign_literal = .{
         .target = source_local,
         .value = .{ .str_literal = .{ .backing = try result.store.insertString(text), .offset = 0, .len = text.len } },
         .next = source_ret,
-    } });
-    const source_proc = try result.store.addProcSpec(.{ .name = .fromRaw(0), .identity = lir.LIR.ProcIdentity.forTest(3), .args = .empty(), .frame_locals = try result.store.addLocalSpan(&.{source_local}), .body = source_body, .ret_layout = .str });
+    } }, .test_fixture);
+    const source_proc = try result.store.addProcSpec(.{ .name = .fromRaw(0), .identity = lir.LIR.ProcIdentity.forTest(3), .args = .empty(), .frame_locals = try result.store.addLocalSpan(&.{source_local}), .body = source_body, .ret_layout = .str }, .none);
     const consumer_local = try result.store.addLocal(.{ .layout_idx = .str });
-    const consumer_ret = try result.store.addCFStmt(.{ .ret = .{ .value = consumer_local } });
+    const consumer_ret = try result.store.addCFStmt(.{ .ret = .{ .value = consumer_local } }, .test_fixture);
     const live_int = try result.store.addLocal(.{ .layout_idx = .u64 });
     const live_float = try result.store.addLocal(.{ .layout_idx = .f64 });
     const expected_int = try result.store.addLocal(.{ .layout_idx = .u64 });
@@ -4272,25 +4272,25 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     const equal_int = try result.store.addLocal(.{ .layout_idx = .bool });
     const equal_float = try result.store.addLocal(.{ .layout_idx = .bool });
     const crash_text = "suspended consumer locals changed";
-    const corrupt = try result.store.addCFStmt(.{ .crash = .{ .msg = .{ .literal = try result.store.insertString(crash_text) } } });
-    const float_branch = try result.store.addCFStmt(.{ .switch_stmt = .{ .cond = equal_float, .branches = try result.store.addCFSwitchBranches(&.{.{ .value = 1, .body = consumer_ret }}), .default_branch = corrupt } });
-    const float_compare = try result.store.addCFStmt(.{ .assign_low_level = .{ .target = equal_float, .op = .num_is_eq, .rc_effect = .{}, .args = try result.store.addLocalSpan(&.{ live_float, expected_float }), .next = float_branch } });
-    const int_branch = try result.store.addCFStmt(.{ .switch_stmt = .{ .cond = equal_int, .branches = try result.store.addCFSwitchBranches(&.{.{ .value = 1, .body = float_compare }}), .default_branch = corrupt } });
-    const int_compare = try result.store.addCFStmt(.{ .assign_low_level = .{ .target = equal_int, .op = .num_is_eq, .rc_effect = .{}, .args = try result.store.addLocalSpan(&.{ live_int, expected_int }), .next = int_branch } });
-    const expected_float_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = expected_float, .value = .{ .f64_literal = 13.25 }, .next = int_compare } });
-    const expected_int_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = expected_int, .value = .{ .i64_literal = .{ .value = 12345, .layout_idx = .u64 } }, .next = expected_float_stmt } });
-    const consumer_load = try result.store.addCFStmt(.{ .assign_literal = .{ .target = consumer_local, .value = .{ .static_data = value_slot }, .next = expected_int_stmt } });
+    const corrupt = try result.store.addCFStmt(.{ .crash = .{ .msg = .{ .literal = try result.store.insertString(crash_text) } } }, .test_fixture);
+    const float_branch = try result.store.addCFStmt(.{ .switch_stmt = .{ .cond = equal_float, .branches = try result.store.addCFSwitchBranches(&.{.{ .value = 1, .body = consumer_ret }}), .default_branch = corrupt } }, .test_fixture);
+    const float_compare = try result.store.addCFStmt(.{ .assign_low_level = .{ .target = equal_float, .op = .num_is_eq, .rc_effect = .{}, .args = try result.store.addLocalSpan(&.{ live_float, expected_float }), .next = float_branch } }, .test_fixture);
+    const int_branch = try result.store.addCFStmt(.{ .switch_stmt = .{ .cond = equal_int, .branches = try result.store.addCFSwitchBranches(&.{.{ .value = 1, .body = float_compare }}), .default_branch = corrupt } }, .test_fixture);
+    const int_compare = try result.store.addCFStmt(.{ .assign_low_level = .{ .target = equal_int, .op = .num_is_eq, .rc_effect = .{}, .args = try result.store.addLocalSpan(&.{ live_int, expected_int }), .next = int_branch } }, .test_fixture);
+    const expected_float_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = expected_float, .value = .{ .f64_literal = 13.25 }, .next = int_compare } }, .test_fixture);
+    const expected_int_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = expected_int, .value = .{ .i64_literal = .{ .value = 12345, .layout_idx = .u64 } }, .next = expected_float_stmt } }, .test_fixture);
+    const consumer_load = try result.store.addCFStmt(.{ .assign_literal = .{ .target = consumer_local, .value = .{ .static_data = value_slot }, .next = expected_int_stmt } }, .test_fixture);
     const input_int = try result.store.addLocal(.{ .layout_idx = .u64 });
     const addend_int = try result.store.addLocal(.{ .layout_idx = .u64 });
     const input_float = try result.store.addLocal(.{ .layout_idx = .f64 });
     const addend_float = try result.store.addLocal(.{ .layout_idx = .f64 });
-    const live_float_stmt = try result.store.addCFStmt(.{ .assign_low_level = .{ .target = live_float, .op = .num_float_add, .rc_effect = .{}, .args = try result.store.addLocalSpan(&.{ input_float, addend_float }), .next = consumer_load } });
-    const live_int_stmt = try result.store.addCFStmt(.{ .assign_low_level = .{ .target = live_int, .op = .num_int_add_wrap, .rc_effect = .{}, .args = try result.store.addLocalSpan(&.{ input_int, addend_int }), .next = live_float_stmt } });
-    const float_addend_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = addend_float, .value = .{ .f64_literal = 3.25 }, .next = live_int_stmt } });
-    const float_input_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = input_float, .value = .{ .f64_literal = 10.0 }, .next = float_addend_stmt } });
-    const int_addend_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = addend_int, .value = .{ .i64_literal = .{ .value = 345, .layout_idx = .u64 } }, .next = float_input_stmt } });
-    const consumer_body = try result.store.addCFStmt(.{ .assign_literal = .{ .target = input_int, .value = .{ .i64_literal = .{ .value = 12000, .layout_idx = .u64 } }, .next = int_addend_stmt } });
-    const consumer_proc = try result.store.addProcSpec(.{ .name = .fromRaw(1), .identity = lir.LIR.ProcIdentity.forTest(2), .args = .empty(), .frame_locals = try result.store.addLocalSpan(&.{ consumer_local, live_int, live_float, expected_int, expected_float, equal_int, equal_float, input_int, addend_int, input_float, addend_float }), .body = consumer_body, .ret_layout = .str });
+    const live_float_stmt = try result.store.addCFStmt(.{ .assign_low_level = .{ .target = live_float, .op = .num_float_add, .rc_effect = .{}, .args = try result.store.addLocalSpan(&.{ input_float, addend_float }), .next = consumer_load } }, .test_fixture);
+    const live_int_stmt = try result.store.addCFStmt(.{ .assign_low_level = .{ .target = live_int, .op = .num_int_add_wrap, .rc_effect = .{}, .args = try result.store.addLocalSpan(&.{ input_int, addend_int }), .next = live_float_stmt } }, .test_fixture);
+    const float_addend_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = addend_float, .value = .{ .f64_literal = 3.25 }, .next = live_int_stmt } }, .test_fixture);
+    const float_input_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = input_float, .value = .{ .f64_literal = 10.0 }, .next = float_addend_stmt } }, .test_fixture);
+    const int_addend_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = addend_int, .value = .{ .i64_literal = .{ .value = 345, .layout_idx = .u64 } }, .next = float_input_stmt } }, .test_fixture);
+    const consumer_body = try result.store.addCFStmt(.{ .assign_literal = .{ .target = input_int, .value = .{ .i64_literal = .{ .value = 12000, .layout_idx = .u64 } }, .next = int_addend_stmt } }, .test_fixture);
+    const consumer_proc = try result.store.addProcSpec(.{ .name = .fromRaw(1), .identity = lir.LIR.ProcIdentity.forTest(2), .args = .empty(), .frame_locals = try result.store.addLocalSpan(&.{ consumer_local, live_int, live_float, expected_int, expected_float, equal_int, equal_float, input_int, addend_int, input_float, addend_float }), .body = consumer_body, .ret_layout = .str }, .none);
     try lir.ComptimeValueGuards.insert(allocator, result);
 
     const failure_size = result.layouts.layoutSize(result.layouts.getLayout(failure_layout));
@@ -4504,8 +4504,8 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     const capture_arg = try program.store.addLocal(.{ .layout_idx = .opaque_ptr });
     const reuse_arg = try program.store.addLocal(.{ .layout_idx = erased_layout });
     const answer = try program.store.addLocal(.{ .layout_idx = .bool });
-    const worker_ret = try program.store.addCFStmt(.{ .ret = .{ .value = answer } });
-    const worker_body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = answer, .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .bool } }, .next = worker_ret } });
+    const worker_ret = try program.store.addCFStmt(.{ .ret = .{ .value = answer } }, .test_fixture);
+    const worker_body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = answer, .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .bool } }, .next = worker_ret } }, .test_fixture);
     const arg_plan = try program.store.internErasedCallArgsPlan(&program.layouts, &.{});
     const worker = try program.store.addProcSpec(.{
         .name = .fromRaw(55),
@@ -4518,13 +4518,13 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
         .frame_locals = try program.store.addLocalSpan(&.{ capture_arg, reuse_arg, answer }),
         .body = worker_body,
         .ret_layout = .bool,
-    });
+    }, .none);
     const closure = try program.store.addLocal(.{ .layout_idx = erased_layout });
     const call_result = try program.store.addLocal(.{ .layout_idx = .bool });
-    const caller_ret = try program.store.addCFStmt(.{ .ret = .{ .value = call_result } });
-    const call = try program.store.addCFStmt(.{ .assign_call_erased = .{ .target = call_result, .closure = closure, .args = .empty(), .arg_plan = arg_plan, .next = caller_ret } });
-    const caller_body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = closure, .value = .{ .static_data = closure_slot }, .next = call } });
-    const caller = try program.store.addProcSpec(.{ .name = .fromRaw(56), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{ closure, call_result }), .body = caller_body, .ret_layout = .bool });
+    const caller_ret = try program.store.addCFStmt(.{ .ret = .{ .value = call_result } }, .test_fixture);
+    const call = try program.store.addCFStmt(.{ .assign_call_erased = .{ .target = call_result, .closure = closure, .args = .empty(), .arg_plan = arg_plan, .next = caller_ret } }, .test_fixture);
+    const caller_body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = closure, .value = .{ .static_data = closure_slot }, .next = call } }, .test_fixture);
+    const caller = try program.store.addProcSpec(.{ .name = .fromRaw(56), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{ closure, call_result }), .body = caller_body, .ret_layout = .bool }, .none);
     const closure_plan: LirProgram.ConstPlanId = @enumFromInt(program.const_plans.items.len);
     const erased_set: LirProgram.ErasedFnsId = @enumFromInt(program.erased_fns.items.len);
     try program.const_plans.append(allocator, .{ .erased_fn = erased_set });
@@ -4654,11 +4654,11 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     const inspected_closure = try program.store.addLocal(.{ .layout_idx = erased_layout });
     const inspected_bool = try program.store.addLocal(.{ .layout_idx = .bool });
     const inspected_str = try program.store.addLocal(.{ .layout_idx = .str });
-    const inspected_ret = try program.store.addCFStmt(.{ .ret = .{ .value = inspected_str } });
-    const inspected_load = try program.store.addCFStmt(.{ .assign_literal = .{ .target = inspected_str, .value = .{ .static_data = result_slot }, .next = inspected_ret } });
-    const inspected_call = try program.store.addCFStmt(.{ .assign_call_erased = .{ .target = inspected_bool, .closure = inspected_closure, .args = .empty(), .arg_plan = arg_plan, .next = inspected_load } });
-    const inspected_body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = inspected_closure, .value = .{ .static_data = closure_slot }, .next = inspected_call } });
-    const inspected_root = try program.store.addProcSpec(.{ .name = .fromRaw(57), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{ inspected_closure, inspected_bool, inspected_str }), .body = inspected_body, .ret_layout = .str });
+    const inspected_ret = try program.store.addCFStmt(.{ .ret = .{ .value = inspected_str } }, .test_fixture);
+    const inspected_load = try program.store.addCFStmt(.{ .assign_literal = .{ .target = inspected_str, .value = .{ .static_data = result_slot }, .next = inspected_ret } }, .test_fixture);
+    const inspected_call = try program.store.addCFStmt(.{ .assign_call_erased = .{ .target = inspected_bool, .closure = inspected_closure, .args = .empty(), .arg_plan = arg_plan, .next = inspected_load } }, .test_fixture);
+    const inspected_body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = inspected_closure, .value = .{ .static_data = closure_slot }, .next = inspected_call } }, .test_fixture);
+    const inspected_root = try program.store.addProcSpec(.{ .name = .fromRaw(57), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{ inspected_closure, inspected_bool, inspected_str }), .body = inspected_body, .ret_layout = .str }, .none);
     const result_name = try LirProgram.staticDataSymbolName(allocator, result_slot);
     defer allocator.free(result_name);
     const result_str = builtins.str.RocStr.fromSliceSmall("relocated");
@@ -4691,9 +4691,9 @@ test "inspected runners consume frozen string slots on every backend" {
         const slot: lir.LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
         try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .str });
         const value = try program.store.addLocal(.{ .layout_idx = .str });
-        const ret = try program.store.addCFStmt(.{ .ret = .{ .value = value } });
-        const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = slot }, .next = ret } });
-        const root = try program.store.addProcSpec(.{ .name = .fromRaw(101), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{value}), .body = body, .ret_layout = .str });
+        const ret = try program.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
+        const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = slot }, .next = ret } }, .test_fixture);
+        const root = try program.store.addProcSpec(.{ .name = .fromRaw(101), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{value}), .body = body, .ret_layout = .str }, .none);
         const name = try LirProgram.staticDataSymbolName(allocator, slot);
         defer allocator.free(name);
         const bytes = try allocator.alloc(u8, 3 * width.size());

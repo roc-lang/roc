@@ -2998,7 +2998,10 @@ pub const MonoLlvmCodeGen = struct {
             LlvmBuilder.Metadata.Optional.none
         else
             (try self.debugInlineCallsite(inline_scope)).toOptional();
+        // ARC-inserted statements get line 0 so they do not affect stepping;
+        // see `OriginKind.isArcInserted`.
         const has_compatible_location = loc.hasLocation() and
+            !self.store.stmtOriginKind(stmt_id).isArcInserted() and
             (inline_scope != lir.LIR.InlineScopeId.none or loc.file == self.current_debug_file);
         wip.debug_location = .{ .location = .{
             .line = if (has_compatible_location) loc.line else 0,
@@ -4604,7 +4607,6 @@ pub const MonoLlvmCodeGen = struct {
             .list_split_first,
             .list_split_last,
             .num_log,
-            .num_round,
             => return error.UnsupportedLowLevel,
             .u8_to_i8_wrap,
             .u8_to_i8_try,
@@ -13218,7 +13220,7 @@ test "LLVM erased capture and reuse parameters may alias" {
         .args = .empty(),
         .ret_layout = .zst,
         .abi = .erased_callable,
-    });
+    }, .none);
     var codegen = MonoLlvmCodeGen.init(allocator, &store, &.{}, &.{}, &.{});
     defer codegen.deinit();
     codegen.proc_symbol_mode = .lir_symbol;
@@ -13302,7 +13304,7 @@ test "issue 11132: scratch clearing follows proc inventories and survives module
     for (0..4096) |_| _ = try store.addLocal(.{ .layout_idx = .i64 });
     const shared = try store.addLocal(.{ .layout_idx = .i64 });
     const args = try store.addLocalSpan(&.{shared});
-    const body = try store.addCFStmt(.{ .ret = .{ .value = shared } });
+    const body = try store.addCFStmt(.{ .ret = .{ .value = shared } }, .test_fixture);
     const proc_count = 32;
     var procs: [proc_count]LirProcSpecId = undefined;
     for (&procs, 0..) |*proc, i| {
@@ -13313,7 +13315,7 @@ test "issue 11132: scratch clearing follows proc inventories and survives module
             .frame_locals = args,
             .body = body,
             .ret_layout = .i64,
-        });
+        }, .none);
     }
     var codegen = MonoLlvmCodeGen.initForLinkedObject(gpa, &store, &.{}, &.{}, &.{}, builtin.target);
     defer codegen.deinit();
@@ -13505,8 +13507,8 @@ test "frozen callable procedures and explicit drop helpers are DLL exports on Wi
     defer store.deinit();
     var layouts = try layout.Store.init(allocator, .u64);
     defer layouts.deinit();
-    const proc = try store.addProcSpec(.{ .name = .fromRaw(1), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .bool });
-    const private_proc = try store.addProcSpec(.{ .name = .fromRaw(2), .identity = lir.LIR.ProcIdentity.forTest(2), .args = .empty(), .ret_layout = .bool });
+    const proc = try store.addProcSpec(.{ .name = .fromRaw(1), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .bool }, .none);
+    const private_proc = try store.addProcSpec(.{ .name = .fromRaw(2), .identity = lir.LIR.ProcIdentity.forTest(2), .args = .empty(), .ret_layout = .bool }, .none);
     const helper: layout.RcHelperKey = .{ .op = .decref, .layout_idx = .str };
     inline for (.{ std.Target.Os.Tag.windows, .linux }) |os| {
         const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .x86_64, .os_tag = os });
@@ -13599,7 +13601,7 @@ test "issue 11451: forced inlining at deep call sites is capped per caller" {
     defer callee_locals.deinit(gpa);
     const callee_arg = try store.addLocal(.{ .layout_idx = .i64 });
     try callee_locals.append(gpa, callee_arg);
-    var callee_body = try store.addCFStmt(.{ .ret = .{ .value = callee_arg } });
+    var callee_body = try store.addCFStmt(.{ .ret = .{ .value = callee_arg } }, .test_fixture);
     for (0..callee_stmts) |_| {
         const scratch = try store.addLocal(.{ .layout_idx = .i64 });
         try callee_locals.append(gpa, scratch);
@@ -13607,7 +13609,7 @@ test "issue 11451: forced inlining at deep call sites is capped per caller" {
             .target = scratch,
             .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } },
             .next = callee_body,
-        } });
+        } }, .test_fixture);
     }
     const callee_args = try store.addLocalSpan(&.{callee_arg});
     const callee = try store.addProcSpec(.{
@@ -13617,7 +13619,7 @@ test "issue 11451: forced inlining at deep call sites is capped per caller" {
         .frame_locals = try store.addLocalSpan(callee_locals.items),
         .body = callee_body,
         .ret_layout = .i64,
-    });
+    }, .none);
 
     // One caller holding many of those call sites, each its own pair of
     // nested loops, exactly as a view walker calling one step function from
@@ -13628,32 +13630,32 @@ test "issue 11451: forced inlining at deep call sites is capped per caller" {
     const caller_arg = try store.addLocal(.{ .layout_idx = .i64 });
     try caller_locals.append(gpa, caller_arg);
     const call_args = try store.addLocalSpan(&.{caller_arg});
-    var caller_body = try store.addCFStmt(.{ .ret = .{ .value = caller_arg } });
+    var caller_body = try store.addCFStmt(.{ .ret = .{ .value = caller_arg } }, .test_fixture);
     for (0..deep_sites) |site| {
         const outer: lir.LIR.JoinPointId = @enumFromInt(@as(u32, @intCast(2 * site)));
         const inner: lir.LIR.JoinPointId = @enumFromInt(@as(u32, @intCast(2 * site + 1)));
         const result = try store.addLocal(.{ .layout_idx = .i64 });
         try caller_locals.append(gpa, result);
-        const repeat_inner = try store.addCFStmt(.{ .jump = .{ .target = inner } });
+        const repeat_inner = try store.addCFStmt(.{ .jump = .{ .target = inner } }, .test_fixture);
         const call = try store.addCFStmt(.{ .assign_call = .{
             .target = result,
             .proc = callee,
             .args = call_args,
             .next = repeat_inner,
-        } });
-        const repeat_outer = try store.addCFStmt(.{ .jump = .{ .target = outer } });
+        } }, .test_fixture);
+        const repeat_outer = try store.addCFStmt(.{ .jump = .{ .target = outer } }, .test_fixture);
         const inner_loop = try store.addCFStmt(.{ .join = .{
             .id = inner,
             .params = .empty(),
             .body = call,
             .remainder = repeat_outer,
-        } });
+        } }, .test_fixture);
         caller_body = try store.addCFStmt(.{ .join = .{
             .id = outer,
             .params = .empty(),
             .body = inner_loop,
             .remainder = caller_body,
-        } });
+        } }, .test_fixture);
     }
     const caller = try store.addProcSpec(.{
         .name = .fromRaw(2),
@@ -13662,7 +13664,7 @@ test "issue 11451: forced inlining at deep call sites is capped per caller" {
         .frame_locals = try store.addLocalSpan(caller_locals.items),
         .body = caller_body,
         .ret_layout = .i64,
-    });
+    }, .none);
 
     var codegen = MonoLlvmCodeGen.init(gpa, &store, &.{}, &.{}, &.{});
     defer codegen.deinit();

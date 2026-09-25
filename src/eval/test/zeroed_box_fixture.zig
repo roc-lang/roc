@@ -36,12 +36,12 @@ pub fn run(allocator: std.mem.Allocator) Error!void {
     const post = try store.addLocal(.{ .layout_idx = .u64 });
     const sum = try store.addLocal(.{ .layout_idx = .u64 });
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } }, .test_fixture);
     const drop_cell = try store.addCFStmt(.{ .decref = .{
         .value = cell,
         .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } },
         .next = ret,
-    } });
+    } }, .test_fixture);
     const add = try lowLevelStmt(&store, sum, .num_int_add_wrap, &.{ pre, post }, drop_cell);
     const load_post = try lowLevelStmt(&store, post, .ptr_load, &.{p}, add);
     const store_v = try lowLevelStmt(&store, st, .ptr_store, &.{ p, v }, load_post);
@@ -49,7 +49,7 @@ pub fn run(allocator: std.mem.Allocator) Error!void {
         .target = v,
         .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u64 } },
         .next = store_v,
-    } });
+    } }, .test_fixture);
     const load_pre = try lowLevelStmt(&store, pre, .ptr_load, &.{p}, v_lit);
     const cast = try lowLevelStmt(&store, p, .ptr_cast, &.{cell}, load_pre);
     const alloc = try lowLevelStmt(&store, cell, .box_alloc_zeroed, &.{}, cast);
@@ -60,7 +60,7 @@ pub fn run(allocator: std.mem.Allocator) Error!void {
         .frame_locals = try store.addLocalSpan(&.{ cell, p, pre, v, st, post, sum }),
         .body = alloc,
         .ret_layout = .u64,
-    });
+    }, .none);
 
     var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &store);
     defer static_strings.deinit();
@@ -86,5 +86,5 @@ fn lowLevelStmt(
         .rc_effect = op.rcEffect(),
         .args = try store.addLocalSpan(args),
         .next = next,
-    } });
+    } }, .test_fixture);
 }
