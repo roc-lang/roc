@@ -10898,6 +10898,17 @@ requester-derived component in either identity would make two programs that
 reach one specialization through differently annotated call sites disagree—one
 key naming two procedure identities.
 
+A procedure identity hashes its source specialization, ABI choices, and solved
+argument, result, and capture types. It excludes the outer function's callable
+set: that set describes the contexts where the function value flows, while the
+selected source and captures already identify the procedure being compiled.
+Passing a closed imported function beside another lambda must not change its
+procedure identity or prevent reuse of its module-pack entry. Callable sets
+nested in arguments, results, and captures remain part of identity because they
+determine runtime representations and dispatch inside the procedure. Function
+value type digests retain their complete callable sets, including when reached
+recursively from those nested positions.
+
 A compiler-generated body retains its own source key. An interpolation or
 field-names iterator step, a structural parser or encoder runtime, and a
 generated encoder callback have no checked declaration to name, so the producer

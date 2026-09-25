@@ -4,7 +4,11 @@
 //! cannot be built from any per-program numbering. The identity rendered here
 //! depends only on what determines the procedure's compiled bytes: the lifted
 //! function's checked source identity (`Lifted.Program.fnSourceDigest`), the
-//! Lambda Mono ABI choices, and the solved function type with its lambda sets.
+//! Lambda Mono ABI choices, and the solved argument, result, and capture types
+//! with their lambda sets.
+//! The outer callable set describes where a function value flows, not the
+//! code of the selected procedure; its source and captures already name that
+//! selection. Nested callable sets still determine dispatch and representation.
 //!
 //! A lambda-set member is rendered as the member function's source identity
 //! followed by its captures and its own solved function type, because two
@@ -52,7 +56,7 @@ const Allocator = std.mem.Allocator;
 /// SHA-256 content identity of one procedure.
 pub const Identity = [TypeDigestHasher.digest_length]u8;
 
-const domain = "roc.proc.identity.v2";
+const domain = "roc.proc.identity.v3";
 
 /// Everything one solved program has rendered so far, shared by every
 /// identity rendered over it.
@@ -107,8 +111,16 @@ pub const Renderer = struct {
         hasher.update(&self.sourceDigest(source));
         writeBytes(&hasher, capture_abi);
         writeBytes(&hasher, return_reuse);
-        writeBytes(&hasher, "type");
-        hasher.update(&try self.typeDigest(solved_fn_ty));
+        const signature = switch (self.types.get(self.renderedRoot(solved_fn_ty))) {
+            .func => |func| func,
+            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .lambda_set, .erased, .zst, .mono => Common.invariant("procedure identity requires a solved function signature"),
+        };
+        writeBytes(&hasher, "args");
+        const args = self.types.span(signature.args);
+        writeU32(&hasher, @intCast(args.len));
+        for (args) |arg| hasher.update(&try self.typeDigest(arg));
+        writeBytes(&hasher, "ret");
+        hasher.update(&try self.typeDigest(signature.ret));
         writeBytes(&hasher, "captures");
         writeU32(&hasher, @intCast(captures.len));
         for (captures) |capture| hasher.update(&try self.typeDigest(capture.ty));
@@ -668,4 +680,68 @@ fn writeU32(hasher: *TypeDigestHasher, value: u32) void {
     var buffer: [4]u8 = undefined;
     encodeU32(&buffer, value);
     hasher.update(&buffer);
+}
+
+test "procedure identity excludes outer callable sets but retains nested callable sets" {
+    const allocator = std.testing.allocator;
+    var types = SolvedType.Store.init(allocator);
+    defer types.deinit();
+    var name_store = names.NameStore.init(allocator);
+    defer name_store.deinit();
+    var memo = Memo.init(allocator);
+    defer memo.deinit();
+    var fn_by_symbol = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator);
+    defer fn_by_symbol.deinit();
+    var symbols = Common.SymbolGen{};
+    const first = symbols.fresh();
+    const second = symbols.fresh();
+    // Renderer function arrays use the dense IDs assigned by this symbol table.
+    const first_fn: Lifted.FnId = @enumFromInt(fn_by_symbol.count());
+    try fn_by_symbol.put(first, first_fn);
+    const second_fn: Lifted.FnId = @enumFromInt(fn_by_symbol.count());
+    try fn_by_symbol.put(second, second_fn);
+    const scalar = try types.add(.{ .primitive = .i64 });
+    const args = try types.addSpan(&.{ scalar, scalar });
+    const singleton = try types.add(.{ .lambda_set = try types.addMembers(&.{
+        .{ .lambda = first, .captures = .empty() },
+    }) });
+    const joined = try types.add(.{ .lambda_set = try types.addMembers(&.{
+        .{ .lambda = first, .captures = .empty() },
+        .{ .lambda = second, .captures = .empty() },
+    }) });
+    const alone = try types.add(.{ .func = .{ .args = args, .ret = scalar, .callable = singleton } });
+    const beside_lambda = try types.add(.{ .func = .{ .args = args, .ret = scalar, .callable = joined } });
+    const takes_alone = try types.add(.{ .func = .{ .args = try types.addSpan(&.{alone}), .ret = scalar, .callable = singleton } });
+    const takes_joined = try types.add(.{ .func = .{ .args = try types.addSpan(&.{beside_lambda}), .ret = scalar, .callable = singleton } });
+    const returns_alone = try types.add(.{ .func = .{ .args = args, .ret = alone, .callable = singleton } });
+    const returns_joined = try types.add(.{ .func = .{ .args = args, .ret = beside_lambda, .callable = singleton } });
+    const renderer = Renderer{
+        .allocator = allocator,
+        .types = types.view(),
+        .names = &name_store,
+        .fn_tys = &.{ alone, beside_lambda },
+        .source_digests = &.{ @splat(1), @splat(2) },
+        .fn_by_symbol = &fn_by_symbol,
+        .memo = &memo,
+    };
+    const identity = try renderer.specIdentity(first_fn, alone, &.{}, "finite", "none");
+    try std.testing.expectEqual(identity, try renderer.specIdentity(first_fn, beside_lambda, &.{}, "finite", "none"));
+    // Function values still distinguish the members their dispatch can select.
+    try std.testing.expect(!std.mem.eql(u8, &try renderer.typeDigest(alone), &try renderer.typeDigest(beside_lambda)));
+    for ([_][2]SolvedType.TypeVarId{ .{ takes_alone, takes_joined }, .{ returns_alone, returns_joined } }) |pair| {
+        const left = try renderer.specIdentity(first_fn, pair[0], &.{}, "finite", "none");
+        const right = try renderer.specIdentity(first_fn, pair[1], &.{}, "finite", "none");
+        try std.testing.expect(!std.mem.eql(u8, &left, &right));
+    }
+    var mono = @import("monotype/ast.zig").ProgramBuilder.init(allocator);
+    defer mono.deinit();
+    const capture_local = try mono.addLocal(first, try mono.types.add(.{ .primitive = .i64 }));
+    var capture = SolvedType.Capture{ .local = capture_local, .symbol = first, .binder = null, .ty = alone };
+    const captures_alone = try renderer.specIdentity(first_fn, alone, &.{capture}, "finite", "none");
+    capture.ty = beside_lambda;
+    const captures_joined = try renderer.specIdentity(first_fn, alone, &.{capture}, "finite", "none");
+    try std.testing.expect(!std.mem.eql(u8, &captures_alone, &captures_joined));
+    try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(second_fn, alone, &.{}, "finite", "none")));
+    try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(first_fn, alone, &.{}, "erased", "none")));
+    try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(first_fn, alone, &.{}, "finite", "reuse")));
 }
