@@ -247,7 +247,7 @@ pub const Evaluator = struct {
 
     fn readComptimeValue(self: *Evaluator, root: Common.ComptimeValueRoot) EvalError!Value {
         for (self.inputs.comptime_producers) |producer| {
-            if (producer.root.root != root.root or !std.meta.eql(producer.root.module, root.module)) continue;
+            if (!producer.root.root.eql(root.root) or !std.meta.eql(producer.root.module, root.module)) continue;
             const outcome = try self.runProducer(producer.root_index);
             return switch (outcome) {
                 .value => |value| value,
@@ -3449,7 +3449,7 @@ test "oracle demands declared roots once without executing representation witnes
     const policy = try program.addExpr(.{ .ty = bool_ty, .data = .{ .inline_expects_enabled = {} } });
     const witness = try program.addExpr(.{ .ty = bool_ty, .data = .@"unreachable" });
     const producer_index = program.rootCount();
-    const root: Common.ComptimeValueRoot = .{ .module = .{}, .root = @enumFromInt(91), .const_locator = null };
+    const root: Common.ComptimeValueRoot = .{ .module = .{}, .root = .{ .checked = @enumFromInt(91) }, .const_locator = null };
     // Neither checked identity nor descriptor-table ordinal is a producer index.
     _ = try program.addComptimeValueRoot(.{ .module = .{ .bytes = @splat(1) }, .root = root.root, .const_locator = null });
     const producer_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = policy }, .ret = bool_ty });

@@ -88,7 +88,7 @@ fn valueSlotsForRoot(
     for (program.lir_result.static_data_values.items) |value| {
         const owner = value.compile_time_root orelse continue;
         if (owner.role != .value) continue;
-        if (!std.meta.eql(owner.module, module) or owner.root != root) continue;
+        if (!std.meta.eql(owner.module, module) or !owner.root.eql(.{ .checked = root })) continue;
         count += 1;
     }
     return count;
@@ -103,7 +103,7 @@ fn valueSlotForRoot(
     for (program.lir_result.static_data_values.items, 0..) |value, index| {
         const owner = value.compile_time_root orelse continue;
         if (owner.role != .value) continue;
-        if (!std.meta.eql(owner.module, module) or owner.root != root) continue;
+        if (!std.meta.eql(owner.module, module) or !owner.root.eql(.{ .checked = root })) continue;
         return @enumFromInt(index);
     }
     return null;

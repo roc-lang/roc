@@ -63,7 +63,7 @@ pub const Construction = union(enum) {
 };
 
 /// Constructions of the completed successful roots of one host program that
-/// lower without a slot, keyed by checked root identity.
+/// lower without a slot, keyed by producer identity.
 pub const CompletedScalarValues = struct {
     entries: Map,
     /// Owns the nested constructions the entries point into.
@@ -71,19 +71,19 @@ pub const CompletedScalarValues = struct {
 
     const Key = struct {
         module: checked.ModuleId,
-        root: checked.ComptimeRootId,
+        root: LIR.ComptimeProducer,
     };
 
     const Context = struct {
         pub fn hash(_: Context, key: Key) u64 {
             var hasher = std.hash.Wyhash.init(0);
             hasher.update(&key.module.bytes);
-            hasher.update(std.mem.asBytes(&key.root));
+            key.root.hash(&hasher);
             return hasher.final();
         }
 
         pub fn eql(_: Context, a: Key, b: Key) bool {
-            return std.meta.eql(a.module, b.module) and a.root == b.root;
+            return std.meta.eql(a.module, b.module) and a.root.eql(b.root);
         }
     };
 
@@ -116,7 +116,7 @@ pub const CompletedScalarValues = struct {
     /// completed successfully in a shape that lowers without a slot. A
     /// scalar is checked against the read's layout here; an aggregate is
     /// checked against it shape by shape as `emit` builds it.
-    pub fn constructionFor(self: *const CompletedScalarValues, module: checked.ModuleId, root: checked.ComptimeRootId, layout_idx: layout.Idx) ?Construction {
+    pub fn constructionFor(self: *const CompletedScalarValues, module: checked.ModuleId, root: LIR.ComptimeProducer, layout_idx: layout.Idx) ?Construction {
         const construction = self.entries.get(.{ .module = module, .root = root }) orelse return null;
         switch (construction) {
             .literal => |literal| if (!literalFitsLayout(literal, layout_idx)) return null,
@@ -127,7 +127,7 @@ pub const CompletedScalarValues = struct {
 
     /// The literal for a root read at `layout_idx`, when the root completed
     /// successfully with a scalar of that layout.
-    pub fn literalFor(self: *const CompletedScalarValues, module: checked.ModuleId, root: checked.ComptimeRootId, layout_idx: layout.Idx) ?LIR.LiteralValue {
+    pub fn literalFor(self: *const CompletedScalarValues, module: checked.ModuleId, root: LIR.ComptimeProducer, layout_idx: layout.Idx) ?LIR.LiteralValue {
         const construction = self.constructionFor(module, root, layout_idx) orelse return null;
         return switch (construction) {
             .literal => |literal| literal,
@@ -448,7 +448,7 @@ test "completed successful scalar roots decode to literals; failed and aggregate
             },
             .compile_time_root = .{
                 .module = .{},
-                .root = @enumFromInt(index),
+                .root = .{ .checked = @enumFromInt(index) },
                 .const_locator = null,
                 .role = switch (role) {
                     .failure => .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = failed_offset, .message_offset = message_offset } },
@@ -478,14 +478,14 @@ test "completed successful scalar roots decode to literals; failed and aggregate
 
     var values = try CompletedScalarValues.init(allocator, &program, &frozen);
     defer values.deinit(allocator);
-    const first = values.literalFor(.{}, @enumFromInt(1), .u32) orelse return error.TestUnexpectedResult;
+    const first = values.literalFor(.{}, .{ .checked = @enumFromInt(1) }, .u32) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(i128, 12345), first.i128_literal.value);
     try std.testing.expectEqual(layout.Idx.u32, first.i128_literal.layout_idx);
-    try std.testing.expect(values.literalFor(.{}, @enumFromInt(1), .u64) == null);
-    try std.testing.expect(values.literalFor(.{}, @enumFromInt(3), .u32) == null);
-    const third = values.literalFor(.{}, @enumFromInt(5), .i16) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(values.literalFor(.{}, .{ .checked = @enumFromInt(1) }, .u64) == null);
+    try std.testing.expect(values.literalFor(.{}, .{ .checked = @enumFromInt(3) }, .u32) == null);
+    const third = values.literalFor(.{}, .{ .checked = @enumFromInt(5) }, .i16) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(i128, -2), third.i128_literal.value);
-    try std.testing.expect(values.literalFor(.{}, @enumFromInt(6), .str) == null);
+    try std.testing.expect(values.literalFor(.{}, .{ .checked = @enumFromInt(6) }, .str) == null);
 }
 
 test "completed empty list roots decode to their constructions; lists with elements keep their slots" {
@@ -510,7 +510,7 @@ test "completed empty list roots decode to their constructions; lists with eleme
             .layout_idx = if (index == 0) record_layout else list_layout,
             .compile_time_root = .{
                 .module = .{},
-                .root = @enumFromInt(index),
+                .root = .{ .checked = @enumFromInt(index) },
                 .const_locator = null,
                 .role = if (index == 0)
                     .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = failed_offset, .message_offset = message_offset } }
@@ -545,12 +545,12 @@ test "completed empty list roots decode to their constructions; lists with eleme
     var values = try CompletedScalarValues.init(allocator, &program, &frozen);
     defer values.deinit(allocator);
 
-    const empty = values.constructionFor(.{}, @enumFromInt(1), list_layout) orelse return error.TestUnexpectedResult;
+    const empty = values.constructionFor(.{}, .{ .checked = @enumFromInt(1) }, list_layout) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(u64, 16), empty.empty_list);
     // A uniform list and a varied list alike keep their slots: rebuilding
     // either would allocate at every read.
-    try std.testing.expectEqual(@as(?Construction, null), values.constructionFor(.{}, @enumFromInt(2), list_layout));
-    try std.testing.expectEqual(@as(?Construction, null), values.constructionFor(.{}, @enumFromInt(3), list_layout));
+    try std.testing.expectEqual(@as(?Construction, null), values.constructionFor(.{}, .{ .checked = @enumFromInt(2) }, list_layout));
+    try std.testing.expectEqual(@as(?Construction, null), values.constructionFor(.{}, .{ .checked = @enumFromInt(3) }, list_layout));
 
     // A consumer that lowers its own roots interns layouts in its own order,
     // so the list layout it reads the root at is a different index from the
@@ -577,7 +577,7 @@ test "completed empty list roots decode to their constructions; lists with eleme
     const ctx = TestEmitContext{ .store = &reader.store, .locals = &locals };
     const empty_target = try ctx.addLocal(reader_list_layout);
     const empty_ret = try reader.store.addCFStmt(.{ .ret = .{ .value = empty_target } });
-    const reserved = try emit(ctx, &reader.store, &reader.layouts, empty_target, values.constructionFor(.{}, @enumFromInt(1), reader_list_layout).?, empty_ret) orelse return error.TestUnexpectedResult;
+    const reserved = try emit(ctx, &reader.store, &reader.layouts, empty_target, values.constructionFor(.{}, .{ .checked = @enumFromInt(1) }, reader_list_layout).?, empty_ret) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(i64, 16), reader.store.getCFStmt(reserved).assign_literal.value.i64_literal.value);
 }
 
@@ -614,7 +614,7 @@ test "an empty string root and a record of an empty list and a scalar decode to 
             .layout_idx = slot_layout,
             .compile_time_root = .{
                 .module = .{},
-                .root = @enumFromInt(index),
+                .root = .{ .checked = @enumFromInt(index) },
                 .const_locator = null,
                 .role = if (index == 0)
                     .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = failed_offset, .message_offset = message_offset } }
@@ -645,11 +645,11 @@ test "an empty string root and a record of an empty list and a scalar decode to 
     var values = try CompletedScalarValues.init(allocator, &program, &frozen);
     defer values.deinit(allocator);
 
-    const string = values.constructionFor(.{}, @enumFromInt(1), .str) orelse return error.TestUnexpectedResult;
+    const string = values.constructionFor(.{}, .{ .checked = @enumFromInt(1) }, .str) orelse return error.TestUnexpectedResult;
     try std.testing.expect(string == .empty_str);
-    const record = values.constructionFor(.{}, @enumFromInt(2), record_layout) orelse return error.TestUnexpectedResult;
+    const record = values.constructionFor(.{}, .{ .checked = @enumFromInt(2) }, record_layout) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 2), record.record.len);
     try std.testing.expectEqual(@as(u64, 4), record.record[0].empty_list);
     try std.testing.expectEqual(@as(i128, 9), record.record[1].literal.i128_literal.value);
-    try std.testing.expect(values.constructionFor(.{}, @enumFromInt(3), .str) == null);
+    try std.testing.expect(values.constructionFor(.{}, .{ .checked = @enumFromInt(3) }, .str) == null);
 }

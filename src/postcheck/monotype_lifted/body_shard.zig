@@ -22,6 +22,7 @@ const frozen_fields = .{
     "fns",             "const_fn_evidence",       "const_fn_evidence_frames", "roots",
     "layout_requests", "runtime_schema_requests", "static_data_values",       "comptime_sites",
     "source_files",    "comptime_value_roots",    "comptime_value_reads",     "lowering_modules",
+    "literal_roots",
 };
 
 /// Every virtual-ID pool whose frozen boundary a shard must retain.

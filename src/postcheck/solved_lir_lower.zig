@@ -157,6 +157,9 @@ pub const RootManifest = struct {
     layout_requests: bool = true,
     /// Whether this consumer emits the producer's runtime value schemas.
     runtime_schema_requests: bool = true,
+    /// Whether this consumer lowers the producer's literal roots. Only a
+    /// consumer that evaluates compile-time roots runs them.
+    literal_roots: bool = true,
 };
 
 /// Configuration for direct solved-to-LIR lowering.
@@ -494,6 +497,13 @@ const RootEntry = struct {
     request_index: u32,
 };
 
+/// A literal root this consumer lowers, at its producer position.
+const LiteralRootEntry = struct {
+    fn_id: Type.FnId,
+    module: check.CheckedModule.ModuleId,
+    site: Common.LiteralRejectionSite,
+};
+
 const LayoutRequest = struct {
     checked_type: check.CheckedModule.CheckedTypeId,
     ty: Type.TypeId,
@@ -508,12 +518,12 @@ const StaticInitializerRequest = struct {
 
 const ComptimeValueRequest = struct {
     module: check.CheckedModule.ModuleId,
-    root: check.CheckedModule.ComptimeRootId,
+    root: LIR.ComptimeProducer,
     ty: Type.TypeId,
     layout_idx: layout.Idx,
 };
 
-/// An evaluated root's checked identity together with the concrete
+/// An evaluated root's producer identity together with the concrete
 /// representation it is demanded at. Stage-local type ids are not identity:
 /// two of them can denote one concrete type, and one layout can serve
 /// distinct types, so neither is what decides whether two demands are the
@@ -521,7 +531,7 @@ const ComptimeValueRequest = struct {
 /// representation equivalence confirms it.
 const ComptimeRootKey = struct {
     module: check.CheckedModule.ModuleId,
-    root: check.CheckedModule.ComptimeRootId,
+    root: LIR.ComptimeProducer,
     ty: check.CanonicalNames.TypeDigest,
 };
 
@@ -689,6 +699,7 @@ const Lowerer = struct {
     own_captures: std.ArrayList(SolvedType.Capture),
     own_capture_spans: []?CaptureSpanId,
     roots: std.ArrayList(RootEntry),
+    literal_roots: std.ArrayList(LiteralRootEntry),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
     type_layouts: collections.DenseMap(Type.TypeId, layout.Idx),
@@ -935,6 +946,7 @@ const Lowerer = struct {
             .own_captures = .empty,
             .own_capture_spans = own_capture_spans,
             .roots = .empty,
+            .literal_roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
             .type_layouts = collections.DenseMap(Type.TypeId, layout.Idx).init(allocator),
@@ -1069,6 +1081,7 @@ const Lowerer = struct {
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
+        self.literal_roots.deinit(self.allocator);
         self.allocator.free(self.own_capture_spans);
         self.own_captures.deinit(self.allocator);
         self.recursive_slot_types.deinit();
@@ -1129,6 +1142,7 @@ const Lowerer = struct {
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
+        self.literal_roots.deinit(self.allocator);
         self.allocator.free(self.own_capture_spans);
         self.own_captures.deinit(self.allocator);
         self.recursive_slot_types.deinit();
@@ -1208,6 +1222,17 @@ const Lowerer = struct {
                 });
             }
         }
+        if (self.lowersLiteralRoots()) {
+            const produced_literal_roots = self.solved.lifted.literalRootsView();
+            try self.literal_roots.ensureTotalCapacity(self.allocator, produced_literal_roots.len);
+            for (produced_literal_roots) |root| {
+                self.literal_roots.appendAssumeCapacity(.{
+                    .fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite),
+                    .module = root.module,
+                    .site = root.site,
+                });
+            }
+        }
         // The compile-time roots' closure lowers first, so that a procedure
         // the evaluator runs is known as such when the object cache is
         // asked for it: the evaluator takes hits only under its own rules
@@ -1216,6 +1241,7 @@ const Lowerer = struct {
             if (!rootRunsAtCompileTime(root.request)) continue;
             _ = try self.markReachableFn(root.fn_id);
         }
+        for (self.literal_roots.items) |root| _ = try self.markReachableFn(root.fn_id);
         try self.lowerReachableFns();
         self.comptime_phase = false;
         for (self.roots.items) |root| {
@@ -1238,6 +1264,12 @@ const Lowerer = struct {
     fn lowersRuntimeSchemaRequests(self: *const Lowerer) bool {
         const manifest = self.root_manifest orelse return true;
         return manifest.runtime_schema_requests;
+    }
+
+    /// Whether this consumer lowers the producer's literal roots.
+    fn lowersLiteralRoots(self: *const Lowerer) bool {
+        const manifest = self.root_manifest orelse return true;
+        return manifest.literal_roots;
     }
 
     fn lowerLayoutRequests(self: *Lowerer) Common.LowerError!void {
@@ -3601,6 +3633,23 @@ const Lowerer = struct {
                         null,
                 });
             }
+        }
+
+        // A literal root's position is its id, and its reads and its
+        // evaluation meet in one slot.
+        for (self.literal_roots.items, 0..) |root, index| {
+            const entry = self.fn_entries.items[@intFromEnum(root.fn_id)];
+            const ret_layout = try self.layoutOfType(entry.ret);
+            const id: Common.LiteralRootId = @enumFromInt(@as(u32, @intCast(index)));
+            try self.result.literal_roots.append(self.allocator, .{
+                .module = root.module,
+                .id = id,
+                .site = root.site,
+                .proc = try self.markReachableFn(root.fn_id),
+                .ret_layout = ret_layout,
+                .plan = try self.constPlanOfType(entry.ret),
+                .value_slot = try self.comptimeValueSlot(.{ .module = root.module, .root = .{ .literal = id }, .const_locator = null }, entry.ret, ret_layout),
+            });
         }
 
         for (self.layout_requests.items) |request| {
@@ -12250,6 +12299,8 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
     errdefer if_branches.deinit(allocator);
     var roots = try clonedLiftedProgramList(Lifted.Root, "roots", allocator, view.roots);
     errdefer roots.deinit(allocator);
+    var literal_roots = try clonedLiftedProgramList(Lifted.LiteralRoot, "literal_roots", allocator, view.literal_roots);
+    errdefer literal_roots.deinit(allocator);
     var layout_requests = try clonedLiftedProgramList(Lifted.LayoutRequest, "layout_requests", allocator, view.layout_requests);
     errdefer layout_requests.deinit(allocator);
     var comptime_value_reads = try clonedLiftedProgramList(Common.ComptimeValueRoot, "comptime_value_reads", allocator, view.comptime_value_reads);
@@ -12312,6 +12363,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .next_lift_capture_id = program.next_lift_capture_id,
         .proc_debug_names = proc_debug_names,
         .roots = roots,
+        .literal_roots = literal_roots,
         .layout_requests = layout_requests,
         .comptime_value_reads = comptime_value_reads,
         .runtime_schema_requests = runtime_schema_requests,
@@ -12719,7 +12771,7 @@ test "frozen solved clone preserves producer IDs and releases partial allocation
     try source.expr_tys.append(allocator, ty);
     try source.pat_tys.append(allocator, ty);
     try source.fn_tys.append(allocator, ty);
-    const root: Common.ComptimeValueRoot = .{ .module = .{}, .root = @enumFromInt(91), .const_locator = null };
+    const root: Common.ComptimeValueRoot = .{ .module = .{}, .root = .{ .checked = @enumFromInt(91) }, .const_locator = null };
     const root_id = try source.lifted.addComptimeValueRoot(root);
     var cloned = try cloneSolvedProgram(allocator, &source);
     defer cloned.deinit();
@@ -12752,10 +12804,10 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
     var source_consumed = false;
     defer if (!source_consumed) solved.deinit();
     const roots = [_]Common.ComptimeValueRoot{
-        .{ .module = .{}, .root = @enumFromInt(91), .const_locator = null },
+        .{ .module = .{}, .root = .{ .checked = @enumFromInt(91) }, .const_locator = null },
         .{
             .module = .{ .bytes = @splat(1) },
-            .root = @enumFromInt(91),
+            .root = .{ .checked = @enumFromInt(91) },
             .const_locator = .{
                 .artifact = .{ .bytes = @splat(1) },
                 .owner = .{ .hoisted_expr = .{ .module_idx = 7, .expr = @enumFromInt(31) } },
@@ -12777,7 +12829,19 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
             .body = .{ .roc = body },
             .ret = bool_ty,
         });
-        try solved.lifted.addRoot(.{ .fn_id = fn_id, .request = undefined, .owner = .first });
+        try solved.lifted.addRoot(.{
+            .fn_id = fn_id,
+            .request = .{
+                .order = @intCast(index),
+                .module_idx = 0,
+                .kind = .dev_expr,
+                .source = undefined, // Neither solving nor lowering reads a root's checked source.
+                .checked_type = undefined, // Neither solving nor lowering reads a root's checked type.
+                .abi = .roc,
+                .exposure = .private,
+            },
+            .owner = .first,
+        });
     }
     solved.lifted.next_symbol = 2;
     const field = try solved.lifted.names.internRecordFieldLabel("field");

@@ -185,6 +185,13 @@ pub const Root = struct {
     owner: Common.LoweringModuleId,
 };
 
+/// See `Mono.LiteralRoot`.
+pub const LiteralRoot = struct {
+    fn_id: FnId,
+    module: check.CheckedModule.ModuleId,
+    site: Common.LiteralRejectionSite,
+};
+
 /// Runtime layout requested for a checked data value.
 pub const LayoutRequest = struct {
     checked_type: check.CheckedModule.CheckedTypeId,
@@ -242,6 +249,7 @@ pub const ProgramView = struct {
     string_literals: []const Mono.StringLiteral,
     proc_debug_names: *const ProcDebugNameMap,
     roots: []const Root,
+    literal_roots: []const LiteralRoot,
     layout_requests: []const LayoutRequest,
     /// Evaluated roots this program reads a completed value of, recorded once
     /// each by Monotype lowering and carried unchanged.
@@ -507,6 +515,7 @@ pub const Program = struct {
     /// to it is recorded as a self call.
     shapes_owner: ?FnId = null,
     roots: ProgramList(Root, "roots"),
+    literal_roots: ProgramList(LiteralRoot, "literal_roots"),
     layout_requests: ProgramList(LayoutRequest, "layout_requests"),
     /// See `ProgramView.comptime_value_reads`.
     comptime_value_reads: ProgramList(Common.ComptimeValueRoot, "comptime_value_reads"),
@@ -714,6 +723,7 @@ pub const Program = struct {
             // by lifting and spec_constr begin after the entire input arena.
             .next_lift_capture_id = first_synthesized_capture_index,
             .roots = .empty,
+            .literal_roots = .empty,
             .layout_requests = .empty,
             .comptime_value_reads = .empty,
             .runtime_schema_requests = .empty,
@@ -762,6 +772,7 @@ pub const Program = struct {
         self.comptime_value_reads.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
+        self.literal_roots.deinit(self.allocator);
         self.proc_debug_names.deinit();
         for (self.string_literals.unsafeRawItemsForView()) |literal| literal.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
@@ -816,6 +827,7 @@ pub const Program = struct {
             .string_literals = self.string_literals.unsafeRawItemsForView(),
             .proc_debug_names = &self.proc_debug_names,
             .roots = self.roots.unsafeRawItemsForView(),
+            .literal_roots = self.literal_roots.unsafeRawItemsForView(),
             .layout_requests = self.layout_requests.unsafeRawItemsForView(),
             .comptime_value_reads = self.comptime_value_reads.unsafeRawItemsForView(),
             .runtime_schema_requests = self.runtime_schema_requests.unsafeRawItemsForView(),
@@ -1226,6 +1238,11 @@ pub const Program = struct {
         return self.roots.unsafeRawItemsForView();
     }
 
+    pub fn literalRootsView(self: *const Program) []const LiteralRoot {
+        if (self.body_prefix) |prefix| return prefix.source.literalRootsView();
+        return self.literal_roots.unsafeRawItemsForView();
+    }
+
     pub fn fnCount(self: *const Program) usize {
         return self.rowCount("fns");
     }
@@ -1375,6 +1392,11 @@ pub const Program = struct {
     pub fn addRoot(self: *Program, root: Root) std.mem.Allocator.Error!void {
         std.debug.assert(self.body_prefix == null);
         try self.roots.append(self.allocator, root);
+    }
+
+    pub fn addLiteralRoot(self: *Program, root: LiteralRoot) std.mem.Allocator.Error!void {
+        std.debug.assert(self.body_prefix == null);
+        try self.literal_roots.append(self.allocator, root);
     }
 
     pub fn addLayoutRequest(self: *Program, request: LayoutRequest) std.mem.Allocator.Error!void {

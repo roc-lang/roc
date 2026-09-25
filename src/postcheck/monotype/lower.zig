@@ -297,6 +297,10 @@ pub const Options = struct {
     static_data_literals: bool = false,
     /// Produce immutable selected-root reads for a shared evaluation/runtime session.
     comptime_value_reads: bool = false,
+    /// Turn each specialized custom literal's conversion into a literal root
+    /// whose completed value the specialization reads. The consumer that
+    /// asks for this evaluates every literal root the program registers.
+    literal_roots: bool = false,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     /// Optional executor for isolated procedure roots and ordinary
     /// specialization batches.
@@ -778,7 +782,14 @@ fn recordComptimeValueReads(allocator: Allocator, program: *Ast.Program) Allocat
     for (program.exprsView()) |expr| {
         if (expr.data != .comptime_value) continue;
         const root = program.getComptimeValueRoot(expr.data.comptime_value.root);
-        const entry = try recorded.getOrPut(.{ .module = root.module, .root = root.root });
+        // A literal root belongs to this program alone: every consumer that
+        // lowers its reads also evaluates it, so no checked module data asks
+        // for its completed value.
+        const checked_root = switch (root.root) {
+            .checked => |id| id,
+            .literal => continue,
+        };
+        const entry = try recorded.getOrPut(.{ .module = root.module, .root = checked_root });
         if (entry.found_existing) continue;
         try program.addComptimeValueRead(root);
     }
@@ -3175,6 +3186,7 @@ const SpecJobWorkerInputs = struct {
     inline_expects: InlineExpectMode,
     static_data_literals: bool,
     comptime_value_reads: bool,
+    literal_roots: bool,
     declared_comptime_root_functions: *const DeclaredComptimeRootFunctions,
     hosted_catalog: []const HostedCatalogEntry,
     current_loc: base.SourceLoc,
@@ -3534,6 +3546,7 @@ const Builder = struct {
     inline_expects: InlineExpectMode,
     static_data_literals: bool,
     comptime_value_reads: bool,
+    literal_roots: bool,
     declared_comptime_root_functions: DeclaredComptimeRootFunctions,
     borrowed_comptime_root_functions: ?*const DeclaredComptimeRootFunctions = null,
     post_check_executor: ?base.post_check_task_executor.Executor,
@@ -3746,6 +3759,7 @@ const Builder = struct {
             .inline_expects = options.inline_expects,
             .static_data_literals = options.static_data_literals,
             .comptime_value_reads = options.comptime_value_reads,
+            .literal_roots = options.literal_roots,
             .declared_comptime_root_functions = DeclaredComptimeRootFunctions.init(allocator),
             .post_check_executor = options.post_check_executor,
             .timing = options.timing,
@@ -3889,6 +3903,7 @@ const Builder = struct {
             .inline_expects = inputs.inline_expects,
             .static_data_literals = inputs.static_data_literals,
             .comptime_value_reads = inputs.comptime_value_reads,
+            .literal_roots = inputs.literal_roots,
             .post_check_executor = null,
             .timing = null,
         });
@@ -4620,6 +4635,7 @@ const Builder = struct {
             .inline_expects = self.inline_expects,
             .static_data_literals = self.static_data_literals,
             .comptime_value_reads = self.comptime_value_reads,
+            .literal_roots = self.literal_roots,
             .declared_comptime_root_functions = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions,
             .hosted_catalog = self.hosted_catalog,
             .current_loc = self.current_loc,
@@ -4719,7 +4735,7 @@ const Builder = struct {
                         break :body try self.program.addExpr(.{
                             .ty = ret_ty,
                             .data = .{ .comptime_value = .{
-                                .root = try self.program.addComptimeValueRoot(.{ .module = view.key, .root = root, .const_locator = request.const_locator }),
+                                .root = try self.program.addComptimeValueRoot(.{ .module = view.key, .root = .{ .checked = root }, .const_locator = request.const_locator }),
                                 .initializer = initializer,
                             } },
                         });
@@ -6306,6 +6322,7 @@ const Builder = struct {
                             .inline_expects = self.inline_expects,
                             .static_data_literals = self.static_data_literals,
                             .comptime_value_reads = self.comptime_value_reads,
+                            .literal_roots = self.literal_roots,
                             .declared_comptime_root_functions = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions,
                             .hosted_catalog = self.hosted_catalog,
                             .current_loc = self.current_loc,
@@ -13619,6 +13636,17 @@ const DraftStaticDataId = enum(u32) { _ };
 /// Qualified by the owning BodyDraftStore, never by a worker Program.
 const DraftComptimeValueRootId = enum(u32) { _ };
 
+/// A literal root this draft registers: its definition, the literal it
+/// converts, and the compile-time value descriptor its read uses. The
+/// descriptor names the root by its position in the draft's list until the
+/// commit gives the root its program id.
+const DraftLiteralRoot = struct {
+    def: DraftDefId,
+    module: checked.ModuleId,
+    site: Common.LiteralRejectionSite,
+    read: DraftComptimeValueRootId,
+};
+
 fn DraftSpan(comptime _: type) type {
     return extern struct {
         start: u32,
@@ -15805,6 +15833,7 @@ const BodyDraftStore = struct {
     /// Keep exact descriptors append-only until ordered commit; abandoned
     /// speculative expressions cannot invalidate ids held by surviving ones.
     comptime_value_roots: std.ArrayList(Common.ComptimeValueRoot),
+    literal_roots: std.ArrayList(DraftLiteralRoot),
     /// These memoized TypeIds belong to this draft's graph, so their lifetime
     /// cannot exceed the body that owns that graph. Type-store entries are
     /// immutable snapshots: later graph refinement allocates a new TypeId
@@ -15912,6 +15941,7 @@ const BodyDraftStore = struct {
             .static_data_requests = .empty,
             .static_data_request_ids = std.AutoHashMap(DraftStaticDataRequestAddress, DraftStaticDataId).init(allocator),
             .comptime_value_roots = .empty,
+            .literal_roots = .empty,
             .parse_result_ok_types = std.AutoHashMap(GeneratedParseResultOkTypeAddress, Type.TypeId).init(allocator),
             .generated_try_types = std.AutoHashMap(GeneratedTryTypeAddress, Type.TypeId).init(allocator),
             .uninhabited_type_cache = collections.DenseMap(Type.TypeId, bool).init(allocator),
@@ -16063,6 +16093,7 @@ const BodyDraftStore = struct {
         self.static_data_request_ids.deinit();
         self.static_data_requests.deinit(self.allocator);
         self.comptime_value_roots.deinit(self.allocator);
+        self.literal_roots.deinit(self.allocator);
         self.static_data_candidate_exprs.deinit();
         self.stmt_regions.deinit(self.allocator);
         self.stmt_locs.deinit(self.allocator);
@@ -16217,6 +16248,20 @@ const BodyDraftStore = struct {
         return std.meta.eql(self.ownerForCore(kind, index), self.current_owner);
     }
 
+    /// Register a literal root whose definition is `def`, returning the
+    /// descriptor its read uses.
+    fn addLiteralRoot(
+        self: *BodyDraftStore,
+        def: DraftDefId,
+        module: checked.ModuleId,
+        site: Common.LiteralRejectionSite,
+    ) Allocator.Error!DraftComptimeValueRootId {
+        const position: Common.LiteralRootId = @enumFromInt(@as(u32, @intCast(self.literal_roots.items.len)));
+        const read = try self.addComptimeValueRoot(.{ .module = module, .root = .{ .literal = position }, .const_locator = null });
+        try self.literal_roots.append(self.allocator, .{ .def = def, .module = module, .site = site, .read = read });
+        return read;
+    }
+
     fn addComptimeValueRoot(self: *BodyDraftStore, root: Common.ComptimeValueRoot) Allocator.Error!DraftComptimeValueRootId {
         const id: DraftComptimeValueRootId = @enumFromInt(@as(u32, @intCast(self.comptime_value_roots.items.len)));
         try self.comptime_value_roots.append(self.allocator, root);
@@ -16230,7 +16275,13 @@ const BodyDraftStore = struct {
         root: DraftComptimeValueRootId,
     ) Allocator.Error!Common.ComptimeValueRootId {
         if (roots.get(root)) |id| return id;
-        const id = try program.addComptimeValueRoot(self.comptime_value_roots.items[@intFromEnum(root)]);
+        const descriptor = self.comptime_value_roots.items[@intFromEnum(root)];
+        switch (descriptor.root) {
+            .checked => {},
+            // Committing the draft's literal roots commits their reads first.
+            .literal => Common.invariant("literal root read was retained without its literal root"),
+        }
+        const id = try program.addComptimeValueRoot(descriptor);
         try roots.put(root, id);
         return id;
     }
@@ -16927,6 +16978,17 @@ const BodyDraftStore = struct {
         // shards may use the same local ordinal for different checked roots.
         var comptime_roots = collections.DenseMap(DraftComptimeValueRootId, Common.ComptimeValueRootId).init(program.allocator);
         defer comptime_roots.deinit();
+
+        // A literal root commits with its definition, which commits exactly
+        // when the function owning it does; its read then names the root by
+        // its program id.
+        for (self.literal_roots.items) |root| {
+            if (emit_defs) |emit| if (!emit[@intFromEnum(root.def)]) continue;
+            const id = try program.addLiteralRoot(.{ .def = ids.def(root.def), .module = root.module, .site = root.site });
+            var descriptor = self.comptime_value_roots.items[@intFromEnum(root.read)];
+            descriptor.root = .{ .literal = id };
+            try comptime_roots.put(root.read, try program.addComptimeValueRoot(descriptor));
+        }
 
         for (self.string_literals.items, 0..) |literal, index| {
             if (!ids.retained(.string_literals, index)) continue;
@@ -25940,7 +26002,7 @@ const BodyContext = struct {
             .args = .empty(),
         } });
         return try self.addExprWithTypeCell(cell, .{ .comptime_value = .{
-            .root = try self.draft.addComptimeValueRoot(.{ .module = view.key, .root = root_id, .const_locator = const_locator }),
+            .root = try self.draft.addComptimeValueRoot(.{ .module = view.key, .root = .{ .checked = root_id }, .const_locator = const_locator }),
             .initializer = initializer,
         } });
     }
@@ -41861,7 +41923,49 @@ const BodyContext = struct {
         const try_ty = self.literalConversionTryType(plan);
         const try_node = try self.instNode(try_ty);
         const try_value = try self.lowerDispatchExprAtType(try_ty, plan, DraftTypeCell.fromGraphNode(try_node));
-        return try self.unwrapLiteralConversionAtNode(try_value, try_node, value_node, self.literalRejectionSite(expr_id));
+        const site = self.literalRejectionSite(expr_id);
+        const value = try self.unwrapLiteralConversionAtNode(try_value, try_node, value_node, site);
+        if (!self.builder.literal_roots) return value;
+        return try self.literalRootRead(expr_id, site, value, value_node);
+    }
+
+    /// A program whose compile-time roots are evaluated with it evaluates a
+    /// specialized literal's conversion at compile time too: the conversion
+    /// becomes the body of a literal root, and the specialization reads the
+    /// root's completed value.
+    fn literalRootRead(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        site: Common.LiteralRejectionSite,
+        value: DraftExprId,
+        value_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const value_cell = DraftTypeCell.fromGraphNode(value_node);
+        const def_id = try self.draft.reserveDef(self.draft.current_owner);
+        self.draft.setDef(def_id, .{
+            .symbol = self.builder.symbols.fresh(),
+            .fn_def = null,
+            .fn_id = null,
+            .identity_seed = .{ .kind = "literal-root", .extra = literalRootIdentity(self.view.key, expr_id) },
+            .args = try self.addTypedLocalSpan(&.{}),
+            .body = .{ .roc = value },
+            .ret = value_cell,
+        });
+        const read = try self.draft.addLiteralRoot(def_id, self.view.key, site);
+        // The call is representation evidence for the read; the read never
+        // runs it.
+        const callee = try self.addExprWithTypeCell(
+            DraftTypeCell.fromGraphNode(try self.graphFunctionNode(&.{}, value_node)),
+            .{ .def_ref = .{ .draft = def_id } },
+        );
+        const initializer = try self.addExprWithTypeCell(value_cell, .{ .call_value = .{
+            .callee = callee,
+            .args = try self.addExprSpan(&.{}),
+        } });
+        return try self.addExprWithTypeCell(value_cell, .{ .comptime_value = .{
+            .root = read,
+            .initializer = initializer,
+        } });
     }
 
     /// The source literal a rejected conversion of this literal reports.
@@ -60059,6 +60163,16 @@ fn moduleDigestFromId(key: checked.ModuleId) names.CheckedModuleDigest {
 /// Content bytes identifying a procedure-use root: the module it was
 /// requested from, the request's kind and checked source site, and the
 /// procedure binding's declared function type key.
+/// The literal a literal root converts; its return type joins the
+/// definition's identity when the definition seals.
+fn literalRootIdentity(module: checked.ModuleId, expr_id: checked.CheckedExprId) [32]u8 {
+    var hasher = TypeDigestHasher.init();
+    hasher.update("roc.monotype.literal-root.v1");
+    hasher.update(&module.bytes);
+    hashU32(&hasher, @intFromEnum(expr_id));
+    return hasher.finalResult();
+}
+
 fn procedureUseRootIdentity(request: checked.RootRequest, procedure: checked.ProcedureUseTemplate, source_module: checked.ModuleId) [32]u8 {
     var hasher = TypeDigestHasher.init();
     hasher.update("roc.monotype.procedure-use-root.v1");
@@ -62006,7 +62120,7 @@ test "body draft comptime roots relocate independent shards and survive source d
     const descriptors = [_]Common.ComptimeValueRoot{
         .{
             .module = .{ .bytes = @splat(0x31) },
-            .root = @enumFromInt(7),
+            .root = .{ .checked = @enumFromInt(7) },
             .const_locator = .{
                 .artifact = .{ .bytes = @splat(0x41) },
                 .owner = .{ .hoisted_expr = .{ .module_idx = 19, .expr = @enumFromInt(23) } },
@@ -62016,7 +62130,7 @@ test "body draft comptime roots relocate independent shards and survive source d
         },
         .{
             .module = .{ .bytes = @splat(0x32) },
-            .root = @enumFromInt(11),
+            .root = .{ .checked = @enumFromInt(11) },
             .const_locator = null,
         },
     };

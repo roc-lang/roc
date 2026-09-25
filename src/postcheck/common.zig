@@ -79,6 +79,12 @@ pub const LiteralRejectionSite = LIR.LiteralRejectionSite;
 /// The kind of literal a `literal_rejected` expression reports.
 pub const LiteralRejectionKind = LIR.LiteralRejectionKind;
 
+/// Program-local literal root index; see `LIR.LiteralRootId`.
+pub const LiteralRootId = LIR.LiteralRootId;
+
+/// The producer of one compile-time value; see `LIR.ComptimeProducer`.
+pub const ComptimeProducer = LIR.ComptimeProducer;
+
 /// Explicit roots requested from checked module data.
 pub const RootRequests = struct {
     requests: []const checked.RootRequest = &.{},
@@ -99,11 +105,12 @@ pub const StaticDataRequest = struct {
 /// Program-local descriptor index, not a checked module/root identity.
 pub const ComptimeValueRootId = enum(u32) { _ };
 
-/// Stable checked identity of one selected compile-time value. Representation
-/// identity belongs to the typed expression that carries this reference.
+/// Stable identity of one compile-time value: the module that owns its
+/// producer, and the producer. Representation identity belongs to the typed
+/// expression that carries this reference.
 pub const ComptimeValueRoot = struct {
     module: checked.ModuleId,
-    root: checked.ComptimeRootId,
+    root: ComptimeProducer,
     const_locator: ?checked.ConstLocator,
 };
 

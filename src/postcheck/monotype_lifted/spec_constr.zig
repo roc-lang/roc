@@ -14631,7 +14631,7 @@ test "compile-time root reads remain opaque through specialization and cloning" 
     const initializer = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&.{item}) } });
     const root: Common.ComptimeValueRoot = .{
         .module = .{},
-        .root = @enumFromInt(1),
+        .root = .{ .checked = @enumFromInt(1) },
         .const_locator = .{
             .artifact = .{},
             .owner = .{ .hoisted_expr = .{ .module_idx = 0, .expr = @enumFromInt(1) } },

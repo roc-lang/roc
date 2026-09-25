@@ -998,9 +998,18 @@ its explicit function relocations retain exactly the callable procedures that
 the completed values contain, and those procedures join the ordinary runtime
 roots supplied to ARC. Successful evaluation evidence removes its value guards
 after guard construction; failed values keep their ordinary runtime failure
-paths. A root that stops at another root's value guard is a propagated failure:
-it records the failure it read and is not reported again, because the failing
-root already reported it. Attaching completed data after ARC and then repeating reachability is
+paths. A root that stops at a checked root's value guard is a propagated
+failure: it records the failure it read and is not reported again, because the
+failing root already reported it in the module that owns it. A literal root
+belongs to no checked module, so nothing retains its failure between
+compilations except the checked results that embed it: a checked root that
+stops at a literal root's value guard, or reaches a rejected literal inline,
+reports that failure in its own module, naming the literal as the failure's
+origin, which keeps that module from being cached clean while its result holds
+the failure. A failed literal root that no checked root embeds is reported at
+its literal once finalization is done. A module whose finalization completed in
+an earlier compilation receives such a report through the coordinator's report
+destination for it, without its cached result changing. Attaching completed data after ARC and then repeating reachability is
 forbidden, because it would make ARC run over a different procedure graph from
 the one emitted to the backend.
 
@@ -4144,8 +4153,27 @@ Every live literal-origin record leaves checking with one explicit resolution:
   carrying the rejection message and the literal's `LiteralRejectionSite`
   (owner module, checked expression, numeral or quote). LIR carries the site on
   the `crash` statement, so a compile-time evaluation that reaches it reports
-  the literal-specific diagnostic in the literal's own module, once per
-  literal, instead of a generic crash.
+  the literal-specific diagnostic instead of a generic crash.
+  A conversion at a specialization's concrete type depends on nothing at
+  runtime, so it is hoisted like any top-level-equivalent expression: a
+  program whose compile-time work is evaluated with it (`literal_roots`) turns
+  the conversion into a literal root. The conversion becomes a zero-argument
+  definition the draft registers; the specialization reads the root's
+  `comptime_value` slot (producer `.literal`); LIR carries `LiteralRootPlan`s
+  beside the checked roots' plans; and finalization evaluates each literal root
+  on its first slot demand, and the rest after every checked root. Every native
+  build evaluates its literal roots: when no checked compile-time root shares
+  the runtime program, finalization prepares the runtime program itself, under
+  the runtime policy (object-cache hits at Monotype reservation included),
+  lowers a native consumer holding only the literal roots, evaluates them, and
+  the runtime consumer transcodes their completed values. Two object-cache
+  rules keep a specialization served from a pack equivalent to one lowered
+  again, whose literal roots would be evaluated again: an entry whose closure
+  still converts a specialized literal at runtime (a program lowered without
+  literal roots, such as a module's pack program) is withheld, and a build
+  that reported an error writes no packs, so no entry embeds a failed literal
+  root. A successful conversion is deterministic in the literal and the
+  concrete type, both part of the entry's identity.
 - `checked_error` means checking rejected the conversion while retaining the
   literal node for diagnostic recovery. `CheckedModule` stores no
   callable, runtime dispatch plan, or compile-time root for it; the containing

@@ -479,6 +479,13 @@ pub const Root = struct {
     owner: Common.LoweringModuleId,
 };
 
+/// See `Mono.LiteralRoot`.
+pub const LiteralRoot = struct {
+    fn_id: FnId,
+    module: checked.ModuleId,
+    site: Common.LiteralRejectionSite,
+};
+
 /// Runtime layout requested for a checked data value.
 pub const LayoutRequest = struct {
     checked_type: checked.CheckedTypeId,
@@ -522,6 +529,7 @@ pub const Program = struct {
     string_literals: ProgramList(Mono.StringLiteral, "string_literals"),
     proc_debug_names: ProcDebugNameMap,
     roots: ProgramList(Root, "roots"),
+    literal_roots: ProgramList(LiteralRoot, "literal_roots"),
     layout_requests: ProgramList(LayoutRequest, "layout_requests"),
     runtime_schema_requests: ProgramList(RuntimeSchemaRequest, "runtime_schema_requests"),
     static_data_values: ProgramList(StaticDataValue, "static_data_values"),
@@ -580,6 +588,7 @@ pub const Program = struct {
             .string_literals = ProgramList(Mono.StringLiteral, "string_literals").fromArrayList(string_literals),
             .proc_debug_names = ProcDebugNameMap.init(allocator),
             .roots = .empty,
+            .literal_roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
             .static_data_values = .empty,
@@ -619,6 +628,7 @@ pub const Program = struct {
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
+        self.literal_roots.deinit(self.allocator);
         self.proc_debug_names.deinit();
         for (self.string_literals.unsafeRawItemsForView()) |literal| literal.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
@@ -890,6 +900,10 @@ pub const Program = struct {
 
     pub fn rootsView(self: *const Program) []const Root {
         return self.roots.unsafeRawItemsForView();
+    }
+
+    pub fn literalRootsView(self: *const Program) []const LiteralRoot {
+        return self.literal_roots.unsafeRawItemsForView();
     }
 
     pub fn layoutRequestsView(self: *const Program) []const LayoutRequest {

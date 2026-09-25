@@ -1379,6 +1379,16 @@ pub const Root = struct {
     owner: Common.LoweringModuleId,
 };
 
+/// One literal root, at its `Common.LiteralRootId` position: a zero-argument
+/// definition that converts one custom literal at the concrete type one
+/// specialization gives it, and is evaluated at compile time.
+pub const LiteralRoot = struct {
+    def: DefId,
+    /// Checked module that owns the literal.
+    module: checked.ModuleId,
+    site: Common.LiteralRejectionSite,
+};
+
 /// Runtime layout requested for a checked data value.
 pub const LayoutRequest = struct {
     checked_type: checked.CheckedTypeId,
@@ -1452,6 +1462,7 @@ pub const ProgramView = struct {
     string_literals: []const StringLiteral,
     proc_debug_names: []const ProcDebugName,
     roots: []const Root,
+    literal_roots: []const LiteralRoot,
     layout_requests: []const LayoutRequest,
     /// Evaluated roots this program reads a completed value of, recorded once
     /// each. Whoever materializes those values consumes this instead of
@@ -1640,6 +1651,7 @@ pub const ProgramBuilder = struct {
     const_blob_backings: std.AutoHashMapUnmanaged(ConstBlobKey, *SharedLiteralBacking) = .empty,
     proc_debug_names: ProcDebugNameMap,
     roots: ProgramList(Root, "roots"),
+    literal_roots: ProgramList(LiteralRoot, "literal_roots"),
     layout_requests: ProgramList(LayoutRequest, "layout_requests"),
     /// See `ProgramView.comptime_value_reads`.
     comptime_value_reads: ProgramList(Common.ComptimeValueRoot, "comptime_value_reads"),
@@ -1705,6 +1717,7 @@ pub const ProgramBuilder = struct {
             .string_literals = .empty,
             .proc_debug_names = ProcDebugNameMap.init(allocator),
             .roots = .empty,
+            .literal_roots = .empty,
             .layout_requests = .empty,
             .comptime_value_reads = .empty,
             .runtime_schema_requests = .empty,
@@ -1731,7 +1744,7 @@ pub const ProgramBuilder = struct {
         result.names = try self.names.clone(allocator);
         result.types = try self.types.cloneFrozen(allocator);
         try result.comptime_value_roots.appendSlice(allocator, self.comptime_value_roots.unsafeRawItemsForView());
-        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "layout_requests", "comptime_value_reads", "runtime_schema_requests", "static_data_values", "lowering_modules", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
+        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "literal_roots", "layout_requests", "comptime_value_reads", "runtime_schema_requests", "static_data_values", "lowering_modules", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
         }
         try result.proc_debug_names.items.appendSlice(allocator, self.proc_debug_names.view());
@@ -1802,6 +1815,7 @@ pub const ProgramBuilder = struct {
         self.comptime_value_reads.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
+        self.literal_roots.deinit(self.allocator);
         self.proc_debug_names.deinit();
         for (self.string_literals.unsafeRawItemsForView()) |literal| literal.deinit(self.allocator);
         var backings = self.const_blob_backings.valueIterator();
@@ -1983,6 +1997,7 @@ pub const ProgramBuilder = struct {
             .string_literals = self.string_literals.unsafeRawItemsForView(),
             .proc_debug_names = self.proc_debug_names.view(),
             .roots = self.roots.unsafeRawItemsForView(),
+            .literal_roots = self.literal_roots.unsafeRawItemsForView(),
             .layout_requests = self.layout_requests.unsafeRawItemsForView(),
             .comptime_value_reads = self.comptime_value_reads.unsafeRawItemsForView(),
             .runtime_schema_requests = self.runtime_schema_requests.unsafeRawItemsForView(),
@@ -2289,6 +2304,12 @@ pub const ProgramBuilder = struct {
 
     pub fn addRoot(self: *ProgramBuilder, root: Root) std.mem.Allocator.Error!void {
         try self.roots.append(self.allocator, root);
+    }
+
+    pub fn addLiteralRoot(self: *ProgramBuilder, root: LiteralRoot) std.mem.Allocator.Error!Common.LiteralRootId {
+        const id: Common.LiteralRootId = @enumFromInt(@as(u32, @intCast(self.literal_roots.len())));
+        try self.literal_roots.append(self.allocator, root);
+        return id;
     }
 
     pub fn layoutRequestCount(self: *const ProgramBuilder) usize {
@@ -3072,7 +3093,7 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     try source.proc_debug_names.put(@enumFromInt(1), name);
     const root_a: Common.ComptimeValueRoot = .{
         .module = std.mem.zeroes(check.CheckedModule.ModuleId),
-        .root = @enumFromInt(7),
+        .root = .{ .checked = @enumFromInt(7) },
         .const_locator = null,
     };
     var root_b = root_a;

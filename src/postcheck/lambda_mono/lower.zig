@@ -131,6 +131,7 @@ fn movedSolvedView(source: *const Solved.Program, moved: *const Ast.Program) Sol
             .string_literals = moved.string_literals.unsafeRawItemsForView(),
             .proc_debug_names = lifted.proc_debug_names,
             .roots = lifted.roots,
+            .literal_roots = lifted.literal_roots,
             .layout_requests = lifted.layout_requests,
             .comptime_value_reads = lifted.comptime_value_reads,
             .runtime_schema_requests = lifted.runtime_schema_requests,
@@ -346,6 +347,15 @@ const Lowerer = struct {
                 .fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite),
                 .request = root.request,
                 .owner = root.owner,
+            });
+        }
+
+        try self.program.literal_roots.ensureTotalCapacity(self.allocator, self.solved.lifted.literal_roots.len);
+        for (self.solved.lifted.literal_roots) |root| {
+            try self.program.literal_roots.append(self.allocator, .{
+                .fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite),
+                .module = root.module,
+                .site = root.site,
             });
         }
 
