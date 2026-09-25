@@ -5402,13 +5402,16 @@ fn settledRowThroughAliases(self: *Self, start: Var) ?Var {
     return null;
 }
 
+/// Record `var_`'s row root, keeping the first published root that reached it.
 fn recordSettledRowRoot(
     self: *Self,
-    roots: *std.AutoHashMapUnmanaged(Var, void),
+    roots: *std.AutoHashMapUnmanaged(Var, Var),
     var_: Var,
+    origin: Var,
 ) std.mem.Allocator.Error!void {
     const row_root = self.settledRowThroughAliases(var_) orelse return;
-    try roots.put(self.gpa, row_root, {});
+    const entry = try roots.getOrPut(self.gpa, row_root);
+    if (!entry.found_existing) entry.value_ptr.* = origin;
 }
 
 const SettledTypeReach = struct {
@@ -5416,14 +5419,14 @@ const SettledTypeReach = struct {
     starts_row: bool,
 };
 
-/// Seeds the settled row walk with each published root as a row start.
+/// Collects the published roots the settled row walk starts from.
 const SettledRootSeeder = struct {
     gpa: Allocator,
-    stack: *std.ArrayListUnmanaged(SettledTypeReach),
+    seeds: *std.ArrayListUnmanaged(Var),
 
     /// Seed one published root.
     pub fn visit(self: *const SettledRootSeeder, var_: Var) Allocator.Error!void {
-        try self.stack.append(self.gpa, .{ .var_ = var_, .starts_row = true });
+        try self.seeds.append(self.gpa, var_);
     }
 
     /// Seed a root checking recorded; an erroneous expression may have none.
@@ -5441,6 +5444,64 @@ fn appendSettledTypeReachVars(
     for (vars) |var_| try stack.append(self.gpa, .{ .var_ = var_, .starts_row = starts_row });
 }
 
+/// Walk every type reachable from one published root, recording the row
+/// roots it reaches for the first time as owned by `origin`.
+fn walkSettledRoot(
+    self: *Self,
+    origin: Var,
+    walk_stack: *std.ArrayListUnmanaged(SettledTypeReach),
+    semantic_row_roots: *std.AutoHashMapUnmanaged(Var, Var),
+) std.mem.Allocator.Error!void {
+    try walk_stack.append(self.gpa, .{ .var_ = origin, .starts_row = true });
+    while (walk_stack.pop()) |entry| {
+        if (entry.starts_row) {
+            try self.recordSettledRowRoot(semantic_row_roots, entry.var_, origin);
+        }
+
+        const resolved = self.types.resolveVar(entry.var_);
+        if (self.var_set.contains(resolved.var_)) continue;
+        try self.var_set.put(resolved.var_, {});
+
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                try walk_stack.append(self.gpa, .{
+                    .var_ = self.types.getAliasBackingVar(alias),
+                    .starts_row = entry.starts_row,
+                });
+                try self.appendSettledTypeReachVars(walk_stack, self.types.sliceAliasArgs(alias), true);
+            },
+            .structure => |flat_type| switch (flat_type) {
+                .tuple => |tuple| try self.appendSettledTypeReachVars(walk_stack, self.types.sliceVars(tuple.elems), true),
+                .nominal_type => |nominal| try self.appendSettledTypeReachVars(walk_stack, self.types.sliceNominalArgs(nominal), true),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try walk_stack.append(self.gpa, .{ .var_ = func.ret, .starts_row = true });
+                    try self.appendSettledTypeReachVars(walk_stack, self.types.sliceVars(func.args), true);
+                    try self.appendSettledTypeReachVars(walk_stack, self.types.sliceVars(func.effect_deps), true);
+                },
+                .record => |record| {
+                    try walk_stack.append(self.gpa, .{ .var_ = record.ext, .starts_row = false });
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    for (fields.items(.presence)) |presence| {
+                        try walk_stack.append(self.gpa, .{ .var_ = presence.typeVar(), .starts_row = true });
+                        if (presence.presenceVar()) |presence_var| {
+                            try walk_stack.append(self.gpa, .{ .var_ = presence_var, .starts_row = true });
+                        }
+                    }
+                },
+                .tag_union => |tag_union| {
+                    try walk_stack.append(self.gpa, .{ .var_ = tag_union.ext, .starts_row = false });
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.args)) |args| {
+                        try self.appendSettledTypeReachVars(walk_stack, self.types.sliceVars(args), true);
+                    }
+                },
+                .empty_record, .empty_tag_union => {},
+            },
+            .flex, .rigid, .field_presence, .err => {},
+        }
+    }
+}
+
 /// Validate every tag and record row reachable from a checked value after
 /// inference has settled. Source annotations are validated when they are
 /// materialized, but instantiating an inferred open row can repeat a label
@@ -5454,15 +5515,19 @@ fn validateSettledValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void
     self.var_set.clearRetainingCapacity();
     defer self.var_set.clearRetainingCapacity();
 
-    var semantic_row_roots: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    // Each row root maps to the first published root that reached it, which a
+    // conflict report shows as the value whose type holds the row.
+    var semantic_row_roots: std.AutoHashMapUnmanaged(Var, Var) = .empty;
     defer semantic_row_roots.deinit(self.gpa);
     var walk_stack: std.ArrayListUnmanaged(SettledTypeReach) = .empty;
     defer walk_stack.deinit(self.gpa);
+    var seeds: std.ArrayListUnmanaged(Var) = .empty;
+    defer seeds.deinit(self.gpa);
 
     // Every type the checked module can publish, so no published row escapes
     // normalization: expression and pattern types, definition types, and the
     // inferred roots publication enumerates through `published_type_roots`.
-    const seeder = SettledRootSeeder{ .gpa = self.gpa, .stack = &walk_stack };
+    const seeder = SettledRootSeeder{ .gpa = self.gpa, .seeds = &seeds };
     var raw_node_idx: u32 = 0;
     while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
         const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
@@ -5486,53 +5551,9 @@ fn validateSettledValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void
     }
     try published_type_roots.forEachLiteralDispatchTypeRoot(self.cir, &seeder);
 
-    while (walk_stack.pop()) |entry| {
-        if (entry.starts_row) {
-            try self.recordSettledRowRoot(&semantic_row_roots, entry.var_);
-        }
-
-        const resolved = self.types.resolveVar(entry.var_);
-        if (self.var_set.contains(resolved.var_)) continue;
-        try self.var_set.put(resolved.var_, {});
-
-        switch (resolved.desc.content) {
-            .alias => |alias| {
-                try walk_stack.append(self.gpa, .{
-                    .var_ = self.types.getAliasBackingVar(alias),
-                    .starts_row = entry.starts_row,
-                });
-                try self.appendSettledTypeReachVars(&walk_stack, self.types.sliceAliasArgs(alias), true);
-            },
-            .structure => |flat_type| switch (flat_type) {
-                .tuple => |tuple| try self.appendSettledTypeReachVars(&walk_stack, self.types.sliceVars(tuple.elems), true),
-                .nominal_type => |nominal| try self.appendSettledTypeReachVars(&walk_stack, self.types.sliceNominalArgs(nominal), true),
-                .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    try walk_stack.append(self.gpa, .{ .var_ = func.ret, .starts_row = true });
-                    try self.appendSettledTypeReachVars(&walk_stack, self.types.sliceVars(func.args), true);
-                    try self.appendSettledTypeReachVars(&walk_stack, self.types.sliceVars(func.effect_deps), true);
-                },
-                .record => |record| {
-                    try walk_stack.append(self.gpa, .{ .var_ = record.ext, .starts_row = false });
-                    const fields = self.types.getRecordFieldsSlice(record.fields);
-                    for (fields.items(.presence)) |presence| {
-                        try walk_stack.append(self.gpa, .{ .var_ = presence.typeVar(), .starts_row = true });
-                        if (presence.presenceVar()) |presence_var| {
-                            try walk_stack.append(self.gpa, .{ .var_ = presence_var, .starts_row = true });
-                        }
-                    }
-                },
-                .tag_union => |tag_union| {
-                    try walk_stack.append(self.gpa, .{ .var_ = tag_union.ext, .starts_row = false });
-                    const tags = self.types.getTagsSlice(tag_union.tags);
-                    for (tags.items(.args)) |args| {
-                        try self.appendSettledTypeReachVars(&walk_stack, self.types.sliceVars(args), true);
-                    }
-                },
-                .empty_record, .empty_tag_union => {},
-            },
-            .flex, .rigid, .field_presence, .err => {},
-        }
-    }
+    // Each seed's walk finishes before the next starts, so a row belongs to
+    // the earliest source node whose type reaches it.
+    for (seeds.items) |seed| try self.walkSettledRoot(seed, &walk_stack, &semantic_row_roots);
 
     var row_roots: std.ArrayListUnmanaged(Var) = .empty;
     defer row_roots.deinit(self.gpa);
@@ -5627,7 +5648,7 @@ fn validateSettledValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void
     // therefore every diagnostic, is independent of traversal order.
     for (repeating_rows.items) |row_root| {
         if (try self.normalizeRowUnion(row_root, env)) |conflict| {
-            try self.reportRowUnionConflict(row_root, conflict, env);
+            try self.reportRowUnionConflict(row_root, conflict, semantic_row_roots.get(row_root), env);
             try invalid_rows.append(self.gpa, row_root);
         }
     }
@@ -5651,6 +5672,8 @@ const RowLabelConflict = struct {
 /// One occurrence of a label along a row's extension chain.
 const RowLabelOccurrence = struct {
     part: u32,
+    /// The row part holding this occurrence, as scanned.
+    part_var: Var,
     index: u32,
     payload: union(enum) {
         tag: types_mod.Var.SafeList.Range,
@@ -5709,7 +5732,7 @@ fn normalizeRowUnion(self: *Self, row: Var, env: *Env) Allocator.Error!?RowLabel
                         try part_labels.append(self.gpa, resolved.desc.content);
                         const tags = self.types.getTagsSlice(tag_union.tags);
                         for (tags.items(.name), tags.items(.args), 0..) |name, args, index| {
-                            try labels.append(self.gpa, .{ .name = name, .occurrence = .{ .part = part, .index = @intCast(index), .payload = .{ .tag = args } } });
+                            try labels.append(self.gpa, .{ .name = name, .occurrence = .{ .part = part, .part_var = resolved.var_, .index = @intCast(index), .payload = .{ .tag = args } } });
                         }
                         current = tag_union.ext;
                     },
@@ -5721,7 +5744,7 @@ fn normalizeRowUnion(self: *Self, row: Var, env: *Env) Allocator.Error!?RowLabel
                         try part_labels.append(self.gpa, resolved.desc.content);
                         const fields = self.types.getRecordFieldsSlice(record.fields);
                         for (fields.items(.name), fields.items(.presence), 0..) |name, presence, index| {
-                            try labels.append(self.gpa, .{ .name = name, .occurrence = .{ .part = part, .index = @intCast(index), .payload = .{ .field = presence } } });
+                            try labels.append(self.gpa, .{ .name = name, .occurrence = .{ .part = part, .part_var = resolved.var_, .index = @intCast(index), .payload = .{ .field = presence } } });
                         }
                         current = record.ext;
                     },
@@ -5887,20 +5910,24 @@ fn redirectEmptiedRowPart(self: *Self, part_var: Var, ext: Var) Allocator.Error!
 /// Report two occurrences of one label that cannot be the same field or tag,
 /// each shown as a closed single-label row at the row's source. The row is
 /// poisoned by the caller once every diagnostic has snapshotted the graph.
-fn reportRowUnionConflict(self: *Self, row: Var, conflict: RowLabelConflict, env: *Env) Allocator.Error!void {
+/// Report the two occurrences of a label that cannot be one tag or field,
+/// each as a closed single-label row at the source of the row part holding it.
+/// `value` is the published root whose type holds the row, when known.
+fn reportRowUnionConflict(self: *Self, row: Var, conflict: RowLabelConflict, value: ?Var, env: *Env) Allocator.Error!void {
     const region = self.getRegionAt(row);
     const outer_var = try self.freshFromContent(try self.singleLabelRow(conflict.name, conflict.outer), env, region);
     const inner_var = try self.freshFromContent(try self.singleLabelRow(conflict.name, conflict.inner), env, region);
-    const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, outer_var);
-    const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, inner_var);
-    _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
-        .types = .{
-            .expected_var = outer_var,
-            .expected_snapshot = expected_snapshot,
-            .actual_var = inner_var,
-            .actual_snapshot = actual_snapshot,
+    _ = try self.problems.appendProblem(self.gpa, .{ .row_label_conflict = .{
+        .row_kind = switch (conflict.outer.payload) {
+            .tag => .tag_union,
+            .field => .record,
         },
-        .context = .none,
+        .label = conflict.name,
+        .outer_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, outer_var),
+        .outer_region = self.getRegionAt(conflict.outer.part_var),
+        .inner_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, inner_var),
+        .inner_region = self.getRegionAt(conflict.inner.part_var),
+        .value_region = if (value) |value_var| self.getRegionAt(value_var) else null,
     } });
 }
 
@@ -5922,7 +5949,7 @@ fn singleLabelRow(self: *Self, name: Ident.Idx, occurrence: RowLabelOccurrence) 
 fn normalizeReportedDuplicateRow(self: *Self, env: *Env) Allocator.Error!bool {
     const row = self.canonical_key_writer.takeDuplicateRow() orelse return false;
     if (try self.normalizeRowUnion(row, env)) |conflict| {
-        try self.reportRowUnionConflict(row, conflict, env);
+        try self.reportRowUnionConflict(row, conflict, null, env);
         try self.types.setVarContent(row, .err);
     }
     return true;

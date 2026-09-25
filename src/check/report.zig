@@ -114,6 +114,7 @@ const LiteralDefaulted = problem_mod.LiteralDefaulted;
 
 // Generic errors
 const VarWithSnapshot = problem_mod.VarWithSnapshot;
+const RowLabelConflict = problem_mod.types.RowLabelConflict;
 
 // Context types for precise error reporting
 const Context = problem_mod.Context;
@@ -1035,6 +1036,9 @@ pub const ReportBuilder = struct {
             },
             .anonymous_recursion => |data| {
                 return self.buildAnonymousRecursionReport(data);
+            },
+            .row_label_conflict => |data| {
+                return self.buildRowLabelConflictReport(data);
             },
             .polymorphic_value => |data| {
                 return self.buildPolymorphicValueReport(data);
@@ -4505,6 +4509,59 @@ pub const ReportBuilder = struct {
     }
 
     /// Build a report for infinite type recursion (e.g., `func = |a| func([a])` creates `a = List(a)`)
+    fn buildRowLabelConflictReport(self: *Self, data: RowLabelConflict) Allocator.Error!Report {
+        const title, const noun, const payload, const rule = switch (data.row_kind) {
+            .tag_union => .{ "Conflicting Tag", "tag", "payloads", "A tag union has each tag once, so every occurrence of a tag must have the same payload." },
+            .record => .{ "Conflicting Field", "field", "types", "A record has each field once, so every occurrence of a field must have the same type." },
+        };
+        var report = try Report.init(self.gpa, title, "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
+            D.bytes("The"),
+            D.ident(data.label).withAnnotation(.inline_code),
+            D.bytes(noun),
+            D.bytes("comes from two places with different"),
+            D.bytes(payload),
+            D.bytes(".").withNoPrecedingSpace(),
+        }, self, &report, &report.headline);
+
+        // The first source region is the report's location: the value whose
+        // type holds both occurrences when checking knows it, otherwise the
+        // outer occurrence.
+        if (data.value_region) |value_region| {
+            try self.addSourceHighlightRegion(&report, value_region);
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{D.bytes("One comes from here:")}, self, &report);
+            try report.document.addLineBreak();
+            try self.addSourceHighlightRegion(&report, data.outer_region);
+            try report.document.addLineBreak();
+        } else {
+            try self.addSourceHighlightRegion(&report, data.outer_region);
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{D.bytes("Here it is:")}, self, &report);
+            try report.document.addLineBreak();
+        }
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(data.outer_snapshot)));
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{D.bytes("It also comes from here:")}, self, &report);
+        try report.document.addLineBreak();
+        try self.addSourceHighlightRegion(&report, data.inner_region);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{D.bytes("where it is:")}, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(data.inner_snapshot)));
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{D.bytes(rule)}, self, &report);
+        return report;
+    }
+
     fn buildAnonymousRecursionReport(self: *Self, data: VarWithSnapshot) Allocator.Error!Report {
         var report = try Report.init(self.gpa, "Anonymous Recursion", "", .runtime_error);
         errdefer report.deinit();

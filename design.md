@@ -7132,9 +7132,15 @@ without a second list to keep in step.
 Normalization needs no metadata on type variables and adds no work where no
 label repeats: detection rides on the unifier's gather,
 the key writer's row sort, and the settled row walk, which already compare
-labels. A conflict is reported as a type mismatch between the two
-occurrences, each shown as a closed single-label row at the row's source, and
-the row is poisoned once every diagnostic has snapshotted the settled graph.
+labels. A conflict is reported as a conflicting tag or field: each occurrence
+is shown as a closed single-label row at the source of the row part holding it,
+so the report names where each copy of the label came from. Its location is
+the value whose type holds the row when the settled walk reached the row from
+a published root, and otherwise the outer occurrence. The walk finishes each
+root before starting the next, in source-node order, so the value is the
+earliest source node whose type reaches the row; choosing it is a reporting
+decision and changes nothing about which programs check. The row is poisoned
+once every diagnostic has snapshotted the settled graph.
 
 The accepted side is pinned by `src/check/test/row_union_normalization_test.zig`
 (a callback raising the tag its wrapper adds, a repeated tag reaching a method
@@ -7148,7 +7154,10 @@ recursive group's substitution rows, and
 `test/fx-open/issue_11621_recursive_try.roc` runs those programs on every
 backend. The
 rejected side is pinned by conflicting payloads and payload counts in the same
-file, `test/snapshots/issue/issue_11097_wrapped_try_overlap.md`, and the
+file, `test/snapshots/issue/issue_11097_wrapped_try_overlap.md` (a conflict
+located at the value holding it), `test/snapshots/issue/issue_11621_conflicting_tag_payloads.md`
+(a conflict found while inference keys a row, located at the outer
+occurrence), and the
 issue #11470 wrapper-overlap integration tests.
 
 ### Derived Parser Tag-Row Closure
