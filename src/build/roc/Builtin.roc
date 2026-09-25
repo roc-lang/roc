@@ -15136,6 +15136,149 @@ Builtin :: [].{
 			## ```
 			abs_diff : Dec, Dec -> Dec
 
+			## Round a [Dec] to the nearest whole number, keeping it a [Dec]. Halfway
+			## values round away from zero, matching [Dec.round_to_i128].
+			##
+			## Crashes if the result does not fit in a [Dec], which only happens within
+			## half of one of [Dec.highest] or [Dec.lowest]. Use [Dec.round_try] to
+			## handle that case.
+			## ```roc
+			## expect Dec.round(2.5) == 3.0
+			##
+			## expect Dec.round(-2.5) == -3.0
+			##
+			## expect Dec.round(2.4999) == 2.0
+			## ```
+			round : Dec -> Dec
+			round = |self|
+				match Dec.round_try(self) {
+					Ok(rounded) => rounded
+					Err(Overflow) => {
+						crash "Dec.round overflowed"
+					}
+				}
+
+			## Like [Dec.round], but returns `Err(Overflow)` instead of crashing when
+			## the rounded value does not fit in a [Dec].
+			## ```roc
+			## expect Dec.round_try(2.5) == Ok(3.0)
+			##
+			## expect Dec.round_try(Dec.highest) == Err(Overflow)
+			## ```
+			round_try : Dec -> Try(Dec, [Overflow])
+			round_try = |self| dec_round_to_multiple_try(self, dec_attos_per_whole, AwayFromZero)
+
+			## Round a [Dec] down to the nearest whole number, toward negative infinity.
+			##
+			## Crashes if the result does not fit in a [Dec], which only happens for
+			## values below `Dec.lowest + 1`. Use [Dec.floor_try] to handle that case.
+			## ```roc
+			## expect Dec.floor(2.7) == 2.0
+			##
+			## expect Dec.floor(-2.1) == -3.0
+			## ```
+			floor : Dec -> Dec
+			floor = |self|
+				match Dec.floor_try(self) {
+					Ok(floored) => floored
+					Err(Overflow) => {
+						crash "Dec.floor overflowed"
+					}
+				}
+
+			## Like [Dec.floor], but returns `Err(Overflow)` instead of crashing when
+			## the result does not fit in a [Dec].
+			## ```roc
+			## expect Dec.floor_try(-2.1) == Ok(-3.0)
+			##
+			## expect Dec.floor_try(Dec.lowest) == Err(Overflow)
+			## ```
+			floor_try : Dec -> Try(Dec, [Overflow])
+			floor_try = |self| dec_attos_multiple_try(I128.div_floor_by(Dec.to_attos(self), dec_attos_per_whole), dec_attos_per_whole)
+
+			## Round a [Dec] up to the nearest whole number, toward positive infinity.
+			##
+			## Crashes if the result does not fit in a [Dec], which only happens for
+			## values above `Dec.highest - 1`. Use [Dec.ceiling_try] to handle that case.
+			## ```roc
+			## expect Dec.ceiling(2.1) == 3.0
+			##
+			## expect Dec.ceiling(-2.7) == -2.0
+			## ```
+			ceiling : Dec -> Dec
+			ceiling = |self|
+				match Dec.ceiling_try(self) {
+					Ok(ceiled) => ceiled
+					Err(Overflow) => {
+						crash "Dec.ceiling overflowed"
+					}
+				}
+
+			## Like [Dec.ceiling], but returns `Err(Overflow)` instead of crashing when
+			## the result does not fit in a [Dec].
+			## ```roc
+			## expect Dec.ceiling_try(2.1) == Ok(3.0)
+			##
+			## expect Dec.ceiling_try(Dec.highest) == Err(Overflow)
+			## ```
+			ceiling_try : Dec -> Try(Dec, [Overflow])
+			ceiling_try = |self| dec_attos_multiple_try(I128.div_ceil_by(Dec.to_attos(self), dec_attos_per_whole), dec_attos_per_whole)
+
+			## Drop the fractional part of a [Dec], rounding toward zero. This never
+			## overflows.
+			## ```roc
+			## expect Dec.trunc(2.7) == 2.0
+			##
+			## expect Dec.trunc(-2.7) == -2.0
+			## ```
+			trunc : Dec -> Dec
+			trunc = |self| Dec.from_attos(I128.div_trunc_by(Dec.to_attos(self), dec_attos_per_whole) * dec_attos_per_whole)
+
+			## Round a [Dec] to the nearest multiple of `step`: `0.01` for cents, `0.05`
+			## for cash rounding, `1000` for thousands.
+			##
+			## `ties` chooses what happens to values exactly halfway between two
+			## multiples: `AwayFromZero` rounds them away from zero, and `ToEven`
+			## (banker's rounding) picks the even multiple, which avoids systematic drift
+			## when many rounded values are summed.
+			##
+			## Crashes if `step` is not positive, or if the result does not fit in a
+			## [Dec]. Use [Dec.round_to_try] to handle overflow.
+			## ```roc
+			## expect Dec.round_to(19.995, { step: 0.01, ties: AwayFromZero }) == 20.0
+			##
+			## expect Dec.round_to(2.345, { step: 0.01, ties: ToEven }) == 2.34
+			##
+			## expect Dec.round_to(7.23, { step: 0.05, ties: AwayFromZero }) == 7.25
+			##
+			## expect Dec.round_to(1500, { step: 1000, ties: ToEven }) == 2000
+			## ```
+			round_to : Dec, { step : Dec, ties : [AwayFromZero, ToEven] } -> Dec
+			round_to = |self, options|
+				match Dec.round_to_try(self, options) {
+					Ok(rounded) => rounded
+					Err(Overflow) => {
+						crash "Dec.round_to overflowed"
+					}
+				}
+
+			## Like [Dec.round_to], but returns `Err(Overflow)` instead of crashing when
+			## the result does not fit in a [Dec]. Still crashes if `step` is not
+			## positive.
+			## ```roc
+			## expect Dec.round_to_try(2.345, { step: 0.01, ties: AwayFromZero }) == Ok(2.35)
+			##
+			## expect Dec.round_to_try(Dec.highest, { step: 1000, ties: ToEven }) == Err(Overflow)
+			## ```
+			round_to_try : Dec, { step : Dec, ties : [AwayFromZero, ToEven] } -> Try(Dec, [Overflow])
+			round_to_try = |self, { step, ties }| {
+				step_attos = Dec.to_attos(step)
+				if step_attos <= 0 {
+					crash "Dec.round_to: step must be positive"
+				}
+				dec_round_to_multiple_try(self, step_attos, ties)
+			}
+
 			## Round a [Dec] to the nearest [I8]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_i8_try(3.4) == Ok(3)
@@ -22358,6 +22501,43 @@ dec_floor_to_i128 = |self| I128.div_floor_by(Dec.to_attos(self), dec_attos_per_w
 
 dec_ceiling_to_i128 : Dec -> I128
 dec_ceiling_to_i128 = |self| I128.div_ceil_by(Dec.to_attos(self), dec_attos_per_whole)
+
+## `quotient * step` as a [Dec], or `Err(Overflow)` if it does not fit.
+dec_attos_multiple_try : I128, I128 -> Try(Dec, [Overflow])
+dec_attos_multiple_try = |quotient, step_attos|
+	match I128.times_try(quotient, step_attos) {
+		Ok(attos) => Ok(Dec.from_attos(attos))
+		Err(Overflow) => Err(Overflow)
+	}
+
+## Round to the nearest multiple of a positive `step_attos`, entirely in
+## integer attos. The halfway test compares `|remainder|` with
+## `step - |remainder|` so that it cannot overflow.
+dec_round_to_multiple_try : Dec, I128, [AwayFromZero, ToEven] -> Try(Dec, [Overflow])
+dec_round_to_multiple_try = |self, step_attos, ties| {
+	attos = Dec.to_attos(self)
+	truncated = I128.div_trunc_by(attos, step_attos)
+	remainder_magnitude = I128.abs(I128.rem_by(attos, step_attos))
+	distance_to_next = step_attos - remainder_magnitude
+	away = if remainder_magnitude > distance_to_next {
+		True
+	} else if remainder_magnitude < distance_to_next {
+		False
+	} else {
+		match ties {
+			AwayFromZero => True
+			ToEven => I128.is_odd(truncated)
+		}
+	}
+	quotient = if !away {
+		truncated
+	} else if attos < 0 {
+		truncated - 1
+	} else {
+		truncated + 1
+	}
+	dec_attos_multiple_try(quotient, step_attos)
+}
 
 dec_floor_to_whole : Dec -> Dec
 dec_floor_to_whole = |self| {

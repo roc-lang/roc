@@ -55,7 +55,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v32: procedure specs carry content identities.
 /// v34: procedure specs carry producer-local native code revisions.
 /// v35: statements carry an explicit origin kind (`LIR.OriginKind`).
-pub const FORMAT_VERSION: u32 = 35;
+/// v36: removing `num_round` changes the numeric IDs of later LowLevel ops.
+pub const FORMAT_VERSION: u32 = 36;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
