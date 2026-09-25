@@ -42,21 +42,21 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
         const inner = try store.addLocal(.{ .layout_idx = .u64 });
         const disc = try store.addLocal(.{ .layout_idx = .u16 });
         const carried = try store.addLocal(.{ .layout_idx = .u64 });
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
-        const external_jump = try store.addCFStmt(.{ .jump = .{ .target = joins.external } });
-        const internal_jump = try store.addCFStmt(.{ .jump = .{ .target = joins.nested } });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+        const external_jump = try store.addCFStmt(.{ .jump = .{ .target = joins.external } }, .test_fixture);
+        const internal_jump = try store.addCFStmt(.{ .jump = .{ .target = joins.nested } }, .test_fixture);
         const initialize = try store.addCFStmt(.{ .assign_literal = .{
             .target = result,
             .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
             .next = internal_jump,
-        } });
+        } }, .test_fixture);
         const arm = try store.addCFStmt(.{ .join = .{
             .id = joins.nested,
             .params = try store.addLocalSpan(&.{result}),
             .body = external_jump,
             .remainder = initialize,
-        } });
-        const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = joins.candidate } });
+        } }, .test_fixture);
+        const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = joins.candidate } }, .test_fixture);
         var consumer = arm;
         var producer: core.LIR.CFStmtId = undefined;
         if (phase == .tag_fusion) {
@@ -64,63 +64,63 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
                 .cond = disc,
                 .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = arm }}),
                 .default_branch = arm,
-            } });
+            } }, .test_fixture);
             consumer = try store.addCFStmt(.{ .assign_ref = .{
                 .target = disc,
                 .op = .{ .discriminant = .{ .source = outer } },
                 .next = choose,
-            } });
+            } }, .test_fixture);
             const first = try store.addCFStmt(.{ .assign_tag = .{
                 .target = outer,
                 .variant_index = 0,
                 .discriminant = 0,
                 .payload = null,
                 .next = jump_outer,
-            } });
+            } }, .test_fixture);
             const second = try store.addCFStmt(.{ .assign_tag = .{
                 .target = outer,
                 .variant_index = 1,
                 .discriminant = 1,
                 .payload = null,
-                .next = try store.addCFStmt(.{ .jump = .{ .target = joins.candidate } }),
-            } });
+                .next = try store.addCFStmt(.{ .jump = .{ .target = joins.candidate } }, .test_fixture),
+            } }, .test_fixture);
             producer = try store.addCFStmt(.{ .switch_stmt = .{
                 .cond = selector,
                 .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = first }}),
                 .default_branch = second,
-            } });
+            } }, .test_fixture);
         } else {
             const forward = try store.addCFStmt(.{ .set_local = .{
                 .target = outer,
                 .value = inner,
                 .mode = .initialize_join_param,
                 .next = jump_outer,
-            } });
-            const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = joins.forwarding } });
+            } }, .test_fixture);
+            const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = joins.forwarding } }, .test_fixture);
             const set_inner = try store.addCFStmt(.{ .set_local = .{
                 .target = inner,
                 .value = selector,
                 .mode = .initialize_join_param,
                 .next = jump_inner,
-            } });
+            } }, .test_fixture);
             producer = try store.addCFStmt(.{ .join = .{
                 .id = joins.forwarding,
                 .params = try store.addLocalSpan(&.{inner}),
                 .body = forward,
                 .remainder = set_inner,
-            } });
+            } }, .test_fixture);
         }
         const candidate = try store.addCFStmt(.{ .join = .{
             .id = joins.candidate,
             .params = try store.addLocalSpan(&.{outer}),
             .body = consumer,
             .remainder = producer,
-        } });
+        } }, .test_fixture);
         const initialize_carried = try store.addCFStmt(.{ .assign_literal = .{
             .target = carried,
             .value = .{ .i64_literal = .{ .value = 17, .layout_idx = .u64 } },
             .next = candidate,
-        } });
+        } }, .test_fixture);
         const root = try store.addCFStmt(.{
             .join = .{
                 .id = joins.external,
@@ -130,7 +130,7 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
                 .body = ret,
                 .remainder = initialize_carried,
             },
-        });
+        }, .test_fixture);
         _ = try store.addProcSpec(.{
             .identity = core.LIR.ProcIdentity.forTest(@intCast(index)),
             .name = store.freshSyntheticSymbol(),
@@ -139,7 +139,7 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
             .body = root,
             .iterator_fusion_scope = true,
             .ret_layout = .u64,
-        });
+        }, .none);
     }
     return fixture;
 }
@@ -200,24 +200,24 @@ const Fixture = struct {
             const text = try self.store.addLocal(.{ .layout_idx = .str });
             const wrapper = try self.store.addLocal(.{ .layout_idx = pair });
             const projected = try self.store.addLocal(.{ .layout_idx = .i64 });
-            const ret = try self.store.addCFStmt(.{ .ret = .{ .value = projected } });
+            const ret = try self.store.addCFStmt(.{ .ret = .{ .value = projected } }, .test_fixture);
             const read = try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = projected,
                 .op = .{ .field = .{ .source = wrapper, .field_idx = 0 } },
                 .next = ret,
-            } });
+            } }, .test_fixture);
             const body = try self.store.addCFStmt(.{ .assign_struct = .{
                 .target = wrapper,
                 .fields = try self.store.addLocalSpan(&.{ number, text }),
                 .next = read,
-            } });
+            } }, .test_fixture);
             _ = try self.store.addProcSpec(.{
                 .identity = core.LIR.ProcIdentity.forTest(@intCast(self.store.procSpecCount())),
                 .name = self.store.freshSyntheticSymbol(),
                 .args = try self.store.addLocalSpan(&.{ number, text }),
                 .body = body,
                 .ret_layout = .i64,
-            });
+            }, .none);
         }
         return self;
     }
@@ -268,18 +268,18 @@ const Fixture = struct {
             const number = try self.store.addLocal(.{ .layout_idx = .i64 });
             const text = try self.store.addLocal(.{ .layout_idx = .str });
             const join_id: core.LIR.JoinPointId = @enumFromInt(index);
-            const ret = try self.store.addCFStmt(.{ .ret = .{ .value = number } });
+            const ret = try self.store.addCFStmt(.{ .ret = .{ .value = number } }, .test_fixture);
             const read_text = try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = text,
                 .op = .{ .field = .{ .source = state, .field_idx = 1 } },
                 .next = ret,
-            } });
+            } }, .test_fixture);
             const read_number = try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = number,
                 .op = .{ .field = .{ .source = state, .field_idx = 0 } },
                 .next = read_text,
-            } });
-            const jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+            } }, .test_fixture);
+            const jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
             // A non-constructor initializer requires appended field reads and
             // assignments, rather than merely deleting an existing constructor.
             const set = try self.store.addCFStmt(.{ .set_local = .{
@@ -287,20 +287,20 @@ const Fixture = struct {
                 .value = input,
                 .mode = .initialize_join_param,
                 .next = jump,
-            } });
+            } }, .test_fixture);
             const body = try self.store.addCFStmt(.{ .join = .{
                 .id = join_id,
                 .params = try self.store.addLocalSpan(&.{state}),
                 .body = read_number,
                 .remainder = set,
-            } });
+            } }, .test_fixture);
             _ = try self.store.addProcSpec(.{
                 .identity = core.LIR.ProcIdentity.forTest(@intCast(self.store.procSpecCount())),
                 .name = self.store.freshSyntheticSymbol(),
                 .args = try self.store.addLocalSpan(&.{input}),
                 .body = body,
                 .ret_layout = .i64,
-            });
+            }, .none);
         }
         return self;
     }
@@ -446,32 +446,32 @@ fn wrapFusionInForwarder(fixture: *Fixture) std.mem.Allocator.Error!void {
         const proc = store.getProcSpec(id);
         const outer = try store.addLocal(.{ .layout_idx = .u64 });
         const inner = try store.addLocal(.{ .layout_idx = .u64 });
-        const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(4) } });
+        const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(4) } }, .test_fixture);
         const forward = try store.addCFStmt(.{ .set_local = .{
             .target = outer,
             .value = inner,
             .mode = .initialize_join_param,
             .next = jump_outer,
-        } });
-        const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(3) } });
+        } }, .test_fixture);
+        const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(3) } }, .test_fixture);
         const initialize = try store.addCFStmt(.{ .set_local = .{
             .target = inner,
             .value = core.LirStore.GuardedList.at(store.getLocalSpan(proc.args), 0),
             .mode = .initialize_join_param,
             .next = jump_inner,
-        } });
+        } }, .test_fixture);
         const inner_join = try store.addCFStmt(.{ .join = .{
             .id = @enumFromInt(3),
             .params = try store.addLocalSpan(&.{inner}),
             .body = forward,
             .remainder = initialize,
-        } });
+        } }, .test_fixture);
         const body = try store.addCFStmt(.{ .join = .{
             .id = @enumFromInt(4),
             .params = try store.addLocalSpan(&.{outer}),
             .body = proc.body.?,
             .remainder = inner_join,
-        } });
+        } }, .test_fixture);
         var frame = std.ArrayList(core.LIR.LocalId).empty;
         defer frame.deinit(testing.allocator);
         const old_frame = store.getLocalSpan(proc.frame_locals);

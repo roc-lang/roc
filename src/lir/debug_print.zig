@@ -708,19 +708,19 @@ test "debug print includes boxy RC helper descriptor references" {
     defer layouts.deinit();
 
     const value = try store.addLocal(.{ .layout_idx = .str });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const incref = try store.addCFStmt(.{ .incref = .{
         .value = value,
         .rc = .{ .boxy = .{ .static = @enumFromInt(3) } },
         .next = ret,
-    } });
+    } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = .none,
         .identity = LIR.ProcIdentity.forTest(2),
         .args = .empty(),
         .body = incref,
         .ret_layout = .str,
-    });
+    }, .none);
 
     var buffer: std.Io.Writer.Allocating = .init(allocator);
     defer buffer.deinit();
@@ -750,7 +750,7 @@ test "debug print includes boxy statement surface" {
     const call_args = try store.addLocalSpan(&.{adapted});
     const hidden_args = try store.addLocalSpan(&.{desc});
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const call = try store.addCFStmt(.{ .assign_call_dict = .{
         .target = result,
         .dict = .{ .local = dict },
@@ -761,14 +761,14 @@ test "debug print includes boxy statement surface" {
         .result_desc = .{ .local = desc },
         .is_cold = true,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const inspect = try store.addCFStmt(.{ .assign_boxy_inspect = .{
         .target = result,
         .source = adapted,
         .source_desc = .{ .local = desc },
         .source_mode = .borrow,
         .next = call,
-    } });
+    } }, .test_fixture);
     const eq = try store.addCFStmt(.{ .assign_boxy_eq = .{
         .target = result,
         .lhs = adapted,
@@ -776,7 +776,7 @@ test "debug print includes boxy statement surface" {
         .source_desc = .{ .local = desc },
         .source_mode = .borrow,
         .next = inspect,
-    } });
+    } }, .test_fixture);
     const adapt = try store.addCFStmt(.{ .assign_boxy_adapt = .{
         .target = adapted,
         .source = unboxed,
@@ -785,7 +785,7 @@ test "debug print includes boxy statement surface" {
         .target_desc = .{ .local = desc },
         .source_mode = .move,
         .next = eq,
-    } });
+    } }, .test_fixture);
     const unbox = try store.addCFStmt(.{ .assign_boxy_unbox = .{
         .target = unboxed,
         .source = reused,
@@ -793,13 +793,13 @@ test "debug print includes boxy statement surface" {
         .target_layout = .str,
         .source_mode = .borrow,
         .next = adapt,
-    } });
+    } }, .test_fixture);
     const reuse = try store.addCFStmt(.{ .assign_boxy_reuse_box = .{
         .target = reused,
         .source = boxed,
         .desc = .{ .local = desc },
         .next = unbox,
-    } });
+    } }, .test_fixture);
     const box = try store.addCFStmt(.{ .assign_boxy_box = .{
         .target = boxed,
         .payload = payload,
@@ -807,24 +807,24 @@ test "debug print includes boxy statement surface" {
         .payload_desc = .{ .local = desc },
         .payload_mode = .copy,
         .next = reuse,
-    } });
+    } }, .test_fixture);
     const desc_ref = try store.addCFStmt(.{ .assign_boxy_desc_ref = .{
         .target = desc,
         .desc = .{ .static = @enumFromInt(4) },
         .next = box,
-    } });
+    } }, .test_fixture);
     const dict_ref = try store.addCFStmt(.{ .assign_boxy_dict_ref = .{
         .target = dict,
         .dict = .{ .static = @enumFromInt(7) },
         .next = desc_ref,
-    } });
+    } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = .none,
         .identity = LIR.ProcIdentity.forTest(1),
         .args = .empty(),
         .body = dict_ref,
         .ret_layout = .u64,
-    });
+    }, .none);
 
     var buffer: std.Io.Writer.Allocating = .init(allocator);
     defer buffer.deinit();

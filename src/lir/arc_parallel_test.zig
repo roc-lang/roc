@@ -24,7 +24,7 @@ const Fixture = struct {
             const number = try self.store.addLocal(.{ .layout_idx = .i64 });
             const text = try self.store.addLocal(.{ .layout_idx = .str });
             const frame = try self.store.addLocalSpan(&.{ number, text });
-            const body = try self.store.addCFStmt(.{ .ret = .{ .value = number } });
+            const body = try self.store.addCFStmt(.{ .ret = .{ .value = number } }, .test_fixture);
             _ = try self.store.addProcSpec(.{
                 .identity = core.LIR.ProcIdentity.forTest(@intCast(self.store.procSpecCount())),
                 .name = self.store.freshSyntheticSymbol(),
@@ -32,7 +32,7 @@ const Fixture = struct {
                 .frame_locals = frame,
                 .body = body,
                 .ret_layout = .i64,
-            });
+            }, .none);
         }
         return self;
     }
@@ -305,7 +305,7 @@ const UniquenessFixture = struct {
                 try s.addLocal(.{ .layout_idx = list })
             else
                 param;
-            const ret = try s.addCFStmt(.{ .ret = .{ .value = result } });
+            const ret = try s.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
             const body = if (index == 0)
                 try s.addCFStmt(.{ .assign_low_level = .{
                     .target = result,
@@ -313,20 +313,20 @@ const UniquenessFixture = struct {
                     .rc_effect = core.LIR.LowLevel.RcEffect.runtimeUniqueness(1),
                     .args = try s.addLocalSpan(&.{param}),
                     .next = ret,
-                } })
+                } }, .test_fixture)
             else if (index <= 3)
                 try s.addCFStmt(.{ .assign_call = .{
                     .target = result,
                     .proc = @enumFromInt(@as(u32, if (index == 2) 1 else 0)),
                     .args = try s.addLocalSpan(&.{param}),
                     .next = ret,
-                } })
+                } }, .test_fixture)
             else if (index == 4)
                 try s.addCFStmt(.{ .assign_list = .{
                     .target = result,
                     .elems = .empty(),
                     .next = ret,
-                } })
+                } }, .test_fixture)
             else
                 ret;
             _ = try s.addProcSpec(.{
@@ -336,15 +336,15 @@ const UniquenessFixture = struct {
                 .frame_locals = try s.addLocalSpan(if (param == result) &.{param} else &.{ param, result }),
                 .body = body,
                 .ret_layout = list,
-            });
+            }, .none);
         }
         const shared = s.getProcSpec(@enumFromInt(5));
         for (0..2) |index| {
             var spec = shared;
             spec.identity = core.LIR.ProcIdentity.forTest(@intCast(s.procSpecCount()));
             spec.name = s.freshSyntheticSymbol();
-            if (index == 1) spec.body = try s.addCFStmt(s.getCFStmt(shared.body.?));
-            _ = try s.addProcSpec(spec);
+            if (index == 1) spec.body = try s.addCFStmt(s.getCFStmt(shared.body.?), .test_fixture);
+            _ = try s.addProcSpec(spec, .none);
         }
         const independent = try s.addLocal(.{ .layout_idx = list });
         _ = try s.addProcSpec(.{
@@ -352,9 +352,9 @@ const UniquenessFixture = struct {
             .name = s.freshSyntheticSymbol(),
             .args = try s.addLocalSpan(&.{independent}),
             .frame_locals = try s.addLocalSpan(&.{independent}),
-            .body = try s.addCFStmt(.{ .ret = .{ .value = independent } }),
+            .body = try s.addCFStmt(.{ .ret = .{ .value = independent } }, .test_fixture),
             .ret_layout = list,
-        });
+        }, .none);
         return .{ .fixture = f };
     }
 
@@ -495,28 +495,28 @@ const OutcomeFixture = struct {
         const choose = try s.addLocal(.{ .layout_idx = .i64 });
         const changed = try s.addLocal(.{ .layout_idx = list });
         const result = try s.addLocal(.{ .layout_idx = result_layout });
-        const ret = try s.addCFStmt(.{ .ret = .{ .value = result } });
+        const ret = try s.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
         const success = try s.addCFStmt(.{ .assign_tag = .{
             .target = result,
             .variant_index = 1,
             .discriminant = 1,
             .payload = changed,
             .next = ret,
-        } });
+        } }, .test_fixture);
         const mutate = try s.addCFStmt(.{ .assign_low_level = .{
             .target = changed,
             .op = .list_reverse,
             .rc_effect = core.LIR.LowLevel.RcEffect.runtimeUniqueness(1),
             .args = try s.addLocalSpan(&.{param}),
             .next = success,
-        } });
+        } }, .test_fixture);
         const failure = try s.addCFStmt(.{ .assign_tag = .{
             .target = result,
             .variant_index = 0,
             .discriminant = 0,
             .payload = null,
             .next = ret,
-        } });
+        } }, .test_fixture);
         const callee_body = try switchStmt(s, choose, mutate, failure);
         const callee = try s.addProcSpec(.{
             .identity = core.LIR.ProcIdentity.forTest(@intCast(s.procSpecCount())),
@@ -525,19 +525,19 @@ const OutcomeFixture = struct {
             .frame_locals = try s.addLocalSpan(&.{ param, choose, changed, result }),
             .body = callee_body,
             .ret_layout = result_layout,
-        });
+        }, .none);
         const item = try s.addLocal(.{ .layout_idx = .str });
         const input = try s.addLocal(.{ .layout_idx = list });
         const caller_choose = try s.addLocal(.{ .layout_idx = .i64 });
         const call_result = try s.addLocal(.{ .layout_idx = result_layout });
         const discriminant = try s.addLocal(.{ .layout_idx = .u8 });
         const answer = try s.addLocal(.{ .layout_idx = .u64 });
-        const caller_ret = try s.addCFStmt(.{ .ret = .{ .value = answer } });
+        const caller_ret = try s.addCFStmt(.{ .ret = .{ .value = answer } }, .test_fixture);
         const caller_success = try s.addCFStmt(.{ .assign_literal = .{
             .target = answer,
             .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
             .next = caller_ret,
-        } });
+        } }, .test_fixture);
         // Only failure reads the exact original list; success consumes it.
         // This needs outcome restitution, not ordinary owned specialization.
         const caller_failure = try s.addCFStmt(.{ .assign_low_level = .{
@@ -546,29 +546,29 @@ const OutcomeFixture = struct {
             .rc_effect = core.LIR.LowLevel.list_len.rcEffect(),
             .args = try s.addLocalSpan(&.{input}),
             .next = caller_ret,
-        } });
+        } }, .test_fixture);
         const refine = try switchStmt(s, discriminant, caller_success, caller_failure);
         const read = try s.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
             .op = .{ .discriminant = .{ .source = call_result } },
             .next = refine,
-        } });
+        } }, .test_fixture);
         const call = try s.addCFStmt(.{ .assign_call = .{
             .target = call_result,
             .proc = callee,
             .args = try s.addLocalSpan(&.{ input, caller_choose }),
             .next = read,
-        } });
+        } }, .test_fixture);
         const make_list = try s.addCFStmt(.{ .assign_list = .{
             .target = input,
             .elems = try s.addLocalSpan(&.{item}),
             .next = call,
-        } });
+        } }, .test_fixture);
         const caller_body = try s.addCFStmt(.{ .assign_literal = .{
             .target = item,
             .value = .{ .str_literal = try s.insertStringView("nested", 0, 6) },
             .next = make_list,
-        } });
+        } }, .test_fixture);
         _ = try s.addProcSpec(.{
             .identity = core.LIR.ProcIdentity.forTest(@intCast(s.procSpecCount())),
             .name = s.freshSyntheticSymbol(),
@@ -576,7 +576,7 @@ const OutcomeFixture = struct {
             .frame_locals = try s.addLocalSpan(&.{ item, input, caller_choose, call_result, discriminant, answer }),
             .body = caller_body,
             .ret_layout = .u64,
-        });
+        }, .none);
         return .{ .fixture = f, .input = input };
     }
 
@@ -586,7 +586,7 @@ const OutcomeFixture = struct {
             .branches = try s.addCFSwitchBranches(&.{.{ .value = 1, .body = yes }}),
             .default_branch = no,
             .continuation = null,
-        } });
+        } }, .test_fixture);
     }
 
     fn run(self: *OutcomeFixture, runner: ?*const executor.Executor, metrics: *arc.ParallelMetrics) arc.ResourceError!void {
