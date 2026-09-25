@@ -155,6 +155,14 @@ pub const Scratch = struct {
     /// occurrences of a twinned formal its own backing and arguments made
     /// (see `stepAlias`). Only used while an instantiation carries twins.
     twin_marks: std.ArrayListUnmanaged(u32) = .empty,
+    /// The fresh vars whose copy opened something (`Instantiator.openings`):
+    /// a polarity marker resolved open, a result-row twin taken, or an
+    /// `.opened` alias copied, at or below that var. A later visit of the
+    /// same source var reuses the copy through the `var_map` memo, so the
+    /// frame making that visit learns from here that its copy contains an
+    /// opening. Every entry stays true for as long as its var exists, so the
+    /// set is only cleared when an instantiation starts from an empty memo.
+    opened_copies: std.AutoHashMapUnmanaged(Var, void) = .empty,
 
     pub fn deinit(self: *Scratch, gpa: std.mem.Allocator) void {
         self.frames.deinit(gpa);
@@ -168,6 +176,7 @@ pub const Scratch = struct {
         self.reach_stack.deinit(gpa);
         self.reach_state.deinit(gpa);
         self.twin_marks.deinit(gpa);
+        self.opened_copies.deinit(gpa);
     }
 };
 
@@ -201,6 +210,9 @@ const Frame = union(enum) {
 const FillCommon = struct {
     fresh_var: Var,
     flags: types_mod.DescriptorFlags,
+    /// `Instantiator.openings` when the frame began, so the frame can tell
+    /// whether its copy opened anything (see `Scratch.opened_copies`).
+    openings_base: u32,
 };
 
 /// Copies a flex var, or a rigid var that keeps a fresh identity, by copying
@@ -398,6 +410,12 @@ pub const Instantiator = struct {
     /// Builds a twin the first time one is taken (see `ResultRowTwinBuilder`).
     /// Required whenever `result_row_twins` is non-empty.
     result_row_twin_builder: ?ResultRowTwinBuilder = null,
+    /// How many openings this instantiation has made so far: polarity
+    /// markers resolved open, result-row twins taken that open their row,
+    /// `.opened` aliases copied, and reuses of a copy that contains one. An
+    /// alias frame whose count grew while it copied its backing and arguments
+    /// is `.opened` (design.md "Opened Alias Instances").
+    openings: u32 = 0,
     /// How to resolve polarity vars (see `PolarityVarBehavior`). `.close`
     /// reproduces the written (closed) row and is the safe default.
     polarity_var_behavior: PolarityVarBehavior = .close,
@@ -447,14 +465,14 @@ pub const Instantiator = struct {
     /// (`ResultRowTwinBuilder`), so a signature whose formal never reaches the
     /// result row mints nothing.
     ///
-    /// An alias's argument list must remain the substitution its backing uses:
-    /// unifying two applications of one alias decides by their arguments and
-    /// does not report a disagreement of their backings. So `stepAlias`
-    /// presents a twinned formal's argument as the twin when every occurrence
-    /// of the formal in that alias took the twin (`Id([A, B])`), and drops the
-    /// alias layer when the alias also uses the shared argument
-    /// (`Fwd(e) : e -> e`), since no one argument list is that alias's
-    /// substitution any more.
+    /// An alias whose backing took a twin is no longer its declaration's body
+    /// under its arguments, so `stepAlias` makes it `.opened`: unification
+    /// relates it to another application of the alias by its backing, never
+    /// by its arguments (design.md "Opened Alias Instances"). The alias layer
+    /// is kept. Its arguments are presentation: a twinned formal's argument
+    /// reads as the twin when every occurrence of the formal in that alias
+    /// took the twin (`Id([A, B])`), and as the shared argument when the
+    /// alias also uses that (`Fwd(e) : e -> e` reads `Fwd([NotFound])`).
     pub const ResultRowTwin = struct {
         /// The declaration formal's rigid name.
         formal: Ident.Idx,
@@ -463,6 +481,10 @@ pub const Instantiator = struct {
         /// Where the twin was taken; null when no occurrence of the formal
         /// stood on the result row.
         consumed_at: ?AdapterReachPosition = null,
+        /// Whether the twin opens the argument's row. A host-boundary
+        /// annotation's twin is the argument itself, as written, so taking
+        /// it opens nothing.
+        opens: bool,
         /// How many occurrences of the formal took the twin.
         taken: u32 = 0,
         /// How many occurrences of the formal were copied as the shared
@@ -610,6 +632,7 @@ pub const Instantiator = struct {
     fn takeResultRowTwin(self: *Self, index: usize) std.mem.Allocator.Error!Var {
         const twin = &self.result_row_twins[index];
         twin.taken += 1;
+        if (twin.opens) self.openings += 1;
         if (twin.twin) |built| return built;
         const builder = self.result_row_twin_builder.?;
         const built = try builder.build(builder.ctx, index);
@@ -796,6 +819,7 @@ pub const Instantiator = struct {
         const fields_base = machine.pending_fields.items.len;
         const constraints_base = machine.pending_constraints.items.len;
         const parts_base = machine.pending_parts.items.len;
+        const twin_marks_base = machine.twin_marks.items.len;
         errdefer {
             machine.frames.items.len = frames_base;
             machine.value_stack.items.len = values_base;
@@ -803,7 +827,11 @@ pub const Instantiator = struct {
             machine.pending_fields.items.len = fields_base;
             machine.pending_constraints.items.len = constraints_base;
             machine.pending_parts.items.len = parts_base;
+            machine.twin_marks.items.len = twin_marks_base;
         }
+        // With an empty memo no earlier copy can be reused, so no entry of
+        // `opened_copies` can be consulted again by this walk.
+        if (frames_base == 0 and self.var_map.count() == 0) machine.opened_copies.clearRetainingCapacity();
 
         if (!try self.requestVar(initial_var, force_root_copy)) {
             while (machine.frames.items.len > frames_base) {
@@ -903,6 +931,9 @@ pub const Instantiator = struct {
         // Check if we've already instantiated this variable
         if (self.var_map.count() > 0) {
             if (self.var_map.get(resolved_var)) |fresh_var| {
+                if (machine.opened_copies.count() > 0 and machine.opened_copies.contains(fresh_var)) {
+                    self.openings += 1;
+                }
                 try machine.value_stack.append(self.store.gpa, fresh_var);
                 return true;
             }
@@ -939,6 +970,8 @@ pub const Instantiator = struct {
                         };
                         const marker_var = try self.store.freshFromContentWithRank(marker_content, self.current_rank);
                         if (opened) {
+                            self.openings += 1;
+                            try machine.opened_copies.put(self.store.gpa, marker_var, {});
                             if (self.opened_marker_exts) |sink| try sink.append(self.store.gpa, .{
                                 .ext = marker_var,
                                 .reach = self.current_reach,
@@ -1023,6 +1056,7 @@ pub const Instantiator = struct {
                     .common = .{
                         .fresh_var = fresh_var,
                         .flags = flags,
+                        .openings_base = self.openings,
                     },
                     .result = switch (fresh_type) {
                         .flex => .flex,
@@ -1052,6 +1086,7 @@ pub const Instantiator = struct {
                     .common = .{
                         .fresh_var = fresh_var,
                         .flags = flags,
+                        .openings_base = self.openings,
                     },
                     .result = .flex,
                     .name = flex.name,
@@ -1075,6 +1110,7 @@ pub const Instantiator = struct {
                     .common = .{
                         .fresh_var = fresh_var,
                         .flags = flags,
+                        .openings_base = self.openings,
                     },
                     .alias = alias,
                     .args_start = @intFromEnum(arg_span.start),
@@ -1115,6 +1151,7 @@ pub const Instantiator = struct {
                             .common = .{
                                 .fresh_var = fresh_var,
                                 .flags = flags,
+                                .openings_base = self.openings,
                             },
                             .elems_start = @intFromEnum(tuple.elems.start),
                             .elems_count = tuple.elems.count,
@@ -1133,6 +1170,7 @@ pub const Instantiator = struct {
                             .common = .{
                                 .fresh_var = fresh_var,
                                 .flags = flags,
+                                .openings_base = self.openings,
                             },
                             .nominal = nominal,
                             .args_start = @intFromEnum(arg_span.start),
@@ -1148,6 +1186,7 @@ pub const Instantiator = struct {
                             .common = .{
                                 .fresh_var = fresh_var,
                                 .flags = flags,
+                                .openings_base = self.openings,
                             },
                             .func = func,
                             .kind = .pure,
@@ -1162,6 +1201,7 @@ pub const Instantiator = struct {
                             .common = .{
                                 .fresh_var = fresh_var,
                                 .flags = flags,
+                                .openings_base = self.openings,
                             },
                             .func = func,
                             .kind = .effectful,
@@ -1176,6 +1216,7 @@ pub const Instantiator = struct {
                             .common = .{
                                 .fresh_var = fresh_var,
                                 .flags = flags,
+                                .openings_base = self.openings,
                             },
                             .func = func,
                             .kind = .unbound,
@@ -1190,6 +1231,7 @@ pub const Instantiator = struct {
                             .common = .{
                                 .fresh_var = fresh_var,
                                 .flags = flags,
+                                .openings_base = self.openings,
                             },
                             .source_fields = record.fields,
                             .ext = record.ext,
@@ -1202,6 +1244,7 @@ pub const Instantiator = struct {
                             .common = .{
                                 .fresh_var = fresh_var,
                                 .flags = flags,
+                                .openings_base = self.openings,
                             },
                             .source_tags = tag_union.tags,
                             .ext = tag_union.ext,
@@ -1247,6 +1290,9 @@ pub const Instantiator = struct {
         content: Content,
     ) std.mem.Allocator.Error!void {
         try self.fillPlaceholder(common.fresh_var, content, common.flags);
+        if (self.openings > common.openings_base) {
+            try self.scratch().opened_copies.put(self.store.gpa, common.fresh_var, {});
+        }
         try self.scratch().value_stack.append(self.store.gpa, common.fresh_var);
     }
 
@@ -1358,18 +1404,9 @@ pub const Instantiator = struct {
             .flex, .alias, .structure, .field_presence, .err => return null,
         };
         const index = self.resultRowTwinIndex(rigid.name) orelse return null;
-        if (self.twinCountsInAlias(frame, index).taken == 0) return null;
+        const counts = self.twinCountsInAlias(frame, index);
+        if (counts.taken == 0 or counts.shared > 0) return null;
         return index;
-    }
-
-    /// Whether `frame`'s alias, backing and arguments together, used some
-    /// twinned formal both as its twin and as the shared argument.
-    fn aliasSplitByTwin(self: *Self, frame: *const AliasFrame) bool {
-        for (0..self.result_row_twins.len) |index| {
-            const counts = self.twinCountsInAlias(frame, index);
-            if (counts.taken > 0 and counts.shared > 0) return true;
-        }
-        return false;
     }
 
     fn stepAlias(self: *Self, frame: *AliasFrame) std.mem.Allocator.Error!bool {
@@ -1399,8 +1436,9 @@ pub const Instantiator = struct {
             if (arrived < frame.args_count + 1) {
                 const arg_var = self.store.vars.items.items[frame.args_start + arrived - 1];
                 // An argument that is a twinned formal whose twin this alias
-                // took is presented as that twin, so the argument list stays
-                // the substitution the backing uses (see `ResultRowTwin`).
+                // took at every occurrence is presented as that twin, so the
+                // argument list reads as the row the backing uses (see
+                // `ResultRowTwin`).
                 if (self.twinTakenInAlias(frame, arg_var)) |index| {
                     try machine.value_stack.append(self.store.gpa, try self.takeResultRowTwin(index));
                     continue;
@@ -1412,20 +1450,22 @@ pub const Instantiator = struct {
             const values = machine.value_stack.items;
             const fresh_backing_var = values[frame.vars_base];
             const fresh_args = values[frame.vars_base + 1 ..][0..frame.args_count];
-            const fresh_content = if (self.aliasSplitByTwin(frame))
-                // The alias used a twinned formal both as its twin and as the
-                // shared argument, so no argument list is its substitution:
-                // it is presented as its backing, as the inline spelling is.
-                self.store.resolveVar(fresh_backing_var).desc.content
-            else
-                try self.store.mkAliasWithSourceDeclAndBuiltinOrigin(
-                    frame.alias.ident,
-                    fresh_backing_var,
-                    fresh_args,
-                    frame.alias.origin_module,
-                    frame.alias.source_decl.toOptional(),
-                    frame.alias.source_decl.originIsBuiltin(),
-                );
+            // A copy of an `.opened` alias stays `.opened`, and is itself an
+            // opening for every alias frame enclosing it. A copy that opened
+            // anything inside its backing or arguments is `.opened` too: its
+            // backing is no longer its declaration's body under its
+            // arguments (design.md "Opened Alias Instances").
+            if (frame.alias.backing == .opened) self.openings += 1;
+            const backing: types_mod.AliasBacking = if (self.openings > frame.common.openings_base) .opened else .declared;
+            const fresh_content = try self.store.mkAliasWithSourceDeclAndBuiltinOrigin(
+                frame.alias.ident,
+                fresh_backing_var,
+                fresh_args,
+                frame.alias.origin_module,
+                frame.alias.source_decl.toOptional(),
+                frame.alias.source_decl.originIsBuiltin(),
+                backing,
+            );
             machine.value_stack.items.len = frame.vars_base;
             if (self.result_row_twins.len > 0) machine.twin_marks.items.len = frame.twin_marks_base;
             try self.finishFrame(frame.common, fresh_content);

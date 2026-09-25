@@ -3063,6 +3063,10 @@ pub fn fixupTypeWriter(self: *Self) void {
     // Defaulted fields render their default's source snippet when it was
     // declared in this module (design.md "Defaulted Fields").
     self.type_writer.setDefaultSourceResolver(self.cir, ModuleEnv.typeWriterDefaultSource);
+    // This writer renders the types of reported errors: an opened alias
+    // shows its backing too, so two instances of one alias never read alike
+    // when their types differ (design.md "Opened Alias Instances").
+    self.type_writer.opened_aliases = .name_and_backing;
 }
 
 /// Deinit owned fields
@@ -7635,7 +7639,14 @@ fn addResultRowTwin(
     if (arg_reached or polarity != .pos) return;
     if (twins.len == max_tracked_alias_formals) return;
     const source = self.resultRowTwinRow(arg_var) orelse return;
-    twins.twins[twins.len] = .{ .formal = formal };
+    twins.twins[twins.len] = .{
+        .formal = formal,
+        // A host-boundary twin is the argument itself (`buildResultRowTwin`).
+        .opens = switch (anno_ctx.opening) {
+            .implicit_open, .per_use => true,
+            .as_written => false,
+        },
+    };
     twins.rows[twins.len] = .{ .arg = arg_var, .region = region, .source = source };
     twins.len += 1;
 }
@@ -7738,7 +7749,7 @@ fn buildResultRowTwin(
         .as_written => unreachable, // handled above
     };
     var innermost: ?Var = null;
-    const twin = try self.copiedTagRowChain(row.arg, ext, .keep, &innermost, env, row.region);
+    const twin = try self.copiedTagRowChain(row.arg, ext, &innermost, env, row.region);
     row.ext = ext;
     row.union_var = innermost.?;
     return twin;
@@ -14121,6 +14132,7 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
                         self.aliasOriginModule(),
                         @intFromEnum(type_alias.alias_stmt_idx),
                         self.cir.module_role == .builtin,
+                        .declared,
                     ),
                     env,
                 );
@@ -14661,6 +14673,7 @@ fn generateForClauseAliasApplication(
             decl_alias.origin_module,
             decl_alias.source_decl.toOptional(),
             decl_alias.source_decl.originIsBuiltin(),
+            .declared,
         ),
         env,
     );
@@ -16676,6 +16689,7 @@ fn predeclareAliasDecl(
             self.aliasOriginModule(),
             @intFromEnum(decl_var),
             self.cir.module_role == .builtin,
+            .declared,
         ),
         env,
     );
@@ -16797,6 +16811,7 @@ fn generateAliasDecl(
                 self.aliasOriginModule(),
                 @intFromEnum(decl_idx),
                 self.cir.module_role == .builtin,
+                .declared,
             ),
             env,
         );
@@ -17579,17 +17594,16 @@ fn reopenCoercedLookup(
     return reopened;
 }
 
-/// The signature layer of `reopenCoercedResultRow`: alias layers are
-/// transparent and the copy is made of their backing alone; the function's
-/// arguments and effect kind are the use's own and only its return is copied.
+/// The signature layer of `reopenCoercedResultRow`: the function's arguments
+/// and effect kind are the use's own and only its return is copied.
 ///
-/// No alias layer on the spine survives into the copy, here or in the cell,
-/// error-row and extension layers below. Every such alias names the NARROW
-/// type the definition closed (`Errs`, `IoResult(Str)`, `Fwd`), and the copy
-/// is the wider type the use may widen it to, so a copied alias would
-/// present the widened row under a name whose declaration lists fewer tags—
-/// in every type the use reports. Alias spelling is presentation, so dropping
-/// it changes no verdict.
+/// Every alias layer on the spine, here and in the cell, error-row and
+/// extension layers below, is kept around its copied backing and is
+/// `.opened` (`copiedAliasWithBacking`). Such an alias names the NARROW type
+/// the definition closed (`Errs`, `IoResult(Str)`, `Fwd`) while its copied
+/// backing is the wider type the use may widen it to, so it is no longer its
+/// declaration's body under its arguments: unification relates it by its
+/// backing, never by its arguments (design.md "Opened Alias Instances").
 fn reopenCoercedSignature(
     self: *Self,
     var_: Var,
@@ -17606,7 +17620,7 @@ fn reopenCoercedSignature(
                 env,
                 region,
             )) orelse return null;
-            return backing;
+            return try self.copiedAliasWithBacking(alias, backing, env, region);
         },
         .structure => |flat| switch (flat) {
             .fn_pure => |func| return try self.copiedFuncWithResult(.pure, func, site, env, region),
@@ -17663,7 +17677,7 @@ fn reopenCoercedResultCell(
                 env,
                 region,
             )) orelse return null;
-            return backing;
+            return try self.copiedAliasWithBacking(alias, backing, env, region);
         },
         .structure => |flat| switch (flat) {
             .tag_union => |tag_union| {
@@ -17713,7 +17727,7 @@ fn reopenCoercedErrorRow(
                 env,
                 region,
             )) orelse return null;
-            return backing;
+            return try self.copiedAliasWithBacking(alias, backing, env, region);
         },
         .structure => |flat| switch (flat) {
             .tag_union => |tag_union| return try self.reopenedTagRow(tag_union, env, region),
@@ -17744,8 +17758,8 @@ fn reopenCoercedErrorRow(
 ///   host boundary), and unification can restructure a closed row but never
 ///   re-open it.
 ///
-/// An alias link is read through its backing, and the copy is the backing
-/// alone, exactly as for the alias layers above the row (see
+/// An alias link is read through its backing and kept, `.opened`, around its
+/// copy, exactly as the alias layers above the row are (see
 /// `reopenCoercedSignature`). A row's extension can be an alias the
 /// annotation names: `Errs : Wrap(Base)` with `Wrap(ext) : [HostErr(U64),
 /// ..ext]` continues `Errs`'s row through `Base`, whose own marker is the
@@ -17768,7 +17782,7 @@ fn reopenedTagRow(
     }
     const fresh_tail = try self.fresh(env, region);
     var innermost: ?Var = null;
-    const ext = try self.copiedTagRowChain(tag_union.ext, fresh_tail, .drop, &innermost, env, region);
+    const ext = try self.copiedTagRowChain(tag_union.ext, fresh_tail, &innermost, env, region);
     return try self.freshFromContent(
         .{ .structure = .{ .tag_union = .{ .tags = tag_union.tags, .ext = ext } } },
         env,
@@ -17796,14 +17810,14 @@ fn tagRowChainTail(self: *Self, var_: Var) Var {
 /// A copy of the tag row `var_` down its whole extension chain with `tail` in
 /// place of the chain's tail (`tagRowChainTail`). Every `tag_union` link is
 /// copied with its own tags, whose payloads stay shared, as they are off the
-/// spine. Alias layers and links are copied around their copied backing
-/// (`.keep`) or replaced by it (`.drop`). `innermost` receives the copy of
-/// the chain's last `tag_union` link, the one `tail` extends.
+/// spine. Alias layers and links are kept around their copied backing, and
+/// are `.opened` since that backing now ends in `tail`
+/// (`copiedAliasWithBacking`). `innermost` receives the copy of the chain's
+/// last `tag_union` link, the one `tail` extends.
 fn copiedTagRowChain(
     self: *Self,
     var_: Var,
     tail: Var,
-    alias_links: enum { keep, drop },
     innermost: *?Var,
     env: *Env,
     region: Region,
@@ -17811,15 +17825,12 @@ fn copiedTagRowChain(
     const resolved = self.types.resolveVar(var_);
     switch (resolved.desc.content) {
         .alias => |alias| {
-            const backing = try self.copiedTagRowChain(self.types.getAliasBackingVar(alias), tail, alias_links, innermost, env, region);
-            return switch (alias_links) {
-                .keep => try self.copiedAliasWithBacking(alias, backing, env, region),
-                .drop => backing,
-            };
+            const backing = try self.copiedTagRowChain(self.types.getAliasBackingVar(alias), tail, innermost, env, region);
+            return try self.copiedAliasWithBacking(alias, backing, env, region);
         },
         .structure => |flat| switch (flat) {
             .tag_union => |link| {
-                const ext = try self.copiedTagRowChain(link.ext, tail, alias_links, innermost, env, region);
+                const ext = try self.copiedTagRowChain(link.ext, tail, innermost, env, region);
                 const copy = try self.freshFromContent(
                     .{ .structure = .{ .tag_union = .{ .tags = link.tags, .ext = ext } } },
                     env,
@@ -17835,7 +17846,10 @@ fn copiedTagRowChain(
 }
 
 /// `alias` with a copied backing and its own arguments, every identity bit
-/// preserved.
+/// preserved. The backing is a copy that opened a row the declaration's body
+/// closes, so the alias is `.opened`: its arguments are presentation, and
+/// unification relates it by its backing (design.md "Opened Alias
+/// Instances").
 fn copiedAliasWithBacking(
     self: *Self,
     alias: types_mod.Alias,
@@ -17857,6 +17871,7 @@ fn copiedAliasWithBacking(
         alias.origin_module,
         alias.source_decl.toOptional(),
         alias.source_decl.originIsBuiltin(),
+        .opened,
     );
     return try self.freshFromContent(content, env, region);
 }
@@ -26709,6 +26724,10 @@ fn singleParameterWrapperPayload(self: *Self, wrapper_var: Var) ?Var {
     const resolved = self.types.resolveVar(wrapper_var);
     return switch (resolved.desc.content) {
         .alias => |alias| blk: {
+            // An `.opened` alias's argument is presentation, not the
+            // substitution of its backing (design.md "Opened Alias
+            // Instances"), so its payload is read from the backing.
+            if (alias.backing == .opened) break :blk self.singleParameterWrapperPayload(self.types.getAliasBackingVar(alias));
             const args = self.types.sliceAliasArgs(alias);
             if (args.len != 1) break :blk null;
             break :blk args[0];
@@ -35905,7 +35924,15 @@ fn dispatchEmbedCoupleGrade(
     const small_content = small.desc.content;
     const big_content = big.desc.content;
 
+    // An `.opened` alias's arguments are presentation, not the substitution
+    // of its backing, so it is graded as its backing alone (design.md
+    // "Opened Alias Instances"). A `.declared` pair of one alias is graded by
+    // backing and arguments together.
+    if (small_content == .alias and small_content.alias.backing == .opened) {
+        return try self.dispatchReceiverEmbedGrade(self.types.getAliasBackingVar(small_content.alias), big.var_);
+    }
     if (small_content == .alias and big_content == .alias and
+        big_content.alias.backing == .declared and
         dispatchSameAliasIdentity(small_content.alias, big_content.alias))
     {
         const small_alias = small_content.alias;
@@ -36184,6 +36211,9 @@ fn dispatchEmbedDivesIntoChild(
         .flex, .rigid, .field_presence, .err => return false,
         .alias => |alias| {
             if (try self.dispatchEmbedsInto(small_var, self.types.getAliasBackingVar(alias))) return true;
+            // An `.opened` alias's arguments are presentation; its structure
+            // is its backing alone, as `dispatchReceiverSizeInner` counts it.
+            if (alias.backing == .opened) return false;
             for (self.types.sliceAliasArgs(alias)) |arg| {
                 if (try self.dispatchEmbedsInto(small_var, arg)) return true;
             }
@@ -36348,6 +36378,9 @@ fn dispatchReceiverSizeInner(
         .flex, .rigid, .field_presence, .err => {},
         .alias => |alias| {
             try self.dispatchReceiverSizeInner(active, self.types.getAliasBackingVar(alias), result);
+            // An `.opened` alias's arguments are presentation, not structure
+            // (design.md "Opened Alias Instances").
+            if (alias.backing == .opened) return;
             for (self.types.sliceAliasArgs(alias)) |arg| {
                 try self.dispatchReceiverSizeInner(active, arg, result);
             }
@@ -38393,7 +38426,9 @@ fn varViolatesHostBoundaryRuleInternal(
     return switch (resolved.desc.content) {
         .structure => |flat_type| try self.flatTypeViolatesHostBoundaryRule(flat_type, visited, rule),
         .alias => |alias| blk: {
-            if (try self.varsViolateHostBoundaryRule(self.types.sliceAliasArgs(alias), visited, rule)) break :blk true;
+            // An `.opened` alias is its backing: its arguments are
+            // presentation (design.md "Opened Alias Instances").
+            if (alias.backing == .declared and try self.varsViolateHostBoundaryRule(self.types.sliceAliasArgs(alias), visited, rule)) break :blk true;
             break :blk try self.varViolatesHostBoundaryRuleInternal(self.types.getAliasBackingVar(alias), visited, rule);
         },
         .flex, .rigid, .err, .field_presence => unreachable,
@@ -38494,7 +38529,7 @@ fn recordExtIsClosedForHostBoundary(
 
         switch (resolved.desc.content) {
             .alias => |alias| {
-                if (try self.varsViolateHostBoundaryRule(self.types.sliceAliasArgs(alias), visited, .closed_rows)) return false;
+                if (alias.backing == .declared and try self.varsViolateHostBoundaryRule(self.types.sliceAliasArgs(alias), visited, .closed_rows)) return false;
                 current = self.types.getAliasBackingVar(alias);
             },
             .structure => |flat_type| switch (flat_type) {
@@ -38533,7 +38568,7 @@ fn tagUnionExtIsClosedForHostBoundary(
 
         switch (resolved.desc.content) {
             .alias => |alias| {
-                if (try self.varsViolateHostBoundaryRule(self.types.sliceAliasArgs(alias), visited, .closed_rows)) return false;
+                if (alias.backing == .declared and try self.varsViolateHostBoundaryRule(self.types.sliceAliasArgs(alias), visited, .closed_rows)) return false;
                 current = self.types.getAliasBackingVar(alias);
             },
             .structure => |flat_type| switch (flat_type) {
@@ -40208,6 +40243,9 @@ fn literalTargetContainsIdentity(
         .err, .field_presence => false,
         .alias => |alias| blk: {
             if (try self.literalTargetContainsIdentity(self.types.getAliasBackingVar(alias), visited)) break :blk true;
+            // An `.opened` alias is its backing (design.md "Opened Alias
+            // Instances").
+            if (alias.backing == .opened) break :blk false;
             for (self.types.sliceAliasArgs(alias)) |arg| {
                 if (try self.literalTargetContainsIdentity(arg, visited)) break :blk true;
             }

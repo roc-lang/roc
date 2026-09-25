@@ -572,6 +572,82 @@ test "unify - aliases with different names but same backing" {
     try std.testing.expectEqual(b_alias, (try env.getDescForRootVar(b)).content);
 }
 
+test "unify - two declared applications of one alias are related by their arguments" {
+    // Today's rule, kept for `.declared` instances: the backing is the
+    // declaration's body under the arguments, so the arguments decide and a
+    // backing disagreement is not reported.
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const other = try env.mkTag("Other", &[_]Var{});
+    const aborted = try env.mkTag("Aborted", &[_]Var{});
+    const narrow = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{other})).content);
+    const wide = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{ aborted, other })).content);
+    const a = try env.module_env.types.freshFromContent(try env.mkAlias("Base", wide, &[_]Var{}));
+    const b = try env.module_env.types.freshFromContent(try env.mkAlias("Base", narrow, &[_]Var{}));
+
+    try std.testing.expectEqual(.unified, try env.unify(a, b));
+}
+
+test "unify - an opened alias application is related to its alias by backing" {
+    // design.md "Opened Alias Instances": when either instance is `.opened`
+    // its arguments do not describe its backing, so the backings are related
+    // for real and their disagreement is the relation's mismatch.
+    for ([_]bool{ false, true }) |reverse| {
+        const gpa = std.testing.allocator;
+        var env = try TestEnv.init(gpa);
+        defer env.deinit();
+
+        const other = try env.mkTag("Other", &[_]Var{});
+        const aborted = try env.mkTag("Aborted", &[_]Var{});
+        const narrow = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{other})).content);
+        const wide = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{ aborted, other })).content);
+        var opened_content = try env.mkAlias("Base", wide, &[_]Var{});
+        opened_content.alias.backing = .opened;
+        const opened = try env.module_env.types.freshFromContent(opened_content);
+        const declared = try env.module_env.types.freshFromContent(try env.mkAlias("Base", narrow, &[_]Var{}));
+
+        const result = if (reverse) try env.unify(declared, opened) else try env.unify(opened, declared);
+        try std.testing.expectEqual(false, result.isAccepted());
+    }
+}
+
+test "unify - an opened alias application meets its alias by backing, not by arguments" {
+    // The opened instance's argument (`[Other]`) disagrees with the declared
+    // one's (`[Aborted, Other]`), but their backings agree, as the inline
+    // spelling's rows do. The merged view is the declared side, whose
+    // arguments are exactly the substitution of the backing both now share.
+    for ([_]bool{ false, true }) |reverse| {
+        const gpa = std.testing.allocator;
+        var env = try TestEnv.init(gpa);
+        defer env.deinit();
+
+        const other = try env.mkTag("Other", &[_]Var{});
+        const aborted = try env.mkTag("Aborted", &[_]Var{});
+        const opened_arg = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{other})).content);
+        const opened_backing = try env.module_env.types.freshFromContent((try env.mkTagUnionOpen(&[_]Tag{other})).content);
+        const declared_arg = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{ aborted, other })).content);
+        var opened_content = try env.mkAlias("Id", opened_backing, &[_]Var{opened_arg});
+        opened_content.alias.backing = .opened;
+        const opened = try env.module_env.types.freshFromContent(opened_content);
+        const declared_content = try env.mkAlias("Id", declared_arg, &[_]Var{declared_arg});
+        const declared = try env.module_env.types.freshFromContent(declared_content);
+
+        const result = if (reverse) try env.unify(declared, opened) else try env.unify(opened, declared);
+        try std.testing.expectEqual(.unified, result);
+        const merged = env.module_env.types.resolveVar(opened).desc.content;
+        try std.testing.expect(merged == .alias);
+        try std.testing.expectEqual(types_mod.AliasBacking.declared, merged.alias.backing);
+        try std.testing.expectEqual(env.module_env.types.resolveVar(declared).var_, env.module_env.types.resolveVar(opened).var_);
+        // The opened instance's own argument was never related.
+        try std.testing.expectEqual(
+            env.module_env.types.resolveVar(opened_arg).desc.content.structure.tag_union.tags.len(),
+            @as(usize, 1),
+        );
+    }
+}
+
 test "unify - alias with concrete" {
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);

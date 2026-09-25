@@ -2319,6 +2319,80 @@ Inference holes retain the existing body-checking and generalization rules, and
 the named method's static-dispatch constraint is preserved even when its type
 is incomplete.
 
+
+### Opened Alias Instances
+
+An alias instance records whether its backing is still exactly its
+declaration's body under its arguments (`Alias.backing == .declared`) or a copy
+opened something inside it (`.opened`). Unification substitutes into shared
+vars only, so it keeps a `.declared` instance's backing and arguments in
+agreement; only copying can separate them, which is why the mark lives on the
+alias content and not on a merged descriptor flag. An instance is `.opened`
+when its copy:
+
+- resolved a polarity marker OPEN (`PolarityVarBehavior.resolve_by_polarity`
+  in a positive position), anywhere in its backing, including inside a nested
+  alias. A marker closed as written (`.close`, a negative position) or kept for
+  a later decision (`.preserve`, `.defer_open`) is not an opening: a later
+  per-use instantiation that opens it marks the alias then;
+- substituted a result-row twin for an argument (`ResultRowTwin`), except a
+  host-boundary twin, which is the argument itself as written;
+- copied an alias that is already `.opened`, or reused (through the
+  instantiation memo) a copy that opened something;
+- is a layer or link a result-row twin or a coerced re-open copies around its
+  widened backing (`copiedAliasWithBacking`).
+
+Every copy carries the mark: instantiation, `copy_import` (an importer relates
+the copy exactly as the exporter relates the original), and the serialized
+module environment.
+
+The unification rule for two applications of one alias: when both are
+`.declared`, their arguments decide, and a disagreement of their backings is
+not reported (the backing is the body under the arguments, so it would be
+surfaced from the arguments). When EITHER is `.opened`, the arguments are
+never unified; the backings are related, and their disagreement is the
+relation's mismatch, reported once as the enclosing relation's error. Once the
+backings agree the two views merge, keeping a `.declared` side when there is
+one, since its arguments are exactly the substitution of the backing both now
+share. This is the relation the inline spelling gets, so identical types
+spelled through an alias or written in place decide identically:
+
+- rejected—a zero-argument alias opened at a result then widened
+  (`mk : Str -> Base` with `Base : [Other]`, `take(if c mk("") else Aborted)`
+  for `take : Base -> Str`), where comparing the empty argument lists accepted
+  the program and Monotype then found a widened closed row; a twin copied
+  through an alias link (`mk : Mk(Wrap([Other]))`) or down an alias chain
+  (`Mk(Errs)`, `Mk(Wrap(Base))`), and an alias argument opened in place
+  (`Str -> Wrap(Base)`), each widened the same way;
+- accepted—an opened instance meeting a wider application of its alias
+  (`x : Wrap([Other, Aborted])` from `mk : Mk(Wrap([Other]))` widened by
+  `Aborted`, and a re-opened `Wrap(Base)` use at `Wrap([Aborted, Other])`),
+  decided by the backings exactly as the inline spelling
+  `[Aborted, HostErr(U64), Other]` is.
+
+Checker decisions other than unification that read an alias's arguments as
+its structure read an `.opened` instance as its backing alone: static-dispatch
+receiver embedding and size (`dispatchEmbedCoupleGrade`,
+`dispatchEmbedDivesIntoChild`, `dispatchReceiverSizeInner`), the
+single-parameter wrapper payload of `record_builder` map2, host-boundary row
+rules, and literal-target identity. Walks that visit every var of the graph
+(rank, generalization, occurs, reachability, concreteness) still visit the
+arguments, which remain vars of the graph.
+
+An `.opened` instance keeps its alias name in presentation (`Fwd([NotFound])`,
+a re-opened `Errs`), so the checker's error-report writer prints its backing
+next to it (`Base (opened: [Aborted, Other])`), and a mismatch between two
+instances of one alias never reads `Base` against `Base`.
+
+The accepted and rejected sides are pinned in
+`src/check/test/type_checking_integration.zig` ("a zero-argument alias opened
+at the result is related by its backing", "a twin copied through an alias link
+widens to a wider application", "an imported opened alias instance is related
+by its backing", ...), `unify_test.zig` ("an opened alias application is
+related to its alias by backing"), `test_rigid_instantiation.zig`, and the LIR
+tests "row subsumption - an opened alias application widens into a wider
+application of its alias" and "... a re-opened alias application ...".
+
 ## Nominal Constructor Backing Relation
 
 An explicit nominal constructor chooses the nominal wrapper itself. Its operand
@@ -6609,7 +6683,11 @@ flex extension; `parse : Str -> Try(U8, [InvalidU8])` is one such signature.
 The same union in a negative position stays closed as written. A union with no
 tags (`[]`) is exempt: it asserts uninhabitedness (`Try(a, [])` needs no
 `Err` branch), which opening would destroy. Polarity is walk state only
-(`types.Polarity`); no new content kind exists.
+(`types.Polarity`); no new content kind exists. A union written in an alias
+declaration defers the decision to a marker its uses resolve; an alias instance
+whose copy resolved a marker open is an OPENED instance, related by its
+backing ("Opened Alias Instances" under "Type Alias Invariant"), while a
+marker closed or kept deferred leaves the instance `.declared`.
 
 What that opening MEANS depends on what is annotated. One spelling, two
 rules:
@@ -7093,19 +7171,19 @@ error tail, left by an already-reported type error, leaves the use unchanged;
 any other tail is an invariant violation, since a recorded coercion means the
 tail was grounded (by the body, or as written at a host boundary) and
 unification cannot re-open a closed row. An ALIAS link is re-opened through
-its backing. A row's extension can be an alias the annotation names—
+its backing and kept around the copy. A row's extension can be an alias the annotation names—
 `Errs : Wrap(Base)` with `Wrap(ext) : [HostErr(U64), ..ext]` continues
 `Errs`'s row through `Base`, whose own marker is the row's tail—and a hosted
 annotation closes that tail as written with no body to unify it away, so the
 link reaches every use.
 
-The copy keeps no alias layer anywhere on its spine: not the signature's
-(`Fwd`), not the result cell's (`IoResult(Str)`), not the row's (`Errs`), and
-not an extension link. Each of those aliases names the NARROW type the
-definition closed, and the copy is the wider type a use may widen it to, so a
-copied alias would present the widened row under a name whose declaration
-lists fewer tags, in every type the use reports. Alias spelling is
-presentation, so dropping it changes no verdict.
+The copy keeps every alias layer on its spine: the signature's (`Fwd`), the
+result cell's (`IoResult(Str)`), the row's (`Errs`), and every extension link.
+Each of those aliases names the NARROW type the definition closed while its
+copied backing is the wider type a use may widen it to, so each copied layer
+is an OPENED instance (see "Opened Alias Instances" under "Type Alias
+Invariant"): unification relates it by its backing, never by its arguments,
+and an error report prints its backing next to its name.
 
 A `[]` result row (`Try(U64, [])`) is never re-opened: `[]` asserts
 uninhabitedness, the annotation walk opens no such row, and the re-open finds
@@ -7174,17 +7252,15 @@ reads at most `max_result_row_twin_alias_layers` (8) alias layers and links of
 one argument's row; beyond either bound the argument gets no twin and its
 result occurrence stays closed, the conservative answer.
 
-An alias's argument list must stay the substitution its backing uses:
-unifying two applications of one alias relates their arguments, and a
-disagreement of their backings is not reported. So where every occurrence of
-a twinned formal in an alias took the twin (`Id([A, B])` at the result, or
-`Res(e)` standing on a function alias's result), the alias presents the twin
-as that argument. Where the alias also used the shared argument
-(`Fwd(e) : e -> e` with `fwd : Fwd([NotFound])`, closed at the input and open
-at the result), no one argument list is its substitution, and the
-instantiation presents the alias as its backing—`[NotFound] -> [NotFound]`,
-the inline spelling—exactly as the re-open drops the alias layers of a copy
-wider than the alias declares.
+An alias whose backing took a twin, and every alias layer a twin is copied
+through, is an OPENED instance ("Opened Alias Instances"): its backing is no
+longer its declaration's body under its arguments, so unification relates it
+by its backing. The layer is kept, and its arguments are presentation: where
+every occurrence of a twinned formal in an alias took the twin (`Id([A, B])`
+at the result, or `Res(e)` standing on a function alias's result), the alias
+reads the twin as that argument; where the alias also used the shared
+argument (`Fwd(e) : e -> e` with `fwd : Fwd([NotFound])`, closed at the input
+and open at the result), it reads the shared argument, `Fwd([NotFound])`.
 
 Every use of a coerced definition re-opens its row, however it names it: a
 local or external lookup, an associated lookup (`Type.item`, including through
@@ -9432,6 +9508,13 @@ update probe (see the record-update bullet in Field Kinds).
 Every solver-mutating rewrite in checking, classified. A change that adds a
 site to any family below must classify it here.
 
+Not listed, because it is not a rewrite: the "Opened Alias Instances" rule
+(under "Type Alias Invariant") is a rule of ordinary unification, deciding how
+two applications of one alias are related. It changes verdicts (programs
+whose widened row slipped past an argument comparison are now rejected), so it
+is declared there with both sides pinned, but it writes the solved graph only
+through unification's own merges.
+
 `dangerousSetVarRedirect` call sites (all in src/check/Check.zig; the
 `RedirectRule` member at each site is the citation):
 
@@ -9587,8 +9670,8 @@ Other solved-graph mutations:
   applied at the result row coerces", "a function alias argument whose row
   continues through an alias link coerces" (and its Try error variant), "an
   alias whose formal stands only on the result row presents its twin as its
-  argument", "an alias using its formal at the input and the result is
-  presented as its backing";
+  argument", "an alias using its formal at the input and the result keeps
+  its alias layer, opened";
   rejected—"a parameterised function alias keeps its input occurrence
   closed", "... does not reach a nested occurrence", "an alias argument
   nested through a function alias stays closed", "a function alias argument

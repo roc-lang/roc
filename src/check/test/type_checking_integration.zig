@@ -9741,7 +9741,7 @@ test "check type - polarity - a coerced Try error row whose extension is an alia
         \\wider : Try(U64, Errs) -> Try(U64, [HostErr(U64), Other, Widened])
         \\wider = |t| fwd(t)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, Errs) -> Try(U64, [HostErr(U64), Other, Widened])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, Errs) -> Try(U64, Errs)");
 }
 
 test "check type - polarity - a coerced direct row whose extension is an alias coerces" {
@@ -9792,7 +9792,7 @@ test "check type - polarity - an alias applied at the result row whose formal is
         \\wider : Try(U64, [HostErr(U64), Other]) -> Try(U64, [HostErr(U64), Other, Widened])
         \\wider = |t| fwd(t)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, [HostErr(U64), Other]) -> Try(U64, [HostErr(U64), Other, Widened])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, [HostErr(U64), Other]) -> Try(U64, Wrap(Base))");
 }
 
 test "check type - polarity - an identity alias applied at the result row coerces" {
@@ -9846,7 +9846,7 @@ test "check type - polarity - a function alias Try error argument whose row cont
         \\wider : Try(U64, Errs) -> Try(U64, [Aborted, HostErr(U64), Other])
         \\wider = |t| fwd(t)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, Errs) -> Try(U64, [Aborted, HostErr(U64), Other])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, Errs) -> Try(U64, Errs)");
 }
 
 test "check type - polarity - a function alias argument continuing through an alias link keeps its input closed" {
@@ -9868,8 +9868,8 @@ test "check type - polarity - a function alias argument continuing through an al
 }
 
 test "check type - polarity - an alias whose formal stands only on the result row presents its twin as its argument" {
-    // Unifying two applications of one alias decides by their arguments, so
-    // `Id([A, B])` at the result must carry the row its backing uses—the
+    // `Id([A, B])` at the result is `.opened` and related by its backing,
+    // but its argument list still reads as the row that backing uses—the
     // twin, which the forwarding body closed—not a second copy of the
     // argument that nothing constrains.
     const source =
@@ -9933,18 +9933,279 @@ test "check type - polarity - an alias whose formal stands only on the result ro
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check type - polarity - an alias using its formal at the input and the result is presented as its backing" {
+test "check type - polarity - an alias using its formal at the input and the result keeps its alias layer, opened" {
     // The input occurrence of `e` keeps the shared closed argument and the
-    // result occurrence takes the opened twin, so no one argument list is
-    // `Fwd`'s substitution: the type is presented as its backing, as the
-    // inline spelling `[NotFound] -> [NotFound]` is.
+    // result occurrence takes the opened twin. The alias layer is kept and
+    // reads as its argument list, but it is `.opened`: its backing is no
+    // longer its declaration's body under that list, so unification relates
+    // it by its backing (design.md "Opened Alias Instances").
     const source =
         \\Fwd(e) : e -> e
         \\
         \\fwd : Fwd([NotFound])
         \\fwd = |t| t
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "[NotFound] -> [NotFound]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Fwd([NotFound])");
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try expectDefAliasBacking(&test_env, "fwd", .opened);
+}
+
+/// Assert that `def_name`'s type is an alias application whose backing is
+/// `backing`.
+fn expectDefAliasBacking(test_env: *TestEnv, def_name: []const u8, backing: types.AliasBacking) error{TestUnexpectedResult}!void {
+    const types_store = &test_env.module_env.types;
+    const idents = test_env.module_env.getIdentStoreConst();
+    for (test_env.module_env.store.sliceDefs(test_env.module_env.all_defs)) |def_idx| {
+        const def = test_env.module_env.store.getDef(def_idx);
+        const ptrn = test_env.module_env.store.getPattern(def.pattern);
+        if (ptrn != .assign) continue;
+        if (!std.mem.eql(u8, def_name, idents.getText(ptrn.assign.ident))) continue;
+        const content = types_store.resolveVar(ModuleEnv.varFrom(def_idx)).desc.content;
+        if (content != .alias) return error.TestUnexpectedResult;
+        if (content.alias.backing != backing) return error.TestUnexpectedResult;
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "check type - polarity - a zero-argument alias opened at the result is related by its backing" {
+    // `mk`'s result opens `Base`'s row, so the instance is `.opened`, and the
+    // widened `z` is related to `take`'s closed `Base` by backing, not by the
+    // (empty) argument list.
+    const source =
+        \\Base : [Other]
+        \\
+        \\mk : Str -> Base
+        \\mk = |_| Other
+        \\
+        \\take : Base -> Str
+        \\take = |b| match b { Other => "o" }
+        \\
+        \\z = if Bool.True mk("") else Aborted
+        \\
+        \\r = take(z)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - a zero-argument alias opened at the result still meets its closed spelling" {
+    const source =
+        \\Base : [Other]
+        \\
+        \\mk : Str -> Base
+        \\mk = |_| Other
+        \\
+        \\take : Base -> Str
+        \\take = |b| match b { Other => "o" }
+        \\
+        \\r = take(mk(""))
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - polarity - a twin copied through an alias link is related by its backing" {
+    const source =
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Mk(e) : Str -> e
+        \\
+        \\mk : Mk(Wrap([Other]))
+        \\mk = |_| Other
+        \\
+        \\take : Wrap([Other]) -> Str
+        \\take = |b| match b { Other => "o", HostErr(_) => "h" }
+        \\
+        \\z = if Bool.True mk("") else Aborted
+        \\
+        \\r = take(z)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - a twin copied through an alias link widens to a wider application" {
+    // The twin's `Wrap` layer is `.opened`, so it meets `Wrap([Other,
+    // Aborted])` by its backing, the inline spelling's relation: the widened
+    // row `[Aborted, HostErr(U64), Other]` is exactly that application.
+    const source =
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Mk(e) : Str -> e
+        \\
+        \\mk : Mk(Wrap([Other]))
+        \\mk = |_| Other
+        \\
+        \\x : Wrap([Other, Aborted])
+        \\x = if Bool.True mk("") else Aborted
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Wrap([Aborted, Other])");
+}
+
+test "check type - polarity - a twin copied down an alias chain is related by its backing" {
+    const source =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\Mk(e) : Str -> e
+        \\
+        \\mk : Mk(Errs)
+        \\mk = |_| Other
+        \\
+        \\take : Errs -> Str
+        \\take = |b| match b { Other => "o", HostErr(_) => "h" }
+        \\
+        \\z = if Bool.True mk("") else Aborted
+        \\
+        \\r = take(z)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - a twin of an alias applied to an alias is related by its backing" {
+    const source =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Mk(e) : Str -> e
+        \\
+        \\mk : Mk(Wrap(Base))
+        \\mk = |_| Other
+        \\
+        \\take : Wrap(Base) -> Str
+        \\take = |b| match b { Other => "o", HostErr(_) => "h" }
+        \\
+        \\z = if Bool.True mk("") else Aborted
+        \\
+        \\r = take(z)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - an alias argument opened inline at the result is related by its backing" {
+    const source =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\mk : Str -> Wrap(Base)
+        \\mk = |_| Other
+        \\
+        \\take : Wrap(Base) -> Str
+        \\take = |b| match b { Other => "o", HostErr(_) => "h" }
+        \\
+        \\z = if Bool.True mk("") else Aborted
+        \\
+        \\r = take(z)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - an identity alias twin still bounds a widened use" {
+    const source =
+        \\Id(a) : a
+        \\
+        \\mk : Str -> Id([A, B])
+        \\mk = |_| A
+        \\
+        \\take : Id([A, B]) -> Str
+        \\take = |_| "t"
+        \\
+        \\r = take(if Bool.True mk("") else C)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - a Try error twin still bounds a widened use" {
+    const source =
+        \\Fwd(e) : Str -> Try(U64, e)
+        \\
+        \\mk : Fwd([A, B])
+        \\mk = |_| Err(A)
+        \\
+        \\take : Try(U64, [A, B]) -> Str
+        \\take = |_| "t"
+        \\
+        \\r = take(if Bool.True mk("") else Err(C))
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - a re-opened use keeps its alias layers, opened" {
+    // The use `g = fwd` re-opens the coerced result row. The copy keeps the
+    // alias names along its spine (`Errs`), each `.opened`.
+    const source =
+        \\Errs : [A, B]
+        \\
+        \\fwd : Errs -> Errs
+        \\fwd = |e| e
+        \\
+        \\g = fwd
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Errs -> Errs");
+}
+
+test "check type - polarity - a mismatch between two opened alias instances shows their backings" {
+    const source =
+        \\Base : [Other]
+        \\
+        \\mk : Str -> Base
+        \\mk = |_| Other
+        \\
+        \\take : Base -> Str
+        \\take = |b| match b { Other => "o" }
+        \\
+        \\z = if Bool.True mk("") else Aborted
+        \\
+        \\r = take(z)
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\The first argument being passed to this function has the wrong type.
+        \\```roc
+        \\r = take(z)
+        \\```
+        \\         ^
+        \\
+        \\This argument has the type:
+        \\
+        \\    Base (opened: [Aborted, Other])
+        \\
+        \\But `take` needs the first argument to be:
+        \\
+        \\    Base
+        \\
+        \\
+    );
+}
+
+test "check type - polarity - an imported opened alias instance is related by its backing" {
+    const source_lib =
+        \\module [Base, mk]
+        \\
+        \\Base : [Other]
+        \\
+        \\mk : Str -> Base
+        \\mk = |_| Other
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\take : Lib.Base -> Str
+        \\take = |b| match b { Other => "o" }
+        \\
+        \\r = take(if Bool.True Lib.mk("") else Aborted)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertOneTypeError("Type Mismatch");
 }
 
 test "check type - polarity - a result-row twin standing as a row's extension coerces" {

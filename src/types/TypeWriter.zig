@@ -68,6 +68,8 @@ count_pending: std.array_list.Managed(Var),
 /// Row collection runs to completion without rendering anything, so one
 /// buffer serves every row node.
 ext_seen: std.AutoHashMap(Var, void),
+/// How an `.opened` alias instance is rendered (see `OpenedAliasDisplay`).
+opened_aliases: OpenedAliasDisplay = .name_only,
 next_name_index: u32,
 name_counters: std.EnumMap(TypeContext, u32),
 flex_var_names_map: std.AutoHashMap(Var, FlexVarNameRange),
@@ -178,10 +180,36 @@ const TagUnionExt = union(enum) {
 /// invalidated by growth of the store it points into.
 const Frame = union(enum) {
     args: ArgsFrame,
+    opened_alias: OpenedAliasFrame,
     func: FuncFrame,
     record: RecordFrame,
     tag_union: TagUnionFrame,
     tag: TagFrame,
+};
+
+/// How to render an alias instance whose backing an instantiation opened
+/// (`types.AliasBacking.opened`, design.md "Opened Alias Instances"). Its
+/// arguments are presentation of the NARROW declaration while its backing may
+/// have been widened, so two such instances can render identically while
+/// their types differ.
+pub const OpenedAliasDisplay = enum {
+    /// The alias's name and arguments, like any alias.
+    name_only,
+    /// The alias's name and arguments followed by its backing:
+    /// `Base (opened: [Aborted, Other])`. Error reports use this, so a
+    /// mismatch between two instances of one alias never reads `Base` vs
+    /// `Base`.
+    name_and_backing,
+};
+
+/// An `.opened` alias rendered with its backing (`OpenedAliasDisplay`): its
+/// arguments, then its backing. The frame owns the `seen` entry its node
+/// pushed.
+const OpenedAliasFrame = struct {
+    args: Var.SafeList.Range,
+    backing: Var,
+    idx: u32 = 0,
+    stage: enum { args, done } = .args,
 };
 
 /// A parenthesised, comma-separated run of child vars: alias arguments,
@@ -613,6 +641,7 @@ fn driveFrames(self: *TypeWriter, writer: *ByteWrite, frames_base: usize, root_v
         const top = &self.frames.items[self.frames.items.len - 1];
         const finished = switch (top.*) {
             .args => |*frame| try self.stepArgs(writer, frame, root_var),
+            .opened_alias => |*frame| try self.stepOpenedAlias(writer, frame, root_var),
             .func => |*frame| try self.stepFunc(writer, frame, root_var),
             .record => |*frame| try self.stepRecord(writer, frame, root_var),
             .tag_union => |*frame| try self.stepTagUnion(writer, frame, root_var),
@@ -739,10 +768,43 @@ fn startAlias(self: *TypeWriter, writer: *ByteWrite, alias: Alias) error{ OutOfM
     // its arguments are the span with that element dropped.
     var args = alias.vars.nonempty;
     args.dropFirstElem();
+    if (alias.backing == .opened and self.opened_aliases == .name_and_backing) {
+        if (args.len() > 0) try writer.writeAll("(");
+        try self.frames.append(.{ .opened_alias = .{
+            .args = args,
+            .backing = self.types.getAliasBackingVar(alias),
+        } });
+        return true;
+    }
     if (args.len() == 0) return false;
     try writer.writeAll("(");
     try self.frames.append(.{ .args = .{ .vars = args, .context = .General } });
     return true;
+}
+
+fn stepOpenedAlias(self: *TypeWriter, writer: *ByteWrite, frame: *OpenedAliasFrame, root_var: Var) error{ OutOfMemory, WriteFailed }!bool {
+    while (true) {
+        switch (frame.stage) {
+            .args => {
+                if (frame.idx < frame.args.len()) {
+                    if (frame.idx > 0) try writer.writeAll(", ");
+                    const child = self.varAt(frame.args, frame.idx);
+                    frame.idx += 1;
+                    if (!try self.requestVar(writer, child, .General, root_var)) return false;
+                    continue;
+                }
+                if (frame.args.len() > 0) try writer.writeAll(")");
+                try writer.writeAll(" (opened: ");
+                frame.stage = .done;
+                if (!try self.requestVar(writer, frame.backing, .General, root_var)) return false;
+            },
+            .done => {
+                try writer.writeAll(")");
+                self.popSeen();
+                return true;
+            },
+        }
+    }
 }
 
 /// Write a flat type's leading bytes, returning true when a frame was pushed.
@@ -1507,10 +1569,14 @@ fn collectCountChildren(self: *TypeWriter, content: Content) std.mem.Allocator.E
             }
         },
         .alias => |alias| {
-            // For aliases, we only count occurrences in the type arguments
+            // For aliases, we only count occurrences in the type arguments,
+            // and in the backing when it is rendered too.
             var args_iter = self.types.iterAliasArgs(alias);
             while (args_iter.next()) |arg_var| {
                 try self.count_pending.append(arg_var);
+            }
+            if (alias.backing == .opened and self.opened_aliases == .name_and_backing) {
+                try self.count_pending.append(self.types.getAliasBackingVar(alias));
             }
         },
         .structure => |flat_type| {

@@ -928,6 +928,7 @@ pub const Store = struct {
             origin_module,
             source_decl,
             false,
+            .declared,
         );
     }
 
@@ -939,6 +940,7 @@ pub const Store = struct {
         origin_module: base.ModuleIdentity.Idx,
         source_decl: ?u32,
         builtin_origin: bool,
+        backing: types.AliasBacking,
     ) std.mem.Allocator.Error!Content {
         const packed_source_decl = try SourceDecl.fromOptionalWithBuiltinOriginChecked(source_decl, builtin_origin);
         const backing_idx = try self.appendVar(backing_var);
@@ -954,6 +956,7 @@ pub const Store = struct {
                 .vars = .{ .nonempty = span },
                 .origin_module = origin_module,
                 .source_decl = packed_source_decl,
+                .backing = backing,
             },
         };
     }

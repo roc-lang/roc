@@ -9296,6 +9296,52 @@ test "row subsumption re-tags a function alias argument whose row continues thro
     , 1);
 }
 
+test "row subsumption - an opened alias application widens into a wider application of its alias" {
+    // `mk`'s result is a twin copied through the alias link `Wrap`, an
+    // `.opened` instance. It meets `Wrap([Aborted, Other])` by its backing
+    // (design.md "Opened Alias Instances"), as the inline spelling
+    // `[Aborted, HostErr(U64), Other]` does.
+    try expectRowSubsumptionProgram(
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Mk(e) : Str -> e
+        \\
+        \\mk : Mk(Wrap([Other]))
+        \\mk = |_| Other
+        \\
+        \\pick : Bool -> Wrap([Aborted, Other])
+        \\pick = |b| if b mk("") else Aborted
+        \\
+        \\show : Wrap([Aborted, Other]) -> Str
+        \\show = |v| match v { Aborted => "Aborted", HostErr(_) => "HostErr", Other => "Other" }
+        \\
+        \\main : Bool
+        \\main = show(pick(Bool.True)) == "Other" and show(pick(Bool.False)) == "Aborted"
+    , 0);
+}
+
+test "row subsumption - a re-opened alias application widens into a wider application of its alias" {
+    // The use's re-opened result keeps its alias layers, `.opened`, and meets
+    // the wider application of the same alias by backing.
+    try expectRowSubsumptionProgram(
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\fwd : Wrap(Base) -> Wrap(Base)
+        \\fwd = |t| t
+        \\
+        \\wider : Wrap(Base) -> Wrap([Aborted, Other])
+        \\wider = |t| fwd(t)
+        \\
+        \\show : Wrap([Aborted, Other]) -> Str
+        \\show = |v| match v { Aborted => "Aborted", HostErr(_) => "HostErr", Other => "Other" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Other)) == "Other" and show(wider(HostErr(1))) == "HostErr"
+    , 1);
+}
+
 test "row subsumption re-tags an identity alias applied at the result row" {
     // `Aborted` sorts between `A` and `B`, so `B`'s discriminant shifts in
     // the widened row.

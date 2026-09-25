@@ -663,3 +663,96 @@ test "instantiate - annotation tag closure authority belongs to the definition" 
     try std.testing.expect(faithful_copy != original);
     try std.testing.expect(env.types.resolveVar(faithful_copy).desc.flags.annotation_tag_ext);
 }
+
+/// A generalized zero-argument alias `Base : [Other]` whose union's extension
+/// is the declaration's polarity marker (`types.polarity_var_text`).
+fn mkMarkerAlias(env: *TestEnv, name: []const u8) std.mem.Allocator.Error!Var {
+    const marker = try env.types.freshFromContentWithRank(try env.mkRigidVar(types_mod.polarity_var_text), .generalized);
+    const other = try env.idents.insert(env.gpa, .for_text("Other"));
+    const tags = try env.types.appendTags(&[_]Tag{.{ .name = other, .args = try env.types.appendVars(&[_]Var{}) }});
+    const backing = try env.types.freshFromContentWithRank(.{ .structure = .{ .tag_union = .{ .tags = tags, .ext = marker } } }, .generalized);
+    return try env.types.freshFromContentWithRank(try env.mkAlias(name, backing, &[_]Var{}, base.ModuleIdentity.Idx.NONE), .generalized);
+}
+
+fn instantiateWithMarkers(
+    env: *TestEnv,
+    var_: Var,
+    behavior: Instantiator.PolarityVarBehavior,
+    polarity: types_mod.Polarity,
+) std.mem.Allocator.Error!Var {
+    var instantiator = Instantiator{
+        .store = &env.types,
+        .idents = &env.idents,
+        .var_map = &env.var_map,
+        .rigid_behavior = .fresh_flex,
+        .current_rank = .outermost,
+        .polarity_var_ident = try env.idents.insert(env.gpa, .for_text(types_mod.polarity_var_text)),
+        .polarity_var_behavior = behavior,
+        .current_polarity = polarity,
+    };
+    env.var_map.clearRetainingCapacity();
+    return try instantiator.instantiateVar(var_);
+}
+
+fn aliasBackingOf(env: *TestEnv, var_: Var) types_mod.AliasBacking {
+    return env.types.resolveVar(var_).desc.content.alias.backing;
+}
+
+test "instantiate - an alias whose marker opens is opened; a closed or deferred one stays declared" {
+    // design.md "Opened Alias Instances".
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const original = try mkMarkerAlias(&env, "Base");
+    try std.testing.expectEqual(types_mod.AliasBacking.opened, aliasBackingOf(&env, try instantiateWithMarkers(&env, original, .resolve_by_polarity, .pos)));
+    try std.testing.expectEqual(types_mod.AliasBacking.declared, aliasBackingOf(&env, try instantiateWithMarkers(&env, original, .resolve_by_polarity, .neg)));
+    try std.testing.expectEqual(types_mod.AliasBacking.declared, aliasBackingOf(&env, try instantiateWithMarkers(&env, original, .close, .pos)));
+    try std.testing.expectEqual(types_mod.AliasBacking.declared, aliasBackingOf(&env, try instantiateWithMarkers(&env, original, .preserve, .pos)));
+}
+
+test "instantiate - an opening inside a nested alias opens every enclosing alias" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const inner = try mkMarkerAlias(&env, "Base");
+    const outer = try env.types.freshFromContentWithRank(try env.mkAlias("Errs", inner, &[_]Var{}, base.ModuleIdentity.Idx.NONE), .generalized);
+    const copy = try instantiateWithMarkers(&env, outer, .resolve_by_polarity, .pos);
+    try std.testing.expectEqual(types_mod.AliasBacking.opened, aliasBackingOf(&env, copy));
+    const inner_copy = env.types.getAliasBackingVar(env.types.resolveVar(copy).desc.content.alias);
+    try std.testing.expectEqual(types_mod.AliasBacking.opened, aliasBackingOf(&env, inner_copy));
+}
+
+test "instantiate - a copy of an opened alias stays opened and opens its enclosing alias" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const empty = try env.types.freshFromContentWithRank(.{ .structure = .empty_tag_union }, .generalized);
+    var opened_content = try env.mkAlias("Base", empty, &[_]Var{}, base.ModuleIdentity.Idx.NONE);
+    opened_content.alias.backing = .opened;
+    const opened = try env.types.freshFromContentWithRank(opened_content, .generalized);
+    const outer = try env.types.freshFromContentWithRank(try env.mkAlias("Errs", opened, &[_]Var{}, base.ModuleIdentity.Idx.NONE), .generalized);
+    const copy = try instantiateWithMarkers(&env, outer, .close, .pos);
+    try std.testing.expectEqual(types_mod.AliasBacking.opened, aliasBackingOf(&env, copy));
+    const inner_copy = env.types.getAliasBackingVar(env.types.resolveVar(copy).desc.content.alias);
+    try std.testing.expectEqual(types_mod.AliasBacking.opened, aliasBackingOf(&env, inner_copy));
+}
+
+test "instantiate - an alias reusing a copy that opened is opened too" {
+    // Two aliases share one backing: the second visit reuses the first's copy
+    // through the memo, and still learns that the copy opened a marker.
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const first = try mkMarkerAlias(&env, "Base");
+    const shared_backing = env.types.getAliasBackingVar(env.types.resolveVar(first).desc.content.alias);
+    const second = try env.types.freshFromContentWithRank(try env.mkAlias("Other", shared_backing, &[_]Var{}, base.ModuleIdentity.Idx.NONE), .generalized);
+    const pair = try env.types.freshFromContentWithRank(try env.mkTuple(&[_]Var{ first, second }), .generalized);
+    const copy = try instantiateWithMarkers(&env, pair, .resolve_by_polarity, .pos);
+    const elems = env.types.sliceVars(env.types.resolveVar(copy).desc.content.structure.tuple.elems);
+    try std.testing.expectEqual(types_mod.AliasBacking.opened, aliasBackingOf(&env, elems[0]));
+    try std.testing.expectEqual(types_mod.AliasBacking.opened, aliasBackingOf(&env, elems[1]));
+}

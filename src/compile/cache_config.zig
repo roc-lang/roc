@@ -266,7 +266,12 @@ pub const Constants = struct {
     ///      error row, was closed by forwarding records a row coercion marked
     ///      as a value's, and every lookup that re-opens a coerced row records
     ///      that it did (`ResultRowReopen`), which post-check stages read.
-    pub const CACHE_VERSION = 115;
+    /// 116: Every type alias instance records whether its backing is still
+    ///      its declaration's body under its arguments or a copy opened
+    ///      something inside it (`Alias.backing`); an opened instance is
+    ///      related to another application of its alias by its backing, and
+    ///      alias layers survive re-opens and result-row twins.
+    pub const CACHE_VERSION = 116;
 };
 
 /// Configuration for the Roc cache system.

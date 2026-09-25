@@ -34,7 +34,7 @@ test {
     // If it went up, please make sure your changes are absolutely required!
     try std.testing.expectEqual(32, @sizeOf(Descriptor));
     try std.testing.expectEqual(28, @sizeOf(Content));
-    try std.testing.expectEqual(20, @sizeOf(Alias));
+    try std.testing.expectEqual(24, @sizeOf(Alias));
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to source identity and opacity bits
@@ -359,6 +359,25 @@ pub const Alias = struct {
     /// this alias came from a concrete source declaration. A decl LOCATOR for
     /// resolving method tables in the owning env—never part of identity.
     source_decl: SourceDecl = .none,
+    /// Whether this instance's backing is still exactly its declaration's
+    /// body under its arguments (`.declared`), or a copy opened something
+    /// inside it (`.opened`): a polarity marker resolved open, a result-row
+    /// twin substituted for an argument, or a coerced row re-opened. Only a
+    /// `.declared` instance may be related to another application of its
+    /// alias by its arguments; an `.opened` one is related by its backing
+    /// (design.md "Opened Alias Instances"). No default: every producer
+    /// states which it built.
+    backing: AliasBacking,
+};
+
+/// See `Alias.backing`.
+pub const AliasBacking = enum(u8) {
+    declared,
+    opened,
+
+    pub fn join(a: AliasBacking, b: AliasBacking) AliasBacking {
+        return if (a == .opened or b == .opened) .opened else .declared;
+    }
 };
 
 /// Represents an ident of a type

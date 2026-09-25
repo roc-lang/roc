@@ -961,7 +961,11 @@ const Unifier = struct {
             .alias => |b_alias| {
                 const b_backing_var = self.types_store.getAliasBackingVar(b_alias);
                 if (sameAliasIdentity(a_alias, b_alias)) {
-                    try self.unifyTwoAliases(vars, a_alias, b_alias);
+                    if (a_alias.backing == .declared and b_alias.backing == .declared) {
+                        try self.unifyTwoAliases(vars, a_alias, b_alias);
+                    } else {
+                        try self.unifyOpenedSameAliases(vars, a_alias, b_alias);
+                    }
                 } else {
                     try self.unifyGuarded(backing_var, b_backing_var);
                 }
@@ -1024,6 +1028,34 @@ const Unifier = struct {
                 .{ .set_flag = did_arg_error_flag },
             );
         }
+    }
+
+    /// Unify two applications of one alias when either is `.opened`
+    /// (design.md "Opened Alias Instances"): its backing is no longer its
+    /// declaration's body under its arguments, so the arguments do not decide
+    /// the relation and are never unified. The backings are related for real,
+    /// and a disagreement is this relation's mismatch. Once they agree the
+    /// two views merge; a `.declared` side is kept when there is one, since
+    /// its arguments are exactly the substitution of the backing both now
+    /// share.
+    fn unifyOpenedSameAliases(self: *Self, vars: *const ResolvedVarDescs, a_alias: Alias, b_alias: Alias) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
+        const merged: Content = if (b_alias.backing == .declared)
+            .{ .alias = b_alias }
+        else if (a_alias.backing == .declared)
+            .{ .alias = a_alias }
+        else
+            .{ .alias = b_alias };
+        // The merge is pushed first so it runs only after the backings have
+        // been related; a mismatch there unwinds past it.
+        try self.scheduleMerge(vars.*, merged);
+        try self.scheduleGuardedPair(
+            self.types_store.getAliasBackingVar(a_alias),
+            self.types_store.getAliasBackingVar(b_alias),
+            .propagate,
+        );
     }
 
     // Unify structure //
