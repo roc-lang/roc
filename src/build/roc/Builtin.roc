@@ -3458,7 +3458,8 @@ Builtin :: [].{
 
 	## An effectful iterator: identical to [Iter] except that its `step!` thunk is
 	## effectful, so combinators like [Stream.map!] can run effects per item while
-	## staying lazy. Produced from an [Iter] via [Iter.map!] and driven by [Stream.collect!].
+	## staying lazy. Produced from an [Iter] via [Iter.map!], or from an effectful source
+	## via [Stream.custom], and driven by [Stream.collect!].
 	Stream(item) :: {
 		len_if_known : [Known(U64), Unknown],
 		step! : () => [One({ item : item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done],
@@ -3476,6 +3477,37 @@ Builtin :: [].{
 						Done => Done
 						Skip({ rest }) => Skip({ rest: Stream.from_iter(rest) })
 						One({ item, rest }) => One({ item, rest: Stream.from_iter(rest) })
+					},
+			}
+
+		## Build a lazy, effectful stream from a seed; the effectful counterpart of [Iter.custom].
+		## Each pull runs `advance!` exactly once: `Ok((item, next_state))` yields `item` and
+		## continues from `next_state`, while `Err(NoMore)` ends the stream. Building the
+		## stream runs no effects. `Known(n)` promises exactly n items; sources whose length
+		## is only discovered by reading (files, stdin, sockets) use `Unknown`.
+		##
+		## Source errors belong in `item` (e.g. `Try(List(U8), ReadErr)`). To stop after an
+		## error, yield it paired with a terminal state that holds no resource, so the
+		## resource is released rather than retained by the rest of the stream.
+		custom : state, [Known(U64), Unknown], (state => Try((item, state), [NoMore])) -> Stream(item)
+		custom = |seed, len_if_known, advance!|
+			{
+				len_if_known,
+				step!: ||
+					match advance!(seed) {
+						Ok((item, next_seed)) =>
+							One({
+								item,
+								rest: Stream.custom(
+									next_seed,
+									match len_if_known {
+										Known(l) => Known(l - 1)
+										Unknown => Unknown
+									},
+									advance!,
+								),
+							})
+						Err(NoMore) => Done
 					},
 			}
 
