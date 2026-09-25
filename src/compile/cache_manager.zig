@@ -181,19 +181,25 @@ pub const CacheManager = struct {
         };
         defer allocator.free(cache_path);
 
-        const temp_path = std.fmt.allocPrint(allocator, "{s}.tmp", .{cache_path}) catch {
+        // Concurrent compilers can publish the same key. Each writer needs its
+        // own staging file so one rename cannot remove another writer's input.
+        var suffix: [16]u8 = undefined;
+        self.roc_ctx.std_io.random(&suffix);
+        const temp_path = std.fmt.allocPrint(allocator, "{s}.{s}.tmp", .{ cache_path, std.fmt.bytesToHex(suffix, .lower) }) catch {
             self.recordStoreFailureFor(kind);
             return;
         };
         defer allocator.free(temp_path);
 
         self.roc_ctx.writeFile(temp_path, data) catch |err| {
+            self.roc_ctx.deleteFile(temp_path) catch {};
             self.verboseLog("Failed to write cache temp file {s}: {}\n", .{ temp_path, err });
             self.recordStoreFailureFor(kind);
             return;
         };
 
         self.roc_ctx.rename(temp_path, cache_path) catch |err| {
+            self.roc_ctx.deleteFile(temp_path) catch {};
             self.verboseLog("Failed to rename cache file {s} -> {s}: {}\n", .{ temp_path, cache_path, err });
             self.recordStoreFailureFor(kind);
             return;

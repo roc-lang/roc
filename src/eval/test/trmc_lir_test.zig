@@ -53,7 +53,7 @@ const ProcBuilder = struct {
             .frame_locals = try self.store.addLocalSpan(self.locals.items),
             .body = body,
             .ret_layout = ret_layout,
-        });
+        }, .none);
     }
 };
 
@@ -69,7 +69,7 @@ fn lowLevelStmtWithUnique(store: *LirStore, target: LocalId, op: LowLevel, args:
         .args = try store.addLocalSpan(args),
         .unique_args = unique_args,
         .next = next,
-    } });
+    } }, .test_fixture);
 }
 
 /// Hand off a fresh join point id, mirroring how the real lowering allocates
@@ -110,7 +110,7 @@ test "ptr_alloca slot is zeroed and ptr_store/ptr_load round trip" {
     const post = try b.addLocal(allocator, .u64);
     const sum = try b.addLocal(allocator, .u64);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } }, .test_fixture);
     const add = try lowLevelStmt(&store, sum, .num_int_add_wrap, &.{ pre, post }, ret);
     const load_post = try lowLevelStmt(&store, post, .ptr_load, &.{slot}, add);
     const store_v = try lowLevelStmt(&store, st, .ptr_store, &.{ slot, v }, load_post);
@@ -118,7 +118,7 @@ test "ptr_alloca slot is zeroed and ptr_store/ptr_load round trip" {
         .target = v,
         .value = .{ .i64_literal = .{ .value = 41, .layout_idx = .u64 } },
         .next = store_v,
-    } });
+    } }, .test_fixture);
     // Loading before any store proves the alloca slot was zero-initialized.
     const load_pre = try lowLevelStmt(&store, pre, .ptr_load, &.{slot}, v_lit);
     const alloca = try lowLevelStmt(&store, slot, .ptr_alloca, &.{}, load_pre);
@@ -154,19 +154,19 @@ test "box_prepare_update reuses a statically unique box" {
     const st = try b.addLocal(allocator, .zst);
     const loaded = try b.addLocal(allocator, .u64);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = loaded } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = loaded } }, .test_fixture);
     const drop_prepared = try store.addCFStmt(.{ .decref = .{
         .value = prepared,
         .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } },
         .next = ret,
-    } });
+    } }, .test_fixture);
     const load = try lowLevelStmt(&store, loaded, .ptr_load, &.{p}, drop_prepared);
     const store_replacement = try lowLevelStmt(&store, st, .ptr_store, &.{ p, replacement }, load);
     const replacement_lit = try store.addCFStmt(.{ .assign_literal = .{
         .target = replacement,
         .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u64 } },
         .next = store_replacement,
-    } });
+    } }, .test_fixture);
     const cast = try lowLevelStmt(&store, p, .ptr_cast, &.{prepared}, replacement_lit);
     const prepare = try lowLevelStmtWithUnique(&store, prepared, .box_prepare_update, &.{boxed}, 1, cast);
     const box_initial = try lowLevelStmt(&store, boxed, .box_box, &.{initial}, prepare);
@@ -174,7 +174,7 @@ test "box_prepare_update reuses a statically unique box" {
         .target = initial,
         .value = .{ .i64_literal = .{ .value = 5, .layout_idx = .u64 } },
         .next = box_initial,
-    } });
+    } }, .test_fixture);
     const proc = try b.finishProc(&.{}, initial_lit, .u64);
 
     try std.testing.expectEqual(@as(u64, 7), try runProcU64(allocator, &store, &layouts, proc, &runtime_env));
@@ -207,17 +207,17 @@ test "box_prepare_update copies a shared box and leaves the original unchanged" 
     const new_value = try b.addLocal(allocator, .u64);
     const sum = try b.addLocal(allocator, .u64);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } }, .test_fixture);
     const drop_boxed = try store.addCFStmt(.{ .decref = .{
         .value = boxed,
         .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } },
         .next = ret,
-    } });
+    } }, .test_fixture);
     const drop_prepared = try store.addCFStmt(.{ .decref = .{
         .value = prepared,
         .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } },
         .next = drop_boxed,
-    } });
+    } }, .test_fixture);
     const add = try lowLevelStmt(&store, sum, .num_int_add_wrap, &.{ old_value, new_value }, drop_prepared);
     const load_new = try lowLevelStmt(&store, new_value, .ptr_load, &.{new_p}, add);
     const load_old = try lowLevelStmt(&store, old_value, .ptr_load, &.{old_p}, load_new);
@@ -226,7 +226,7 @@ test "box_prepare_update copies a shared box and leaves the original unchanged" 
         .target = replacement,
         .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u64 } },
         .next = store_replacement,
-    } });
+    } }, .test_fixture);
     const cast_new = try lowLevelStmt(&store, new_p, .ptr_cast, &.{prepared}, replacement_lit);
     const cast_old = try lowLevelStmt(&store, old_p, .ptr_cast, &.{boxed}, cast_new);
     const prepare = try lowLevelStmt(&store, prepared, .box_prepare_update, &.{boxed}, cast_old);
@@ -235,13 +235,13 @@ test "box_prepare_update copies a shared box and leaves the original unchanged" 
         .rc = .{ .concrete = .{ .op = .incref, .layout_idx = box_u64 } },
         .count = 1,
         .next = prepare,
-    } });
+    } }, .test_fixture);
     const box_initial = try lowLevelStmt(&store, boxed, .box_box, &.{initial}, incref_boxed);
     const initial_lit = try store.addCFStmt(.{ .assign_literal = .{
         .target = initial,
         .value = .{ .i64_literal = .{ .value = 5, .layout_idx = .u64 } },
         .next = box_initial,
-    } });
+    } }, .test_fixture);
     const proc = try b.finishProc(&.{}, initial_lit, .u64);
 
     try std.testing.expectEqual(@as(u64, 12), try runProcU64(allocator, &store, &layouts, proc, &runtime_env));
@@ -277,23 +277,23 @@ test "ptr ops round trip a multi-word payload through a heap cell" {
     const f1 = try b.addLocal(allocator, .u64);
     const sum = try b.addLocal(allocator, .u64);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } }, .test_fixture);
     const drop_cell = try store.addCFStmt(.{ .decref = .{
         .value = cell,
         .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_pair } },
         .next = ret,
-    } });
+    } }, .test_fixture);
     const add = try lowLevelStmt(&store, sum, .num_int_add_wrap, &.{ f0, f1 }, drop_cell);
     const get_f1 = try store.addCFStmt(.{ .assign_ref = .{
         .target = f1,
         .op = .{ .field = .{ .source = loaded, .field_idx = 1 } },
         .next = add,
-    } });
+    } }, .test_fixture);
     const get_f0 = try store.addCFStmt(.{ .assign_ref = .{
         .target = f0,
         .op = .{ .field = .{ .source = loaded, .field_idx = 0 } },
         .next = get_f1,
-    } });
+    } }, .test_fixture);
     const load_pair = try lowLevelStmt(&store, loaded, .ptr_load, &.{p}, get_f0);
     const store_pair = try lowLevelStmt(&store, st, .ptr_store, &.{ p, made }, load_pair);
     const cast = try lowLevelStmt(&store, p, .ptr_cast, &.{cell}, store_pair);
@@ -302,17 +302,17 @@ test "ptr ops round trip a multi-word payload through a heap cell" {
         .target = made,
         .fields = try store.addLocalSpan(&.{ x, y }),
         .next = alloc,
-    } });
+    } }, .test_fixture);
     const y_lit = try store.addCFStmt(.{ .assign_literal = .{
         .target = y,
         .value = .{ .i64_literal = .{ .value = 1000, .layout_idx = .u64 } },
         .next = make_pair,
-    } });
+    } }, .test_fixture);
     const x_lit = try store.addCFStmt(.{ .assign_literal = .{
         .target = x,
         .value = .{ .i64_literal = .{ .value = 234, .layout_idx = .u64 } },
         .next = y_lit,
-    } });
+    } }, .test_fixture);
     const proc = try b.finishProc(&.{}, x_lit, .u64);
 
     try std.testing.expectEqual(@as(u64, 1234), try runProcU64(allocator, &store, &layouts, proc, &runtime_env));
@@ -373,7 +373,7 @@ fn buildRepeatProc(
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{a_n}),
         .ret_layout = peano.u,
-    });
+    }, .none);
 
     const res = try b.addLocal(allocator, peano.u);
     const zero = try b.addLocal(allocator, .u64);
@@ -387,69 +387,69 @@ fn buildRepeatProc(
 
     var next_join: u32 = 0;
     const join_id = freshJoinPointId(&next_join);
-    const ret_res = try store.addCFStmt(.{ .ret = .{ .value = res } });
+    const ret_res = try store.addCFStmt(.{ .ret = .{ .value = res } }, .test_fixture);
 
     // case n == 0: res = Nil; jump done
-    const nil_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const nil_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const nil_tag = try store.addCFStmt(.{ .assign_tag = .{
         .target = res,
         .variant_index = 0,
         .discriminant = 0,
         .payload = null,
         .next = nil_jump,
-    } });
+    } }, .test_fixture);
 
     // default: res = S(repeat(n - 1)) via box_box + payload struct + alias hop
-    const def_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const def_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = res,
         .op = .{ .local = t },
         .next = def_jump,
-    } });
+    } }, .test_fixture);
     const mk_tag = try store.addCFStmt(.{ .assign_tag = .{
         .target = t,
         .variant_index = 1,
         .discriminant = 1,
         .payload = p,
         .next = alias,
-    } });
+    } }, .test_fixture);
     const mk_payload = try store.addCFStmt(.{ .assign_struct = .{
         .target = p,
         .fields = try store.addLocalSpan(&.{cell}),
         .next = mk_tag,
-    } });
+    } }, .test_fixture);
     const mk_cell = try lowLevelStmt(store, cell, .box_box, &.{r}, mk_payload);
     const call = try store.addCFStmt(.{ .assign_call = .{
         .target = r,
         .proc = proc,
         .args = try store.addLocalSpan(&.{m}),
         .next = mk_cell,
-    } });
+    } }, .test_fixture);
     const mk_m = try lowLevelStmt(store, m, .num_int_sub_wrap, &.{ a_n, one }, call);
     const mk_one = try store.addCFStmt(.{ .assign_literal = .{
         .target = one,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
         .next = mk_m,
-    } });
+    } }, .test_fixture);
 
     const branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = nil_tag }});
     const switch_stmt = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = cond,
         .branches = branches,
         .default_branch = mk_one,
-    } });
+    } }, .test_fixture);
     const mk_cond = try lowLevelStmt(store, cond, .num_is_eq, &.{ a_n, zero }, switch_stmt);
     const mk_zero = try store.addCFStmt(.{ .assign_literal = .{
         .target = zero,
         .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
         .next = mk_cond,
-    } });
+    } }, .test_fixture);
     const join = try store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try store.addLocalSpan(&.{res}),
         .body = ret_res,
         .remainder = mk_zero,
-    } });
+    } }, .test_fixture);
 
     store.setProcSpecBody(proc, join);
 
@@ -656,25 +656,25 @@ test "trmc'd repeat is leak-free and allocation-exact when consumed" {
     const root_n = try b.addLocal(allocator, .u64);
     const list = try b.addLocal(allocator, peano.u);
     const root_zero = try b.addLocal(allocator, .u64);
-    const root_ret = try store.addCFStmt(.{ .ret = .{ .value = root_zero } });
+    const root_ret = try store.addCFStmt(.{ .ret = .{ .value = root_zero } }, .test_fixture);
     const mk_root_zero = try store.addCFStmt(.{ .assign_literal = .{
         .target = root_zero,
         .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
         .next = root_ret,
-    } });
+    } }, .test_fixture);
     const call_repeat = try store.addCFStmt(.{ .assign_call = .{
         .target = list,
         .proc = repeat,
         .args = try store.addLocalSpan(&.{root_n}),
         .next = mk_root_zero,
-    } });
+    } }, .test_fixture);
     const root = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(10),
         .args = try store.addLocalSpan(&.{root_n}),
         .body = call_repeat,
         .ret_layout = .u64,
-    });
+    }, .none);
     store.getProcSpecPtr(root).frame_locals = try store.addLocalSpan(&.{ root_n, list, root_zero });
 
     try lir.Trmc.run(&store, &layouts);
@@ -699,7 +699,7 @@ fn buildCountdownProc(allocator: Allocator, b: *ProcBuilder, store: *LirStore) T
         .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{ a_n, a_acc }),
         .ret_layout = .u64,
-    });
+    }, .none);
     var tail_builder = lir.TailCallBuilder.init(allocator, proc);
     defer tail_builder.deinit();
     store.tail_call_builder = &tail_builder;
@@ -712,33 +712,33 @@ fn buildCountdownProc(allocator: Allocator, b: *ProcBuilder, store: *LirStore) T
     const acc2 = try b.addLocal(allocator, .u64);
     const r = try b.addLocal(allocator, .u64);
 
-    const ret_acc = try store.addCFStmt(.{ .ret = .{ .value = a_acc } });
-    const ret_r = try store.addCFStmt(.{ .ret = .{ .value = r } });
+    const ret_acc = try store.addCFStmt(.{ .ret = .{ .value = a_acc } }, .test_fixture);
+    const ret_r = try store.addCFStmt(.{ .ret = .{ .value = r } }, .test_fixture);
     const call = try store.addCFStmt(.{ .assign_call = .{
         .target = r,
         .proc = proc,
         .args = try store.addLocalSpan(&.{ m, acc2 }),
         .next = ret_r,
-    } });
+    } }, .test_fixture);
     const mk_acc2 = try lowLevelStmt(store, acc2, .num_int_add_wrap, &.{ a_acc, one }, call);
     const mk_m = try lowLevelStmt(store, m, .num_int_sub_wrap, &.{ a_n, one }, mk_acc2);
     const mk_one = try store.addCFStmt(.{ .assign_literal = .{
         .target = one,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
         .next = mk_m,
-    } });
+    } }, .test_fixture);
     const branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = ret_acc }});
     const switch_stmt = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = cond,
         .branches = branches,
         .default_branch = mk_one,
-    } });
+    } }, .test_fixture);
     const mk_cond = try lowLevelStmt(store, cond, .num_is_eq, &.{ a_n, zero }, switch_stmt);
     const mk_zero = try store.addCFStmt(.{ .assign_literal = .{
         .target = zero,
         .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
         .next = mk_cond,
-    } });
+    } }, .test_fixture);
 
     store.setProcSpecBody(proc, mk_zero);
 
@@ -795,7 +795,7 @@ test "tce loop-back copies swapped params through temps" {
         .identity = LIR.ProcIdentity.forTest(9),
         .args = try store.addLocalSpan(&.{ a_a, a_b, a_n }),
         .ret_layout = .u64,
-    });
+    }, .none);
     var tail_builder = lir.TailCallBuilder.init(allocator, proc);
     defer tail_builder.deinit();
     store.tail_call_builder = &tail_builder;
@@ -807,32 +807,32 @@ test "tce loop-back copies swapped params through temps" {
     const m = try b.addLocal(allocator, .u64);
     const r = try b.addLocal(allocator, .u64);
 
-    const ret_a = try store.addCFStmt(.{ .ret = .{ .value = a_a } });
-    const ret_r = try store.addCFStmt(.{ .ret = .{ .value = r } });
+    const ret_a = try store.addCFStmt(.{ .ret = .{ .value = a_a } }, .test_fixture);
+    const ret_r = try store.addCFStmt(.{ .ret = .{ .value = r } }, .test_fixture);
     const call = try store.addCFStmt(.{ .assign_call = .{
         .target = r,
         .proc = proc,
         .args = try store.addLocalSpan(&.{ a_b, a_a, m }),
         .next = ret_r,
-    } });
+    } }, .test_fixture);
     const mk_m = try lowLevelStmt(&store, m, .num_int_sub_wrap, &.{ a_n, one }, call);
     const mk_one = try store.addCFStmt(.{ .assign_literal = .{
         .target = one,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
         .next = mk_m,
-    } });
+    } }, .test_fixture);
     const branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = ret_a }});
     const switch_stmt = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = cond,
         .branches = branches,
         .default_branch = mk_one,
-    } });
+    } }, .test_fixture);
     const mk_cond = try lowLevelStmt(&store, cond, .num_is_eq, &.{ a_n, zero }, switch_stmt);
     const mk_zero = try store.addCFStmt(.{ .assign_literal = .{
         .target = zero,
         .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
         .next = mk_cond,
-    } });
+    } }, .test_fixture);
     store.setProcSpecBody(proc, mk_zero);
     store.getProcSpecPtr(proc).frame_locals = try store.addLocalSpan(b.locals.items);
 
@@ -870,7 +870,7 @@ test "mixed construct and plain-tail branches both become jumps" {
         .identity = LIR.ProcIdentity.forTest(8),
         .args = try store.addLocalSpan(&.{a_n}),
         .ret_layout = peano.u,
-    });
+    }, .none);
     var tail_builder = lir.TailCallBuilder.init(allocator, proc);
     defer tail_builder.deinit();
     store.tail_call_builder = &tail_builder;
@@ -891,60 +891,60 @@ test "mixed construct and plain-tail branches both become jumps" {
 
     var next_join: u32 = 0;
     const join_id = freshJoinPointId(&next_join);
-    const ret_res = try store.addCFStmt(.{ .ret = .{ .value = res } });
+    const ret_res = try store.addCFStmt(.{ .ret = .{ .value = res } }, .test_fixture);
 
     // n == 0: res = Nil
-    const nil_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const nil_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const nil_tag = try store.addCFStmt(.{ .assign_tag = .{
         .target = res,
         .variant_index = 0,
         .discriminant = 0,
         .payload = null,
         .next = nil_jump,
-    } });
+    } }, .test_fixture);
 
     // odd: res = weird(n - 1)—plain tail call targeting the done-join param
-    const tail_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const tail_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const tail_call = try store.addCFStmt(.{ .assign_call = .{
         .target = res,
         .proc = proc,
         .args = try store.addLocalSpan(&.{m_tail}),
         .next = tail_jump,
-    } });
+    } }, .test_fixture);
     // Two edges enter the exact same plain-tail call inside a TRMC procedure.
     const shared_tail = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = is_zero,
         .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = tail_call }}),
         .default_branch = tail_call,
-    } });
+    } }, .test_fixture);
     const mk_m_tail = try lowLevelStmt(&store, m_tail, .num_int_sub_wrap, &.{ a_n, one }, shared_tail);
 
     // even: res = S(weird(n - 1))—the construct branch
-    const cons_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const cons_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = res,
         .op = .{ .local = t },
         .next = cons_jump,
-    } });
+    } }, .test_fixture);
     const mk_tag = try store.addCFStmt(.{ .assign_tag = .{
         .target = t,
         .variant_index = 1,
         .discriminant = 1,
         .payload = p,
         .next = alias,
-    } });
+    } }, .test_fixture);
     const mk_payload = try store.addCFStmt(.{ .assign_struct = .{
         .target = p,
         .fields = try store.addLocalSpan(&.{cell}),
         .next = mk_tag,
-    } });
+    } }, .test_fixture);
     const mk_cell = try lowLevelStmt(&store, cell, .box_box, &.{r_cons}, mk_payload);
     const cons_call = try store.addCFStmt(.{ .assign_call = .{
         .target = r_cons,
         .proc = proc,
         .args = try store.addLocalSpan(&.{m_cons}),
         .next = mk_cell,
-    } });
+    } }, .test_fixture);
     const mk_m_cons = try lowLevelStmt(&store, m_cons, .num_int_sub_wrap, &.{ a_n, one }, cons_call);
 
     // odd/even dispatch
@@ -953,18 +953,18 @@ test "mixed construct and plain-tail branches both become jumps" {
         .cond = rem,
         .branches = parity_branches,
         .default_branch = mk_m_cons,
-    } });
+    } }, .test_fixture);
     const mk_rem = try lowLevelStmt(&store, rem, .num_rem_by, &.{ a_n, two }, parity_switch);
     const mk_two = try store.addCFStmt(.{ .assign_literal = .{
         .target = two,
         .value = .{ .i64_literal = .{ .value = 2, .layout_idx = .u64 } },
         .next = mk_rem,
-    } });
+    } }, .test_fixture);
     const mk_one = try store.addCFStmt(.{ .assign_literal = .{
         .target = one,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
         .next = mk_two,
-    } });
+    } }, .test_fixture);
 
     // n == 0 dispatch
     const zero_branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = nil_tag }});
@@ -972,19 +972,19 @@ test "mixed construct and plain-tail branches both become jumps" {
         .cond = is_zero,
         .branches = zero_branches,
         .default_branch = mk_one,
-    } });
+    } }, .test_fixture);
     const mk_is_zero = try lowLevelStmt(&store, is_zero, .num_is_eq, &.{ a_n, zero }, zero_switch);
     const mk_zero = try store.addCFStmt(.{ .assign_literal = .{
         .target = zero,
         .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
         .next = mk_is_zero,
-    } });
+    } }, .test_fixture);
     const join = try store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try store.addLocalSpan(&.{res}),
         .body = ret_res,
         .remainder = mk_zero,
-    } });
+    } }, .test_fixture);
     store.setProcSpecBody(proc, join);
     store.getProcSpecPtr(proc).frame_locals = try store.addLocalSpan(b.locals.items);
 
@@ -1116,18 +1116,18 @@ test "tail eligibility distinguishes result uses and mutual recursion from share
             .identity = LIR.ProcIdentity.forTest(7),
             .args = try store.addLocalSpan(&.{a_n}),
             .ret_layout = peano.u,
-        });
+        }, .none);
         const r = try b.addLocal(allocator, peano.u);
         const cell = try b.addLocal(allocator, peano.box_u);
         const cell2 = try b.addLocal(allocator, peano.box_u);
         const p = try b.addLocal(allocator, peano.payload);
         const t = try b.addLocal(allocator, peano.u);
-        const ret_t = try store.addCFStmt(.{ .ret = .{ .value = t } });
-        const mk_tag = try store.addCFStmt(.{ .assign_tag = .{ .target = t, .variant_index = 1, .discriminant = 1, .payload = p, .next = ret_t } });
-        const mk_p = try store.addCFStmt(.{ .assign_struct = .{ .target = p, .fields = try store.addLocalSpan(&.{cell}), .next = mk_tag } });
+        const ret_t = try store.addCFStmt(.{ .ret = .{ .value = t } }, .test_fixture);
+        const mk_tag = try store.addCFStmt(.{ .assign_tag = .{ .target = t, .variant_index = 1, .discriminant = 1, .payload = p, .next = ret_t } }, .test_fixture);
+        const mk_p = try store.addCFStmt(.{ .assign_struct = .{ .target = p, .fields = try store.addLocalSpan(&.{cell}), .next = mk_tag } }, .test_fixture);
         const mk_cell2 = try lowLevelStmt(&store, cell2, .box_box, &.{r}, mk_p);
         const mk_cell = try lowLevelStmt(&store, cell, .box_box, &.{r}, mk_cell2);
-        const call = try store.addCFStmt(.{ .assign_call = .{ .target = r, .proc = proc, .args = try store.addLocalSpan(&.{a_n}), .next = mk_cell } });
+        const call = try store.addCFStmt(.{ .assign_call = .{ .target = r, .proc = proc, .args = try store.addLocalSpan(&.{a_n}), .next = mk_cell } }, .test_fixture);
         store.setProcSpecBody(proc, call);
         store.getProcSpecPtr(proc).frame_locals = try store.addLocalSpan(b.locals.items);
         break :blk proc;
@@ -1141,18 +1141,18 @@ test "tail eligibility distinguishes result uses and mutual recursion from share
             .identity = LIR.ProcIdentity.forTest(3),
             .args = try store.addLocalSpan(&.{a_n}),
             .ret_layout = peano.u,
-        });
+        }, .none);
         const r = try b.addLocal(allocator, peano.u);
         const cell = try b.addLocal(allocator, peano.box_u);
         const p = try b.addLocal(allocator, peano.payload);
         const t = try b.addLocal(allocator, peano.u);
         const other = try b.addLocal(allocator, peano.u);
-        const ret_other = try store.addCFStmt(.{ .ret = .{ .value = other } });
-        const mk_other = try store.addCFStmt(.{ .assign_tag = .{ .target = other, .variant_index = 0, .discriminant = 0, .payload = null, .next = ret_other } });
-        const mk_tag = try store.addCFStmt(.{ .assign_tag = .{ .target = t, .variant_index = 1, .discriminant = 1, .payload = p, .next = mk_other } });
-        const mk_p = try store.addCFStmt(.{ .assign_struct = .{ .target = p, .fields = try store.addLocalSpan(&.{cell}), .next = mk_tag } });
+        const ret_other = try store.addCFStmt(.{ .ret = .{ .value = other } }, .test_fixture);
+        const mk_other = try store.addCFStmt(.{ .assign_tag = .{ .target = other, .variant_index = 0, .discriminant = 0, .payload = null, .next = ret_other } }, .test_fixture);
+        const mk_tag = try store.addCFStmt(.{ .assign_tag = .{ .target = t, .variant_index = 1, .discriminant = 1, .payload = p, .next = mk_other } }, .test_fixture);
+        const mk_p = try store.addCFStmt(.{ .assign_struct = .{ .target = p, .fields = try store.addLocalSpan(&.{cell}), .next = mk_tag } }, .test_fixture);
         const mk_cell = try lowLevelStmt(&store, cell, .box_box, &.{r}, mk_p);
-        const call = try store.addCFStmt(.{ .assign_call = .{ .target = r, .proc = proc, .args = try store.addLocalSpan(&.{a_n}), .next = mk_cell } });
+        const call = try store.addCFStmt(.{ .assign_call = .{ .target = r, .proc = proc, .args = try store.addLocalSpan(&.{a_n}), .next = mk_cell } }, .test_fixture);
         store.setProcSpecBody(proc, call);
         store.getProcSpecPtr(proc).frame_locals = try store.addLocalSpan(b.locals.items);
         break :blk proc;
@@ -1166,35 +1166,35 @@ test "tail eligibility distinguishes result uses and mutual recursion from share
             .identity = LIR.ProcIdentity.forTest(1),
             .args = try store.addLocalSpan(&.{a_n}),
             .ret_layout = .u64,
-        });
+        }, .none);
         const one = try b.addLocal(allocator, .u64);
         const m = try b.addLocal(allocator, .u64);
         const r = try b.addLocal(allocator, .u64);
         const s = try b.addLocal(allocator, .u64);
-        const ret_s = try store.addCFStmt(.{ .ret = .{ .value = s } });
+        const ret_s = try store.addCFStmt(.{ .ret = .{ .value = s } }, .test_fixture);
         const mk_s = try lowLevelStmt(&store, s, .num_int_add_wrap, &.{ r, one }, ret_s);
-        const call = try store.addCFStmt(.{ .assign_call = .{ .target = r, .proc = proc, .args = try store.addLocalSpan(&.{m}), .next = mk_s } });
+        const call = try store.addCFStmt(.{ .assign_call = .{ .target = r, .proc = proc, .args = try store.addLocalSpan(&.{m}), .next = mk_s } }, .test_fixture);
         const mk_m = try lowLevelStmt(&store, m, .num_int_sub_wrap, &.{ a_n, one }, call);
-        const mk_one = try store.addCFStmt(.{ .assign_literal = .{ .target = one, .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } }, .next = mk_m } });
+        const mk_one = try store.addCFStmt(.{ .assign_literal = .{ .target = one, .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } }, .next = mk_m } }, .test_fixture);
         store.setProcSpecBody(proc, mk_one);
         store.getProcSpecPtr(proc).frame_locals = try store.addLocalSpan(b.locals.items);
         break :blk proc;
     };
 
     // (4) Mutual recursion: tail calls, but never to self.
-    const mutual_a = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(11), .args = LIR.LocalSpan.empty(), .ret_layout = .u64 });
-    const mutual_b = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(12), .args = LIR.LocalSpan.empty(), .ret_layout = .u64 });
+    const mutual_a = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(11), .args = LIR.LocalSpan.empty(), .ret_layout = .u64 }, .none);
+    const mutual_b = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(12), .args = LIR.LocalSpan.empty(), .ret_layout = .u64 }, .none);
     {
         const ra = try b.addLocal(allocator, .u64);
-        const ret_ra = try store.addCFStmt(.{ .ret = .{ .value = ra } });
-        const call_b = try store.addCFStmt(.{ .assign_call = .{ .target = ra, .proc = mutual_b, .args = try store.addLocalSpan(&.{}), .next = ret_ra } });
+        const ret_ra = try store.addCFStmt(.{ .ret = .{ .value = ra } }, .test_fixture);
+        const call_b = try store.addCFStmt(.{ .assign_call = .{ .target = ra, .proc = mutual_b, .args = try store.addLocalSpan(&.{}), .next = ret_ra } }, .test_fixture);
         const pa = store.getProcSpecPtr(mutual_a);
         pa.body = call_b;
         pa.frame_locals = try store.addLocalSpan(&.{ra});
 
         const rb = try b.addLocal(allocator, .u64);
-        const ret_rb = try store.addCFStmt(.{ .ret = .{ .value = rb } });
-        const call_a = try store.addCFStmt(.{ .assign_call = .{ .target = rb, .proc = mutual_a, .args = try store.addLocalSpan(&.{}), .next = ret_rb } });
+        const ret_rb = try store.addCFStmt(.{ .ret = .{ .value = rb } }, .test_fixture);
+        const call_a = try store.addCFStmt(.{ .assign_call = .{ .target = rb, .proc = mutual_a, .args = try store.addLocalSpan(&.{}), .next = ret_rb } }, .test_fixture);
         const pb = store.getProcSpecPtr(mutual_b);
         pb.body = call_a;
         pb.frame_locals = try store.addLocalSpan(&.{rb});
@@ -1209,26 +1209,26 @@ test "tail eligibility distinguishes result uses and mutual recursion from share
             .identity = LIR.ProcIdentity.forTest(2),
             .args = try store.addLocalSpan(&.{a_n}),
             .ret_layout = .u64,
-        });
+        }, .none);
         var tail_builder = lir.TailCallBuilder.init(allocator, proc);
         defer tail_builder.deinit();
         store.tail_call_builder = &tail_builder;
         defer store.tail_call_builder = null;
         const cond = try b.addLocal(allocator, .bool);
         const r = try b.addLocal(allocator, .u64);
-        const ret_r = try store.addCFStmt(.{ .ret = .{ .value = r } });
+        const ret_r = try store.addCFStmt(.{ .ret = .{ .value = r } }, .test_fixture);
         const call = try store.addCFStmt(.{ .assign_call = .{
             .target = r,
             .proc = proc,
             .args = try store.addLocalSpan(&.{a_n}),
             .next = ret_r,
-        } });
+        } }, .test_fixture);
         const branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = call }});
         const switch_stmt = try store.addCFStmt(.{ .switch_stmt = .{
             .cond = cond,
             .branches = branches,
             .default_branch = call,
-        } });
+        } }, .test_fixture);
         store.setProcSpecBody(proc, switch_stmt);
         store.getProcSpecPtr(proc).frame_locals = try store.addLocalSpan(b.locals.items);
         const sites = try tail_builder.finish(&store);
@@ -1264,7 +1264,7 @@ test "tce has no site or forwarding-depth cap and preserves a shared base return
         .identity = LIR.ProcIdentity.forTest(6),
         .args = try store.addLocalSpan(&.{n}),
         .ret_layout = .u64,
-    });
+    }, .none);
     var builder = lir.TailCallBuilder.init(allocator, proc);
     defer builder.deinit();
     store.tail_call_builder = &builder;
@@ -1273,18 +1273,18 @@ test "tce has no site or forwarding-depth cap and preserves a shared base return
     const result = try b.addLocal(allocator, .u64);
     const one = try b.addLocal(allocator, .u64);
     const m = try b.addLocal(allocator, .u64);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     // A long forwarding join chain is shared by every call and the base case.
     var entry_jumps: [128]CFStmtId = undefined;
     for (&entry_jumps, 0..) |*entry, index| {
-        entry.* = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(index) } });
+        entry.* = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(index) } }, .test_fixture);
     }
     const shared = entry_jumps[entry_jumps.len - 1];
     const base_case = try store.addCFStmt(.{ .assign_literal = .{
         .target = result,
         .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
         .next = shared,
-    } });
+    } }, .test_fixture);
     var branches: [96]LIR.CFSwitchBranch = undefined;
     for (&branches, 0..) |*branch, index| {
         branch.* = .{ .value = index + 1, .body = try store.addCFStmt(.{ .assign_call = .{
@@ -1292,13 +1292,13 @@ test "tce has no site or forwarding-depth cap and preserves a shared base return
             .proc = proc,
             .args = try store.addLocalSpan(&.{m}),
             .next = shared,
-        } }) };
+        } }, .test_fixture) };
     }
     const dispatch = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = n,
         .branches = try store.addCFSwitchBranches(&branches),
         .default_branch = base_case,
-    } });
+    } }, .test_fixture);
     // Put the dispatch under all forwarding joins' lexical scopes.
     var body = dispatch;
     for (0..entry_jumps.len) |offset| {
@@ -1308,14 +1308,14 @@ test "tce has no site or forwarding-depth cap and preserves a shared base return
             .params = try store.addLocalSpan(&.{result}),
             .body = if (index == 0) ret else entry_jumps[index - 1],
             .remainder = body,
-        } });
+        } }, .test_fixture);
     }
     body = try lowLevelStmt(&store, m, .num_int_sub_wrap, &.{ n, one }, body);
     body = try store.addCFStmt(.{ .assign_literal = .{
         .target = one,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
         .next = body,
-    } });
+    } }, .test_fixture);
     store.setProcSpecBody(proc, body);
     store.getProcSpecPtr(proc).frame_locals = try store.addLocalSpan(b.locals.items);
     const sites = try builder.finish(&store);
@@ -1352,30 +1352,30 @@ test "tail-call proof rejects an intervening effect and a forwarding cycle" {
             .identity = LIR.ProcIdentity.forTest(5),
             .args = try store.addLocalSpan(&.{cond}),
             .ret_layout = .u64,
-        });
+        }, .none);
         var builder = lir.TailCallBuilder.init(allocator, proc);
         defer builder.deinit();
         store.tail_call_builder = &builder;
         defer store.tail_call_builder = null;
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
         var next_join: u32 = 0;
         const join_id = freshJoinPointId(&next_join);
         const suffix = if (cycle)
-            try store.addCFStmt(.{ .jump = .{ .target = join_id } })
+            try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture)
         else
-            try store.addCFStmt(.{ .expect = .{ .condition = cond, .next = ret } });
+            try store.addCFStmt(.{ .expect = .{ .condition = cond, .next = ret } }, .test_fixture);
         const call = try store.addCFStmt(.{ .assign_call = .{
             .target = result,
             .proc = proc,
             .args = try store.addLocalSpan(&.{cond}),
             .next = suffix,
-        } });
+        } }, .test_fixture);
         const body = if (cycle) try store.addCFStmt(.{ .join = .{
             .id = join_id,
             .params = LIR.LocalSpan.empty(),
             .body = suffix,
             .remainder = call,
-        } }) else call;
+        } }, .test_fixture) else call;
         store.setProcSpecBody(proc, body);
         store.getProcSpecPtr(proc).frame_locals = try store.addLocalSpan(b.locals.items);
         const sites = try builder.finish(&store);
@@ -1402,7 +1402,7 @@ test "tail-call proof consumes the explicit boxy adapter operation" {
             .identity = LIR.ProcIdentity.forTest(4),
             .args = try store.addLocalSpan(&.{arg}),
             .ret_layout = .u64,
-        });
+        }, .none);
         var builder = lir.TailCallBuilder.init(allocator, proc);
         defer builder.deinit();
         store.tail_call_builder = &builder;
@@ -1419,7 +1419,7 @@ test "tail-call proof consumes the explicit boxy adapter operation" {
             .produces_owned_result = true,
         });
         builder.adapters = adapters.items;
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = forwarded } });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = forwarded } }, .test_fixture);
         const adapt = try store.addCFStmt(.{ .assign_boxy_adapt = .{
             .source = result,
             .target = forwarded,
@@ -1428,13 +1428,13 @@ test "tail-call proof consumes the explicit boxy adapter operation" {
             .source_mode = .move,
             .adapter = adapter_id,
             .next = ret,
-        } });
+        } }, .test_fixture);
         const call = try store.addCFStmt(.{ .assign_call = .{
             .target = result,
             .proc = proc,
             .args = try store.addLocalSpan(&.{arg}),
             .next = adapt,
-        } });
+        } }, .test_fixture);
         store.setProcSpecBody(proc, call);
         const sites = try builder.finish(&store);
         try std.testing.expectEqual(operation == .relabel, sites != null);
@@ -1461,7 +1461,7 @@ test "tce parallel transfers preserve every small source graph" {
             .identity = LIR.ProcIdentity.forTest(3),
             .args = try store.addLocalSpan(&args),
             .ret_layout = .u64,
-        });
+        }, .none);
         var builder = lir.TailCallBuilder.init(allocator, proc);
         defer builder.deinit();
         store.tail_call_builder = &builder;
@@ -1474,7 +1474,7 @@ test "tce parallel transfers preserve every small source graph" {
         const scaled = try b.addLocal(allocator, .u64);
         const sum = try b.addLocal(allocator, .u64);
         const scaled_again = try b.addLocal(allocator, .u64);
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
         var base_case = try lowLevelStmt(&store, result, .num_int_add_wrap, &.{ args[0], scaled_again }, ret);
         base_case = try lowLevelStmt(&store, scaled_again, .num_int_mul_wrap, &.{ sum, radix }, base_case);
         base_case = try lowLevelStmt(&store, sum, .num_int_add_wrap, &.{ args[1], scaled }, base_case);
@@ -1483,7 +1483,7 @@ test "tce parallel transfers preserve every small source graph" {
             .target = radix,
             .value = .{ .i64_literal = .{ .value = 64, .layout_idx = .u64 } },
             .next = base_case,
-        } });
+        } }, .test_fixture);
         var sources: [3]usize = undefined;
         var call_args: [4]LocalId = undefined;
         var code = encoding;
@@ -1498,23 +1498,23 @@ test "tce parallel transfers preserve every small source graph" {
             .proc = proc,
             .args = try store.addLocalSpan(&call_args),
             .next = ret,
-        } });
+        } }, .test_fixture);
         var recur = try lowLevelStmt(&store, remaining, .num_int_sub_wrap, &.{ args[3], one }, call);
         recur = try store.addCFStmt(.{ .assign_literal = .{
             .target = fresh,
             .value = .{ .i64_literal = .{ .value = 31, .layout_idx = .u64 } },
             .next = recur,
-        } });
+        } }, .test_fixture);
         recur = try store.addCFStmt(.{ .assign_literal = .{
             .target = one,
             .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
             .next = recur,
-        } });
+        } }, .test_fixture);
         const body = try store.addCFStmt(.{ .switch_stmt = .{
             .cond = args[3],
             .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = base_case }}),
             .default_branch = recur,
-        } });
+        } }, .test_fixture);
         store.setProcSpecBody(proc, body);
         store.getProcSpecPtr(proc).frame_locals = try store.addLocalSpan(b.locals.items);
         const sites = try builder.finish(&store);
@@ -1578,7 +1578,7 @@ test "tce reuses scratch across shrinking and growing procedure frames" {
             // An explicit requirement must survive even when the pass adds
             // no locals. It is never downgraded based on the new locals alone.
             .stack_probe = .required,
-        });
+        }, .none);
         var builder = lir.TailCallBuilder.init(allocator, proc.*);
         defer builder.deinit();
         store.tail_call_builder = &builder;
@@ -1586,8 +1586,8 @@ test "tce reuses scratch across shrinking and growing procedure frames" {
         const result = try b.addLocal(allocator, .u64);
         const one = try b.addLocal(allocator, .u64);
         const remaining = try b.addLocal(allocator, .u64);
-        const base_case = try store.addCFStmt(.{ .ret = .{ .value = args[0] } });
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        const base_case = try store.addCFStmt(.{ .ret = .{ .value = args[0] } }, .test_fixture);
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
         var call_buffer: [13]LocalId = undefined;
         const call_args = call_buffer[0 .. width + 1];
         for (call_args[0..width], 0..) |*arg, index| arg.* = args[(index + 1) % width];
@@ -1597,18 +1597,18 @@ test "tce reuses scratch across shrinking and growing procedure frames" {
             .proc = proc.*,
             .args = try store.addLocalSpan(call_args),
             .next = ret,
-        } });
+        } }, .test_fixture);
         var recur = try lowLevelStmt(&store, remaining, .num_int_sub_wrap, &.{ args[width], one }, call);
         recur = try store.addCFStmt(.{ .assign_literal = .{
             .target = one,
             .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
             .next = recur,
-        } });
+        } }, .test_fixture);
         store.setProcSpecBody(proc.*, try store.addCFStmt(.{ .switch_stmt = .{
             .cond = args[width],
             .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = base_case }}),
             .default_branch = recur,
-        } }));
+        } }, .test_fixture));
         frame.* = try store.addLocalSpan(b.locals.items);
         store.getProcSpecPtr(proc.*).frame_locals = frame.*;
         const sites = try builder.finish(&store);
@@ -1654,20 +1654,20 @@ test "tce emits an identity loop directly into the original call" {
         .args = try store.addLocalSpan(&.{arg}),
         .frame_locals = try store.addLocalSpan(b.locals.items),
         .ret_layout = .u64,
-    });
+    }, .none);
     var builder = lir.TailCallBuilder.init(allocator, proc);
     defer builder.deinit();
     store.tail_call_builder = &builder;
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const loc: base.SourceLoc = .{ .file = 0, .line = 7, .column = 3 };
-    store.current_loc = loc;
+    var call_origin = LIR.StmtOrigin.test_fixture;
+    call_origin.loc = loc;
     const call = try store.addCFStmt(.{ .assign_call = .{
         .target = result,
         .proc = proc,
         .args = try store.addLocalSpan(&.{arg}),
         .next = ret,
-    } });
-    store.current_loc = .none;
+    } }, call_origin);
     store.setProcSpecBody(proc, call);
     const sites = try builder.finish(&store);
     store.getProcSpecPtr(proc).tail_calls = sites;

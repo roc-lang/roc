@@ -515,6 +515,14 @@ waiting_predeclared_dispatch_uses: std.ArrayListUnmanaged(WaitingPredeclaredDisp
 /// removed when the statement finishes). The value is the def's annotation,
 /// whose `predeclared_slots` entry holds the scheme.
 predeclared_local_annotations: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Annotation.Idx) = .empty,
+/// Hole-sharing predeclared schemes (annotations with `_` inference holes,
+/// predeclared at their recursive group's start), keyed by the scheme var:
+/// each value lists the scheme's hole copies paired with the live annotation
+/// hole vars. Every use re-unifies its hole copies with the live vars so the
+/// body's inference and the uses' constraints stay monomorphically consistent
+/// until the group's boundary generalizes the holes; see
+/// `predeclareAnnotationSchemeKeepingHolesShared` and `reunifySharedSchemeHoles`.
+hole_shared_schemes: std.AutoHashMapUnmanaged(Var, []const Var) = .empty,
 /// The one expression (a recursive group member's top-level RHS) whose
 /// generalization is suppressed because it lives in its group's shared rank
 /// frame and generalizes at the group boundary instead. Consume-once, like
@@ -2905,6 +2913,9 @@ pub fn deinit(self: *Self) void {
     self.predeclared_scheme_vars.deinit(self.gpa);
     self.predeclared_slots.deinit(self.gpa);
     self.predeclared_slot_vars.deinit(self.gpa);
+    var hole_shared_iter = self.hole_shared_schemes.valueIterator();
+    while (hole_shared_iter.next()) |holes| self.gpa.free(holes.*);
+    self.hole_shared_schemes.deinit(self.gpa);
     self.predeclared_local_annotations.deinit(self.gpa);
     self.value_lookup_tracking.deinit(self.gpa);
     self.erroneous_value_exprs.deinit(self.gpa);
@@ -7190,6 +7201,10 @@ fn instantiateTypeScheme(
         .polarity_var_ident = self.cir.idents.polarity_var,
         .anonymous_ext_ident = self.cir.idents.open_ext,
         .polarity_var_behavior = .close,
+        // A hole-sharing predeclared scheme's hole leaves are the LIVE
+        // annotation hole vars: seed their identity so the copy shares them
+        // and the body's inference stays connected to this use.
+        .share_vars = self.hole_shared_schemes.get(var_to_instantiate) orelse &.{},
     };
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, true, evidence);
 }
@@ -7253,6 +7268,37 @@ fn instantiateVarOrphan(
         .polarity_var_ident = self.cir.idents.polarity_var,
         .anonymous_ext_ident = self.cir.idents.open_ext,
         .polarity_var_behavior = .preserve,
+    };
+    return self.instantiateOrphanCopy(var_to_instantiate, &instantiate_ctx, env, region_behavior);
+}
+
+/// Like `instantiateVarOrphan`, but the listed source vars are SHARED into the
+/// copy rather than copied: the copy references the live original variables.
+/// Used by a predeclared scheme for an annotation with `_` inference holes, so
+/// the scheme's holes stay monomorphically connected to the body's inference.
+fn instantiateVarOrphanSharingVars(
+    self: *Self,
+    var_to_instantiate: Var,
+    env: *Env,
+    rank: Rank,
+    region_behavior: InstantiateRegionBehavior,
+    share_vars: []const Var,
+) std.mem.Allocator.Error!Var {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+    std.debug.assert(@intFromEnum(rank) <= @intFromEnum(env.rank()));
+    var instantiate_ctx = Instantiator{
+        .store = self.types,
+        .idents = self.cir.getIdentStoreConst(),
+        .var_map = &self.var_map,
+        .current_rank = env.rank(),
+        .rigid_behavior = .fresh_rigid,
+        .rank_behavior = .ignore_rank,
+        // An orphan copy is a faithful copy: keep polarity vars deferred.
+        .polarity_var_ident = self.cir.idents.polarity_var,
+        .anonymous_ext_ident = self.cir.idents.open_ext,
+        .polarity_var_behavior = .preserve,
+        .share_vars = share_vars,
     };
     return self.instantiateOrphanCopy(var_to_instantiate, &instantiate_ctx, env, region_behavior);
 }
@@ -7409,6 +7455,14 @@ fn instantiateVarHelp(
 
     // First, reset state
     instantiator.var_map.clearRetainingCapacity();
+
+    // Vars the caller asked to share keep their identity in the copy: the
+    // walk's `var_map` lookup resolves them to themselves instead of minting
+    // a placeholder.
+    for (instantiator.share_vars) |shared_var| {
+        const resolved_shared = self.types.resolveVar(shared_var);
+        try instantiator.var_map.put(resolved_shared.var_, resolved_shared.var_);
+    }
 
     // Then, instantiate the variable with the provided context
     const instantiated_var = if (force_type_scheme_root)
@@ -14241,6 +14295,34 @@ fn annotationIsPredeclarableScheme(
     return !self.cir.store.getAnnotation(annotation_idx).contains_underscore;
 }
 
+/// Predeclare schemes for a recursive group's annotated members whose
+/// annotations contain `_` inference holes, at the group's shared frame.
+/// The module-wide pre-pass skips these (see
+/// `predeclareAnnotationSchemeKeepingHolesShared` for why the holes must not
+/// generalize into the standalone scheme); without a predeclared scheme, an
+/// in-group reference to such a member links monomorphically to its in-flight
+/// type and unifies the two members' distinct same-named rigid variables
+/// (issue 11605). Declaring each member's scheme here—inside the frame the
+/// group generalizes at, so the holes stay monomorphic through the body
+/// checks—gives in-group references the same instantiate-the-declared-scheme
+/// rule the hole-free annotations already have.
+fn predeclareHoledAnnotationSchemes(
+    self: *Self,
+    defs: []const CIR.Def.Idx,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const hole_rank = env.rank();
+    for (defs) |def_idx| {
+        const def = self.cir.store.getDef(def_idx);
+        const annotation_idx = def.annotation orelse continue;
+        if (!self.cir.store.getAnnotation(annotation_idx).contains_underscore) continue;
+        if (self.predeclared_slots.contains(annotation_idx)) continue;
+        const scheme_var = try self.predeclareAnnotationSchemeKeepingHolesShared(annotation_idx, env, hole_rank);
+        self.setPredeclaredSchemeVar(def_idx, scheme_var);
+        try self.registerPredeclaredSlots(annotation_idx, scheme_var);
+    }
+}
+
 /// Build a standalone generalized scheme from an annotation, leaving the
 /// annotation's CIR nodes untouched for the def's own body check.
 ///
@@ -14259,6 +14341,39 @@ fn predeclareAnnotationScheme(
     annotation_idx: CIR.Annotation.Idx,
     env: *Env,
 ) std.mem.Allocator.Error!Var {
+    return self.predeclareAnnotationSchemeHelp(annotation_idx, env, null);
+}
+
+/// Like `predeclareAnnotationScheme`, for an annotation containing `_`
+/// inference holes. The holes must NOT be quantified into the standalone
+/// scheme: a hole's type is inferred from the body, so a scheme that
+/// generalized its holes would hand every use an unconstrained rigid var the
+/// body never committed to—unsound. Instead, after the speculative generation
+/// each hole var's rank is lowered to `hole_rank` (the caller's live rank, for
+/// a group-start predeclaration the binding group's shared frame), so the
+/// speculative generalization treats every hole as an ESCAPED variable: it
+/// stays a shared flex, and the orphan scheme copy shares the live hole vars
+/// (`instantiateVarOrphanSharingVars`). In-group references instantiating the
+/// scheme then get fresh flexes for its rigids—two members' same-named rigids
+/// are never unified—while their constraints, and the body's own annotation
+/// regeneration, all flow into the same hole vars. The group's boundary
+/// generalization quantifies the holes exactly like any other body-inferred
+/// variable.
+fn predeclareAnnotationSchemeKeepingHolesShared(
+    self: *Self,
+    annotation_idx: CIR.Annotation.Idx,
+    env: *Env,
+    hole_rank: Rank,
+) std.mem.Allocator.Error!Var {
+    return self.predeclareAnnotationSchemeHelp(annotation_idx, env, hole_rank);
+}
+
+fn predeclareAnnotationSchemeHelp(
+    self: *Self,
+    annotation_idx: CIR.Annotation.Idx,
+    env: *Env,
+    hole_rank: ?Rank,
+) std.mem.Allocator.Error!Var {
     const problems_len = self.problems.len();
     const snapshots_mark = self.snapshots.mark();
 
@@ -14272,12 +14387,41 @@ fn predeclareAnnotationScheme(
         self.active_scheme_root = saved_active_scheme_root;
     }
     try self.generateAnnotationType(annotation_idx, env);
-    const scheme_var = try self.instantiateVarOrphan(
-        ModuleEnv.varFrom(annotation_idx),
-        env,
-        env.rank(),
-        .use_last_var,
-    );
+
+    // For a hole-sharing predeclaration, collect the live hole vars first: the
+    // orphan copy below SHARES them (the scheme references the live vars), and
+    // their rank is lowered to `hole_rank` so the generalization below treats
+    // each hole as an escaped variable (still shared and flex) instead of
+    // quantifying it into the scheme. The generalizer re-pools escaped vars by
+    // their descriptor rank, so no manual pool bookkeeping is needed.
+    var live_holes: std.ArrayListUnmanaged(Var) = .empty;
+    defer live_holes.deinit(self.gpa);
+    if (hole_rank != null) {
+        try self.collectUnderscoreAnnoVars(annotation_idx, &live_holes);
+    }
+
+    const scheme_var = if (live_holes.items.len > 0)
+        try self.instantiateVarOrphanSharingVars(
+            ModuleEnv.varFrom(annotation_idx),
+            env,
+            env.rank(),
+            .use_last_var,
+            live_holes.items,
+        )
+    else
+        try self.instantiateVarOrphan(
+            ModuleEnv.varFrom(annotation_idx),
+            env,
+            env.rank(),
+            .use_last_var,
+        );
+
+    if (hole_rank) |hr| {
+        for (live_holes.items) |hole_var| {
+            const resolved_hole = self.types.resolveVar(hole_var);
+            try self.types.setDescRank(resolved_hole.desc_idx, hr);
+        }
+    }
     try self.judgeFieldKindsAtBoundary(env);
     self.unify_scratch.clearPersistentOpenings();
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
@@ -14288,6 +14432,23 @@ fn predeclareAnnotationScheme(
     self.problems.truncate(problems_len);
     self.snapshots.truncateToMark(snapshots_mark);
     try self.resetAnnotationNodes(annotation_idx);
+
+    if (hole_rank) |hr| {
+        // The reset gave each live hole a fresh unbound class at the outermost
+        // rank; set it to `hr` so a use unifying into the hole before the
+        // body pass re-ranks it cannot pull the class below the group's
+        // generalization boundary, which would freeze the hole monomorphic
+        // into the published scheme instead of quantifying it there.
+        for (live_holes.items) |hole_var| {
+            const resolved_hole = self.types.resolveVar(hole_var);
+            try self.types.setDescRank(resolved_hole.desc_idx, hr);
+        }
+
+        // Every use of the scheme shares the live hole vars; register them so
+        // each use's instantiation seeds the identity mappings.
+        const holes = try self.gpa.dupe(Var, live_holes.items);
+        try self.hole_shared_schemes.put(self.gpa, scheme_var, holes);
+    }
     return scheme_var;
 }
 
@@ -14317,13 +14478,33 @@ fn predeclaredSchemeSlots(self: *Self, annotation_idx: CIR.Annotation.Idx) Alloc
     const slots = self.predeclaredSlotsPtr(annotation_idx);
     if (slots.predeclared == null) {
         const start: u32 = @intCast(self.predeclared_slot_vars.items.len);
-        try self.canonical_key_writer.appendIdentityVarsFromVar(slots.scheme_var, &self.predeclared_slot_vars);
+        try self.appendPredeclaredIdentitySlots(slots.scheme_var, slots.scheme_var);
         slots.predeclared = .{
             .start = start,
             .len = @intCast(self.predeclared_slot_vars.items.len - start),
         };
     }
     return slots.predeclared.?.slice(self.predeclared_slot_vars.items);
+}
+
+/// Append to `predeclared_slot_vars` the identity slots reachable from `var_`,
+/// one side of the predeclared scheme `scheme_var`. A hole-sharing scheme's
+/// live hole vars are shared by both sides and are never quantified by the
+/// scheme, so both enumerations treat them as opaque leaves: whatever the
+/// group has unified a hole with by the time either side is enumerated, the
+/// two sides still enumerate exactly the annotation's own variables, in the
+/// same order.
+fn appendPredeclaredIdentitySlots(self: *Self, scheme_var: Var, var_: Var) Allocator.Error!void {
+    const holes = self.hole_shared_schemes.get(scheme_var) orelse {
+        try self.canonical_key_writer.appendIdentityVarsFromVar(var_, &self.predeclared_slot_vars);
+        return;
+    };
+    var stack_allocator_state = std.heap.stackFallback(256, self.gpa);
+    const stack_allocator = stack_allocator_state.get();
+    const hole_roots = try stack_allocator.alloc(Var, holes.len);
+    defer stack_allocator.free(hole_roots);
+    for (holes, hole_roots) |hole, *hole_root| hole_root.* = self.types.resolveVar(hole).var_;
+    try self.canonical_key_writer.appendIdentityVarsFromVarWithOpaqueRoots(var_, hole_roots, &self.predeclared_slot_vars);
 }
 
 /// Record the body side of a predeclared annotation's identity slots at the
@@ -14334,7 +14515,7 @@ fn recordPredeclaredBodySlots(self: *Self, annotation_idx: CIR.Annotation.Idx) A
     const slots = self.predeclared_slots.getPtr(annotation_idx) orelse return;
     if (slots.body != null) return;
     const start: u32 = @intCast(self.predeclared_slot_vars.items.len);
-    try self.canonical_key_writer.appendIdentityVarsFromVar(ModuleEnv.varFrom(annotation_idx), &self.predeclared_slot_vars);
+    try self.appendPredeclaredIdentitySlots(slots.scheme_var, ModuleEnv.varFrom(annotation_idx));
     slots.body = .{
         .start = start,
         .len = @intCast(self.predeclared_slot_vars.items.len - start),
@@ -14539,8 +14720,13 @@ fn recordPredeclaredDispatchUse(
 /// Reset every type-annotation node var this annotation's generation wrote
 /// (the annotation node itself, its type tree, and its where-clause
 /// signatures) to a pristine unbound slot. Sound because nothing live
-/// references those vars afterwards: the pre-declared scheme is a fully
-/// disjoint orphan copy, and generation-internal fresh vars are garbage.
+/// references those vars' CLASSES afterwards: the pre-declared scheme is a
+/// fully disjoint orphan copy, and generation-internal fresh vars are
+/// garbage. One exception: a hole-sharing predeclared scheme
+/// (`predeclareAnnotationSchemeKeepingHolesShared`) references the hole
+/// node VARS, which the reset gives fresh unbound classes—the body pass's
+/// annotation regeneration then re-ranks and re-constrains those same vars,
+/// which is exactly the sharing the scheme is meant to preserve.
 fn resetAnnotationNodes(self: *Self, annotation_idx: CIR.Annotation.Idx) std.mem.Allocator.Error!void {
     try self.types.resetVarToUnbound(ModuleEnv.varFrom(annotation_idx), Rank.outermost);
 
@@ -14630,6 +14816,28 @@ fn collectAnnotationTypeAnnos(
                 try pending.append(allocator, func.ret);
             },
             .parens => |parens| try pending.append(allocator, parens.anno),
+        }
+    }
+}
+
+/// The vars of every `_` inference hole in an annotation—its type tree plus
+/// its where-clause method signatures, the same nodes `resetAnnotationNodes`
+/// resets. Each hole node's var is the live variable the body's annotation
+/// regeneration constrains, so a hole-sharing predeclared scheme must name
+/// exactly these.
+fn collectUnderscoreAnnoVars(
+    self: *Self,
+    annotation_idx: CIR.Annotation.Idx,
+    out: *std.ArrayListUnmanaged(Var),
+) std.mem.Allocator.Error!void {
+    var stack_allocator_state = std.heap.stackFallback(1024, self.gpa);
+    const stack_allocator = stack_allocator_state.get();
+    var nodes: std.ArrayList(CIR.TypeAnno.Idx) = .empty;
+    defer nodes.deinit(stack_allocator);
+    try self.collectAnnotationTypeAnnos(annotation_idx, &nodes, stack_allocator);
+    for (nodes.items) |anno_idx| {
+        if (self.cir.store.getTypeAnno(anno_idx) == .underscore) {
+            try out.append(self.gpa, ModuleEnv.varFrom(anno_idx));
         }
     }
 }
@@ -14822,6 +15030,17 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
                 try self.erroneous_value_exprs.put(self.gpa, member_def.expr, {});
             }
         }
+
+        // Predeclare schemes for members whose annotations contain `_`
+        // inference holes. The module-wide pre-pass skips these (generalizing
+        // a hole into the standalone scheme would be unsound—see
+        // `predeclareAnnotationSchemeKeepingHolesShared`), but without a
+        // predeclared scheme an in-group reference links monomorphically to
+        // the member's in-flight type, unifying two members' distinct
+        // same-named rigid variables (issue 11605). Inside the shared frame
+        // the holes can stay monomorphic instead, so the annotation's rigids
+        // are quantified for in-group uses exactly like the hole-free rule.
+        try self.predeclareHoledAnnotationSchemes(scc.defs, env);
 
         for (scc.defs) |member_def_idx| {
             const member_def = self.cir.store.getDef(member_def_idx);

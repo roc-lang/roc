@@ -429,6 +429,46 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"same\"" },
     },
     .{
+        .name = "issue 11626: different tags keep independent return rows",
+        .source_kind = .module,
+        .source = @import("issue_11626_source.zig").source ++ "\nmain = (stats_page(\"\"), lead_page(\"\"), stats_page(\"ok\"), lead_page(\"ok\"))\n",
+        .expected = .{ .inspect_str = "(Err(NotFound(IndexStats)), Err(NotFound(LeadMissing)), Ok(\"stats\"), Ok(\"lead\"))" },
+    },
+    .{
+        .name = "issue 11626: different base types keep independent return rows",
+        .source_kind = .module,
+        .source = @import("issue_11626_source.zig").source ++ "\nmain = (text_page(\"\"), number_page(\"\"), text_page(\"ok\"), number_page(\"ok\"))\n",
+        .expected = .{ .inspect_str = "(Err(NotFound(\"owned error payload longer than an inline string\")), Err(NotFound(7)), Ok(\"text\"), Ok(\"number\"))" },
+    },
+    .{
+        .name = "issue 11626: higher order calls keep independent return rows",
+        .source_kind = .module,
+        .source = @import("issue_11626_source.zig").source ++ "\nmain = (run(\"\", stats_page), run(\"\", lead_page), run(\"ok\", stats_page), run(\"ok\", lead_page))\n",
+        .expected = .{ .inspect_str = "(Err(NotFound(IndexStats)), Err(NotFound(LeadMissing)), Ok(\"stats\"), Ok(\"lead\"))" },
+    },
+    .{
+        .name = "issue 11626: composed returns carry captured callable payloads",
+        .source_kind = .module,
+        .source =
+        \\find = |text, what| if text == "" Err(NotFound(what)) else Ok(text)
+        \\respond = |text| Ok(|{}| text)
+        \\stats_page = |text| {
+        \\    _ = find(text, IndexStats)?
+        \\    respond(text)
+        \\}
+        \\lead_page = |text| {
+        \\    _ = find(text, LeadMissing)?
+        \\    respond(text)
+        \\}
+        \\call = |result| match result {
+        \\    Ok(f) => f({})
+        \\    Err(_) => "missing"
+        \\}
+        \\main = (call(stats_page("owned stats response longer than an inline string")), call(lead_page("owned lead response longer than an inline string")))
+        ,
+        .expected = .{ .inspect_str = "(\"owned stats response longer than an inline string\", \"owned lead response longer than an inline string\")" },
+    },
+    .{
         .name = "issue 11470: imported polymorphic error composition preserves shared tails",
         .source_kind = .module,
         .imports = &.{.{
@@ -3393,5 +3433,50 @@ pub const tests = [_]TestCase{
         \\main = inner_host(Outer.{ inner: Inner.{ host: 40 }, port: 2 })
         ,
         .expected = .{ .inspect_str = "42" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11668
+        // The literal's target `Sql(a)` gets `a` from the record argument, whose
+        // field kind is still open when the literal is lowered, so the
+        // `from_quote` call must lower at the open target instead of demanding
+        // its finished type.
+        .name = "issue 11668: from_quote literal argument whose type parameter comes from a record argument",
+        .source_kind = .module,
+        .source =
+        \\Sql(a) := { text : Str }.{
+        \\    from_quote : Str -> Try(Sql(a), [BadQuotedBytes(Str)])
+        \\    from_quote = |raw| Ok(Sql.{ text: raw })
+        \\}
+        \\
+        \\query : Sql(a), a -> Str
+        \\query = |sql, _| sql.text
+        \\
+        \\run : {} -> Str
+        \\run = |_| query("select 1", { id: 1.I32 })
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "\"select 1\"" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11668
+        // The numeral flavor of the same open-target literal conversion.
+        .name = "issue 11668: from_numeral literal argument whose type parameter comes from a record argument",
+        .source_kind = .module,
+        .source =
+        \\Tally(a) := { count : I64 }.{
+        \\    from_numeral : Numeral -> Try(Tally(a), [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Ok(Tally.{ count: 7 })
+        \\}
+        \\
+        \\total : Tally(a), a -> I64
+        \\total = |tally, _| tally.count
+        \\
+        \\run : {} -> I64
+        \\run = |_| total(3, { id: 1.I32 })
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "7" },
     },
 };
