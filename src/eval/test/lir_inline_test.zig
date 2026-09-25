@@ -2415,29 +2415,28 @@ fn closedCalleeCallersGraphNodes(allocator: Allocator, callers: usize, body: Clo
 
 test "issue 10529 ten-level open Try chain with inline callback stays bounded" {
     const allocator = std.testing.allocator;
-    const source =
-        \\take0 = |b| Ok({ val: b.get(0).map_err(|_| End)?, rest: b.drop_first(1) })
-        \\take1 = |b| Ok({ val: take0(b)?.val, rest: take0(b)?.rest })
-        \\take2 = |b| Ok({ val: take1(b)?.val, rest: take1(b)?.rest })
-        \\take3 = |b| Ok({ val: take2(b)?.val, rest: take2(b)?.rest })
-        \\take4 = |b| Ok({ val: take3(b)?.val, rest: take3(b)?.rest })
-        \\take5 = |b| Ok({ val: take4(b)?.val, rest: take4(b)?.rest })
-        \\take6 = |b| Ok({ val: take5(b)?.val, rest: take5(b)?.rest })
-        \\take7 = |b| Ok({ val: take6(b)?.val, rest: take6(b)?.rest })
-        \\take8 = |b| Ok({ val: take7(b)?.val, rest: take7(b)?.rest })
-        \\take9 = |b| Ok({ val: take8(b)?.val, rest: take8(b)?.rest })
-        \\
-        \\main : {} -> Try({ val : U8, rest : List(U8) }, [End, ..])
-        \\main = |_| take9([1, 2, 3])
-    ;
+    for ([_]usize{ 6, 8, 10 }) |depth| {
+        const counters = try openTryChainCounters(allocator, depth);
+        // Preserve the original ten-level limits while also checking shorter
+        // chains. Complete method contracts belong in reusable summaries;
+        // applying them before every cache lookup repeats transitive work.
+        if (counters.template_misses > 8 * depth or counters.nominal_backing_instantiations > 310 * depth) {
+            std.debug.print("Try chain depth {d}: {d} nominal backings, {d} template misses\n", .{ depth, counters.nominal_backing_instantiations, counters.template_misses });
+        }
+        try std.testing.expect(counters.template_misses <= 8 * depth);
+        try std.testing.expect(counters.nominal_backing_instantiations <= 310 * depth);
+    }
+}
 
-    const counters = try monotypeCountersForModule(allocator, source);
-    // Each helper adds a bounded amount of work: completed transitive interface
-    // summaries replay without coupling the two independent calls. Resolving
-    // hidden defaultable evidence at checked edges adds exact specializations
-    // to this chain, but does not restore its prior combinatorial growth.
-    try std.testing.expect(counters.template_misses <= 80);
-    try std.testing.expect(counters.nominal_backing_instantiations <= 3100);
+fn openTryChainCounters(allocator: Allocator, depth: usize) TestError!MonoLower.SpecializationCounters {
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "take0 = |b| Ok({ val: b.get(0).map_err(|_| End)?, rest: b.drop_first(1) })\n");
+    for (1..depth) |level| {
+        try source.print(allocator, "take{d} = |b| Ok({{ val: take{d}(b)?.val, rest: take{d}(b)?.rest }})\n", .{ level, level - 1, level - 1 });
+    }
+    try source.print(allocator, "main : {{}} -> Try({{ val : U8, rest : List(U8) }}, [End, ..])\nmain = |_| take{d}([1, 2, 3])\n", .{depth - 1});
+    return monotypeCountersForModule(allocator, source.items);
 }
 
 test "independent same-name helper requirements lower separately" {

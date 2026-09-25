@@ -10050,6 +10050,19 @@ preceding explicit relations. Applying defaults is never part of cache identity.
 Digests select buckets; exact input constraints and evidence are the collision
 authorities.
 
+Selected method contracts are part of the dependency's output constraints.
+Summary inputs materialize their exact checked evidence without first applying
+those contracts to the caller graph. Expansion relates the contracts over its
+detached substitution and captures the results in the completed summary;
+cache hits replay those same results. Ordinary specialization edges still
+apply the complete contracts before specialization identity or sealing.
+Individual selected method-signature relations use the same immutable summary
+storage, in a distinct key domain from procedure dependency summaries. Their
+keys include the checked signature identity, method scope, adapter reachability,
+and complete input constraint. They consume no nested dispatch evidence.
+Expansion uses detached inputs; replay creates fresh open cells and preserves
+the input's sharing, so independent calls never share new quantified variables.
+
 Interface summaries are immutable constraints over explicit input roots. They
 preserve unresolved variables and their defaults, row tails, variable and
 field-presence sharing, recursive topology, and producer-owned representation
