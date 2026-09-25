@@ -48,5 +48,6 @@ test "builtins tests" {
     std.testing.refAllDecls(@import("sort.zig"));
     std.testing.refAllDecls(@import("simd.zig"));
     std.testing.refAllDecls(@import("str.zig"));
+    std.testing.refAllDecls(@import("wide_utf_ascii.zig"));
     std.testing.refAllDecls(@import("utils.zig"));
 }

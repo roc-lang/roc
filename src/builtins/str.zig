@@ -1713,32 +1713,91 @@ fn WideUtfIterator(comptime Unit: type) type {
     };
 }
 
-/// Borrows the input. Validation and exact sizing precede the single output
-/// allocation, so strict failures allocate nothing and short results stay inline.
+// Stage the maximum UTF-8 expansion of an inline-sized sequence of UTF-32
+// units. This bounds stack usage and gives every such input at most one allocation.
+const WIDE_UTF_STAGING_CAPACITY = 4 * SMALL_STR_MAX_LENGTH;
+
+/// Borrows the input and encodes in one forward pass. Stage short output on
+/// the stack, reserve a proven output lower bound on spill, then grow geometrically.
+/// Strict failure releases any partial output.
 fn fromWideUtf(comptime Unit: type, comptime lossy: bool, list: RocList, roc_ops: *RocOps) FromWideUtfTry {
     if (list.len() == 0) return .{ .index = 0, .string = RocStr.empty(), .is_ok = true, .problem_code = 0 };
     const units = @as([*]const Unit, @ptrCast(@alignCast(list.bytes)))[0..list.len()];
     var it = WideUtfIterator(Unit){ .units = units };
-    var byte_len: usize = 0;
+    var staging: [WIDE_UTF_STAGING_CAPACITY]u8 = undefined;
+    var result = RocStr.empty();
+    var bytes: []u8 = &staging;
+    var offset: usize = 0;
     while (it.index < units.len) {
+        // Dense non-ASCII input should not perform a SIMD prefix probe for
+        // every scalar. The slice stays valid until the output actually grows.
+        if (units[it.index] <= 0x7f) {
+            const ascii_len = @import("wide_utf_ascii.zig").encodePrefix(Unit, units[it.index..], bytes[offset..]);
+            it.index += ascii_len;
+            offset += ascii_len;
+            if (it.index == units.len) break;
+        }
+
         const index = it.index;
         const item = it.next().?;
         if (!lossy) {
-            if (item.problem) |problem| return .{ .index = @intCast(index), .string = RocStr.empty(), .is_ok = false, .problem_code = problem };
+            if (item.problem) |problem| {
+                result.decref(roc_ops);
+                return .{ .index = @intCast(index), .string = RocStr.empty(), .is_ok = false, .problem_code = problem };
+            }
         }
-        byte_len = std.math.add(usize, byte_len, unicode.utf8CodepointSequenceLength(item.scalar) catch unreachable) catch {
+        if (bytes.len - offset >= 4) {
+            offset += unicode.utf8Encode(item.scalar, bytes[offset..]) catch unreachable;
+            continue;
+        }
+        // At a capacity boundary, encode into local storage first. Grow only
+        // when this scalar's actual bytes do not fit, keeping short output inline.
+        var encoded: [4]u8 = undefined;
+        const encoded_len = unicode.utf8Encode(item.scalar, &encoded) catch unreachable;
+        const required = std.math.add(usize, offset, encoded_len) catch {
             roc_ops.crash("UTF decoding output is too large");
             unreachable;
         };
+        // Owned string capacities reserve the low bit for slice tagging.
+        const max_capacity: usize = std.math.maxInt(isize);
+        if (required > max_capacity) {
+            roc_ops.crash("UTF decoding output is too large");
+            unreachable;
+        }
+        if (required > bytes.len) {
+            if (result.isSmallStr()) {
+                // Every remaining input unit produces at least one UTF-8 byte
+                // (including two-unit surrogate pairs, which produce four).
+                const lower_bound = std.math.add(usize, required, units.len - it.index) catch {
+                    roc_ops.crash("UTF decoding output is too large");
+                    unreachable;
+                };
+                if (lower_bound > max_capacity) {
+                    roc_ops.crash("UTF decoding output is too large");
+                    unreachable;
+                }
+                result = RocStr.allocateBig(offset, lower_bound, roc_ops);
+                @memcpy(result.asU8ptrMut()[0..offset], bytes[0..offset]);
+            } else {
+                result.setLen(offset);
+                if (bytes.len > max_capacity / 2) {
+                    // Saturate the final growth step before geometric multiplication.
+                    result = result.reallocate(max_capacity, .InPlace, roc_ops);
+                } else {
+                    result = result.reallocateForAppend(required, .InPlace, roc_ops);
+                }
+            }
+            bytes = result.asU8ptrMut()[0..result.getCapacity()];
+        }
+        @memcpy(bytes[offset..required], encoded[0..encoded_len]);
+        offset = required;
     }
-    var result = RocStr.allocateExact(byte_len, roc_ops);
-    const bytes = result.asU8ptrMut()[0..byte_len];
-    it.index = 0;
-    var offset: usize = 0;
-    while (it.next()) |item| {
-        offset += unicode.utf8Encode(item.scalar, bytes[offset..]) catch unreachable;
+    if (result.isSmallStr()) {
+        result = RocStr.allocateExact(offset, roc_ops);
+        @memcpy(result.asU8ptrMut()[0..offset], staging[0..offset]);
+    } else {
+        result.setLen(offset);
     }
-    std.debug.assert(offset == byte_len);
     return .{ .index = 0, .string = result, .is_ok = true, .problem_code = 0 };
 }
 
@@ -5188,4 +5247,79 @@ test "wide UTF decoding: every Unicode scalar agrees with standard UTF-8 encodin
         try testing.expect(result32.is_ok);
         try testing.expectEqualStrings(utf8[0..len], result32.string.asSlice());
     }
+}
+
+test "wide UTF decoding: ASCII and scalar transitions at output growth boundaries" {
+    inline for (.{ u16, u32 }) |Unit| {
+        var input: [257]Unit = @splat('a');
+        var expected: [259]u8 = @splat('a');
+        // Exercise each inline/SIMD boundary, then a scalar that grows the heap.
+        for (0..65) |prefix| {
+            input[prefix] = 0x20ac;
+            @memcpy(expected[prefix..][0..3], "€");
+            try testWideUtf(Unit, input[0 .. prefix + 1], expected[0 .. prefix + 3], null);
+            input[prefix] = 'a';
+            @memset(expected[prefix..][0..3], 'a');
+        }
+        input[256] = 0x20ac;
+        @memcpy(expected[256..], "€");
+        try testWideUtf(Unit, &input, &expected, null);
+        @memset(&input, 'a');
+        @memset(&expected, 'a');
+        try testWideUtf(Unit, &input, expected[0..input.len], null);
+    }
+}
+
+test "wide UTF decoding: dense output grows and strict late errors release storage" {
+    inline for (.{ u16, u32 }) |Unit| {
+        var input: [1024]Unit = @splat(0x20ac);
+        var expected: [3072]u8 = undefined;
+        for (0..input.len) |i| @memcpy(expected[i * 3 ..][0..3], "€");
+        try testWideUtf(Unit, &input, &expected, null);
+        const last = input.len - 1;
+        input[last] = 0xd800;
+        @memcpy(expected[last * 3 ..][0..3], "�");
+        const problem = if (Unit == u16)
+            @intFromEnum(Utf16Problem.UnpairedHighSurrogate)
+        else
+            @intFromEnum(Utf32Problem.SurrogateCodePoint);
+        try testWideUtf(Unit, &input, &expected, .{ .index = last, .problem = problem });
+    }
+}
+
+test "wide UTF decoding: surrogate pairs at inline and SIMD boundaries" {
+    var input: [66]u16 = @splat('a');
+    var expected: [68]u8 = @splat('a');
+    for (0..65) |prefix| {
+        input[prefix] = 0xd83d;
+        input[prefix + 1] = 0xdc26;
+        @memcpy(expected[prefix..][0..4], "🐦");
+        try testWideUtf(u16, input[0 .. prefix + 2], expected[0 .. prefix + 4], null);
+        input[prefix] = 'a';
+        input[prefix + 1] = 'a';
+        @memset(expected[prefix..][0..4], 'a');
+    }
+}
+
+test "wide UTF decoding: staging boundaries and four-byte dense output" {
+    inline for (.{ u16, u32 }) |Unit| {
+        var input: [WIDE_UTF_STAGING_CAPACITY + 8]Unit = @splat('a');
+        var expected: [WIDE_UTF_STAGING_CAPACITY + 10]u8 = @splat('a');
+        for (WIDE_UTF_STAGING_CAPACITY - 4..WIDE_UTF_STAGING_CAPACITY + 5) |prefix| {
+            // Exact ASCII staging capacity and a spill must both preserve bytes.
+            try testWideUtf(Unit, input[0..prefix], expected[0..prefix], null);
+            const count: usize = if (Unit == u16) 2 else 1;
+            input[prefix] = if (Unit == u16) 0xd83d else 0x1f426;
+            if (Unit == u16) input[prefix + 1] = 0xdc26;
+            @memcpy(expected[prefix..][0..4], "🐦");
+            try testWideUtf(Unit, input[0 .. prefix + count], expected[0 .. prefix + 4], null);
+            @memset(input[prefix..][0..count], 'a');
+            @memset(expected[prefix..][0..4], 'a');
+        }
+    }
+    const input = [_]u32{0x1f426} ** (WIDE_UTF_STAGING_CAPACITY + 1);
+    const expected = "🐦" ** input.len;
+    try testWideUtf(u32, &input, expected, null);
+    // Exact maximum expansion of an inline-sized input stays within staging.
+    try testWideUtf(u32, input[0..SMALL_STR_MAX_LENGTH], expected[0..WIDE_UTF_STAGING_CAPACITY], null);
 }

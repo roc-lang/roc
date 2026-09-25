@@ -84,8 +84,18 @@ Strict decoding returns the first invalid input code-unit index and an empty
 string on error. Lossy decoding replaces each unpaired UTF-16 surrogate or
 invalid UTF-32 unit with U+FFFD, preserving the next unit unless it completes
 a valid surrogate pair. Both forms borrow their input and produce an
-independent owned string. Validation and exact UTF-8 sizing precede allocation;
-strict failure allocates nothing. BOMs and Unicode noncharacters are preserved.
+independent owned string. Decoding validates and encodes in one forward pass,
+using bounded SIMD loads to narrow ASCII prefixes directly into the output.
+Output starts in a fixed stack buffer sized to the maximum UTF-8 expansion of
+an inline-sized sequence of UTF-32 units (four times the inline byte capacity).
+A result that fits this buffer is copied into its final exact-sized string,
+remaining inline when it fits. On spill, allocation reserves the encoded byte
+count plus one byte for each remaining input unit, a proven lower bound on final
+output size; further growth is geometric. ASCII output and any input with at
+most an inline capacity's worth of units therefore need at most one heap
+allocation. Stack usage is bounded, and dense Unicode does not require reserving
+the worst-case output size for the full input. Strict failure releases any partial
+output allocation. BOMs and Unicode noncharacters are preserved.
 Inputs are numeric code units, so byte order belongs to the caller's byte
 decoding step. Output encoders (`to_utf16`/`to_utf32`) are a separate API addition.
 
