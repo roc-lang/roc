@@ -169,7 +169,7 @@ test "issue 11621 - a repeated tag with an incompatible payload is rejected" {
     var test_env = try TestEnv.init("Test", src);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("Type Mismatch");
+    try test_env.assertOneTypeError("Conflicting Tag");
 }
 
 test "issue 11621 - a method recursing through dispatch on its own receiver" {
