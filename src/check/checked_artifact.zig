@@ -33199,9 +33199,7 @@ pub const CheckedModuleArtifact = struct {
     // adapted (design.md "Result-Row Widening Adapter").
     // Version 102 preserves solver-independent deferred evaluation diagnostics.
     // Version 103 persists the checked root index for immutable composition.
-    // Version 104 links each custom literal to its conversion root
-    // (`CheckedNumeralData.conversion_root`, `CheckedQuoteData.conversion_root`).
-    const serialized_layout_version: u32 = 104;
+    const serialized_layout_version: u32 = 103;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -40004,8 +40002,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x14, 0xB9, 0x46, 0x76, 0xEA, 0x9F, 0x35, 0xA6, 0x9C, 0xE8, 0x91, 0x43, 0xF3, 0x89, 0xD8, 0xF6,
-        0x69, 0xA7, 0xC7, 0xB4, 0xD1, 0xE1, 0x42, 0x26, 0x2F, 0xA2, 0x40, 0xF3, 0x46, 0x32, 0x42, 0x83,
+        0x96, 0x0D, 0x66, 0x60, 0x55, 0x6C, 0x67, 0x6B, 0x27, 0x2A, 0xB2, 0xEF, 0xA7, 0xBF, 0x24, 0xE0,
+        0xBA, 0x11, 0x39, 0x38, 0x3D, 0x15, 0x3B, 0x02, 0xF2, 0x98, 0x80, 0xFD, 0x91, 0xD7, 0xFD, 0x96,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

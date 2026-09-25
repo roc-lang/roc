@@ -33652,24 +33652,6 @@ const BodyContext = struct {
         return try functionRequestNode(self.graph, fn_node, request_args, request_ret);
     }
 
-    fn relateFormalToOperand(
-        self: *BodyContext,
-        formal_node: NodeId,
-        caller: *BodyContext,
-        operand: static_dispatch.StaticDispatchOperand,
-    ) Allocator.Error!void {
-        switch (operand) {
-            .checked_expr => |checked_arg| {
-                const arg_ty = caller.view.bodies.expr(checked_arg).ty;
-                try relateRequestComponent(self.graph, formal_node, try caller.instNode(arg_ty));
-            },
-            .generated_interpolation_iter,
-            .generated_numeral,
-            .generated_quote,
-            => {},
-        }
-    }
-
     fn instantiateTargetFromPlanNode(
         self: *BodyContext,
         source_fn_ty: checked.CheckedTypeId,
@@ -44278,18 +44260,6 @@ const BodyContext = struct {
             } else Common.invariant("dispatch runtime evidence was absent from its lexical chain"),
             .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
             .direct_closed, .direct_parametric, .structural => null,
-        };
-    }
-
-    fn dispatchTarget(
-        self: *BodyContext,
-        plan: static_dispatch.StaticDispatchCallPlan,
-    ) ?MethodLookup {
-        const resolution = self.evidenceResolution(plan) orelse
-            Common.invariant("dispatch plan reached monotype lowering without a resolution");
-        return switch (resolution) {
-            .target => |lookup| lookup,
-            .structural => null,
         };
     }
 
