@@ -384,9 +384,17 @@ pub const Generalizer = struct {
         // Check if this variable is one we're trying to generalize at this rank
         const is_var_to_generalize = self.vars_to_generalized.contains(resolved.var_);
 
-        // Early return for already-processed vars to handle recursive types
+        // Early return for already-processed vars to handle recursive types.
+        // A var reached again while its own walk is still in progress (a
+        // cycle) has not settled yet, so its descriptor still holds its
+        // pre-adjustment rank, which can exceed the rank this walk is
+        // settling. Checking admits cyclic graphs until the settled-state
+        // occurs sweep reports them, and every cycle this walk can reach is
+        // one that sweep rejects; capping the in-progress contribution at
+        // `group_rank` keeps adjustment from ever raising a rank. A var that
+        // already settled holds a rank no higher than `group_rank`.
         if (is_var_to_generalize and self.rank_adjusted_vars.contains(resolved.var_)) {
-            try self.pending_ranks.append(self.gpa, resolved.desc.rank);
+            try self.pending_ranks.append(self.gpa, resolved.desc.rank.min(group_rank));
             return true;
         }
 

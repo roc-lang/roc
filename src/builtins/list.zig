@@ -717,7 +717,13 @@ fn listReserveForAppend(
 
     const needed = @as(u64, @intCast(original_len)) +| spare;
     const clamped: usize = @intCast(@min(needed, @as(u64, @intCast(std.math.maxInt(usize)))));
-    const desired = @max(clamped, utils.geometricGrowth(@as(usize, @intCast(cap)), element_width));
+    // Only an allocation that grows in place carries its slack into future
+    // appends, so only that path steps geometrically from the capacity. A
+    // fresh copy steps from the length instead: its capacity then tracks the
+    // elements it holds, rather than compounding on every append to a list
+    // that stays shared.
+    const growth_base: usize = if (list.canReuseAllocation(update_mode, roc_ops)) @intCast(cap) else original_len;
+    const desired = @max(clamped, utils.geometricGrowth(growth_base, element_width));
 
     var output = list.reallocate(
         alignment,
@@ -3419,6 +3425,53 @@ test "listReserve followed by listAppendUnsafe reuses reserved allocation" {
     try std.testing.expectEqual(@as(u16, 22), elements[1]);
 
     defer list.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
+}
+
+test "listAppendSublist on a shared list sizes each copy by its length" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+
+    const src = RocList.fromSlice(u8, ([_]u8{7})[0..], false, ops);
+    defer src.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, ops);
+
+    var items = RocList.empty();
+    var step: usize = 0;
+    while (step < 200) : (step += 1) {
+        const kept = items;
+        kept.incref(1, false, ops);
+        items = listAppendSublist(items, src, 0, 1, @alignOf(u8), @sizeOf(u8), false, null, rcNone, null, rcNone, utils.UpdateMode.Immutable, ops);
+        kept.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, ops);
+
+        try std.testing.expectEqual(step + 1, items.len());
+        try std.testing.expect(items.getCapacity() <= @max(64, 2 * items.len()));
+    }
+
+    const elements = items.elements(u8).?[0..items.len()];
+    for (elements) |byte| try std.testing.expectEqual(@as(u8, 7), byte);
+    items.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, ops);
+}
+
+test "listAppendSublist on an exclusive list grows geometrically in place" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+
+    const src = RocList.fromSlice(u8, ([_]u8{7})[0..], false, ops);
+    defer src.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, ops);
+
+    var items = RocList.empty();
+    var reallocations: usize = 0;
+    var step: usize = 0;
+    while (step < 1000) : (step += 1) {
+        const capacity_before = items.getCapacity();
+        items = listAppendSublist(items, src, 0, 1, @alignOf(u8), @sizeOf(u8), false, null, rcNone, null, rcNone, utils.UpdateMode.Immutable, ops);
+        if (items.getCapacity() != capacity_before) reallocations += 1;
+    }
+
+    try std.testing.expectEqual(@as(usize, 1000), items.len());
+    try std.testing.expect(reallocations <= 8);
+    items.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, ops);
 }
 
 test "listPrepend basic functionality" {

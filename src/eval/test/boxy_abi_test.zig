@@ -342,7 +342,7 @@ test "issue 11170 boxy record inspect reborrows descriptor refs after a custom m
             .identity = LIR.ProcIdentity.forTest(2),
             .args = LIR.LocalSpan.empty(),
             .ret_layout = .str,
-        });
+        }, .none);
         slot.* = .{ .method = inspect_method, .proc = proc, .adapter = .{
             .arg_layouts = .{ .start = 0, .len = 1 },
             .arg_descs = .{ .start = 0, .len = 1 },
@@ -476,7 +476,7 @@ test "boxy tag inspect preserves variant metadata across a custom method" {
             .identity = LIR.ProcIdentity.forTest(1),
             .args = LIR.LocalSpan.empty(),
             .ret_layout = .str,
-        });
+        }, .none);
         slot.* = .{ .method = inspect_method, .proc = proc, .adapter = .{
             .arg_layouts = .{ .start = 0, .len = 1 },
             .arg_descs = .{ .start = 0, .len = 1 },

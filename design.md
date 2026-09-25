@@ -2874,6 +2874,20 @@ reference to an imported scheme copy; the def itself still checks with its
 annotation generated in its body's frame, sharing vars with the scheme the
 checked module outputs, which checked dispatch-evidence resolution relies on.
 
+An annotation with `_` holes cannot be predeclared module-wide: a hole's type
+is inferred from its body, so quantifying it into a standalone scheme would
+hand every use an unconstrained variable the body never committed to. When
+such an annotated member belongs to a recursive binding group, its scheme is
+instead predeclared at the start of that group, inside the group's shared rank
+frame. The scheme quantifies the annotation's named variables exactly like a
+module-wide predeclaration, but it shares the live hole variables with the
+body's annotation rather than copying them: every in-group use instantiates
+fresh copies of the named variables and constrains the very hole variables
+the body's inference constrains. The holes therefore stay monomorphic across
+the group, and two members' same-named variables are never unified with each
+other. The group's boundary generalizes the holes like any other
+body-inferred variable.
+
 Rank adjustment writes a node's enclosing traversal rank before descending
 into its children and marking it visited. In particular, a back-edge in a
 function's directed effect dependencies observes that enclosing rank, not the
@@ -6965,6 +6979,44 @@ the very tags its wrapper adds; occurrences whose relation fails or would make
 the row anonymously recursive, as when `e` contains `Wrapped(x)`, are
 rejected.
 
+Composition relates only rows whose final identity is known. A frame whose
+results other expressions still reach monomorphically is a FIXPOINT: every
+binding group frame, and every unannotated local function declaration's own
+frame. Until its boundary, an unannotated function member's result row can
+still become the row of any expression that reached it through a recursive
+reference or a dispatch back-edge, and a deferred dispatch constraint
+waiting for an unchecked target still becomes that target's instantiated
+result. A contribution whose source row ends in such an open row (a member's
+result row, a waiting dispatch constraint's result row, or a destination
+already waiting on a fixpoint) is not related when its lambda composes: building the result
+on top of that row could make the result its own extension once the
+fixpoint closes (`helper = |_| { _a = Err(Bad)?  helper({}) }` would infer
+`E = [Bad, ..E]`). The contribution waits for the outermost fixpoint in which
+its source is open, and the destination's residual tail is kept at that
+fixpoint's rank so no frame nested inside it generalizes the tail first. A
+member result reached before the member's own result is built may still be
+the structural union `Try`'s backing relates to; its error row is the `Err`
+payload.
+
+At the fixpoint's boundary—after every member's pattern has been related to
+its right-hand side and every deferred dispatch constraint the frame owns
+has resolved, and before anything generalizes—the waiting contributions form a
+graph whose nodes are destinations keyed by residual tail; a contribution
+points at the destination its source row ends in. Rows that include one
+another around a cycle are one row, so each strongly connected component
+with a cycle collapses by ordinary unification before any row is built on
+another, and every other contribution then relates exactly as its lambda
+classified it, visiting components after everything they reach. A source that
+already ends in its destination's residual tail and has no tag the
+destination lacks is already included. A destination generalized by a frame
+nested inside the fixpoint is live only through its residual tail, which
+receives the source. A contribution whose source ends in a row still open in
+an enclosing fixpoint moves to that fixpoint. Thus a self tail call adds
+nothing to its own result, mutually tail-calling functions share one error
+row, and a closure whose result includes its enclosing function's errors
+adds nothing to that function unless the function returns the closure's
+result. Pinned by `src/check/test/issue_11640_test.zig`.
+
 The rule is confined to deferred returns carrying the explicit `try_suffix`
 return context emitted by canonicalization. Annotated returns retain the Hosted
 Try Question Widening policy above, including its ordinary non-hosted
@@ -7280,10 +7332,17 @@ field.
 
 An open row simply gains the tag, so a program that never mentions it still
 sees `MissingRequiredField(field_name)`. A row the program closed without the
-tag rejects it: a closed row reports an ordinary type mismatch at the
-unification, and an annotated output row, whose extension is implicitly open,
-reports that the definition can produce a tag its annotation does not list
-(Polarity). The failure is never mapped onto a format error.
+tag rejects it. When the closed row belongs to an annotated value or
+function, the report is the annotation mismatch: the definition can produce a
+tag its annotation does not list (Polarity). When the closed row belongs to a
+where-clause parser contract, the report is the dedicated
+`derived_parser_error_row` problem instead of a generic row mismatch: it is
+located at the expression that instantiated the codec relation (the call that
+fixes the record type, where the user can act), and names the record type,
+the tag, the closed row, and the required fields. A nested custom parser whose
+error tag the enclosing row lacks reports the same problem; a payload conflict
+on a tag the row already lists remains an ordinary row mismatch (issue 11246).
+The failure is never mapped onto a format error.
 
 A custom nominal parser nested inside a derived shape keeps its own minimal
 error row. During checking, `constrainDerivedParserErrorRowIncludes` closes an
@@ -7486,7 +7545,12 @@ without CIR nodes included, so slot i of one is slot i of the other. The body
 side is enumerated at the moment the body generates the annotation, before
 anything unifies with it; it is enumerated for every predeclared annotation,
 because a use made while the body is being checked is only discovered after
-that generation. The predeclared side is enumerated at the first use. A use
+that generation. The predeclared side is enumerated at the first use. A
+group-start predeclaration's shared hole variables are opaque leaves in both
+enumerations: a hole is never quantified by the predeclared scheme, and
+whatever the group has unified it with by the time either side is enumerated
+is not part of either side's interface, so both sides still enumerate exactly
+the annotation's own variables in the same order. A use
 keeps only its copies of the predeclared slots (and of their where-clause
 callables), and its record pairs each body slot that is still a variable with
 the copy of the same predeclared slot. A use made while the body is in flight
@@ -8871,8 +8935,11 @@ Other solved-graph mutations:
   uses before error-row relations run. A source row used in a payload
   contributes through a fresh spine with unchanged payload identities, and
   relates its residual tail after visible tags have merged; independent
-  contributions retain full-row equality. No solved source row is redirected,
-  and no checked metadata is restamped.
+  contributions retain full-row equality. A contribution whose source ends in
+  a row still open in a fixpoint (`collectOpenTryRowTails`) waits for that
+  fixpoint's boundary (`relateTryRowFixpoint`), where cyclic components
+  collapse by ordinary unification before the rest relate as classified. No
+  solved source row is redirected, and no checked metadata is restamped.
 - `validateSettledValueRows`—policy: Row Union Normalization (above). A walk
   over every settled tag and record row normalizes the rows that repeat a
   label; rows with invalid content or conflicting occurrences are set to `err`
@@ -10066,6 +10133,19 @@ preceding explicit relations. Applying defaults is never part of cache identity.
 Digests select buckets; exact input constraints and evidence are the collision
 authorities.
 
+Selected method contracts are part of the dependency's output constraints.
+Summary inputs materialize their exact checked evidence without first applying
+those contracts to the caller graph. Expansion relates the contracts over its
+detached substitution and captures the results in the completed summary;
+cache hits replay those same results. Ordinary specialization edges still
+apply the complete contracts before specialization identity or sealing.
+Individual selected method-signature relations use the same immutable summary
+storage, in a distinct key domain from procedure dependency summaries. Their
+keys include the checked signature identity, method scope, adapter reachability,
+and complete input constraint. They consume no nested dispatch evidence.
+Expansion uses detached inputs; replay creates fresh open cells and preserves
+the input's sharing, so independent calls never share new quantified variables.
+
 Interface summaries are immutable constraints over explicit input roots. They
 preserve unresolved variables and their defaults, row tails, variable and
 field-presence sharing, recursive topology, and producer-owned representation
@@ -10216,8 +10296,20 @@ recorded bindings, not to the size of the enclosing scheme or its type-node map.
 Stored function evidence remains graph-free across root and cache boundaries.
 Entering a restored nested body recreates its lexical substitutions in that
 body's instantiation context, consuming saved callable/capture interfaces and
-retained hidden method contracts. Descendant contexts then use ordinary live
-bindings; decoding stored evidence never attaches graph cells to durable data.
+every retained method contract. A receiver reachable from the callable can still
+have signature variables reachable only through its method constraint, so
+restoration relates selected target and checked structural signatures before
+those variables may be sealed. Receiver reachability controls which checked
+instantiation payload is retained, not whether its signature relation applies.
+A checked instantiation supplies the identities of every substitution slot;
+it does not necessarily constrain signature-only variables to the selected
+method's complete result. In particular, taking a constrained function as a
+value preserves its open method-result rows until specialization. After
+materializing a checked edge's complete evidence vector, Monotype relates its
+target and checked structural signatures over that exact substitution before
+specialization identity or interface replay can freeze it.
+Descendant contexts then use ordinary live bindings; decoding stored evidence
+never attaches graph cells to durable data.
 An initializer template with no requirements derives no method evidence. A use
 of its returned value can still carry a checked recipe for a callable stored
 inside that value; that recipe is separate from the initializer edge.
@@ -10519,7 +10611,11 @@ types digest equally regardless of alias spelling or knot-tying ids.
 Generated helper code for an empty tag union, such as an inspector requested
 only because a container type mentions the empty tag union, has an unreachable
 body. Reaching that helper means a runtime value of an uninhabited type existed,
-which is a compiler or unsafe-runtime bug.
+which is a compiler or unsafe-runtime bug. The same rule applies when an
+explicit typed boundary has an empty source row: LIR emits a terminal impossible
+path before considering layout equality or payload conversion. A destination
+row or primitive never gives an uninhabited source a value. This includes the
+`Err` branch when returning `Try(a, [])` into a composed `Try` result.
 
 If Monotype lowering cannot construct a closed monomorphic type from checked
 data, that is a compiler bug.
@@ -11771,6 +11867,34 @@ The solver:
 - solves recursive groups as groups, not by accidental declaration order
 - verifies each lifted jump is lexically scoped and unifies its arguments with
   the corresponding join-point parameter types
+
+Explicit return boundaries preserve the source value's tag rows and the
+function's destination rows independently. Lambda Solved infers the returned
+value at its producer type, then relates the payloads of each source tag to
+its destination payloads without linking the row roots. This relation follows
+nested tag rows, including `Try`'s error payload, with directed pair visitation
+for cycles. Other payloads retain ordinary callable-flow unification. An empty
+source row contributes no payload flow. In particular, returning one shared
+`Ok`-only callee from two `?`-composed functions must never write either
+function's error row into that callee. LIR consumes the retained source and
+destination types at the explicit return boundary.
+
+A terminal crash, failed compile-time exhaustiveness marker, or unreachable
+marker produces no value and contributes no return payload flow. Lambda Solved
+retains its source type for structural consumers, such as a field access on a
+checked-error record, but does not relate a terminal return operand to the
+function's destination type. In particular, a checked-error crash may retain
+a different source type from the function without unifying those types.
+
+When backwards LIR construction first reaches a local through a return use,
+it reserves storage at that local's solved producer type. The destination row
+does not determine the producer's storage. Typed boundaries may copy matching
+layouts directly only when the source and destination value encodings also
+agree: identical byte layouts do not prove identical tag encodings. Finite
+callables compare their ordered source members and capture encodings; their
+specialized procedure targets are consumer decisions, not stored code pointers.
+Erased callable entries retain the complete target comparison because their
+runtime values do carry code pointers.
 
 Expression inference uses an explicit, reusable continuation stack. A suspended
 block owns one statement cursor, and a suspended match owns its branch and
@@ -13549,6 +13673,51 @@ hidden by an unused result.
 
 Interprocedural inlining, generated-procedure variants, global reachability,
 and ARC's solve remain outside this boundary.
+
+### Statement Provenance
+
+Every LIR statement records where it came from and why it exists. This is the
+data that `roc test` code coverage, runtime instrumentation, and debugger line
+tables consume, so it is explicit data stated by the producer, never recovered
+from context. `LirStore.addCFStmt(stmt, origin)` and
+`replaceCFStmt(id, stmt, origin)` require a `StmtOrigin`: source location,
+checked region, inline scope, and an `OriginKind`. The store keeps these as
+dense columns parallel to the statements. There is no ambient "current
+location" on the store, and a statement cannot be created without one.
+
+`OriginKind` states why the statement exists. `source` statements lower a user
+expression, statement, or pattern. `lowering_glue`, `derived`, and `scaffold`
+statements are introduced by lowering for boundaries and control flow,
+generated helpers such as structural equality and hashing, and generated
+procedures and rebuilt constants; each carries the location of the construct
+that required it. Each LIR rewrite has its own kind (`trmc`, `range_prove`,
+`join_scalarize`, `box_reuse`, `return_slot`, `str_append_fuse`,
+`loop_append_promote`, `tag_case_fusion`, `forwarding_join_inline`,
+`comptime_value_guard`) and keeps the location of the statement it rewrites.
+Clones inherit the original's origin with the inline scope remapped; clone
+callbacks receive that origin as a parameter.
+
+ARC states the ownership decision behind every statement it inserts.
+`arc_incref` and `arc_decref` carry the subject local and an `RcReason` taken
+from the ARC plan datum that produced the statement, and `arc_dismantle` covers
+the glue of a residual release. They carry the location of the statement whose
+ownership decision caused them. A consumer that reports where refcount traffic
+or a copy-on-write comes from reads these rows; it does not re-derive ownership.
+
+Backends read provenance and make no decisions of their own beyond the stated
+kind. ARC-inserted statements (`OriginKind.isArcInserted`) do not affect
+debugger stepping: LLVM gives them line 0 and the dev backend emits no
+line-table row for them.
+
+Procedure rewrites that replace a statement in the frozen coordinator prefix
+  record its new origin in the rewrite's own origin columns, which are provided
+with the statement on commit. A plain lowering shard never restamps prefix
+metadata. Pure link edits (`next`, `body`, `remainder`) and operand edits that
+do not change what a statement does keep its existing origin.
+
+Provenance adds one `OriginKind` column (12 bytes per statement) to the store and
+the LIR image. Procedure locations are likewise explicit: `addProcSpec(proc,
+loc)`.
 
 ### ARC
 
@@ -15622,6 +15791,16 @@ its existing value-flow edges once per candidate; validation and emission consum
 that classification. Tracked sources forward valid metadata, while sources
 entering the chain establish metadata for their actual allocation. A merged
 local's membership in the chain is not evidence about all of its definitions.
+
+Metadata forwarding also requires linear value use. Pure single-definition
+aliases belong to the same logical value; join writes, merged definitions,
+and operation results establish new values. If a consuming use can execute
+while another use of that value remains live (including through an alias),
+transfers out of that value establish fresh metadata. Checked operations keep
+their checks and measure their results; aliases and join entries acquire their
+unit before measuring. Mutually exclusive consuming uses and reads completed
+before consumption preserve forwarding. Control-flow use ordering is shared
+with ARC as a neutral LIR query; promotion never consults an ARC solution.
 
 An incoming alias or join argument transfers its ownership unit through the
 existing consuming `list_map_prepare_reuse` identity before querying uniqueness.

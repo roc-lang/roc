@@ -1245,14 +1245,14 @@ test "independent message pools preserve their targets across repeated artifact 
         var procs: [2]lir.LIR.LirProcSpecId = undefined; // Filled by addProcSpec before emission.
         for (&procs, [_][]const u8{ "first independent message", "second independent message" }, 0..) |*proc, message, index| {
             const text = try store.insertString(message);
-            const body = try store.addCFStmt(.{ .crash = .{ .msg = .{ .literal = text } } });
+            const body = try store.addCFStmt(.{ .crash = .{ .msg = .{ .literal = text } } }, .test_fixture);
             proc.* = try store.addProcSpec(.{
                 .name = store.freshSyntheticSymbol(),
                 .identity = lir.ProcIdentity.forTest(@intCast(index)),
                 .args = .empty(),
                 .body = body,
                 .ret_layout = .zst,
-            });
+            }, .none);
         }
         var image = try CG.init(allocator, &store, &layouts, .{}, &.{}, .default);
         defer image.deinit();
