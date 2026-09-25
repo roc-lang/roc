@@ -7974,6 +7974,32 @@ test "iterdiff: stream per-element effects agree across inline modes" {
     );
 }
 
+test "iterdiff: Stream.custom advance effects agree across inline modes" {
+    // A custom effectful source runs its advance exactly once per pull, and
+    // `map` effects interleave per element; every lowering must reproduce the
+    // same ordered trace, including the final `NoMore` advance.
+    try expectSameObservationsAcrossInlineModes(
+        \\up_to_three! : I64 => Try((I64, I64), [NoMore])
+        \\up_to_three! = |n| {
+        \\    dbg n
+        \\    if n < 3 { Ok((n, n + 1)) } else { Err(NoMore) }
+        \\}
+        \\
+        \\main : () => List(I64)
+        \\main = || {
+        \\    stream =
+        \\        Stream.custom(0.I64, Unknown, up_to_three!)
+        \\            .map(|n| {
+        \\                dbg n * 2
+        \\                n * 2
+        \\            })
+        \\    result = Stream.collect!(stream)
+        \\    dbg result
+        \\    result
+        \\}
+    );
+}
+
 // Pre-existing divergence: a bounded prefix (`take_first`) of an infinite custom
 // iterator (`Iter.custom`, the Fibonacci unfold below) diverges between the two
 // lowerings, and the seed+step representation does NOT fix it: the divergence is

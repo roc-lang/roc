@@ -3049,6 +3049,7 @@ Builtin :: [].{
 		# The general unfold. `advance` maps a seed to either the next item paired with the
 		# next seed, or `NoMore`. `custom` owns rebuilding the rest from the new seed, so the
 		# seed type stays hidden inside the step closure and never appears in `Iter(item)`.
+		# `Known(n)` is a promise: yielding more than n items crashes. Fewer is allowed.
 		custom : state, [Known(U64), Unknown], (state -> Try((item, state), [NoMore])) -> Iter(item)
 		custom = |seed, len_if_known, advance|
 			iter_from_step(
@@ -3060,6 +3061,11 @@ Builtin :: [].{
 								item,
 								rest: Iter.custom(
 									next_seed,
+									# A source that outlives its `Known` count crashes on this
+									# subtraction, before the extra item reaches the unchecked
+									# append in `List.from_iter`. No extra branch here: ranges
+									# are built on `custom`, and loops rely on this step
+									# optimizing away completely.
 									match len_if_known {
 										Known(l) => Known(l - 1)
 										Unknown => Unknown
@@ -3458,7 +3464,8 @@ Builtin :: [].{
 
 	## An effectful iterator: identical to [Iter] except that its `step!` thunk is
 	## effectful, so combinators like [Stream.map!] can run effects per item while
-	## staying lazy. Produced from an [Iter] via [Iter.map!] and driven by [Stream.collect!].
+	## staying lazy. Produced from an [Iter] via [Iter.map!], or from an effectful source
+	## via [Stream.custom], and driven by [Stream.collect!].
 	Stream(item) :: {
 		len_if_known : [Known(U64), Unknown],
 		step! : () => [One({ item : item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done],
@@ -3476,6 +3483,41 @@ Builtin :: [].{
 						Done => Done
 						Skip({ rest }) => Skip({ rest: Stream.from_iter(rest) })
 						One({ item, rest }) => One({ item, rest: Stream.from_iter(rest) })
+					},
+			}
+
+		## Build a lazy, effectful stream from a seed; the effectful counterpart of [Iter.custom].
+		## Each pull runs `advance!` exactly once: `Ok((item, next_state))` yields `item` and
+		## continues from `next_state`, while `Err(NoMore)` ends the stream. Building the
+		## stream runs no effects. `Known(n)` promises exactly n items; sources whose length
+		## is only discovered by reading (files, stdin, sockets) use `Unknown`. A source that
+		## yields more items than its `Known` count reports `Unknown` from then on.
+		##
+		## Source errors belong in `item` (e.g. `Try(List(U8), ReadErr)`). To stop after an
+		## error, yield it paired with a terminal state that holds no resource, so the
+		## resource is released rather than retained by the rest of the stream.
+		custom : state, [Known(U64), Unknown], (state => Try((item, state), [NoMore])) -> Stream(item)
+		custom = |seed, len_if_known, advance!|
+			{
+				len_if_known,
+				step!: ||
+					match advance!(seed) {
+						Ok((item, next_seed)) =>
+							One({
+								item,
+								rest: Stream.custom(
+									next_seed,
+									# A source that outlives its `Known` count degrades to
+									# `Unknown` instead of underflowing the countdown.
+									match len_if_known {
+										Known(0) => Unknown
+										Known(l) => Known(l - 1)
+										Unknown => Unknown
+									},
+									advance!,
+								),
+							})
+						Err(NoMore) => Done
 					},
 			}
 
@@ -3527,10 +3569,11 @@ Builtin :: [].{
 		## into a [List] (pre-sized from `len_if_known` when known).
 		collect! : Stream(item) => List(item)
 		collect! = |stream| {
-			# `Known(n)` guarantees exactly n items (count-changing combinators
-			# report `Unknown`), so reserve up front and use the unchecked append.
-			# When the length is unknown, start empty and grow with the reserving
-			# append—the unchecked append would corrupt a zero-capacity list.
+			# `Known(n)` promises n items (count-changing combinators report
+			# `Unknown`), so reserve up front and use the unchecked append while
+			# the reservation lasts. `Stream.custom` hints come from the caller and
+			# may undercount, so past `cap` use the reserving append instead: the
+			# unchecked append would write past the list's capacity.
 			length = Stream.size_hint(stream)
 			cap = match length {
 				Known(n) => n
@@ -3547,9 +3590,10 @@ Builtin :: [].{
 						$rest = rest
 					}
 					One({ item, rest }) => {
-						$list = match length {
-							Known(_) => list_append_unsafe($list, item)
-							Unknown => List.append($list, item)
+						$list = if List.len($list) < cap {
+							list_append_unsafe($list, item)
+						} else {
+							List.append($list, item)
 						}
 						$rest = rest
 					}

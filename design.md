@@ -5443,7 +5443,9 @@ Range(num) :: {
 }
 ```
 
-Adapters, custom sources, and consumers remain ordinary Roc functions. There is
+Adapters, custom sources (`Iter.custom` for pure unfolds, `Stream.custom` for
+sources whose advance and end-of-input discovery are effectful), and consumers
+remain ordinary Roc functions. There is
 no public chain type, iterator trait, extra public step tag, or source-visible
 compiler representation. Internal representation data is attached only after
 checking, when Monotype creates concrete iterator call results.
