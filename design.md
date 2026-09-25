@@ -69,35 +69,41 @@ lowerer.
 
 ## UTF-16 and UTF-32 decoding primitives
 
-`Str.from_utf16` and `Str.from_utf32` are checked Roc wrappers around Zig
-decoding primitives. The private primitive result is the record
-`{ index : U64, status : U8, string : Str }`, whose original field indices
-are respectively 0, 1, and 2. Status 0 means success; UTF-16 statuses 1 and 2
-mean unpaired high and low surrogate; UTF-32 statuses 1 and 2 mean code point
-too large and surrogate code point. Checking lowers the wrappers' ordinary
-matches to the public `Try` and nominal problem types. Consumers use the
-record's committed field offsets, never search a result union's shape to
-infer error identities. The status is a private protocol, not a Roc tag's
-runtime discriminant.
+`Str.from_utf16`, `Str.from_utf16_lossy`, `Str.from_utf32`, and
+`Str.from_utf32_lossy` decode in checked Roc code. The loops borrow numeric
+code-unit lists and make two forward passes: sizing, then encoding. Full ASCII
+blocks use the existing `U16x8`/`U32x4` SIMD types: typed loads, unsigned
+comparison against 127, narrowing, and `U8x16.append_to`. Their operations
+follow the ordinary LIR/backend SIMD path and the target's existing CPU
+contract; Zig vector code does not implement a separate decoding kernel.
 
-Strict decoding returns the first invalid input code-unit index and an empty
-string on error. Lossy decoding replaces each unpaired UTF-16 surrogate or
-invalid UTF-32 unit with U+FFFD, preserving the next unit unless it completes
-a valid surrogate pair. Both forms borrow their input and produce an
-independent owned string. Decoding validates and encodes in one forward pass,
-using bounded SIMD loads to narrow ASCII prefixes directly into the output.
-Output starts in a fixed stack buffer sized to the maximum UTF-8 expansion of
-an inline-sized sequence of UTF-32 units (four times the inline byte capacity).
-A result that fits this buffer is copied into its final exact-sized string,
-remaining inline when it fits. On spill, allocation reserves the encoded byte
-count plus one byte for each remaining input unit, a proven lower bound on final
-output size; further growth is geometric. ASCII output and any input with at
-most an inline capacity's worth of units therefore need at most one heap
-allocation. Stack usage is bounded, and dense Unicode does not require reserving
-the worst-case output size for the full input. Strict failure releases any partial
-output allocation. BOMs and Unicode noncharacters are preserved.
-Inputs are numeric code units, so byte order belongs to the caller's byte
-decoding step. Output encoders (`to_utf16`/`to_utf32`) are a separate API addition.
+Typed SIMD loads consume numeric lanes from `List(U16)` or `List(U32)` at a
+unit index. The input list's explicit item type determines the address
+stride. Byte-list loads continue to interpret bytes as little-endian lanes. Bounds
+are checked before each full block, and partial blocks use scalar decoding.
+
+Strict decoding reports the first invalid input code-unit index. Lossy
+decoding replaces each unpaired UTF-16 surrogate or invalid UTF-32 unit with
+U+FFFD, consuming the following unit only for a valid surrogate pair. The
+private Roc helpers return `{ index : U64, status : U8, string : Str }`;
+public wrappers construct the nominal error values from their status. No
+backend knows the wide-UTF error representation.
+
+The sizing pass validates and computes the exact UTF-8 length without
+allocating, so strict failure allocates nothing. Output of at most 23 bytes
+(the 64-bit inline string capacity) is built by the private scalar primitives
+`str_from_utf16_short`/`str_from_utf32_short` from a stack buffer: it stays
+inline without allocating wherever it fits, and allocates once on 32-bit
+targets whose inline capacity is smaller. These primitives contain no Zig
+vector code; they only see inputs whose output was already sized. Longer
+output is encoded into one byte list of exactly the sized capacity, so it
+never regrows. Only validated scalars and checked ASCII reach it. The private
+`str_from_utf8_validated` primitive consumes that guarantee to produce an owned
+string without a validation rescan, retaining the byte storage. Successful
+decoding therefore allocates at most once. Inputs remain
+unchanged, BOMs and noncharacters are preserved, and byte order belongs to
+the caller's byte-decoding step. Output encoders (`to_utf16`/`to_utf32`) remain
+a separate API addition.
 
 ## Core Principles
 
@@ -18170,6 +18176,18 @@ generated Zig and C declarations for x86-64 and AArch64 Linux/macOS/Windows plus
 wasm, compiles Rust for native and wasm, and the native/wasm glue runtime matrix
 calls the generated contracts in both directions.
 
+### WebAssembly 1.0 SIMD legalization
+
+The `wasm32v1` target has no SIMD instructions or `v128` value type. Its dev
+backend represents a Roc SIMD value as a pointer to its sixteen-byte lane
+storage, using the same explicit indirect-value conventions as scalar U128.
+The target's CPU level selects this representation before local, procedure,
+and memory emission. Each SIMD operation lowers to exact scalar integer
+instructions over its committed lane width and signedness. This is ordinary
+instruction legalization: there is no runtime operation descriptor, evaluator
+call, or alternate source decoder. The default Wasm target continues to use
+native `v128` values and SIMD instructions.
+
 ### Doc comments name the instructions
 
 Every operation's doc comment states the instruction (or short sequence)
@@ -18228,8 +18246,9 @@ the pass/fail bar while the language is 128-bit-only.
 - Whether a 32/48/64-byte `table_lookup` tier (NEON `tbl2`–`tbl4`) earns
   its place once real kernels are measured (expressible today as multiple
   16-byte lookups plus selects).
-- Typed-item loads (`List(U16)` → `U16x8`, etc.)—deferred until a
-  kernel wants them; byte buffers are the codec substrate.
+- Additional typed-item loads beyond `U16x8.load_units` and
+  `U32x4.load_units` remain demand-driven. Wide-UTF decoding uses those two
+  numeric-unit loads; byte-buffer codecs retain the existing byte loads.
 - Saturating arithmetic on 32/64-bit lanes, `abs` on `I64x2`, and unsigned
   ordering compares on `U64x2` are omitted because no cataloged kernel
   uses them and hardware support is ragged; any of them can be added later

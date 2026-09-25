@@ -6422,42 +6422,16 @@ pub const Interpreter = struct {
                 }
                 break :blk val;
             },
-            .str_from_utf16 => blk: {
-                var crash_boundary = self.enterCrashBoundary();
-                defer crash_boundary.deinit();
-                if (crash_boundary.set() != 0) return error.Crash;
-                const result = builtins.str.fromUtf16(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
-                const val = try self.alloc(ll.ret_layout);
-                const struct_idx = self.layout_store.getLayout(ll.ret_layout).getStruct().idx;
-                val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 0)).write(u64, result.index);
-                val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 1)).write(u8, if (result.is_ok) 0 else result.problem_code + 1);
-                val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 2)).write(RocStr, result.string);
-                break :blk val;
-            },
-            .str_from_utf16_lossy => blk: {
-                var crash_boundary = self.enterCrashBoundary();
-                defer crash_boundary.deinit();
-                if (crash_boundary.set() != 0) return error.Crash;
-                const result = builtins.str.fromUtf16Lossy(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
+            .str_from_utf8_validated => blk: {
+                const result = builtins.str.fromUtf8Validated(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
-            .str_from_utf32 => blk: {
-                var crash_boundary = self.enterCrashBoundary();
-                defer crash_boundary.deinit();
-                if (crash_boundary.set() != 0) return error.Crash;
-                const result = builtins.str.fromUtf32(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
-                const val = try self.alloc(ll.ret_layout);
-                const struct_idx = self.layout_store.getLayout(ll.ret_layout).getStruct().idx;
-                val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 0)).write(u64, result.index);
-                val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 1)).write(u8, if (result.is_ok) 0 else result.problem_code + 1);
-                val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 2)).write(RocStr, result.string);
-                break :blk val;
+            .str_from_utf16_short => blk: {
+                const result = builtins.str.fromUtf16Short(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
+                break :blk self.rocStrToValue(result, ll.ret_layout);
             },
-            .str_from_utf32_lossy => blk: {
-                var crash_boundary = self.enterCrashBoundary();
-                defer crash_boundary.deinit();
-                if (crash_boundary.set() != 0) return error.Crash;
-                const result = builtins.str.fromUtf32Lossy(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
+            .str_from_utf32_short => blk: {
+                const result = builtins.str.fromUtf32Short(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
             .str_from_utf8_lossy => blk: {
@@ -7935,10 +7909,13 @@ pub const Interpreter = struct {
     }
 
     fn evalSimdLoad(self: *LirInterpreter, ll: LowLevelEvalInput) Error!Value {
-        const list = self.valueToRocListForLayout(ll.args[0], try self.lowLevelArgLayout(ll, 0));
+        const list_layout = try self.lowLevelArgLayout(ll, 0);
+        const list = self.valueToRocListForLayout(ll.args[0], list_layout);
+        const abi = self.layout_store.builtinListAbi(list_layout);
         const index: usize = @intCast(ll.args[1].read(u64));
+        const offset = index * abi.elem_size;
         const result = try self.alloc(ll.ret_layout);
-        @memcpy(result.ptr[0..16], list.bytes.?[index..][0..16]);
+        @memcpy(result.ptr[0..16], list.bytes.?[offset..][0..16]);
         return result;
     }
 

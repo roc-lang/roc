@@ -4534,11 +4534,10 @@ pub const MonoLlvmCodeGen = struct {
             .str_reserve => try self.emitStrReserve(target, arg_locals, unique_args),
             .str_release_excess_capacity => try self.emitStrUnaryRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_release_excess_capacity)), GuardedList.at(arg_locals, 0), unique_args),
             .str_to_utf8 => try self.emitStrToUtf8(target, GuardedList.at(arg_locals, 0)),
-            .str_from_utf8_lossy => try self.emitStrFromUtf8Lossy(target, GuardedList.at(arg_locals, 0)),
-            .str_from_utf16 => try self.emitStrFromWideUtf(.str_from_utf16, target, GuardedList.at(arg_locals, 0)),
-            .str_from_utf16_lossy => try self.emitStrFromWideUtf(.str_from_utf16_lossy, target, GuardedList.at(arg_locals, 0)),
-            .str_from_utf32 => try self.emitStrFromWideUtf(.str_from_utf32, target, GuardedList.at(arg_locals, 0)),
-            .str_from_utf32_lossy => try self.emitStrFromWideUtf(.str_from_utf32_lossy, target, GuardedList.at(arg_locals, 0)),
+            .str_from_utf8_lossy => try self.emitStrFromByteList(.str_from_utf8_lossy, target, GuardedList.at(arg_locals, 0)),
+            .str_from_utf8_validated => try self.emitStrFromByteList(.str_from_utf8_validated, target, GuardedList.at(arg_locals, 0)),
+            .str_from_utf16_short => try self.emitStrFromByteList(.str_from_utf16_short, target, GuardedList.at(arg_locals, 0)),
+            .str_from_utf32_short => try self.emitStrFromByteList(.str_from_utf32_short, target, GuardedList.at(arg_locals, 0)),
             .str_from_utf8 => try self.emitStrFromUtf8(target, GuardedList.at(arg_locals, 0)),
             .str_inspect => try self.emitStrUnaryRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_inspect)), GuardedList.at(arg_locals, 0), null),
             .dict_pseudo_seed,
@@ -5689,11 +5688,14 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitSimdLoad(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const vector = self.simdVectorForLayout(self.localLayout(target)) orelse return error.CompilationFailed;
         const bytes = try self.loadPointer(self.slot(GuardedList.at(args, 0)).ptr);
         const index = try self.loadIntegerLocalAsUsize(GuardedList.at(args, 1));
-        const source = wip.gep(.inbounds, .i8, bytes, &.{index}, "") catch return error.OutOfMemory;
+        const abi = self.layout_store.?.builtinListAbi(self.localLayout(GuardedList.at(args, 0)));
+        const offset = wip.bin(.mul, index, builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const source = wip.gep(.inbounds, .i8, bytes, &.{offset}, "") catch return error.OutOfMemory;
         const value = wip.load(.normal, try self.simdType(vector), source, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
         try self.storeSimdLocal(target, value);
     }
@@ -9233,28 +9235,11 @@ pub const MonoLlvmCodeGen = struct {
         try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_to_utf8)), call_args.types.items, call_args.values.items);
     }
 
-    fn emitStrFromWideUtf(self: *MonoLlvmCodeGen, comptime op: lir.LowLevel, target: LocalId, arg: LocalId) Error!void {
-        const builder = self.builder orelse return error.CompilationFailed;
-        const target_slot = self.slot(target);
-        var call_args = try self.rocListArgs1(arg);
-        defer call_args.deinit(self.allocator);
-        try call_args.prepend(self.allocator, try self.ptrType(), target_slot.ptr);
-        if (op == .str_from_utf16 or op == .str_from_utf32) {
-            try self.zeroBytes(target_slot.ptr, target_slot.size);
-            const struct_idx = self.layoutValue(target_slot.layout_idx).getStruct().idx;
-            inline for (0..3) |field| {
-                const offset = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, field);
-                try call_args.append(self.allocator, .i32, builder.intValue(.i32, offset) catch return error.OutOfMemory);
-            }
-        }
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(op)), call_args.types.items, call_args.values.items);
-    }
-
-    fn emitStrFromUtf8Lossy(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+    fn emitStrFromByteList(self: *MonoLlvmCodeGen, comptime op: lir.LowLevel, target: LocalId, arg: LocalId) Error!void {
         var call_args = try self.rocListArgs1(arg);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_from_utf8_lossy)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(op)), call_args.types.items, call_args.values.items);
     }
 
     fn emitStrFromUtf8(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
