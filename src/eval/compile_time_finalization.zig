@@ -3860,9 +3860,9 @@ fn failedLiteralRejection(lir_result: *const lir.Program.Result, failed_stmt: ?l
     return data.crash.literal_rejection;
 }
 
-/// A root that failed because a literal conversion rejected its literal
-/// reports the literal's own diagnostic, in the literal's module and once per
-/// literal, in place of a compile-time crash of the root.
+/// Report a rejected literal at the literal itself, in its own module, once
+/// per literal: the report of a literal root whose failure no checked root
+/// embeds.
 fn reportLiteralRejection(
     allocator: Allocator,
     owners: *const ModuleOwners,
