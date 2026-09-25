@@ -289,13 +289,40 @@ pub const Store = struct {
     }
 
     pub fn typeDigest(self: *Store, name_store: *const names.NameStore, ty: TypeId) std.mem.Allocator.Error!names.TypeDigest {
-        return try self.digest_scratch.run(self, name_store, ty);
+        return try self.digest_scratch.run(self, name_store, ty, null);
+    }
+
+    /// Digest of `ty` that is the same in every program giving a value this
+    /// representation. `typeDigest` names a callable variant by this
+    /// program's symbol and function numbering and a capture by its symbol;
+    /// this digest names a variant by its source function's content digest
+    /// and a capture by its position. It leaves out a variant's
+    /// specialization target, which decides a caller's dispatch code but not
+    /// the bytes of a value.
+    pub fn contentDigest(self: *Store, name_store: *const names.NameStore, ty: TypeId, sources: CallableSources) std.mem.Allocator.Error!names.TypeDigest {
+        return try self.digest_scratch.run(self, name_store, ty, sources);
+    }
+
+    /// Content digests of the source functions callable variants name.
+    pub const CallableSources = struct {
+        context: *const anyopaque,
+        digest: *const fn (context: *const anyopaque, source: Common.Symbol) [TypeDigestHasher.digest_length]u8,
+    };
+
+    fn writeVariantDigest(hasher: *TypeDigestHasher, sources: ?CallableSources, variant: FnVariant) void {
+        if (sources) |content| {
+            hasher.update(&content.digest(content.context, variant.source));
+        } else {
+            writeU32(hasher, @intFromEnum(variant.source));
+            writeU32(hasher, @intFromEnum(variant.target));
+        }
     }
 
     fn encodeDigestNode(
         self: *const Store,
         name_store: *const names.NameStore,
         scratch: *DigestScratch,
+        sources: ?CallableSources,
         ty: TypeId,
     ) std.mem.Allocator.Error!void {
         var scalar_hasher = TypeDigestHasher.init();
@@ -348,7 +375,7 @@ pub const Store = struct {
                 writeU32(hasher, @intCast(field_slice.len));
                 for (0..field_slice.len) |index| {
                     const field = GuardedList.at(field_slice, index);
-                    writeU32(hasher, @intFromEnum(field.symbol));
+                    if (sources == null) writeU32(hasher, @intFromEnum(field.symbol));
                     try scratch.child(hasher, field.ty);
                     try scratch.child(hasher, field.storage_ty);
                 }
@@ -373,8 +400,7 @@ pub const Store = struct {
                 writeU32(hasher, @intCast(variant_slice.len));
                 for (0..variant_slice.len) |index| {
                     const variant = GuardedList.at(variant_slice, index);
-                    writeU32(hasher, @intFromEnum(variant.source));
-                    writeU32(hasher, @intFromEnum(variant.target));
+                    writeVariantDigest(hasher, sources, variant);
                     if (variant.capture_ty) |capture_ty| {
                         writeBytes(hasher, "capture");
                         try scratch.child(hasher, capture_ty);
@@ -398,8 +424,7 @@ pub const Store = struct {
                 writeU32(hasher, @intCast(variant_slice.len));
                 for (0..variant_slice.len) |index| {
                     const variant = GuardedList.at(variant_slice, index);
-                    writeU32(hasher, @intFromEnum(variant.source));
-                    writeU32(hasher, @intFromEnum(variant.target));
+                    writeVariantDigest(hasher, sources, variant);
                     if (variant.capture_ty) |capture_ty| {
                         writeBytes(hasher, "capture");
                         try scratch.child(hasher, capture_ty);
@@ -469,18 +494,66 @@ const DigestScratch = struct {
         try self.graph.putChild(try self.discover(ty));
     }
 
-    fn run(self: *DigestScratch, store: *const Store, name_store: *const names.NameStore, ty: TypeId) std.mem.Allocator.Error!names.TypeDigest {
+    fn run(self: *DigestScratch, store: *const Store, name_store: *const names.NameStore, ty: TypeId, sources: ?Store.CallableSources) std.mem.Allocator.Error!names.TypeDigest {
         defer self.reset();
         const root = try self.discover(ty);
         while (self.pending.pop()) |pending_ty| {
             const node = self.node_by_type.get(pending_ty).?;
             self.graph.beginNode(node);
-            try store.encodeDigestNode(name_store, self, pending_ty);
+            try store.encodeDigestNode(name_store, self, sources, pending_ty);
             self.graph.endNode(node);
         }
         return .{ .bytes = try self.graph.resolve(root) };
     }
 };
+
+/// Test source digests: a symbol's digest is its number modulo 10, so
+/// symbols 3 and 13 name one source function.
+fn testCallableSource(_: *const anyopaque, source: Common.Symbol) [TypeDigestHasher.digest_length]u8 {
+    return @splat(@intCast(@intFromEnum(source) % 10));
+}
+
+test "Lambda Mono content digest ignores program numbering of callables and captures" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+    const sources = Store.CallableSources{ .context = &name_store, .digest = testCallableSource };
+    const captured = try store.add(.{ .primitive = .bool });
+    const Variant = struct { source: u32, target: u32, capture_symbol: u32 };
+    const shapes = [_][2]Variant{
+        .{ .{ .source = 3, .target = 1, .capture_symbol = 20 }, .{ .source = 4, .target = 2, .capture_symbol = 21 } },
+        // The same representation under another program's numbering.
+        .{ .{ .source = 13, .target = 8, .capture_symbol = 40 }, .{ .source = 14, .target = 9, .capture_symbol = 41 } },
+        // Another source function in the first position.
+        .{ .{ .source = 5, .target = 1, .capture_symbol = 20 }, .{ .source = 4, .target = 2, .capture_symbol = 21 } },
+    };
+    var content: [shapes.len]names.TypeDigest = undefined;
+    var numbered: [shapes.len]names.TypeDigest = undefined;
+    for (shapes, 0..) |shape, index| {
+        var variants: [2]FnVariant = undefined;
+        for (shape, &variants, 0..) |variant, *out, position| {
+            const capture = try store.add(.{ .capture_record = try store.addCaptureFields(&.{.{
+                .symbol = @enumFromInt(variant.capture_symbol),
+                .binder = null,
+                .ty = captured,
+                .storage_ty = captured,
+            }}) });
+            out.* = .{
+                .id = @enumFromInt(position),
+                .source = @enumFromInt(variant.source),
+                .target = @enumFromInt(variant.target),
+                .capture_ty = capture,
+            };
+        }
+        const callable = try store.add(.{ .callable = try store.addFnVariants(&variants) });
+        content[index] = try store.contentDigest(&name_store, callable, sources);
+        numbered[index] = try store.typeDigest(&name_store, callable);
+    }
+    try std.testing.expectEqualSlices(u8, &content[0].bytes, &content[1].bytes);
+    try std.testing.expect(!std.mem.eql(u8, &numbered[0].bytes, &numbered[1].bytes));
+    try std.testing.expect(!std.mem.eql(u8, &content[0].bytes, &content[2].bytes));
+}
 
 test "Lambda Mono digest terminates recursive erased captures independent of allocation order" {
     var name_store = names.NameStore.init(std.testing.allocator);

@@ -6285,10 +6285,10 @@ fn customIssue11673CallableCache(
 }
 
 // Repro for https://github.com/roc-lang/roc/issues/11627: the cold build
-// caches Lib.wrap, whose object points at the static data of Lib.constant.
-// Editing the app makes the warm build check and lower it again while
-// Lib.wrap comes from the cache, so the app's own constant must not take the
-// data symbol the cached procedure refers to.
+// caches Lib.wrap with the accessor that reads Lib.constant and that
+// constant's data. Editing the app makes the warm build check and lower it
+// again while Lib.wrap comes from the cache, so the app's own constant and
+// its accessor must not share a name or identity with Lib.constant's.
 fn customIssue11627StaticDataNamesCache(
     io: std.Io,
     allocator: Allocator,

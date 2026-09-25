@@ -1523,9 +1523,7 @@ test "constants are named by content across programs, through cycles, and never 
     var names_three = try ContentNames.init(testing.allocator, &set_three);
     defer names_three.deinit();
     try testing.expect(!std.mem.eql(u8, one_root, names_three.of("roc__static_const_value_0")));
+    // The leaf's program-local name is the same in both programs, and its
+    // content name is not.
     try testing.expect(!std.mem.eql(u8, one_leaf, names_three.of("roc__ctfe_0_2")));
-
-    // One program-local name given to different constants in two programs
-    // yields two content names.
-    try testing.expect(!std.mem.eql(u8, names_one.of("roc__ctfe_0_2"), names_three.of("roc__ctfe_0_2")));
 }

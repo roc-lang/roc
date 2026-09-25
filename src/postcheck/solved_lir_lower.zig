@@ -4785,21 +4785,32 @@ const Lowerer = struct {
     }
 
     /// An accessor is emitted and carried in object-cache packs like any
-    /// procedure, so its identity names what it reads in every program: the
-    /// root's module by content key, the root within that module, and the
-    /// representation the slot commits, the same parts that decide which
-    /// roots share a slot (`ComptimeRootKey`).
+    /// procedure, and a spliced procedure takes the place of the program's
+    /// own procedure with its identity, so the identity names what the
+    /// accessor returns in every program: the root's module by content key,
+    /// the root within that module, and the representation the slot commits,
+    /// by a digest no program's numbering enters.
     fn comptimeRootAccessorIdentity(self: *Lowerer, root: Common.ComptimeValueRoot, ty: Type.TypeId, layout_idx: layout.Idx) std.mem.Allocator.Error!LIR.ProcIdentity {
         var digests = try layout.Digests.init(self.allocator, &self.result.layouts);
         defer digests.deinit();
+        const representation = try self.types.contentDigest(&self.solved.lifted.names, ty, .{ .context = self, .digest = callableSourceDigest });
         var hasher = base.TypeDigestHasher.init();
         hasher.update("roc.proc.comptime-root-accessor.v2");
         hasher.update(&root.module.bytes);
         const root_index: u32 = @intFromEnum(root.root);
         hasher.update(&[_]u8{ @truncate(root_index), @truncate(root_index >> 8), @truncate(root_index >> 16), @truncate(root_index >> 24) });
-        hasher.update(&(try self.types.typeDigest(&self.solved.lifted.names, ty)).bytes);
+        hasher.update(&representation.bytes);
         hasher.update(&try digests.get(layout_idx));
         return .{ .bytes = hasher.finalResult() };
+    }
+
+    /// The content digest of the lifted function a callable variant names.
+    fn callableSourceDigest(context: *const anyopaque, source: Common.Symbol) proc_identity.Identity {
+        const self: *const Lowerer = @ptrCast(@alignCast(context));
+        const fn_id = self.source_symbols.get(source) orelse
+            Common.invariant("callable variant named a symbol with no lifted function");
+        return self.source_digests[@intFromEnum(fn_id)] orelse
+            Common.invariant("callable variant named a lifted function with no content identity");
     }
 
     fn lowerStaticDataCandidateInto(
