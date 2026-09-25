@@ -318,6 +318,13 @@ pub const Instantiator = struct {
     /// is not quantified, so each use must see the same node, including a
     /// function node's effect kind and effect dependencies.
     copy_scheme_structure: bool = false,
+    /// Source vars this instantiation must SHARE rather than copy, mapped to
+    /// themselves in `var_map` before the walk starts. Used by a predeclared
+    /// scheme for an annotation with `_` inference holes: a hole's type is
+    /// inferred from the body, so the scheme's copy must keep the live hole
+    /// variables—every use constrains the same var the body's annotation
+    /// regeneration constrains—instead of an independent unconstrained copy.
+    share_vars: []const Var = &.{},
     /// Share every leaf (flex, rigid, field presence, error) whatever its
     /// rank, copying only structure and resolving polarity markers. This is
     /// the shape of a where-method signature's per-use instantiation: the

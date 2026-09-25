@@ -923,6 +923,9 @@ const NestedSpecEvidence = union(enum) {
 const EvidenceMaterializationPurpose = enum {
     body_lowering,
     specialization_interface,
+    /// Materialize the input to an interface summary. Its selected contracts
+    /// are related on the detached expansion graph and captured in the summary.
+    interface_summary_input,
 };
 
 /// One quantified variable's binding at a specialization request: the live
@@ -18123,6 +18126,7 @@ const ActiveConstBindingScope = struct {
 const InterfaceReplayStatus = enum { expanding, expanded, ready };
 
 const InterfaceReplayAddress = struct {
+    kind: enum { procedure, method_contract, local_method_contract } = .procedure,
     family: DraftTemplateFamilyAddress,
     evidence_digest: [32]u8,
     input_digest: [32]u8,
@@ -23023,7 +23027,7 @@ const BodyContext = struct {
         const template_ref = self.builder.templateRefForProcedureUse(procedure);
         const callee_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = callee_view.templates.get(template_ref.template);
-        const partial_edge = try self.evidenceForProcedureUseAtNode(procedure, record.expr, root_evidence, request_fn_node, .specialization_interface);
+        const partial_edge = try self.evidenceForProcedureUseAtNode(procedure, record.expr, root_evidence, request_fn_node, .interface_summary_input);
         var edge = if (partial_edge.vector.len == template.evidence_params.len)
             partial_edge
         else
@@ -23032,14 +23036,14 @@ const BodyContext = struct {
                 template_ref,
                 template,
                 partial_edge,
-                .specialization_interface,
+                .interface_summary_input,
             );
         edge.vector = try self.resolveCallableEvidenceAtNode(
             callee_view,
             template,
             edge.vector,
             request_fn_node,
-            .specialization_interface,
+            .interface_summary_input,
         );
         const evidence = edge.vector;
         const stored_evidence = try self.builder.constFnEvidence(rootEvidence(template_ref, evidence));
@@ -23168,6 +23172,7 @@ const BodyContext = struct {
         )) {
             try relateConstructionFunctionRequestInterface(self.graph, root_node, roots[0]);
         }
+        try callee_ctx.relateMaterializedEvidenceConstraints(&callee_ctx, callee_ctx.evidence.schema.?, edge.vector);
         if (templateInterfaceIsClosed(callee_view, &template)) {
             // A closed interface is complete once the request is related to
             // its checked root; its relation table never enters this graph.
@@ -24544,6 +24549,13 @@ const BodyContext = struct {
                 // that the target itself should default to a builtin.
                 if (self.graph.content(expr_node) == .unresolved) {
                     try self.graph.materializeLiteralDefault(expr_node);
+                }
+                // A builtin target is resolved by the time its value is
+                // demanded, so a target with open parts is a custom type whose
+                // conversion is an ordinary dispatch call. That call lowers at
+                // the target node and completes when the node resolves.
+                if (!try self.graph.typeIsResolved(expr_node)) {
+                    return try self.lowerLiteralConversionCallAtNode(expr_id, expr, expr_node);
                 }
                 const expr_ty = try self.resolvedTypeViewForNode(expr_node);
                 return try self.lowerExprWithType(expr_id, expr_ty);
@@ -33665,7 +33677,7 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         caller: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
-        target_ty: Type.TypeId,
+        target_node: NodeId,
         operands: []const static_dispatch.StaticDispatchOperand,
     ) Allocator.Error!NodeId {
         const function = self.checkedFunctionType(source_fn_ty);
@@ -33682,8 +33694,8 @@ const BodyContext = struct {
         }
         // The numeral expression's checked type is the converted value type;
         // the plan's checked structure relates it to the Try-shaped return.
-        try self.graph.unify(try caller.instNode(checked_ret_ty), try self.graph.importMono(target_ty));
-        try self.graph.unify(try self.instNode(checked_ret_ty), try self.graph.importMono(target_ty));
+        try self.graph.unify(try caller.instNode(checked_ret_ty), target_node);
+        try self.graph.unify(try self.instNode(checked_ret_ty), target_node);
         for (fn_graph.args, operands) |formal_node, operand| {
             try self.relateFormalToOperand(formal_node, caller, operand);
         }
@@ -41906,6 +41918,21 @@ const BodyContext = struct {
         callable: CallableDispatchPlan,
         target_ty: Type.TypeId,
     ) Allocator.Error!NumeralCall {
+        const result = try self.lowerNumeralCallRawAtNode(checked_ret_ty, callable, try self.graph.importMono(target_ty));
+        return .{ .call = result.call, .try_ty = try self.activeTypeFromNode(result.try_node) };
+    }
+
+    const NumeralCallAtNode = struct {
+        call: DraftExprId,
+        try_node: NodeId,
+    };
+
+    fn lowerNumeralCallRawAtNode(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        callable: CallableDispatchPlan,
+        target_node: NodeId,
+    ) Allocator.Error!NumeralCallAtNode {
         const plan = callable.plan;
         const plan_args = callable.operands;
 
@@ -41918,21 +41945,74 @@ const BodyContext = struct {
         call_ctx.current_entry_root = self.current_entry_root;
         call_ctx.in_deferred_body = self.in_deferred_body;
 
-        const callable_node = try call_ctx.instantiateNumeralPlanCallNode(plan.callable_ty, self, checked_ret_ty, target_ty, plan_args);
+        const callable_node = try call_ctx.instantiateNumeralPlanCallNode(plan.callable_ty, self, checked_ret_ty, target_node, plan_args);
 
         const resolved = self.dispatchTarget(plan) orelse
             Common.invariant("checked from_numeral dispatch unexpectedly resolved to structural equality");
 
-        const target_node = try self.methodTargetNodeFromPlan(resolved, &call_ctx, plan.callable_ty);
-        try self.relateDispatchTargetRequestInterface(resolved, target_node, callable_node);
+        const method_node = try self.methodTargetNodeFromPlan(resolved, &call_ctx, plan.callable_ty);
+        try self.relateDispatchTargetRequestInterface(resolved, method_node, callable_node);
         const fn_nodes = try self.graph.functionNodes(callable_node);
-        const ret_ty = try self.activeTypeFromNode(fn_nodes.ret);
 
         const call_expr = try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(fn_nodes.ret),
             try self.lowerResolvedDispatchAtNode(plan, resolved, callable_node, self, &.{}),
         );
-        return .{ .call = call_expr, .try_ty = ret_ty };
+        return .{ .call = call_expr, .try_node = fn_nodes.ret };
+    }
+
+    /// Lower a literal conversion whose target still has open parts: the
+    /// target's `from_numeral`/`from_quote` dispatch call and the unwrap of
+    /// its `Try` result, all at graph nodes.
+    fn lowerLiteralConversionCallAtNode(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        expr: checked.CheckedExpr,
+        target_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        if (self.view.compile_time_roots.lookupNumeralRootByExpr(expr_id)) |root| switch (root.payload) {
+            .const_node => |node| return try self.restoreConstNodeAtNode(self.view, self.view, node, target_node),
+            .pending => {},
+            .fn_value, .discarded, .expect => Common.invariant("numeral conversion root stored a non-constant payload"),
+        };
+        const maybe_plan = switch (expr.data) {
+            .numeral => |numeral| numeral.plan,
+            .str_from_quote => |quote| quote.plan,
+            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("literal conversion call did not point at a conversion expression"),
+        };
+        const target_cell = DraftTypeCell.fromGraphNode(target_node);
+        const callable = switch (self.literalDispatchRuntimePlan(maybe_plan)) {
+            .callable => |callable| callable,
+            .crash => |reason| return try self.runtimeCrashExprAtCell(target_cell, dispatchCrashMessage(reason)),
+        };
+        const result = try self.lowerNumeralCallRawAtNode(expr.ty, callable, target_node);
+
+        const ok_name = try self.nameStoreMut().internTagLabel("Ok");
+        const err_name = try self.nameStoreMut().internTagLabel("Err");
+        const try_cell = DraftTypeCell.fromGraphNode(result.try_node);
+
+        const ok_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), target_cell, null);
+        const ok_pat = try self.addPatWithTypeCell(try_cell, .{ .tag = .{
+            .name = ok_name,
+            .payloads = try self.addPatSpan(&.{try self.addPatWithTypeCell(target_cell, .{ .bind = ok_local })}),
+        } });
+        const ok_body = try self.addExprWithTypeCell(target_cell, .{ .local = ok_local });
+
+        const err_payload_cell = DraftTypeCell.fromGraphNode(try self.graph.tagPayloadNode(result.try_node, err_name, 0));
+        const err_pat = try self.addPatWithTypeCell(try_cell, .{ .tag = .{
+            .name = err_name,
+            .payloads = try self.addPatSpan(&.{try self.addPatWithTypeCell(err_payload_cell, .wildcard)}),
+        } });
+        const err_body = try self.runtimeCrashExprAtCell(target_cell, "invalid numeric literal");
+
+        const branches = [_]DraftBranch{
+            .{ .pat = ok_pat, .body = ok_body },
+            .{ .pat = err_pat, .body = err_body },
+        };
+        return try self.addExprWithTypeCell(target_cell, .{ .match_ = .{
+            .scrutinee = result.call,
+            .branches = try self.addBranchSpan(&branches),
+        } });
     }
 
     fn lowerNumeralRootBody(
@@ -42876,8 +42956,9 @@ const BodyContext = struct {
 
     /// Stored functions have graph-free evidence. Recreate its lexical
     /// substitution in the restoration context, where saved callable and
-    /// capture interfaces will constrain the same checked identities. Hidden
-    /// receivers additionally consume their retained method contracts.
+    /// capture interfaces will constrain the same checked identities. Every
+    /// retained method contract also constrains the variables reached through
+    /// its signature, even when its receiver is reachable from the callable.
     fn restoreEvidenceFrame(
         self: *BodyContext,
         view: ModuleView,
@@ -42894,7 +42975,6 @@ const BodyContext = struct {
         var ctx: ?BodyContext = null;
         defer if (ctx) |*context| context.deinit();
         for (schema.params, vector) |param, entry| {
-            if (!evidenceParamRequiresConstraintRelation(param)) continue;
             switch (entry) {
                 .target => |target| {
                     if (ctx == null) {
@@ -42903,7 +42983,14 @@ const BodyContext = struct {
                     }
                     try self.relateTargetToConstraint(target, &ctx.?, param);
                 },
-                .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+                .structural => |structural| if (structural.checked) |checked_structural| {
+                    if (ctx == null) {
+                        ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, owner, self.graph, self.draft);
+                        try ctx.?.seedSubstitution(schema, subst);
+                    }
+                    try self.relateStructuralEvidenceToConstraint(checked_structural, &ctx.?, param);
+                },
+                .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
             }
         }
         return .{ .scope = .{ .owner = owner, .lexical = scope }, .schema = schema, .subst = subst, .vector = vector, .parent = parent };
@@ -43742,10 +43829,10 @@ const BodyContext = struct {
         // selected target to its constraint binds every quantified variable
         // only that callable reaches. Each such binding can resolve another
         // requirement's receiver, so the derivation runs to a fixpoint before
-        // any receiver is judged open. A checked instantiation record already
-        // binds every slot, hidden ones included, so its edge relates no
-        // target callable; nor does a requirement the site recorded as
-        // structural, unreachable, or rejected. A forwarded structural codec
+        // any receiver is judged open. A checked instantiation record binds
+        // slot identities, hidden ones included. Its complete checked evidence
+        // contract is related below after materialization, rather than using
+        // these intermediate target selections. A forwarded structural codec
         // carries its checked callable, which can reach variables its receiver
         // does not (a parser's error row), so it is related like a target.
         // The context is created by the first relation.
@@ -43831,6 +43918,12 @@ const BodyContext = struct {
                 .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
             };
         }
+        if (site_refs != null and purpose != .interface_summary_input) {
+            var checked_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, schema.view, self.method_scope, self.owner_template, self.graph, self.draft);
+            defer checked_ctx.deinit();
+            try checked_ctx.seedSubstitution(schema, subst);
+            try self.relateMaterializedEvidenceConstraints(&checked_ctx, schema, out);
+        }
         return out;
     }
 
@@ -43842,6 +43935,46 @@ const BodyContext = struct {
         scheme_ctx: *BodyContext,
         param: static_dispatch.EvidenceParamRecord,
     ) Allocator.Error!void {
+        const constraint_node = try scheme_ctx.instNode(param.callable_ty);
+        const root_view = if (target.instantiation) |instantiation| instantiation.view else target.view;
+        const root_fn_ty = if (target.instantiation) |instantiation| instantiation.callable_ty else target.target.callable_ty;
+        const reachability = dispatchTargetAdapterReachability(target.target);
+        const owner = switch (target.target.kind) {
+            .procedure => |procedure| procedure.template,
+            .local_proc => |local| self.localMethodOwnerTemplate(.{
+                .view = target.view,
+                .target = target.target,
+                .local_proc_context = target.local_proc_context,
+            }, local),
+            .structural => unreachable,
+        };
+        var scratch = std.heap.ArenaAllocator.init(self.allocator);
+        defer scratch.deinit();
+        const input = try InterfaceConstraints.capture(self.graph, scratch.allocator(), &.{constraint_node});
+        const request = try input.identityInto(self.graph, scratch.allocator());
+        // This relation consumes only the selected checked signature, not its
+        // nested dispatch evidence. Its source identity and adapter rule fully
+        // determine the operation over the complete input constraint.
+        const evidence: StoredConstFnEvidence = .{ .nodes = &.{}, .frames = &.{}, .head = null };
+        const address: InterfaceReplayAddress = .{
+            .kind = switch (reachability) {
+                .adapter_reachable => .method_contract,
+                .no_adapter => .local_method_contract,
+            },
+            .family = DraftTemplateFamilyAddress.init(owner, self.method_scope.key, root_view.types.rootKey(root_fn_ty)),
+            .evidence_digest = @splat(0),
+            .input_digest = TypeDigestHasher.hash(request.bytes),
+        };
+        const use_summaries = self.draft.interface_replay.use_finished_summaries;
+        if (use_summaries) {
+            if (try self.findInterfaceSummary(address, evidence, request)) |summary| {
+                try self.graph.unify((try summary.instantiate(self.graph))[0], constraint_node);
+                return;
+            }
+        }
+        // Relate an independent copy, so unrelated caller state cannot enter
+        // the retained result. Open variables remain fresh on each replay.
+        const detached = (try input.instantiate(self.graph))[0];
         const target_node = if (target.instantiation) |instantiation| blk: {
             var instantiation_ctx = try BodyContext.initWithMethodScope(
                 self.allocator,
@@ -43864,10 +43997,17 @@ const BodyContext = struct {
             defer target_ctx.deinit();
             break :blk try target_ctx.instNode(lookup.target.callable_ty);
         };
-        const constraint_node = try scheme_ctx.instNode(param.callable_ty);
-        const root_view = if (target.instantiation) |instantiation| instantiation.view else target.view;
-        const root_fn_ty = if (target.instantiation) |instantiation| instantiation.callable_ty else target.target.callable_ty;
-        try self.relateEvidenceTargetRootToRequest(root_view, root_fn_ty, target_node, constraint_node, dispatchTargetAdapterReachability(target.target));
+        try self.relateEvidenceTargetRootToRequest(root_view, root_fn_ty, target_node, detached, reachability);
+        const summary = try InterfaceConstraints.capture(self.graph, scratch.allocator(), &.{detached});
+        if (use_summaries) {
+            _ = try self.insertInterfaceSummary(.{
+                .address = address,
+                .evidence = evidence,
+                .request = request,
+                .summary = summary,
+            });
+        }
+        try self.graph.unify(detached, constraint_node);
     }
 
     /// Relate a checked structural codec's callable to the scheme constraint
@@ -44561,7 +44701,7 @@ const BodyContext = struct {
     ) Allocator.Error!MethodLookup {
         return switch (purpose) {
             .body_lowering => try self.withLocalProcContext(lookup),
-            .specialization_interface => blk: {
+            .specialization_interface, .interface_summary_input => blk: {
                 if (lookup.local_proc_context != null) {
                     Common.invariant("checked specialization-interface evidence unexpectedly carried a draft-local context");
                 }
@@ -44961,6 +45101,30 @@ const BodyContext = struct {
         };
     }
 
+    fn relateMaterializedEvidenceConstraints(
+        self: *BodyContext,
+        target_ctx: *BodyContext,
+        schema: SchemeRequirements,
+        contract: []const SpecEvidence,
+    ) Allocator.Error!void {
+        if (contract.len != schema.params.len) {
+            Common.invariant("materialized target contract length differed from its scheme requirements");
+        }
+        for (schema.params, contract) |param, entry| {
+            // Even a callable-root receiver's method can bind variables
+            // reached only through its constraint signature. Every
+            // selected target supplies that relation exactly once;
+            // selection itself needs no graph-driven fixpoint here.
+            switch (entry) {
+                .target => |target| try self.relateTargetToConstraint(target, target_ctx, param),
+                .structural => |structural| if (structural.checked) |checked_structural| {
+                    try self.relateStructuralEvidenceToConstraint(checked_structural, target_ctx, param);
+                },
+                .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+            }
+        }
+    }
+
     /// The substitution and evidence a target scheme receives from a request
     /// its root was related to in `target_ctx`.
     fn deriveTargetEdge(
@@ -44986,22 +45150,7 @@ const BodyContext = struct {
                 .body_lowering,
             ),
             .materialized_contract => |contract| blk: {
-                if (contract.len != schema.params.len) {
-                    Common.invariant("materialized target contract length differed from its scheme requirements");
-                }
-                for (schema.params, contract) |param, entry| {
-                    // Even a callable-root receiver's method can bind variables
-                    // reached only through its constraint signature. Every
-                    // selected target supplies that relation exactly once;
-                    // selection itself needs no graph-driven fixpoint here.
-                    switch (entry) {
-                        .target => |target| try self.relateTargetToConstraint(target, target_ctx, param),
-                        .structural => |structural| if (structural.checked) |checked_structural| {
-                            try self.relateStructuralEvidenceToConstraint(checked_structural, target_ctx, param);
-                        },
-                        .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
-                    }
-                }
+                try self.relateMaterializedEvidenceConstraints(target_ctx, schema, contract);
                 // Reuse is authorized by the checked dispatch plan. Independent
                 // callables without that proof use .derive instead. This contract
                 // already supplies every target and terminal verdict, including

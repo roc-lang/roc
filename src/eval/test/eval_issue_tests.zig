@@ -266,6 +266,34 @@ const issue11377GenericNominalCollectionSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "issue 11661: closure relaxation preserves previous loop list",
+        .source_kind = .module,
+        .source =
+        \\answer : U64 -> Str
+        \\answer = |n| {
+        \\    edges = List.map_with_index(List.repeat(0, n - 1), |_, i| { from: n - 1 - i, to: n - 2 - i, cost: 1 })
+        \\    relax = |d| List.fold(edges, d, |acc, e| {
+        \\        via = (List.get(acc, e.to) ?? 1000) + e.cost
+        \\        if via < (List.get(acc, e.from) ?? 1000) {
+        \\            List.set(acc, e.from, via) ?? crash("relax: out of range")
+        \\        } else { acc }
+        \\    })
+        \\    start = List.set(List.repeat(1000, n), 0, 0) ?? crash("start")
+        \\    var $d = start
+        \\    var $next = relax(start)
+        \\    var $passes = 1
+        \\    while $next != $d {
+        \\        $d = $next
+        \\        $next = relax($d)
+        \\        $passes = $passes + 1
+        \\    }
+        \\    "passes ${U64.to_str($passes)}: ${Str.join_with(List.map($d, I64.to_str), " ")}"
+        \\}
+        \\main = answer(10)
+        ,
+        .expected = .{ .inspect_str = "\"passes 10: 0 1 2 3 4 5 6 7 8 9\"" },
+    },
+    .{
         .name = "issue 11632: annotated Try parser keeps its listed tags",
         .source_kind = .module,
         .source =
@@ -3380,5 +3408,50 @@ pub const tests = [_]TestCase{
         \\main = split(["a", "b"]).map(|group| group.len())
         ,
         .expected = .{ .inspect_str = "[1, 1]" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11668
+        // The literal's target `Sql(a)` gets `a` from the record argument, whose
+        // field kind is still open when the literal is lowered, so the
+        // `from_quote` call must lower at the open target instead of demanding
+        // its finished type.
+        .name = "issue 11668: from_quote literal argument whose type parameter comes from a record argument",
+        .source_kind = .module,
+        .source =
+        \\Sql(a) := { text : Str }.{
+        \\    from_quote : Str -> Try(Sql(a), [BadQuotedBytes(Str)])
+        \\    from_quote = |raw| Ok(Sql.{ text: raw })
+        \\}
+        \\
+        \\query : Sql(a), a -> Str
+        \\query = |sql, _| sql.text
+        \\
+        \\run : {} -> Str
+        \\run = |_| query("select 1", { id: 1.I32 })
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "\"select 1\"" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11668
+        // The numeral flavor of the same open-target literal conversion.
+        .name = "issue 11668: from_numeral literal argument whose type parameter comes from a record argument",
+        .source_kind = .module,
+        .source =
+        \\Tally(a) := { count : I64 }.{
+        \\    from_numeral : Numeral -> Try(Tally(a), [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Ok(Tally.{ count: 7 })
+        \\}
+        \\
+        \\total : Tally(a), a -> I64
+        \\total = |tally, _| tally.count
+        \\
+        \\run : {} -> I64
+        \\run = |_| total(3, { id: 1.I32 })
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "7" },
     },
 };
