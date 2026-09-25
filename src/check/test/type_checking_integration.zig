@@ -9907,7 +9907,7 @@ test "check type - polarity - derived parser closes an implicitly open Dict key 
         \\parse_counts : Str -> Try(Dict([Active, Paused], U64), [InvalidJson(Str)])
         \\parse_counts = |s| Json.parse(s)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try(Dict([Active, Paused], U64), [InvalidJson(Str), ..errs])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try(Dict([Active, Paused], U64), [InvalidJson(Str)])");
 }
 
 test "check type - polarity - derivation leaves a rigid tag-row extension rejected" {

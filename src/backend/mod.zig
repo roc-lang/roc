@@ -91,7 +91,7 @@ test "issue 10295: dev backend preserves deep structural equality under register
     }
     const answer = try store.addLocal(.{ .layout_idx = .bool });
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = answer } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = answer } }, .test_fixture);
     const eq_args = try store.addLocalSpan(&.{ lhs[depth], rhs[depth] });
     var body = try store.addCFStmt(.{ .assign_low_level = .{
         .target = answer,
@@ -99,7 +99,7 @@ test "issue 10295: dev backend preserves deep structural equality under register
         .rc_effect = lir.LowLevel.num_is_eq.rcEffect(),
         .args = eq_args,
         .next = ret,
-    } });
+    } }, .test_fixture);
 
     var level: usize = depth;
     while (level > 0) : (level -= 1) {
@@ -108,24 +108,24 @@ test "issue 10295: dev backend preserves deep structural equality under register
             .target = rhs[level],
             .fields = rhs_fields,
             .next = body,
-        } });
+        } }, .test_fixture);
         const lhs_fields = try store.addLocalSpan(&.{lhs[level - 1]});
         body = try store.addCFStmt(.{ .assign_struct = .{
             .target = lhs[level],
             .fields = lhs_fields,
             .next = body,
-        } });
+        } }, .test_fixture);
     }
     body = try store.addCFStmt(.{ .assign_literal = .{
         .target = rhs[0],
         .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } },
         .next = body,
-    } });
+    } }, .test_fixture);
     body = try store.addCFStmt(.{ .assign_literal = .{
         .target = lhs[0],
         .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } },
         .next = body,
-    } });
+    } }, .test_fixture);
 
     const root = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
@@ -133,7 +133,7 @@ test "issue 10295: dev backend preserves deep structural equality under register
         .args = lir.LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = .bool,
-    });
+    }, .none);
 
     var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, roc_target.host_cpu.level());
     defer codegen.deinit();
@@ -178,7 +178,7 @@ test "issue 10295: nested list equality has bounded register pressure" {
     const rhs = try store.addLocal(.{ .layout_idx = nested_layouts[depth] });
     const answer = try store.addLocal(.{ .layout_idx = .bool });
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = answer } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = answer } }, .test_fixture);
     const eq_args = try store.addLocalSpan(&.{ lhs, rhs });
     const eq = try store.addCFStmt(.{ .assign_low_level = .{
         .target = answer,
@@ -186,25 +186,25 @@ test "issue 10295: nested list equality has bounded register pressure" {
         .rc_effect = lir.LowLevel.num_is_eq.rcEffect(),
         .args = eq_args,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const empty_elems = try store.addLocalSpan(&.{});
     const assign_rhs = try store.addCFStmt(.{ .assign_list = .{
         .target = rhs,
         .elems = empty_elems,
         .next = eq,
-    } });
+    } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_list = .{
         .target = lhs,
         .elems = empty_elems,
         .next = assign_rhs,
-    } });
+    } }, .test_fixture);
     const root = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = lir.LIR.ProcIdentity.forTest(4),
         .args = lir.LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = .bool,
-    });
+    }, .none);
 
     var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, roc_target.host_cpu.level());
     defer codegen.deinit();
@@ -274,7 +274,7 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
                 .erased_capture_arg = capture_arg,
                 .erased_reuse_arg = reuse_arg,
                 .erased_call_args = arg_plan,
-            });
+            }, .none);
         }
 
         fn addStructBody(
@@ -288,19 +288,19 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
                 field_locals[i] = try s.addLocal(.{ .layout_idx = field_layout });
             }
             const result = try s.addLocal(.{ .layout_idx = struct_layout });
-            const ret = try s.addCFStmt(.{ .ret = .{ .value = result } });
+            const ret = try s.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
             const fields = try s.addLocalSpan(field_locals[0..field_values.len]);
             var body = try s.addCFStmt(.{ .assign_struct = .{
                 .target = result,
                 .fields = fields,
                 .next = ret,
-            } });
+            } }, .test_fixture);
             for (field_values, 0..) |value, i| {
                 body = try s.addCFStmt(.{ .assign_literal = .{
                     .target = field_locals[i],
                     .value = .{ .i64_literal = .{ .value = value, .layout_idx = field_layout } },
                     .next = body,
-                } });
+                } }, .test_fixture);
             }
             return body;
         }
@@ -321,12 +321,12 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
 
     // u8 scalar returning 2 (an Ordering-sized result, the List.sort shape).
     const scalar_result = try store.addLocal(.{ .layout_idx = .u8 });
-    const scalar_ret = try store.addCFStmt(.{ .ret = .{ .value = scalar_result } });
+    const scalar_ret = try store.addCFStmt(.{ .ret = .{ .value = scalar_result } }, .test_fixture);
     const scalar_body = try store.addCFStmt(.{ .assign_literal = .{
         .target = scalar_result,
         .value = .{ .i64_literal = .{ .value = 2, .layout_idx = .u8 } },
         .next = scalar_ret,
-    } });
+    } }, .test_fixture);
     const scalar_proc = try helpers.addErasedProc(&store, &layout_store, scalar_body, .u8);
 
     const u8x3_layout = try layout_store.putStructFields(&.{
@@ -436,7 +436,7 @@ test "x86_64 Windows hosted U128 return stores all 16 bytes from XMM0" {
         .args = lir.LIR.LocalSpan.empty(),
         .ret_layout = .u128,
         .hosted = .{ .symbol = symbol, .dispatch_index = 0 },
-    });
+    }, .none);
 
     const WinCodeGen = dev.LirCodeGenMod.LirCodeGen(.x64win);
     var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, .default);
@@ -473,19 +473,19 @@ test "x86_64 Windows U128 entrypoint return loads all 16 bytes into XMM0" {
     defer layout_store.deinit();
 
     const result = try store.addLocal(.{ .layout_idx = .u128 });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_literal = .{
         .target = result,
         .value = .{ .i128_literal = .{ .value = 0x11111111111111112222222222222222, .layout_idx = .u128 } },
         .next = ret,
-    } });
+    } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = lir.LIR.ProcIdentity.forTest(1),
         .args = lir.LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = .u128,
-    });
+    }, .none);
 
     const WinCodeGen = dev.LirCodeGenMod.LirCodeGen(.x64win);
     var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, .default);

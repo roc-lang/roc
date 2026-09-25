@@ -87,6 +87,7 @@ pub const Problem = union(enum) {
     unreachable_code: UnreachableCode,
     comptime_unused_branch: ComptimeUnusedBranch,
     comptime_condition: ComptimeCondition,
+    derived_parser_error_row: DerivedParserErrorRow,
 
     pub const Idx = enum(u32) { _ };
     pub const Tag = std.meta.Tag(@This());
@@ -372,6 +373,33 @@ pub const OptionalAccessOfRequiredField = struct {
 pub const UnsetOfRequiredField = struct {
     region: base.Region,
     field_name: Ident.Idx,
+};
+
+/// A derived parser's error-row demand failed against a closed row. The
+/// program is correctly rejected, but the diagnostic must point at the
+/// expression that introduced the parser relation (the call that fixes the
+/// record type), not at the unified variables' regions inside the generic
+/// helper (design.md "Derived Parser Required-Field Error Composition").
+pub const DerivedParserErrorRow = struct {
+    region: base.Region,
+    reason: enum {
+        /// The record has required fields, so its compiler-derived parser can
+        /// fail with `MissingRequiredField(Str)`, which the row does not list.
+        required_field,
+        /// A nested custom parser's error tags do not fit the enclosing row.
+        nested_row,
+    },
+    /// Snapshot of the record type whose derived parser needs the tag
+    /// (`required_field` only).
+    record_snapshot: ?SnapshotContentIdx,
+    /// Snapshot of the tags the parser can produce (`nested_row` only).
+    tags_snapshot: ?SnapshotContentIdx,
+    /// Snapshot of the closed error row the tags had to fit in.
+    row_snapshot: SnapshotContentIdx,
+    /// Comma-joined names of the required fields (`required_field` only).
+    required_fields: ?ExtraStringIdx,
+    /// How many required fields `required_fields` joins.
+    required_field_count: u32,
 };
 
 /// Unset (`x: _`) of a field whose presence resolved to `defaulted`: the

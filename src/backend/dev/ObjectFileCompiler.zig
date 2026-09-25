@@ -1040,19 +1040,19 @@ test "ObjectFileCompiler native emission skips static initializers and captures 
     var layouts = try layout.Store.init(allocator, @import("base").target.TargetUsize.native);
     defer layouts.deinit();
     const result_local = try store.addLocal(.{ .layout_idx = .i64 });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result_local } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result_local } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_literal = .{
         .target = result_local,
         .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } },
         .next = ret,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = lir.LIR.ProcIdentity.forTest(1),
         .args = lir.LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = .i64,
-    });
+    }, .none);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = lir.LIR.ProcIdentity.forTest(2),
@@ -1060,7 +1060,7 @@ test "ObjectFileCompiler native emission skips static initializers and captures 
         .body = body,
         .ret_layout = .i64,
         .is_static_initializer = true,
-    });
+    }, .none);
 
     var timing = ObjectFileCompiler.Timing.init(std.testing.io);
     var compiler = ObjectFileCompiler.initForPack(allocator);
@@ -1107,19 +1107,19 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
             var layouts = try layout.Store.init(a, .u64);
             defer layouts.deinit();
             const local = try store.addLocal(.{ .layout_idx = .str });
-            const ret = try store.addCFStmt(.{ .ret = .{ .value = local } });
+            const ret = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
             const body = try store.addCFStmt(.{ .assign_literal = .{
                 .target = local,
                 .value = .{ .static_data = @enumFromInt(7) },
                 .next = ret,
-            } });
+            } }, .test_fixture);
             _ = try store.addProcSpec(.{
                 .name = store.freshSyntheticSymbol(),
                 .identity = identity,
                 .args = .empty(),
                 .body = body,
                 .ret_layout = .str,
-            });
+            }, .none);
             const descriptor = try a.alloc(u8, 24);
             @memset(descriptor, 0);
             std.mem.writeInt(u64, descriptor[8..16], text.len << 1, .little);
