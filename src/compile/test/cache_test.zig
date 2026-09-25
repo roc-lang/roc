@@ -20,6 +20,40 @@ fn captureStderr(ctx: ?*anyopaque, _: std.Io, bytes: []const u8) CoreCtx.StdioEr
     capture.stderr.appendSlice(capture.allocator, bytes) catch return error.IoError;
 }
 
+const CacheWriteBarrier = struct {
+    base: CoreCtx,
+    mutex: std.Io.Mutex = .init,
+    condition: std.Io.Condition = .init,
+    writes: usize = 0,
+
+    fn writeFile(ctx: ?*anyopaque, io: std.Io, path: []const u8, data: []const u8) CoreCtx.WriteError!void {
+        const self: *CacheWriteBarrier = @ptrCast(@alignCast(ctx.?));
+        try self.base.writeFile(path, data);
+
+        // Both publishers finish staging before either can rename. A shared
+        // temp filename makes the second rename fail with FileNotFound.
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        self.writes += 1;
+        if (self.writes == 2) {
+            self.condition.broadcast(io);
+        } else {
+            while (self.writes < 2) self.condition.waitUncancelable(io, &self.mutex);
+        }
+    }
+};
+
+const CacheStoreTask = struct {
+    manager: *CacheManager,
+    directory: []const u8,
+    key: [32]u8,
+    data: []const u8,
+
+    fn run(self: *CacheStoreTask) void {
+        self.manager.storeRawBytes(self.key, self.data, self.directory);
+    }
+};
+
 test "getTestCacheDir returns test subdirectory" {
     const allocator = testing.allocator;
     // Use an explicit cache_dir so the test does not depend on HOME/XDG env vars
@@ -94,6 +128,39 @@ test "storeRawBytes and loadRawBytes round-trip" {
 
     // Verify they match
     try testing.expectEqualStrings(test_data, loaded.?);
+}
+
+test "concurrent cache stores of one key use separate staging files" {
+    const allocator = testing.allocator;
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(tmp_path);
+
+    var barrier = CacheWriteBarrier{ .base = CoreCtx.os(std.heap.page_allocator, std.heap.page_allocator, std.testing.io) };
+    var filesystem = barrier.base;
+    filesystem.ctx = &barrier;
+    filesystem.vtable.writeFile = &CacheWriteBarrier.writeFile;
+    const config = CacheConfig{ .roc_ctx = filesystem };
+    var first = CacheManager.init(std.heap.page_allocator, config, filesystem);
+    var second = CacheManager.init(std.heap.page_allocator, config, filesystem);
+
+    const key = [_]u8{0x51} ** 32;
+    const data = "same checked artifact";
+    var first_task = CacheStoreTask{ .manager = &first, .directory = tmp_path, .key = key, .data = data };
+    var second_task = CacheStoreTask{ .manager = &second, .directory = tmp_path, .key = key, .data = data };
+    const first_thread = try std.Thread.spawn(.{}, CacheStoreTask.run, .{&first_task});
+    const second_thread = try std.Thread.spawn(.{}, CacheStoreTask.run, .{&second_task});
+    first_thread.join();
+    second_thread.join();
+
+    try testing.expectEqual(@as(u64, 1), first.stats.stores);
+    try testing.expectEqual(@as(u64, 1), second.stats.stores);
+    try testing.expectEqual(@as(u64, 0), first.stats.store_failures);
+    try testing.expectEqual(@as(u64, 0), second.stats.store_failures);
+    const loaded = first.loadRawBytes(key, tmp_path).?;
+    defer std.heap.page_allocator.free(loaded);
+    try testing.expectEqualStrings(data, loaded);
 }
 
 test "loadRawBytes returns null on miss" {

@@ -191,6 +191,22 @@ return_value_exprs: std.ArrayListUnmanaged(CIR.Expr.Idx),
 return_constraint_frames: std.ArrayListUnmanaged(ReturnConstraintFrame),
 /// Lambda-local inventory and projections for directed error-row composition.
 try_return_rows: TryReturnRows,
+/// Frames whose results other expressions still reach monomorphically,
+/// innermost last (design.md "Try Return-Row Composition"): every binding
+/// group frame, and every local function declaration's own frame.
+try_row_fixpoints: std.ArrayListUnmanaged(TryRowFixpoint) = .empty,
+/// The vars whose results are still open in some fixpoint: the vars that
+/// monomorphic references to an unannotated function member link to, and the
+/// callables of dispatch obligations waiting for their target's scheme.
+try_row_fixpoint_links: std.ArrayListUnmanaged(TryRowFixpointLink) = .empty,
+/// Error-row contributions whose source is still open in a fixpoint, waiting
+/// for that fixpoint's boundary.
+deferred_try_row_edges: std.ArrayListUnmanaged(DeferredTryRowEdge) = .empty,
+/// Scratch for resolving one fixpoint's deferred contributions.
+try_row_fixpoint_scratch: TryRowFixpointScratch = .{},
+/// Scratch: residual tail root of every row open below some fixpoint limit,
+/// to the outermost fixpoint it is open in (`collectOpenTryRowTails`).
+try_row_open_tails: std.AutoHashMapUnmanaged(Var, u32) = .empty,
 /// A map from one var to another. Used in instantiation and var copying
 var_map: collections.DenseMap(Var, Var),
 /// A map from one var to another. Used in instantiation and var copying
@@ -515,6 +531,14 @@ waiting_predeclared_dispatch_uses: std.ArrayListUnmanaged(WaitingPredeclaredDisp
 /// removed when the statement finishes). The value is the def's annotation,
 /// whose `predeclared_slots` entry holds the scheme.
 predeclared_local_annotations: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Annotation.Idx) = .empty,
+/// Hole-sharing predeclared schemes (annotations with `_` inference holes,
+/// predeclared at their recursive group's start), keyed by the scheme var:
+/// each value lists the scheme's hole copies paired with the live annotation
+/// hole vars. Every use re-unifies its hole copies with the live vars so the
+/// body's inference and the uses' constraints stay monomorphically consistent
+/// until the group's boundary generalizes the holes; see
+/// `predeclareAnnotationSchemeKeepingHolesShared` and `reunifySharedSchemeHoles`.
+hole_shared_schemes: std.AutoHashMapUnmanaged(Var, []const Var) = .empty,
 /// The one expression (a recursive group member's top-level RHS) whose
 /// generalization is suppressed because it lives in its group's shared rank
 /// frame and generalizes at the group boundary instead. Consume-once, like
@@ -1702,6 +1726,8 @@ const GroupFrame = struct {
     /// targets, early annotated uses are a stack-owned suffix and must be
     /// replayed before this frame generalizes.
     pending_predeclared_uses_top: usize,
+    /// This frame's index in `try_row_fixpoints`.
+    try_row_fixpoint: u32,
 };
 
 const PendingPredeclaredSchemeUse = struct {
@@ -2377,6 +2403,9 @@ const TryReturnRows = struct {
             tail: struct { var_: Var, nested: bool },
             projected: Projection,
         } = .none,
+        /// The open fixpoint whose boundary relates this contribution, when
+        /// its source row is still open there.
+        deferred_owner: ?u32 = null,
     };
 
     uses: collections.DenseMap(Var, u2),
@@ -2410,6 +2439,100 @@ const TryReturnRows = struct {
 
     fn appendVars(self: *TryReturnRows, gpa: Allocator, vars: []const Var, nested: bool) Allocator.Error!void {
         for (vars) |var_| try self.work.append(gpa, .{ .var_ = var_, .nested = nested });
+    }
+};
+
+/// A frame whose results other expressions still reach monomorphically: a
+/// binding group frame, or a local function declaration's own frame. Until
+/// the frame's boundary relates every member's pattern to its right-hand side
+/// and resolves every dispatch obligation it owns, such a result row can still
+/// become the row of any expression that reached it.
+const TryRowFixpoint = struct {
+    /// The frame's generalization rank. A contribution deferred to this frame
+    /// keeps its destination's residual tail at this rank, so no frame nested
+    /// inside it generalizes that tail first.
+    rank: Rank,
+};
+
+/// A function-typed var whose result stays open until `owner`'s boundary.
+const TryRowFixpointLink = struct {
+    owner: u32,
+    var_: Var,
+};
+
+/// One `?` or body error-row contribution whose source row was still open in
+/// a fixpoint when its lambda composed its result.
+const DeferredTryRowEdge = struct {
+    /// Index of the fixpoint in `try_row_fixpoints` whose boundary relates it.
+    owner: u32,
+    /// The composed `Try` result of the lambda that owns the contribution,
+    /// and that result's error row.
+    composed: Var,
+    composed_err: Var,
+    /// The contribution exactly as the lambda classified it.
+    plan: TryReturnRows.Plan,
+    ctx: problem.Context,
+};
+
+/// Reusable buffers for relating one fixpoint's deferred contributions. The
+/// destinations form a graph keyed by residual tail: a contribution points at
+/// the destination whose residual tail its source row ends in.
+const TryRowFixpointScratch = struct {
+    const no_node = std.math.maxInt(u32);
+
+    /// Indices into `deferred_try_row_edges` owned by the fixpoint.
+    edges: std.ArrayListUnmanaged(u32) = .empty,
+    /// Per owned edge: its destination node and the node its source ends in.
+    edge_nodes: std.ArrayListUnmanaged(u32) = .empty,
+    edge_targets: std.ArrayListUnmanaged(u32) = .empty,
+    /// Destination residual tail root to node.
+    node_keys: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+    /// Owned edges grouped by destination node (`out_start` is per node).
+    out_start: std.ArrayListUnmanaged(u32) = .empty,
+    out_edges: std.ArrayListUnmanaged(u32) = .empty,
+    /// Tarjan state per node, and the SCCs in completion order (every SCC
+    /// after all the SCCs it reaches).
+    index: std.ArrayListUnmanaged(u32) = .empty,
+    lowlink: std.ArrayListUnmanaged(u32) = .empty,
+    on_stack: std.ArrayListUnmanaged(bool) = .empty,
+    component: std.ArrayListUnmanaged(u32) = .empty,
+    stack: std.ArrayListUnmanaged(u32) = .empty,
+    calls: std.ArrayListUnmanaged(struct { node: u32, next: u32 }) = .empty,
+    order: std.ArrayListUnmanaged(u32) = .empty,
+    order_start: std.ArrayListUnmanaged(u32) = .empty,
+
+    fn clear(self: *TryRowFixpointScratch) void {
+        self.edges.clearRetainingCapacity();
+        self.edge_nodes.clearRetainingCapacity();
+        self.edge_targets.clearRetainingCapacity();
+        self.node_keys.clearRetainingCapacity();
+        self.out_start.clearRetainingCapacity();
+        self.out_edges.clearRetainingCapacity();
+        self.index.clearRetainingCapacity();
+        self.lowlink.clearRetainingCapacity();
+        self.on_stack.clearRetainingCapacity();
+        self.component.clearRetainingCapacity();
+        self.stack.clearRetainingCapacity();
+        self.calls.clearRetainingCapacity();
+        self.order.clearRetainingCapacity();
+        self.order_start.clearRetainingCapacity();
+    }
+
+    fn deinit(self: *TryRowFixpointScratch, gpa: Allocator) void {
+        self.edges.deinit(gpa);
+        self.edge_nodes.deinit(gpa);
+        self.edge_targets.deinit(gpa);
+        self.node_keys.deinit(gpa);
+        self.out_start.deinit(gpa);
+        self.out_edges.deinit(gpa);
+        self.index.deinit(gpa);
+        self.lowlink.deinit(gpa);
+        self.on_stack.deinit(gpa);
+        self.component.deinit(gpa);
+        self.stack.deinit(gpa);
+        self.calls.deinit(gpa);
+        self.order.deinit(gpa);
+        self.order_start.deinit(gpa);
     }
 };
 
@@ -2905,6 +3028,9 @@ pub fn deinit(self: *Self) void {
     self.predeclared_scheme_vars.deinit(self.gpa);
     self.predeclared_slots.deinit(self.gpa);
     self.predeclared_slot_vars.deinit(self.gpa);
+    var hole_shared_iter = self.hole_shared_schemes.valueIterator();
+    while (hole_shared_iter.next()) |holes| self.gpa.free(holes.*);
+    self.hole_shared_schemes.deinit(self.gpa);
     self.predeclared_local_annotations.deinit(self.gpa);
     self.value_lookup_tracking.deinit(self.gpa);
     self.erroneous_value_exprs.deinit(self.gpa);
@@ -2951,6 +3077,11 @@ pub fn deinit(self: *Self) void {
     self.return_value_exprs.deinit(self.gpa);
     self.return_constraint_frames.deinit(self.gpa);
     self.try_return_rows.deinit(self.gpa);
+    self.try_row_fixpoints.deinit(self.gpa);
+    self.try_row_fixpoint_links.deinit(self.gpa);
+    self.deferred_try_row_edges.deinit(self.gpa);
+    self.try_row_fixpoint_scratch.deinit(self.gpa);
+    self.try_row_open_tails.deinit(self.gpa);
     self.var_set.deinit();
     self.inspect_type_visits.deinit();
     self.type_visit_stack.deinit(self.gpa);
@@ -7190,6 +7321,10 @@ fn instantiateTypeScheme(
         .polarity_var_ident = self.cir.idents.polarity_var,
         .anonymous_ext_ident = self.cir.idents.open_ext,
         .polarity_var_behavior = .close,
+        // A hole-sharing predeclared scheme's hole leaves are the LIVE
+        // annotation hole vars: seed their identity so the copy shares them
+        // and the body's inference stays connected to this use.
+        .share_vars = self.hole_shared_schemes.get(var_to_instantiate) orelse &.{},
     };
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, true, evidence);
 }
@@ -7253,6 +7388,37 @@ fn instantiateVarOrphan(
         .polarity_var_ident = self.cir.idents.polarity_var,
         .anonymous_ext_ident = self.cir.idents.open_ext,
         .polarity_var_behavior = .preserve,
+    };
+    return self.instantiateOrphanCopy(var_to_instantiate, &instantiate_ctx, env, region_behavior);
+}
+
+/// Like `instantiateVarOrphan`, but the listed source vars are SHARED into the
+/// copy rather than copied: the copy references the live original variables.
+/// Used by a predeclared scheme for an annotation with `_` inference holes, so
+/// the scheme's holes stay monomorphically connected to the body's inference.
+fn instantiateVarOrphanSharingVars(
+    self: *Self,
+    var_to_instantiate: Var,
+    env: *Env,
+    rank: Rank,
+    region_behavior: InstantiateRegionBehavior,
+    share_vars: []const Var,
+) std.mem.Allocator.Error!Var {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+    std.debug.assert(@intFromEnum(rank) <= @intFromEnum(env.rank()));
+    var instantiate_ctx = Instantiator{
+        .store = self.types,
+        .idents = self.cir.getIdentStoreConst(),
+        .var_map = &self.var_map,
+        .current_rank = env.rank(),
+        .rigid_behavior = .fresh_rigid,
+        .rank_behavior = .ignore_rank,
+        // An orphan copy is a faithful copy: keep polarity vars deferred.
+        .polarity_var_ident = self.cir.idents.polarity_var,
+        .anonymous_ext_ident = self.cir.idents.open_ext,
+        .polarity_var_behavior = .preserve,
+        .share_vars = share_vars,
     };
     return self.instantiateOrphanCopy(var_to_instantiate, &instantiate_ctx, env, region_behavior);
 }
@@ -7409,6 +7575,14 @@ fn instantiateVarHelp(
 
     // First, reset state
     instantiator.var_map.clearRetainingCapacity();
+
+    // Vars the caller asked to share keep their identity in the copy: the
+    // walk's `var_map` lookup resolves them to themselves instead of minting
+    // a placeholder.
+    for (instantiator.share_vars) |shared_var| {
+        const resolved_shared = self.types.resolveVar(shared_var);
+        try instantiator.var_map.put(resolved_shared.var_, resolved_shared.var_);
+    }
 
     // Then, instantiate the variable with the provided context
     const instantiated_var = if (force_type_scheme_root)
@@ -14241,6 +14415,34 @@ fn annotationIsPredeclarableScheme(
     return !self.cir.store.getAnnotation(annotation_idx).contains_underscore;
 }
 
+/// Predeclare schemes for a recursive group's annotated members whose
+/// annotations contain `_` inference holes, at the group's shared frame.
+/// The module-wide pre-pass skips these (see
+/// `predeclareAnnotationSchemeKeepingHolesShared` for why the holes must not
+/// generalize into the standalone scheme); without a predeclared scheme, an
+/// in-group reference to such a member links monomorphically to its in-flight
+/// type and unifies the two members' distinct same-named rigid variables
+/// (issue 11605). Declaring each member's scheme here—inside the frame the
+/// group generalizes at, so the holes stay monomorphic through the body
+/// checks—gives in-group references the same instantiate-the-declared-scheme
+/// rule the hole-free annotations already have.
+fn predeclareHoledAnnotationSchemes(
+    self: *Self,
+    defs: []const CIR.Def.Idx,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const hole_rank = env.rank();
+    for (defs) |def_idx| {
+        const def = self.cir.store.getDef(def_idx);
+        const annotation_idx = def.annotation orelse continue;
+        if (!self.cir.store.getAnnotation(annotation_idx).contains_underscore) continue;
+        if (self.predeclared_slots.contains(annotation_idx)) continue;
+        const scheme_var = try self.predeclareAnnotationSchemeKeepingHolesShared(annotation_idx, env, hole_rank);
+        self.setPredeclaredSchemeVar(def_idx, scheme_var);
+        try self.registerPredeclaredSlots(annotation_idx, scheme_var);
+    }
+}
+
 /// Build a standalone generalized scheme from an annotation, leaving the
 /// annotation's CIR nodes untouched for the def's own body check.
 ///
@@ -14259,6 +14461,39 @@ fn predeclareAnnotationScheme(
     annotation_idx: CIR.Annotation.Idx,
     env: *Env,
 ) std.mem.Allocator.Error!Var {
+    return self.predeclareAnnotationSchemeHelp(annotation_idx, env, null);
+}
+
+/// Like `predeclareAnnotationScheme`, for an annotation containing `_`
+/// inference holes. The holes must NOT be quantified into the standalone
+/// scheme: a hole's type is inferred from the body, so a scheme that
+/// generalized its holes would hand every use an unconstrained rigid var the
+/// body never committed to—unsound. Instead, after the speculative generation
+/// each hole var's rank is lowered to `hole_rank` (the caller's live rank, for
+/// a group-start predeclaration the binding group's shared frame), so the
+/// speculative generalization treats every hole as an ESCAPED variable: it
+/// stays a shared flex, and the orphan scheme copy shares the live hole vars
+/// (`instantiateVarOrphanSharingVars`). In-group references instantiating the
+/// scheme then get fresh flexes for its rigids—two members' same-named rigids
+/// are never unified—while their constraints, and the body's own annotation
+/// regeneration, all flow into the same hole vars. The group's boundary
+/// generalization quantifies the holes exactly like any other body-inferred
+/// variable.
+fn predeclareAnnotationSchemeKeepingHolesShared(
+    self: *Self,
+    annotation_idx: CIR.Annotation.Idx,
+    env: *Env,
+    hole_rank: Rank,
+) std.mem.Allocator.Error!Var {
+    return self.predeclareAnnotationSchemeHelp(annotation_idx, env, hole_rank);
+}
+
+fn predeclareAnnotationSchemeHelp(
+    self: *Self,
+    annotation_idx: CIR.Annotation.Idx,
+    env: *Env,
+    hole_rank: ?Rank,
+) std.mem.Allocator.Error!Var {
     const problems_len = self.problems.len();
     const snapshots_mark = self.snapshots.mark();
 
@@ -14272,12 +14507,41 @@ fn predeclareAnnotationScheme(
         self.active_scheme_root = saved_active_scheme_root;
     }
     try self.generateAnnotationType(annotation_idx, env);
-    const scheme_var = try self.instantiateVarOrphan(
-        ModuleEnv.varFrom(annotation_idx),
-        env,
-        env.rank(),
-        .use_last_var,
-    );
+
+    // For a hole-sharing predeclaration, collect the live hole vars first: the
+    // orphan copy below SHARES them (the scheme references the live vars), and
+    // their rank is lowered to `hole_rank` so the generalization below treats
+    // each hole as an escaped variable (still shared and flex) instead of
+    // quantifying it into the scheme. The generalizer re-pools escaped vars by
+    // their descriptor rank, so no manual pool bookkeeping is needed.
+    var live_holes: std.ArrayListUnmanaged(Var) = .empty;
+    defer live_holes.deinit(self.gpa);
+    if (hole_rank != null) {
+        try self.collectUnderscoreAnnoVars(annotation_idx, &live_holes);
+    }
+
+    const scheme_var = if (live_holes.items.len > 0)
+        try self.instantiateVarOrphanSharingVars(
+            ModuleEnv.varFrom(annotation_idx),
+            env,
+            env.rank(),
+            .use_last_var,
+            live_holes.items,
+        )
+    else
+        try self.instantiateVarOrphan(
+            ModuleEnv.varFrom(annotation_idx),
+            env,
+            env.rank(),
+            .use_last_var,
+        );
+
+    if (hole_rank) |hr| {
+        for (live_holes.items) |hole_var| {
+            const resolved_hole = self.types.resolveVar(hole_var);
+            try self.types.setDescRank(resolved_hole.desc_idx, hr);
+        }
+    }
     try self.judgeFieldKindsAtBoundary(env);
     self.unify_scratch.clearPersistentOpenings();
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
@@ -14288,6 +14552,23 @@ fn predeclareAnnotationScheme(
     self.problems.truncate(problems_len);
     self.snapshots.truncateToMark(snapshots_mark);
     try self.resetAnnotationNodes(annotation_idx);
+
+    if (hole_rank) |hr| {
+        // The reset gave each live hole a fresh unbound class at the outermost
+        // rank; set it to `hr` so a use unifying into the hole before the
+        // body pass re-ranks it cannot pull the class below the group's
+        // generalization boundary, which would freeze the hole monomorphic
+        // into the published scheme instead of quantifying it there.
+        for (live_holes.items) |hole_var| {
+            const resolved_hole = self.types.resolveVar(hole_var);
+            try self.types.setDescRank(resolved_hole.desc_idx, hr);
+        }
+
+        // Every use of the scheme shares the live hole vars; register them so
+        // each use's instantiation seeds the identity mappings.
+        const holes = try self.gpa.dupe(Var, live_holes.items);
+        try self.hole_shared_schemes.put(self.gpa, scheme_var, holes);
+    }
     return scheme_var;
 }
 
@@ -14317,13 +14598,33 @@ fn predeclaredSchemeSlots(self: *Self, annotation_idx: CIR.Annotation.Idx) Alloc
     const slots = self.predeclaredSlotsPtr(annotation_idx);
     if (slots.predeclared == null) {
         const start: u32 = @intCast(self.predeclared_slot_vars.items.len);
-        try self.canonical_key_writer.appendIdentityVarsFromVar(slots.scheme_var, &self.predeclared_slot_vars);
+        try self.appendPredeclaredIdentitySlots(slots.scheme_var, slots.scheme_var);
         slots.predeclared = .{
             .start = start,
             .len = @intCast(self.predeclared_slot_vars.items.len - start),
         };
     }
     return slots.predeclared.?.slice(self.predeclared_slot_vars.items);
+}
+
+/// Append to `predeclared_slot_vars` the identity slots reachable from `var_`,
+/// one side of the predeclared scheme `scheme_var`. A hole-sharing scheme's
+/// live hole vars are shared by both sides and are never quantified by the
+/// scheme, so both enumerations treat them as opaque leaves: whatever the
+/// group has unified a hole with by the time either side is enumerated, the
+/// two sides still enumerate exactly the annotation's own variables, in the
+/// same order.
+fn appendPredeclaredIdentitySlots(self: *Self, scheme_var: Var, var_: Var) Allocator.Error!void {
+    const holes = self.hole_shared_schemes.get(scheme_var) orelse {
+        try self.canonical_key_writer.appendIdentityVarsFromVar(var_, &self.predeclared_slot_vars);
+        return;
+    };
+    var stack_allocator_state = std.heap.stackFallback(256, self.gpa);
+    const stack_allocator = stack_allocator_state.get();
+    const hole_roots = try stack_allocator.alloc(Var, holes.len);
+    defer stack_allocator.free(hole_roots);
+    for (holes, hole_roots) |hole, *hole_root| hole_root.* = self.types.resolveVar(hole).var_;
+    try self.canonical_key_writer.appendIdentityVarsFromVarWithOpaqueRoots(var_, hole_roots, &self.predeclared_slot_vars);
 }
 
 /// Record the body side of a predeclared annotation's identity slots at the
@@ -14334,7 +14635,7 @@ fn recordPredeclaredBodySlots(self: *Self, annotation_idx: CIR.Annotation.Idx) A
     const slots = self.predeclared_slots.getPtr(annotation_idx) orelse return;
     if (slots.body != null) return;
     const start: u32 = @intCast(self.predeclared_slot_vars.items.len);
-    try self.canonical_key_writer.appendIdentityVarsFromVar(ModuleEnv.varFrom(annotation_idx), &self.predeclared_slot_vars);
+    try self.appendPredeclaredIdentitySlots(slots.scheme_var, ModuleEnv.varFrom(annotation_idx));
     slots.body = .{
         .start = start,
         .len = @intCast(self.predeclared_slot_vars.items.len - start),
@@ -14539,8 +14840,13 @@ fn recordPredeclaredDispatchUse(
 /// Reset every type-annotation node var this annotation's generation wrote
 /// (the annotation node itself, its type tree, and its where-clause
 /// signatures) to a pristine unbound slot. Sound because nothing live
-/// references those vars afterwards: the pre-declared scheme is a fully
-/// disjoint orphan copy, and generation-internal fresh vars are garbage.
+/// references those vars' CLASSES afterwards: the pre-declared scheme is a
+/// fully disjoint orphan copy, and generation-internal fresh vars are
+/// garbage. One exception: a hole-sharing predeclared scheme
+/// (`predeclareAnnotationSchemeKeepingHolesShared`) references the hole
+/// node VARS, which the reset gives fresh unbound classes—the body pass's
+/// annotation regeneration then re-ranks and re-constrains those same vars,
+/// which is exactly the sharing the scheme is meant to preserve.
 fn resetAnnotationNodes(self: *Self, annotation_idx: CIR.Annotation.Idx) std.mem.Allocator.Error!void {
     try self.types.resetVarToUnbound(ModuleEnv.varFrom(annotation_idx), Rank.outermost);
 
@@ -14630,6 +14936,28 @@ fn collectAnnotationTypeAnnos(
                 try pending.append(allocator, func.ret);
             },
             .parens => |parens| try pending.append(allocator, parens.anno),
+        }
+    }
+}
+
+/// The vars of every `_` inference hole in an annotation—its type tree plus
+/// its where-clause method signatures, the same nodes `resetAnnotationNodes`
+/// resets. Each hole node's var is the live variable the body's annotation
+/// regeneration constrains, so a hole-sharing predeclared scheme must name
+/// exactly these.
+fn collectUnderscoreAnnoVars(
+    self: *Self,
+    annotation_idx: CIR.Annotation.Idx,
+    out: *std.ArrayListUnmanaged(Var),
+) std.mem.Allocator.Error!void {
+    var stack_allocator_state = std.heap.stackFallback(1024, self.gpa);
+    const stack_allocator = stack_allocator_state.get();
+    var nodes: std.ArrayList(CIR.TypeAnno.Idx) = .empty;
+    defer nodes.deinit(stack_allocator);
+    try self.collectAnnotationTypeAnnos(annotation_idx, &nodes, stack_allocator);
+    for (nodes.items) |anno_idx| {
+        if (self.cir.store.getTypeAnno(anno_idx) == .underscore) {
+            try out.append(self.gpa, ModuleEnv.varFrom(anno_idx));
         }
     }
 }
@@ -14789,14 +15117,26 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
         !isFunctionDef(&self.cir.store, self.cir.store.getExpr(self.cir.store.getDef(scc.defs[0]).expr));
 
     self.group_states.items[group_index] = .checking;
+    const boundary_rank = if (group_is_value_def) base_rank else base_rank.next();
+    const try_row_fixpoint = try self.pushTryRowFixpoint(boundary_rank);
     try self.group_stack.append(self.gpa, .{
         .group_index = group_index,
         .base_rank = base_rank,
         .def_check_rank = if (scc.is_recursive) base_rank.next() else base_rank,
-        .boundary_rank = if (group_is_value_def) base_rank else base_rank.next(),
+        .boundary_rank = boundary_rank,
         .pending_targets_top = self.pending_dispatch_targets.items.len,
         .pending_predeclared_uses_top = self.pending_predeclared_scheme_uses.items.len,
+        .try_row_fixpoint = try_row_fixpoint,
     });
+    // An unannotated function member is reached monomorphically through its
+    // pattern var and, while in flight, its RHS var.
+    for (scc.defs) |member_def_idx| {
+        const member_def = self.cir.store.getDef(member_def_idx);
+        if (member_def.annotation != null) continue;
+        if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(member_def.expr))) continue;
+        try self.addTryRowFixpointLink(try_row_fixpoint, ModuleEnv.varFrom(member_def.pattern));
+        try self.addTryRowFixpointLink(try_row_fixpoint, ModuleEnv.varFrom(member_def.expr));
+    }
 
     if (!scc.is_recursive) {
         std.debug.assert(scc.defs.len == 1);
@@ -14804,8 +15144,10 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
         std.debug.assert(env.rank() == base_rank);
         // A function def resolved its dispatch obligations at its RHS
         // generalization boundary (inside checkExpr); a value def has no such
-        // boundary, so any obligations its RHS recorded resolve here.
+        // boundary, so any obligations its RHS recorded resolve here, and
+        // with them the error-row contributions waiting on them.
         try self.resolveGroupPendingDispatchTargets(env);
+        while (try self.relateTryRowFixpoint(env)) try self.resolveGroupPendingDispatchTargets(env);
         _ = try self.resolvePendingPredeclaredSchemeUses(env, false);
     } else {
         try env.var_pool.pushRank();
@@ -14822,6 +15164,17 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
                 try self.erroneous_value_exprs.put(self.gpa, member_def.expr, {});
             }
         }
+
+        // Predeclare schemes for members whose annotations contain `_`
+        // inference holes. The module-wide pre-pass skips these (generalizing
+        // a hole into the standalone scheme would be unsound—see
+        // `predeclareAnnotationSchemeKeepingHolesShared`), but without a
+        // predeclared scheme an in-group reference links monomorphically to
+        // the member's in-flight type, unifying two members' distinct
+        // same-named rigid variables (issue 11605). Inside the shared frame
+        // the holes can stay monomorphic instead, so the annotation's rigids
+        // are quantified for in-group uses exactly like the hole-free rule.
+        try self.predeclareHoledAnnotationSchemes(scc.defs, env);
 
         for (scc.defs) |member_def_idx| {
             const member_def = self.cir.store.getDef(member_def_idx);
@@ -14905,6 +15258,8 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
         self.group_stack.items[self.group_stack.items.len - 1].pending_targets_top);
     std.debug.assert(self.pending_predeclared_scheme_uses.items.len ==
         self.group_stack.items[self.group_stack.items.len - 1].pending_predeclared_uses_top);
+    std.debug.assert(self.try_row_fixpoints.items.len == try_row_fixpoint + 1);
+    try self.popTryRowFixpoint(env);
     _ = self.group_stack.pop();
     self.group_states.items[group_index] = .checked;
 }
@@ -14920,6 +15275,12 @@ fn runGroupBoundary(
     roots: []const BoundaryRoot,
     env: *Env,
 ) std.mem.Allocator.Error!void {
+    // Outside every group frame (module finalization, REPL, expect bodies)
+    // no fixpoint is open here.
+    const owns_fixpoint = self.group_stack.items.len > 0;
+    if (owns_fixpoint) {
+        std.debug.assert(self.group_stack.items[self.group_stack.items.len - 1].try_row_fixpoint + 1 == self.try_row_fixpoints.items.len);
+    }
     while (true) {
         // Deferred dispatch receivers may have been pinned since the last
         // in-body pass—in a recursive group, the members' def-level
@@ -14928,6 +15289,10 @@ fn runGroupBoundary(
         // `reverse(rest).append(first)`). Resolve those before generalizing.
         try self.checkStaticDispatchConstraints(env, false);
         try self.resolveGroupPendingDispatchTargets(env);
+        // Every member's pattern carries its RHS and every obligation this
+        // frame owns has resolved, so the results its deferred error-row
+        // contributions reached are known. Relating them can pin receivers.
+        if (owns_fixpoint and try self.relateTryRowFixpoint(env)) continue;
         const pending_before = self.pending_dispatch_targets.items.len;
         const replayed_before_capture = try self.resolvePendingPredeclaredSchemeUses(env, false);
         try self.defaultLiteralsAtGeneralizationBoundaryMultiRoot(roots, env);
@@ -15236,6 +15601,16 @@ fn deferDispatchObligationForUncheckedTarget(
     const owner_boundary_rank = self.deferredDispatchObligationBoundaryRank(owner_frame);
     try self.pinVarAtRank(constraint.fn_var, owner_boundary_rank, env);
     try self.pinVarAtRank(deferred_constraint.var_, owner_boundary_rank, env);
+    // The callable's result becomes the target's once the obligation resolves
+    // at that same frame's boundary, so it stays open in the frame's fixpoint.
+    // A waiting obligation is re-deferred on every pass; it links when it
+    // starts waiting, and again when a frame adopts it as an orphan.
+    if (!deferred_constraint.waiting_on_target_def or owner_frame == null) {
+        const link_frame = owner_frame orelse if (self.group_stack.items.len > 0) @as(usize, 0) else null;
+        if (link_frame) |frame_idx| {
+            try self.addTryRowFixpointLink(self.group_stack.items[frame_idx].try_row_fixpoint, constraint.fn_var);
+        }
+    }
     try self.scratch_deferred_static_dispatch_constraints.append(waiting_constraint);
 }
 
@@ -16502,6 +16877,25 @@ fn codecRelationOwnerRegion(
     failure_expr: ?CIR.Expr.Idx,
 ) ?Region {
     const expr_idx = constraintIntroExpr(constraint) orelse failure_expr orelse return null;
+    return self.codecRelationRegionFrom(expr_idx);
+}
+
+/// Source region for a derived-codec diagnostic: the expression whose
+/// checking owns the constraint obligation. For a where-clause codec
+/// constraint that is the instantiation site which fixes the codec's type
+/// arguments (where the user can act), falling back to the constraint's
+/// introducing expression and then to the validation region.
+fn derivedCodecDiagnosticRegion(
+    self: *const Self,
+    constraint: StaticDispatchConstraint,
+    failure_expr: ?CIR.Expr.Idx,
+    fallback: Region,
+) Region {
+    const expr_idx = failure_expr orelse constraintIntroExpr(constraint) orelse return fallback;
+    return self.codecRelationRegionFrom(expr_idx) orelse fallback;
+}
+
+fn codecRelationRegionFrom(self: *const Self, expr_idx: CIR.Expr.Idx) ?Region {
     const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
     if (@intFromEnum(node_idx) >= self.cir.store.nodes.len()) return null;
     if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) return null;
@@ -23915,7 +24309,10 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 // detected syntactically up front (a capture-free
                 // `f = |x| f(x)` has no self-capture).
                 const decl_fn_frame = decl_is_fn and !decl_predeclared;
-                if (decl_fn_frame) try env.var_pool.pushRank();
+                if (decl_fn_frame) {
+                    try env.var_pool.pushRank();
+                    try self.addTryRowFixpointLink(try self.pushTryRowFixpoint(env.rank()), decl_pattern_var);
+                }
 
                 const decl_pattern_ctx: PatternCtx = .{ .row_openness = if (self.patternNeedsExhaustiveness(decl_stmt.pattern)) .open else .closed, .failure_owner = ModuleEnv.nodeIdxFrom(stmt_idx) };
 
@@ -24012,6 +24409,10 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 }
 
                 if (decl_fn_frame) {
+                    // The pattern carries its RHS, so the def's result row is
+                    // known to every contribution that reached it.
+                    try self.popTryRowFixpoint(env);
+
                     // This statement's binding-group boundary: the pattern and
                     // any recursive links generalize together, then the frame
                     // pops so the statement's own var unifies with the
@@ -32895,12 +33296,28 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
         }
     }
 
+    // A source row that ends in a row still open in a fixpoint may yet become
+    // this very result's row through a monomorphic reference, so relating it
+    // now could build the result on top of itself. Its fixpoint's boundary
+    // relates it once every member's result is known. An annotated result is
+    // the declared row, which no monomorphic reference can reach.
+    var any_deferred = false;
+    if (frame.expected_result == null and self.try_row_fixpoints.items.len > 0) {
+        try self.collectOpenTryRowTails(self.try_row_fixpoints.items.len);
+        for (rows.plans.items) |*plan| {
+            if (plan.relation == .none) continue;
+            plan.deferred_owner = self.openTryRowTailOwner(self.tryReturnErrorTail(plan.err));
+            if (plan.deferred_owner != null) any_deferred = true;
+        }
+    }
+
     // Only the explicit plans survive error-row mutations. The inventory
     // and projection lookup describe the pre-relation graph exclusively.
     rows.uses.clearRetainingCapacity();
     rows.projections.clearRetainingCapacity();
     const try_ctx = ReturnConstraintKind.try_suffix.problemContext(body_tail_try);
     for (rows.plans.items) |plan| {
+        if (plan.deferred_owner != null) continue;
         const ctx = if (plan.is_body) body_ctx else try_ctx;
         switch (plan.relation) {
             .whole => try self.checkReturnRelation(composed_var, plan.expr, ctx, env),
@@ -32913,6 +33330,7 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
     // payload relation may have exposed more heads in a source tail; these
     // contribute through the same directed relation before its terminal tail.
     for (rows.plans.items) |plan| {
+        if (plan.deferred_owner != null) continue;
         const ctx = if (plan.is_body) body_ctx else try_ctx;
         var tail: Var = undefined;
         switch (plan.relation) {
@@ -32944,7 +33362,414 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
         }
     }
 
+    if (any_deferred) {
+        // The residual tail is where every deferred contribution lands, so
+        // it stays live at each owning fixpoint's rank until that boundary.
+        const residual = self.tryReturnErrorTail(composed.err);
+        for (rows.plans.items) |plan| {
+            const owner = plan.deferred_owner orelse continue;
+            try self.pinVarAtRank(residual, self.try_row_fixpoints.items[owner].rank, env);
+            try self.deferred_try_row_edges.append(self.gpa, .{
+                .owner = owner,
+                .composed = composed_var,
+                .composed_err = composed.err,
+                .plan = plan,
+                .ctx = if (plan.is_body) body_ctx else try_ctx,
+            });
+        }
+    }
+
     return composed_var;
+}
+
+/// Open a fixpoint for a frame that generalizes at `rank`, returning its index.
+fn pushTryRowFixpoint(self: *Self, rank: Rank) Allocator.Error!u32 {
+    try self.try_row_fixpoints.append(self.gpa, .{ .rank = rank });
+    return @intCast(self.try_row_fixpoints.items.len - 1);
+}
+
+/// Record a function-typed var whose result stays open until `owner`'s
+/// boundary.
+fn addTryRowFixpointLink(self: *Self, owner: u32, link_var: Var) Allocator.Error!void {
+    std.debug.assert(owner < self.try_row_fixpoints.items.len);
+    try self.try_row_fixpoint_links.append(self.gpa, .{ .owner = owner, .var_ = link_var });
+}
+
+/// Close the innermost fixpoint: relate what is still deferred to it, then
+/// drop it and its links.
+fn popTryRowFixpoint(self: *Self, env: *Env) Allocator.Error!void {
+    std.debug.assert(self.try_row_fixpoints.items.len > 0);
+    const fixpoint_idx: u32 = @intCast(self.try_row_fixpoints.items.len - 1);
+    _ = try self.relateTryRowFixpoint(env);
+    var write: usize = 0;
+    for (self.try_row_fixpoint_links.items) |link| {
+        if (link.owner == fixpoint_idx) continue;
+        self.try_row_fixpoint_links.items[write] = link;
+        write += 1;
+    }
+    self.try_row_fixpoint_links.shrinkRetainingCapacity(write);
+    _ = self.try_row_fixpoints.pop();
+}
+
+/// The residual tail of the result error row a link var carries, once
+/// references have given it a function type returning a `Try`. A reference
+/// that matched on the result before the member's own result was built sees
+/// it as the structural union `Try`'s backing relates to, `[Ok(ok), Err(err)]`,
+/// whose `Err` payload is that error row.
+fn tryRowFixpointMemberTail(self: *Self, link_var: Var) ?Var {
+    var current = link_var;
+    var guard = types_mod.debug.IterationGuard.init("tryRowFixpointMemberTail");
+    const ret = while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| break func.ret,
+                .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => return null,
+            },
+            .flex, .rigid, .field_presence, .err => return null,
+        }
+    };
+    const err = if (self.tryArgsFromVar(ret)) |args| args.err else self.tryBackingErrPayload(ret) orelse return null;
+    return self.types.resolveVar(self.tryReturnErrorTail(err)).var_;
+}
+
+/// The payload of the `Err` tag on a structural union's row spine, when it
+/// carries exactly one.
+fn tryBackingErrPayload(self: *Self, union_var: Var) ?Var {
+    var current = union_var;
+    var guard = types_mod.debug.IterationGuard.init("tryBackingErrPayload");
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |row| {
+                    const tags = self.types.getTagsSlice(row.tags);
+                    for (tags.items(.name), tags.items(.args)) |name, args| {
+                        if (name != self.cir.idents.err) continue;
+                        const payload = self.types.sliceVars(args);
+                        return if (payload.len == 1) payload[0] else null;
+                    }
+                    current = row.ext;
+                },
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return null,
+            },
+            .flex, .rigid, .field_presence, .err => return null,
+        }
+    }
+}
+
+/// Collect the residual tail of every row still open in a fixpoint below
+/// `limit`, each mapped to the outermost such fixpoint: the result row of every
+/// link, and every destination waiting on a fixpoint. Nothing unifies between
+/// this collection and the lookups that use it.
+fn collectOpenTryRowTails(self: *Self, limit: usize) Allocator.Error!void {
+    const open_tails = &self.try_row_open_tails;
+    open_tails.clearRetainingCapacity();
+    for (self.try_row_fixpoint_links.items) |link| {
+        if (link.owner >= limit) continue;
+        const tail = self.tryRowFixpointMemberTail(link.var_) orelse continue;
+        try self.noteOpenTryRowTail(tail, link.owner);
+    }
+    for (self.deferred_try_row_edges.items) |edge| {
+        if (edge.owner >= limit) continue;
+        try self.noteOpenTryRowTail(self.types.resolveVar(self.tryReturnErrorTail(edge.composed_err)).var_, edge.owner);
+    }
+}
+
+fn noteOpenTryRowTail(self: *Self, tail_root: Var, owner: u32) Allocator.Error!void {
+    const entry = try self.try_row_open_tails.getOrPut(self.gpa, tail_root);
+    if (!entry.found_existing or owner < entry.value_ptr.*) entry.value_ptr.* = owner;
+}
+
+/// The outermost fixpoint in which a row ending in `tail` is still open, per
+/// the last `collectOpenTryRowTails`.
+fn openTryRowTailOwner(self: *Self, tail: Var) ?u32 {
+    return self.try_row_open_tails.get(self.types.resolveVar(tail).var_);
+}
+
+/// Relate the innermost fixpoint's deferred contributions at its boundary,
+/// after every member's pattern has been related to its right-hand side and
+/// every dispatch obligation it owns has resolved, and before anything
+/// generalizes. Returns whether any contribution was related.
+///
+/// Each deferred contribution says its destination row includes its source
+/// row. Destinations are nodes keyed by residual tail, and a contribution
+/// points at the node its source row ends in. Rows that include one another
+/// around a cycle are one row, so each strongly connected component with a
+/// cycle collapses by ordinary unification before any row is built on
+/// another; then every remaining contribution relates as its lambda
+/// classified it, visiting components after everything they reach. A
+/// contribution whose source ends in a row still open in an enclosing
+/// fixpoint moves to that fixpoint.
+fn relateTryRowFixpoint(self: *Self, env: *Env) Allocator.Error!bool {
+    std.debug.assert(self.try_row_fixpoints.items.len > 0);
+    const fixpoint_idx: u32 = @intCast(self.try_row_fixpoints.items.len - 1);
+
+    const scratch = &self.try_row_fixpoint_scratch;
+    scratch.clear();
+    var any_owned = false;
+    for (self.deferred_try_row_edges.items) |edge| {
+        if (edge.owner == fixpoint_idx) any_owned = true;
+    }
+    if (!any_owned) return false;
+    try self.collectOpenTryRowTails(fixpoint_idx);
+    for (self.deferred_try_row_edges.items, 0..) |*edge, edge_idx| {
+        if (edge.owner != fixpoint_idx) continue;
+        if (self.openTryRowTailOwner(self.tryReturnErrorTail(edge.plan.err))) |outer| {
+            edge.owner = outer;
+            const destination_tail = self.tryReturnErrorTail(edge.composed_err);
+            try self.pinVarAtRank(destination_tail, self.try_row_fixpoints.items[outer].rank, env);
+            try self.noteOpenTryRowTail(self.types.resolveVar(destination_tail).var_, outer);
+            continue;
+        }
+        try scratch.edges.append(self.gpa, @intCast(edge_idx));
+    }
+    if (scratch.edges.items.len == 0) return false;
+
+    // Nodes and edges.
+    for (scratch.edges.items) |edge_idx| {
+        const edge = self.deferred_try_row_edges.items[edge_idx];
+        const key = self.types.resolveVar(self.tryReturnErrorTail(edge.composed_err)).var_;
+        const entry = try scratch.node_keys.getOrPut(self.gpa, key);
+        if (!entry.found_existing) entry.value_ptr.* = @intCast(scratch.node_keys.count() - 1);
+        try scratch.edge_nodes.append(self.gpa, entry.value_ptr.*);
+    }
+    for (scratch.edges.items) |edge_idx| {
+        const edge = self.deferred_try_row_edges.items[edge_idx];
+        const source_tail = self.types.resolveVar(self.tryReturnErrorTail(edge.plan.err)).var_;
+        try scratch.edge_targets.append(self.gpa, scratch.node_keys.get(source_tail) orelse TryRowFixpointScratch.no_node);
+    }
+    const node_count: u32 = scratch.node_keys.count();
+    try scratch.out_start.appendNTimes(self.gpa, 0, node_count + 1);
+    for (scratch.edge_nodes.items) |node| scratch.out_start.items[node + 1] += 1;
+    for (1..scratch.out_start.items.len) |i| scratch.out_start.items[i] += scratch.out_start.items[i - 1];
+    try scratch.out_edges.appendNTimes(self.gpa, 0, scratch.edges.items.len);
+    {
+        try scratch.index.appendSlice(self.gpa, scratch.out_start.items[0..node_count]);
+        for (scratch.edge_nodes.items, 0..) |node, owned_idx| {
+            scratch.out_edges.items[scratch.index.items[node]] = @intCast(owned_idx);
+            scratch.index.items[node] += 1;
+        }
+        scratch.index.clearRetainingCapacity();
+    }
+
+    try self.tryRowFixpointComponents(node_count);
+
+    // Collapse cycles, then relate every remaining contribution, visiting
+    // each component after the components it reaches.
+    for (0..scratch.order_start.items.len - 1) |component_idx| {
+        const members = scratch.order.items[scratch.order_start.items[component_idx]..scratch.order_start.items[component_idx + 1]];
+        for (members) |node| {
+            for (scratch.out_edges.items[scratch.out_start.items[node]..scratch.out_start.items[node + 1]]) |owned_idx| {
+                const target = scratch.edge_targets.items[owned_idx];
+                if (target == TryRowFixpointScratch.no_node) continue;
+                if (scratch.component.items[target] != component_idx) continue;
+                try self.collapseTryRowEdge(self.deferred_try_row_edges.items[scratch.edges.items[owned_idx]], env);
+            }
+        }
+        for (members) |node| {
+            for (scratch.out_edges.items[scratch.out_start.items[node]..scratch.out_start.items[node + 1]]) |owned_idx| {
+                const target = scratch.edge_targets.items[owned_idx];
+                if (target != TryRowFixpointScratch.no_node and scratch.component.items[target] == component_idx) continue;
+                try self.relateDeferredTryRowEdge(self.deferred_try_row_edges.items[scratch.edges.items[owned_idx]], env);
+            }
+        }
+    }
+
+    var write: usize = 0;
+    for (self.deferred_try_row_edges.items) |edge| {
+        if (edge.owner == fixpoint_idx) continue;
+        self.deferred_try_row_edges.items[write] = edge;
+        write += 1;
+    }
+    self.deferred_try_row_edges.shrinkRetainingCapacity(write);
+    return true;
+}
+
+/// Strongly connected components of the fixpoint's destination graph
+/// (Tarjan, on explicit stacks), in completion order: each component follows
+/// every component it reaches. Fills `component`, `order`, and `order_start`.
+fn tryRowFixpointComponents(self: *Self, node_count: u32) Allocator.Error!void {
+    const scratch = &self.try_row_fixpoint_scratch;
+    const unvisited = std.math.maxInt(u32);
+    try scratch.index.appendNTimes(self.gpa, unvisited, node_count);
+    try scratch.lowlink.appendNTimes(self.gpa, 0, node_count);
+    try scratch.on_stack.appendNTimes(self.gpa, false, node_count);
+    try scratch.component.appendNTimes(self.gpa, 0, node_count);
+    try scratch.order_start.append(self.gpa, 0);
+    var next_index: u32 = 0;
+    for (0..node_count) |root_usize| {
+        const root: u32 = @intCast(root_usize);
+        if (scratch.index.items[root] != unvisited) continue;
+        try scratch.calls.append(self.gpa, .{ .node = root, .next = scratch.out_start.items[root] });
+        scratch.index.items[root] = next_index;
+        scratch.lowlink.items[root] = next_index;
+        next_index += 1;
+        try scratch.stack.append(self.gpa, root);
+        scratch.on_stack.items[root] = true;
+        while (scratch.calls.items.len > 0) {
+            const call = &scratch.calls.items[scratch.calls.items.len - 1];
+            const node = call.node;
+            if (call.next < scratch.out_start.items[node + 1]) {
+                const target = scratch.edge_targets.items[scratch.out_edges.items[call.next]];
+                call.next += 1;
+                if (target == TryRowFixpointScratch.no_node) continue;
+                if (scratch.index.items[target] == unvisited) {
+                    scratch.index.items[target] = next_index;
+                    scratch.lowlink.items[target] = next_index;
+                    next_index += 1;
+                    try scratch.stack.append(self.gpa, target);
+                    scratch.on_stack.items[target] = true;
+                    try scratch.calls.append(self.gpa, .{ .node = target, .next = scratch.out_start.items[target] });
+                } else if (scratch.on_stack.items[target]) {
+                    scratch.lowlink.items[node] = @min(scratch.lowlink.items[node], scratch.index.items[target]);
+                }
+                continue;
+            }
+            _ = scratch.calls.pop();
+            if (scratch.calls.items.len > 0) {
+                const parent = scratch.calls.items[scratch.calls.items.len - 1].node;
+                scratch.lowlink.items[parent] = @min(scratch.lowlink.items[parent], scratch.lowlink.items[node]);
+            }
+            if (scratch.lowlink.items[node] != scratch.index.items[node]) continue;
+            const component_idx: u32 = @intCast(scratch.order_start.items.len - 1);
+            while (scratch.stack.pop()) |member| {
+                scratch.on_stack.items[member] = false;
+                scratch.component.items[member] = component_idx;
+                try scratch.order.append(self.gpa, member);
+                if (member == node) break;
+            }
+            try scratch.order_start.append(self.gpa, @intCast(scratch.order.items.len));
+        }
+    }
+}
+
+/// Whether a deferred contribution's destination was generalized by a frame
+/// nested inside its fixpoint. Only its residual tail, kept at the fixpoint's
+/// rank, is still live there.
+fn tryRowEdgeDestinationGeneralized(self: *Self, edge: DeferredTryRowEdge) bool {
+    return self.types.resolveVar(edge.composed).desc.rank == .generalized or
+        self.types.resolveVar(edge.composed_err).desc.rank == .generalized;
+}
+
+/// Relate a contribution whose destination and source include one another
+/// around a cycle: they are one row. A source already ending in the
+/// destination's residual tail with no tag the destination lacks is already
+/// included. A destination generalized inside the fixpoint is equal to its
+/// source through the cycle's other contributions, which relate its live
+/// instances.
+fn collapseTryRowEdge(self: *Self, edge: DeferredTryRowEdge, env: *Env) Allocator.Error!void {
+    if (self.tryRowEdgeDestinationGeneralized(edge)) return;
+    const destination_root = self.types.resolveVar(edge.composed_err).var_;
+    const source_root = self.types.resolveVar(edge.plan.err).var_;
+    if (destination_root == source_root) return;
+    if (self.types.resolveVar(self.tryReturnErrorTail(edge.composed_err)).var_ ==
+        self.types.resolveVar(self.tryReturnErrorTail(edge.plan.err)).var_ and
+        self.tryRowHeadsIncluded(edge.plan.err, edge.composed_err))
+    {
+        return;
+    }
+    if ((try self.unifyInContext(edge.composed_err, edge.plan.err, env, edge.ctx)).isProblem()) {
+        try self.erroneous_value_exprs.put(self.gpa, edge.plan.expr, {});
+    }
+}
+
+/// Whether every tag on `source`'s row spine names a tag on `destination`'s.
+fn tryRowHeadsIncluded(self: *Self, source: Var, destination: Var) bool {
+    var current = source;
+    var guard = types_mod.debug.IterationGuard.init("tryRowHeadsIncluded");
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |row| {
+                    for (self.types.getTagsSlice(row.tags).items(.name)) |name| {
+                        if (!self.tryRowHasTag(destination, name)) return false;
+                    }
+                    current = row.ext;
+                },
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return true,
+            },
+            .flex, .rigid, .field_presence, .err => return true,
+        }
+    }
+}
+
+fn tryRowHasTag(self: *Self, row_var: Var, name: Ident.Idx) bool {
+    var current = row_var;
+    var guard = types_mod.debug.IterationGuard.init("tryRowHasTag");
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |row| {
+                    for (self.types.getTagsSlice(row.tags).items(.name)) |tag_name| {
+                        if (tag_name == name) return true;
+                    }
+                    current = row.ext;
+                },
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return false,
+            },
+            .flex, .rigid, .field_presence, .err => return false,
+        }
+    }
+}
+
+/// Relate a deferred contribution that is not part of a cycle, exactly as
+/// its lambda classified it. A destination generalized inside the fixpoint
+/// includes its source through its live residual tail.
+fn relateDeferredTryRowEdge(self: *Self, edge: DeferredTryRowEdge, env: *Env) Allocator.Error!void {
+    const plan = edge.plan;
+    const residual = self.tryReturnErrorTail(edge.composed_err);
+    if (self.tryRowEdgeDestinationGeneralized(edge)) {
+        if (self.types.resolveVar(residual).var_ == self.types.resolveVar(plan.err).var_) return;
+        if ((try self.unifyInContext(residual, plan.err, env, edge.ctx)).isProblem()) {
+            try self.erroneous_value_exprs.put(self.gpa, plan.expr, {});
+        }
+        return;
+    }
+    switch (plan.relation) {
+        .none => {},
+        .whole => try self.checkReturnRelation(edge.composed, plan.expr, edge.ctx, env),
+        .tail => |source_tail| {
+            if (!source_tail.nested and !plan.is_body) {
+                if (self.types.resolveVar(plan.err).var_ == self.types.resolveVar(residual).var_) return;
+                if ((try self.unifyInContext(edge.composed_err, plan.err, env, edge.ctx)).isProblem()) {
+                    try self.erroneous_value_exprs.put(self.gpa, plan.expr, {});
+                }
+                return;
+            }
+            try self.includeTryRowDirected(edge, env);
+        },
+        .projected => try self.includeTryRowDirected(edge, env),
+    }
+}
+
+/// The directed inclusion of Try Return-Row Composition for a deferred
+/// contribution: the source's visible heads merge through a fresh spine that
+/// shares their payloads, then its residual tail becomes the destination's.
+fn includeTryRowDirected(self: *Self, edge: DeferredTryRowEdge, env: *Env) Allocator.Error!void {
+    const plan = edge.plan;
+    if (self.types.resolveVar(plan.err).var_ == self.types.resolveVar(edge.composed_err).var_) return;
+    const rows = &self.try_return_rows;
+    rows.clear();
+    defer rows.clear();
+    const gathered = try self.gatherTryReturnRow(plan.err, true);
+    if (rows.tags.items.len > 0) {
+        const projection = try self.projectTryReturnRow(gathered.tail, env, self.cir.store.getExprRegion(plan.expr));
+        try self.checkProjectedTryReturn(edge.composed, plan, projection.row, env, edge.ctx);
+    }
+    if ((try self.unifyInContext(self.tryReturnErrorTail(edge.composed_err), gathered.tail, env, edge.ctx)).isProblem()) {
+        try self.erroneous_value_exprs.put(self.gpa, plan.expr, {});
+    }
 }
 
 /// Resolve one `eql` constraint.
@@ -38825,6 +39650,7 @@ test "deferred dispatch obligation ownership is by group identity, not rank" {
         .boundary_rank = Rank.outermost.next(),
         .pending_targets_top = 0,
         .pending_predeclared_uses_top = 0,
+        .try_row_fixpoint = 0,
     });
     try checker.group_stack.append(checker.gpa, .{
         .group_index = 9,
@@ -38833,6 +39659,7 @@ test "deferred dispatch obligation ownership is by group identity, not rank" {
         .boundary_rank = Rank.outermost.next(),
         .pending_targets_top = 0,
         .pending_predeclared_uses_top = 0,
+        .try_row_fixpoint = 0,
     });
 
     try std.testing.expectEqual(@as(?usize, 1), checker.activeDeferredDispatchObligationOwnerFrame(9));
@@ -38876,6 +39703,7 @@ test "an orphan dispatch obligation is adopted only by the outermost frame" {
         .boundary_rank = Rank.outermost.next(),
         .pending_targets_top = 0,
         .pending_predeclared_uses_top = 0,
+        .try_row_fixpoint = 0,
     });
 
     // The outermost frame adopts an orphan, and owns an obligation its own
@@ -38890,6 +39718,7 @@ test "an orphan dispatch obligation is adopted only by the outermost frame" {
         .boundary_rank = Rank.outermost.next().next(),
         .pending_targets_top = 0,
         .pending_predeclared_uses_top = 0,
+        .try_row_fixpoint = 0,
     });
 
     // The nested frame owns only what its own group stamped.
@@ -40616,7 +41445,7 @@ fn validateParseFormatMethod(
         },
     });
     if (!result.isEstablished()) return .reported_error;
-    if (spec_decl != .tag_union) switch (try self.constrainDerivedParserFormatError(err_var, child_err_var, env, region)) {
+    if (spec_decl != .tag_union) switch (try self.constrainDerivedParserFormatError(err_var, child_err_var, constraint, failure_expr, env, region)) {
         .ok => {},
         .unsupported, .reported_error => |validation| return validation,
     };
@@ -40755,7 +41584,7 @@ fn validateDictProtocolMethod(
         },
     });
     if (!result.isEstablished()) return .reported_error;
-    if (is_parser) switch (try self.constrainDerivedParserFormatError(parent_result.err, child_err_var, env, region)) {
+    if (is_parser) switch (try self.constrainDerivedParserFormatError(parent_result.err, child_err_var, constraint, failure_expr, env, region)) {
         .ok => {},
         .unsupported, .reported_error => |validation| return validation,
     };
@@ -40789,7 +41618,7 @@ fn validateParseKeyMethod(
         },
     });
     if (!result.isEstablished()) return .reported_error;
-    switch (try self.constrainDerivedParserFormatError(err_var, child_err_var, env, region)) {
+    switch (try self.constrainDerivedParserFormatError(err_var, child_err_var, constraint, failure_expr, env, region)) {
         .ok => {},
         .unsupported, .reported_error => |validation| return validation,
     }
@@ -40825,7 +41654,10 @@ fn validateEncodeKeyMethod(
 
 fn constrainDerivedParserRequiredFieldError(
     self: *Self,
+    record_var: Var,
     err_var: Var,
+    constraint: StaticDispatchConstraint,
+    failure_expr: ?CIR.Expr.Idx,
     env: *Env,
     region: Region,
 ) Allocator.Error!DerivedParseValidation {
@@ -40834,10 +41666,116 @@ fn constrainDerivedParserRequiredFieldError(
     const tag = try self.types.mkTag(tag_name, &.{str_var});
     const ext_var = try self.fresh(env, region);
     const required_err_var = try self.freshFromContent(try self.types.mkTagUnion(&.{tag}, ext_var), env, region);
-    const result = try self.unify(err_var, required_err_var, env);
-    if (!result.isEstablished()) return .reported_error;
+    // A mismatch is reported as the dedicated derived-parser error-row
+    // problem at the codec relation's owner region; the generic row-vs-row
+    // mismatch would point at the unified variables' regions inside the
+    // generic helper instead of at the call that fixes the record type.
+    const result = try self.runUnify(err_var, required_err_var, env, .{ .on_mismatch = .write_no_report });
+    if (!result.isEstablished()) {
+        var field_idents = std.ArrayListUnmanaged(Ident.Idx).empty;
+        defer field_idents.deinit(self.gpa);
+        try self.requiredParseFieldIdents(record_var, &field_idents);
+        try self.reportDerivedParserErrorRow(.required_field, record_var, null, err_var, field_idents.items, constraint, failure_expr, region);
+        return .reported_error;
+    }
     try self.recordCodecRowDemand(err_var, &.{tag_name});
     return .ok;
+}
+
+/// Report the dedicated derived-parser error-row problem, located at the
+/// expression that introduced the codec relation (the call that fixes the
+/// record type). Built only after the unification has already failed, so the
+/// no-error path pays nothing.
+fn reportDerivedParserErrorRow(
+    self: *Self,
+    reason: @FieldType(problem.types.DerivedParserErrorRow, "reason"),
+    record_var: ?Var,
+    tags_var: ?Var,
+    row_var: Var,
+    required_field_idents: []const Ident.Idx,
+    constraint: StaticDispatchConstraint,
+    failure_expr: ?CIR.Expr.Idx,
+    region: Region,
+) Allocator.Error!void {
+    const owner_region = self.derivedCodecDiagnosticRegion(constraint, failure_expr, region);
+    const record_snapshot = if (record_var) |v|
+        try self.snapshots.snapshotVarForError(self.types, &self.type_writer, v)
+    else
+        null;
+    const tags_snapshot = if (tags_var) |v|
+        try self.snapshots.snapshotVarForError(self.types, &self.type_writer, v)
+    else
+        null;
+    const row_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, row_var);
+    var required_fields: ?problem.ExtraStringIdx = null;
+    if (required_field_idents.len > 0) {
+        var joined = std.ArrayListUnmanaged(u8).empty;
+        defer joined.deinit(self.gpa);
+        for (required_field_idents, 0..) |field_ident, i| {
+            if (i > 0) try joined.appendSlice(self.gpa, ", ");
+            try joined.appendSlice(self.gpa, self.cir.getIdentText(field_ident));
+        }
+        required_fields = try self.problems.putExtraString(joined.items);
+    }
+    _ = try self.problems.appendProblem(self.gpa, .{ .derived_parser_error_row = .{
+        .region = owner_region,
+        .reason = reason,
+        .record_snapshot = record_snapshot,
+        .tags_snapshot = tags_snapshot,
+        .row_snapshot = row_snapshot,
+        .required_fields = required_fields,
+        .required_field_count = @intCast(required_field_idents.len),
+    } });
+}
+
+/// Collect the names of the record's fields whose presence makes the derived
+/// parser able to fail with `MissingRequiredField` (the same predicate
+/// `recordParseNeedsRequiredFieldError` applies).
+fn requiredParseFieldIdents(
+    self: *Self,
+    record_var: Var,
+    out: *std.ArrayListUnmanaged(Ident.Idx),
+) Allocator.Error!void {
+    var current = record_var;
+    var guard = types_mod.debug.IterationGuard.init("requiredParseFieldIdents");
+    while (true) {
+        guard.tick();
+        switch (self.types.resolveVar(current).desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |structure| switch (structure) {
+                .record => |record| {
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    for (fields.items(.name), fields.items(.presence)) |field_name, presence| {
+                        if (try self.fieldPresenceDemandsRequiredFieldError(presence)) {
+                            try out.append(self.gpa, field_name);
+                        }
+                    }
+                    current = record.ext;
+                },
+                .empty_record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => return,
+            },
+            .flex, .rigid, .field_presence, .err => return,
+        }
+    }
+}
+
+/// Whether one field's presence makes the derived parser able to fail with
+/// `MissingRequiredField`: a field whose KIND can self-fill never does, and
+/// a field whose value type is an optional-parse field does not either.
+fn fieldPresenceDemandsRequiredFieldError(
+    self: *Self,
+    presence: types_mod.RecordField.Presence,
+) Allocator.Error!bool {
+    if (presence.presenceVar()) |presence_var| {
+        const kind_content = self.types.resolveVar(presence_var).desc.content;
+        if (kind_content == .field_presence) {
+            switch (kind_content.field_presence) {
+                .optional, .defaulted => return false,
+                .required => {},
+            }
+        }
+    }
+    return !try self.varIsOptionalParseField(presence.typeVar());
 }
 
 /// Format errors need not be tag rows (for example a format may return Str).
@@ -40847,6 +41785,8 @@ fn constrainDerivedParserFormatError(
     self: *Self,
     parent: Var,
     child: Var,
+    constraint: StaticDispatchConstraint,
+    failure_expr: ?CIR.Expr.Idx,
     env: *Env,
     region: Region,
 ) Allocator.Error!DerivedParseValidation {
@@ -40858,17 +41798,41 @@ fn constrainDerivedParserFormatError(
                 continue;
             },
             .structure => |structure| switch (structure) {
-                .tag_union, .empty_tag_union => return try self.constrainDerivedParserErrorRowIncludes(parent, child, env, region),
+                .tag_union, .empty_tag_union => return try self.constrainDerivedParserErrorRowIncludes(parent, child, constraint, failure_expr, env, region),
                 .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => {},
             },
             .flex => |flex| if (flex.constraints.len() == 0) {
-                return try self.constrainDerivedParserErrorRowIncludes(parent, child, env, region);
+                return try self.constrainDerivedParserErrorRowIncludes(parent, child, constraint, failure_expr, env, region);
             },
             .rigid, .field_presence => {},
             .err => return .ok,
         }
         const result = try self.unify(parent, child, env);
         return if (result.isEstablished()) .ok else .reported_error;
+    }
+}
+
+/// Whether a tag row (through aliases and extension chains) lists a tag with
+/// the given name, regardless of payload.
+fn tagRowIncludesName(self: *Self, row: Var, name: Ident.Idx) Allocator.Error!bool {
+    var current = row;
+    var guard = types_mod.debug.IterationGuard.init("tagRowIncludesName");
+    while (true) {
+        guard.tick();
+        switch (self.types.resolveVar(current).desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |structure| switch (structure) {
+                .tag_union => |tag_union| {
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.name)) |tag_name| {
+                        if (tag_name.eql(name)) return true;
+                    }
+                    current = tag_union.ext;
+                },
+                .empty_tag_union, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return false,
+            },
+            .flex, .rigid, .field_presence, .err => return false,
+        }
     }
 }
 
@@ -40879,6 +41843,8 @@ fn constrainDerivedParserErrorRowIncludes(
     self: *Self,
     parent_err_var: Var,
     child_err_var: Var,
+    constraint: StaticDispatchConstraint,
+    failure_expr: ?CIR.Expr.Idx,
     env: *Env,
     region: Region,
 ) Allocator.Error!DerivedParseValidation {
@@ -40923,10 +41889,29 @@ fn constrainDerivedParserErrorRowIncludes(
     }
     const tags = self.scratch_tags.sliceFromStart(mark);
     if (tags.len == 0) return .ok;
+    // The dedicated diagnostic is about tags the row does not list at all. A
+    // payload conflict on a tag the row already lists is an ordinary mismatch
+    // between the two rows (issue 11246), so it keeps the generic report.
+    var all_child_tags_listed = true;
+    for (tags) |tag| {
+        if (!try self.tagRowIncludesName(parent_err_var, tag.name)) all_child_tags_listed = false;
+    }
     const parent_ext = try self.fresh(env, region);
     const required_parent = try self.freshFromContent(try self.types.mkTagUnion(tags, parent_ext), env, region);
-    const result = try self.unify(parent_err_var, required_parent, env);
-    if (!result.isEstablished()) return .reported_error;
+    // A mismatch on a tag the row lacks is reported as the dedicated
+    // derived-parser error-row problem at the codec relation's owner region,
+    // like the required-field demand; the generic row-vs-row mismatch would
+    // point inside the helper.
+    const result = if (all_child_tags_listed)
+        try self.unify(parent_err_var, required_parent, env)
+    else
+        try self.runUnify(parent_err_var, required_parent, env, .{ .on_mismatch = .write_no_report });
+    if (!result.isEstablished()) {
+        if (!all_child_tags_listed) {
+            try self.reportDerivedParserErrorRow(.nested_row, null, required_parent, parent_err_var, &.{}, constraint, failure_expr, region);
+        }
+        return .reported_error;
+    }
     if (self.active_codec_owner_region != null) {
         const names_start = self.codec_row_demand_tags.items.len;
         for (tags) |tag| try self.codec_row_demand_tags.append(self.gpa, tag.name);
@@ -40991,7 +41976,7 @@ fn validateSkipRecordFieldMethod(
         },
     });
     if (!result.isEstablished()) return .reported_error;
-    switch (try self.constrainDerivedParserFormatError(err_var, child_err_var, env, region)) {
+    switch (try self.constrainDerivedParserFormatError(err_var, child_err_var, constraint, failure_expr, env, region)) {
         .ok => {},
         .unsupported, .reported_error => |validation| return validation,
     }
@@ -41487,7 +42472,7 @@ fn validateDerivedParseRecord(
         }
     }
     if (try self.recordParseNeedsRequiredFieldError(field_presences.items)) {
-        switch (try self.constrainDerivedParserRequiredFieldError(err_var, env, region)) {
+        switch (try self.constrainDerivedParserRequiredFieldError(record_var, err_var, constraint, failure_expr, env, region)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
@@ -41588,23 +42573,7 @@ fn recordParseNeedsRequiredFieldError(
     field_presences: []const types_mod.RecordField.Presence,
 ) Allocator.Error!bool {
     for (field_presences) |presence| {
-        // A field whose KIND can self-fill never demands the
-        // required-field error: an absent `?:` key materializes the
-        // `#Missing` slot state and an absent `??` key materializes the
-        // archived default (design.md "Field Kinds", "Defaulted Fields").
-        // A still-flex kind reads required-equivalent, matching every
-        // other read boundary.
-        if (presence.presenceVar()) |presence_var| {
-            const kind_content = self.types.resolveVar(presence_var).desc.content;
-            if (kind_content == .field_presence) {
-                switch (kind_content.field_presence) {
-                    .optional, .defaulted => continue,
-                    .required => {},
-                }
-            }
-        }
-        const field_var = presence.typeVar();
-        if (!try self.varIsOptionalParseField(field_var)) return true;
+        if (try self.fieldPresenceDemandsRequiredFieldError(presence)) return true;
     }
     return false;
 }
@@ -41928,7 +42897,7 @@ fn validateDerivedParseNominal(
     // inclusion holds by construction and there is no child extension left to
     // close.
     if (generated_parser) return .ok;
-    return try self.constrainDerivedParserErrorRowIncludes(err_var, child_err_var, env, region);
+    return try self.constrainDerivedParserErrorRowIncludes(err_var, child_err_var, constraint, failure_expr, env, region);
 }
 
 fn validateSetFromListMethod(

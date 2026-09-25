@@ -425,19 +425,19 @@ const TestExecutor = struct {
 
 fn testProc(store: *lir.LirStore, value: i64) Allocator.Error!ProcId {
     const local = try store.addLocal(.{ .layout_idx = .i64 });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = local } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_literal = .{
         .target = local,
         .value = .{ .i64_literal = .{ .value = value, .layout_idx = .i64 } },
         .next = ret,
-    } });
+    } }, .test_fixture);
     return store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = lir.ProcIdentity.forTest(@intCast(store.getProcSpecs().len + 1)),
         .args = lir.LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = .i64,
-    });
+    }, .none);
 }
 
 test "native driver serial reverse lanes own identical executable artifacts and reuse" {
@@ -686,12 +686,12 @@ test "native driver shared literal data outlives source and reused fragment owne
     const text = "a readonly literal with more than twenty three bytes";
     const literal = try store.insertString(text);
     const local = try store.addLocal(.{ .layout_idx = .str });
-    const end = try store.addCFStmt(.{ .ret = .{ .value = local } });
+    const end = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_literal = .{
         .target = local,
         .value = .{ .str_literal = .{ .backing = literal, .offset = 0, .len = text.len } },
         .next = end,
-    } });
+    } }, .test_fixture);
     var demand: [2]ProcId = undefined;
     for (&demand, 0..) |*id, i| id.* = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
@@ -699,7 +699,7 @@ test "native driver shared literal data outlives source and reused fragment owne
         .args = .empty(),
         .body = body,
         .ret_layout = .str,
-    });
+    }, .none);
     const CG = Emitter.HostLirCodeGen;
     var cache = blk: {
         var strings = try @import("StaticStringData.zig").build(a, &store, roc_target.RocTarget.detectNative());
