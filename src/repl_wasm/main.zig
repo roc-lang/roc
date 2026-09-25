@@ -195,6 +195,7 @@ fn definitionKindName(kind: ReplSession.DefinitionKind, file_import: bool) []con
 fn inputMetadata(info: ReplSession.InputInfo) SnippetMetadata {
     return switch (info.kind) {
         .expression => .{ .kind = "expression" },
+        .statement => .{ .kind = "statement" },
         .definition => .{
             .kind = "definition",
             .definition_kind = definitionKindName(info.definition_kind, info.file_import),
@@ -257,7 +258,7 @@ fn parseDiagnosticMessage(arena: Allocator, session: *ReplSession, source: []con
     defer step_result.deinit(allocator);
     return switch (step_result) {
         .diagnostic => |diagnostic| arenaDupe(arena, diagnostic.message),
-        .expression, .definition, .runtime_crash, .none => error.ParseDiagnosticUnavailable,
+        .expression, .definition, .statement, .runtime_crash, .none => error.ParseDiagnosticUnavailable,
     };
 }
 
@@ -286,6 +287,14 @@ fn evaluate(request: Request, arena: Allocator) RequestError![]u8 {
                 .revision = session_revision,
                 .value = try arenaDupe(arena, output),
                 .type = try expressionType(arena, session, statement),
+                .events = try copyEvents(arena, session),
+            }),
+            .statement => try results.append(arena, .{
+                .source = try arenaDupe(arena, statement),
+                .kind = "statement",
+                .status = "ok",
+                .committed = false,
+                .revision = session_revision,
                 .events = try copyEvents(arena, session),
             }),
             .definition => |definition| {
@@ -430,7 +439,7 @@ fn inspect(request: Request, arena: Allocator) RequestError![]u8 {
             arena,
             source,
             "expected_expression",
-            "inspect accepts an expression, not a definition.",
+            "inspect accepts an expression, not a definition or statement.",
         ),
     }
 

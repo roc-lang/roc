@@ -169,6 +169,14 @@ pub fn main(init: std.process.Init) anyerror!void {
     , &.{ "\"status\":\"diagnostic\"", "\"code\":\"compile_error\"", "Compile Time Expect Failed", "expect failed", "\"events\":[]", "\"completed\":false", "\"stop_reason\":\"diagnostic\"", "\"committed_count\":0" }, &.{ "\"kind\":\"expect_failed\"", "\"value\":\"42.0\"" });
 
     try sendAndCheck(interface, gpa,
+        \\{"protocol":1,"id":112,"op":"eval","params":{"source":"expect x == 41"}}
+    , &.{ "\"ok\":true", "\"kind\":\"statement\"", "\"status\":\"ok\"", "\"committed\":false", "\"revision\":3", "\"value\":null", "\"type\":null", "\"completed\":true", "\"committed_count\":0" }, &.{ "internal_error" });
+
+    try sendAndCheck(interface, gpa,
+        \\{"protocol":1,"id":113,"op":"eval","params":{"source":"expect x == 0"}}
+    , &.{ "\"kind\":\"statement\"", "\"status\":\"diagnostic\"", "\"code\":\"compile_error\"", "Compile Time Expect Failed", "\"completed\":false" }, &.{ "internal_error" });
+
+    try sendAndCheck(interface, gpa,
         \\{"protocol":1,"id":12,"op":"eval","params":{"source":"crash \"boom\""}}
     , &.{ "\"status\":\"diagnostic\"", "\"code\":\"compile_error\"", "Compile Time Crash", "boom", "\"events\":[]", "\"completed\":false", "\"stop_reason\":\"diagnostic\"", "\"committed_count\":0" }, &.{ "\"status\":\"crashed\"", "\"crash\":{\"message\":\"boom\"}", "\"kind\":\"crashed\"" });
 
