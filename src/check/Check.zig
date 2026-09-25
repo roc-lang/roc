@@ -40889,10 +40889,9 @@ fn requiredParseFieldIdents(
                     }
                     current = record.ext;
                 },
-                .empty_record => return,
-                else => return,
+                .empty_record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => return,
             },
-            else => return,
+            .flex, .rigid, .field_presence, .err => return,
         }
     }
 }
@@ -40967,9 +40966,9 @@ fn tagRowIncludesName(self: *Self, row: Var, name: Ident.Idx) Allocator.Error!bo
                     }
                     current = tag_union.ext;
                 },
-                else => return false,
+                .empty_tag_union, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return false,
             },
-            else => return false,
+            .flex, .rigid, .field_presence, .err => return false,
         }
     }
 }
