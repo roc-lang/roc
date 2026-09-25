@@ -8766,8 +8766,24 @@ fn packFileBytes(
 }
 
 /// Whether any artifact reachable from `root` relocates against static data
-/// that only its own program defines.
+/// that only its own program defines: data it does not carry, or boxy
+/// descriptor tables. Reachability is the closure a splice places: set-local
+/// references and stable references to definitions in the same set.
 fn artifactClosureNamesProgramLocalSymbols(allocator: Allocator, set: *const backend.dev.ProcArtifact.Set, root: u32) Allocator.Error!bool {
+    var procs = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
+    defer procs.deinit();
+    var thunks = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
+    defer thunks.deinit();
+    var helpers = std.StringHashMap(u32).init(allocator);
+    defer helpers.deinit();
+    for (set.artifacts, 0..) |artifact, index| {
+        switch (artifact.kind) {
+            .proc => |identity| _ = try procs.getOrPutValue(identity, @intCast(index)),
+            .boxy_thunk => |identity| _ = try thunks.getOrPutValue(identity, @intCast(index)),
+            .rc_helper => |name| _ = try helpers.getOrPutValue(name, @intCast(index)),
+            .entrypoint, .message_pool_run, .branch_island => {},
+        }
+    }
     var seen = std.AutoHashMap(u32, void).init(allocator);
     defer seen.deinit();
     var stack = std.ArrayList(u32).empty;
@@ -8778,15 +8794,64 @@ fn artifactClosureNamesProgramLocalSymbols(allocator: Allocator, set: *const bac
         if (gop.found_existing) continue;
         const artifact = set.artifacts[index];
         for (artifact.relocations) |relocation| {
-            if (std.mem.startsWith(u8, relocation.name, "roc__static_") and
-                !std.mem.startsWith(u8, relocation.name, "roc__static_str_") and
-                !std.mem.startsWith(u8, relocation.name, backend.dev.ProcArtifact.content_data_prefix)) return true;
+            if (std.mem.startsWith(u8, relocation.name, "roc__static_") and !carriesData(artifact, relocation.name)) return true;
             if (std.mem.startsWith(u8, relocation.name, "roc_boxy_")) return true;
         }
         for (artifact.data) |item| {
             for (item.relocations) |relocation| if (relocation.function) return true;
         }
         for (artifact.refs) |ref| try stack.append(allocator, ref.target);
+        for (artifact.symbolic_refs) |ref| {
+            const target = switch (ref.target) {
+                .proc => |identity| procs.get(identity),
+                .boxy_thunk => |identity| thunks.get(identity),
+                .rc_helper => |name| helpers.get(name),
+            };
+            if (target) |target_index| try stack.append(allocator, target_index);
+        }
+    }
+    return false;
+}
+
+test "pack withholds an entry whose stable references reach a constant holding a code pointer" {
+    const ProcArtifact = backend.dev.ProcArtifact;
+    const callee = lir.ProcIdentity.forTest(2);
+    const artifacts = [_]ProcArtifact.Artifact{
+        .{
+            .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
+            .code = "call",
+            .entry = 0,
+            .frame = null,
+            .refs = &.{},
+            .symbolic_refs = &.{.{ .site = 0, .form = .call, .target = .{ .proc = callee } }},
+            .relocations = &.{},
+            .data = &.{},
+        },
+        .{
+            .kind = .{ .proc = callee },
+            .code = "read",
+            .entry = 0,
+            .frame = null,
+            .refs = &.{},
+            .relocations = &.{.{ .offset = 0, .name = "roc__static_const_value_0", .kind = .{ .data = .rel32 } }},
+            .data = &.{.{
+                .name = "roc__static_const_value_0",
+                .bytes = "\x00" ** 8,
+                .alignment = 8,
+                .symbol_offset = 0,
+                .relocations = &.{.{ .offset = 0, .name = "roc__proc_callback", .addend = 0, .function = true }},
+                .program_local_name = true,
+            }},
+        },
+    };
+    const set = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(std.testing.allocator), .artifacts = &artifacts };
+    try std.testing.expect(try artifactClosureNamesProgramLocalSymbols(std.testing.allocator, &set, 0));
+    try std.testing.expect(try artifactClosureNamesProgramLocalSymbols(std.testing.allocator, &set, 1));
+}
+
+fn carriesData(artifact: backend.dev.ProcArtifact.Artifact, name: []const u8) bool {
+    for (artifact.data) |item| {
+        if (std.mem.eql(u8, item.name, name)) return true;
     }
     return false;
 }
