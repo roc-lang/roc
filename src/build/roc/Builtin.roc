@@ -14794,6 +14794,51 @@ Builtin :: [].{
 				else
 					b
 
+			## Returns `True` if `a` and `b` are within the given tolerances of each
+			## other: `|a - b| <= max(abs, rel * max(|a|, |b|))`.
+			##
+			## - `rel`: allowed difference as a fraction of the larger magnitude.
+			## - `abs`: allowed difference regardless of magnitude.
+			##
+			## [Dec] addition and subtraction are exact, so `==` is usually what you
+			## want; this helps with rounded results such as division or `sqrt`. It never
+			## overflows: a difference too large for a [Dec] is never approximately equal.
+			## This is not transitive, so do not use it as equality for `Dict`/`Set` keys.
+			##
+			## Crashes unless `0 <= rel <= 1` and `abs >= 0`.
+			## ```roc
+			## expect Dec.is_approx_eq(1.0, 1.01, { rel: 0.01, abs: 0.0 })
+			##
+			## expect Dec.is_approx_eq(100.0, 109.0, { rel: 0.0, abs: 10.0 })
+			##
+			## expect !Dec.is_approx_eq(100.0, 111.0, { rel: 0.0, abs: 10.0 })
+			##
+			## expect !Dec.is_approx_eq(Dec.highest, Dec.lowest, { rel: 1.0, abs: 0.0 })
+			## ```
+			is_approx_eq : Dec, Dec, { rel : Dec, abs : Dec } -> Bool
+			is_approx_eq = |a, b, { rel, abs }| {
+				if !(rel >= 0.0 and rel <= 1.0 and abs >= 0.0) {
+					crash "Dec.is_approx_eq: rel must be in [0, 1] and abs non-negative"
+				}
+
+				if a == b {
+					True
+				} else {
+					diff_result = if a > b Dec.minus_try(a, b) else Dec.minus_try(b, a)
+					match diff_result {
+						Ok(diff) => {
+							magnitude = if a == Dec.lowest or b == Dec.lowest {
+								Dec.highest
+							} else {
+								Dec.max(Dec.abs(a), Dec.abs(b))
+							}
+							diff <= Dec.max(abs, rel * magnitude)
+						}
+						Err(Overflow) => False
+					}
+				}
+			}
+
 			## Negate a [Dec].
 			## ```roc
 			## expect Dec.negate(3.5) == -3.5
@@ -15778,6 +15823,42 @@ Builtin :: [].{
 			## ```
 			is_float_eq : F32, F32 -> Bool
 
+			## Returns `True` if `a` and `b` are equal within the given tolerances:
+			## exactly equal (including `+0.0`/`-0.0` and same-sign infinities), or both
+			## finite with `|a - b| <= max(abs, rel * max(|a|, |b|))`.
+			##
+			## - `rel`: allowed difference as a fraction of the larger magnitude.
+			## - `abs`: allowed difference regardless of magnitude; needed near zero.
+			##
+			## `NaN` is never approximately equal to anything, including itself. An
+			## infinity is only equal to the same infinity. This is not transitive, so do
+			## not use it as equality for `Dict`/`Set` keys.
+			##
+			## Crashes unless `0 <= rel <= 1` and `abs` is finite and `>= 0`.
+			## ```roc
+			## expect F32.is_approx_eq(0.1 + 0.2, 0.3, { rel: 1e-6, abs: 0.0 })
+			##
+			## expect F32.is_approx_eq(1e-20, 0.0, { rel: 1e-9, abs: 1e-12 })
+			##
+			## expect !F32.is_approx_eq(1e-20, 0.0, { rel: 1e-9, abs: 0.0 })
+			##
+			## expect !F32.is_approx_eq(F32.nan, F32.nan, { rel: 1.0, abs: 1.0 })
+			## ```
+			is_approx_eq : F32, F32, { rel : F32, abs : F32 } -> Bool
+			is_approx_eq = |a, b, { rel, abs }| {
+				if !(rel >= 0.0 and rel <= 1.0 and abs >= 0.0 and F32.is_finite(abs)) {
+					crash "F32.is_approx_eq: rel must be in [0, 1] and abs finite and non-negative"
+				}
+
+				if F32.is_float_eq(a, b) {
+					True
+				} else if F32.is_finite(a) and F32.is_finite(b) {
+					F32.abs(a - b) <= F32.max(abs, rel * F32.max(F32.abs(a), F32.abs(b)))
+				} else {
+					False
+				}
+			}
+
 			is_eq : _
 
 			## Feed an [F32] into a [Hasher].
@@ -16701,6 +16782,42 @@ Builtin :: [].{
 			## expect !F64.is_float_eq(F64.nan, F64.nan)
 			## ```
 			is_float_eq : F64, F64 -> Bool
+
+			## Returns `True` if `a` and `b` are equal within the given tolerances:
+			## exactly equal (including `+0.0`/`-0.0` and same-sign infinities), or both
+			## finite with `|a - b| <= max(abs, rel * max(|a|, |b|))`.
+			##
+			## - `rel`: allowed difference as a fraction of the larger magnitude.
+			## - `abs`: allowed difference regardless of magnitude; needed near zero.
+			##
+			## `NaN` is never approximately equal to anything, including itself. An
+			## infinity is only equal to the same infinity. This is not transitive, so do
+			## not use it as equality for `Dict`/`Set` keys.
+			##
+			## Crashes unless `0 <= rel <= 1` and `abs` is finite and `>= 0`.
+			## ```roc
+			## expect F64.is_approx_eq(0.1 + 0.2, 0.3, { rel: 1e-12, abs: 0.0 })
+			##
+			## expect F64.is_approx_eq(1e-20, 0.0, { rel: 1e-9, abs: 1e-12 })
+			##
+			## expect !F64.is_approx_eq(1e-20, 0.0, { rel: 1e-9, abs: 0.0 })
+			##
+			## expect !F64.is_approx_eq(F64.nan, F64.nan, { rel: 1.0, abs: 1.0 })
+			## ```
+			is_approx_eq : F64, F64, { rel : F64, abs : F64 } -> Bool
+			is_approx_eq = |a, b, { rel, abs }| {
+				if !(rel >= 0.0 and rel <= 1.0 and abs >= 0.0 and F64.is_finite(abs)) {
+					crash "F64.is_approx_eq: rel must be in [0, 1] and abs finite and non-negative"
+				}
+
+				if F64.is_float_eq(a, b) {
+					True
+				} else if F64.is_finite(a) and F64.is_finite(b) {
+					F64.abs(a - b) <= F64.max(abs, rel * F64.max(F64.abs(a), F64.abs(b)))
+				} else {
+					False
+				}
+			}
 
 			is_eq : _
 
