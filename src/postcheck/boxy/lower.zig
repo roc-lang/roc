@@ -44115,7 +44115,6 @@ test "boxy lowerer materializes record rest declaration patterns" {
         .success_ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
         .mode = .required,
-        .backing_access = .inspectable,
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(5),
@@ -44876,7 +44875,6 @@ test "boxy lowerer emits record field access using layout field index" {
         .success_ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
         .mode = .required,
-        .backing_access = .inspectable,
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(1),

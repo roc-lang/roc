@@ -1379,20 +1379,20 @@ const Solver = struct {
     }
 
     fn markErasedCallablesReachedByType(self: *Solver, ty: Type.TypeVarId) Allocator.Error!void {
-        var active = self.solved_set_pool.acquire();
-        defer self.solved_set_pool.release(&active);
-        try self.markErasedCallablesReachedByTypeInner(ty, &active);
+        var visited = self.solved_set_pool.acquire();
+        defer self.solved_set_pool.release(&visited);
+        try self.markErasedCallablesReachedByTypeInner(ty, &visited);
     }
 
+    /// Marking a root erases every callable it reaches, and marking it again
+    /// in the same traversal changes nothing, so each root is visited once.
     fn markErasedCallablesReachedByTypeInner(
         self: *Solver,
         ty: Type.TypeVarId,
-        active: *collections.DenseMap(Type.TypeVarId, void),
+        visited: *collections.DenseMap(Type.TypeVarId, void),
     ) Allocator.Error!void {
         const root = self.program.types.rootCompressed(ty);
-        if (active.contains(root)) return;
-        try active.put(root, {});
-        defer _ = active.remove(root);
+        if ((try visited.getOrPut(root)).found_existing) return;
 
         const content = self.program.types.get(root);
         const resolved = if (std.meta.activeTag(content) == .mono)
@@ -1407,32 +1407,35 @@ const Solver = struct {
             .mono => Common.invariant("lazy Monotype leaf reached erased-callable marking unexpanded"),
             .link => Common.invariant("Lambda Solved root returned a link"),
             .unbound, .forall, .primitive, .zst => {},
-            .erased => |erased| try self.markErasedCallablesReachedByMembers(erased.members, active),
+            .erased => |erased| try self.markErasedCallablesReachedByMembers(erased.members, visited),
             .func => |func| {
-                const erased = try self.program.types.add(.{ .erased = .{
-                    .source_fn_ty = try self.solvedTypeDigest(root),
-                    .members = .empty(),
-                } });
-                try self.unify(func.callable, erased);
+                // An erased callable already has this marking's effect.
+                if (std.meta.activeTag(self.program.types.get(self.program.types.rootCompressed(func.callable))) != .erased) {
+                    const erased = try self.program.types.add(.{ .erased = .{
+                        .source_fn_ty = try self.solvedTypeDigest(root),
+                        .members = .empty(),
+                    } });
+                    try self.unify(func.callable, erased);
+                }
                 for (0..func.args.count()) |index| {
                     const arg = self.program.types.spanItem(func.args, index);
-                    try self.markErasedCallablesReachedByTypeInner(arg, active);
+                    try self.markErasedCallablesReachedByTypeInner(arg, visited);
                 }
-                try self.markErasedCallablesReachedByTypeInner(func.ret, active);
+                try self.markErasedCallablesReachedByTypeInner(func.ret, visited);
             },
-            .list => |elem| try self.markErasedCallablesReachedByTypeInner(elem, active),
-            .box => |elem| try self.markErasedCallablesReachedByTypeInner(elem, active),
+            .list => |elem| try self.markErasedCallablesReachedByTypeInner(elem, visited),
+            .box => |elem| try self.markErasedCallablesReachedByTypeInner(elem, visited),
             .tuple => |items| {
                 for (0..items.count()) |index| {
                     const item = self.program.types.spanItem(items, index);
-                    try self.markErasedCallablesReachedByTypeInner(item, active);
+                    try self.markErasedCallablesReachedByTypeInner(item, visited);
                 }
             },
             .record => |fields| {
                 for (0..fields.count()) |index| {
                     const field = self.program.types.fieldItem(fields, index);
-                    try self.markErasedCallablesReachedByTypeInner(field.ty, active);
-                    if (field.value_ty) |value_ty| try self.markErasedCallablesReachedByTypeInner(value_ty, active);
+                    try self.markErasedCallablesReachedByTypeInner(field.ty, visited);
+                    if (field.value_ty) |value_ty| try self.markErasedCallablesReachedByTypeInner(value_ty, visited);
                 }
             },
             .tag_union => |tags| {
@@ -1440,33 +1443,33 @@ const Solver = struct {
                     const tag = self.program.types.tagItem(tags, tag_index);
                     for (0..tag.payloads.count()) |payload_index| {
                         const payload = self.program.types.spanItem(tag.payloads, payload_index);
-                        try self.markErasedCallablesReachedByTypeInner(payload, active);
+                        try self.markErasedCallablesReachedByTypeInner(payload, visited);
                     }
                 }
             },
             .named => |named| {
                 for (0..named.args.count()) |index| {
                     const arg = self.program.types.spanItem(named.args, index);
-                    try self.markErasedCallablesReachedByTypeInner(arg, active);
+                    try self.markErasedCallablesReachedByTypeInner(arg, visited);
                 }
                 if (named.backing) |backing| {
-                    try self.markErasedCallablesReachedByTypeInner(backing.ty, active);
+                    try self.markErasedCallablesReachedByTypeInner(backing.ty, visited);
                 }
             },
-            .lambda_set => |members| try self.markErasedCallablesReachedByMembers(members, active),
+            .lambda_set => |members| try self.markErasedCallablesReachedByMembers(members, visited),
         }
     }
 
     fn markErasedCallablesReachedByMembers(
         self: *Solver,
         members: Type.Span,
-        active: *collections.DenseMap(Type.TypeVarId, void),
+        visited: *collections.DenseMap(Type.TypeVarId, void),
     ) Allocator.Error!void {
         for (0..members.count()) |member_index| {
             const member = self.program.types.memberItem(members, member_index);
             for (0..member.captures.count()) |capture_index| {
                 const capture = self.program.types.captureItem(member.captures, capture_index);
-                try self.markErasedCallablesReachedByTypeInner(capture.ty, active);
+                try self.markErasedCallablesReachedByTypeInner(capture.ty, visited);
             }
         }
     }
