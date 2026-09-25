@@ -638,13 +638,17 @@ them.
       request reuses them). Literal backings are named by content
       (`roc__static_str_{digest}`) and travel with the artifacts that name
       them. Constants travel the same way: every backend and the compile-time
-      evaluator still find a constant by its per-program name
-      (`roc__static_const_value_N`), so the pack layer alone names it by
+      evaluator find a constant, and every node of its frozen graph, by its
+      per-program name (`roc__static_const_value_N`, `roc__ctfe_{slot}_{n}`),
+      and lifted artifacts carry the constant graph an entry reaches under
+      those names, marked as program-local by the producer's `is_exported`
+      flag. The pack encoder alone names every program-local datum by
       content (`roc__static_data_{digest}`, the digest of its bytes,
-      alignment, symbol offset, and relocations, with data targets by digest
-      through cycles and code targets by content name), renames the
-      relocations it lifts, and carries the constant graph an entry reaches
-      with its relocations; splicing defines what the program did not. An
+      alignment, symbol offset, and relocations, with program-local targets
+      by digest through cycles and every other target by name) and writes
+      each relocation to it under that name, so the hashing happens only
+      when a pack is written and only over what it carries; splicing defines
+      what the program did not. An
       entry reaching a constant that holds a code pointer, or the boxy
       runtime, is still withheld. A pack program keeps every keyed
       specialization as a procedure through inlining and compaction, since

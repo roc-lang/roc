@@ -4637,7 +4637,6 @@ pub const MonoLlvmCodeGen = struct {
             .list_split_first,
             .list_split_last,
             .num_log,
-            .num_round,
             => return error.UnsupportedLowLevel,
             .u8_to_i8_wrap,
             .u8_to_i8_try,

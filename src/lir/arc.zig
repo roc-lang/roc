@@ -1476,6 +1476,14 @@ const SolveTask = union(enum) {
     switch_resume: u32,
 };
 
+/// Keep a list that grew in `growth_allocator` at its exact length in
+/// `allocator`, freeing the grown storage.
+fn settleGrownList(comptime T: type, allocator: Allocator, growth_allocator: Allocator, grown: *std.ArrayList(T)) Allocator.Error!std.ArrayList(T) {
+    const exact = try allocator.dupe(T, grown.items);
+    grown.deinit(growth_allocator);
+    return .{ .items = exact, .capacity = exact.len };
+}
+
 fn cloneOwnedSetWith(allocator: Allocator, source: *const OwnedSet) ResourceError!OwnedSet {
     @constCast(source).unique = false;
     var cloned = source.*;
@@ -6124,7 +6132,7 @@ const Inserter = struct {
         const index = graph.nodes.items.len;
         if (index >= no_stmt_node_index) arcInvariant("ARC liveness graph exceeded its node index representation");
 
-        try graph.nodes.append(graph.allocator, .{
+        try graph.nodes.append(self.source_liveness.scratch_allocator, .{
             .stmt = stmt,
             .reads = reads,
             .exposed = exposed,
@@ -6149,7 +6157,7 @@ const Inserter = struct {
         if (graph.nodes.items[node_index].successor_len == 0) {
             graph.nodes.items[node_index].successor_start = successor_index;
         }
-        try graph.successors.append(graph.allocator, successor_node);
+        try graph.successors.append(self.source_liveness.scratch_allocator, successor_node);
         graph.nodes.items[node_index].successor_len += 1;
     }
 
@@ -6313,6 +6321,14 @@ const Inserter = struct {
         }
         var graph = graph_slot.*.?;
         const graph_allocator = graph.allocator;
+        // The node and successor lists grow while the graph is discovered.
+        // They grow in the freeing scratch allocator and are then kept at
+        // their exact size, so the source arena never retains outgrown lists.
+        var lists_growing = true;
+        errdefer if (lists_growing) {
+            graph.nodes.deinit(self.source_liveness.scratch_allocator);
+            graph.successors.deinit(self.source_liveness.scratch_allocator);
+        };
         var scratch_arena = std.heap.ArenaAllocator.init(self.source_liveness.scratch_allocator);
         defer scratch_arena.deinit();
         const scratch_allocator = scratch_arena.allocator();
@@ -6648,6 +6664,9 @@ const Inserter = struct {
             }
         }
 
+        graph.nodes = try settleGrownList(ReadBeforeRebindNode, graph_allocator, self.source_liveness.scratch_allocator, &graph.nodes);
+        graph.successors = try settleGrownList(u32, graph_allocator, self.source_liveness.scratch_allocator, &graph.successors);
+        lists_growing = false;
         try self.solveKeepFreeLiveness(&graph);
         // There are exactly two source read contracts: no restitution, or
         // the solver's complete available outcome span. Parameter ownership

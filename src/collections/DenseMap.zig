@@ -20,7 +20,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
     return struct {
         const Self = @This();
 
-        const chunk_shift = 8;
+        const chunk_shift = 6;
         const chunk_len = 1 << chunk_shift;
         const chunk_mask = chunk_len - 1;
 

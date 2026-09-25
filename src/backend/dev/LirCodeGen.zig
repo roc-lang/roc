@@ -5456,7 +5456,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // not a missing feature.
                 // Unimplemented ops
                 .num_log,
-                .num_round,
                 => {
                     std.debug.panic("UNIMPLEMENTED low-level op: {s}", .{@tagName(ll.op)});
                 },
@@ -7543,7 +7542,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_atan2,
                 .num_rem_by,
                 .num_rem_by_checked,
-                .num_round,
                 .num_shift_left_by,
                 .num_shift_right_by,
                 .num_shift_right_zf_by,

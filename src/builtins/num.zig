@@ -2212,7 +2212,7 @@ test "parseFloatPrefix special values underflow and overflow" {
         try expectPrefixOk(T, parseFloatPrefix(T, "inf"), inf, 3);
         try expectPrefixOk(T, parseFloatPrefix(T, "Infinity,"), inf, 8);
         try expectPrefixOk(T, parseFloatPrefix(T, "-INF]"), -inf, 4);
-        try expectPrefixOk(T, parseFloatPrefix(T, "+infinit"), inf, 4);
+        try expectPrefixOk(T, parseFloatPrefix(T, "+infinix"), inf, 4);
 
         const nan_result = parseFloatPrefix(T, "NaN,");
         try std.testing.expectEqual(@as(u8, 0), nan_result.errorcode);

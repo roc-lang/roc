@@ -1353,7 +1353,6 @@ pub const Evaluator = struct {
             .num_acos => self.numFloatMath1(args, arg_types, .acos),
             .num_atan => self.numFloatMath1(args, arg_types, .atan),
             .num_log => self.numFloatMath1(args, arg_types, .log),
-            .num_round => self.numRoundLike(args, arg_types, .round),
             .num_floor => self.numRoundLike(args, arg_types, .floor),
             .num_ceiling => self.numRoundLike(args, arg_types, .ceiling),
 
@@ -2163,25 +2162,20 @@ pub const Evaluator = struct {
         }
     }
 
-    const RoundOp = enum { round, floor, ceiling };
+    const RoundOp = enum { floor, ceiling };
 
     fn numRoundLike(self: *Evaluator, args: []const Value, arg_types: []const Type.TypeId, op: RoundOp) EvalError!Value {
         const prim = self.primitiveOf(arg_types[0]) orelse return self.unsupported_("round operand without primitive type");
         switch (prim) {
             .f32 => return .{ .float32 = switch (op) {
-                .round => @round(args[0].float32),
                 .floor => @floor(args[0].float32),
                 .ceiling => @ceil(args[0].float32),
             } },
             .f64 => return .{ .float64 = switch (op) {
-                .round => @round(args[0].float64),
                 .floor => @floor(args[0].float64),
                 .ceiling => @ceil(args[0].float64),
             } },
-            .dec => switch (op) {
-                .round => return .{ .dec = decRound(args[0].dec) },
-                .floor, .ceiling => return self.unsupported_("dec floor or ceiling op"),
-            },
+            .dec => return self.unsupported_("dec floor or ceiling op"),
             .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return self.unsupported_("integer round op"),
         }
     }
@@ -3372,19 +3366,6 @@ fn signedI128(comptime T: type, x: T) i128 {
         .signed => @intCast(x),
         .unsigned => @bitCast(@as(u128, @intCast(x))),
     };
-}
-
-/// Round a Dec fixed-point value half-away-from-zero, matching `RocDec.round`.
-fn decRound(num: i128) i128 {
-    const one = RocDec.one_point_zero_i128;
-    const whole = @divTrunc(num, one);
-    const truncated = whole *% one;
-    const fract = num - truncated;
-    const abs_fract = if (fract < 0) -fract else fract;
-    if (abs_fract >= @divTrunc(one, 2)) {
-        return truncated + (if (num < 0) -one else one);
-    }
-    return truncated;
 }
 
 fn caselessAsciiEqual(a: []const u8, b: []const u8) bool {

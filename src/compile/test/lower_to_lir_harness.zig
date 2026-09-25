@@ -699,7 +699,7 @@ pub const prepared_finite_capture_free_direct_call_fixture =
 pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() LowerToLirHarnessError!void {
     const gpa = std.testing.allocator;
     const cap = 1 << 22;
-    const max_retained_specialization_shards_per_lane = 4;
+    const max_retained_specialization_shards_per_lane = postcheck.Monotype.Lower.parallel_spec_jobs_per_lane;
     const reference = try gpa.alloc(u8, cap);
     defer gpa.free(reference);
     var reference_writer = std.Io.Writer.fixed(reference);

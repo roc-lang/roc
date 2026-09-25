@@ -100,6 +100,10 @@ const fx_open_tests = [_]SimpleTestSpec{
         .description = "Regression test: a callback's narrower Try crosses a ?-composed return boundary into the wider row (issue 11469)",
     },
     .{
+        .roc_file = "test/fx-open/issue_11621_recursive_try.roc",
+        .description = "Regression test: a ?-composed error row includes a repeated or self-referential tail (issue 11621)",
+    },
+    .{
         .roc_file = "test/fx-open/issue_10270_named_map_err_closure.roc",
         .description = "Regression test: named closure using map_err compiles when its result is propagated with ? (issue 10270)",
     },

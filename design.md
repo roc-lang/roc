@@ -5443,7 +5443,9 @@ Range(num) :: {
 }
 ```
 
-Adapters, custom sources, and consumers remain ordinary Roc functions. There is
+Adapters, custom sources (`Iter.custom` for pure unfolds, `Stream.custom` for
+sources whose advance and end-of-input discovery are effectful), and consumers
+remain ordinary Roc functions. There is
 no public chain type, iterator trait, extra public step tag, or source-visible
 compiler representation. Internal representation data is attached only after
 checking, when Monotype creates concrete iterator call results.
@@ -7170,21 +7172,46 @@ Three consumers keep the rule exact:
   treats a repeated label as an invariant violation.
 
 Before `CheckedModule` is built, every tag and record row reachable from a
-settled value type is checked once; rows that repeat a label are normalized
-in ascending root order. Normalization needs no metadata on type variables and
-adds no work where no label repeats: detection rides on the unifier's gather,
+type in the checked module's output is checked once; rows that repeat a label
+are normalized in ascending root order. Those types are the expression,
+pattern, and definition types and the roots inference recorded elsewhere: call
+and dispatch constraint functions, scheme-use substitutions and instances, and
+codec requirements and derivations. A scheme-use substitution can hold a copy
+of an unnormalized row that no expression's type still reaches, such as a
+mutually recursive member's error row copied before its group settled.
+`CheckedModule` construction and this walk enumerate the recorded roots
+through the same `output_type_roots` functions, so a root added to the output
+is normalized without a second list to keep in step.
+
+Normalization needs no metadata on type variables and adds no work where no
+label repeats: detection rides on the unifier's gather,
 the key writer's row sort, and the settled row walk, which already compare
-labels. A conflict is reported as a type mismatch between the two
-occurrences, each shown as a closed single-label row at the row's source, and
-the row is poisoned once every diagnostic has snapshotted the settled graph.
+labels. A conflict is reported as a conflicting tag or field: each occurrence
+is shown as a closed single-label row at the source of the row part holding it,
+so the report names where each copy of the label came from. Its location is
+the value whose type holds the row when the settled walk reached the row from
+an output root, and otherwise the outer occurrence. The walk finishes each
+root before starting the next, in source-node order, so the value is the
+earliest source node whose type reaches the row; choosing it is a reporting
+decision and changes nothing about which programs check. The row is poisoned
+once every diagnostic has snapshotted the settled graph.
 
 The accepted side is pinned by `src/check/test/row_union_normalization_test.zig`
 (a callback raising the tag its wrapper adds, a repeated tag reaching a method
 dispatcher, a method call typing like the direct call it names, and a tag
-repeated two extensions down) and by the chain-duplicate unifier tests and the
-`normalizeRowUnion` test in `src/check/Check.zig`, which cover records. The
+repeated two extensions down), by `src/check/test/issue_11621_test.zig`
+(recursive functions using `?`, directly, mutually, through a generalized
+helper, and through dispatch), and by the chain-duplicate unifier tests and the
+`normalizeRowUnion` test in `src/check/Check.zig`, which cover records.
+`src/compile/test/issue_11621_test.zig` pins the output of a mutually
+recursive group's substitution rows, and
+`test/fx-open/issue_11621_recursive_try.roc` runs those programs on every
+backend. The
 rejected side is pinned by conflicting payloads and payload counts in the same
-file, `test/snapshots/issue/issue_11097_wrapped_try_overlap.md`, and the
+file, `test/snapshots/issue/issue_11097_wrapped_try_overlap.md` (a conflict
+located at the value holding it), `test/snapshots/issue/issue_11621_conflicting_tag_payloads.md`
+(a conflict found while inference keys a row, located at the outer
+occurrence), and the
 issue #11470 wrapper-overlap integration tests.
 
 ### Derived Parser Tag-Row Closure
@@ -7316,10 +7343,17 @@ field.
 
 An open row simply gains the tag, so a program that never mentions it still
 sees `MissingRequiredField(field_name)`. A row the program closed without the
-tag rejects it: a closed row reports an ordinary type mismatch at the
-unification, and an annotated output row, whose extension is implicitly open,
-reports that the definition can produce a tag its annotation does not list
-(Polarity). The failure is never mapped onto a format error.
+tag rejects it. When the closed row belongs to an annotated value or
+function, the report is the annotation mismatch: the definition can produce a
+tag its annotation does not list (Polarity). When the closed row belongs to a
+where-clause parser contract, the report is the dedicated
+`derived_parser_error_row` problem instead of a generic row mismatch: it is
+located at the expression that instantiated the codec relation (the call that
+fixes the record type, where the user can act), and names the record type,
+the tag, the closed row, and the required fields. A nested custom parser whose
+error tag the enclosing row lacks reports the same problem; a payload conflict
+on a tag the row already lists remains an ordinary row mismatch (issue 11246).
+The failure is never mapped onto a format error.
 
 A custom nominal parser nested inside a derived shape keeps its own minimal
 error row. During checking, `constrainDerivedParserErrorRowIncludes` closes an
@@ -10110,6 +10144,33 @@ preceding explicit relations. Applying defaults is never part of cache identity.
 Digests select buckets; exact input constraints and evidence are the collision
 authorities.
 
+A Roc template without evidence parameters cannot dispatch on its quantified
+variables, so its interface relates a quantified variable only by unification
+when every occurrence of that variable in its checked function type is a value
+position: a function argument or result, a tuple item, a record field, a tag
+payload, or the item of `List` or `Box`. A row tail, or an argument of any
+other nominal type, is not a value position. A request captures such a
+variable's substitution cell as a parametric hole, an unconstrained variable,
+when the cell is resolved and nothing it reaches carries private backing,
+source-interface or constructor evidence, forced-dynamic iterator identity, or
+generated or iterator representation authority. Structure reaching a hole stays
+open instead of settling, so requests that differ only in their holes' contents
+share one input identity and one summary, and relating the summary back to a
+request fills its holes. A cell that is unresolved or carries representation
+authority is captured as itself: relating it back would not be plain
+unification. An unfinished expansion is joined only by the instantiation it
+expands: each hole slot of the joining request names the class the expanding
+request supplied, or the expansion's own hole cell, as a recursive call inside
+the expansion does. A single-request component takes a parametric
+summary from its expansion before relating back to the request, so the summary
+keeps its holes open. Members of a larger component relate back to each other's
+requests before their summaries are taken, so a parametric member stores no
+reusable summary. The pins are the monotype capture test
+"interface constraints capture representation-neutral holes as variables", the
+compile test "interface summaries share one expansion across parametric
+instantiations", and test/echo/parametric_interface_summaries.roc (a template
+that dispatches on its variable keeps a summary per instantiation).
+
 Selected method contracts are part of the dependency's output constraints.
 Summary inputs materialize their exact checked evidence without first applying
 those contracts to the caller graph. Expansion relates the contracts over its
@@ -10159,7 +10220,11 @@ or defaulted Monotype views. Expansion
 uses an independent instantiation of the inputs so incidental caller state
 cannot enter the summary. Replaying a summary instantiates its open cells once
 per request and relates all its input roots, preserving relationships through
-scheme variables that are not reachable from the function shape.
+scheme variables that are not reachable from the function shape. An expansion
+whose captured roots equal its captured input contributed no constraint; its
+summary records exactly that, and replaying it neither instantiates nor
+relates anything. The input identity is the same exact interface the cache key
+compares, so an unchanged summary is as complete as any other.
 
 Recursive dependency components store summaries only after every member has
 contributed its relations. An active exact request joins its active interface;
@@ -10637,7 +10702,16 @@ rediscover a backing, owner, or field order. If a named type is opaque at the
 current boundary, Monotype still preserves the named type node and therefore
 the dispatch owner derivable from it. A `runtime_layout_only` backing may be
 used by layout lowering to represent values, but it is not permission
-for Monotype or static dispatch to inspect through the opaque boundary. If no
+for Monotype or static dispatch to inspect through the opaque boundary. The
+exceptions are checked source operations whose authority the checker already
+established: record construction, destructuring, and field access. The
+unifier admits an opaque nominal into a structural record position only where
+its backing is visible (`canLiftInner`), and let-polymorphism can carry that
+lifted nominal into a record-polymorphic body checked elsewhere, so a field
+access's authority is a property of the checked access itself, never of its
+receiver's head in the generic body. Monotype reads such a field through any
+named backing its receiver specializes to. Reads Monotype synthesizes on its
+own (derived inspect, equality, codecs) carry no such authority. If no
 backing is present, any stage that needs the representation must consume a
 separate explicit checked representation authority; it must not rediscover the
 backing by scanning declarations.
