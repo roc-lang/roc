@@ -1652,6 +1652,116 @@ pub fn fromUtf8C(
 
 const UNICODE_REPLACEMENT: u21 = 0xfffd;
 
+/// UTF-16 failures in the private decoder protocol's order.
+pub const Utf16Problem = enum(u8) {
+    UnpairedHighSurrogate,
+    UnpairedLowSurrogate,
+};
+
+/// UTF-32 failures in the private decoder protocol's order.
+pub const Utf32Problem = enum(u8) {
+    CodePointTooLarge,
+    SurrogateCodePoint,
+};
+
+/// Runtime decoding result. `index` counts input code units, not UTF-8 bytes.
+/// The problem code belongs to Utf16Problem or Utf32Problem according to the
+/// called primitive. Checked Roc wrappers construct the public error tags.
+pub const FromWideUtfTry = extern struct {
+    index: u64,
+    string: RocStr,
+    is_ok: bool,
+    problem_code: u8,
+};
+
+fn WideUtfIterator(comptime Unit: type) type {
+    return struct {
+        units: []const Unit,
+        index: usize = 0,
+
+        const Self = @This();
+        const Item = struct { scalar: u21, problem: ?u8 = null };
+
+        fn next(self: *Self) ?Item {
+            if (self.index == self.units.len) return null;
+            const unit = self.units[self.index];
+            self.index += 1;
+            if (Unit == u16) {
+                if (unit >= 0xd800 and unit <= 0xdbff) {
+                    if (self.index < self.units.len) {
+                        const low = self.units[self.index];
+                        if (low >= 0xdc00 and low <= 0xdfff) {
+                            self.index += 1;
+                            return .{ .scalar = 0x10000 + ((@as(u21, unit) - 0xd800) << 10) + (low - 0xdc00) };
+                        }
+                    }
+                    return .{ .scalar = UNICODE_REPLACEMENT, .problem = @intFromEnum(Utf16Problem.UnpairedHighSurrogate) };
+                }
+                if (unit >= 0xdc00 and unit <= 0xdfff) {
+                    return .{ .scalar = UNICODE_REPLACEMENT, .problem = @intFromEnum(Utf16Problem.UnpairedLowSurrogate) };
+                }
+            } else {
+                if (unit > 0x10ffff) {
+                    return .{ .scalar = UNICODE_REPLACEMENT, .problem = @intFromEnum(Utf32Problem.CodePointTooLarge) };
+                }
+                if (unit >= 0xd800 and unit <= 0xdfff) {
+                    return .{ .scalar = UNICODE_REPLACEMENT, .problem = @intFromEnum(Utf32Problem.SurrogateCodePoint) };
+                }
+            }
+            return .{ .scalar = @intCast(unit) };
+        }
+    };
+}
+
+/// Borrows the input. Validation and exact sizing precede the single output
+/// allocation, so strict failures allocate nothing and short results stay inline.
+fn fromWideUtf(comptime Unit: type, comptime lossy: bool, list: RocList, roc_ops: *RocOps) FromWideUtfTry {
+    if (list.len() == 0) return .{ .index = 0, .string = RocStr.empty(), .is_ok = true, .problem_code = 0 };
+    const units = @as([*]const Unit, @ptrCast(@alignCast(list.bytes)))[0..list.len()];
+    var it = WideUtfIterator(Unit){ .units = units };
+    var byte_len: usize = 0;
+    while (it.index < units.len) {
+        const index = it.index;
+        const item = it.next().?;
+        if (!lossy) {
+            if (item.problem) |problem| return .{ .index = @intCast(index), .string = RocStr.empty(), .is_ok = false, .problem_code = problem };
+        }
+        byte_len = std.math.add(usize, byte_len, unicode.utf8CodepointSequenceLength(item.scalar) catch unreachable) catch {
+            roc_ops.crash("UTF decoding output is too large");
+            unreachable;
+        };
+    }
+    var result = RocStr.allocateExact(byte_len, roc_ops);
+    const bytes = result.asU8ptrMut()[0..byte_len];
+    it.index = 0;
+    var offset: usize = 0;
+    while (it.next()) |item| {
+        offset += unicode.utf8Encode(item.scalar, bytes[offset..]) catch unreachable;
+    }
+    std.debug.assert(offset == byte_len);
+    return .{ .index = 0, .string = result, .is_ok = true, .problem_code = 0 };
+}
+
+/// Decode UTF-16 code units, reporting the first unpaired surrogate.
+pub fn fromUtf16(list: RocList, roc_ops: *RocOps) callconv(.c) FromWideUtfTry {
+    return fromWideUtf(u16, false, list, roc_ops);
+}
+
+/// Decode UTF-16, replacing each unpaired surrogate with U+FFFD.
+pub fn fromUtf16Lossy(list: RocList, roc_ops: *RocOps) callconv(.c) RocStr {
+    return fromWideUtf(u16, true, list, roc_ops).string;
+}
+
+/// Decode UTF-32 code units, reporting the first non-scalar value.
+pub fn fromUtf32(list: RocList, roc_ops: *RocOps) callconv(.c) FromWideUtfTry {
+    return fromWideUtf(u32, false, list, roc_ops);
+}
+
+/// Decode UTF-32, replacing each non-scalar value with U+FFFD.
+pub fn fromUtf32Lossy(list: RocList, roc_ops: *RocOps) callconv(.c) RocStr {
+    return fromWideUtf(u32, true, list, roc_ops).string;
+}
+
 const Utf8Iterator = struct {
     bytes: []u8,
     i: usize,
@@ -4992,5 +5102,90 @@ test "default-platform RocStr view matches canonical RocStr layout" {
         try std.testing.expect(std.mem.eql(u8, cf.name, vf.name));
         try std.testing.expectEqual(cf.type, vf.type);
         try std.testing.expectEqual(@offsetOf(RocStr, cf.name), @offsetOf(View, vf.name));
+    }
+}
+
+fn testWideUtf(comptime Unit: type, input: []const Unit, expected: []const u8, failure: ?struct { index: u64, problem: u8 }) error{ TestUnexpectedResult, TestExpectedEqual }!void {
+    var env = TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const list = RocList.fromSlice(Unit, input, false, env.getOps());
+    defer list.decref(@alignOf(Unit), @sizeOf(Unit), false, null, &rcNone, env.getOps());
+    const input_allocations = env.allocation_map.count();
+    const strict = fromWideUtf(Unit, false, list, env.getOps());
+    defer strict.string.decref(env.getOps());
+    if (failure) |err| {
+        try testing.expect(!strict.is_ok);
+        try testing.expectEqual(err.index, strict.index);
+        try testing.expectEqual(err.problem, strict.problem_code);
+        try testing.expectEqualStrings("", strict.string.asSlice());
+    } else {
+        try testing.expect(strict.is_ok);
+        try testing.expectEqualStrings(expected, strict.string.asSlice());
+    }
+    const strict_allocations = input_allocations + @intFromBool(!strict.string.isSmallStr());
+    try testing.expectEqual(strict_allocations, env.allocation_map.count());
+    const lossy = fromWideUtf(Unit, true, list, env.getOps()).string;
+    defer lossy.decref(env.getOps());
+    try testing.expectEqualStrings(expected, lossy.asSlice());
+    try testing.expectEqual(strict_allocations + @intFromBool(!lossy.isSmallStr()), env.allocation_map.count());
+    // Both conversions borrow; neither may change the input allocation.
+    if (input.len != 0) try testing.expectEqualSlices(Unit, input, @as([*]const Unit, @ptrCast(@alignCast(list.bytes)))[0..input.len]);
+}
+
+test "wide UTF decoding: scalar boundaries, NUL, BOM, noncharacters and heap output" {
+    try testWideUtf(u16, &.{}, "", null);
+    try testWideUtf(u32, &.{}, "", null);
+    const expected = "\x00\x7f\u{80}\u{7ff}\u{800}\u{d7ff}\u{e000}\u{feff}\u{ffff}\u{10000}\u{10ffff}";
+    try testWideUtf(u16, &.{ 0, 0x7f, 0x80, 0x7ff, 0x800, 0xd7ff, 0xe000, 0xfeff, 0xffff, 0xd800, 0xdc00, 0xdbff, 0xdfff }, expected, null);
+    try testWideUtf(u32, &.{ 0, 0x7f, 0x80, 0x7ff, 0x800, 0xd7ff, 0xe000, 0xfeff, 0xffff, 0x10000, 0x10ffff }, expected, null);
+    try testWideUtf(u16, &.{ 82, 111, 99, 0xd83d, 0xdc26 }, "Roc🐦", null);
+    try testWideUtf(u32, &.{ 82, 111, 99, 0x1f426 }, "Roc🐦", null);
+}
+
+test "wide UTF decoding: unpaired surrogates preserve following input" {
+    const high = @intFromEnum(Utf16Problem.UnpairedHighSurrogate);
+    const low = @intFromEnum(Utf16Problem.UnpairedLowSurrogate);
+    try testWideUtf(u16, &.{0xd800}, "�", .{ .index = 0, .problem = high });
+    try testWideUtf(u16, &.{0xdfff}, "�", .{ .index = 0, .problem = low });
+    try testWideUtf(u16, &.{ 65, 0xdbff, 66 }, "A�B", .{ .index = 1, .problem = high });
+    try testWideUtf(u16, &.{ 0xd800, 0xd83d, 0xdc26 }, "�🐦", .{ .index = 0, .problem = high });
+    try testWideUtf(u16, &.{ 0xdc00, 0xdfff, 0xd800, 0xdbff }, "����", .{ .index = 0, .problem = low });
+    try testWideUtf(u16, &.{ 0xd83d, 0xdc26, 0xdc00 }, "🐦�", .{ .index = 2, .problem = low });
+}
+
+test "wide UTF decoding: UTF-32 rejects every non-scalar class" {
+    const surrogate = @intFromEnum(Utf32Problem.SurrogateCodePoint);
+    const large = @intFromEnum(Utf32Problem.CodePointTooLarge);
+    try testWideUtf(u32, &.{ 65, 0xd800, 0xdfff, 66 }, "A��B", .{ .index = 1, .problem = surrogate });
+    try testWideUtf(u32, &.{ 0x1f426, 0x110000, 0xffffffff }, "🐦��", .{ .index = 1, .problem = large });
+    try testWideUtf(u32, &.{ 0xd83d, 0xdc26 }, "��", .{ .index = 0, .problem = surrogate });
+}
+
+test "wide UTF decoding: every Unicode scalar agrees with standard UTF-8 encoding" {
+    var env = TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    var scalar: u32 = 0;
+    while (scalar <= 0x10ffff) : (scalar += 1) {
+        if (scalar >= 0xd800 and scalar <= 0xdfff) continue;
+        var utf8: [4]u8 = undefined;
+        const len = try unicode.utf8Encode(@intCast(scalar), &utf8);
+        var utf16: [2]u16 = undefined;
+        const units: usize = if (scalar < 0x10000) blk: {
+            utf16[0] = @intCast(scalar);
+            break :blk 1;
+        } else blk: {
+            utf16[0] = @intCast(0xd800 + ((scalar - 0x10000) >> 10));
+            utf16[1] = @intCast(0xdc00 + ((scalar - 0x10000) & 0x3ff));
+            break :blk 2;
+        };
+        // Borrow stack storage: these primitives never inspect its refcount.
+        const list16 = RocList{ .bytes = @ptrCast(&utf16), .length = units, .capacity_or_alloc_ptr = RocList.encodeCapacity(units) };
+        const result16 = fromUtf16(list16, env.getOps());
+        try testing.expect(result16.is_ok);
+        try testing.expectEqualStrings(utf8[0..len], result16.string.asSlice());
+        const list32 = RocList{ .bytes = @ptrCast(&scalar), .length = 1, .capacity_or_alloc_ptr = RocList.encodeCapacity(1) };
+        const result32 = fromUtf32(list32, env.getOps());
+        try testing.expect(result32.is_ok);
+        try testing.expectEqualStrings(utf8[0..len], result32.string.asSlice());
     }
 }

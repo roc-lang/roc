@@ -4292,6 +4292,54 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
                     return try self.callList1RocOpsToStr(list_off, @intFromPtr(&wrapStrFromUtf8Lossy), LowLevelBuiltins.strOp(.str_from_utf8_lossy));
                 },
+                .str_from_utf16_lossy => {
+                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    return try self.callList1RocOpsToStr(list_off, @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf16_lossy), LowLevelBuiltins.strOp(.str_from_utf16_lossy));
+                },
+                .str_from_utf16 => {
+                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    const ls = self.layout_store;
+                    const struct_idx = ls.getLayout(ll.ret_layout).getStruct().idx;
+                    const size = ls.layoutSize(ls.getLayout(ll.ret_layout));
+                    const result_slot = self.codegen.allocStackSlot(size);
+                    try self.zeroStackArea(result_slot, size);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addLeaArg(frame_ptr, result_slot);
+                    try builder.addMemArg(frame_ptr, list_off);
+                    try builder.addMemArg(frame_ptr, list_off + 8);
+                    try builder.addMemArg(frame_ptr, list_off + 16);
+                    inline for (0..3) |field| {
+                        try builder.addImmArg(ls.getStructFieldOffsetByOriginalIndex(struct_idx, field));
+                    }
+                    try self.callBuiltin(&builder, LowLevelBuiltins.strOp(.str_from_utf16));
+                    return self.stackLocationForLayout(ll.ret_layout, result_slot);
+                },
+                .str_from_utf32_lossy => {
+                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    return try self.callList1RocOpsToStr(list_off, @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf32_lossy), LowLevelBuiltins.strOp(.str_from_utf32_lossy));
+                },
+                .str_from_utf32 => {
+                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    const ls = self.layout_store;
+                    const struct_idx = ls.getLayout(ll.ret_layout).getStruct().idx;
+                    const size = ls.layoutSize(ls.getLayout(ll.ret_layout));
+                    const result_slot = self.codegen.allocStackSlot(size);
+                    try self.zeroStackArea(result_slot, size);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addLeaArg(frame_ptr, result_slot);
+                    try builder.addMemArg(frame_ptr, list_off);
+                    try builder.addMemArg(frame_ptr, list_off + 8);
+                    try builder.addMemArg(frame_ptr, list_off + 16);
+                    inline for (0..3) |field| {
+                        try builder.addImmArg(ls.getStructFieldOffsetByOriginalIndex(struct_idx, field));
+                    }
+                    try self.callBuiltin(&builder, LowLevelBuiltins.strOp(.str_from_utf32));
+                    return self.stackLocationForLayout(ll.ret_layout, result_slot);
+                },
                 .str_from_utf8 => {
                     // str_from_utf8(list) -> Try(Str, [BadUtf8 {problem: Utf8Problem, index: U64}])
                     if (args.len != 1) unreachable;
@@ -7550,6 +7598,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .str_ends_with,
                 .str_from_utf8,
                 .str_from_utf8_lossy,
+                .str_from_utf16,
+                .str_from_utf16_lossy,
+                .str_from_utf32,
+                .str_from_utf32_lossy,
+
                 .str_get_utf8_byte_unsafe,
                 .str_inspect,
                 .str_is_eq,

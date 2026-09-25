@@ -197,6 +197,11 @@ pub fn strOp(op: LowLevel) BuiltinFn {
         .{ LowLevel.str_to_utf8, BuiltinFn.str_to_utf8 },
         .{ LowLevel.str_from_utf8_lossy, BuiltinFn.str_from_utf8_lossy },
         .{ LowLevel.str_from_utf8, BuiltinFn.str_from_utf8_result },
+        .{ LowLevel.str_from_utf16, BuiltinFn.str_from_utf16 },
+        .{ LowLevel.str_from_utf16_lossy, BuiltinFn.str_from_utf16_lossy },
+        .{ LowLevel.str_from_utf32, BuiltinFn.str_from_utf32 },
+        .{ LowLevel.str_from_utf32_lossy, BuiltinFn.str_from_utf32_lossy },
+
         .{ LowLevel.str_split_on, BuiltinFn.str_split },
         .{ LowLevel.str_join_with, BuiltinFn.str_join_with },
         .{ LowLevel.str_inspect, BuiltinFn.str_escape_and_quote },

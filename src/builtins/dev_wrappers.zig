@@ -2681,3 +2681,29 @@ pub fn roc_builtins_i64_mod_by(a: i64, b: i64) callconv(.c) i64 {
 pub fn roc_builtins_u64_mod_by(a: u64, b: u64) callconv(.c) u64 {
     return @mod(a, b);
 }
+
+/// Decode borrowed UTF-16 units into an owned string.
+pub fn roc_builtins_str_from_utf16_lossy(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize) callconv(.c) void {
+    out.* = str.fromUtf16Lossy(.{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap }, in_process_host.ops());
+}
+
+/// Write the private decoder record at its explicitly supplied field offsets.
+pub fn roc_builtins_str_from_utf16(out: [*]u8, bytes: ?[*]u8, len: usize, cap: usize, index_offset: u32, status_offset: u32, string_offset: u32) callconv(.c) void {
+    const result = str.fromUtf16(.{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap }, in_process_host.ops());
+    utils.writeAs(u64, out + index_offset, result.index, @src());
+    utils.writeAs(u8, out + status_offset, if (result.is_ok) 0 else result.problem_code + 1, @src());
+    utils.writeAs(RocStr, out + string_offset, result.string, @src());
+}
+
+/// Decode borrowed UTF-32 units into an owned string.
+pub fn roc_builtins_str_from_utf32_lossy(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize) callconv(.c) void {
+    out.* = str.fromUtf32Lossy(.{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap }, in_process_host.ops());
+}
+
+/// Write the private decoder record at its explicitly supplied field offsets.
+pub fn roc_builtins_str_from_utf32(out: [*]u8, bytes: ?[*]u8, len: usize, cap: usize, index_offset: u32, status_offset: u32, string_offset: u32) callconv(.c) void {
+    const result = str.fromUtf32(.{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap }, in_process_host.ops());
+    utils.writeAs(u64, out + index_offset, result.index, @src());
+    utils.writeAs(u8, out + status_offset, if (result.is_ok) 0 else result.problem_code + 1, @src());
+    utils.writeAs(RocStr, out + string_offset, result.string, @src());
+}

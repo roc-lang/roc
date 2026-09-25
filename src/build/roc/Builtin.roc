@@ -2226,6 +2226,14 @@ Builtin :: [].{
 			is_eq : Utf8Problem, Utf8Problem -> Bool
 		}
 
+		Utf16Problem := [UnpairedHighSurrogate, UnpairedLowSurrogate].{
+			is_eq : Utf16Problem, Utf16Problem -> Bool
+		}
+
+		Utf32Problem := [CodePointTooLarge, SurrogateCodePoint].{
+			is_eq : Utf32Problem, Utf32Problem -> Bool
+		}
+
 		## Returns guidance about string length instead of a number.
 		##
 		## A string can have different lengths depending on what you count: UTF-8
@@ -2732,6 +2740,68 @@ Builtin :: [].{
 		## expect Str.from_utf8([255]).is_err()
 		## ```
 		from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem : Str.Utf8Problem, index : U64 })])
+
+		## Decodes a list of UTF-16 code units into a string.
+		## Returns the first invalid code unit's zero-based index and problem.
+		## Input values are code units, independent of byte order. A leading BOM
+		## is preserved as U+FEFF; empty input returns `Ok("")`.
+		##
+		## ```roc
+		## expect Str.from_utf16([82, 111, 99, 0xD83D, 0xDC26]) == Ok("Roc🐦")
+		## expect Str.from_utf16([]) == Ok("")
+		## ```
+		from_utf16 : List(U16) -> Try(Str, [BadUtf16({ problem : Str.Utf16Problem, index : U64 })])
+		from_utf16 = |units| {
+			decoded = str_from_utf16(units)
+			match decoded.status {
+				0 => Ok(decoded.string)
+				1 => Err(BadUtf16({ problem: UnpairedHighSurrogate, index: decoded.index }))
+				2 => Err(BadUtf16({ problem: UnpairedLowSurrogate, index: decoded.index }))
+				_ => crash "Invalid UTF-16 decoder status"
+			}
+		}
+
+		## Decodes UTF-16, replacing each unpaired surrogate with U+FFFD.
+		## A high surrogate consumes a following unit only when it forms a valid pair.
+		## Input values are code units, independent of byte order. A leading BOM
+		## is preserved as U+FEFF; empty input returns an empty string.
+		##
+		## ```roc
+		## expect Str.from_utf16_lossy([82, 111, 99, 0xD83D, 0xDC26]) == "Roc🐦"
+		## expect Str.from_utf16_lossy([65, 0xD800, 66]) == "A�B"
+		## ```
+		from_utf16_lossy : List(U16) -> Str
+
+		## Decodes a list of UTF-32 code units into a string.
+		## Returns the first invalid code unit's zero-based index and problem.
+		## Input values are code units, independent of byte order. A leading BOM
+		## is preserved as U+FEFF; empty input returns `Ok("")`.
+		##
+		## ```roc
+		## expect Str.from_utf32([82, 111, 99, 0x1F426]) == Ok("Roc🐦")
+		## expect Str.from_utf32([]) == Ok("")
+		## ```
+		from_utf32 : List(U32) -> Try(Str, [BadUtf32({ problem : Str.Utf32Problem, index : U64 })])
+		from_utf32 = |units| {
+			decoded = str_from_utf32(units)
+			match decoded.status {
+				0 => Ok(decoded.string)
+				1 => Err(BadUtf32({ problem: CodePointTooLarge, index: decoded.index }))
+				2 => Err(BadUtf32({ problem: SurrogateCodePoint, index: decoded.index }))
+				_ => crash "Invalid UTF-32 decoder status"
+			}
+		}
+
+		## Decodes UTF-32, replacing each surrogate or value above U+10FFFF with U+FFFD.
+		## Surrogate pairs are not combined: each UTF-32 unit must be a scalar value.
+		## Input values are code units, independent of byte order. A leading BOM
+		## is preserved as U+FEFF; empty input returns an empty string.
+		##
+		## ```roc
+		## expect Str.from_utf32_lossy([82, 111, 99, 0x1F426]) == "Roc🐦"
+		## expect Str.from_utf32_lossy([65, 0xD800, 66]) == "A�B"
+		## ```
+		from_utf32_lossy : List(U32) -> Str
 
 		## Converts a string literal to a [Str].
 		##
@@ -23581,3 +23651,9 @@ simd_i64x2_with_lane_unchecked : Num.I64x2, U64, I64 -> Num.I64x2
 simd_i64x2_load_16_unchecked : List(U8), U64 -> Num.I64x2
 
 simd_i64x2_store_16_unchecked : Num.I64x2, List(U8), U64 -> List(U8)
+
+# Zig decoders borrow their input and return an owned string (empty on failure).
+# Status: 0 = success, 1/2 = the corresponding Utf16Problem/Utf32Problem above.
+str_from_utf16 : List(U16) -> { index : U64, status : U8, string : Str }
+
+str_from_utf32 : List(U32) -> { index : U64, status : U8, string : Str }

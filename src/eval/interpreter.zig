@@ -6422,6 +6422,44 @@ pub const Interpreter = struct {
                 }
                 break :blk val;
             },
+            .str_from_utf16 => blk: {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                if (crash_boundary.set() != 0) return error.Crash;
+                const result = builtins.str.fromUtf16(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
+                const val = try self.alloc(ll.ret_layout);
+                const struct_idx = self.layout_store.getLayout(ll.ret_layout).getStruct().idx;
+                val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 0)).write(u64, result.index);
+                val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 1)).write(u8, if (result.is_ok) 0 else result.problem_code + 1);
+                val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 2)).write(RocStr, result.string);
+                break :blk val;
+            },
+            .str_from_utf16_lossy => blk: {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                if (crash_boundary.set() != 0) return error.Crash;
+                const result = builtins.str.fromUtf16Lossy(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
+                break :blk self.rocStrToValue(result, ll.ret_layout);
+            },
+            .str_from_utf32 => blk: {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                if (crash_boundary.set() != 0) return error.Crash;
+                const result = builtins.str.fromUtf32(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
+                const val = try self.alloc(ll.ret_layout);
+                const struct_idx = self.layout_store.getLayout(ll.ret_layout).getStruct().idx;
+                val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 0)).write(u64, result.index);
+                val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 1)).write(u8, if (result.is_ok) 0 else result.problem_code + 1);
+                val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 2)).write(RocStr, result.string);
+                break :blk val;
+            },
+            .str_from_utf32_lossy => blk: {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                if (crash_boundary.set() != 0) return error.Crash;
+                const result = builtins.str.fromUtf32Lossy(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
+                break :blk self.rocStrToValue(result, ll.ret_layout);
+            },
             .str_from_utf8_lossy => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();

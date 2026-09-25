@@ -429,6 +429,10 @@ pub fn runWasmOutcomeWithStats(
         }) |entry| {
             env_imports.addHostFunction(entry[0], &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, entry[1], &run_state) catch return error.WasmExecFailed;
         }
+        env_imports.addHostFunction("roc_str_from_utf16", &.{ .I32, .I32, .I32, .I32, .I32 }, &.{}, hostStrFromUtf16, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_str_from_utf16_lossy", &.{ .I32, .I32 }, &.{}, hostStrFromUtf16Lossy, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_str_from_utf32", &.{ .I32, .I32, .I32, .I32, .I32 }, &.{}, hostStrFromUtf32, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_str_from_utf32_lossy", &.{ .I32, .I32 }, &.{}, hostStrFromUtf32Lossy, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction(
             "roc_str_from_utf8",
             &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32 },
@@ -2905,4 +2909,51 @@ fn hostMuloti4(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const
     writeIntLittle(u64, buffer, result_ptr, @truncate(result_u128));
     writeIntLittle(u64, buffer, result_ptr + 8, @truncate(result_u128 >> 64));
     writeIntLittle(i32, buffer, overflow_ptr, overflow);
+}
+
+fn hostStrFromWideUtf(comptime Unit: type, comptime lossy: bool, ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val) void {
+    const state: *WasmRunState = @ptrCast(@alignCast(ctx));
+    const buffer = module.store.getMemory(0).buffer();
+    const list_ptr: usize = @intCast(params[0].I32);
+    const result_ptr: usize = @intCast(params[1].I32);
+    const data_ptr = readIntLittle(u32, buffer, list_ptr);
+    const len = readIntLittle(u32, buffer, list_ptr + 4);
+    const units = std.heap.page_allocator.alloc(Unit, len) catch @panic("out of memory");
+    defer std.heap.page_allocator.free(units);
+    for (units, 0..) |*unit, i| unit.* = readIntLittle(Unit, buffer, data_ptr + i * @sizeOf(Unit));
+    var env = builtins.utils.TestEnv.init(std.heap.page_allocator);
+    defer env.deinit();
+    const list = builtins.list.RocList{ .bytes = @ptrCast(units.ptr), .length = len, .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(len) };
+    if (lossy) {
+        const string = if (Unit == u16) builtins.str.fromUtf16Lossy(list, env.getOps()) else builtins.str.fromUtf32Lossy(list, env.getOps());
+        defer string.decref(env.getOps());
+        const bytes = string.asSlice();
+        writeWasmStr(state, module, result_ptr, bytes.ptr, bytes.len);
+    } else {
+        const result = if (Unit == u16) builtins.str.fromUtf16(list, env.getOps()) else builtins.str.fromUtf32(list, env.getOps());
+        defer result.string.decref(env.getOps());
+        const index_offset: usize = @intCast(params[2].I32);
+        const status_offset: usize = @intCast(params[3].I32);
+        const string_offset: usize = @intCast(params[4].I32);
+        writeIntLittle(u64, buffer, result_ptr + index_offset, result.index);
+        buffer[result_ptr + status_offset] = if (result.is_ok) 0 else result.problem_code + 1;
+        const bytes = result.string.asSlice();
+        writeWasmStr(state, module, result_ptr + string_offset, bytes.ptr, bytes.len);
+    }
+}
+
+fn hostStrFromUtf16(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostStrFromWideUtf(u16, false, ctx, module, params);
+}
+
+fn hostStrFromUtf16Lossy(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostStrFromWideUtf(u16, true, ctx, module, params);
+}
+
+fn hostStrFromUtf32(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostStrFromWideUtf(u32, false, ctx, module, params);
+}
+
+fn hostStrFromUtf32Lossy(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostStrFromWideUtf(u32, true, ctx, module, params);
 }

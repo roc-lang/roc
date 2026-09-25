@@ -74,6 +74,8 @@ pub fn intrinsicAnnotation(env: *const ModuleEnv, ident: base.Ident.Idx) ?Intrin
 
     const entries = [_]struct { name: []const u8, intrinsic: IntrinsicId }{
         .{ .name = "Builtin.Str.Utf8Problem.is_eq", .intrinsic = .structural_eq },
+        .{ .name = "Builtin.Str.Utf16Problem.is_eq", .intrinsic = .structural_eq },
+        .{ .name = "Builtin.Str.Utf32Problem.is_eq", .intrinsic = .structural_eq },
         .{ .name = "Builtin.Encoding.ParseTagUnionSpec.parse", .intrinsic = .parse_tag_union },
         .{ .name = "Builtin.Encoding.FieldName.FieldNames.rename_fields", .intrinsic = .field_names_rename_fields },
         .{ .name = "Builtin.Encoding.FieldName.FieldNames.shortest_name", .intrinsic = .field_names_shortest_name },
@@ -276,6 +278,18 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     }
     if (env.common.findIdent("Builtin.Str.from_utf8_lossy")) |str_from_utf8_lossy_ident| {
         try low_level_map.put(str_from_utf8_lossy_ident, .str_from_utf8_lossy);
+    }
+    if (env.common.findIdent("str_from_utf16")) |ident| {
+        try low_level_map.put(ident, .str_from_utf16);
+    }
+    if (env.common.findIdent("Builtin.Str.from_utf16_lossy")) |ident| {
+        try low_level_map.put(ident, .str_from_utf16_lossy);
+    }
+    if (env.common.findIdent("str_from_utf32")) |ident| {
+        try low_level_map.put(ident, .str_from_utf32);
+    }
+    if (env.common.findIdent("Builtin.Str.from_utf32_lossy")) |ident| {
+        try low_level_map.put(ident, .str_from_utf32_lossy);
     }
     if (env.common.findIdent("Builtin.Str.from_utf8")) |str_from_utf8_ident| {
         try low_level_map.put(str_from_utf8_ident, .str_from_utf8);

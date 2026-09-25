@@ -67,6 +67,28 @@ second stored expression, pattern, and statement tree. In `.boxy`, checked CIR
 is consumed directly with explicit boxy representation plans owned by that
 lowerer.
 
+## UTF-16 and UTF-32 decoding primitives
+
+`Str.from_utf16` and `Str.from_utf32` are checked Roc wrappers around Zig
+decoding primitives. The private primitive result is the record
+`{ index : U64, status : U8, string : Str }`, whose original field indices
+are respectively 0, 1, and 2. Status 0 means success; UTF-16 statuses 1 and 2
+mean unpaired high and low surrogate; UTF-32 statuses 1 and 2 mean code point
+too large and surrogate code point. Checking lowers the wrappers' ordinary
+matches to the public `Try` and nominal problem types. Consumers use the
+record's committed field offsets, never search a result union's shape to
+infer error identities. The status is a private protocol, not a Roc tag's
+runtime discriminant.
+
+Strict decoding returns the first invalid input code-unit index and an empty
+string on error. Lossy decoding replaces each unpaired UTF-16 surrogate or
+invalid UTF-32 unit with U+FFFD, preserving the next unit unless it completes
+a valid surrogate pair. Both forms borrow their input and produce an
+independent owned string. Validation and exact UTF-8 sizing precede allocation;
+strict failure allocates nothing. BOMs and Unicode noncharacters are preserved.
+Inputs are numeric code units, so byte order belongs to the caller's byte
+decoding step. Output encoders (`to_utf16`/`to_utf32`) are a separate API addition.
+
 ## Core Principles
 
 Compiler stages after parsing and error reporting must not use workarounds,

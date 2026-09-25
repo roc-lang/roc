@@ -457,6 +457,11 @@ str_with_ascii_lowercased_import: ?u32 = null,
 str_with_ascii_uppercased_import: ?u32 = null,
 str_caseless_ascii_equals_import: ?u32 = null,
 str_from_utf8_import: ?u32 = null,
+str_from_utf16_import: ?u32 = null,
+str_from_utf16_lossy_import: ?u32 = null,
+str_from_utf32_import: ?u32 = null,
+str_from_utf32_lossy_import: ?u32 = null,
+
 int_from_str_import: ?u32 = null,
 dec_from_str_import: ?u32 = null,
 float_from_str_import: ?u32 = null,
@@ -794,6 +799,11 @@ fn hostBuiltinImports(self: *const Self) HostBuiltinImports {
             .str_escape_and_quote => self.str_escape_and_quote_import,
             .str_from_utf8 => self.str_from_utf8_import,
             .str_from_utf8_result => null,
+            .str_from_utf16 => self.str_from_utf16_import,
+            .str_from_utf16_lossy => self.str_from_utf16_lossy_import,
+            .str_from_utf32 => self.str_from_utf32_import,
+            .str_from_utf32_lossy => self.str_from_utf32_lossy_import,
+
             .list_append_unsafe => self.list_append_unsafe_import,
             .list_concat => self.list_concat_import,
             .list_append_range_within => self.list_append_range_within_import,
@@ -988,6 +998,35 @@ fn emitStrUnaryResultCall(
         try self.emitFpOffset(result_offset);
     }
     try self.emitBuiltinCall(kind, host_import);
+}
+
+fn emitStrFromWideUtf(self: *Self, comptime op: base.LowLevel, input_local: ProcLocalId, ret_layout: layout.Idx) Allocator.Error!void {
+    const strict = op == .str_from_utf16 or op == .str_from_utf32;
+    const kind = comptime BuiltinSignatures.kindOf(LowLevelBuiltins.strOp(op));
+    try self.emitProcLocal(input_local);
+    const input = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(input);
+    const result_offset = try self.allocStackMemory(try self.layoutStorageByteSize(ret_layout), 8);
+    switch (self.external_calls) {
+        .host_imports => {
+            try self.emitLocalGet(input);
+            try self.emitFpOffset(result_offset);
+        },
+        .builtin_relocs => {
+            const list = try self.loadRocListFields(input);
+            try self.emitFpOffset(result_offset);
+            try self.emitRocListFields(list);
+        },
+        .unconfigured => unreachable,
+    }
+    if (strict) {
+        const struct_idx = self.getLayoutStore().getLayout(ret_layout).getStruct().idx;
+        inline for (0..3) |field| {
+            try self.emitI32Const(@intCast(try self.structFieldOffsetByOriginalIndexWasm(struct_idx, field)));
+        }
+    }
+    try self.emitBuiltinCall(kind, null);
+    try self.emitFpOffset(result_offset);
 }
 
 fn emitStrUnaryLowLevel(
@@ -2123,6 +2162,12 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
     self.str_with_ascii_uppercased_import = try self.module.addImport("env", "roc_str_with_ascii_uppercased", str_unary_type);
     self.str_release_excess_capacity_import = try self.module.addImport("env", "roc_str_release_excess_capacity", str_unary_type);
     self.str_with_capacity_import = try self.module.addImport("env", "roc_str_with_capacity", str_unary_type);
+
+    const str_from_wide_utf_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
+    self.str_from_utf16_import = try self.module.addImport("env", "roc_str_from_utf16", str_from_wide_utf_type);
+    self.str_from_utf16_lossy_import = try self.module.addImport("env", "roc_str_from_utf16_lossy", str_unary_type);
+    self.str_from_utf32_import = try self.module.addImport("env", "roc_str_from_utf32", str_from_wide_utf_type);
+    self.str_from_utf32_lossy_import = try self.module.addImport("env", "roc_str_from_utf32_lossy", str_unary_type);
 
     const str_from_utf8_type = try self.module.addFuncType(
         &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 },
@@ -13784,6 +13829,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .str_to_utf8 => {
             try self.emitStrToUtf8(GuardedList.at(args, 0));
         },
+        .str_from_utf16 => try self.emitStrFromWideUtf(.str_from_utf16, GuardedList.at(args, 0), ll.ret_layout),
+        .str_from_utf16_lossy => try self.emitStrFromWideUtf(.str_from_utf16_lossy, GuardedList.at(args, 0), ll.ret_layout),
+        .str_from_utf32 => try self.emitStrFromWideUtf(.str_from_utf32, GuardedList.at(args, 0), ll.ret_layout),
+        .str_from_utf32_lossy => try self.emitStrFromWideUtf(.str_from_utf32_lossy, GuardedList.at(args, 0), ll.ret_layout),
         .str_from_utf8_lossy => {
             try self.emitStrFromUtf8Lossy(GuardedList.at(args, 0));
         },
@@ -15806,6 +15855,11 @@ fn numericOpFromLowLevel(op: LIR.LowLevel) NumericOp {
         .str_release_excess_capacity,
         .str_to_utf8,
         .str_from_utf8_lossy,
+        .str_from_utf16,
+        .str_from_utf16_lossy,
+        .str_from_utf32,
+        .str_from_utf32_lossy,
+
         .str_from_utf8,
         .str_split_on,
         .str_join_with,

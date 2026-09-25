@@ -71,6 +71,11 @@ pub const BuiltinFn = enum {
     str_with_ascii_lowercased,
     str_with_ascii_uppercased,
     str_from_utf8_lossy,
+    str_from_utf16,
+    str_from_utf16_lossy,
+    str_from_utf32,
+    str_from_utf32_lossy,
+
     str_from_utf8,
     str_from_utf8_result,
     str_from_utf8_parts,
@@ -351,6 +356,11 @@ pub const BuiltinFn = enum {
             .str_from_literal,
             .str_from_utf8,
             .str_from_utf8_lossy,
+            .str_from_utf16,
+            .str_from_utf16_lossy,
+            .str_from_utf32,
+            .str_from_utf32_lossy,
+
             .str_from_utf8_parts,
             .str_from_utf8_result,
             .str_join_with,
@@ -477,6 +487,8 @@ pub const core_root_symbols: std.StaticStringMap(void) = blk: {
 pub const intrinsic_annotation_names = [_][]const u8{
     "Builtin.Str.inspect",
     "Builtin.Str.Utf8Problem.is_eq",
+    "Builtin.Str.Utf16Problem.is_eq",
+    "Builtin.Str.Utf32Problem.is_eq",
     "Builtin.Encoding.ParseTagUnionSpec.parse",
     "Builtin.Encoding.FieldName.FieldNames.rename_fields",
     "Builtin.Encoding.FieldName.FieldNames.shortest_name",

@@ -3791,6 +3791,149 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "2" },
     },
     .{
+        .name = "wide UTF decoding - UTF-16 strict valid",
+        .source =
+        \\Str.from_utf16([82, 111, 99, 0xD83D, 0xDC26]) == Ok("Roc🐦")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 lossy valid",
+        .source =
+        \\Str.from_utf16_lossy([82, 111, 99, 0xD83D, 0xDC26]) == "Roc🐦"
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 empty",
+        .source =
+        \\Str.from_utf16([]) == Ok("") and Str.from_utf16_lossy([]) == ""
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 strict error 0",
+        .source =
+        \\Str.from_utf16([65, 0xD800, 66]) == Err(BadUtf16({ index: 1, problem: UnpairedHighSurrogate }))
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 strict error 1",
+        .source =
+        \\Str.from_utf16([0xD83D, 0xDC26, 0xDFFF]) == Err(BadUtf16({ index: 2, problem: UnpairedLowSurrogate }))
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 strict error 2",
+        .source =
+        \\Str.from_utf16([65, 0xDBFF]) == Err(BadUtf16({ index: 1, problem: UnpairedHighSurrogate }))
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 shared input and heap result",
+        .source =
+        \\{
+        \\    units = List.repeat(65.U16, 64)
+        \\    strict = Str.from_utf16(units)
+        \\    lossy = Str.from_utf16_lossy(units)
+        \\    strict == Ok(Str.repeat("A", 64)) and lossy == Str.repeat("A", 64) and units == List.repeat(65.U16, 64)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 sliced input",
+        .source =
+        \\Str.from_utf16(List.drop_first([99.U16, 65, 66, 67], 1)) == Ok("ABC")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 strict valid",
+        .source =
+        \\Str.from_utf32([82, 111, 99, 0x1F426]) == Ok("Roc🐦")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 lossy valid",
+        .source =
+        \\Str.from_utf32_lossy([82, 111, 99, 0x1F426]) == "Roc🐦"
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 empty",
+        .source =
+        \\Str.from_utf32([]) == Ok("") and Str.from_utf32_lossy([]) == ""
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 strict error 0",
+        .source =
+        \\Str.from_utf32([65, 0xD800]) == Err(BadUtf32({ index: 1, problem: SurrogateCodePoint }))
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 strict error 1",
+        .source =
+        \\Str.from_utf32([65, 0x110000]) == Err(BadUtf32({ index: 1, problem: CodePointTooLarge }))
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 strict error 2",
+        .source =
+        \\Str.from_utf32([0xFFFFFFFF]) == Err(BadUtf32({ index: 0, problem: CodePointTooLarge }))
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 shared input and heap result",
+        .source =
+        \\{
+        \\    units = List.repeat(65.U32, 64)
+        \\    strict = Str.from_utf32(units)
+        \\    lossy = Str.from_utf32_lossy(units)
+        \\    strict == Ok(Str.repeat("A", 64)) and lossy == Str.repeat("A", 64) and units == List.repeat(65.U32, 64)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 sliced input",
+        .source =
+        \\Str.from_utf32(List.drop_first([99.U32, 65, 66, 67], 1)) == Ok("ABC")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 lossy resynchronization",
+        .source =
+        \\Str.from_utf16_lossy([0xD800, 0xD83D, 0xDC26, 0xDC00, 65, 0xDBFF]) == "�🐦�A�"
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 lossy invalid units",
+        .source =
+        \\Str.from_utf32_lossy([0xD83D, 0xDC26, 65, 0x110000, 0xFFFFFFFF]) == "��A��"
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 all scalar boundaries",
+        .source =
+        \\Str.from_utf16([0, 0x7F, 0x80, 0x7FF, 0x800, 0xD7FF, 0xE000, 0xFEFF, 0xFFFF, 0xD800, 0xDC00, 0xDBFF, 0xDFFF]).ok_or("").to_utf8() == [0, 127, 194, 128, 223, 191, 224, 160, 128, 237, 159, 191, 238, 128, 128, 239, 187, 191, 239, 191, 191, 240, 144, 128, 128, 244, 143, 191, 191] and Str.from_utf32([0, 0x7F, 0x80, 0x7FF, 0x800, 0xD7FF, 0xE000, 0xFEFF, 0xFFFF, 0x10000, 0x10FFFF]).ok_or("").to_utf8() == [0, 127, 194, 128, 223, 191, 224, 160, 128, 237, 159, 191, 238, 128, 128, 239, 187, 191, 239, 191, 191, 240, 144, 128, 128, 244, 143, 191, 191]
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "low_level - Str.from_utf8_lossy roundtrip ASCII",
         .source =
         \\{

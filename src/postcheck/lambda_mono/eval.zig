@@ -1475,6 +1475,11 @@ pub const Evaluator = struct {
             .str_release_excess_capacity,
             .str_to_utf8,
             .str_from_utf8_lossy,
+            .str_from_utf16,
+            .str_from_utf16_lossy,
+            .str_from_utf32,
+            .str_from_utf32_lossy,
+
             .str_from_utf8,
             .str_split_on,
             .str_join_with,
@@ -2438,6 +2443,11 @@ pub const Evaluator = struct {
             str_split_last,
             str_from_utf8,
             str_from_utf8_lossy,
+            str_from_utf16,
+            str_from_utf16_lossy,
+            str_from_utf32,
+            str_from_utf32_lossy,
+
             str_is_eq_static_small,
             str_static_small_word_eq,
             str_static_small_word_caseless_eq,
@@ -2498,6 +2508,10 @@ pub const Evaluator = struct {
             .str_split_first => return try self.strSplitFirst(result_ty, args[0].str, args[1].str),
             .str_split_last => return try self.strSplitLast(result_ty, args[0].str, args[1].str),
             .str_from_utf8 => return try self.strFromUtf8(result_ty, args[0]),
+            .str_from_utf16 => return try self.strFromWideUtf(u16, false, args[0]),
+            .str_from_utf16_lossy => return try self.strFromWideUtf(u16, true, args[0]),
+            .str_from_utf32 => return try self.strFromWideUtf(u32, false, args[0]),
+            .str_from_utf32_lossy => return try self.strFromWideUtf(u32, true, args[0]),
             .str_from_utf8_lossy => {
                 const elems = args[0].list;
                 const buf = arena.alloc(u8, elems.len) catch return error.OutOfMemory;
@@ -2511,6 +2525,25 @@ pub const Evaluator = struct {
             .str_static_small_word_caseless_eq,
             => return self.unsupported_("static small string dispatch op"),
         }
+    }
+
+    fn strFromWideUtf(self: *Evaluator, comptime Unit: type, comptime lossy: bool, input: Value) EvalError!Value {
+        const units = self.alloc().alloc(Unit, input.list.len) catch return error.OutOfMemory;
+        for (input.list, 0..) |value, i| units[i] = readInt(Unit, value);
+        const list = builtins.list.RocList{ .bytes = @ptrCast(units.ptr), .length = units.len, .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(units.len) };
+        if (lossy) {
+            const decoded = if (Unit == u16) builtins.str.fromUtf16Lossy(list, self.getOps()) else builtins.str.fromUtf32Lossy(list, self.getOps());
+            defer decoded.decref(self.getOps());
+            return .{ .str = self.alloc().dupe(u8, decoded.asSlice()) catch return error.OutOfMemory };
+        }
+        const decoded = if (Unit == u16) builtins.str.fromUtf16(list, self.getOps()) else builtins.str.fromUtf32(list, self.getOps());
+        defer decoded.string.decref(self.getOps());
+        const fields = self.alloc().alloc(Value, 3) catch return error.OutOfMemory;
+        // Private primitive fields are index, status, string in declared field order.
+        fields[0] = self.canonicalInt(.u64, decoded.index);
+        fields[1] = self.canonicalInt(.u8, if (decoded.is_ok) 0 else decoded.problem_code + 1);
+        fields[2] = .{ .str = self.alloc().dupe(u8, decoded.string.asSlice()) catch return error.OutOfMemory };
+        return .{ .record = fields };
     }
 
     fn mapAscii(self: *Evaluator, source: []const u8, comptime f: fn (u8) u8) EvalError![]const u8 {
