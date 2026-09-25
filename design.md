@@ -4143,8 +4143,10 @@ Every live literal-origin record leaves checking with one explicit resolution:
   literal data (`conversion_root`). That root is the single source of the
   literal's value: its body lowers through ordinary dispatch-call lowering,
   and every use restores the root's stored payload, or, while its module is
-  still finalizing, reads the root's declared compile-time value. No use
-  re-runs the conversion. A root whose conversion returns `Err` records the
+  still finalizing, reads the root's declared compile-time value. A root no
+  evaluation requests (its type holds a callable, so the root is
+  specialization-owned) is hoisted per program instead, as a literal root
+  (see `specialization_dispatch` below). No use re-runs the conversion. A root whose conversion returns `Err` records the
   literal-specific rejection as its failure.
 - `specialization_dispatch` means the target remains an identity variable in a
   generalized callable. The checked plan retains this erased requirement; each
