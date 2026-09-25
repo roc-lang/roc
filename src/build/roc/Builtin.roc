@@ -3484,7 +3484,8 @@ Builtin :: [].{
 		## Each pull runs `advance!` exactly once: `Ok((item, next_state))` yields `item` and
 		## continues from `next_state`, while `Err(NoMore)` ends the stream. Building the
 		## stream runs no effects. `Known(n)` promises exactly n items; sources whose length
-		## is only discovered by reading (files, stdin, sockets) use `Unknown`.
+		## is only discovered by reading (files, stdin, sockets) use `Unknown`. A source that
+		## yields more items than its `Known` count reports `Unknown` from then on.
 		##
 		## Source errors belong in `item` (e.g. `Try(List(U8), ReadErr)`). To stop after an
 		## error, yield it paired with a terminal state that holds no resource, so the
@@ -3500,7 +3501,10 @@ Builtin :: [].{
 								item,
 								rest: Stream.custom(
 									next_seed,
+									# A source that outlives its `Known` count degrades to
+									# `Unknown` instead of underflowing the countdown.
 									match len_if_known {
+										Known(0) => Unknown
 										Known(l) => Known(l - 1)
 										Unknown => Unknown
 									},
@@ -3559,10 +3563,11 @@ Builtin :: [].{
 		## into a [List] (pre-sized from `len_if_known` when known).
 		collect! : Stream(item) => List(item)
 		collect! = |stream| {
-			# `Known(n)` guarantees exactly n items (count-changing combinators
-			# report `Unknown`), so reserve up front and use the unchecked append.
-			# When the length is unknown, start empty and grow with the reserving
-			# append—the unchecked append would corrupt a zero-capacity list.
+			# `Known(n)` promises n items (count-changing combinators report
+			# `Unknown`), so reserve up front and use the unchecked append while
+			# the reservation lasts. `Stream.custom` hints come from the caller and
+			# may undercount, so past `cap` use the reserving append instead: the
+			# unchecked append would write past the list's capacity.
 			length = Stream.size_hint(stream)
 			cap = match length {
 				Known(n) => n
@@ -3579,9 +3584,10 @@ Builtin :: [].{
 						$rest = rest
 					}
 					One({ item, rest }) => {
-						$list = match length {
-							Known(_) => list_append_unsafe($list, item)
-							Unknown => List.append($list, item)
+						$list = if List.len($list) < cap {
+							list_append_unsafe($list, item)
+						} else {
+							List.append($list, item)
 						}
 						$rest = rest
 					}

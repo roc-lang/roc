@@ -1266,6 +1266,39 @@ pub const tests = [_]TestCase{
         0,
     ),
     moduleTestWithLiveAllocations(
+        "Stream.custom: an undercounted Known hint degrades to Unknown and still collects every item",
+        \\count! : U64 => Try((U64, U64), [NoMore])
+        \\count! = |n| if n < 4 { Ok((n, n + 1)) } else { Err(NoMore) }
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    stream = Stream.custom(0, Known(1), count!)
+        \\    match Stream.next!(stream) {
+        \\        One({ rest, .. }) => {
+        \\            expect Stream.size_hint(rest) == Known(0)
+        \\            match Stream.next!(rest) {
+        \\                One({ rest: after, .. }) => {
+        \\                    expect Stream.size_hint(after) == Unknown
+        \\                }
+        \\                _ => {
+        \\                    crash "expected a second item"
+        \\                }
+        \\            }
+        \\        }
+        \\        _ => {
+        \\            crash "expected an item"
+        \\        }
+        \\    }
+        \\    expect Stream.collect!(Stream.custom(0, Known(0), count!)) == [0, 1, 2, 3]
+        \\    expect Stream.collect!(Stream.custom(0, Known(2), count!)) == [0, 1, 2, 3]
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
         "Stream.custom: size hint counts down per pull and Unknown stays Unknown",
         \\count! : U64 => Try((U64, U64), [NoMore])
         \\count! = |n| if n < 3 { Ok((n, n + 1)) } else { Err(NoMore) }
