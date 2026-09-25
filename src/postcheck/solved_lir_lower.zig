@@ -11569,12 +11569,10 @@ const Lowerer = struct {
         local_nodes: *collections.DenseMap(Type.TypeId, layout.GraphNodeId),
 
         fn inputForType(self: *LayoutGraphBuilder, ty: Type.TypeId) Common.LowerError!layout.GraphInput {
-            if (self.lowerer.knownLayoutForType(ty)) |layout_idx| return layout.committedGraphInput(layout_idx);
-            if (try self.lowerer.knownLayoutForEquivalentNamedType(ty)) |layout_idx| {
-                try self.lowerer.rememberLayoutForType(ty, layout_idx.layout_idx);
-                try self.lowerer.layout_owner_types.put(ty, layout_idx.ty);
-                return layout.committedGraphInput(layout_idx.layout_idx);
-            }
+            // Expand the complete type graph, including already committed children.
+            // A cached layout is a leaf in commitGraph's analysis: substituting it
+            // here hides recursive paths and changes boxing for an unrolled copy
+            // of a previously committed node. commitGraph owns recursive interning.
             if (self.local_nodes.get(ty)) |node| return layout.localGraphInput(node);
 
             switch (self.lowerer.types.get(ty)) {
@@ -13380,5 +13378,41 @@ test "typed boundaries from empty rows are terminal even with matching layouts" 
         const next = try lowerer.result.store.addCFStmt(.{ .ret = .{ .value = target } });
         const boundary = try lowerer.assignTypedBoundary(target, target_ty, source, empty, next);
         try std.testing.expect(lowerer.result.store.getCFStmt(boundary) == .runtime_error);
+    }
+}
+
+test "layout lowering preserves recursive slots across cached children (issue 11693)" {
+    const allocator = std.testing.allocator;
+    for ([_]bool{ false, true }) |unrolled_first| {
+        var solved = emptySolvedProgramForTest(allocator);
+        defer solved.deinit();
+        const first = try solved.lifted.names.internRecordFieldLabel("first");
+        const second = try solved.lifted.names.internRecordFieldLabel("second");
+        const end = try solved.lifted.names.internTagLabel("End");
+        const more = try solved.lifted.names.internTagLabel("More");
+        var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+        defer lowerer.deinit();
+
+        const record = try lowerer.types.add(.zst);
+        const tags = try lowerer.types.addTags(&.{
+            .{ .name = end, .checked_name = end, .payloads = .empty() },
+            .{ .name = more, .checked_name = more, .payloads = try lowerer.types.addSpan(&.{record}) },
+        });
+        const union_ty = try lowerer.types.add(.{ .tag_union = tags });
+        const fields = try lowerer.types.addFields(&.{
+            .{ .name = first, .ty = union_ty, .default = null },
+            .{ .name = second, .ty = union_ty, .default = null },
+        });
+        lowerer.types.set(record, .{ .record = fields });
+        const unrolled = try lowerer.types.add(.{ .record = fields });
+
+        const first_layout = try lowerer.layoutOfType(if (unrolled_first) unrolled else record);
+        const second_layout = try lowerer.layoutOfType(if (unrolled_first) record else unrolled);
+        try std.testing.expectEqual(first_layout, second_layout);
+        const info = lowerer.result.layouts.getStructInfo(lowerer.result.layouts.getLayout(first_layout));
+        try std.testing.expectEqual(@as(usize, 2), info.fields.len);
+        for (0..info.fields.len) |i| {
+            try std.testing.expectEqual(layout.LayoutTag.box, lowerer.result.layouts.getLayout(info.fields.get(i).layout).tag);
+        }
     }
 }

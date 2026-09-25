@@ -12069,6 +12069,13 @@ builder owns:
 
 These are builder responsibilities, not a separate meaning-carrying IR.
 
+The LSS layout graph builder expands the complete reachable type graph before
+committing a new composite layout. Previously committed child layouts must not
+replace composite type nodes during graph discovery: those leaves would hide
+recursive paths and give an unrolled copy different slot boxing. The shared
+layout store owns recursive graph reduction and interning. Whole-root layout
+cache hits can reuse the completed result without rebuilding that graph.
+
 The `.lss` builder may maintain temporary maps such as `TypeId -> layout.Idx`,
 `LambdaMonoFnId -> LirProcSpecId`, `LiftedLocalId -> LirLocalId`, and
 `LiftedExprId -> lowered logical expression` while lowering one function
