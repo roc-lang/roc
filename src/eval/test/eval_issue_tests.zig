@@ -429,6 +429,46 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"same\"" },
     },
     .{
+        .name = "issue 11626: different tags keep independent return rows",
+        .source_kind = .module,
+        .source = @import("issue_11626_source.zig").source ++ "\nmain = (stats_page(\"\"), lead_page(\"\"), stats_page(\"ok\"), lead_page(\"ok\"))\n",
+        .expected = .{ .inspect_str = "(Err(NotFound(IndexStats)), Err(NotFound(LeadMissing)), Ok(\"stats\"), Ok(\"lead\"))" },
+    },
+    .{
+        .name = "issue 11626: different base types keep independent return rows",
+        .source_kind = .module,
+        .source = @import("issue_11626_source.zig").source ++ "\nmain = (text_page(\"\"), number_page(\"\"), text_page(\"ok\"), number_page(\"ok\"))\n",
+        .expected = .{ .inspect_str = "(Err(NotFound(\"owned error payload longer than an inline string\")), Err(NotFound(7)), Ok(\"text\"), Ok(\"number\"))" },
+    },
+    .{
+        .name = "issue 11626: higher order calls keep independent return rows",
+        .source_kind = .module,
+        .source = @import("issue_11626_source.zig").source ++ "\nmain = (run(\"\", stats_page), run(\"\", lead_page), run(\"ok\", stats_page), run(\"ok\", lead_page))\n",
+        .expected = .{ .inspect_str = "(Err(NotFound(IndexStats)), Err(NotFound(LeadMissing)), Ok(\"stats\"), Ok(\"lead\"))" },
+    },
+    .{
+        .name = "issue 11626: composed returns carry captured callable payloads",
+        .source_kind = .module,
+        .source =
+        \\find = |text, what| if text == "" Err(NotFound(what)) else Ok(text)
+        \\respond = |text| Ok(|{}| text)
+        \\stats_page = |text| {
+        \\    _ = find(text, IndexStats)?
+        \\    respond(text)
+        \\}
+        \\lead_page = |text| {
+        \\    _ = find(text, LeadMissing)?
+        \\    respond(text)
+        \\}
+        \\call = |result| match result {
+        \\    Ok(f) => f({})
+        \\    Err(_) => "missing"
+        \\}
+        \\main = (call(stats_page("owned stats response longer than an inline string")), call(lead_page("owned lead response longer than an inline string")))
+        ,
+        .expected = .{ .inspect_str = "(\"owned stats response longer than an inline string\", \"owned lead response longer than an inline string\")" },
+    },
+    .{
         .name = "issue 11470: imported polymorphic error composition preserves shared tails",
         .source_kind = .module,
         .imports = &.{.{
