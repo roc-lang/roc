@@ -7118,16 +7118,16 @@ Three consumers keep the rule exact:
   treats a repeated label as an invariant violation.
 
 Before `CheckedModule` is built, every tag and record row reachable from a
-type the checked module can publish is checked once; rows that repeat a label
+type in the checked module's output is checked once; rows that repeat a label
 are normalized in ascending root order. Those types are the expression,
 pattern, and definition types and the roots inference recorded elsewhere: call
 and dispatch constraint functions, scheme-use substitutions and instances, and
 codec requirements and derivations. A scheme-use substitution can hold a copy
 of an unnormalized row that no expression's type still reaches, such as a
 mutually recursive member's error row copied before its group settled.
-Publication and this walk enumerate the recorded roots through the same
-`published_type_roots` functions, so a root publication adds is normalized
-without a second list to keep in step.
+`CheckedModule` construction and this walk enumerate the recorded roots
+through the same type-root functions, so a root added to the output is
+normalized without a second list to keep in step.
 
 Normalization needs no metadata on type variables and adds no work where no
 label repeats: detection rides on the unifier's gather,
@@ -7143,7 +7143,7 @@ repeated two extensions down), by `src/check/test/issue_11621_test.zig`
 (recursive functions using `?`, directly, mutually, through a generalized
 helper, and through dispatch), and by the chain-duplicate unifier tests and the
 `normalizeRowUnion` test in `src/check/Check.zig`, which cover records.
-`src/compile/test/issue_11621_test.zig` pins the publication of a mutually
+`src/compile/test/issue_11621_test.zig` pins the output of a mutually
 recursive group's substitution rows, and
 `test/fx-open/issue_11621_recursive_try.roc` runs those programs on every
 backend. The
