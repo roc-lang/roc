@@ -3,8 +3,10 @@ app [main!] { pf: platform "./platform/fallible_widen_main.roc" }
 # Every channel a hosted result reaches a caller through, each at an error row
 # wider than the one FallibleHost.str_ok! declares (platform/FallibleWiden.roc):
 # an annotated binding, an argument, a record field, the function carried as a
-# value, passed to a higher-order function, boxed, `?` in an unannotated
-# function, and the function named through an alias of its owner. Row
+# value, passed to a higher-order function, boxed (at the wider type and with
+# its row left open), `?` in an unannotated function, the function named
+# through an alias of its owner, and one local alias of it used at both the
+# declared and a wider row. Row
 # subsumption re-opens the hosted `Try` error row at each use (design.md "Row
 # Subsumption"), so all of them typecheck.
 #
@@ -29,6 +31,8 @@ main! = |_args| {
 	Stdout.line!("box: ${wider_row(FallibleWiden.via_box!({}))}")
 	Stdout.line!("unannotated question: ${wider_row(FallibleWiden.via_unannotated_question!({}))}")
 	Stdout.line!("alias owner: ${wider_row(FallibleWiden.via_alias_owner!({}))}")
+	Stdout.line!("open box: ${wider_row(FallibleWiden.via_box_open!({}))}")
+	Stdout.line!("alias both: ${wider_row(FallibleWiden.via_alias_both!({}))}")
 	Stdout.line!("host err: ${host_err_row(FallibleWiden.via_host_err!({}))}")
 
 	Ok({})

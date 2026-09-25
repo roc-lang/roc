@@ -78,6 +78,30 @@ FallibleWiden := [].{
 		value
 	}
 
+	# Channel: boxed with no annotation, so the re-opened error row stays open
+	# until the caller's annotation decides it.
+	via_box_open! : {} => Try(Str, [HostErr(Str), Widened(I32)])
+	via_box_open! = |{}| {
+		boxed = Box.box(FallibleHost.str_ok!)
+		run! = Box.unbox(boxed)
+		run!({})
+	}
+
+	# Channel: one local alias of the hosted function used both at its
+	# declared row and at a wider one.
+	via_alias_both! : {} => Try(Str, [HostErr(Str), Widened(I32)])
+	via_alias_both! = |{}| {
+		run! = FallibleHost.str_ok!
+		narrow : Try(Str, [HostErr(Str)])
+		narrow = run!({})
+		wide : Try(Str, [HostErr(Str), Widened(I32)])
+		wide = run!({})
+		match narrow {
+			Ok(_) => wide
+			Err(HostErr(message)) => Err(HostErr("narrow misread as ${message}"))
+		}
+	}
+
 	# Channel: the hosted function named through an alias of its owner.
 	via_alias_owner! : {} => Try(Str, [HostErr(Str), Widened(I32)])
 	via_alias_owner! = |{}| {

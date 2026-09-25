@@ -7689,6 +7689,35 @@ Since a payload's representation is taken from the REQUEST rather than from
 the declared type, a polymorphic implementation's rigid payloads are correct
 by construction: the declared row supplies only the set of labels.
 
+Boxy instances. Boxy specializes nothing, so a widened use of a coerced
+function is not served at a template boundary: its worker returns the
+declared row, and a DIRECT call's result crosses the call's return boundary,
+whose descriptor-driven adaptation rebuilds each tag by name at the caller's
+representation (`lower.assignCoercedResultRow`; a restored coerced constant
+crosses the same one). A lookup that re-opened a coerced function's row and is
+NOT the callee of a direct call—the function passed, boxed, stored in a
+record, or named as a callable alias's whole right-hand side—resolves to a
+compiler-generated adapter worker keyed by that lookup
+(`Plan.WorkerSource.coerced_use_adapter`), read from the checker's per-use
+record (Row Subsumption) and never from comparing types. The adapter is
+`|args| target(args)` at the lookup's own type: its body is one direct call of
+the function the lookup names, at the lookup's own instantiation (the call's
+function type is the lookup's type, its operands the adapter's arguments,
+`Plan.CallOperand.adapter_param`), so the re-tag is the call's return
+boundary. The adapter's scheme is the one of the binding whose whole
+right-hand side the lookup is—a local callable alias's generalized scope, or a
+top-level callable binding's compile-time root—because that binding
+generalizes the re-opened tail and its uses supply a substitution for it,
+which the target's own worker, quantifying no such variable, could not take.
+Any other adapter quantifies nothing and captures a re-opened tail its
+creating frame leaves open, as a nested callable does. Pinned by
+`src/compile/test/row_subsumption_boxy_adapter_test.zig`,
+`test/cli/RowSubsumptionCallableValue.roc`, and the `--specialize=no` runs of
+`test/fx-open/hosted_widening_channels.roc`. A LOCAL callable alias of a
+`where`-clause function is not yet lowered by Boxy, coerced or not: static
+dictionary planning cannot resolve the method a use of the alias supplies. A
+top-level one is.
+
 ### Row Union Normalization
 
 A tag union or record row denotes the union of its labels. When a label occurs more than

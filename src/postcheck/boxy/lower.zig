@@ -172,6 +172,9 @@ const ResolvedWorkerBody = union(enum) {
     generated_codec: Plan.GeneratedCodecSource,
     generated_field_iterator: Plan.GeneratedFieldIteratorSource,
     generated_interpolation_step: Plan.GeneratedInterpolationStepSource,
+    /// A direct call of the coerced function a lookup names, at the lookup's
+    /// instantiation (`Plan.CoercedUseAdapterSource`).
+    coerced_use_adapter: Plan.CoercedUseAdapterSource,
 };
 
 fn resolvedWorkerIsListMapCanReuseWrapper(resolved: ResolvedWorker) bool {
@@ -183,6 +186,7 @@ fn resolvedWorkerIsListMapCanReuseWrapper(resolved: ResolvedWorker) bool {
         .generated_codec,
         .generated_field_iterator,
         .generated_interpolation_step,
+        .coerced_use_adapter,
         => return false,
     };
     return checkedExprIsListMapCanReuseWrapper(resolved.module, body);
@@ -286,9 +290,24 @@ fn resolveWorkerProcedure(modules: Common.CheckedModules, worker: Plan.WorkerPla
         .generated_codec => |source| resolveGeneratedCodecWorker(modules, worker.id, source),
         .generated_field_iterator => |source| resolveGeneratedFieldIteratorWorker(modules, worker.id, source),
         .generated_interpolation_step => |source| resolveGeneratedInterpolationStepWorker(modules, worker.id, source),
+        .coerced_use_adapter => |source| resolveCoercedUseAdapterWorker(modules, worker.id, source),
     };
     resolved.stored_fn = worker.stored_fn;
     return resolved;
+}
+
+fn resolveCoercedUseAdapterWorker(
+    modules: Common.CheckedModules,
+    worker: Plan.WorkerPlanId,
+    source: Plan.CoercedUseAdapterSource,
+) ResolvedWorker {
+    const module = procedureModuleById(modules, source.use.module);
+    return .{
+        .worker = worker,
+        .module_key = module.key,
+        .module = module,
+        .body = .{ .coerced_use_adapter = source },
+    };
 }
 
 fn resolveGeneratedInterpolationStepWorker(
@@ -1311,6 +1330,17 @@ const ProcedureBuilder = struct {
         return switch (resolved.body) {
             .checked_expr => |body| blk: {
                 const region = resolved.module.checked_bodies.expr(body.root_expr).source_region;
+                break :blk .{
+                    .loc = try self.sourceLoc(resolved.module, region),
+                    .region = region,
+                    .inline_scope = LIR.InlineScopeId.none,
+                    .kind = .scaffold,
+                };
+            },
+            // An adapter for a coerced function used as a value is scaffolding
+            // around the lookup that demanded it, so it names that lookup.
+            .coerced_use_adapter => |source| blk: {
+                const region = resolved.module.checked_bodies.expr(source.use.expr).source_region;
                 break :blk .{
                     .loc = try self.sourceLoc(resolved.module, region),
                     .region = region,
@@ -5437,6 +5467,7 @@ const ProcedureBuilder = struct {
             .generated_codec,
             .generated_field_iterator,
             .generated_interpolation_step,
+            .coerced_use_adapter,
             => {},
         }
 
@@ -5516,6 +5547,7 @@ const ProcedureBuilder = struct {
             .generated_codec,
             .generated_field_iterator,
             .generated_interpolation_step,
+            .coerced_use_adapter,
             => {},
         }
 
@@ -5664,6 +5696,7 @@ const ProcedureBuilder = struct {
         generated_codec: Plan.GeneratedCodecSource,
         generated_field_iterator: Plan.GeneratedFieldIteratorSource,
         generated_interpolation_step: Plan.GeneratedInterpolationStepSource,
+        coerced_use_adapter: Plan.CoercedUseAdapterSource,
         generated_evidence_intrinsic: checked.IntrinsicId,
         str_inspect: struct {
             arg: LIR.LocalId,
@@ -5696,7 +5729,33 @@ const ProcedureBuilder = struct {
             .generated_codec => |source| try self.bodySourceForGeneratedCodec(proc, source),
             .generated_field_iterator => |source| try self.bodySourceForGeneratedFieldIterator(proc, source),
             .generated_interpolation_step => |source| try self.bodySourceForGeneratedInterpolationStep(proc, source),
+            .coerced_use_adapter => |source| try self.bodySourceForCoercedUseAdapter(proc, source),
         };
+    }
+
+    /// A coerced-use adapter's arguments are its own; they are passed
+    /// straight to its call (`Plan.CallOperand.adapter_param`).
+    fn bodySourceForCoercedUseAdapter(
+        _: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        source: Plan.CoercedUseAdapterSource,
+    ) Allocator.Error!WorkerBodySource {
+        const worker = proc.parent.plan.workers.items[@intFromEnum(proc.worker_layout.worker)];
+        const function = proc.functionChildrenForRep(worker.rep) orelse
+            boxyLowerInvariant("coerced-use adapter worker was not callable");
+        const worker_args = proc.parent.layout_plan.workerLayoutSlice(proc.worker_layout.args);
+        if (function.arg_count != worker_args.len) {
+            boxyLowerInvariant("coerced-use adapter arity disagreed with its worker layout");
+        }
+        const children = proc.parent.plan.childSlice(proc.parent.plan.representations.items[@intFromEnum(function.rep)].children);
+        for (children[function.args_start..][0..function.arg_count], worker_args) |child, arg_layout| {
+            const local = try proc.addArgLocalForRep(child.rep);
+            if (proc.parent.result.store.getLocal(local).layout_idx != arg_layout.layoutIdx()) {
+                boxyLowerInvariant("coerced-use adapter argument layout disagreed with its representation");
+            }
+        }
+        proc.coerced_use_adapter_arity = function.arg_count;
+        return .{ .coerced_use_adapter = source };
     }
 
     fn bodySourceForGeneratedInterpolationStep(
@@ -5866,6 +5925,7 @@ const ProcedureBuilder = struct {
             .generated_codec => |source| try self.lowerGeneratedCodecWorkerInto(proc, source, ret_local, ret_stmt),
             .generated_field_iterator => |source| try self.lowerGeneratedFieldIteratorStepInto(proc, source, ret_local, ret_stmt),
             .generated_interpolation_step => |source| try self.lowerGeneratedInterpolationStepInto(proc, source, ret_local, ret_stmt),
+            .coerced_use_adapter => |source| try proc.lowerCoercedUseAdapterBodyInto(source, ret_local, ret_stmt),
             .generated_evidence_intrinsic => |intrinsic| try self.lowerGeneratedEvidenceIntrinsicInto(proc, intrinsic, ret_local, ret_stmt),
             .str_inspect => |inspect| blk: {
                 try proc.markLocalDescriptorForType(inspect.arg, inspect.arg_ty);
@@ -12634,6 +12694,9 @@ const ProcBodyBuilder = struct {
     worker_layout: Layouts.WorkerLayouts,
     synthetic_adapter: bool,
     erased_argument_descriptors: bool,
+    /// For a coerced-use adapter worker, how many leading `arg_locals` are
+    /// its own arguments (`Plan.CallOperand.adapter_param`); zero otherwise.
+    coerced_use_adapter_arity: u32 = 0,
     arg_locals: std.ArrayList(LIR.LocalId),
     lambda_arg_patterns: []const checked.CheckedPatternId,
     lambda_arg_binding_locals: []LIR.LocalId,
@@ -13607,7 +13670,7 @@ const ProcBodyBuilder = struct {
             },
             .generated_field_iterator => true,
             .generated_interpolation_step => true,
-            .procedure_template, .procedure_binding, .procedure_use, .nested_expr => false,
+            .procedure_template, .procedure_binding, .procedure_use, .nested_expr, .coerced_use_adapter => false,
         };
 
         try self.erased_capture_locals.ensureTotalCapacity(self.parent.allocator, captures.len);
@@ -14128,7 +14191,7 @@ const ProcBodyBuilder = struct {
             },
             .generated_field_iterator => true,
             .generated_interpolation_step => true,
-            .procedure_template, .procedure_binding, .procedure_use, .nested_expr => false,
+            .procedure_template, .procedure_binding, .procedure_use, .nested_expr, .coerced_use_adapter => false,
         };
 
         var continuation = next;
@@ -14256,6 +14319,7 @@ const ProcBodyBuilder = struct {
             .generated_codec,
             .generated_field_iterator,
             .generated_interpolation_step,
+            .coerced_use_adapter,
             => &.{},
         };
     }
@@ -18261,6 +18325,7 @@ const ProcBodyBuilder = struct {
             .generated_codec,
             .generated_field_iterator,
             .generated_interpolation_step,
+            .coerced_use_adapter,
             => &.{},
         };
     }
@@ -19443,6 +19508,27 @@ const ProcBodyBuilder = struct {
         return std.mem.eql(u8, self.module.canonical_names.methodNameText(method), expected);
     }
 
+    /// A coerced-use adapter's body: the call its plan records
+    /// (`Plan.Builder.analyzeCoercedUseAdapterBody`), at the adapter's own
+    /// lookup type, whose result crosses the call's return boundary from the
+    /// callee's declared row into the adapter's wider one—the re-tag
+    /// `assignCoercedResultRow` names.
+    fn lowerCoercedUseAdapterBodyInto(
+        self: *ProcBodyBuilder,
+        source: Plan.CoercedUseAdapterSource,
+        target: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const direct_plan = self.parent.plan.directCallPlanForCall(source.use, self.worker_layout.worker) orelse
+            boxyLowerInvariant("coerced-use adapter reached boxy lowering without its planned call");
+        const worker = self.parent.plan.workers.items[@intFromEnum(self.worker_layout.worker)];
+        const function = self.functionChildrenForRep(worker.rep) orelse
+            boxyLowerInvariant("coerced-use adapter worker was not callable");
+        const use_type = self.module.checked_bodies.expr(source.use.expr).ty;
+        const ret_ty = checkedFunctionPayload(self.module, use_type).ret;
+        return try self.lowerPlannedWorkerCallInto(target, function.ret, ret_ty, direct_plan, next);
+    }
+
     fn lowerPlannedWorkerCallInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -19552,6 +19638,7 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!Plan.TypeRepId {
         const expr_id = switch (operand) {
             .checked_expr => |expr| expr,
+            .adapter_param,
             .generated_interpolation_iter,
             .generated_numeral,
             .generated_quote,
@@ -29464,6 +29551,12 @@ const ProcBodyBuilder = struct {
                     try self.lowerExprExpectedTypeRefInto(lowered[index], arg_types[index], arg, continuation)
                 else
                     try self.lowerExprStorageRepInto(lowered[index], storage_arg_reps[index], arg, continuation),
+                .adapter_param => |param| blk: {
+                    if (param >= self.coerced_use_adapter_arity) {
+                        boxyLowerInvariant("coerced-use adapter operand named an argument the adapter does not have");
+                    }
+                    break :blk try self.assignLocalFromRep(lowered[index], self.arg_locals.items[param], storage_arg_reps[index], continuation);
+                },
                 .generated_quote => |literal| try self.assignStringLiteral(lowered[index], literal, continuation),
                 .generated_numeral => |literal| try self.lowerGeneratedNumeralInto(
                     lowered[index],
@@ -38787,7 +38880,7 @@ fn expectResolvedWorkerCheckedExpr(
 ) error{ TestExpectedEqual, TestUnexpectedResult }!void {
     const body = switch (worker.body) {
         .checked_expr => |checked_body| checked_body,
-        .intrinsic, .hosted, .unimplemented, .generated_codec, .generated_field_iterator, .generated_interpolation_step => return error.TestUnexpectedResult,
+        .intrinsic, .hosted, .unimplemented, .generated_codec, .generated_field_iterator, .generated_interpolation_step, .coerced_use_adapter => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(expected_body, body.body_id);
     try std.testing.expectEqual(expected_root, body.root_expr);

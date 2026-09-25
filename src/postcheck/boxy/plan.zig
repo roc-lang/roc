@@ -748,6 +748,23 @@ pub const WorkerSource = union(enum) {
     generated_codec: GeneratedCodecSource,
     generated_field_iterator: GeneratedFieldIteratorSource,
     generated_interpolation_step: GeneratedInterpolationStepSource,
+    coerced_use_adapter: CoercedUseAdapterSource,
+};
+
+/// A compiler-generated adapter worker for one lookup that re-opened a
+/// coerced function's result row (design.md "Row Subsumption", "Result-Row
+/// Widening Adapter"), used as a VALUE rather than called directly: the
+/// lookup's own type lists more tags at the coerced row than the function's
+/// worker returns. The adapter is `|args| target(args)` at the lookup's type:
+/// its body is a direct call of the target at the lookup's instantiation,
+/// whose result crosses the call's return boundary into the adapter's wider
+/// row. Its scheme is the one of the binding the lookup is the whole
+/// right-hand side of (a callable alias `run = base`), so every use of that
+/// binding instantiates the adapter as it instantiates the binding. Keyed by
+/// the lookup; the target, the coerced cell, and the scheme are all read from
+/// the checked module data for it.
+pub const CoercedUseAdapterSource = struct {
+    use: CheckedExprIdentity,
 };
 
 /// Const-store identity of a function value persisted into runtime code.
@@ -786,6 +803,9 @@ pub const WorkerPlan = struct {
 /// Exact producer for one explicit call argument.
 pub const CallOperand = union(enum) {
     checked_expr: checked.CheckedExprId,
+    /// The argument at this index of the coerced-use adapter worker making
+    /// the call (`WorkerSource.coerced_use_adapter`), passed through.
+    adapter_param: u32,
     generated_interpolation_iter: checked.CheckedExprId,
     generated_numeral: can.ModuleEnv.NumeralLiteral,
     generated_quote: checked.CheckedStringLiteralId,
@@ -1470,7 +1490,7 @@ pub const ProgramPlan = struct {
     pub fn workerForSourceType(self: *const ProgramPlan, source: WorkerSource, checked_type: CheckedTypeIdentity) ?WorkerPlanId {
         for (self.workers.items) |worker| {
             if (!workerSourceEql(worker.source, source)) continue;
-            if (source == .nested_expr or typeRefEql(worker.checked_type, checked_type)) return worker.id;
+            if (source == .nested_expr or source == .coerced_use_adapter or typeRefEql(worker.checked_type, checked_type)) return worker.id;
         }
         return null;
     }
@@ -2277,6 +2297,7 @@ const Builder = struct {
             .procedure_use,
             .generated_field_iterator,
             .generated_interpolation_step,
+            .coerced_use_adapter,
             => unreachable,
         };
         const worker = try self.ensureWorker(source, checked_type, null);
@@ -2345,6 +2366,7 @@ const Builder = struct {
             .nested_expr,
             .generated_field_iterator,
             .generated_interpolation_step,
+            .coerced_use_adapter,
             => boxyPlanInvariant("generated stored capture referenced a non-codec worker"),
         };
         if (capture_id == checked.CaptureId.generatedCheck(0)) {
@@ -2950,7 +2972,7 @@ const Builder = struct {
         if (!workerSourceEql(selected_source, source)) {
             return self.ensureWorker(selected_source, checked_type, root_request);
         }
-        const worker_type = if (source == .nested_expr)
+        const worker_type = if (source == .nested_expr or source == .coerced_use_adapter)
             self.workerCheckedTypeForSource(source, checked_type)
         else
             checked_type;
@@ -2960,7 +2982,7 @@ const Builder = struct {
             _ = try self.analyzeType(self.moduleForId(definition_type.module), definition_type.ty);
         }
         for (self.plan.workers.items) |worker| {
-            if (workerSourceEql(worker.source, source) and (source == .nested_expr or typeRefEql(worker.checked_type, worker_type))) {
+            if (workerSourceEql(worker.source, source) and (source == .nested_expr or source == .coerced_use_adapter or typeRefEql(worker.checked_type, worker_type))) {
                 if (root_request) |request| {
                     if (worker.root_request == null) {
                         self.plan.workers.items[@intFromEnum(worker.id)].root_request = request;
@@ -2986,7 +3008,7 @@ const Builder = struct {
             .rep = rep,
             .stored_fn = if (body) |resolved_body| switch (resolved_body) {
                 .checked_expr => |checked_body| checked_body.stored_fn,
-                .intrinsic_wrapper, .hosted_proc, .unimplemented => null,
+                .intrinsic_wrapper, .hosted_proc, .unimplemented, .coerced_use_adapter => null,
             } else null,
         });
 
@@ -3092,6 +3114,7 @@ const Builder = struct {
             .procedure_binding,
             .procedure_use,
             .nested_expr,
+            .coerced_use_adapter,
             => {},
         }
 
@@ -3355,6 +3378,7 @@ const Builder = struct {
             .nested_expr,
             .generated_field_iterator,
             .generated_interpolation_step,
+            .coerced_use_adapter,
             => boxyPlanInvariant("generated codec call was planned outside a generated worker"),
         };
         const contract_worker = if (codec.contract_worker) |root|
@@ -3369,6 +3393,7 @@ const Builder = struct {
             .nested_expr,
             .generated_field_iterator,
             .generated_interpolation_step,
+            .coerced_use_adapter,
             => boxyPlanInvariant("generated codec callback contract did not reference a generated worker"),
         };
         const expected_kind: static_dispatch.GeneratedCodecDerivationKind = switch (codec.kind) {
@@ -4589,6 +4614,7 @@ const Builder = struct {
             .nested_expr,
             .generated_field_iterator,
             .generated_interpolation_step,
+            .coerced_use_adapter,
             => boxyPlanInvariant("generated codec contract worker was not generated"),
         };
     }
@@ -6527,6 +6553,7 @@ const Builder = struct {
             .generated_codec,
             .generated_field_iterator,
             .generated_interpolation_step,
+            .coerced_use_adapter,
             => null,
             .procedure_template,
             .procedure_binding,
@@ -6534,7 +6561,7 @@ const Builder = struct {
             .nested_expr,
             => switch (self.rootWorkerBody(source)) {
                 .intrinsic_wrapper => |intrinsic| intrinsic.wrapper.intrinsic,
-                .checked_expr, .hosted_proc, .unimplemented => null,
+                .checked_expr, .hosted_proc, .unimplemented, .coerced_use_adapter => null,
             },
         };
     }
@@ -6606,6 +6633,8 @@ const Builder = struct {
         if (call_expr.data == .call) {
             return self.checkedEvidenceForProcedureUse(.{ .module = direct.call.module, .expr = call_expr.data.call.func });
         }
+        // A coerced-use adapter's call carries its lookup's own evidence.
+        if (self.isCoercedUseAdapterCall(direct)) return self.checkedEvidenceForProcedureUse(direct.call);
         const entries = if (call_expr.data == .dispatch_call)
             self.nestedEvidenceForDirectDispatch(view, call_expr.data.dispatch_call)
         else if (call_expr.data == .type_dispatch_call)
@@ -6890,9 +6919,12 @@ const Builder = struct {
                     if (self.root_module == null) continue;
                     switch (self.rootWorkerBody(worker.source)) {
                         .checked_expr => |body| break :blk .{ body.view, body.root_expr },
-                        .intrinsic_wrapper, .hosted_proc, .unimplemented => continue,
+                        .intrinsic_wrapper, .hosted_proc, .unimplemented, .coerced_use_adapter => continue,
                     }
                 },
+                // An adapter standing for a callable alias's right-hand side
+                // owns that alias's scope, exactly as the alias does.
+                .coerced_use_adapter => |adapter| .{ self.moduleForId(adapter.use.module), adapter.use.expr },
                 .generated_codec, .generated_field_iterator, .generated_interpolation_step => continue,
             };
             const templates = view.checked_procedure_templates;
@@ -6914,7 +6946,18 @@ const Builder = struct {
             changed = false;
             for (edges) |edge| {
                 if (edge.caller == edge.callee) continue;
-                if (self.plan.workers.items[@intFromEnum(edge.callee)].source != .nested_expr) continue;
+                switch (self.plan.workers.items[@intFromEnum(edge.callee)].source) {
+                    // A coerced-use adapter is created where its lookup is,
+                    // like a nested callable.
+                    .nested_expr, .coerced_use_adapter => {},
+                    .procedure_template,
+                    .procedure_binding,
+                    .procedure_use,
+                    .generated_codec,
+                    .generated_field_iterator,
+                    .generated_interpolation_step,
+                    => continue,
+                }
                 var keys = chains[@intFromEnum(edge.caller)].keyIterator();
                 while (keys.next()) |key| {
                     if (!(try chains[@intFromEnum(edge.callee)].getOrPut(key.*)).found_existing) changed = true;
@@ -7019,6 +7062,7 @@ const Builder = struct {
                 .procedure_use,
                 .nested_expr,
                 .generated_field_iterator,
+                .coerced_use_adapter,
                 => {},
             }
 
@@ -7140,6 +7184,11 @@ const Builder = struct {
                 }
                 break :blk null;
             },
+            .coerced_use_adapter => |adapter| switch (self.coercedUseAdapterScheme(adapter)) {
+                .none => null,
+                .alias_scope => |scope| .{ .view = scope.view, .vars = scope.view.checked_procedure_templates.scopeSchemeVars(scope.scope) },
+                .binding_root => |template| self.templateSchemeVars(template),
+            },
             .generated_codec,
             .generated_field_iterator,
             .generated_interpolation_step,
@@ -7168,11 +7217,30 @@ const Builder = struct {
         };
     }
 
+    /// Whether `direct` is a coerced-use adapter's body call: made by the
+    /// adapter keyed by the same lookup the call is keyed by.
+    fn isCoercedUseAdapterCall(self: *Builder, direct: DirectCallPlan) bool {
+        return switch (self.plan.workers.items[@intFromEnum(direct.caller)].source) {
+            .coerced_use_adapter => |adapter| exprRefEql(adapter.use, direct.call),
+            .procedure_template,
+            .procedure_binding,
+            .procedure_use,
+            .nested_expr,
+            .generated_codec,
+            .generated_field_iterator,
+            .generated_interpolation_step,
+            => false,
+        };
+    }
+
     /// The checked call-site substitution for a direct call's callee scheme,
     /// when the call names its callee through an instantiated lookup.
     fn directCallSchemeSubstitution(self: *Builder, direct: DirectCallPlan) ?SchemeCallSubstitution {
         const site_view = self.moduleForId(direct.call.module);
         const call_expr = site_view.checked_bodies.expr(direct.call.expr);
+        // A coerced-use adapter's call is keyed by its lookup, and is at that
+        // lookup's own instantiation of the callee.
+        if (self.isCoercedUseAdapterCall(direct)) return self.useSiteSchemeSubstitution(direct.worker, direct.call);
         if (call_expr.data != .call) return null;
         if (site_view.resolved_value_refs.lookupIdByCheckedExpr(call_expr.data.call.func)) |use_id| {
             // An annotated recursive use instantiates the in-flight annotation,
@@ -7200,6 +7268,25 @@ const Builder = struct {
     /// The checked substitution a callable-value or stored nested-function use
     /// applied to its worker's scheme, when checking instantiated one there.
     fn useSchemeSubstitution(self: *Builder, worker_id: WorkerPlanId, use: CheckedExprIdentity) ?SchemeCallSubstitution {
+        // A coerced-use adapter's own lookup instantiates the adapter's
+        // callee, not the adapter: that substitution is its body's call's
+        // (`directCallSchemeSubstitution`), and the adapter value takes none.
+        switch (self.plan.workers.items[@intFromEnum(worker_id)].source) {
+            .coerced_use_adapter => |adapter| if (exprRefEql(adapter.use, use)) return null,
+            .procedure_template,
+            .procedure_binding,
+            .procedure_use,
+            .nested_expr,
+            .generated_codec,
+            .generated_field_iterator,
+            .generated_interpolation_step,
+            => {},
+        }
+        return self.useSiteSchemeSubstitution(worker_id, use);
+    }
+
+    /// `use`'s checked site substitution, applied to `worker_id`'s scheme.
+    fn useSiteSchemeSubstitution(self: *Builder, worker_id: WorkerPlanId, use: CheckedExprIdentity) ?SchemeCallSubstitution {
         const site_view = self.moduleForId(use.module);
         const site_types = site_view.static_dispatch_plans.siteSubstitution(use.expr) orelse return null;
         if (site_types.len == 0) return null;
@@ -7254,6 +7341,11 @@ const Builder = struct {
                 const view = self.moduleForId(expr_ref.module);
                 const site_expr = self.nestedCallableSiteExprForExpr(view, expr_ref.expr) orelse expr_ref.expr;
                 break :blk self.nestedExprEvidenceParams(view, site_expr);
+            },
+            .coerced_use_adapter => |adapter| switch (self.coercedUseAdapterScheme(adapter)) {
+                .none => null,
+                .alias_scope => |scope| self.nestedExprEvidenceParams(scope.view, adapter.use.expr),
+                .binding_root => |template| self.templateEvidenceParams(template),
             },
             .generated_codec,
             .generated_field_iterator,
@@ -7464,6 +7556,7 @@ const Builder = struct {
                 .procedure_template,
                 .procedure_binding,
                 .procedure_use,
+                .coerced_use_adapter,
                 => {},
                 .generated_codec => |codec| switch (codec.kind) {
                     .parser_constructor,
@@ -7746,6 +7839,7 @@ const Builder = struct {
             .nested_expr,
             .generated_field_iterator,
             .generated_interpolation_step,
+            .coerced_use_adapter,
             => boxyPlanInvariant("non-codec callable had an unpersisted stored capture"),
         };
         const contract_expr = codec.contract_expr orelse
@@ -7778,6 +7872,7 @@ const Builder = struct {
             .checked_expr,
             .intrinsic_wrapper,
             .unimplemented,
+            .coerced_use_adapter,
             => false,
         };
     }
@@ -7811,6 +7906,9 @@ const Builder = struct {
                     .rep = try self.analyzeType(call_view, actual_expr.ty),
                 };
             },
+            // An adapter passes its own argument, which is at the adapter's
+            // type: the call's instantiated argument type.
+            .adapter_param,
             .generated_interpolation_iter,
             .generated_numeral,
             .generated_quote,
@@ -8077,7 +8175,7 @@ const Builder = struct {
         }
         return switch (self.rootWorkerBody(worker.source)) {
             .intrinsic_wrapper => |intrinsic| intrinsic.wrapper.intrinsic == .str_inspect,
-            .checked_expr, .hosted_proc, .unimplemented => false,
+            .checked_expr, .hosted_proc, .unimplemented, .coerced_use_adapter => false,
         };
     }
 
@@ -10626,6 +10724,7 @@ const Builder = struct {
                 .nested_expr,
                 .generated_field_iterator,
                 .generated_interpolation_step,
+                .coerced_use_adapter,
                 => null,
             };
             var call_source: ?u32 = null;
@@ -11160,6 +11259,7 @@ const Builder = struct {
             // A crash body references no types beyond the declared signature,
             // which the worker's own representation already covers.
             .unimplemented => {},
+            .coerced_use_adapter => |adapter| try self.analyzeCoercedUseAdapterBody(adapter),
         }
     }
 
@@ -11191,6 +11291,9 @@ const Builder = struct {
         /// The declaration behind this worker has a type annotation and no
         /// implementation, so reaching the worker crashes.
         unimplemented,
+        /// A direct call of the coerced function the lookup names, at the
+        /// lookup's instantiation (`CoercedUseAdapterSource`).
+        coerced_use_adapter: CoercedUseAdapterSource,
     };
 
     fn rootWorkerBody(self: *Builder, source: WorkerSource) WorkerBody {
@@ -11210,6 +11313,7 @@ const Builder = struct {
                 .hosted => |hosted| self.hostedProcedureBody(hosted),
             },
             .nested_expr => |expr_ref| self.nestedExprWorkerBody(expr_ref),
+            .coerced_use_adapter => |adapter| .{ .coerced_use_adapter = adapter },
             .generated_codec => boxyPlanInvariant("generated codec worker has no checked procedure body"),
             .generated_field_iterator => boxyPlanInvariant("generated FieldNames iterator worker has no checked procedure body"),
             .generated_interpolation_step => boxyPlanInvariant("generated interpolation step worker has no checked procedure body"),
@@ -11284,6 +11388,7 @@ const Builder = struct {
             .generated_codec,
             .generated_field_iterator,
             .generated_interpolation_step,
+            .coerced_use_adapter,
             => null,
         };
     }
@@ -11436,6 +11541,7 @@ const Builder = struct {
                 .intrinsic_wrapper,
                 .hosted_proc,
                 .unimplemented,
+                .coerced_use_adapter,
                 => boxyPlanInvariant("capturing stored function did not resolve to a checked function body"),
             }
         }
@@ -11994,8 +12100,11 @@ const Builder = struct {
             boxyPlanInvariant("non-lookup expression reached callable lookup worker planning");
         const ref_id = maybe_ref orelse return;
         try self.analyzeConstDefinitionTypes(view, ref_id);
-        const stored_fn = self.storedFnSourceForProcedureValueRef(view, ref_id);
-        const source = if (stored_fn) |stored|
+        const adapter = coercedUseAdapterForRef(view, ref_id);
+        const stored_fn = if (adapter == null) self.storedFnSourceForProcedureValueRef(view, ref_id) else null;
+        const source = if (adapter) |adapter_source|
+            adapter_source
+        else if (stored_fn) |stored|
             try self.workerSourceForStoredFnAtType(stored, typeRef(view, expr.ty))
         else
             self.workerSourceForProcedureValueRef(view, ref_id) orelse return;
@@ -13079,7 +13188,17 @@ const Builder = struct {
         view: ModuleView,
         ref_id: checked.ResolvedValueRefId,
     ) ?WorkerSource {
-        const record = view.resolved_value_refs.callableTarget(ref_id);
+        if (coercedUseAdapterForRef(view, ref_id)) |adapter| return adapter;
+        return self.workerSourceForProcedureRecord(view, view.resolved_value_refs.callableTarget(ref_id));
+    }
+
+    /// The worker a procedure reference's record names, as written: a
+    /// coerced-use adapter's own call of its target reads this.
+    fn workerSourceForProcedureRecord(
+        self: *Builder,
+        view: ModuleView,
+        record: checked.ResolvedValueRefRecord,
+    ) ?WorkerSource {
         return switch (record.ref) {
             .local_proc => |local| if (self.topLevelProcedureBindingForExpr(view, local.expr)) |binding|
                 .{ .procedure_binding = binding }
@@ -13262,6 +13381,139 @@ const Builder = struct {
         return null;
     }
 
+    /// The coerced-use adapter a callable reference resolves to, when the
+    /// lookup it finally names (through callable aliases) re-opened a coerced
+    /// function's result row. The checker records that per lookup
+    /// (its resolved value reference's `coerced_result_row`), so no type is
+    /// compared.
+    ///
+    /// Only a PROCEDURE's lookup gets an adapter: a coerced constant's use is
+    /// re-tagged where the constant is restored (`lower.restoreCoercedConstUseInto`).
+    fn coercedUseAdapterForRef(view: ModuleView, ref_id: checked.ResolvedValueRefId) ?WorkerSource {
+        const record = view.resolved_value_refs.callableTarget(ref_id);
+        if (record.coerced_result_row == .none) return null;
+        switch (record.ref) {
+            .local_proc,
+            .top_level_proc,
+            .promoted_top_level_proc,
+            .platform_required_proc,
+            .imported_proc,
+            .hosted_proc,
+            => {},
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .selected_hoisted_const,
+            .top_level_const,
+            .imported_const,
+            .platform_required_declaration,
+            .platform_required_checked_error,
+            .platform_required_const,
+            => return null,
+        }
+        return .{ .coerced_use_adapter = .{ .use = .{ .module = view.key, .expr = record.expr } } };
+    }
+
+    /// The coerced-use adapter a top-level callable binding stands for, when
+    /// its compile-time root is a lookup that re-opened a coerced function's
+    /// result row (`run = fwd`).
+    fn coercedUseAdapterForCallableRoot(view: ModuleView, root_expr: checked.CheckedExprId) ?WorkerSource {
+        const expr = view.checked_bodies.expr(root_expr);
+        const maybe_ref: ?checked.ResolvedValueRefId = if (expr.data == .lookup_local)
+            expr.data.lookup_local.resolved
+        else if (expr.data == .lookup_external)
+            expr.data.lookup_external
+        else if (expr.data == .lookup_required)
+            expr.data.lookup_required
+        else
+            null;
+        return coercedUseAdapterForRef(view, maybe_ref orelse return null);
+    }
+
+    /// The resolved value record of a coerced-use adapter's lookup.
+    fn coercedUseAdapterRecord(self: *Builder, adapter: CoercedUseAdapterSource) checked.ResolvedValueRefRecord {
+        const view = self.moduleForId(adapter.use.module);
+        const ref_id = view.resolved_value_refs.lookupIdByCheckedExpr(adapter.use.expr) orelse
+            boxyPlanInvariant("coerced-use adapter lookup had no resolved value reference");
+        const record = view.resolved_value_refs.records[@intFromEnum(ref_id)];
+        if (record.coerced_result_row == .none) {
+            boxyPlanInvariant("coerced-use adapter was keyed by a lookup that re-opened no row");
+        }
+        return record;
+    }
+
+    const CoercedUseAdapterScheme = union(enum) {
+        /// The lookup is not the whole right-hand side of a generalizing
+        /// callable binding: the adapter quantifies nothing of its own.
+        none,
+        /// The right-hand side of a local callable alias, whose generalized
+        /// scope the adapter owns.
+        alias_scope: struct { view: ModuleView, scope: *const checked.DispatchRefScope },
+        /// The compile-time root of a top-level callable binding, whose entry
+        /// wrapper template carries the binding's scheme.
+        binding_root: checked_names.ProcedureTemplateRef,
+    };
+
+    /// The scheme a coerced-use adapter is generalized at: the binding whose
+    /// whole right-hand side is its lookup, read from that binding's recorded
+    /// scope or compile-time root.
+    fn coercedUseAdapterScheme(self: *Builder, adapter: CoercedUseAdapterSource) CoercedUseAdapterScheme {
+        const view = self.moduleForId(adapter.use.module);
+        for (view.checked_procedure_templates.dispatch_scopes) |*scope| {
+            if (scope.checked_expr == adapter.use.expr) return .{ .alias_scope = .{ .view = view, .scope = scope } };
+        }
+        for (view.compile_time_roots.roots) |root| {
+            if (root.kind != .callable_binding or root.expr != adapter.use.expr) continue;
+            const wrapper = view.entry_wrappers.lookupByRoot(root.id) orelse
+                boxyPlanInvariant("top-level callable binding root had no entry wrapper");
+            return .{ .binding_root = wrapper.template };
+        }
+        return .none;
+    }
+
+    /// Plan a coerced-use adapter's body: one direct call of the function its
+    /// lookup names, at the lookup's own instantiation—the call's function
+    /// type is the lookup's type, and its operands are the adapter's own
+    /// arguments. The call's return boundary crosses the function's declared
+    /// row into the lookup's wider one (`lower.assignCoercedResultRow`).
+    fn analyzeCoercedUseAdapterBody(self: *Builder, adapter: CoercedUseAdapterSource) Allocator.Error!void {
+        const adapter_worker = self.active_worker orelse
+            boxyPlanInvariant("coerced-use adapter body was analyzed outside its worker");
+        const view = self.moduleForId(adapter.use.module);
+        const record = self.coercedUseAdapterRecord(adapter);
+        const target_source = self.workerSourceForProcedureRecord(view, record) orelse
+            boxyPlanInvariant("coerced-use adapter lookup did not name a procedure");
+        const use_expr = view.checked_bodies.expr(adapter.use.expr);
+        const use_type = typeRef(view, use_expr.ty);
+        const use_rep = try self.analyzeType(view, use_expr.ty);
+        try self.recordWorkerBodyType(adapter_worker, use_rep);
+        const function = checkedFunctionPayload(view, use_expr.ty);
+        const target_worker = try self.ensureWorker(
+            target_source,
+            self.workerCheckedTypeForSource(target_source, use_type),
+            null,
+        );
+        if (self.plan.directWorkerForCall(adapter.use, adapter_worker)) |existing| {
+            if (existing != target_worker) {
+                boxyPlanInvariant("coerced-use adapter call was bound to two workers");
+            }
+            return;
+        }
+        const operands_start: u32 = @intCast(self.plan.call_operands.items.len);
+        for (0..function.args.len) |index| {
+            try self.plan.call_operands.append(self.allocator, .{ .adapter_param = @intCast(index) });
+        }
+        try self.plan.direct_calls.append(self.allocator, .{
+            .call = adapter.use,
+            .caller = adapter_worker,
+            .worker = target_worker,
+            .source_fn_type = use_type,
+            .operands = .{ .start = operands_start, .len = @intCast(function.args.len) },
+        });
+        try self.analyzeDirectCallSchemeSubstitution(self.plan.direct_calls.items[self.plan.direct_calls.items.len - 1]);
+    }
+
     fn workerCheckedTypeForSource(self: *Builder, source: WorkerSource, requested_type: CheckedTypeIdentity) CheckedTypeIdentity {
         return switch (source) {
             .procedure_template => |template| self.checkedTypeForTemplate(template),
@@ -13276,6 +13528,8 @@ const Builder = struct {
                 .hosted => requested_type,
             },
             .nested_expr => |expr_ref| self.nestedExprDefinitionType(expr_ref),
+            // The adapter is defined at its lookup's own type.
+            .coerced_use_adapter => |adapter| self.nestedExprDefinitionType(adapter.use),
             .generated_codec => requested_type,
             .generated_field_iterator => requested_type,
             .generated_interpolation_step => requested_type,
@@ -13398,6 +13652,7 @@ const Builder = struct {
             .generated_codec,
             .generated_field_iterator,
             .generated_interpolation_step,
+            .coerced_use_adapter,
             => source,
         };
     }
@@ -13409,6 +13664,7 @@ const Builder = struct {
     ) ?WorkerSource {
         const template = self.callableEvalTemplate(view, template_id);
         const root = view.compile_time_roots.root(template.root);
+        if (coercedUseAdapterForCallableRoot(view, root.expr)) |adapter| return adapter;
         return switch (root.payload) {
             .fn_value => |fn_id| blk: {
                 const store = view.const_store orelse
@@ -13458,6 +13714,7 @@ fn workerSourceIsHosted(source: WorkerSource) bool {
         .generated_codec,
         .generated_field_iterator,
         .generated_interpolation_step,
+        .coerced_use_adapter,
         => false,
     };
 }
@@ -14950,7 +15207,7 @@ test "boxy planner walks callable eval finalized const function bodies" {
     const body = body_builder.callableEvalTemplateBody(root_view, @enumFromInt(fixtureTableIndex(0)));
     const stored_fn = switch (body) {
         .checked_expr => |checked_body| checked_body.stored_fn orelse return error.TestUnexpectedResult,
-        .intrinsic_wrapper, .hosted_proc, .unimplemented => return error.TestUnexpectedResult,
+        .intrinsic_wrapper, .hosted_proc, .unimplemented, .coerced_use_adapter => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(root_key, stored_fn.module);
     try std.testing.expectEqual(fn_id, stored_fn.fn_id);
