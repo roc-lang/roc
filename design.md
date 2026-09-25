@@ -7118,9 +7118,19 @@ Three consumers keep the rule exact:
   treats a repeated label as an invariant violation.
 
 Before `CheckedModule` is built, every tag and record row reachable from a
-settled value type is checked once; rows that repeat a label are normalized
-in ascending root order. Normalization needs no metadata on type variables and
-adds no work where no label repeats: detection rides on the unifier's gather,
+type the checked module can publish is checked once; rows that repeat a label
+are normalized in ascending root order. Those types are the expression,
+pattern, and definition types and the roots inference recorded elsewhere: call
+and dispatch constraint functions, scheme-use substitutions and instances, and
+codec requirements and derivations. A scheme-use substitution can hold a copy
+of an unnormalized row that no expression's type still reaches, such as a
+mutually recursive member's error row copied before its group settled.
+Publication and this walk enumerate the recorded roots through the same
+`published_type_roots` functions, so a root publication adds is normalized
+without a second list to keep in step.
+
+Normalization needs no metadata on type variables and adds no work where no
+label repeats: detection rides on the unifier's gather,
 the key writer's row sort, and the settled row walk, which already compare
 labels. A conflict is reported as a type mismatch between the two
 occurrences, each shown as a closed single-label row at the row's source, and
@@ -7129,8 +7139,14 @@ the row is poisoned once every diagnostic has snapshotted the settled graph.
 The accepted side is pinned by `src/check/test/row_union_normalization_test.zig`
 (a callback raising the tag its wrapper adds, a repeated tag reaching a method
 dispatcher, a method call typing like the direct call it names, and a tag
-repeated two extensions down) and by the chain-duplicate unifier tests and the
-`normalizeRowUnion` test in `src/check/Check.zig`, which cover records. The
+repeated two extensions down), by `src/check/test/issue_11621_test.zig`
+(recursive functions using `?`, directly, mutually, through a generalized
+helper, and through dispatch), and by the chain-duplicate unifier tests and the
+`normalizeRowUnion` test in `src/check/Check.zig`, which cover records.
+`src/compile/test/issue_11621_test.zig` pins the publication of a mutually
+recursive group's substitution rows, and
+`test/fx-open/issue_11621_recursive_try.roc` runs those programs on every
+backend. The
 rejected side is pinned by conflicting payloads and payload counts in the same
 file, `test/snapshots/issue/issue_11097_wrapped_try_overlap.md`, and the
 issue #11470 wrapper-overlap integration tests.
