@@ -1077,7 +1077,7 @@ pub const Program = struct {
                     self.shapes.loop_tuple_result = true;
                 }
             },
-            .local, .int_lit, .dec_lit, .str_lit, .bytes_lit, .inline_expects_enabled, .typed_boundary, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .@"unreachable", .unit, .frac_f32_lit, .frac_f64_lit, .uninitialized => {},
+            .local, .int_lit, .dec_lit, .str_lit, .bytes_lit, .inline_expects_enabled, .typed_boundary, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .literal_rejected, .expect, .@"unreachable", .unit, .frac_f32_lit, .frac_f64_lit, .uninitialized => {},
         }
     }
 

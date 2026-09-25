@@ -508,6 +508,10 @@ pub const Evaluator = struct {
                 const msg = try self.evalExpr(frame, expect_err.msg);
                 return self.raiseAbort(.expect_err, msg.str);
             },
+            .literal_rejected => |rejected| {
+                const msg = try self.evalExpr(frame, rejected.msg);
+                return self.crashAbort(msg.str);
+            },
         }
     }
 

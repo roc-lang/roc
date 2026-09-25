@@ -4,6 +4,8 @@
 //! diagnostic, and never as a compile-time crash of a definition that uses the
 //! literal. This holds whether the literal's target is concrete where it is
 //! written or only once a generalized local function is instantiated.
+//! Likewise a compile-time crash read by other constants is reported once, at
+//! the constant that crashed.
 //! repro for https://github.com/roc-lang/roc/issues/11670
 //! repro for https://github.com/roc-lang/roc/issues/11675
 
@@ -26,7 +28,7 @@ const rejecting_sql =
 ;
 
 test "issue 11670: a rejected from_quote literal in a top-level constant reports only the invalid string" {
-    try expectOnlyLiteralRejection(rejecting_sql ++
+    try expectOnlyReport(rejecting_sql ++
         \\sql : Sql
         \\sql = "bad"
         \\
@@ -36,7 +38,7 @@ test "issue 11670: a rejected from_quote literal in a top-level constant reports
 }
 
 test "issue 11670: a rejected from_numeral literal in a top-level constant reports only the invalid number" {
-    try expectOnlyLiteralRejection(
+    try expectOnlyReport(
         \\Small := [Small(U8)].{
         \\    from_numeral : Numeral -> Try(Small, [InvalidNumeral(Str)])
         \\    from_numeral = |_| Err(InvalidNumeral("rejected"))
@@ -53,7 +55,7 @@ test "issue 11670: a rejected from_numeral literal in a top-level constant repor
 }
 
 test "issue 11675: a rejected from_quote literal passed to a method of an unannotated parameter is reported" {
-    try expectOnlyLiteralRejection(rejecting_sql ++
+    try expectOnlyReport(rejecting_sql ++
         \\run : {} -> Str
         \\run = |_| {
         \\    by_id = |db| db.query("bad")
@@ -64,7 +66,7 @@ test "issue 11675: a rejected from_quote literal passed to a method of an unanno
 }
 
 test "issue 11675: a rejected from_quote literal in a generalized local of a top-level constant is reported" {
-    try expectOnlyLiteralRejection(rejecting_sql ++
+    try expectOnlyReport(rejecting_sql ++
         \\value = {
         \\    by_id = |db| db.query("bad")
         \\    by_id(Db.{ name: "pg" })
@@ -73,13 +75,58 @@ test "issue 11675: a rejected from_quote literal in a generalized local of a top
     , "Invalid String");
 }
 
+test "issue 11675: a rejected from_quote literal reached through a local helper function is reported" {
+    try expectOnlyReport(rejecting_sql ++
+        \\run : {} -> Str
+        \\run = |_| {
+        \\    make = |raw| Sql.{ text: raw }
+        \\    by_id = |db| db.query("bad")
+        \\    helper = |db| by_id(db)
+        \\    Str.concat(helper(Db.{ name: "pg" }), make("x").text)
+        \\}
+        \\
+    , "Invalid String");
+}
+
+test "issue 11675: a rejected from_quote literal at a generalized return type is reported at its instantiation" {
+    try expectOnlyReport(
+        \\Sql(a) := { text : Str }.{
+        \\    from_quote : Str -> Try(Sql(a), [BadQuotedBytes(Str)])
+        \\    from_quote = |_| Err(BadQuotedBytes("rejected"))
+        \\}
+        \\
+        \\get : {} -> Sql(a)
+        \\get = |_| "select 1"
+        \\
+        \\run : {} -> Str
+        \\run = |_| {
+        \\    s : Sql(I32)
+        \\    s = get({})
+        \\    s.text
+        \\}
+        \\
+    , "Invalid String");
+}
+
+test "a crashing constant read by two other constants is reported once" {
+    try expectOnlyReport(
+        \\x : Str
+        \\x = crash "boom"
+        \\
+        \\y = Str.concat(x, "!")
+        \\
+        \\z = x
+        \\
+    , "Compile Time Crash");
+}
+
 const RejectionTestError = compile_build.InitError || compile_build.BuildRootError ||
     std.Io.Dir.WriteFileError || std.Io.Dir.RealPathFileAllocError ||
     error{ TestExpectedEqual, TestUnexpectedResult };
 
 /// Build `source` as a module and require that its only error report is one
-/// literal-rejection report titled `rejection_title`.
-fn expectOnlyLiteralRejection(source: []const u8, rejection_title: []const u8) RejectionTestError!void {
+/// report titled `report_title`.
+fn expectOnlyReport(source: []const u8, report_title: []const u8) RejectionTestError!void {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -98,12 +145,12 @@ fn expectOnlyLiteralRejection(source: []const u8, rejection_title: []const u8) R
     const reports = try build.drainReports();
     defer build.freeDrainedReports(reports);
 
-    var rejections: usize = 0;
+    var matching: usize = 0;
     var other_errors: usize = 0;
     for (reports) |module_reports| {
         for (module_reports.reports) |report| {
-            if (std.mem.eql(u8, report.title, rejection_title)) {
-                rejections += 1;
+            if (std.mem.eql(u8, report.title, report_title)) {
+                matching += 1;
             } else if (report.severity != .warning) {
                 std.debug.print("unexpected report: {s}\n", .{report.title});
                 other_errors += 1;
@@ -111,5 +158,5 @@ fn expectOnlyLiteralRejection(source: []const u8, rejection_title: []const u8) R
         }
     }
     try std.testing.expectEqual(@as(usize, 0), other_errors);
-    try std.testing.expectEqual(@as(usize, 1), rejections);
+    try std.testing.expectEqual(@as(usize, 1), matching);
 }

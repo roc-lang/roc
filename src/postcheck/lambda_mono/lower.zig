@@ -788,6 +788,10 @@ const Lowerer = struct {
                 .msg = try self.lowerExpr(expect_err.msg),
                 .region = expect_err.region,
             } },
+            .literal_rejected => |rejected| .{ .literal_rejected = .{
+                .msg = try self.lowerExpr(rejected.msg),
+                .site = rejected.site,
+            } },
             .expect => |child| if (self.inline_expects == .omit)
                 .unit
             else

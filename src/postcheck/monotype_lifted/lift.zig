@@ -678,6 +678,7 @@ const Lifter = struct {
             => |child| try self.rewriteExpr(child),
             .return_ => |ret| try self.rewriteExpr(ret.value),
             .expect_err => |expect_err| try self.rewriteExpr(expect_err.msg),
+            .literal_rejected => |rejected| try self.rewriteExpr(rejected.msg),
             .comptime_branch_taken => |taken| try self.rewriteExpr(taken.body),
             .let_ => |let_| {
                 try self.rewriteExpr(let_.value);
@@ -1364,6 +1365,7 @@ const CaptureSet = struct {
             => |child| try self.collectExpr(child, bound),
             .return_ => |ret| try self.collectExpr(ret.value, bound),
             .expect_err => |expect_err| try self.collectExpr(expect_err.msg, bound),
+            .literal_rejected => |rejected| try self.collectExpr(rejected.msg, bound),
             .comptime_branch_taken => |taken| try self.collectExpr(taken.body, bound),
             .let_ => |let_| {
                 try self.collectExpr(let_.value, bound);
@@ -2209,6 +2211,7 @@ const CaptureGraphBuilder = struct {
             => |child| try self.collectExpr(child, node),
             .return_ => |ret| try self.collectExpr(ret.value, node),
             .expect_err => |expect_err| try self.collectExpr(expect_err.msg, node),
+            .literal_rejected => |rejected| try self.collectExpr(rejected.msg, node),
             .comptime_branch_taken => |taken| try self.collectExpr(taken.body, node),
             .let_ => |let_| {
                 try self.collectExpr(let_.value, node);

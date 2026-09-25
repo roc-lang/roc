@@ -2952,6 +2952,8 @@ fn evalDevProgramRoots(
                 job.host.failed_region,
                 job.host.failed_loc,
                 failedAtValueGuard(&lowered.lir_result, job.host.failed_stmt),
+                failedLiteralRejection(&lowered.lir_result, job.host.failed_stmt),
+                owners,
                 &lowered.lir_result.store,
                 &had_problem,
             ),
@@ -3165,10 +3167,17 @@ fn devCrashedRootPayload(
     failed_region: ?base.Region,
     failed_loc: ?base.SourceLoc,
     failed_at_value_guard: bool,
+    literal_rejection: ?lir.LIR.LiteralRejectionSite,
+    owners: *const ModuleOwners,
     lir_store: *const lir.LirStore,
     had_problem: *bool,
 ) FinalizeError!checked.CompileTimeRootPayload {
     if (failed_at_value_guard) return try failedRootPayload(module, root, message);
+    if (literal_rejection) |site| {
+        try reportLiteralRejection(allocator, owners, site, message);
+        had_problem.* = true;
+        return try failedRootPayload(module, root, message);
+    }
     if (request.kind == .compile_time_constant and problem_store == null) {
         return .{ .const_node = try appendCrashConst(module, message) };
     }
@@ -3290,6 +3299,61 @@ fn finishEvaluatedRootPayload(
 /// The failure origin a rejected literal publishes: the literal itself.
 fn literalRejectionOrigin(module: *const checked.CheckedModuleArtifact, root: checked.CompileTimeRoot) lir.LIR.ComptimeFailureOrigin {
     return .{ .loc = null, .region = module.checked_bodies.expr(root.expr).source_region };
+}
+
+/// The literal a root's failing crash rejected, when that crash is a literal
+/// conversion rejecting its literal.
+fn failedLiteralRejection(lir_result: *const lir.Program.Result, failed_stmt: ?lir.LIR.CFStmtId) ?lir.LIR.LiteralRejectionSite {
+    const stmt = failed_stmt orelse return null;
+    const data = lir_result.store.getCFStmt(stmt);
+    if (data != .crash) return null;
+    return data.crash.literal_rejection;
+}
+
+/// A root that failed because a literal conversion rejected its literal
+/// reports the literal's own diagnostic, in the literal's module and once per
+/// literal, in place of a compile-time crash of the root.
+fn reportLiteralRejection(
+    allocator: Allocator,
+    owners: *const ModuleOwners,
+    site: lir.LIR.LiteralRejectionSite,
+    message: []const u8,
+) FinalizeError!void {
+    if (!owners.report_sites) return;
+    var alias: ?u32 = owners.position(site.owner) orelse
+        finalizationInvariant("literal rejection named a checked module this finalization does not complete");
+    while (alias) |index| : (alias = owners.next_alias[index]) {
+        const owner = owners.modules[index];
+        const store = owner.problem_store orelse continue;
+        const region = owner.module.checked_bodies.expr(@enumFromInt(site.checked_expr)).source_region;
+        if (literalRejectionReported(store, site.kind, region)) continue;
+        const failure_site = comptimeFailureSiteFrom(owner.module, region, null, null, null);
+        const message_idx = try store.putExtraString(message);
+        switch (site.kind) {
+            .numeral => _ = try store.appendProblem(allocator, .{ .comptime_invalid_numeral = .{
+                .message = message_idx,
+                .region = failure_site.region,
+                .origin = try comptimeFailureOrigin(store, failure_site),
+            } }),
+            .quote => _ = try store.appendProblem(allocator, .{ .comptime_invalid_quote = .{
+                .message = message_idx,
+                .region = failure_site.region,
+                .origin = try comptimeFailureOrigin(store, failure_site),
+            } }),
+        }
+    }
+}
+
+/// Whether a store already reports this literal's rejection.
+fn literalRejectionReported(store: *const check.problem.Store, kind: lir.LIR.LiteralRejectionKind, region: base.Region) bool {
+    for (store.problems.items) |problem| {
+        const reported_region = switch (kind) {
+            .numeral => if (problem == .comptime_invalid_numeral) problem.comptime_invalid_numeral.region else continue,
+            .quote => if (problem == .comptime_invalid_quote) problem.comptime_invalid_quote.region else continue,
+        };
+        if (regionsEqual(reported_region, region)) return true;
+    }
+    return false;
 }
 
 /// Whether a root failed at a compile-time value guard: it read another
@@ -3500,16 +3564,16 @@ fn evalCompileTimeRoot(
             error.OutOfMemory => return error.OutOfMemory,
             error.RuntimeError => {
                 const message = interpreter.getRuntimeErrorMessage() orelse "compile-time evaluation failed";
-                return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, lir_result, message) } };
+                return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, owners, lir_result, message) } };
             },
             error.ComptimeExhaustiveness => return .{ .failed = .{ .message = "compile-time exhaustiveness failure", .payload = try reportCompileTimeExhaustiveness(allocator, problem_store, owners, root_owner, module, root, lir_result, interpreter, proc) } },
             error.DivisionByZero => {
                 const message = interpreter.getRuntimeErrorMessage() orelse "Division by zero";
-                return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, lir_result, message) } };
+                return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, owners, lir_result, message) } };
             },
             error.Crash => {
                 const message = interpreter.getCrashMessage() orelse "Roc crashed";
-                return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, lir_result, message) } };
+                return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, owners, lir_result, message) } };
             },
             error.ExpectErr => finalizationInvariant("compile-time root reached an expect_err statement"),
             error.UnsupportedHostedFunction => finalizationInvariant("compile-time root reached an unsupported hosted function"),
@@ -3727,10 +3791,15 @@ fn reportCompileTimeCrash(
     module: *checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     interpreter: *const Interpreter,
+    owners: *const ModuleOwners,
     lir_result: *const lir.Program.Result,
     message: []const u8,
 ) FinalizeError!checked.CompileTimeRootPayload {
     if (failedAtValueGuard(lir_result, interpreter.getFailedCrashStmt())) return try failedRootPayload(module, root, message);
+    if (failedLiteralRejection(lir_result, interpreter.getFailedCrashStmt())) |site| {
+        try reportLiteralRejection(allocator, owners, site, message);
+        return try failedRootPayload(module, root, message);
+    }
     const problem_store = maybe_problem_store orelse {
         finalizationInvariant("compile-time root crashed without a checking problem store");
     };

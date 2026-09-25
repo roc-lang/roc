@@ -1438,10 +1438,13 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .join => |s| try self.cloneJoin(s),
                 .jump => |s| try self.cloneJump(s),
                 .ret => |s| try self.rewriter.cloneRet(self, s.value),
-                .crash => |s| try self.store.addCFStmt(.{ .crash = .{ .msg = switch (s.msg) {
-                    .literal => |literal| .{ .literal = literal },
-                    .local => |local| .{ .local = try self.mapLocal(local) },
-                } } }),
+                .crash => |s| try self.store.addCFStmt(.{ .crash = .{
+                    .msg = switch (s.msg) {
+                        .literal => |literal| .{ .literal = literal },
+                        .local => |local| .{ .local = try self.mapLocal(local) },
+                    },
+                    .literal_rejection = s.literal_rejection,
+                } }),
             };
 
             try self.stmt_map.put(old_id, cloned);

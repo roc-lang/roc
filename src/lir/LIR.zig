@@ -252,6 +252,22 @@ pub const LoweringModuleId = enum(u32) {
     _,
 };
 
+/// The kind of literal whose checked conversion rejected it.
+pub const LiteralRejectionKind = enum(u8) {
+    numeral,
+    quote,
+};
+
+/// The source literal a literal-rejection crash reports: the checked
+/// expression, in its owning module, whose `from_numeral` or `from_quote`
+/// conversion returned `Err`.
+pub const LiteralRejectionSite = struct {
+    owner: LoweringModuleId,
+    /// The literal's `CheckedExprId` in `owner`.
+    checked_expr: u32,
+    kind: LiteralRejectionKind,
+};
+
 /// Source control-flow construct observed during compile-time finalization.
 pub const ComptimeSiteKind = enum {
     match,
@@ -1236,6 +1252,10 @@ pub const CFStmt = union(enum) {
     },
     crash: struct {
         msg: CrashMessage,
+        /// Set when this crash is a literal conversion rejecting its literal:
+        /// compile-time evaluation reports the literal's own diagnostic with
+        /// `msg`, the conversion's error message.
+        literal_rejection: ?LiteralRejectionSite = null,
     },
 };
 

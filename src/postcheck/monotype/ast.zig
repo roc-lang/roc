@@ -1158,6 +1158,16 @@ pub const ExprData = union(enum(u8)) {
     dbg: ExprId,
     expect_err: ExpectErrExpr,
     expect: ExprId,
+    literal_rejected: LiteralRejected,
+};
+
+/// A literal conversion rejected its literal: the conversion returned `Err`
+/// with `msg`. Compile-time evaluation reports the literal's own diagnostic;
+/// at runtime it crashes with `msg`. Never returns.
+pub const LiteralRejected = struct {
+    /// String-typed expression producing the conversion's error message.
+    msg: ExprId,
+    site: Common.LiteralRejectionSite,
 };
 
 /// The Err arm of a `?` operator used directly inside a top-level `expect`.

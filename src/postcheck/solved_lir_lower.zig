@@ -1988,6 +1988,7 @@ const Lowerer = struct {
                 },
                 .return_ => |ret| try self.add(.{ .expr = ret.value }),
                 .expect_err => |expect_err| try self.add(.{ .expr = expect_err.msg }),
+                .literal_rejected => |rejected| try self.add(.{ .expr = rejected.msg }),
                 .unit,
                 .@"unreachable",
                 .int_lit,
@@ -3060,6 +3061,7 @@ const Lowerer = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => null,
         };
@@ -4859,6 +4861,14 @@ const Lowerer = struct {
                 } });
                 break :blk try self.lowerExprInto(message, expect_err.msg, expect_err_stmt);
             },
+            .literal_rejected => |rejected| blk: {
+                const message = try self.addTemp(try self.lowerExprTy(rejected.msg));
+                const crash_stmt = try self.result.store.addCFStmt(.{ .crash = .{
+                    .msg = .{ .local = message },
+                    .literal_rejection = rejected.site,
+                } });
+                break :blk try self.lowerExprInto(message, rejected.msg, crash_stmt);
+            },
             .expect => |child| if (self.inline_expects == .omit)
                 try self.assignZst(target, next)
             else
@@ -4958,6 +4968,7 @@ const Lowerer = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => try self.lowerExprInto(target, expr_id, next),
         };

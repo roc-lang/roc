@@ -72,6 +72,13 @@ pub const CheckedModules = struct {
 /// the same `lowering_modules` table and the same ids into it.
 pub const LoweringModuleId = LIR.LoweringModuleId;
 
+/// The source literal a `literal_rejected` expression reports; see
+/// `LIR.LiteralRejectionSite`.
+pub const LiteralRejectionSite = LIR.LiteralRejectionSite;
+
+/// The kind of literal a `literal_rejected` expression reports.
+pub const LiteralRejectionKind = LIR.LiteralRejectionKind;
+
 /// Explicit roots requested from checked module data.
 pub const RootRequests = struct {
     requests: []const checked.RootRequest = &.{},

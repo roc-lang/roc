@@ -13850,6 +13850,11 @@ const DraftExpectErrExpr = struct {
     region: base.Region,
 };
 
+const DraftLiteralRejected = struct {
+    msg: DraftExprId,
+    site: Common.LiteralRejectionSite,
+};
+
 const DraftReturn = struct {
     value: DraftExprId,
     target: DraftTypeCell,
@@ -13965,6 +13970,7 @@ const DraftExprData = union(enum(u8)) {
     dbg: DraftExprId,
     expect_err: DraftExpectErrExpr,
     expect: DraftExprId,
+    literal_rejected: DraftLiteralRejected,
 };
 
 const DraftPat = struct {
@@ -17379,6 +17385,7 @@ const BodyDraftStore = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => .{ .ty = ty, .data = data },
         };
@@ -17483,6 +17490,7 @@ const BodyDraftStore = struct {
                 .comptime_exhaustiveness_failed,
                 .dbg,
                 .expect_err,
+                .literal_rejected,
                 .expect,
                 => Common.invariant("Monotype direct-call capture operand was not a local expression"),
             };
@@ -17679,6 +17687,10 @@ const BodyDraftStore = struct {
                 .region = expect_err.region,
             } },
             .expect => |expr| .{ .expect = ids.expr(expr) },
+            .literal_rejected => |rejected| .{ .literal_rejected = .{
+                .msg = ids.expr(rejected.msg),
+                .site = rejected.site,
+            } },
         };
     }
 
@@ -19857,6 +19869,7 @@ const BodyContext = struct {
             .comptime_branch_taken => |branch| self.exprImpossibilityProof(branch.body),
             .dbg => |child| self.exprImpossibilityProof(child),
             .expect_err => |expect_err| self.exprImpossibilityProof(expect_err.msg),
+            .literal_rejected => |rejected| self.exprImpossibilityProof(rejected.msg),
             .expect => |child| if (self.builder.inline_expects == .shared) null else self.exprImpossibilityProof(child),
         };
     }
@@ -21521,6 +21534,7 @@ const BodyContext = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => false,
         };
@@ -21632,6 +21646,7 @@ const BodyContext = struct {
             => |child| return try self.exprDependsOnFreeLocalInner(child, target, bound),
             .return_ => |ret| return try self.exprDependsOnFreeLocalInner(ret.value, target, bound),
             .expect_err => |expect_err| return try self.exprDependsOnFreeLocalInner(expect_err.msg, target, bound),
+            .literal_rejected => |rejected| return try self.exprDependsOnFreeLocalInner(rejected.msg, target, bound),
             .comptime_branch_taken => |taken| return try self.exprDependsOnFreeLocalInner(taken.body, target, bound),
             .let_ => |let_| {
                 if (try self.exprDependsOnFreeLocalInner(let_.value, target, bound)) return true;
@@ -24548,11 +24563,7 @@ const BodyContext = struct {
                     // A custom target converts through its checked conversion
                     // plan at this node; the target's own arguments may still
                     // resolve through later relations in this body.
-                    .named, .record, .tuple, .tag_union, .empty_tag_union, .empty_record, .list, .box, .func, .erased, .zst => return try self.lowerSpecializedLiteralConversion(
-                        self.literalConversionPlan(expr_id),
-                        expr_node,
-                        if (expr.data == .numeral) "invalid numeric literal" else "invalid string literal",
-                    ),
+                    .named, .record, .tuple, .tag_union, .empty_tag_union, .empty_record, .list, .box, .func, .erased, .zst => return try self.lowerSpecializedLiteralConversion(expr_id, expr_node),
                     .redirect => Common.invariant("literal type node was not a class root"),
                 }
                 const expr_ty = try self.resolvedTypeViewForNode(expr_node);
@@ -24891,11 +24902,11 @@ const BodyContext = struct {
             .runtime_error => return try self.runtimeCrashExpr(ty, "runtime error"),
             .numeral => |numeral| {
                 if (numeral.conversion_root) |root_id| return try self.lowerLiteralConversionAtNode(expr_id, root_id, try self.graph.importMono(ty));
-                return try self.lowerNumeralExpr(numeral, ty);
+                return try self.lowerNumeralExpr(expr_id, numeral, ty);
             },
             .str_from_quote => |quote| {
                 if (quote.conversion_root) |root_id| return try self.lowerLiteralConversionAtNode(expr_id, root_id, try self.graph.importMono(ty));
-                return try self.lowerQuoteExpr(quote, ty);
+                return try self.lowerQuoteExpr(expr_id, quote, ty);
             },
             .str_segment => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
             .bytes_literal => |str| blk: {
@@ -41843,14 +41854,23 @@ const BodyContext = struct {
     /// conversion call at this specialization's target, unwrapped to its value.
     fn lowerSpecializedLiteralConversion(
         self: *BodyContext,
-        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        expr_id: checked.CheckedExprId,
         value_node: NodeId,
-        rejected_message: []const u8,
     ) Allocator.Error!DraftExprId {
-        const try_ty = self.literalConversionTryType(maybe_plan);
+        const plan = self.literalConversionPlan(expr_id);
+        const try_ty = self.literalConversionTryType(plan);
         const try_node = try self.instNode(try_ty);
-        const try_value = try self.lowerDispatchExprAtType(try_ty, maybe_plan, DraftTypeCell.fromGraphNode(try_node));
-        return try self.unwrapLiteralConversionAtNode(try_value, try_node, value_node, rejected_message);
+        const try_value = try self.lowerDispatchExprAtType(try_ty, plan, DraftTypeCell.fromGraphNode(try_node));
+        return try self.unwrapLiteralConversionAtNode(try_value, try_node, value_node, self.literalRejectionSite(expr_id));
+    }
+
+    /// The source literal a rejected conversion of this literal reports.
+    fn literalRejectionSite(self: *BodyContext, expr_id: checked.CheckedExprId) Common.LiteralRejectionSite {
+        return .{
+            .owner = self.builder.loweringModuleId(self.view.key),
+            .checked_expr = @intFromEnum(expr_id),
+            .kind = if (self.view.bodies.expr(expr_id).data == .numeral) .numeral else .quote,
+        };
     }
 
     /// The checked conversion plan of a literal expression.
@@ -41911,20 +41931,24 @@ const BodyContext = struct {
             try self.declaredComptimeValueRead(self.view, root_id, try_cell, null)
         else
             try self.lowerDispatchExprAtType(try_ty, plan, try_cell);
-        return try self.unwrapLiteralConversionAtNode(try_value, try_node, request_node, switch (kind) {
-            .numeral => "invalid numeric literal",
-            .quote => "invalid string literal",
-        });
+        const site = self.literalRejectionSite(expr_id);
+        const expected_kind: Common.LiteralRejectionKind = switch (kind) {
+            .numeral => .numeral,
+            .quote => .quote,
+        };
+        if (site.kind != expected_kind) Common.invariant("literal conversion root kind differed from its literal");
+        return try self.unwrapLiteralConversionAtNode(try_value, try_node, request_node, site);
     }
 
-    /// The value of a literal conversion's `Try` result: its `Ok` payload, or
-    /// a crash when the conversion rejected the literal.
+    /// The value of a literal conversion's `Try` result: its `Ok` payload, or,
+    /// when the conversion rejected the literal, a literal rejection carrying
+    /// the conversion's error message.
     fn unwrapLiteralConversionAtNode(
         self: *BodyContext,
         try_value: DraftExprId,
         try_node: NodeId,
         value_node: NodeId,
-        rejected_message: []const u8,
+        site: Common.LiteralRejectionSite,
     ) Allocator.Error!DraftExprId {
         const payloads = try self.graphTryPayloads(try_node);
         try relateRequestComponent(self.graph, payloads.ok, value_node);
@@ -41932,23 +41956,44 @@ const BodyContext = struct {
         const err_name = try self.nameStoreMut().internTagLabel("Err");
         const try_cell = DraftTypeCell.fromGraphNode(try_node);
         const value_cell = DraftTypeCell.fromGraphNode(value_node);
+        const err_cell = DraftTypeCell.fromGraphNode(payloads.err);
+
+        var branches = std.ArrayList(DraftBranch).empty;
+        defer branches.deinit(self.allocator);
 
         const ok_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null);
-        const ok_pat = try self.addPatWithTypeCell(try_cell, .{ .tag = .{
-            .name = ok_name,
-            .payloads = try self.addPatSpan(&.{try self.addPatWithTypeCell(value_cell, .{ .bind = ok_local })}),
-        } });
-        const err_pat = try self.addPatWithTypeCell(try_cell, .{ .tag = .{
-            .name = err_name,
-            .payloads = try self.addPatSpan(&.{try self.addPatWithTypeCell(DraftTypeCell.fromGraphNode(payloads.err), .wildcard)}),
-        } });
-        const branches = [_]DraftBranch{
-            .{ .pat = ok_pat, .body = try self.addExprWithTypeCell(value_cell, .{ .local = ok_local }) },
-            .{ .pat = err_pat, .body = try self.addExprWithTypeCell(value_cell, .{ .crash = try self.addStringLiteral(rejected_message) }) },
-        };
+        try branches.append(self.allocator, .{
+            .pat = try self.addPatWithTypeCell(try_cell, .{ .tag = .{
+                .name = ok_name,
+                .payloads = try self.addPatSpan(&.{try self.addPatWithTypeCell(value_cell, .{ .bind = ok_local })}),
+            } }),
+            .body = try self.addExprWithTypeCell(value_cell, .{ .local = ok_local }),
+        });
+
+        // Every tag of a literal conversion's error row carries its message.
+        const error_tags = (try self.graph.tagRowNodes(payloads.err)).tags;
+        for (error_tags) |error_tag| {
+            if (error_tag.payloads.len != 1) Common.invariant("literal conversion error tag did not carry one message");
+            const message_cell = DraftTypeCell.fromGraphNode(error_tag.payloads[0]);
+            const message_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), message_cell, null);
+            const error_pat = try self.addPatWithTypeCell(err_cell, .{ .tag = .{
+                .name = error_tag.name,
+                .payloads = try self.addPatSpan(&.{try self.addPatWithTypeCell(message_cell, .{ .bind = message_local })}),
+            } });
+            try branches.append(self.allocator, .{
+                .pat = try self.addPatWithTypeCell(try_cell, .{ .tag = .{
+                    .name = err_name,
+                    .payloads = try self.addPatSpan(&.{error_pat}),
+                } }),
+                .body = try self.addExprWithTypeCell(value_cell, .{ .literal_rejected = .{
+                    .msg = try self.addExprWithTypeCell(message_cell, .{ .local = message_local }),
+                    .site = site,
+                } }),
+            });
+        }
         return try self.addExprWithTypeCell(value_cell, .{ .match_ = .{
             .scrutinee = try_value,
-            .branches = try self.addBranchSpan(&branches),
+            .branches = try self.addBranchSpan(branches.items),
         } });
     }
 
@@ -41958,12 +42003,13 @@ const BodyContext = struct {
     /// real user-defined `from_numeral` dispatch call instead.
     fn lowerNumeralExpr(
         self: *BodyContext,
+        expr_id: checked.CheckedExprId,
         numeral: checked.CheckedNumeralData,
         target_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const primitive = switch (self.shapeContent(target_ty)) {
             .primitive => |p| p,
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return try self.lowerSpecializedLiteralConversion(numeral.plan, try self.graph.importMono(target_ty), "invalid numeric literal"),
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return try self.lowerSpecializedLiteralConversion(expr_id, try self.graph.importMono(target_ty)),
         };
         const data = (try self.numeralBits(numeral.literal, primitive)) orelse blk: {
             // A value that does not fit its concrete integer or Dec target (a
@@ -41982,6 +42028,7 @@ const BodyContext = struct {
     /// every custom target follows the explicit from_quote dispatch plan.
     fn lowerQuoteExpr(
         self: *BodyContext,
+        expr_id: checked.CheckedExprId,
         quote: checked.CheckedQuoteData,
         target_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
@@ -41998,7 +42045,7 @@ const BodyContext = struct {
                 }
                 return try self.lowerQuoteValue(quote.literal, target_ty);
             },
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return try self.lowerSpecializedLiteralConversion(quote.plan, try self.graph.importMono(target_ty), "invalid string literal"),
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return try self.lowerSpecializedLiteralConversion(expr_id, try self.graph.importMono(target_ty)),
         }
     }
 

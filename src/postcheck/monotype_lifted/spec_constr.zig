@@ -1541,6 +1541,7 @@ const Pass = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => blk: {
                 if (std.debug.runtime_safety) {
@@ -1914,6 +1915,7 @@ const Pass = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => {},
         }
@@ -2215,6 +2217,7 @@ const Pass = struct {
             => |child| try self.markArgUsesInExpr(fn_id, child, changed),
             .return_ => |ret| try self.markArgUsesInExpr(fn_id, ret.value, changed),
             .expect_err => |expect_err| try self.markArgUsesInExpr(fn_id, expect_err.msg, changed),
+            .literal_rejected => |rejected| try self.markArgUsesInExpr(fn_id, rejected.msg, changed),
             .comptime_branch_taken => |taken| try self.markArgUsesInExpr(fn_id, taken.body, changed),
             .let_ => |let_| {
                 try self.markArgUsesInExpr(fn_id, let_.value, changed);
@@ -2414,6 +2417,7 @@ const Pass = struct {
             => |child| try self.collectCallPatternsInExpr(owner, child),
             .return_ => |ret| try self.collectCallPatternsInExpr(owner, ret.value),
             .expect_err => |expect_err| try self.collectCallPatternsInExpr(owner, expect_err.msg),
+            .literal_rejected => |rejected| try self.collectCallPatternsInExpr(owner, rejected.msg),
             .comptime_branch_taken => |taken| try self.collectCallPatternsInExpr(owner, taken.body),
             .let_ => |let_| {
                 try self.collectCallPatternsInExpr(owner, let_.value);
@@ -3362,6 +3366,7 @@ const Pass = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => .disproven,
         };
@@ -3904,6 +3909,7 @@ const Pass = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => return try self.cloneExprFresh(expr_id, renames),
         }
@@ -4083,6 +4089,7 @@ const Pass = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => return null,
         };
@@ -4380,6 +4387,7 @@ const Pass = struct {
             => |child| try self.rewriteCallsInExpr(child, done),
             .return_ => |ret| try self.rewriteCallsInExpr(ret.value, done),
             .expect_err => |expect_err| try self.rewriteCallsInExpr(expect_err.msg, done),
+            .literal_rejected => |rejected| try self.rewriteCallsInExpr(rejected.msg, done),
             .comptime_branch_taken => |taken| try self.rewriteCallsInExpr(taken.body, done),
             .let_ => |let_| {
                 try self.rewriteCallsInExpr(let_.value, done);
@@ -4787,6 +4795,7 @@ const Pass = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => null,
         };
@@ -5512,6 +5521,7 @@ const Cloner = struct {
             => |child| try self.collectCallPatternsInExpr(owner, child),
             .return_ => |ret| try self.collectCallPatternsInExpr(owner, ret.value),
             .expect_err => |expect_err| try self.collectCallPatternsInExpr(owner, expect_err.msg),
+            .literal_rejected => |rejected| try self.collectCallPatternsInExpr(owner, rejected.msg),
             .comptime_branch_taken => |taken| try self.collectCallPatternsInExpr(owner, taken.body),
             .let_ => |let_| try self.collectCallPatternsInLet(owner, let_.bind, let_.value, let_.rest, false),
             .lambda,
@@ -6232,6 +6242,7 @@ const Cloner = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => return .{ .expr = try self.cloneExprPlain(expr_id) },
         }
@@ -6338,6 +6349,7 @@ const Cloner = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => try self.cloneExprValueInto(expr_id, bindings),
         };
@@ -6441,6 +6453,7 @@ const Cloner = struct {
             .crash,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => false,
         };
@@ -6573,6 +6586,7 @@ const Cloner = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => false,
         };
@@ -6692,6 +6706,7 @@ const Cloner = struct {
                 .comptime_branch_taken,
                 .dbg,
                 .expect_err,
+                .literal_rejected,
                 .expect,
                 => {},
             }
@@ -6860,6 +6875,10 @@ const Cloner = struct {
                 .region = expect_err.region,
             } },
             .expect => |child| .{ .expect = try self.cloneExpr(child) },
+            .literal_rejected => |rejected| .{ .literal_rejected = .{
+                .msg = try self.cloneExpr(rejected.msg),
+                .site = rejected.site,
+            } },
         };
         if (plainExprCanReuse(expr.data) and
             std.meta.eql(expr.data, data) and
@@ -6965,6 +6984,7 @@ const Cloner = struct {
             .comptime_branch_taken,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => true,
             .@"unreachable",
@@ -7561,6 +7581,7 @@ const Cloner = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             .typed_boundary,
             => unreachable,
@@ -7708,6 +7729,7 @@ const Cloner = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             .typed_boundary,
             => unreachable,
@@ -7957,6 +7979,7 @@ const Cloner = struct {
                     .comptime_exhaustiveness_failed,
                     .dbg,
                     .expect_err,
+                    .literal_rejected,
                     .expect,
                     => {},
                 }
@@ -8041,6 +8064,7 @@ const Cloner = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => {
                 const branch = try self.cloneExprValue(branch_body);
@@ -8126,6 +8150,7 @@ const Cloner = struct {
             .comptime_branch_taken,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => null,
         };
@@ -9843,6 +9868,7 @@ const Cloner = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => null,
         };
@@ -10100,6 +10126,7 @@ const Cloner = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => return null,
         };
@@ -10227,6 +10254,7 @@ const Cloner = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             .typed_boundary,
             => unreachable,
@@ -12332,6 +12360,7 @@ const BodyLocalScope = struct {
             => |child| try self.walkExpr(child),
             .return_ => |ret| try self.walkExpr(ret.value),
             .expect_err => |expect_err| try self.walkExpr(expect_err.msg),
+            .literal_rejected => |rejected| try self.walkExpr(rejected.msg),
             .comptime_branch_taken => |taken| try self.walkExpr(taken.body),
             .let_ => |let_| {
                 try self.walkExpr(let_.value);
@@ -12570,6 +12599,7 @@ const BodySizeCounter = struct {
             => |child| self.countExpr(child),
             .return_ => |ret| self.countExpr(ret.value),
             .expect_err => |expect_err| self.countExpr(expect_err.msg),
+            .literal_rejected => |rejected| self.countExpr(rejected.msg),
             .comptime_branch_taken => |taken| self.countExpr(taken.body),
             .let_ => |let_| {
                 self.countExpr(let_.value);
@@ -12769,6 +12799,7 @@ fn collectAllFnUsesInExpr(
         => |child| collectAllFnUsesInExpr(program, child, owner, uses),
         .return_ => |ret| collectAllFnUsesInExpr(program, ret.value, owner, uses),
         .expect_err => |expect_err| collectAllFnUsesInExpr(program, expect_err.msg, owner, uses),
+        .literal_rejected => |rejected| collectAllFnUsesInExpr(program, rejected.msg, owner, uses),
         .comptime_branch_taken => |taken| collectAllFnUsesInExpr(program, taken.body, owner, uses),
         .let_ => |let_| {
             collectAllFnUsesInExpr(program, let_.value, owner, uses);
@@ -13012,6 +13043,7 @@ fn tailSelfCallSummary(program: *const Ast.Program, expr_id: Ast.ExprId, target:
         .comptime_exhaustiveness_failed,
         .dbg,
         .expect_err,
+        .literal_rejected,
         .expect,
         => if (exprCallsFn(program, expr_id, target)) .{ .valid = false } else .{},
     };
@@ -13049,6 +13081,7 @@ fn exprContainsIteratorProducer(program: *const Ast.Program, expr_id: Ast.ExprId
         .nominal, .dbg, .expect => |child| exprContainsIteratorProducer(program, child),
         .return_ => |ret| exprContainsIteratorProducer(program, ret.value),
         .expect_err => |expect_err| exprContainsIteratorProducer(program, expect_err.msg),
+        .literal_rejected => |rejected| exprContainsIteratorProducer(program, rejected.msg),
         .comptime_branch_taken => |taken| exprContainsIteratorProducer(program, taken.body),
         .let_ => |let_| exprContainsIteratorProducer(program, let_.value) or
             exprContainsIteratorProducer(program, let_.rest),
@@ -13165,6 +13198,7 @@ fn exprCallsFn(program: *const Ast.Program, expr_id: Ast.ExprId, fn_id: Ast.FnId
         .nominal, .dbg, .expect => |child| exprCallsFn(program, child, fn_id),
         .return_ => |ret| exprCallsFn(program, ret.value, fn_id),
         .expect_err => |expect_err| exprCallsFn(program, expect_err.msg, fn_id),
+        .literal_rejected => |rejected| exprCallsFn(program, rejected.msg, fn_id),
         .comptime_branch_taken => |taken| exprCallsFn(program, taken.body, fn_id),
         .let_ => |let_| exprCallsFn(program, let_.value, fn_id) or exprCallsFn(program, let_.rest, fn_id),
         .lambda, .def_ref, .fn_def => Common.invariant("pre-lift function expression reached recursive-call scan"),
@@ -13300,6 +13334,7 @@ fn exprContainsReturn(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
         .expect,
         => |child| exprContainsReturn(program, child),
         .expect_err => |expect_err| exprContainsReturn(program, expect_err.msg),
+        .literal_rejected => |rejected| exprContainsReturn(program, rejected.msg),
         .comptime_branch_taken => |taken| exprContainsReturn(program, taken.body),
         .let_ => |let_| exprContainsReturn(program, let_.value) or exprContainsReturn(program, let_.rest),
         .call_value => |call| exprContainsReturn(program, call.callee) or exprSpanContainsReturn(program, call.args),
@@ -13443,6 +13478,7 @@ fn exprReferencesLocal(program: *const Ast.Program, expr_id: Ast.ExprId, local: 
         .expect,
         => |child| exprReferencesLocal(program, child, local),
         .expect_err => |expect_err| exprReferencesLocal(program, expect_err.msg, local),
+        .literal_rejected => |rejected| exprReferencesLocal(program, rejected.msg, local),
         .comptime_branch_taken => |taken| exprReferencesLocal(program, taken.body, local),
         .let_ => |let_| exprReferencesLocal(program, let_.value, local) or exprReferencesLocal(program, let_.rest, local),
         .call_value => |call| exprReferencesLocal(program, call.callee, local) or exprSpanReferencesLocal(program, call.args, local),
@@ -13596,6 +13632,7 @@ fn exprContainsFreeLoopControl(program: *const Ast.Program, expr_id: Ast.ExprId,
         .expect,
         => |child| exprContainsFreeLoopControl(program, child, loop_depth),
         .expect_err => |expect_err| exprContainsFreeLoopControl(program, expect_err.msg, loop_depth),
+        .literal_rejected => |rejected| exprContainsFreeLoopControl(program, rejected.msg, loop_depth),
         .comptime_branch_taken => |taken| exprContainsFreeLoopControl(program, taken.body, loop_depth),
         .let_ => |let_| exprContainsFreeLoopControl(program, let_.value, loop_depth) or exprContainsFreeLoopControl(program, let_.rest, loop_depth),
         .call_value => |call| exprContainsFreeLoopControl(program, call.callee, loop_depth) or exprSpanContainsFreeLoopControl(program, call.args, loop_depth),
@@ -13745,6 +13782,7 @@ fn collectTupleLocalDemandInExpr(
         => |child| collectTupleLocalDemandInExpr(program, local, child, used),
         .return_ => |ret| collectTupleLocalDemandInExpr(program, local, ret.value, used),
         .expect_err => |expect_err| collectTupleLocalDemandInExpr(program, local, expect_err.msg, used),
+        .literal_rejected => |rejected| collectTupleLocalDemandInExpr(program, local, rejected.msg, used),
         .comptime_branch_taken => |taken| collectTupleLocalDemandInExpr(program, local, taken.body, used),
         .let_ => |let_| collectTupleLocalDemandInExpr(program, local, let_.value, used) and
             collectTupleLocalDemandInExpr(program, local, let_.rest, used),
@@ -13926,6 +13964,7 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
         => |child| localUseCountInExpr(program, local, child),
         .return_ => |ret| localUseCountInExpr(program, local, ret.value),
         .expect_err => |expect_err| localUseCountInExpr(program, local, expect_err.msg),
+        .literal_rejected => |rejected| localUseCountInExpr(program, local, rejected.msg),
         .comptime_branch_taken => |taken| localUseCountInExpr(program, local, taken.body),
         .let_ => |let_| localUseCountInExpr(program, local, let_.value) + localUseCountInExpr(program, local, let_.rest),
         .lambda,

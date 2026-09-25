@@ -998,7 +998,9 @@ its explicit function relocations retain exactly the callable procedures that
 the completed values contain, and those procedures join the ordinary runtime
 roots supplied to ARC. Successful evaluation evidence removes its value guards
 after guard construction; failed values keep their ordinary runtime failure
-paths. Attaching completed data after ARC and then repeating reachability is
+paths. A root that stops at another root's value guard is a propagated failure:
+it records the failure it read and is not reported again, because the failing
+root already reported it. Attaching completed data after ARC and then repeating reachability is
 forbidden, because it would make ARC run over a different procedure graph from
 the one emitted to the backend.
 
@@ -3674,6 +3676,22 @@ expression is evaluated exactly once by the compile-time finalizer. Nested uses
 of other already-sorted compile-time constants may still restore their stored
 `ConstStore` values.
 
+A block-local function binding whose body refers to nothing bound inside its
+enclosing function—no outer local, no outer rigid type variable, no local type
+declaration—is a promoted local procedure. Checking decides promotion while it
+already walks the body: each `s_decl` of a lambda or closure is a candidate,
+every local lookup, rigid-variable use, and local type-declaration reference
+records the candidate depths it crosses, and the greatest fixpoint over
+references between candidates removes every candidate that reaches a
+contextual one. The capture list is not that proof: canonicalization omits
+local functions and globally resolvable patterns from captures. A promoted
+local procedure outputs a `promoted_proc` checked statement in place of its
+binding, its own procedure template (`ProcBaseKind.promoted_local`), and its
+pattern's scheme; references resolve to `promoted_top_level_proc`, so it
+specializes exactly like a top-level procedure. Hoisting treats a lookup of it
+as known, so a top-level-equivalent call through a local helper is selected
+as a hoisted root. Lexically context-dependent local procedures are unchanged.
+
 Hoisted roots use the same compile-time constant rules as ordinary top-level
 constants. A failure produced while evaluating a hoisted root is a checking-time
 failure reported at the hoisted expression's original source region. If Roc ever
@@ -4109,12 +4127,25 @@ Every live literal-origin record leaves checking with one explicit resolution:
   materializes the value directly.
 - `custom_dispatch` means checking selected and typechecked one concrete custom
   conversion callable. `CheckedModule` construction retains its
-  dispatcher and callable types, and compile-time evaluation evaluates that
-  conversion when a checked constant is required.
+  dispatcher and callable types and gives the literal exactly one
+  `numeral_conversion`/`quote_conversion` root, linked from the checked
+  literal data (`conversion_root`). That root is the single source of the
+  literal's value: its body lowers through ordinary dispatch-call lowering,
+  and every use restores the root's stored payload, or, while its module is
+  still finalizing, reads the root's declared compile-time value. No use
+  re-runs the conversion. A root whose conversion returns `Err` records the
+  literal-specific rejection as its failure.
 - `specialization_dispatch` means the target remains an identity variable in a
   generalized callable. The checked plan retains this erased requirement; each
-  Monotype specialization either materializes a builtin directly or consumes
-  the callable evidence supplied for that specialization.
+  Monotype specialization reads the literal's own type node and either
+  materializes a builtin directly or lowers the conversion call at that node
+  with the callable evidence supplied for that specialization. The `Err` arm
+  of that conversion lowers to `literal_rejected`, a non-returning terminal
+  carrying the rejection message and the literal's `LiteralRejectionSite`
+  (owner module, checked expression, numeral or quote). LIR carries the site on
+  the `crash` statement, so a compile-time evaluation that reaches it reports
+  the literal-specific diagnostic in the literal's own module, once per
+  literal, instead of a generic crash.
 - `checked_error` means checking rejected the conversion while retaining the
   literal node for diagnostic recovery. `CheckedModule` stores no
   callable, runtime dispatch plan, or compile-time root for it; the containing
@@ -8469,12 +8500,11 @@ materialized and contributes no edge. Foreign constructions
 module's defaults are that module's own compile-time roots.
 When the default literal uses a custom `from_numeral` or `from_quote`, the
 conversion gets an ORDINARY `numeral_conversion`/`quote_conversion` root
-in the declaring module: finalization still evaluates the raw conversion
-once and reports `Err` with the literal-specific diagnostic; sites restore
-the archived `Ok` payload when it is finalized and lower the real dispatch
-call inside their own comptime evaluation while the declaring module's
-roots are still mid-finalization (the same split every custom literal
-gets).
+in the declaring module: finalization evaluates the conversion once and
+reports `Err` with the literal-specific diagnostic; sites restore the
+archived `Ok` payload when it is finalized and read the root's declared
+compile-time value while the declaring module's roots are still
+mid-finalization (the same single-owner rule every custom literal gets).
 CROSS-MODULE materialization is COMPLETE through the same route: the
 default identity's declaring-module content hash resolves the declaring
 view (`moduleForIdentityHash`), and the foreign checked expression lowers
