@@ -31,6 +31,7 @@ test "instantiate - generalized flex var creates new flex var" {
     const original = try env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, .generalized);
 
     var instantiator = Instantiator{
+        .opening_site = .use,
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
@@ -56,6 +57,7 @@ test "instantiate - non-generalized flex var DOES NOT create new flex var" {
     const original = try env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, .outermost);
 
     var instantiator = Instantiator{
+        .opening_site = .use,
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
@@ -77,6 +79,7 @@ test "instantiate - generalized rigid var with fresh_flex creates flex var" {
     const original = try env.types.freshFromContentWithRank(try env.mkRigidVar("a"), .generalized);
 
     var instantiator = Instantiator{
+        .opening_site = .use,
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
@@ -102,6 +105,7 @@ test "instantiate - generalized rigid var with fresh_rigid creates new rigid var
     const original = try env.types.freshFromContentWithRank(try env.mkRigidVar("a"), .generalized);
 
     var instantiator = Instantiator{
+        .opening_site = .use,
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
@@ -130,6 +134,7 @@ test "instantiate - preserves generalized rigid var structure in function" {
     const original = try env.types.freshFromContentWithRank(func_content, .generalized);
 
     var instantiator = Instantiator{
+        .opening_site = .use,
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
@@ -175,6 +180,7 @@ test "expected shape preserves sharing without copying dispatch-only graphs" {
         const root = try env.types.freshFromContentWithRank(try env.mkFuncPure(&.{source}, source), .generalized);
 
         var instantiator = Instantiator{
+            .opening_site = .use,
             .store = &env.types,
             .idents = &env.idents,
             .var_map = &env.var_map,
@@ -206,6 +212,7 @@ test "instantiate - func with some generalized and some not preserve non-general
     const var_fn = try env.types.freshFromContentWithRank(try env.mkFuncPure(&[_]Var{ var_a, var_b }, var_a), .generalized);
 
     var instantiator = Instantiator{
+        .opening_site = .use,
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
@@ -255,6 +262,7 @@ test "instantiate type scheme copies a monomorphic structural spine" {
     );
 
     var instantiator = Instantiator{
+        .opening_site = .use,
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
@@ -285,6 +293,7 @@ test "instantiate - tuple with multiple vars" {
     const original = try env.types.freshFromContentWithRank(tuple_content, .generalized);
 
     var instantiator = Instantiator{
+        .opening_site = .use,
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
@@ -321,6 +330,7 @@ test "instantiate - record with multiple fields" {
     const original = try env.types.freshFromContentWithRank(record_info.content, .generalized);
 
     var instantiator = Instantiator{
+        .opening_site = .use,
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
@@ -360,6 +370,7 @@ test "instantiate - tag union preserves structure" {
     const original = try env.types.freshFromContentWithRank(tag_union_info.content, .generalized);
 
     var instantiator = Instantiator{
+        .opening_site = .use,
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
@@ -417,6 +428,7 @@ test "instantiate - alias preserves structure" {
     const original = try env.types.freshFromContentWithRank(alias_content, .generalized);
 
     var instantiator = Instantiator{
+        .opening_site = .use,
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
@@ -464,6 +476,7 @@ test "instantiate - nominal type application instantiates its args" {
         const box_var = try env.types.freshFromContentWithRank(box_content, .generalized);
 
         var instantiator = Instantiator{
+            .opening_site = .use,
             .store = &env.types,
             .idents = &env.idents,
             .var_map = &env.var_map,
@@ -496,6 +509,7 @@ test "instantiate - multiple instantiations are independent" {
     defer var_map1.deinit();
 
     var instantiator1 = Instantiator{
+        .opening_site = .use,
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &var_map1,
@@ -510,6 +524,7 @@ test "instantiate - multiple instantiations are independent" {
     defer var_map2.deinit();
 
     var instantiator2 = Instantiator{
+        .opening_site = .use,
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &var_map2,
@@ -647,6 +662,7 @@ test "instantiate - annotation tag closure authority belongs to the definition" 
     try env.types.markAnnotationTagExt(original);
 
     var instantiator = Instantiator{
+        .opening_site = .use,
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
@@ -751,21 +767,47 @@ test "instantiate - a copy of an opened alias stays opened and opens its enclosi
     try std.testing.expectEqual(types_mod.AliasBacking.opened_at_use, aliasBackingOf(&env, inner_copy));
 }
 
-test "instantiate - an alias reusing a copy that opened is opened too" {
-    // Two aliases share one backing: the second visit reuses the first's copy
-    // through the memo, and still learns that the copy opened a marker.
+test "instantiate - an alias reusing an opened alias copy is opened too" {
+    // `Errs`'s backing is the very alias var the tuple's first element
+    // copies first, so its visit reuses that copy through the memo; the
+    // reused copy is an opened alias, and the mark on it opens `Errs`.
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const first = try mkMarkerAlias(&env, "Base");
-    const shared_backing = env.types.getAliasBackingVar(env.types.resolveVar(first).desc.content.alias);
-    const second = try env.types.freshFromContentWithRank(try env.mkAlias("Other", shared_backing, &[_]Var{}, base.ModuleIdentity.Idx.NONE), .generalized);
+    const second = try env.types.freshFromContentWithRank(try env.mkAlias("Errs", first, &[_]Var{}, base.ModuleIdentity.Idx.NONE), .generalized);
     const pair = try env.types.freshFromContentWithRank(try env.mkTuple(&[_]Var{ first, second }), .generalized);
     const copy = try instantiateWithMarkers(&env, pair, .resolve_by_polarity, .pos);
     const elems = env.types.sliceVars(env.types.resolveVar(copy).desc.content.structure.tuple.elems);
     try std.testing.expectEqual(types_mod.AliasBacking.opened_at_use, aliasBackingOf(&env, elems[0]));
     try std.testing.expectEqual(types_mod.AliasBacking.opened_at_use, aliasBackingOf(&env, elems[1]));
+}
+
+test "instantiate - a nominal application's backing is opened for a use" {
+    // `instantiateNominalBacking` copies the declaration's backing for one
+    // use, so an opened alias it copies is the use's. No source program
+    // reaches this today (a nominal body closes its markers and builds no
+    // twins), so the site is pinned here.
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const empty = try env.types.freshFromContentWithRank(.{ .structure = .empty_tag_union }, .generalized);
+    var opened_content = try env.mkAlias("Base", empty, &[_]Var{}, base.ModuleIdentity.Idx.NONE);
+    opened_content.alias.backing = .opened_by_annotation;
+    const backing = try env.types.freshFromContentWithRank(opened_content, .generalized);
+    const name = try env.idents.insert(gpa, .for_text("Box"));
+    const decl = types_mod.NominalDecl{
+        .ident = .{ .ident_idx = name },
+        .origin_module = base.ModuleIdentity.Idx.NONE,
+        .source = try types_mod.NominalType.Source.initChecked(try types_mod.SourceDecl.fromStatementChecked(1), false, false),
+        .formals = try env.types.appendVars(&[_]Var{}),
+        .backing = backing,
+        .flags = .{ .valid = true },
+    };
+    const opened = try @import("../instantiate.zig").instantiateNominalBacking(&env.types, &env.idents, &env.var_map, decl, &[_]Var{}, .outermost, .instantiation);
+    try std.testing.expectEqual(types_mod.AliasBacking.opened_at_use, aliasBackingOf(&env, opened));
 }
 
 test "instantiate - an annotation walk's opening is the annotation's; a use's copy of it is the use's" {

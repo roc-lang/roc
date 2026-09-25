@@ -623,6 +623,8 @@ annotation_implicit_open_exts: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, Impl
 /// written inline or contributed by an alias it names. Scratch for one
 /// `generateAnnotationType` call.
 written_result_rows: std.ArrayListUnmanaged(ResultRowSite),
+/// Worklist for `aliasBodyFormals`, empty between calls.
+alias_body_formal_stack: std.ArrayListUnmanaged(CIR.TypeAnno.Idx),
 /// Per host-boundary annotation: the one adapter-reachable result row its
 /// generation closed as written, or `.none`. A hosted function's row is closed
 /// by declaration rather than by a body, so this is the whole producer answer
@@ -2977,6 +2979,7 @@ fn initAssumePrepared(
         .implicit_open_exts = .empty,
         .annotation_implicit_open_exts = .empty,
         .written_result_rows = .empty,
+        .alias_body_formal_stack = .empty,
         .host_annotation_result_rows = .empty,
         .unquantified_value_implicit_open_ext_ranges = .empty,
         .late_implicit_open_ext_audits = .empty,
@@ -3122,6 +3125,7 @@ pub fn deinit(self: *Self) void {
     self.implicit_open_exts.deinit(self.gpa);
     self.annotation_implicit_open_exts.deinit(self.gpa);
     self.written_result_rows.deinit(self.gpa);
+    self.alias_body_formal_stack.deinit(self.gpa);
     self.host_annotation_result_rows.deinit(self.gpa);
     self.unquantified_value_implicit_open_ext_ranges.deinit(self.gpa);
     self.late_implicit_open_ext_audits.deinit(self.gpa);
@@ -7349,6 +7353,7 @@ fn instantiateVar(
     defer trace.end();
 
     var instantiate_ctx = Instantiator{
+        .opening_site = .use,
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
@@ -7383,6 +7388,7 @@ fn instantiateWhereMethodForUse(self: *Self, signature_var: Var, env: *Env, regi
     defer trace.end();
 
     var instantiator = Instantiator{
+        .opening_site = .use,
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
@@ -7816,6 +7822,7 @@ fn instantiateTypeScheme(
     std.debug.assert(self.isBindingSchemeVar(var_to_instantiate));
 
     var instantiate_ctx = Instantiator{
+        .opening_site = .use,
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
@@ -7876,11 +7883,13 @@ fn instantiateVarOrphan(
     env: *Env,
     rank: Rank,
     region_behavior: InstantiateRegionBehavior,
+    opening_site: Instantiator.OpeningSite,
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
     std.debug.assert(@intFromEnum(rank) <= @intFromEnum(env.rank()));
     var instantiate_ctx = Instantiator{
+        .opening_site = opening_site,
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
@@ -7911,6 +7920,7 @@ fn instantiateVarOrphanSharingVars(
     defer trace.end();
     std.debug.assert(@intFromEnum(rank) <= @intFromEnum(env.rank()));
     var instantiate_ctx = Instantiator{
+        .opening_site = .annotation,
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
@@ -7960,6 +7970,7 @@ fn instantiateVarOrphanFlexed(
     const trace = tracy.trace(@src());
     defer trace.end();
     var instantiate_ctx = Instantiator{
+        .opening_site = .annotation,
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
@@ -7987,8 +7998,9 @@ fn instantiateVarWithSubs(
     subs: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
+    opening_site: Instantiator.OpeningSite,
 ) std.mem.Allocator.Error!Var {
-    return self.instantiateVarWithSubsPolarized(var_to_instantiate, subs, env, region_behavior, .close, .pos, .nested, .ignore, null);
+    return self.instantiateVarWithSubsPolarized(var_to_instantiate, subs, env, region_behavior, .close, .pos, .nested, .ignore, null, opening_site);
 }
 
 /// `instantiateVarWithSubs` with explicit polarity var handling; see
@@ -8004,6 +8016,7 @@ fn instantiateVarWithSubsPolarized(
     reach: Instantiator.AdapterReach,
     written_rows: WrittenResultRows,
     twin_build: ?*ResultRowTwinBuild,
+    opening_site: Instantiator.OpeningSite,
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -8013,7 +8026,7 @@ fn instantiateVarWithSubsPolarized(
     var closed_marker_reaches: std.ArrayListUnmanaged(Instantiator.AdapterReach) = .empty;
     defer closed_marker_reaches.deinit(self.gpa);
     var instantiate_ctx = Instantiator{
-        .opening_site = .annotation,
+        .opening_site = opening_site,
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
@@ -14135,6 +14148,7 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
                         @intFromEnum(type_alias.alias_stmt_idx),
                         self.cir.module_role == .builtin,
                         .declared,
+                        .none,
                     ),
                     env,
                 );
@@ -14676,6 +14690,7 @@ fn generateForClauseAliasApplication(
             decl_alias.source_decl.toOptional(),
             decl_alias.source_decl.originIsBuiltin(),
             .declared,
+            decl_alias.body_formals,
         ),
         env,
     );
@@ -15200,6 +15215,7 @@ fn predeclareAnnotationSchemeHelp(
             env,
             env.rank(),
             .use_last_var,
+            .annotation,
         );
 
     if (hole_rank) |hr| {
@@ -16365,6 +16381,7 @@ fn replayPredeclaredSchemeUse(
     }
 
     var instantiator = Instantiator{
+        .opening_site = .use,
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
@@ -16692,9 +16709,64 @@ fn predeclareAliasDecl(
             @intFromEnum(decl_var),
             self.cir.module_role == .builtin,
             .declared,
+            try self.aliasBodyFormals(header_args, alias.anno),
         ),
         env,
     );
+}
+
+/// Which of an alias declaration's formals its body uses
+/// (`types.Alias.body_formals`), read from the declaration's canonical
+/// annotation: a formal is used when the body refers to it anywhere, through
+/// any constructor, argument, field, payload or extension. A formal the body
+/// refers to only as another alias's argument is still used here; that
+/// alias's own formals decide how its argument is related.
+fn aliasBodyFormals(self: *Self, header_args: []const CIR.TypeAnno.Idx, body: CIR.TypeAnno.Idx) std.mem.Allocator.Error!types_mod.AliasBodyFormals {
+    var used = types_mod.AliasBodyFormals.none;
+    if (header_args.len == 0 or body == .placeholder) return used;
+    const stack = &self.alias_body_formal_stack;
+    std.debug.assert(stack.items.len == 0);
+    defer stack.clearRetainingCapacity();
+    try stack.append(self.gpa, body);
+    while (stack.pop()) |anno_idx| {
+        switch (self.cir.store.getTypeAnno(anno_idx)) {
+            .rigid_var_lookup => |lookup| {
+                for (header_args, 0..) |header_arg, index| {
+                    if (header_arg == lookup.ref) used = used.with(index);
+                }
+            },
+            .rigid_var => |rigid| {
+                for (header_args, 0..) |header_arg, index| {
+                    switch (self.cir.store.getTypeAnno(header_arg)) {
+                        .rigid_var => |formal| if (formal.name.eql(rigid.name)) {
+                            used = used.with(index);
+                        },
+                        .apply, .rigid_var_lookup, .underscore, .lookup, .tag_union, .tag, .tuple, .record, .@"fn", .parens, .malformed => {},
+                    }
+                }
+            },
+            .apply => |apply| try stack.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(apply.args)),
+            .tag_union => |tag_union| {
+                try stack.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tag_union.tags));
+                if (tag_union.ext) |ext| try stack.append(self.gpa, ext);
+            },
+            .tag => |tag| try stack.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tag.args)),
+            .tuple => |tuple| try stack.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tuple.elems)),
+            .record => |record| {
+                for (self.cir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
+                    try stack.append(self.gpa, self.cir.store.getAnnoRecordField(field_idx).ty);
+                }
+                if (record.ext) |ext| try stack.append(self.gpa, ext);
+            },
+            .@"fn" => |func| {
+                try stack.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(func.args));
+                try stack.append(self.gpa, func.ret);
+            },
+            .parens => |parens| try stack.append(self.gpa, parens.anno),
+            .underscore, .lookup, .malformed => {},
+        }
+    }
+    return used;
 }
 
 fn predeclareNominalDecl(
@@ -16814,6 +16886,7 @@ fn generateAliasDecl(
                 @intFromEnum(decl_idx),
                 self.cir.module_role == .builtin,
                 .declared,
+                try self.aliasBodyFormals(header_args, alias.anno),
             ),
             env,
         );
@@ -17877,6 +17950,7 @@ fn copiedAliasWithBacking(
         alias.source_decl.toOptional(),
         alias.source_decl.originIsBuiltin(),
         opened,
+        alias.body_formals,
     );
     return try self.freshFromContent(content, env, region);
 }
@@ -19702,7 +19776,7 @@ fn instantiateWhereAliasConstraint(
         // A faithful copy: the declaration's where-method signatures keep
         // their polarity markers, which the referencing annotation's own body
         // uses and obligations resolve.
-        .fn_var = try self.instantiateVarWithSubsPolarized(constraint.fn_var, subs, env, .{ .explicit = region }, .preserve, .pos, .nested, .ignore, null),
+        .fn_var = try self.instantiateVarWithSubsPolarized(constraint.fn_var, subs, env, .{ .explicit = region }, .preserve, .pos, .nested, .ignore, null, .annotation),
         .origin = .{ .where_clause = .{} },
     };
 }
@@ -20411,6 +20485,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             twin_build = .{ .check = self, .twins = &result_row_twins, .opening = ctx.annotation.opening, .env = env };
                             break :twin_blk &twin_build;
                         },
+                        .annotation,
                     );
                     try self.recordConsumedResultRowTwins(&result_row_twins, ctx);
                     if (decl_is_alias and !try self.validateAliasRows(instantiated_var, env, anno_region)) {
@@ -20513,6 +20588,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                 twin_build = .{ .check = self, .twins = &result_row_twins, .opening = ctx.annotation.opening, .env = env };
                                 break :twin_blk &twin_build;
                             },
+                            .annotation,
                         );
                         try self.recordConsumedResultRowTwins(&result_row_twins, ctx);
                         if (ext_is_alias and !try self.validateAliasRows(instantiated_var, env, anno_region)) {
@@ -22423,6 +22499,7 @@ fn checkStoredValueExpr(
 /// neither attached constraints nor off-root scheme requirements are copied.
 fn copyExpectedShape(self: *Self, source: Var, env: *Env) Allocator.Error!Var {
     var instantiator = Instantiator{
+        .opening_site = .annotation,
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
@@ -22832,7 +22909,7 @@ fn beginExprCheckFrame(
             try self.generateAnnotationType(annotation_idx, env);
             try self.recordPredeclaredBodySlots(annotation_idx);
             const anno_var = ModuleEnv.varFrom(annotation_idx);
-            const anno_var_backup = try self.instantiateVarOrphan(anno_var, env, env.rank(), .use_last_var);
+            const anno_var_backup = try self.instantiateVarOrphan(anno_var, env, env.rank(), .use_last_var, .annotation);
             break :blk .{
                 try self.fresh(env, expr_region),
                 AnnoVars{
@@ -22846,7 +22923,7 @@ fn beginExprCheckFrame(
                 }).withBranchResult(anno_var),
             };
         } else if (expected.expected_type) |expected_type| {
-            const expected_var_backup = try self.instantiateVarOrphan(expected_type.var_, env, env.rank(), .use_last_var);
+            const expected_var_backup = try self.instantiateVarOrphan(expected_type.var_, env, env.rank(), .use_last_var, .annotation);
             break :blk .{
                 try self.fresh(env, expr_region),
                 AnnoVars{
@@ -23906,7 +23983,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 else
                     false;
                 const copied_var = if (checked_ground_def)
-                    try self.instantiateVarOrphan(pat_var, env, env.rank(), .use_last_var)
+                    try self.instantiateVarOrphan(pat_var, env, env.rank(), .use_last_var, .use)
                 else
                     pat_var;
                 // A coerced definition is ground—its result row was closed by
@@ -29560,11 +29637,13 @@ fn openNominalBackingForApp(
         try self.rigid_var_substitutions.put(self.gpa, formal_resolved.rigid.name, arg_var);
     }
 
+    // The backing is opened for this one use of the nominal application.
     return try self.instantiateVarWithSubs(
         decl.backing,
         &self.rigid_var_substitutions,
         env,
         .{ .explicit = region },
+        .use,
     );
 }
 
@@ -42288,6 +42367,7 @@ fn recordGeneratedCodecDerivationSnapshot(
     );
     self.var_map.clearRetainingCapacity();
     var instantiator = Instantiator{
+        .opening_site = .annotation,
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,

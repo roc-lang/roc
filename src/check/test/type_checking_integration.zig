@@ -10027,9 +10027,9 @@ test "check type - polarity - a twin copied through an alias link is related by 
 test "check type - polarity - a twin copied through an alias link widens to a wider application" {
     // The twin's `Wrap` layer is opened, so it is related by its backing, the
     // inline spelling's relation: the widened row `[Aborted, HostErr(U64),
-    // Other]` is exactly `Wrap([Aborted, Other])`. The use's instance merges
-    // into the widened row, so the value reads as that row, exactly as
-    // `x = if Bool.True Other else Aborted` under the same annotation does.
+    // Other]` is exactly `Wrap([Aborted, Other])`. The value reads as its
+    // annotation, exactly as `x = if Bool.True Other else Aborted` under the
+    // same annotation does (the sibling below).
     const source =
         \\Wrap(ext) : [HostErr(U64), ..ext]
         \\
@@ -10041,7 +10041,15 @@ test "check type - polarity - a twin copied through an alias link widens to a wi
         \\x : Wrap([Other, Aborted])
         \\x = if Bool.True mk("") else Aborted
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "[Aborted, HostErr(U64), Other]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Wrap([Aborted, Other])");
+
+    const sibling =
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\x : Wrap([Other, Aborted])
+        \\x = if Bool.True Other else Aborted
+    ;
+    try checkTypesModule(sibling, .{ .pass = .last_def }, "Wrap([Aborted, Other])");
 }
 
 test "check type - polarity - a twin copied down an alias chain is related by its backing" {
@@ -10243,6 +10251,135 @@ test "check type - polarity - an annotated def whose body widens a coerced call 
         \\wider = |t| fwd(t)
     ;
     try checkTypesModule(same_alias, .{ .pass = .last_def }, "Wrap(Base) -> Wrap([Aborted, Other])");
+}
+
+test "check type - polarity - an absorbed opened alias never becomes its own backing" {
+    // `x`'s opened `Base` meets `Id(a)` whose backing `a` is already `x`'s
+    // class: absorbing it would make `Id` its own backing and lose `[Other]`
+    // (design.md "Opened Alias Instances"). Both argument orders.
+    const alias_second =
+        \\Base : [Other]
+        \\
+        \\Id(a) : a
+        \\
+        \\mk : Str -> Base
+        \\mk = |_| Other
+        \\
+        \\f : a, Id(a) -> Str
+        \\f = |_, _| "f"
+        \\
+        \\x = mk("")
+        \\
+        \\r = f(x, x)
+        \\
+        \\t = match x { Other => "o" }
+    ;
+    try checkTypesModule(alias_second, .{ .pass = .last_def }, "Str");
+
+    const alias_first =
+        \\Base : [Other]
+        \\
+        \\Id(a) : a
+        \\
+        \\mk : Str -> Base
+        \\mk = |_| Other
+        \\
+        \\f : Id(a), a -> Str
+        \\f = |_, _| "f"
+        \\
+        \\x = mk("")
+        \\
+        \\r = f(x, x)
+        \\
+        \\t = match x { Other => "o" }
+    ;
+    try checkTypesModule(alias_first, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - polarity - a flex never takes an alias view whose backing is that flex" {
+    // `f(y, y)` unifies `y` with `Id(a)` after `a` is already `y`: merging
+    // the alias view into `y` would make it its own backing.
+    const source =
+        \\Id(a) : a
+        \\
+        \\f : a, Id(a) -> Str
+        \\f = |_, _| "f"
+        \\
+        \\g = |y| f(y, y)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "a -> Str");
+}
+
+test "check type - polarity - a phantom parameter of an opened alias is related exactly" {
+    // `P(a) : Base` never uses `a`, so no opening touches it: an opened
+    // `P(Str)` still differs from `P(U64)`.
+    const opened_vs_declared =
+        \\Base : [Other]
+        \\
+        \\P(a) : Base
+        \\
+        \\g : {} -> P(Str)
+        \\g = |_| Other
+        \\
+        \\f : P(U64) -> Str
+        \\f = |_| "f"
+        \\
+        \\r = f(g({}))
+    ;
+    try checkTypesModule(opened_vs_declared, .fail, "Type Mismatch");
+
+    const opened_vs_opened =
+        \\Base : [Other]
+        \\
+        \\P(a) : Base
+        \\
+        \\g : {} -> P(Str)
+        \\g = |_| Other
+        \\
+        \\h : {} -> P(U64)
+        \\h = |_| Other
+        \\
+        \\r = if Bool.True g({}) else h({})
+    ;
+    try checkTypesModule(opened_vs_opened, .fail, "Type Mismatch");
+
+    const matching =
+        \\Base : [Other]
+        \\
+        \\P(a) : Base
+        \\
+        \\g : {} -> P(Str)
+        \\g = |_| Other
+        \\
+        \\f : P(Str) -> Str
+        \\f = |_| "f"
+        \\
+        \\r = f(g({}))
+    ;
+    try checkTypesModule(matching, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - polarity - a method used before its body is checked relates its opened result by backing" {
+    // `fwd` and `bwd` call each other through method syntax, so each is used
+    // through its predeclared annotation before its body is checked. The
+    // widened use of `fwd`'s opened `Base` result is still related by its
+    // backing.
+    const source =
+        \\Base : [Other]
+        \\
+        \\Flip := [Val(U64)].{
+        \\  fwd : Flip, U64 -> Base
+        \\  fwd = |Flip.Val(x), n| if n == 0.U64 Other else Flip.Val(x).bwd(n - 1.U64)
+        \\  bwd : Flip, U64 -> Base
+        \\  bwd = |Flip.Val(x), n| if n == 0.U64 Other else Flip.Val(x).fwd(n - 1.U64)
+        \\}
+        \\
+        \\take : Base -> Str
+        \\take = |b| match b { Other => "o" }
+        \\
+        \\r = take(if Bool.True Flip.Val(1.U64).fwd(2.U64) else Aborted)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - polarity - an imported opened alias instance is related by its backing" {

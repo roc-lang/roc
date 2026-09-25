@@ -20,6 +20,7 @@ pub const TypeWriter = @import("TypeWriter.zig");
 
 pub const Alias = types.Alias;
 pub const AliasBacking = types.AliasBacking;
+pub const AliasBodyFormals = types.AliasBodyFormals;
 pub const Flex = types.Flex;
 pub const Rigid = types.Rigid;
 pub const RecursionVar = types.RecursionVar;

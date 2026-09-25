@@ -681,6 +681,7 @@ fn stepAlias(ctx: *CopyContext, frame: *AliasFrame) std.mem.Allocator.Error!bool
                     .origin_module = translated_origin,
                     .source_decl = frame.source.source_decl,
                     .backing = frame.source.backing,
+                    .body_formals = frame.source.body_formals,
                 } });
                 return true;
             },

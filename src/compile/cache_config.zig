@@ -274,7 +274,10 @@ pub const Constants = struct {
     /// 117: An opened alias instance records where it was opened (by the
     ///      annotation walk, or at a use), and a use's instance never wins a
     ///      merge, so an annotated definition keeps its annotation.
-    pub const CACHE_VERSION = 117;
+    /// 118: Every alias instance records which of its declaration's formals
+    ///      the body uses (`Alias.body_formals`), and an opened instance's
+    ///      phantom arguments are related exactly.
+    pub const CACHE_VERSION = 118;
 };
 
 /// Configuration for the Roc cache system.

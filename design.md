@@ -2337,14 +2337,21 @@ and not on a merged descriptor flag. An instance is opened when its copy:
 - substituted a result-row twin for an argument (`ResultRowTwin`), except a
   host-boundary twin, which is the argument itself as written;
 - copied an alias that is already opened, or reused (through the
-  instantiation memo) a copy that opened something;
+  instantiation memo) a copy that is an opened alias. The mark is read from
+  the reused var itself, so a memo seeded with an earlier walk's copies (the
+  delayed predeclared-use replay) is answered the same; any other reused copy
+  inside a `.declared` source alias reaches it through that alias's arguments,
+  whose own marks say so;
 - is a layer or link a result-row twin or a coerced re-open copies around its
   widened backing (`copiedAliasWithBacking`).
 
 WHERE it was opened is part of the mark. The annotation walk generating a
 definition's own declared type makes `.opened_by_annotation` instances
 (`Instantiator.opening_site = .annotation`, and the twins it builds): they are
-what the annotation states. Everything else happens at a USE and makes
+what the annotation states. A copy standing for an annotation or an expected
+type (orphan copies of annotations, expected shapes, the branch accumulator)
+is also `.annotation` and keeps every mark it copies as it is. Every
+instantiator states its site; there is no default. Everything else happens at a USE and makes
 `.opened_at_use` instances: a scheme instantiated where a definition is used
 (including a copy of an annotation's instance), a coerced row re-opened there,
 and a where-method signature's per-use copy. Widening happens only at a use,
@@ -2357,11 +2364,26 @@ module environment.
 The unification rule for two applications of one alias: when both are
 `.declared`, their arguments decide, and a disagreement of their backings is
 not reported (the backing is the body under the arguments, so it would be
-surfaced from the arguments). When EITHER is opened, the arguments are never
-unified; the backings are related, and their disagreement is the relation's
-mismatch, reported once as the enclosing relation's error. This is the
-relation the inline spelling gets, so identical types spelled through an alias
-or written in place decide identically.
+surfaced from the arguments). When EITHER is opened, the backings are related,
+and their disagreement is the relation's mismatch, reported once as the
+enclosing relation's error. This is the relation the inline spelling gets, so
+identical types spelled through an alias or written in place decide
+identically. The arguments are related only where the backing does not carry
+them: a formal the declaration's body never uses (a phantom parameter, `P(a) :
+Base`) exists only in the argument list, no opening ever touches it, and its
+arguments are related exactly, so an opened `P(Str)` still differs from
+`P(U64)`. Which formals the body uses is read once from the declaration's
+annotation and carried on every instance (`Alias.body_formals`); a formal past
+the first 16 is related exactly, the stricter answer.
+
+An alias is never its own backing. Absorbing a use's opened instance can
+otherwise produce one: when its class already holds the other alias's backing
+(`Id(a)` meeting an opened `Base` that `a` already is), relating the backings
+absorbs the opened instance into its row first, and the pending absorb into
+`Id` then finds no opened alias left and does nothing. Independently, a merge
+never takes an alias view whose backing is one of the two classes being merged
+(`contentForMerge`): the merged class keeps the backing's own content. This
+also closes a flex meeting `Id(a)` whose backing `a` is that flex.
 
 The merge rule: a use's instance never wins a merge. Once the backings agree,
 two applications of one alias merge keeping the side with the higher
@@ -2399,14 +2421,14 @@ Checker decisions other than unification that grade an alias by its
 arguments read an opened instance as its backing alone: static-dispatch
 receiver embedding and size (`dispatchEmbedCoupleGrade`,
 `dispatchEmbedDivesIntoChild`, `dispatchReceiverSizeInner`). Every other
-reader of alias arguments is unaffected, because an opened instance's
-arguments are still vars of its backing (a twin replaces a formal's argument
-only where the alias presents the twin, and a marker never touches an
-argument): graph walks (rank, generalization, occurs, reachability,
-concreteness), the record-builder `map2` wrapper payload (a non-row formal is
-never twinned), host-boundary row rules (a host-boundary annotation is
-generated as written and never holds an opened instance), and literal-target
-identity (the argument vars are reachable through the backing).
+reader of alias arguments is unaffected: graph walks (rank, generalization,
+occurs, reachability, concreteness) visit the arguments as the vars of the
+graph they are; the record-builder `map2` wrapper payload is a non-row formal,
+which neither a twin nor a re-open ever replaces; host-boundary row rules read
+annotations generated as written, which never hold an opened instance; and
+literal-target identity finds no identity variable in an opened instance's
+arguments that its backing lacks (a twin or re-open replaces a row the
+arguments present closed).
 
 An opened instance keeps its alias name in presentation (`Fwd([NotFound])`),
 so the checker's error-report writer prints its backing next to it (`Base
@@ -2417,10 +2439,14 @@ The sides are pinned in `src/check/test/type_checking_integration.zig` ("a
 zero-argument alias opened at the result is related by its backing", "a twin
 copied through an alias link widens to a wider application", "an imported
 opened alias instance is related by its backing", "an annotated def whose body
-widens a coerced call keeps its annotation", ...), `unify_test.zig` ("an
-opened alias application is related to its alias by backing", "a use's opened
-alias never replaces the structure it meets", "a use's opened alias
-application never replaces an annotation's"), `test_rigid_instantiation.zig`,
+widens a coerced call keeps its annotation", "a phantom parameter of an opened
+alias is related exactly", "an absorbed opened alias never becomes its own
+backing", ...), `unify_test.zig` ("an opened alias application is related to
+its alias by backing", "a use's opened alias never replaces the structure it
+meets", "a use's opened alias application never replaces an annotation's", "an
+absorbed opened alias never makes another alias its own backing", "a flex
+never takes an alias view whose backing is that flex"),
+`test_rigid_instantiation.zig`,
 and the LIR tests "row subsumption - an opened alias application widens into a
 wider application of its alias" and "... a re-opened alias application ...".
 

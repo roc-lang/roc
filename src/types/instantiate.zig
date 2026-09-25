@@ -123,6 +123,8 @@ pub fn instantiateNominalBacking(
         .var_map = var_map,
         .current_rank = current_rank,
         .purpose = purpose,
+        // A nominal application's backing is opened for one use.
+        .opening_site = .use,
         // Rigids naming a formal take that formal's arg; any other rigid
         // (impossible in a well-formed template) stays rigid rather than
         // silently flexing.
@@ -155,14 +157,6 @@ pub const Scratch = struct {
     /// occurrences of a twinned formal its own backing and arguments made
     /// (see `stepAlias`). Only used while an instantiation carries twins.
     twin_marks: std.ArrayListUnmanaged(u32) = .empty,
-    /// The fresh vars whose copy opened something (`Instantiator.openings`):
-    /// a polarity marker resolved open, a result-row twin taken, or an
-    /// opened alias copied, at or below that var. A later visit of the
-    /// same source var reuses the copy through the `var_map` memo, so the
-    /// frame making that visit learns from here that its copy contains an
-    /// opening. Every entry stays true for as long as its var exists, so the
-    /// set is only cleared when an instantiation starts from an empty memo.
-    opened_copies: std.AutoHashMapUnmanaged(Var, void) = .empty,
 
     pub fn deinit(self: *Scratch, gpa: std.mem.Allocator) void {
         self.frames.deinit(gpa);
@@ -176,7 +170,6 @@ pub const Scratch = struct {
         self.reach_stack.deinit(gpa);
         self.reach_state.deinit(gpa);
         self.twin_marks.deinit(gpa);
-        self.opened_copies.deinit(gpa);
     }
 };
 
@@ -210,9 +203,6 @@ const Frame = union(enum) {
 const FillCommon = struct {
     fresh_var: Var,
     flags: types_mod.DescriptorFlags,
-    /// `Instantiator.openings` when the frame began, so the frame can tell
-    /// whether its copy opened anything (see `Scratch.opened_copies`).
-    openings_base: u32,
 };
 
 /// Copies a flex var, or a rigid var that keeps a fresh identity, by copying
@@ -257,6 +247,9 @@ const AliasFrame = struct {
     /// Base of this frame's snapshot in `Scratch.twin_marks`; meaningful only
     /// when the instantiation carries result-row twins.
     twin_marks_base: u32,
+    /// `Instantiator.openings` when the frame began, so the frame can tell
+    /// whether copying its backing and arguments opened anything.
+    openings_base: u32,
 };
 
 const TupleFrame = struct {
@@ -412,15 +405,18 @@ pub const Instantiator = struct {
     result_row_twin_builder: ?ResultRowTwinBuilder = null,
     /// How many openings this instantiation has made so far: polarity
     /// markers resolved open, result-row twins taken that open their row,
-    /// opened aliases copied, and reuses of a copy that contains one. An
+    /// opened aliases copied, and reuses of an opened alias copy. An
     /// alias frame whose count grew while it copied its backing and arguments
     /// is opened (design.md "Opened Alias Instances").
     openings: u32 = 0,
     /// Where this instantiation happens, which decides how an alias it opens
-    /// is marked (`types.AliasBacking`): an annotation walk generating a
-    /// definition's own declared type (`.annotation`), or a use of a
-    /// definition (`.use`: a scheme instantiated where it is used).
-    opening_site: OpeningSite = .use,
+    /// or copies is marked (`types.AliasBacking`): an annotation walk
+    /// generating a definition's own declared type, or a copy standing for an
+    /// annotation or expected type, which keeps every copied mark as it is
+    /// (`.annotation`); or a use of a definition (`.use`: a scheme
+    /// instantiated where it is used, whose opened copies are the use's). No
+    /// default: every instantiation states which it is.
+    opening_site: OpeningSite,
     /// How to resolve polarity vars (see `PolarityVarBehavior`). `.close`
     /// reproduces the written (closed) row and is the safe default.
     polarity_var_behavior: PolarityVarBehavior = .close,
@@ -837,9 +833,6 @@ pub const Instantiator = struct {
             machine.pending_parts.items.len = parts_base;
             machine.twin_marks.items.len = twin_marks_base;
         }
-        // With an empty memo no earlier copy can be reused, so no entry of
-        // `opened_copies` can be consulted again by this walk.
-        if (frames_base == 0 and self.var_map.count() == 0) machine.opened_copies.clearRetainingCapacity();
 
         if (!try self.requestVar(initial_var, force_root_copy)) {
             while (machine.frames.items.len > frames_base) {
@@ -939,8 +932,18 @@ pub const Instantiator = struct {
         // Check if we've already instantiated this variable
         if (self.var_map.count() > 0) {
             if (self.var_map.get(resolved_var)) |fresh_var| {
-                if (machine.opened_copies.count() > 0 and machine.opened_copies.contains(fresh_var)) {
-                    self.openings += 1;
+                // Reusing an opened alias copy is an opening for every alias
+                // frame enclosing this visit; the mark is on the var itself,
+                // however long ago (or in whichever walk) the copy was made.
+                // Any other reused copy needs no count: an enclosing
+                // `.declared` source alias's backing is its body under its
+                // arguments, so opened content reused inside it arrives
+                // through an argument, whose own mark says so.
+                switch (self.store.resolveVar(fresh_var).desc.content) {
+                    .alias => |alias| if (alias.backing.isOpened()) {
+                        self.openings += 1;
+                    },
+                    .flex, .rigid, .field_presence, .structure, .err => {},
                 }
                 try machine.value_stack.append(self.store.gpa, fresh_var);
                 return true;
@@ -979,7 +982,6 @@ pub const Instantiator = struct {
                         const marker_var = try self.store.freshFromContentWithRank(marker_content, self.current_rank);
                         if (opened) {
                             self.openings += 1;
-                            try machine.opened_copies.put(self.store.gpa, marker_var, {});
                             if (self.opened_marker_exts) |sink| try sink.append(self.store.gpa, .{
                                 .ext = marker_var,
                                 .reach = self.current_reach,
@@ -1064,7 +1066,6 @@ pub const Instantiator = struct {
                     .common = .{
                         .fresh_var = fresh_var,
                         .flags = flags,
-                        .openings_base = self.openings,
                     },
                     .result = switch (fresh_type) {
                         .flex => .flex,
@@ -1094,7 +1095,6 @@ pub const Instantiator = struct {
                     .common = .{
                         .fresh_var = fresh_var,
                         .flags = flags,
-                        .openings_base = self.openings,
                     },
                     .result = .flex,
                     .name = flex.name,
@@ -1118,7 +1118,6 @@ pub const Instantiator = struct {
                     .common = .{
                         .fresh_var = fresh_var,
                         .flags = flags,
-                        .openings_base = self.openings,
                     },
                     .alias = alias,
                     .args_start = @intFromEnum(arg_span.start),
@@ -1126,6 +1125,7 @@ pub const Instantiator = struct {
                     .vars_base = @intCast(machine.value_stack.items.len),
                     .saved_reach = self.current_reach,
                     .twin_marks_base = twin_marks_base,
+                    .openings_base = self.openings,
                 } });
                 return false;
             },
@@ -1159,7 +1159,6 @@ pub const Instantiator = struct {
                             .common = .{
                                 .fresh_var = fresh_var,
                                 .flags = flags,
-                                .openings_base = self.openings,
                             },
                             .elems_start = @intFromEnum(tuple.elems.start),
                             .elems_count = tuple.elems.count,
@@ -1178,7 +1177,6 @@ pub const Instantiator = struct {
                             .common = .{
                                 .fresh_var = fresh_var,
                                 .flags = flags,
-                                .openings_base = self.openings,
                             },
                             .nominal = nominal,
                             .args_start = @intFromEnum(arg_span.start),
@@ -1194,7 +1192,6 @@ pub const Instantiator = struct {
                             .common = .{
                                 .fresh_var = fresh_var,
                                 .flags = flags,
-                                .openings_base = self.openings,
                             },
                             .func = func,
                             .kind = .pure,
@@ -1209,7 +1206,6 @@ pub const Instantiator = struct {
                             .common = .{
                                 .fresh_var = fresh_var,
                                 .flags = flags,
-                                .openings_base = self.openings,
                             },
                             .func = func,
                             .kind = .effectful,
@@ -1224,7 +1220,6 @@ pub const Instantiator = struct {
                             .common = .{
                                 .fresh_var = fresh_var,
                                 .flags = flags,
-                                .openings_base = self.openings,
                             },
                             .func = func,
                             .kind = .unbound,
@@ -1239,7 +1234,6 @@ pub const Instantiator = struct {
                             .common = .{
                                 .fresh_var = fresh_var,
                                 .flags = flags,
-                                .openings_base = self.openings,
                             },
                             .source_fields = record.fields,
                             .ext = record.ext,
@@ -1252,7 +1246,6 @@ pub const Instantiator = struct {
                             .common = .{
                                 .fresh_var = fresh_var,
                                 .flags = flags,
-                                .openings_base = self.openings,
                             },
                             .source_tags = tag_union.tags,
                             .ext = tag_union.ext,
@@ -1298,9 +1291,6 @@ pub const Instantiator = struct {
         content: Content,
     ) std.mem.Allocator.Error!void {
         try self.fillPlaceholder(common.fresh_var, content, common.flags);
-        if (self.openings > common.openings_base) {
-            try self.scratch().opened_copies.put(self.store.gpa, common.fresh_var, {});
-        }
         try self.scratch().value_stack.append(self.store.gpa, common.fresh_var);
     }
 
@@ -1466,7 +1456,7 @@ pub const Instantiator = struct {
             // by the annotation walk when that walk made it, and at a use
             // otherwise; a use's instance stays a use's instance.
             if (frame.alias.backing.isOpened()) self.openings += 1;
-            const backing: types_mod.AliasBacking = if (self.openings == frame.common.openings_base)
+            const backing: types_mod.AliasBacking = if (self.openings == frame.openings_base)
                 .declared
             else switch (self.opening_site) {
                 .use => .opened_at_use,
@@ -1480,6 +1470,7 @@ pub const Instantiator = struct {
                 frame.alias.source_decl.toOptional(),
                 frame.alias.source_decl.originIsBuiltin(),
                 backing,
+                frame.alias.body_formals,
             );
             machine.value_stack.items.len = frame.vars_base;
             if (self.result_row_twins.len > 0) machine.twin_marks.items.len = frame.twin_marks_base;

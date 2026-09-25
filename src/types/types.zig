@@ -368,6 +368,37 @@ pub const Alias = struct {
     /// (design.md "Opened Alias Instances"). No default: every producer
     /// states which it built.
     backing: AliasBacking,
+    /// Which of the declaration's first 16 formals its body uses: bit `i`
+    /// is set when formal `i` occurs in the body. Unification relates an
+    /// opened instance by its backing, which carries every formal the body
+    /// uses; a formal the body does not use (a phantom parameter, `P(a) :
+    /// Base`) is carried only by the argument list, so its argument is
+    /// related exactly. A formal past the first 16 is related exactly too,
+    /// the stricter answer (design.md "Opened Alias Instances").
+    body_formals: AliasBodyFormals,
+};
+
+/// See `Alias.body_formals`.
+pub const AliasBodyFormals = packed struct(u16) {
+    bits: u16,
+
+    /// Every formal the mask can name is used by the body (the answer for an
+    /// alias with no declaration to read, such as a synthetic test alias).
+    pub const all: AliasBodyFormals = .{ .bits = std.math.maxInt(u16) };
+    pub const none: AliasBodyFormals = .{ .bits = 0 };
+    pub const tracked: usize = 16;
+
+    pub fn with(self: AliasBodyFormals, index: usize) AliasBodyFormals {
+        if (index >= tracked) return self;
+        return .{ .bits = self.bits | (@as(u16, 1) << @intCast(index)) };
+    }
+
+    /// Whether the body carries formal `index`, so its argument needs no
+    /// relation beyond the backing's.
+    pub fn uses(self: AliasBodyFormals, index: usize) bool {
+        if (index >= tracked) return false;
+        return self.bits & (@as(u16, 1) << @intCast(index)) != 0;
+    }
 };
 
 /// See `Alias.backing`.
