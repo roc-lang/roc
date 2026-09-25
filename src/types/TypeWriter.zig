@@ -1091,17 +1091,22 @@ fn stepTagUnion(self: *TypeWriter, writer: *ByteWrite, frame: *TagUnionFrame, ro
                 frame.stage = .done;
                 switch (frame.ext) {
                     .flex => |flex| {
-                        // An anonymous, unshared, unconstrained flex ext in an
-                        // output position is that position's implicit openness
-                        // (an instantiated `..`)—hide it. Openness is still
-                        // shown in input positions, for named extensions, and
-                        // when the ext var is shared or constrained elsewhere in
-                        // the type (where it carries real information).
+                        // An unshared, unconstrained flex ext in an output
+                        // position is that position's implicit openness (an
+                        // instantiated `..`)—hide it, named or not. Openness is
+                        // still shown in input positions, and when the ext var is
+                        // shared or constrained elsewhere in the type (where it
+                        // carries real information).
                         const display: enum { hidden, anonymous, source_name, generated_name } = blk: {
                             const implicit_openness = self.polarity == .pos and flex.payload.constraints.len() == 0;
                             if (flex.payload.name) |ident_idx| {
                                 const name = self.getIdent(ident_idx);
-                                if (name.len > 0 and name[0] != '#') break :blk .source_name;
+                                if (name.len > 0 and name[0] != '#') {
+                                    // A name says nothing an anonymous
+                                    // extension here would not: hide it too.
+                                    if (implicit_openness and (try self.countVarOccurrences(flex.var_, root_var)) <= 1) break :blk .hidden;
+                                    break :blk .source_name;
+                                }
                                 // A compiler-internal name (#others from `..`)
                                 // is suppressed; the `..` itself is kept in
                                 // input positions.
