@@ -10256,7 +10256,7 @@ const Lowerer = struct {
         if (target == source) return next;
         var equivalent_pairs = std.AutoHashMap(u64, void).init(self.allocator);
         defer equivalent_pairs.deinit();
-        if (try self.representationTypesEquivalent(target_ty, source_ty, &equivalent_pairs)) {
+        if (try self.typesEquivalentInMode(.value_encoding, target_ty, source_ty, &equivalent_pairs)) {
             if (try self.maybeAssignDirectLayoutBoundary(target, source, next)) |stmt| return stmt;
         }
 
@@ -11182,7 +11182,7 @@ const Lowerer = struct {
     /// member sets) to match, which is what shared-layout reuse must key on:
     /// a layout's field slots, discriminant space, and dispatch targets are
     /// functions of the representation, not of the public interface.
-    const EquivalenceMode = enum { public, representation };
+    const EquivalenceMode = enum { public, representation, value_encoding };
 
     fn publicTypesEquivalent(
         self: *Lowerer,
@@ -11228,9 +11228,9 @@ const Lowerer = struct {
             .record => |fields| try self.fieldsEquivalentInMode(mode, fields, rhs.record, visited),
             .capture_record => |fields| try self.captureFieldsEquivalentInMode(mode, fields, rhs.capture_record, visited),
             .tag_union => |tags| try self.tagsEquivalentInMode(mode, tags, rhs.tag_union, visited),
-            .callable => |variants| try self.fnVariantsEquivalentInMode(mode, variants, rhs.callable, visited),
+            .callable => |variants| try self.fnVariantsEquivalentInMode(mode, mode != .value_encoding, variants, rhs.callable, visited),
             .erased_fn => |erased| std.mem.eql(u8, erased.source_fn_ty.bytes[0..], rhs.erased_fn.source_fn_ty.bytes[0..]) and
-                try self.fnVariantsEquivalentInMode(mode, erased.members, rhs.erased_fn.members, visited),
+                try self.fnVariantsEquivalentInMode(mode, true, erased.members, rhs.erased_fn.members, visited),
             .named => |named| try self.namedTypesEquivalentInMode(mode, named, rhs.named, visited),
         };
     }
@@ -11268,7 +11268,7 @@ const Lowerer = struct {
             }
         }
 
-        if (mode == .representation) {
+        if (mode != .public) {
             const lhs_backing = lhs.backing orelse return rhs.backing == null;
             const rhs_backing = rhs.backing orelse return false;
             if (lhs_backing.use != rhs_backing.use) return false;
@@ -11362,6 +11362,7 @@ const Lowerer = struct {
     fn fnVariantsEquivalentInMode(
         self: *Lowerer,
         comptime mode: EquivalenceMode,
+        comptime compare_targets: bool,
         lhs_span: Type.Span,
         rhs_span: Type.Span,
         visited: *std.AutoHashMap(u64, void),
@@ -11373,7 +11374,11 @@ const Lowerer = struct {
             const lhs_variant = GuardedList.at(lhs, index);
             const rhs_variant = GuardedList.at(rhs, index);
             if (lhs_variant.source != rhs_variant.source) return false;
-            if (lhs_variant.target != rhs_variant.target) return false;
+            // A finite callable stores its variant tag and captures. The
+            // specialization target belongs to its consumer, not its bytes.
+            // Erased entries retain the full comparison because they store
+            // an actual code pointer.
+            if (compare_targets and lhs_variant.target != rhs_variant.target) return false;
             if (!std.meta.eql(lhs_variant.capture_ty, rhs_variant.capture_ty)) {
                 if (lhs_variant.capture_ty == null or rhs_variant.capture_ty == null) return false;
                 if (!try self.typesEquivalentInMode(mode, lhs_variant.capture_ty.?, rhs_variant.capture_ty.?, visited)) return false;
@@ -13317,6 +13322,48 @@ fn rootRunsAtCompileTime(request: check.CheckedModule.RootRequest) bool {
         .compile_time_constant, .compile_time_callable => true,
         .runtime_entrypoint, .provided_export, .platform_required_binding, .hosted_export, .test_expect, .repl_expr, .dev_expr => false,
     };
+}
+
+test "value encoding preserves tag identities but excludes finite call targets" {
+    const allocator = std.testing.allocator;
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+    const a = try solved.lifted.names.internTagLabel("A");
+    const b = try solved.lifted.names.internTagLabel("B");
+    var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+    defer lowerer.deinit();
+    const lhs_members = try lowerer.types.addFnVariants(&.{.{
+        .id = undefined,
+        .source = @enumFromInt(1),
+        .target = @enumFromInt(2),
+        .capture_ty = null,
+    }});
+    const rhs_members = try lowerer.types.addFnVariants(&.{.{
+        .id = undefined,
+        .source = @enumFromInt(1),
+        .target = @enumFromInt(3),
+        .capture_ty = null,
+    }});
+    const lhs = try lowerer.types.add(.{ .callable = lhs_members });
+    const rhs = try lowerer.types.add(.{ .callable = rhs_members });
+    var visited = std.AutoHashMap(u64, void).init(allocator);
+    defer visited.deinit();
+    try std.testing.expect(try lowerer.typesEquivalentInMode(.value_encoding, lhs, rhs, &visited));
+    visited.clearRetainingCapacity();
+    try std.testing.expect(!try lowerer.representationTypesEquivalent(lhs, rhs, &visited));
+
+    const lhs_erased = try lowerer.types.add(.{ .erased_fn = .{ .source_fn_ty = .{}, .members = lhs_members } });
+    const rhs_erased = try lowerer.types.add(.{ .erased_fn = .{ .source_fn_ty = .{}, .members = rhs_members } });
+    visited.clearRetainingCapacity();
+    try std.testing.expect(!try lowerer.typesEquivalentInMode(.value_encoding, lhs_erased, rhs_erased, &visited));
+
+    const tag_a: Type.Tag = .{ .name = a, .checked_name = a, .payloads = .empty() };
+    const tag_b: Type.Tag = .{ .name = b, .checked_name = b, .payloads = .empty() };
+    const ab = try lowerer.types.add(.{ .tag_union = try lowerer.types.addTags(&.{ tag_a, tag_b }) });
+    const ba = try lowerer.types.add(.{ .tag_union = try lowerer.types.addTags(&.{ tag_b, tag_a }) });
+    try std.testing.expectEqual(try lowerer.layoutOfType(ab), try lowerer.layoutOfType(ba));
+    visited.clearRetainingCapacity();
+    try std.testing.expect(!try lowerer.typesEquivalentInMode(.value_encoding, ab, ba, &visited));
 }
 
 test "typed boundaries from empty rows are terminal even with matching layouts" {

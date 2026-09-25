@@ -11728,8 +11728,12 @@ a different source type from the function without unifying those types.
 When backwards LIR construction first reaches a local through a return use,
 it reserves storage at that local's solved producer type. The destination row
 does not determine the producer's storage. Typed boundaries may copy matching
-layouts directly only when the source and destination representation types
-also agree: identical byte layouts do not prove identical tag encodings.
+layouts directly only when the source and destination value encodings also
+agree: identical byte layouts do not prove identical tag encodings. Finite
+callables compare their ordered source members and capture encodings; their
+specialized procedure targets are consumer decisions, not stored code pointers.
+Erased callable entries retain the complete target comparison because their
+runtime values do carry code pointers.
 
 Expression inference uses an explicit, reusable continuation stack. A suspended
 block owns one statement cursor, and a suspended match owns its branch and
