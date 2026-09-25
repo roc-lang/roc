@@ -460,6 +460,12 @@ str_from_utf8_import: ?u32 = null,
 int_from_str_import: ?u32 = null,
 dec_from_str_import: ?u32 = null,
 float_from_str_import: ?u32 = null,
+int_from_str_prefix_import: ?u32 = null,
+int_from_utf8_prefix_import: ?u32 = null,
+dec_from_str_prefix_import: ?u32 = null,
+dec_from_utf8_prefix_import: ?u32 = null,
+float_from_str_prefix_import: ?u32 = null,
+float_from_utf8_prefix_import: ?u32 = null,
 list_append_unsafe_import: ?u32 = null,
 list_concat_import: ?u32 = null,
 list_append_range_within_import: ?u32 = null,
@@ -772,6 +778,12 @@ fn hostBuiltinImports(self: *const Self) HostBuiltinImports {
             .int_from_str => self.int_from_str_import,
             .dec_from_str => self.dec_from_str_import,
             .float_from_str => self.float_from_str_import,
+            .int_from_str_prefix => self.int_from_str_prefix_import,
+            .int_from_utf8_prefix => self.int_from_utf8_prefix_import,
+            .dec_from_str_prefix => self.dec_from_str_prefix_import,
+            .dec_from_utf8_prefix => self.dec_from_utf8_prefix_import,
+            .float_from_str_prefix => self.float_from_str_prefix_import,
+            .float_from_utf8_prefix => self.float_from_utf8_prefix_import,
             .str_equal => self.str_eq_import,
             .str_split_first => self.str_split_first_import,
             .str_split_last => self.str_split_last_import,
@@ -912,6 +924,18 @@ fn emitI64Const(self: *Self, value: i64) Allocator.Error!void {
 /// `.Immutable` (checked) otherwise.
 fn updateModeImmForArg(unique_args: u64, arg_index: u6) i32 {
     return @intFromEnum(if ((unique_args >> arg_index) & 1 != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable);
+}
+
+/// Push the width (and, for integers, signedness) args of a prefix-parse call.
+fn emitNumPrefixParseScalars(self: *Self, parse: numeric_conversion.NumericParseSpec) Allocator.Error!void {
+    switch (parse) {
+        .int => |int| {
+            try self.emitI32Const(int.width_bytes);
+            try self.emitI32Const(if (int.signed) 1 else 0);
+        },
+        .float => |float| try self.emitI32Const(float.width_bytes),
+        .dec => {},
+    }
 }
 
 fn loadRocListFields(self: *Self, list_ptr: u32) Allocator.Error!RocListFields {
@@ -2138,6 +2162,19 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
 
     const float_from_str_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32 }, &.{});
     self.float_from_str_import = try self.module.addImport("env", "roc_float_from_str", float_from_str_type);
+
+    // Prefix parse host imports: (source_ptr, result_ptr, [width, [signed,]] err_off, rest_off, value_off) -> void
+    const int_from_prefix_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
+    self.int_from_str_prefix_import = try self.module.addImport("env", "roc_int_from_str_prefix", int_from_prefix_type);
+    self.int_from_utf8_prefix_import = try self.module.addImport("env", "roc_int_from_utf8_prefix", int_from_prefix_type);
+
+    const dec_from_prefix_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
+    self.dec_from_str_prefix_import = try self.module.addImport("env", "roc_dec_from_str_prefix", dec_from_prefix_type);
+    self.dec_from_utf8_prefix_import = try self.module.addImport("env", "roc_dec_from_utf8_prefix", dec_from_prefix_type);
+
+    const float_from_prefix_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
+    self.float_from_str_prefix_import = try self.module.addImport("env", "roc_float_from_str_prefix", float_from_prefix_type);
+    self.float_from_utf8_prefix_import = try self.module.addImport("env", "roc_float_from_utf8_prefix", float_from_prefix_type);
 
     const list_append_unsafe_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
     self.list_append_unsafe_import = try self.module.addImport("env", "roc_list_append_unsafe", list_append_unsafe_type);
@@ -14104,6 +14141,99 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitFpOffset(result_offset);
         },
 
+        .u8_from_str_prefix,
+        .u8_from_utf8_prefix,
+        .i8_from_str_prefix,
+        .i8_from_utf8_prefix,
+        .u16_from_str_prefix,
+        .u16_from_utf8_prefix,
+        .i16_from_str_prefix,
+        .i16_from_utf8_prefix,
+        .u32_from_str_prefix,
+        .u32_from_utf8_prefix,
+        .i32_from_str_prefix,
+        .i32_from_utf8_prefix,
+        .u64_from_str_prefix,
+        .u64_from_utf8_prefix,
+        .i64_from_str_prefix,
+        .i64_from_utf8_prefix,
+        .u128_from_str_prefix,
+        .u128_from_utf8_prefix,
+        .i128_from_str_prefix,
+        .i128_from_utf8_prefix,
+        .dec_from_str_prefix,
+        .dec_from_utf8_prefix,
+        .f32_from_str_prefix,
+        .f32_from_utf8_prefix,
+        .f64_from_str_prefix,
+        .f64_from_utf8_prefix,
+        => {
+            const spec = numeric_conversion.getNumericPrefixParseSpec(ll.op) orelse unreachable;
+            const ls = self.getLayoutStore();
+            const ret_layout_val = ls.getLayout(ll.ret_layout);
+            if (ret_layout_val.tag != .struct_) unreachable;
+            const record_idx = ret_layout_val.getStruct().idx;
+            const record_data = ls.getStructData(record_idx);
+            const fields = ls.struct_fields.sliceRange(record_data.getFields());
+            if (fields.len != 3 or ls.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .u8) unreachable;
+
+            try self.emitProcLocal(GuardedList.at(args, 0));
+            const input = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(input);
+
+            const result_size = try self.layoutStorageByteSize(ll.ret_layout);
+            const result_align = try self.layoutStorageByteAlign(ll.ret_layout);
+            const result_offset = try self.allocStackMemory(result_size, result_align);
+            const err_offset: u32 = @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 0));
+            const rest_offset: u32 = @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 1));
+            const value_offset: u32 = @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 2));
+
+            const class: LowLevelBuiltins.NumericClass = switch (spec.parse) {
+                .int => .int,
+                .float => .float,
+                .dec => .dec,
+            };
+            const builtin_fn = LowLevelBuiltins.numFromStrPrefix(class, spec.source);
+            if (self.externalCallsUseRelocs()) {
+                const Layout = builtins.dev_wrappers.NumPrefixParseLayout;
+                const layout_offset = try self.allocStackMemory(@sizeOf(Layout), @alignOf(Layout));
+                try self.emitFpOffset(layout_offset);
+                try self.emitI32Const(@intCast(err_offset));
+                try self.emitStoreOp(.i32, @offsetOf(Layout, "err_offset"));
+                try self.emitFpOffset(layout_offset);
+                try self.emitI32Const(@intCast(rest_offset));
+                try self.emitStoreOp(.i32, @offsetOf(Layout, "rest_offset"));
+                try self.emitFpOffset(layout_offset);
+                try self.emitI32Const(@intCast(value_offset));
+                try self.emitStoreOp(.i32, @offsetOf(Layout, "value_offset"));
+                try self.emitFpOffset(result_offset);
+                switch (spec.source) {
+                    .str => try self.emitRocStrFields(try self.loadRocStrFields(input)),
+                    .utf8 => try self.emitRocListFields(try self.loadRocListFields(input)),
+                }
+                try self.emitNumPrefixParseScalars(spec.parse);
+                try self.emitFpOffset(layout_offset);
+            } else {
+                try self.emitLocalGet(input);
+                try self.emitFpOffset(result_offset);
+                try self.emitNumPrefixParseScalars(spec.parse);
+                try self.emitI32Const(@intCast(err_offset));
+                try self.emitI32Const(@intCast(rest_offset));
+                try self.emitI32Const(@intCast(value_offset));
+            }
+            switch (builtin_fn) {
+                inline .int_from_str_prefix,
+                .int_from_utf8_prefix,
+                .dec_from_str_prefix,
+                .dec_from_utf8_prefix,
+                .float_from_str_prefix,
+                .float_from_utf8_prefix,
+                => |f| try self.emitBuiltinCall(BuiltinSignatures.kindOf(f), @field(self, @tagName(f) ++ "_import")),
+                else => unreachable,
+            }
+            try self.emitFpOffset(result_offset);
+        },
+
         .str_inspect => {
             try self.emitStrEscapeAndQuote(GuardedList.at(args, 0));
         },
@@ -15999,6 +16129,32 @@ fn numericOpFromLowLevel(op: LIR.LowLevel) NumericOp {
         .dec_from_attos,
         .f32_from_str,
         .f64_from_str,
+        .u8_from_str_prefix,
+        .u8_from_utf8_prefix,
+        .i8_from_str_prefix,
+        .i8_from_utf8_prefix,
+        .u16_from_str_prefix,
+        .u16_from_utf8_prefix,
+        .i16_from_str_prefix,
+        .i16_from_utf8_prefix,
+        .u32_from_str_prefix,
+        .u32_from_utf8_prefix,
+        .i32_from_str_prefix,
+        .i32_from_utf8_prefix,
+        .u64_from_str_prefix,
+        .u64_from_utf8_prefix,
+        .i64_from_str_prefix,
+        .i64_from_utf8_prefix,
+        .u128_from_str_prefix,
+        .u128_from_utf8_prefix,
+        .i128_from_str_prefix,
+        .i128_from_utf8_prefix,
+        .dec_from_str_prefix,
+        .dec_from_utf8_prefix,
+        .f32_from_str_prefix,
+        .f32_from_utf8_prefix,
+        .f64_from_str_prefix,
+        .f64_from_utf8_prefix,
         .u8_to_i8_wrap,
         .u8_to_i8_try,
         .u8_to_i16,

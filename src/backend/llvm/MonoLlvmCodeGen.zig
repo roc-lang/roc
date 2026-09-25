@@ -496,6 +496,12 @@ pub const MonoLlvmCodeGen = struct {
         found_offset: u32,
     };
 
+    const NumPrefixParseLayoutInfo = struct {
+        err_offset: u32,
+        rest_offset: u32,
+        value_offset: u32,
+    };
+
     const StrDropPrefixCaselessAsciiLayoutInfo = struct {
         after_offset: u32,
         found_offset: u32,
@@ -4581,6 +4587,33 @@ pub const MonoLlvmCodeGen = struct {
             .dec_from_str => try self.emitDecFromStr(target, GuardedList.at(arg_locals, 0)),
             .f32_from_str => try self.emitFloatFromStr(target, GuardedList.at(arg_locals, 0), 4),
             .f64_from_str => try self.emitFloatFromStr(target, GuardedList.at(arg_locals, 0), 8),
+            .u8_from_str_prefix,
+            .u8_from_utf8_prefix,
+            .i8_from_str_prefix,
+            .i8_from_utf8_prefix,
+            .u16_from_str_prefix,
+            .u16_from_utf8_prefix,
+            .i16_from_str_prefix,
+            .i16_from_utf8_prefix,
+            .u32_from_str_prefix,
+            .u32_from_utf8_prefix,
+            .i32_from_str_prefix,
+            .i32_from_utf8_prefix,
+            .u64_from_str_prefix,
+            .u64_from_utf8_prefix,
+            .i64_from_str_prefix,
+            .i64_from_utf8_prefix,
+            .u128_from_str_prefix,
+            .u128_from_utf8_prefix,
+            .i128_from_str_prefix,
+            .i128_from_utf8_prefix,
+            .dec_from_str_prefix,
+            .dec_from_utf8_prefix,
+            .f32_from_str_prefix,
+            .f32_from_utf8_prefix,
+            .f64_from_str_prefix,
+            .f64_from_utf8_prefix,
+            => try self.emitNumFromStrPrefix(target, op, GuardedList.at(arg_locals, 0)),
             .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str => try self.emitIntToStr(target, GuardedList.at(arg_locals, 0)),
             .f32_to_str, .f64_to_str => try self.emitFloatToStr(target, GuardedList.at(arg_locals, 0)),
             .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits => try self.emitFloatBitCast(target, op, GuardedList.at(arg_locals, 0)),
@@ -9304,6 +9337,55 @@ pub const MonoLlvmCodeGen = struct {
         try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.numFromStr(.float)), call_args.types.items, call_args.values.items);
     }
 
+    fn emitNumFromStrPrefix(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, arg: LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const spec = numeric_conversion.getNumericPrefixParseSpec(op) orelse unreachable;
+        const target_slot = self.slot(target);
+        const info = try self.resolveNumPrefixParseLayout(target_slot.layout_idx);
+        if (target_slot.size > 0) try self.zeroBytes(target_slot.ptr, target_slot.size);
+
+        const layout_ptr = try self.allocEntryBlockSlot(
+            .i8,
+            @sizeOf(builtins.dev_wrappers.NumPrefixParseLayout),
+            LlvmBuilder.Alignment.fromByteUnits(@alignOf(builtins.dev_wrappers.NumPrefixParseLayout)),
+            "num_prefix_parse_layout",
+        );
+        try self.storeRawInt(layout_ptr, @offsetOf(builtins.dev_wrappers.NumPrefixParseLayout, "err_offset"), .i32, info.err_offset, 4);
+        try self.storeRawInt(layout_ptr, @offsetOf(builtins.dev_wrappers.NumPrefixParseLayout, "rest_offset"), .i32, info.rest_offset, 4);
+        try self.storeRawInt(layout_ptr, @offsetOf(builtins.dev_wrappers.NumPrefixParseLayout, "value_offset"), .i32, info.value_offset, 4);
+
+        var call_args = switch (spec.source) {
+            .str => try self.rocStrArgs1(arg),
+            .utf8 => try self.rocListArgs1(arg),
+        };
+        defer call_args.deinit(self.allocator);
+        try call_args.prepend(self.allocator, try self.ptrType(), target_slot.ptr);
+        const class: LowLevelBuiltins.NumericClass = switch (spec.parse) {
+            .int => |int| blk: {
+                try call_args.append(self.allocator, .i8, builder.intValue(.i8, int.width_bytes) catch return error.OutOfMemory);
+                try call_args.append(self.allocator, .i1, builder.intValue(.i1, @intFromBool(int.signed)) catch return error.OutOfMemory);
+                break :blk .int;
+            },
+            .float => |float| blk: {
+                try call_args.append(self.allocator, .i8, builder.intValue(.i8, float.width_bytes) catch return error.OutOfMemory);
+                break :blk .float;
+            },
+            .dec => .dec,
+        };
+        try call_args.append(self.allocator, try self.ptrType(), layout_ptr);
+        const symbol = switch (LowLevelBuiltins.numFromStrPrefix(class, spec.source)) {
+            inline .int_from_str_prefix,
+            .int_from_utf8_prefix,
+            .dec_from_str_prefix,
+            .dec_from_utf8_prefix,
+            .float_from_str_prefix,
+            .float_from_utf8_prefix,
+            => |f| builtinSymbol(f),
+            else => unreachable,
+        };
+        try self.callBuiltinVoid(symbol, call_args.types.items, call_args.values.items);
+    }
+
     fn emitIntToStr(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const arg_layout = self.localLayout(arg);
@@ -12001,6 +12083,25 @@ pub const MonoLlvmCodeGen = struct {
             .after_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 0),
             .before_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 1),
             .found_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 2),
+        };
+    }
+
+    /// Field offsets of the `{ err : U8, rest : Str | List(U8), value : T }`
+    /// record a prefix-parse op returns (fields in original alphabetical order).
+    fn resolveNumPrefixParseLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) Error!NumPrefixParseLayoutInfo {
+        const ret_layout_val = self.layoutValue(layout_idx);
+        if (ret_layout_val.tag != .struct_) return error.CompilationFailed;
+
+        const record_idx = ret_layout_val.getStruct().idx;
+        const record_data = self.layouts().getStructData(record_idx);
+        const fields = self.layouts().struct_fields.sliceRange(record_data.getFields());
+        if (fields.len != 3) return error.CompilationFailed;
+        if (self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 0) != .u8) return error.CompilationFailed;
+
+        return .{
+            .err_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 0),
+            .rest_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 1),
+            .value_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 2),
         };
     }
 
