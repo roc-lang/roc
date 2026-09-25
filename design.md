@@ -6970,11 +6970,11 @@ results other expressions still reach monomorphically is a FIXPOINT: every
 binding group frame, and every unannotated local function declaration's own
 frame. Until its boundary, an unannotated function member's result row can
 still become the row of any expression that reached it through a recursive
-reference or a dispatch back-edge, and a dispatch obligation waiting for an
-unchecked target still becomes that target's instantiated result. A
-contribution whose source row ends in such an open row (a member's result
-row, a waiting obligation's result row, or a destination already waiting on
-a fixpoint) is not related when its lambda composes: building the result
+reference or a dispatch back-edge, and a deferred dispatch constraint
+waiting for an unchecked target still becomes that target's instantiated
+result. A contribution whose source row ends in such an open row (a member's
+result row, a waiting dispatch constraint's result row, or a destination
+already waiting on a fixpoint) is not related when its lambda composes: building the result
 on top of that row could make the result its own extension once the
 fixpoint closes (`helper = |_| { _a = Err(Bad)?  helper({}) }` would infer
 `E = [Bad, ..E]`). The contribution waits for the outermost fixpoint in which
@@ -6985,8 +6985,8 @@ the structural union `Try`'s backing relates to; its error row is the `Err`
 payload.
 
 At the fixpoint's boundary—after every member's pattern has been related to
-its right-hand side and every dispatch obligation the frame owns has
-resolved, and before anything generalizes—the waiting contributions form a
+its right-hand side and every deferred dispatch constraint the frame owns
+has resolved, and before anything generalizes—the waiting contributions form a
 graph whose nodes are destinations keyed by residual tail; a contribution
 points at the destination its source row ends in. Rows that include one
 another around a cycle are one row, so each strongly connected component
