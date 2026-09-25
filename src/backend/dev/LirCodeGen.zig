@@ -26190,6 +26190,7 @@ fn addSineChainProc(store: *LirStore, allocator: Allocator, count: u32) Allocato
 }
 
 test "stack reuse does not allocate declaration-only join parameters" {
+    if (comptime !host_lir_codegen_available) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var sizes: [2]u32 = undefined;
     for ([_]usize{ 0, 128 }, &sizes) |count, *size| {
@@ -28331,6 +28332,7 @@ test "independent fragment emits only requested procedure with unresolved self a
 }
 
 test "independent fragment defers shared RC helper demand" {
+    if (comptime !host_lir_codegen_available) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var store = LirStore.init(allocator);
     defer store.deinit();
@@ -28506,6 +28508,7 @@ test "AArch64 finalized artifacts preserve external calls across changed placeme
 }
 
 test "independent fragment ownership survives allocation failure" {
+    if (comptime !host_lir_codegen_available) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var store = LirStore.init(allocator);
     defer store.deinit();
@@ -28524,6 +28527,7 @@ test "independent fragment ownership survives allocation failure" {
 }
 
 test "independent fragment symbolic hooks record actual context use" {
+    if (comptime !host_lir_codegen_available) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const Hooks = struct {
         fn one(_: u32) callconv(.c) void {}

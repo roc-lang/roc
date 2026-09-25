@@ -2305,13 +2305,15 @@ test "interface summaries relocate across bodies and executor lanes" {
         }
     };
     const source =
-        \\leaf : Str -> Str
-        \\leaf = |s| Str.concat(s, "!")
-        \\left : Str -> Str
-        \\left = |s| leaf(s)
-        \\right : Str -> Str
-        \\right = |s| leaf(s)
-        \\main : Str -> (Str, Str)
+        \\inner : a -> List(a)
+        \\inner = |x| [x]
+        \\leaf : a -> List(a)
+        \\leaf = |x| inner(x)
+        \\left : a -> List(a)
+        \\left = |x| leaf(x)
+        \\right : a -> List(a)
+        \\right = |x| leaf(x)
+        \\main : Str -> (List(Str), List(Str))
         \\main = |s| (left(s), right(s))
     ;
     var first_executor = Executor{ .allocator = allocator, .next_lane = 0 };
@@ -2344,6 +2346,71 @@ test "interface summaries relocate across bodies and executor lanes" {
         try std.testing.expectEqual(lhs.identity.request_fn_ty_digest, rhs.identity.request_fn_ty_digest);
         try std.testing.expectEqual(lhs.solved_fn_ty_digest, rhs.solved_fn_ty_digest);
     }
+}
+
+test "issue 11326 callers of a closed procedure do not pay for its body" {
+    // Repro for https://github.com/roc-lang/roc/issues/11326: a procedure
+    // whose checked signature has no quantified variables has a complete
+    // specialization interface already, so requesting it must not replay its
+    // body's relations inside the caller's graph. Adding callers of one shared
+    // closed procedure therefore costs the same Monotype graph work whether
+    // that procedure's body is trivial or large.
+    const allocator = std.testing.allocator;
+    const light_four = try closedCalleeCallersGraphNodes(allocator, 4, .light);
+    const light_eight = try closedCalleeCallersGraphNodes(allocator, 8, .light);
+    const heavy_four = try closedCalleeCallersGraphNodes(allocator, 4, .heavy);
+    const heavy_eight = try closedCalleeCallersGraphNodes(allocator, 8, .heavy);
+
+    const light_per_four_callers = light_eight - light_four;
+    const heavy_per_four_callers = heavy_eight - heavy_four;
+    if (heavy_per_four_callers != light_per_four_callers) {
+        std.debug.print(
+            "four more callers of a closed procedure created {d} graph nodes when its body was trivial " ++
+                "but {d} when its body was large (totals: trivial {d}->{d}, large {d}->{d})\n",
+            .{ light_per_four_callers, heavy_per_four_callers, light_four, light_eight, heavy_four, heavy_eight },
+        );
+    }
+    try std.testing.expectEqual(light_per_four_callers, heavy_per_four_callers);
+}
+
+const ClosedCalleeBody = enum { light, heavy };
+
+fn closedCalleeCallersGraphNodes(allocator: Allocator, callers: usize, body: ClosedCalleeBody) TestError!u64 {
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "Page : { title : Str, body : Str, count : U64, tags : List(Str) }\n");
+    try source.appendSlice(allocator, "page : Str, U64 -> Str\n");
+    switch (body) {
+        .light => try source.appendSlice(allocator, "page = |name, _n| name\n"),
+        .heavy => try source.appendSlice(allocator,
+            \\page = |name, n| {
+            \\    body = match n {
+            \\        0 => "zero"
+            \\        1 => "one ${name}"
+            \\        _ => "many ${name} ${n.to_str()}"
+            \\    }
+            \\    tags = List.map([name, "p"], |t| Str.concat(t, "!"))
+            \\    record : Page
+            \\    record = { title: "page", body: body, count: n + 1, tags: tags }
+            \\    "${record.title}|${record.body}|${record.count.to_str()}|${Str.join_with(record.tags, ",")}"
+            \\}
+            \\
+        ),
+    }
+    for (0..callers) |index| {
+        try source.print(allocator, "caller_{d} : Str, U64 -> Str\ncaller_{d} = |name, n| page(name, n + {d})\n", .{ index, index, index });
+    }
+    try source.appendSlice(allocator, "main : Str -> List(Str)\nmain = |name| [");
+    for (0..callers) |index| {
+        if (index != 0) try source.appendSlice(allocator, ", ");
+        try source.print(allocator, "caller_{d}(name, {d})", .{ index, index });
+    }
+    try source.appendSlice(allocator, "]\n");
+
+    var diagnostics: MonoLower.Diagnostics = .{};
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source.items, .{ .diagnostics = &diagnostics });
+    defer lowered.deinit(allocator);
+    return diagnostics.graph.nodes_created;
 }
 
 test "issue 10529 ten-level open Try chain with inline callback stays bounded" {

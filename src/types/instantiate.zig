@@ -176,7 +176,7 @@ const Frame = union(enum) {
 /// flag carried over from the source var.
 const FillCommon = struct {
     fresh_var: Var,
-    empty_tag_union_is_default: bool,
+    flags: types_mod.DescriptorFlags,
 };
 
 /// Copies a flex var, or a rigid var that keeps a fresh identity, by copying
@@ -306,6 +306,9 @@ pub const Instantiator = struct {
     rigid_behavior: RigidBehavior,
     rank_behavior: RankBehavior = .respect_rank,
     purpose: Purpose = .instantiation,
+    /// Faithful definition copies retain annotation closure authority; fresh
+    /// scheme uses start with ordinary inferred openness.
+    preserve_annotation_tag_ext: bool = false,
 
     /// A rank-1 scheme can contain quantified leaves below monomorphic
     /// structural nodes. While instantiating such a scheme, copy exactly the
@@ -751,7 +754,10 @@ pub const Instantiator = struct {
             }
         }
 
-        const empty_tag_union_is_default = resolved.desc.flags.empty_tag_union_is_default;
+        const flags: types_mod.DescriptorFlags = .{
+            .empty_tag_union_is_default = resolved.desc.flags.empty_tag_union_is_default,
+            .annotation_tag_ext = self.preserve_annotation_tag_ext and resolved.desc.flags.annotation_tag_ext,
+        };
         switch (resolved.desc.content) {
             .rigid => |rigid| {
                 // Polarity vars (the deferred open-vs-closed tag union
@@ -848,7 +854,7 @@ pub const Instantiator = struct {
                         .flex => Content{ .flex = Flex{ .name = rigid.name, .constraints = StaticDispatchConstraint.SafeList.Range.empty() } },
                         .rigid => Content{ .rigid = Rigid{ .name = rigid.name, .constraints = StaticDispatchConstraint.SafeList.Range.empty() } },
                     };
-                    try self.fillPlaceholder(fresh_var, fresh_content, empty_tag_union_is_default);
+                    try self.fillPlaceholder(fresh_var, fresh_content, flags);
                     try machine.value_stack.append(self.store.gpa, fresh_var);
                     return true;
                 }
@@ -856,7 +862,7 @@ pub const Instantiator = struct {
                 try machine.frames.append(self.store.gpa, .{ .flex_like = .{
                     .common = .{
                         .fresh_var = fresh_var,
-                        .empty_tag_union_is_default = empty_tag_union_is_default,
+                        .flags = flags,
                     },
                     .result = switch (fresh_type) {
                         .flex => .flex,
@@ -877,7 +883,7 @@ pub const Instantiator = struct {
 
                 if (self.purpose == .expected_shape or flex.constraints.len() == 0) {
                     const fresh_content = Content{ .flex = Flex{ .name = flex.name, .constraints = StaticDispatchConstraint.SafeList.Range.empty() } };
-                    try self.fillPlaceholder(fresh_var, fresh_content, empty_tag_union_is_default);
+                    try self.fillPlaceholder(fresh_var, fresh_content, flags);
                     try machine.value_stack.append(self.store.gpa, fresh_var);
                     return true;
                 }
@@ -885,7 +891,7 @@ pub const Instantiator = struct {
                 try machine.frames.append(self.store.gpa, .{ .flex_like = .{
                     .common = .{
                         .fresh_var = fresh_var,
-                        .empty_tag_union_is_default = empty_tag_union_is_default,
+                        .flags = flags,
                     },
                     .result = .flex,
                     .name = flex.name,
@@ -904,7 +910,7 @@ pub const Instantiator = struct {
                 try machine.frames.append(self.store.gpa, .{ .alias = .{
                     .common = .{
                         .fresh_var = fresh_var,
-                        .empty_tag_union_is_default = empty_tag_union_is_default,
+                        .flags = flags,
                     },
                     .alias = alias,
                     .args_start = @intFromEnum(arg_span.start),
@@ -920,7 +926,7 @@ pub const Instantiator = struct {
                 // axis has the same identity semantics as every other axis.
                 const fresh_var = try self.store.fresh();
                 try self.var_map.put(resolved_var, fresh_var);
-                try self.fillPlaceholder(fresh_var, .{ .field_presence = field_presence }, empty_tag_union_is_default);
+                try self.fillPlaceholder(fresh_var, .{ .field_presence = field_presence }, flags);
                 try machine.value_stack.append(self.store.gpa, fresh_var);
                 return true;
             },
@@ -930,12 +936,12 @@ pub const Instantiator = struct {
 
                 switch (flat_type) {
                     .empty_record => {
-                        try self.fillPlaceholder(fresh_var, Content{ .structure = FlatType.empty_record }, empty_tag_union_is_default);
+                        try self.fillPlaceholder(fresh_var, Content{ .structure = FlatType.empty_record }, flags);
                         try machine.value_stack.append(self.store.gpa, fresh_var);
                         return true;
                     },
                     .empty_tag_union => {
-                        try self.fillPlaceholder(fresh_var, Content{ .structure = FlatType.empty_tag_union }, empty_tag_union_is_default);
+                        try self.fillPlaceholder(fresh_var, Content{ .structure = FlatType.empty_tag_union }, flags);
                         try machine.value_stack.append(self.store.gpa, fresh_var);
                         return true;
                     },
@@ -943,7 +949,7 @@ pub const Instantiator = struct {
                         try machine.frames.append(self.store.gpa, .{ .tuple = .{
                             .common = .{
                                 .fresh_var = fresh_var,
-                                .empty_tag_union_is_default = empty_tag_union_is_default,
+                                .flags = flags,
                             },
                             .elems_start = @intFromEnum(tuple.elems.start),
                             .elems_count = tuple.elems.count,
@@ -961,7 +967,7 @@ pub const Instantiator = struct {
                         try machine.frames.append(self.store.gpa, .{ .nominal = .{
                             .common = .{
                                 .fresh_var = fresh_var,
-                                .empty_tag_union_is_default = empty_tag_union_is_default,
+                                .flags = flags,
                             },
                             .nominal = nominal,
                             .args_start = @intFromEnum(arg_span.start),
@@ -976,7 +982,7 @@ pub const Instantiator = struct {
                         try machine.frames.append(self.store.gpa, .{ .func = .{
                             .common = .{
                                 .fresh_var = fresh_var,
-                                .empty_tag_union_is_default = empty_tag_union_is_default,
+                                .flags = flags,
                             },
                             .func = func,
                             .kind = .pure,
@@ -989,7 +995,7 @@ pub const Instantiator = struct {
                         try machine.frames.append(self.store.gpa, .{ .func = .{
                             .common = .{
                                 .fresh_var = fresh_var,
-                                .empty_tag_union_is_default = empty_tag_union_is_default,
+                                .flags = flags,
                             },
                             .func = func,
                             .kind = .effectful,
@@ -1002,7 +1008,7 @@ pub const Instantiator = struct {
                         try machine.frames.append(self.store.gpa, .{ .func = .{
                             .common = .{
                                 .fresh_var = fresh_var,
-                                .empty_tag_union_is_default = empty_tag_union_is_default,
+                                .flags = flags,
                             },
                             .func = func,
                             .kind = .unbound,
@@ -1015,7 +1021,7 @@ pub const Instantiator = struct {
                         try machine.frames.append(self.store.gpa, .{ .record = .{
                             .common = .{
                                 .fresh_var = fresh_var,
-                                .empty_tag_union_is_default = empty_tag_union_is_default,
+                                .flags = flags,
                             },
                             .source_fields = record.fields,
                             .ext = record.ext,
@@ -1027,7 +1033,7 @@ pub const Instantiator = struct {
                         try machine.frames.append(self.store.gpa, .{ .tag_union = .{
                             .common = .{
                                 .fresh_var = fresh_var,
-                                .empty_tag_union_is_default = empty_tag_union_is_default,
+                                .flags = flags,
                             },
                             .source_tags = tag_union.tags,
                             .ext = tag_union.ext,
@@ -1042,7 +1048,7 @@ pub const Instantiator = struct {
             .err => {
                 const fresh_var = try self.store.fresh();
                 try self.var_map.put(resolved_var, fresh_var);
-                try self.fillPlaceholder(fresh_var, Content.err, empty_tag_union_is_default);
+                try self.fillPlaceholder(fresh_var, Content.err, flags);
                 try machine.value_stack.append(self.store.gpa, fresh_var);
                 return true;
             },
@@ -1054,14 +1060,14 @@ pub const Instantiator = struct {
         self: *Self,
         fresh_var: Var,
         content: Content,
-        empty_tag_union_is_default: bool,
+        flags: types_mod.DescriptorFlags,
     ) std.mem.Allocator.Error!void {
         try self.store.dangerousSetVarDesc(
             fresh_var,
             .{
                 .content = content,
                 .rank = self.current_rank,
-                .flags = .{ .empty_tag_union_is_default = empty_tag_union_is_default },
+                .flags = flags,
             },
         );
     }
@@ -1072,7 +1078,7 @@ pub const Instantiator = struct {
         common: FillCommon,
         content: Content,
     ) std.mem.Allocator.Error!void {
-        try self.fillPlaceholder(common.fresh_var, content, common.empty_tag_union_is_default);
+        try self.fillPlaceholder(common.fresh_var, content, common.flags);
         try self.scratch().value_stack.append(self.store.gpa, common.fresh_var);
     }
 

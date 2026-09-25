@@ -339,6 +339,94 @@ const TestEnv = struct {
 
 // unification - flex_vars //
 
+test "unify - row extensions preserve either merged equivalence class" {
+    for ([_]bool{ false, true }) |reverse| {
+        for ([_]bool{ false, true }) |is_record| {
+            var env = try TestEnv.init(std.testing.allocator);
+            defer env.deinit();
+            const store = &env.module_env.types;
+            const tail = try store.fresh();
+            const content = if (is_record)
+                (try env.mkRecord(&.{}, tail)).content
+            else
+                (try env.mkTagUnion(&.{try env.mkTag("Oops", &.{})}, tail)).content;
+            const row = try store.freshFromContent(content);
+            try std.testing.expectEqual(.unified, if (reverse) try env.unify(row, tail) else try env.unify(tail, row));
+            try std.testing.expectEqual(.valid, try occurs.occurs(store, &env.occurs_scratch, row));
+            const merged = store.resolveVar(row).desc.content.structure;
+            const ext = if (is_record) merged.record.ext else merged.tag_union.ext;
+            try std.testing.expect(store.resolveVar(ext).desc_idx != store.resolveVar(row).desc_idx);
+            try std.testing.expectEqual(.flex, std.meta.activeTag(store.resolveVar(ext).desc.content));
+            if (!is_record) try std.testing.expectEqual(@as(u32, 1), merged.tag_union.tags.len());
+        }
+    }
+}
+
+test "unify - a tag repeated along one row's chain relates its payloads" {
+    for ([_]enum { related, conflicting, arity }{ .related, .conflicting, .arity }) |case| {
+        var env = try TestEnv.init(std.testing.allocator);
+        defer env.deinit();
+        const store = &env.module_env.types;
+        const outer_payload = try store.freshFromContent(switch (case) {
+            .related, .arity => .{ .flex = Flex.init() },
+            .conflicting => .{ .structure = .empty_record },
+        });
+        const inner_payload = try store.freshFromContent(switch (case) {
+            .related, .arity => .{ .flex = Flex.init() },
+            .conflicting => .{ .structure = .empty_tag_union },
+        });
+        const inner_args: []const Var = if (case == .arity) &.{} else &.{inner_payload};
+        const inner = try store.freshFromContent((try env.mkTagUnionOpen(&.{try env.mkTag("Oops", inner_args)})).content);
+        const row = try store.freshFromContent((try env.mkTagUnion(&.{try env.mkTag("Oops", &.{outer_payload})}, inner)).content);
+        const other = try store.freshFromContent((try env.mkTagUnionOpen(&.{try env.mkTag("Other", &.{})})).content);
+        const result = try env.unify(row, other);
+        switch (case) {
+            .related => {
+                try std.testing.expectEqual(.unified, result);
+                try std.testing.expectEqual(store.resolveVar(outer_payload).var_, store.resolveVar(inner_payload).var_);
+            },
+            .conflicting, .arity => try std.testing.expect(result.isProblem()),
+        }
+    }
+}
+
+test "unify - a field repeated along one row's chain relates its value and kind" {
+    for ([_]enum { related, conflicting, kind }{ .related, .conflicting, .kind }) |case| {
+        var env = try TestEnv.init(std.testing.allocator);
+        defer env.deinit();
+        const store = &env.module_env.types;
+        const outer_value = try store.freshFromContent(switch (case) {
+            .related, .kind => .{ .flex = Flex.init() },
+            .conflicting => .{ .structure = .empty_record },
+        });
+        const inner_value = try store.freshFromContent(switch (case) {
+            .related, .kind => .{ .flex = Flex.init() },
+            .conflicting => .{ .structure = .empty_tag_union },
+        });
+        const outer_kind = try store.fresh();
+        const outer_field = if (case == .kind)
+            try env.mkUnknownRecordField("name", outer_kind, outer_value)
+        else
+            try env.mkRecordField("name", outer_value);
+        const inner = try store.freshFromContent((try env.mkRecordOpen(&.{try env.mkRecordField("name", inner_value)})).content);
+        const row = try store.freshFromContent((try env.mkRecord(&.{outer_field}, inner)).content);
+        const other = try store.freshFromContent((try env.mkRecordOpen(&.{try env.mkRecordField("other", try store.fresh())})).content);
+        const result = try env.unify(row, other);
+        switch (case) {
+            .related, .kind => {
+                try std.testing.expectEqual(.unified, result);
+                try std.testing.expectEqual(store.resolveVar(outer_value).var_, store.resolveVar(inner_value).var_);
+                // The repeat is required, so the one field it names is too.
+                if (case == .kind) try std.testing.expectEqual(
+                    types_mod.FieldPresence.required,
+                    store.resolveVar(outer_kind).desc.content.field_presence,
+                );
+            },
+            .conflicting => try std.testing.expect(result.isProblem()),
+        }
+    }
+}
+
 test "unify - identical" {
     const gpa = std.testing.allocator;
 
