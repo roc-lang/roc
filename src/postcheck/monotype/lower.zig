@@ -34470,10 +34470,7 @@ const BodyContext = struct {
                 // final segment's relation is the trailing whole-expression
                 // constraint below.
                 .required => {
-                    const slot_node = switch (segment.backing_access) {
-                        .inspectable => try self.graph.requiredRecordFieldNode(field_node, mono_field_name),
-                        .opaque_definition_private => try self.graph.requiredOpaqueDefinitionFieldNode(field_node, mono_field_name),
-                    };
+                    const slot_node = try self.graph.requiredRecordFieldNode(field_node, mono_field_name);
                     if (!is_last) {
                         try self.constrainCheckedInterfaceToCell(
                             segment.success_ty,
@@ -34486,10 +34483,7 @@ const BodyContext = struct {
                 // value; the chain continues from the Present payload.
                 .optional => {
                     saw_optional = true;
-                    const field = switch (segment.backing_access) {
-                        .inspectable => try self.graph.optionalRecordFieldNodes(field_node, mono_field_name),
-                        .opaque_definition_private => try self.graph.optionalOpaqueDefinitionFieldNodes(field_node, mono_field_name),
-                    };
+                    const field = try self.graph.optionalRecordFieldNodes(field_node, mono_field_name);
                     const value_node = try self.instNode(segment.success_ty);
                     try self.graph.unify(field.value, value_node);
                     try self.graph.unify(field.slot, try self.optionalSlotNode(value_node));
@@ -39494,10 +39488,7 @@ const BodyContext = struct {
         var prefix_node = receiver_node;
         for (field.segments) |segment| {
             const field_name = try self.recordFieldName(self.view, segment.field_name);
-            prefix_node = switch (segment.backing_access) {
-                .inspectable => try self.graph.requiredRecordFieldNode(prefix_node, field_name),
-                .opaque_definition_private => try self.graph.requiredOpaqueDefinitionFieldNode(prefix_node, field_name),
-            };
+            prefix_node = try self.graph.requiredRecordFieldNode(prefix_node, field_name);
             self.draft.field_access_segments.appendAssumeCapacity(.{ .field = field_name });
         }
         try relateRequestComponent(self.graph, expected_node, prefix_node);
@@ -40424,10 +40415,7 @@ const BodyContext = struct {
         const field_name = try self.recordFieldName(self.view, segment.field_name);
         switch (segment.mode) {
             .required => {
-                const field_node = switch (segment.backing_access) {
-                    .inspectable => try self.graph.requiredRecordFieldNode(current_node, field_name),
-                    .opaque_definition_private => try self.graph.requiredOpaqueDefinitionFieldNode(current_node, field_name),
-                };
+                const field_node = try self.graph.requiredRecordFieldNode(current_node, field_name);
                 const field_expr = try self.addExprWithTypeCell(
                     DraftTypeCell.fromGraphNode(field_node),
                     .{ .field_access = .{
@@ -40444,10 +40432,7 @@ const BodyContext = struct {
                 );
             },
             .optional => {
-                const field = switch (segment.backing_access) {
-                    .inspectable => try self.graph.optionalRecordFieldNodes(current_node, field_name),
-                    .opaque_definition_private => try self.graph.optionalOpaqueDefinitionFieldNodes(current_node, field_name),
-                };
+                const field = try self.graph.optionalRecordFieldNodes(current_node, field_name);
                 const slot_cell = DraftTypeCell.fromGraphNode(field.slot);
                 const payload_cell = DraftTypeCell.fromGraphNode(field.value);
                 const slot_expr = try self.addExprWithTypeCell(slot_cell, .{ .field_access = .{
