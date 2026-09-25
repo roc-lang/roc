@@ -62,47 +62,6 @@ fn typeDispatchOwnerVar(module: anytype, stmt_idx: CIR.Statement.Idx) Var {
     };
 }
 
-fn checkedFieldBackingAccess(module: TypedCIR.Module, receiver_var: Var) CheckedFieldBackingAccess {
-    const store = module.typeStoreConst();
-    var current = receiver_var;
-    var remaining = store.len();
-    while (remaining > 0) : (remaining -= 1) {
-        const resolved = store.resolveVar(current);
-        switch (resolved.desc.content) {
-            .alias => |alias| {
-                current = store.getAliasBackingVar(alias);
-            },
-            .structure => |flat| return switch (flat) {
-                .nominal_type => |nominal| checkedNominalFieldBackingAccess(
-                    nominal,
-                    module.moduleEnvConst().selfModuleIdentity(),
-                ),
-                .record,
-                .tuple,
-                .fn_pure,
-                .fn_effectful,
-                .fn_unbound,
-                .empty_record,
-                .tag_union,
-                .empty_tag_union,
-                => .inspectable,
-            },
-            .flex, .rigid, .field_presence, .err => return .inspectable,
-        }
-    }
-    checkedArtifactInvariant("field access receiver alias chain contained a cycle", .{});
-}
-
-fn checkedNominalFieldBackingAccess(
-    nominal: types.NominalType,
-    current_module: base.ModuleIdentity.Idx,
-) CheckedFieldBackingAccess {
-    return if (nominal.isOpaque() and nominal.canLiftInner(current_module))
-        .opaque_definition_private
-    else
-        .inspectable;
-}
-
 /// Public `ModuleEnvStorage` declaration.
 pub const ModuleEnvStorage = union(enum) {
     checked_source: *ModuleEnv,
@@ -10376,13 +10335,6 @@ pub const CheckedFieldAccessSegment = struct {
     success_ty: CheckedTypeId,
     source_region: base.Region,
     mode: CheckedFieldAccessMode,
-    /// How Monotype may reach this segment's slot in its receiver: through an
-    /// ordinary record field, or through the private backing record of an
-    /// opaque nominal defined in the current module. Computed per segment:
-    /// the first segment's receiver is the access expression's receiver, and
-    /// each later segment's receiver is the previous segment's successful
-    /// value.
-    backing_access: CheckedFieldBackingAccess,
 };
 
 /// Public `CheckedIfBranch` declaration.
@@ -10635,12 +10587,6 @@ pub const CheckedNumeralData = struct {
 pub const CheckedQuoteData = struct {
     plan: ?StaticDispatchPlanId,
     literal: CheckedStringLiteralId,
-};
-
-/// Checker-recorded authority for a field access to cross a named backing.
-pub const CheckedFieldBackingAccess = enum(u8) {
-    inspectable,
-    opaque_definition_private,
 };
 
 /// Checker-authored plan for equality against one payload-free tag.
@@ -14614,7 +14560,7 @@ const CheckedBodyPayloadCopier = struct {
             .e_unary_minus => |unary| .{ .unary_minus = self.checkedExpr(unary.expr) },
             .e_field_access => |field_access| .{ .field_access = .{
                 .receiver = self.checkedExpr(field_access.receiver),
-                .segments = try self.copyFieldAccessSegments(field_access.receiver, field_access.segments),
+                .segments = try self.copyFieldAccessSegments(field_access.segments),
             } },
             .e_method_call => checkedArtifactInvariant(
                 "ordinary method call reached artifact publication after checking; expected explicit static-dispatch plan",
@@ -15102,7 +15048,6 @@ const CheckedBodyPayloadCopier = struct {
     /// `commitExprs`, so they cannot share one scratch buffer.
     fn copyFieldAccessSegments(
         self: *@This(),
-        receiver: CIR.Expr.Idx,
         span: CIR.Expr.FieldAccessSegment.Span,
     ) Allocator.Error![]const CheckedFieldAccessSegment {
         if (span.len == 0) {
@@ -15113,7 +15058,6 @@ const CheckedBodyPayloadCopier = struct {
         errdefer self.allocator.free(out);
 
         const module_env = self.module.moduleEnvConst();
-        var receiver_var = ModuleEnv.varFrom(receiver);
         var position: u32 = 0;
         while (position < span.len) : (position += 1) {
             const segment_idx = module_env.store.fieldAccessSegmentAt(span, position);
@@ -15129,10 +15073,7 @@ const CheckedBodyPayloadCopier = struct {
                     .required => .required,
                     .optional => .optional,
                 },
-                .backing_access = checkedFieldBackingAccess(self.module, receiver_var),
             };
-            // The next segment reads from this segment's successful value.
-            receiver_var = ModuleEnv.varFrom(segment_idx);
         }
         return out;
     }
@@ -39190,14 +39131,12 @@ test "CheckedBodyStore: POD round-trip preserves exprs, paths, match branches, s
             .success_ty = ty0,
             .source_region = base.Region.from_raw_offsets(11, 17),
             .mode = .required,
-            .backing_access = .inspectable,
         },
         .{
             .field_name = @enumFromInt(4),
             .success_ty = ty1,
             .source_region = base.Region.from_raw_offsets(18, 25),
             .mode = .optional,
-            .backing_access = .inspectable,
         },
     };
     const exprs = [_]CheckedExpr{
@@ -39570,7 +39509,6 @@ test "checked inspect evaluation elision is producer-recorded for exact callable
         .success_ty = testIndexId(CheckedTypeId, 0),
         .source_region = base.Region.zero(),
         .mode = .required,
-        .backing_access = .inspectable,
     }};
     const block_statements = [_]CheckedStatementId{};
     const call_args = [_]CheckedExprId{};
@@ -39586,31 +39524,6 @@ test "checked inspect evaluation elision is producer-recorded for exact callable
     try std.testing.expectEqualSlices(bool, &.{ true, false, true, false, false }, &may_be_elided);
 }
 
-test "checked field backing access is private only for a local opaque definition" {
-    const declaring_module: base.ModuleIdentity.Idx = @enumFromInt(4);
-    const other_module: base.ModuleIdentity.Idx = @enumFromInt(5);
-    const opaque_nominal = types.NominalType{
-        .ident = undefined,
-        .args = undefined,
-        .origin_module = declaring_module,
-        .source = types.NominalType.Source.init(.none, true, false),
-    };
-    try std.testing.expectEqual(
-        CheckedFieldBackingAccess.opaque_definition_private,
-        checkedNominalFieldBackingAccess(opaque_nominal, declaring_module),
-    );
-    try std.testing.expectEqual(
-        CheckedFieldBackingAccess.inspectable,
-        checkedNominalFieldBackingAccess(opaque_nominal, other_module),
-    );
-    var nominal = opaque_nominal;
-    nominal.source = types.NominalType.Source.init(.none, false, false);
-    try std.testing.expectEqual(
-        CheckedFieldBackingAccess.inspectable,
-        checkedNominalFieldBackingAccess(nominal, declaring_module),
-    );
-}
-
 test "SERIALIZED_VERSION_HASH golden value" {
     // Tripwire: an *accidental* change to `CheckedModuleArtifact.Serialized`'s layout
     // would make a previously-baked builtin blob / cached artifact relocate into a
@@ -39619,8 +39532,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x34, 0xB6, 0xC5, 0x7C, 0x80, 0x64, 0xC2, 0xA8, 0x8D, 0x94, 0xC9, 0xE2, 0xE5, 0xD9, 0x58, 0x0D,
-        0xBA, 0x88, 0x6C, 0x91, 0x83, 0x90, 0xA3, 0xF8, 0xED, 0xFA, 0x4E, 0x20, 0x18, 0x94, 0x3C, 0x5B,
+        0x59, 0xC2, 0xAD, 0xD8, 0x04, 0xCD, 0x9D, 0x8E, 0xB8, 0x75, 0x9F, 0xB0, 0xB8, 0xB0, 0x08, 0x40,
+        0x4F, 0x1C, 0x2B, 0x98, 0xC5, 0xCF, 0x75, 0x80, 0xF1, 0xF6, 0x57, 0xA1, 0xEC, 0xB7, 0x03, 0x96,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
