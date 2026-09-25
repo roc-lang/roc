@@ -15174,6 +15174,16 @@ that classification. Tracked sources forward valid metadata, while sources
 entering the chain establish metadata for their actual allocation. A merged
 local's membership in the chain is not evidence about all of its definitions.
 
+Metadata forwarding also requires linear value use. Pure single-definition
+aliases belong to the same logical value; join writes, merged definitions,
+and operation results establish new values. If a consuming use can execute
+while another use of that value remains live (including through an alias),
+transfers out of that value establish fresh metadata. Checked operations keep
+their checks and measure their results; aliases and join entries acquire their
+unit before measuring. Mutually exclusive consuming uses and reads completed
+before consumption preserve forwarding. Control-flow use ordering is shared
+with ARC as a neutral LIR query; promotion never consults an ARC solution.
+
 An incoming alias or join argument transfers its ownership unit through the
 existing consuming `list_map_prepare_reuse` identity before querying uniqueness.
 ARC therefore preserves other live uses before the observation. Incoming

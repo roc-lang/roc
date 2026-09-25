@@ -44,9 +44,10 @@
 //! A chain value with any unrecognized use is tainted (something may retain or
 //! observe it); a tainted value may end the chain (escape to the loop's
 //! result) but must not feed further chain edges, since a later unchecked
-//! append through it could write into shared memory. Lowering emits one
-//! `ref.local` alias per use, so a taint lands on the single-purpose alias
-//! and leaves the chain spine clean.
+//! append through it could write into shared memory. In addition, control-flow
+//! use ordering follows pure aliases: a consumption with another live use
+//! splits the value, so its outgoing transfers establish fresh metadata instead
+//! of forwarding a uniqueness observation made before that split.
 //!
 //! Element overwrites on a carried list thread an owned flag beside the
 //! limit: one once the list uniquely owns a non-slice allocation, measured on
@@ -69,6 +70,7 @@ const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 const body_clone = @import("body_clone.zig");
+const UseOrder = @import("use_order.zig").UseOrder;
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -193,6 +195,8 @@ const Edge = struct {
     /// Classified once for the current candidate, before validating or emitting
     /// metadata. Entry definitions supply a new list rather than chain facts.
     flow: enum { outside, carried, entry } = .outside,
+    /// False when this transfer can split a value from another live use.
+    preserves_metadata: bool = true,
 };
 
 /// Source adjacency is immutable for one scan round. A carrier is enqueued only
@@ -1007,6 +1011,117 @@ const Pass = struct {
         return false;
     }
 
+    /// Alias families describe one logical list value. A join write or a
+    /// merged definition starts a new family; an operation result also starts
+    /// a new value even when its allocation can be reused at runtime.
+    ///
+    /// Metadata can cross a consuming use only if that family has no other
+    /// live use. Otherwise every transfer out of the family re-establishes
+    /// metadata after acquiring its own unit. Looking through aliases is
+    /// essential: an old view can outlive a redefinition of its source.
+    fn classifyMetadataTransfers(self: *Pass, scan: *Scan, proc_id: LIR.LirProcSpecId) ResourceError!void {
+        const allocator = self.allocator;
+        var parents = collections.DenseMap(LocalId, LocalId).init(allocator);
+        defer parents.deinit();
+        for (scan.edges.items) |edge| {
+            if (!parents.contains(edge.source)) try parents.put(edge.source, edge.source);
+            if (!parents.contains(edge.target)) try parents.put(edge.target, edge.target);
+        }
+        const Family = struct {
+            fn root(map: *collections.DenseMap(LocalId, LocalId), local: LocalId) LocalId {
+                var result = local;
+                while (map.get(result).? != result) result = map.get(result).?;
+                var cursor = local;
+                while (cursor != result) {
+                    const next = map.get(cursor).?;
+                    map.getPtr(cursor).?.* = result;
+                    cursor = next;
+                }
+                return result;
+            }
+        };
+        for (scan.edges.items) |edge| {
+            if (edge.kind != .alias or scan.param_join.contains(edge.target) or
+                (scan.assigned_targets.get(edge.target) orelse 0) != 1) continue;
+            const source = Family.root(&parents, edge.source);
+            const target = Family.root(&parents, edge.target);
+            parents.getPtr(target).?.* = source;
+        }
+        var families = collections.DenseMap(LocalId, std.ArrayList(LocalId)).init(allocator);
+        defer {
+            var it = families.valueIterator();
+            while (it.next()) |members| members.deinit(allocator);
+            families.deinit();
+        }
+        // Resolve before iterating so path compression cannot invalidate keys.
+        var locals = parents.keyIterator();
+        while (locals.next()) |local| {
+            const root = Family.root(&parents, local.*);
+            const entry = try families.getOrPut(root);
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            try entry.value_ptr.append(allocator, local.*);
+        }
+        var order = try UseOrder.initFromStore(allocator, self.store, proc_id);
+        defer order.deinit();
+        var split = collections.DenseMap(LocalId, void).init(allocator);
+        defer split.deinit();
+        var consumes = collections.DenseMap(CFStmtId, void).init(allocator);
+        defer consumes.deinit();
+        var occurrences = collections.DenseMap(CFStmtId, usize).init(allocator);
+        defer occurrences.deinit();
+        var groups = families.iterator();
+        while (groups.next()) |group| {
+            consumes.clearRetainingCapacity();
+            occurrences.clearRetainingCapacity();
+            for (group.value_ptr.items) |member| {
+                for (order.topology.reads_of.row(member)) |raw| {
+                    const stmt_id: CFStmtId = @enumFromInt(raw);
+                    const stmt = self.store.getCFStmt(stmt_id);
+                    // A transparent alias names the same value; account for
+                    // its actual uses, including ones after its source dies.
+                    if (stmt == .assign_ref and stmt.assign_ref.op == .local and
+                        parents.contains(stmt.assign_ref.target) and
+                        Family.root(&parents, stmt.assign_ref.target) == group.key_ptr.*) continue;
+                    const occurrence = try occurrences.getOrPut(stmt_id);
+                    if (!occurrence.found_existing) occurrence.value_ptr.* = 0;
+                    occurrence.value_ptr.* += 1;
+                    if (stmt == .assign_low_level) {
+                        const op = stmt.assign_low_level.op;
+                        if (op == .list_len or op == .list_get_unsafe or
+                            op == .list_slack_unique or op == .list_owned_unique) continue;
+                    }
+                    try consumes.put(stmt_id, {});
+                }
+            }
+            var shared = false;
+            var consume_it = consumes.keyIterator();
+            while (consume_it.next()) |stmt| {
+                if (occurrences.get(stmt.*).? > 1) {
+                    shared = true;
+                    break;
+                }
+            }
+            // Group by member so the backward reachability marks are built
+            // once per local, then reused for all its consumption queries.
+            outer: for (group.value_ptr.items) |member| {
+                if (shared) break;
+                consume_it = consumes.keyIterator();
+                while (consume_it.next()) |stmt| {
+                    if (try order.usesAfter(@intFromEnum(stmt.*), member)) {
+                        shared = true;
+                        break :outer;
+                    }
+                }
+            }
+            if (shared) try split.put(group.key_ptr.*, {});
+        }
+        for (scan.edges.items) |*edge| {
+            const root = Family.root(&parents, edge.source);
+            const same_value_alias = edge.kind == .alias and Family.root(&parents, edge.target) == root;
+            edge.preserves_metadata = same_value_alias or !split.contains(root);
+        }
+    }
+
     // Per-parameter qualification and rewrite
 
     fn transformProc(self: *Pass, proc_id: LIR.LirProcSpecId) ResourceError!void {
@@ -1046,6 +1161,7 @@ const Pass = struct {
             try self.scanProc(self.store.getProcSpec(proc_id).body.?, &scan);
             max_join_id = @max(max_join_id, scan.max_join_id);
             if (scan.edges.items.len == 0) break;
+            try self.classifyMetadataTransfers(&scan, proc_id);
             var edge_index = try EdgeIndex.init(allocator, scan.edges.items);
             defer edge_index.deinit(allocator);
             outer: for (scan.joins.items) |info| {
@@ -1105,7 +1221,11 @@ const Pass = struct {
         try chain_params.put(list_param, loop_stmt);
 
         for (scan.edges.items) |*edge| {
-            edge.flow = if (!carriers.contains(edge.target)) .outside else if (carriers.contains(edge.source)) .carried else .entry;
+            edge.flow = if (!carriers.contains(edge.target)) .outside else if (carriers.contains(edge.source) and edge.preserves_metadata) .carried else .entry;
+            if (edge.flow != .outside and edge.kind == .param_write) {
+                const owner = scan.param_join.get(edge.target) orelse return false;
+                try chain_params.put(edge.target, owner);
+            }
             if (edge.flow != .carried) continue;
             switch (edge.kind) {
                 .append_call, .range_append => rewrite_site_count += 1,
@@ -1113,10 +1233,7 @@ const Pass = struct {
                     rewrite_site_count += 1;
                     has_sets = true;
                 },
-                .param_write => {
-                    const owner = scan.param_join.get(edge.target) orelse return false;
-                    try chain_params.put(edge.target, owner);
-                },
+                .param_write => {},
                 .alias, .refresh_op => {},
             }
         }
@@ -2737,6 +2854,103 @@ test "promote summary provenance distinguishes aliased reserve siblings" {
             prepared.kinds.get(helper).?,
         );
     }
+}
+
+/// Check the immutable metadata plan without changing the test procedure.
+fn testMetadataTransfer(f: *PromoteTest, proc: LIR.LirProcSpecId, site_entry: CFStmtId, expected: bool) !void {
+    // addSetSite emits the index and element literals before the actual set.
+    const element = f.store.getCFStmt(site_entry).assign_literal.next;
+    const site = f.store.getCFStmt(element).assign_literal.next;
+    const allocator = testing.allocator;
+    var analysis = body_clone.AnalysisScratch.init(allocator);
+    defer analysis.deinit();
+    var pass = Pass.init(&f.store, &f.layouts, allocator, &analysis);
+    defer pass.deinit();
+    var scan = Pass.Scan{
+        .total_uses = collections.DenseMap(LocalId, u32).init(allocator),
+        .tracked_uses = collections.DenseMap(LocalId, u32).init(allocator),
+        .param_join = collections.DenseMap(LocalId, CFStmtId).init(allocator),
+        .dirty_targets = collections.DenseMap(LocalId, void).init(allocator),
+        .assigned_targets = collections.DenseMap(LocalId, u32).init(allocator),
+    };
+    defer scan.deinit(allocator);
+    try pass.scanProc(f.store.getProcSpec(proc).body.?, &scan);
+    try pass.classifyMetadataTransfers(&scan, proc);
+    for (scan.edges.items) |edge| if (edge.stmt == site) {
+        try testing.expectEqual(expected, edge.preserves_metadata);
+        return;
+    };
+    return error.MissingTransfer;
+}
+
+test "promote metadata follows alias observations across source redefinitions" {
+    // The saved view remains observable even after its source is rebound.
+    // Moving the observation before the mutation instead proves linear use.
+    for ([_]bool{ false, true }) |observe_after| {
+        var f = try PromoteTest.init(testing.allocator);
+        defer f.deinit();
+        const store = &f.store;
+        const input = try store.addLocal(.{ .layout_idx = f.list });
+        const saved = try store.addLocal(.{ .layout_idx = f.list });
+        const changed = try store.addLocal(.{ .layout_idx = f.list });
+        const item = try store.addLocal(.{ .layout_idx = .u8 });
+        const index = try store.addLocal(.{ .layout_idx = .u64 });
+        const done = try store.addCFStmt(.{ .ret = .{ .value = changed } });
+        const read = try store.addCFStmt(.{ .assign_low_level = .{
+            .target = item,
+            .op = .list_get_unsafe,
+            .rc_effect = LowLevelOp.list_get_unsafe.rcEffect(),
+            .args = try store.addLocalSpan(&.{ saved, index }),
+            .next = done,
+        } });
+        const rebind = try store.addCFStmt(.{ .set_local = .{
+            .target = input,
+            .value = changed,
+            .mode = .initialize_join_param,
+            .next = if (observe_after) read else done,
+        } });
+        const site = try addSetSite(&f, changed, input, rebind);
+        if (!observe_after) store.getCFStmtPtr(read).assign_low_level.next = site;
+        const alias = try store.addCFStmt(.{ .assign_ref = .{
+            .target = saved,
+            .op = .{ .local = input },
+            .next = if (observe_after) site else read,
+        } });
+        const proc = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(11661),
+            .args = try store.addLocalSpan(&.{ input, index }),
+            .body = alias,
+            .ret_layout = f.list,
+        });
+        try testMetadataTransfer(&f, proc, site, !observe_after);
+    }
+}
+
+test "promote metadata preserves exclusive consuming branches" {
+    var f = try PromoteTest.init(testing.allocator);
+    defer f.deinit();
+    const store = &f.store;
+    const input = try store.addLocal(.{ .layout_idx = f.list });
+    const output = try store.addLocal(.{ .layout_idx = f.list });
+    const cond = try store.addLocal(.{ .layout_idx = .bool });
+    const done = try store.addCFStmt(.{ .ret = .{ .value = output } });
+    const left = try addSetSite(&f, output, input, done);
+    const right = try addSetSite(&f, output, input, done);
+    const branch = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = cond,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = left }}),
+        .default_branch = right,
+    } });
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(11662),
+        .args = try store.addLocalSpan(&.{ input, cond }),
+        .body = branch,
+        .ret_layout = f.list,
+    });
+    try testMetadataTransfer(&f, proc, left, true);
+    try testMetadataTransfer(&f, proc, right, true);
 }
 
 test "promote threads slack through an append-only loop" {
