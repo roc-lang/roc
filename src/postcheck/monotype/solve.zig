@@ -288,6 +288,10 @@ pub const InterfaceConstraints = struct {
         shareable: collections.DenseMap(NodeId, bool),
         share_seen: collections.DenseMap(NodeId, void),
         related_ids: std.AutoHashMap(Capture.RelatedKey, u32),
+        settled_sealed: collections.DenseMap(NodeId, Type.TypeId),
+        settled_sealed_types: collections.DenseMap(Type.TypeId, Type.TypeId),
+        retained_sealed: collections.DenseMap(NodeId, Type.TypeId),
+        retained_sealed_types: collections.DenseMap(Type.TypeId, Type.TypeId),
         nodes: std.ArrayList(Node) = .empty,
         open_nodes: std.ArrayList(OpenNode) = .empty,
         kinds: std.ArrayList(Kind) = .empty,
@@ -299,6 +303,10 @@ pub const InterfaceConstraints = struct {
                 .shareable = collections.DenseMap(NodeId, bool).init(allocator),
                 .share_seen = collections.DenseMap(NodeId, void).init(allocator),
                 .related_ids = std.AutoHashMap(Capture.RelatedKey, u32).init(allocator),
+                .settled_sealed = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
+                .settled_sealed_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(allocator),
+                .retained_sealed = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
+                .retained_sealed_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(allocator),
             };
         }
 
@@ -308,6 +316,10 @@ pub const InterfaceConstraints = struct {
             self.shareable.deinit();
             self.share_seen.deinit();
             self.related_ids.deinit();
+            self.settled_sealed.deinit();
+            self.settled_sealed_types.deinit();
+            self.retained_sealed.deinit();
+            self.retained_sealed_types.deinit();
             self.nodes.deinit(allocator);
             self.open_nodes.deinit(allocator);
             self.kinds.deinit(allocator);
@@ -334,11 +346,15 @@ pub const InterfaceConstraints = struct {
         @memset(hole_classes, null);
         const hole_roots = try allocator.alloc(NodeId, holes.len);
         for (holes, hole_roots) |hole, *root| root.* = graph.find(hole);
-        var retained = GraphTypeFinals.initRetainedTypeView(graph);
-        defer retained.deinit();
-        var settled = GraphTypeFinals.initSettledInterface(graph);
-        defer settled.deinit();
         const scratch = &graph.capture_scratch;
+        var retained = GraphTypeFinals.initRetainedTypeViewWithMaps(graph, scratch.retained_sealed, scratch.retained_sealed_types);
+        defer {
+            scratch.retained_sealed, scratch.retained_sealed_types = retained.releaseMaps();
+        }
+        var settled = GraphTypeFinals.initSettledInterface(graph, scratch.settled_sealed, scratch.settled_sealed_types);
+        defer {
+            scratch.settled_sealed, scratch.settled_sealed_types = settled.releaseMaps();
+        }
         var builder = Capture{
             .settled = &settled,
             .retained = &retained,
@@ -364,16 +380,14 @@ pub const InterfaceConstraints = struct {
             builder.nodes.clearRetainingCapacity();
             builder.open_nodes.clearRetainingCapacity();
             builder.kinds.clearRetainingCapacity();
-            scratch.* = .{
-                .node_ids = builder.node_ids,
-                .kind_ids = builder.kind_ids,
-                .shareable = builder.shareable,
-                .share_seen = builder.share_seen,
-                .related_ids = builder.related_ids,
-                .nodes = builder.nodes,
-                .open_nodes = builder.open_nodes,
-                .kinds = builder.kinds,
-            };
+            scratch.node_ids = builder.node_ids;
+            scratch.kind_ids = builder.kind_ids;
+            scratch.shareable = builder.shareable;
+            scratch.share_seen = builder.share_seen;
+            scratch.related_ids = builder.related_ids;
+            scratch.nodes = builder.nodes;
+            scratch.open_nodes = builder.open_nodes;
+            scratch.kinds = builder.kinds;
         }
         const captured_roots = try mapValue(&builder, []const NodeId, roots);
         return .{
@@ -6777,9 +6791,23 @@ pub const GraphTypeFinals = struct {
     /// Capture has established that these nodes contain no open cells or
     /// request-local evidence. Intern them directly, without retaining an
     /// intermediate active snapshot or finalizing the surrounding graph.
-    fn initSettledInterface(graph: *InstGraph) GraphTypeFinals {
+    fn initSettledInterface(
+        graph: *InstGraph,
+        sealed: collections.DenseMap(NodeId, Type.TypeId),
+        sealed_types: collections.DenseMap(Type.TypeId, Type.TypeId),
+    ) GraphTypeFinals {
         graph.requireRelationProduction();
-        return initUnchecked(graph, .settled_interface);
+        return initWithMaps(graph, .settled_interface, sealed, sealed_types);
+    }
+
+    /// `initRetainedTypeView` sealing into maps the caller owns.
+    fn initRetainedTypeViewWithMaps(
+        graph: *InstGraph,
+        sealed: collections.DenseMap(NodeId, Type.TypeId),
+        sealed_types: collections.DenseMap(Type.TypeId, Type.TypeId),
+    ) GraphTypeFinals {
+        graph.requireRelationProduction();
+        return initWithMaps(graph, .retained_type_view, sealed, sealed_types);
     }
 
     /// Intern immutable view content without consulting its former live graph
@@ -6805,15 +6833,44 @@ pub const GraphTypeFinals = struct {
     }
 
     fn initUnchecked(graph: *InstGraph, mode: Mode) GraphTypeFinals {
+        return initWithMaps(
+            graph,
+            mode,
+            collections.DenseMap(NodeId, Type.TypeId).init(graph.allocator),
+            collections.DenseMap(Type.TypeId, Type.TypeId).init(graph.allocator),
+        );
+    }
+
+    /// Seal into empty maps the caller owns; `releaseMaps` hands them back
+    /// empty with their capacity retained.
+    fn initWithMaps(
+        graph: *InstGraph,
+        mode: Mode,
+        sealed: collections.DenseMap(NodeId, Type.TypeId),
+        sealed_types: collections.DenseMap(Type.TypeId, Type.TypeId),
+    ) GraphTypeFinals {
+        std.debug.assert(sealed.count() == 0 and sealed_types.count() == 0);
         return .{
             .graph = graph,
             .mode = mode,
-            .sealed = collections.DenseMap(NodeId, Type.TypeId).init(graph.allocator),
-            .sealed_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(graph.allocator),
+            .sealed = sealed,
+            .sealed_types = sealed_types,
             .active_transaction = null,
             .transaction_sealed_nodes = .empty,
             .transaction_sealed_types = .empty,
         };
+    }
+
+    fn releaseMaps(self: *GraphTypeFinals) struct {
+        collections.DenseMap(NodeId, Type.TypeId),
+        collections.DenseMap(Type.TypeId, Type.TypeId),
+    } {
+        std.debug.assert(self.active_transaction == null);
+        self.transaction_sealed_types.deinit(self.graph.allocator);
+        self.transaction_sealed_nodes.deinit(self.graph.allocator);
+        self.sealed.clearRetainingCapacity();
+        self.sealed_types.clearRetainingCapacity();
+        return .{ self.sealed, self.sealed_types };
     }
 
     pub fn deinit(self: *GraphTypeFinals) void {
