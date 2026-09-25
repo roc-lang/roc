@@ -2973,7 +2973,7 @@ const Lowerer = struct {
         if (try self.captureBindingForLocal(local)) |capture| {
             return try self.lowerCaptureBindingInto(where, target, capture, next);
         }
-        const source = try self.bindUnboundLocalForTarget(local, ty, target);
+        const source = try self.bindUnboundLocal(local);
         const source_ty = try self.lowerLocalTy(local);
         try self.noteReturnForwardingLocal(target, source);
         return try self.assignTypedBoundary(where, target, ty, source, source_ty, next);
@@ -10243,13 +10243,12 @@ const Lowerer = struct {
         return lir_local;
     }
 
-    fn bindUnboundLocalForTarget(
+    fn bindUnboundLocal(
         self: *Lowerer,
         local: Lifted.LocalId,
-        ty: Type.TypeId,
-        target: LIR.LocalId,
     ) Common.LowerError!LIR.LocalId {
         if (self.local_map.contains(local)) Common.invariant("unbound local destination was already bound");
+        const ty = try self.lowerLocalTy(local);
 
         // Recursive values have an explicit slot representation selected before
         // ordinary value lowering. A backwards-built lookup must reserve that
@@ -10262,12 +10261,10 @@ const Lowerer = struct {
             return binding.slot;
         }
 
-        // LIR chains are built backwards, so the first use can reach an
-        // unbound local before its producer. Preserve that use's committed
-        // destination layout in a distinct local; direct let lowering later
-        // writes the producer into this exact slot.
-        const target_layout = self.result.store.getLocal(target).layout_idx;
-        const source = try self.addLocalForLayout(target_layout);
+        // LIR chains are built backwards, so a use can precede its producer.
+        // Reserve the producer's solved representation; the use's destination
+        // may have a different row and is converted at its typed boundary.
+        const source = try self.addTemp(ty);
         try self.local_map.put(local, source);
         try self.typed_local_map.put(.{ .local = local, .ty = ty }, source);
         try self.local_types.put(source, ty);
@@ -10421,11 +10418,22 @@ const Lowerer = struct {
         source_ty: Type.TypeId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
+        const source_runtime_ty = self.runtimeBackingType(source_ty);
+        const source_runtime_content = self.types.get(source_runtime_ty);
+        // The sealed empty row is uninhabited. A boundary may mention it in
+        // an impossible variant such as Err in Try(Str, []), but there is no
+        // payload to copy or convert, regardless of its zero-sized layout.
+        if (source_runtime_content == .tag_union and source_runtime_content.tag_union.len == 0) {
+            return try self.result.store.addCFStmt(.{ .runtime_error = {} }, where.source());
+        }
         if (target == source) return next;
-        if (try self.maybeAssignDirectLayoutBoundary(where, target, source, next)) |stmt| return stmt;
+        var equivalent_pairs = std.AutoHashMap(u64, void).init(self.allocator);
+        defer equivalent_pairs.deinit();
+        if (try self.typesEquivalentInMode(.value_encoding, target_ty, source_ty, &equivalent_pairs)) {
+            if (try self.maybeAssignDirectLayoutBoundary(where, target, source, next)) |stmt| return stmt;
+        }
 
         const target_runtime_ty = self.runtimeBackingType(target_ty);
-        const source_runtime_ty = self.runtimeBackingType(source_ty);
         if (target_runtime_ty != target_ty or source_runtime_ty != source_ty) {
             return try self.assignTypedBoundary(where, target, target_runtime_ty, source, source_runtime_ty, next);
         }
@@ -11377,7 +11385,7 @@ const Lowerer = struct {
     /// member sets) to match, which is what shared-layout reuse must key on:
     /// a layout's field slots, discriminant space, and dispatch targets are
     /// functions of the representation, not of the public interface.
-    const EquivalenceMode = enum { public, representation };
+    const EquivalenceMode = enum { public, representation, value_encoding };
 
     fn publicTypesEquivalent(
         self: *Lowerer,
@@ -11423,9 +11431,9 @@ const Lowerer = struct {
             .record => |fields| try self.fieldsEquivalentInMode(mode, fields, rhs.record, visited),
             .capture_record => |fields| try self.captureFieldsEquivalentInMode(mode, fields, rhs.capture_record, visited),
             .tag_union => |tags| try self.tagsEquivalentInMode(mode, tags, rhs.tag_union, visited),
-            .callable => |variants| try self.fnVariantsEquivalentInMode(mode, variants, rhs.callable, visited),
+            .callable => |variants| try self.fnVariantsEquivalentInMode(mode, mode != .value_encoding, variants, rhs.callable, visited),
             .erased_fn => |erased| std.mem.eql(u8, erased.source_fn_ty.bytes[0..], rhs.erased_fn.source_fn_ty.bytes[0..]) and
-                try self.fnVariantsEquivalentInMode(mode, erased.members, rhs.erased_fn.members, visited),
+                try self.fnVariantsEquivalentInMode(mode, true, erased.members, rhs.erased_fn.members, visited),
             .named => |named| try self.namedTypesEquivalentInMode(mode, named, rhs.named, visited),
         };
     }
@@ -11463,7 +11471,7 @@ const Lowerer = struct {
             }
         }
 
-        if (mode == .representation) {
+        if (mode != .public) {
             const lhs_backing = lhs.backing orelse return rhs.backing == null;
             const rhs_backing = rhs.backing orelse return false;
             if (lhs_backing.use != rhs_backing.use) return false;
@@ -11557,6 +11565,7 @@ const Lowerer = struct {
     fn fnVariantsEquivalentInMode(
         self: *Lowerer,
         comptime mode: EquivalenceMode,
+        comptime compare_targets: bool,
         lhs_span: Type.Span,
         rhs_span: Type.Span,
         visited: *std.AutoHashMap(u64, void),
@@ -11568,7 +11577,11 @@ const Lowerer = struct {
             const lhs_variant = GuardedList.at(lhs, index);
             const rhs_variant = GuardedList.at(rhs, index);
             if (lhs_variant.source != rhs_variant.source) return false;
-            if (lhs_variant.target != rhs_variant.target) return false;
+            // A finite callable stores its variant tag and captures. The
+            // specialization target belongs to its consumer, not its bytes.
+            // Erased entries retain the full comparison because they store
+            // an actual code pointer.
+            if (compare_targets and lhs_variant.target != rhs_variant.target) return false;
             if (!std.meta.eql(lhs_variant.capture_ty, rhs_variant.capture_ty)) {
                 if (lhs_variant.capture_ty == null or rhs_variant.capture_ty == null) return false;
                 if (!try self.typesEquivalentInMode(mode, lhs_variant.capture_ty.?, rhs_variant.capture_ty.?, visited)) return false;
@@ -13519,4 +13532,70 @@ fn rootRunsAtCompileTime(request: check.CheckedModule.RootRequest) bool {
         .compile_time_constant, .compile_time_callable => true,
         .runtime_entrypoint, .provided_export, .platform_required_binding, .hosted_export, .test_expect, .repl_expr, .dev_expr => false,
     };
+}
+
+test "value encoding preserves tag identities but excludes finite call targets" {
+    const allocator = std.testing.allocator;
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+    const a = try solved.lifted.names.internTagLabel("A");
+    const b = try solved.lifted.names.internTagLabel("B");
+    var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+    defer lowerer.deinit();
+    const lhs_members = try lowerer.types.addFnVariants(&.{.{
+        .id = undefined,
+        .source = @enumFromInt(1),
+        .target = @enumFromInt(2),
+        .capture_ty = null,
+    }});
+    const rhs_members = try lowerer.types.addFnVariants(&.{.{
+        .id = undefined,
+        .source = @enumFromInt(1),
+        .target = @enumFromInt(3),
+        .capture_ty = null,
+    }});
+    const lhs = try lowerer.types.add(.{ .callable = lhs_members });
+    const rhs = try lowerer.types.add(.{ .callable = rhs_members });
+    var visited = std.AutoHashMap(u64, void).init(allocator);
+    defer visited.deinit();
+    try std.testing.expect(try lowerer.typesEquivalentInMode(.value_encoding, lhs, rhs, &visited));
+    visited.clearRetainingCapacity();
+    try std.testing.expect(!try lowerer.representationTypesEquivalent(lhs, rhs, &visited));
+
+    const lhs_erased = try lowerer.types.add(.{ .erased_fn = .{ .source_fn_ty = .{}, .members = lhs_members } });
+    const rhs_erased = try lowerer.types.add(.{ .erased_fn = .{ .source_fn_ty = .{}, .members = rhs_members } });
+    visited.clearRetainingCapacity();
+    try std.testing.expect(!try lowerer.typesEquivalentInMode(.value_encoding, lhs_erased, rhs_erased, &visited));
+
+    const tag_a: Type.Tag = .{ .name = a, .checked_name = a, .payloads = .empty() };
+    const tag_b: Type.Tag = .{ .name = b, .checked_name = b, .payloads = .empty() };
+    const ab = try lowerer.types.add(.{ .tag_union = try lowerer.types.addTags(&.{ tag_a, tag_b }) });
+    const ba = try lowerer.types.add(.{ .tag_union = try lowerer.types.addTags(&.{ tag_b, tag_a }) });
+    try std.testing.expectEqual(try lowerer.layoutOfType(ab), try lowerer.layoutOfType(ba));
+    visited.clearRetainingCapacity();
+    try std.testing.expect(!try lowerer.typesEquivalentInMode(.value_encoding, ab, ba, &visited));
+}
+
+test "typed boundaries from empty rows are terminal even with matching layouts" {
+    const allocator = std.testing.allocator;
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+    var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+    defer lowerer.deinit();
+    const empty = try lowerer.types.add(.{ .tag_union = .empty() });
+    const u64_ty = try lowerer.types.add(.{ .primitive = .u64 });
+    const source = try lowerer.result.store.addLocal(.{ .layout_idx = .zst });
+    const test_site = LowerSite{
+        .loc = base.SourceLoc.none,
+        .region = base.Region.zero(),
+        .inline_scope = .none,
+        .outer = .none,
+        .mode = .source,
+    };
+    for ([_]Type.TypeId{ empty, u64_ty }, [_]layout.Idx{ .zst, .u64 }) |target_ty, target_layout| {
+        const target = try lowerer.result.store.addLocal(.{ .layout_idx = target_layout });
+        const next = try lowerer.result.store.addCFStmt(.{ .ret = .{ .value = target } }, test_site.scaffold());
+        const boundary = try lowerer.assignTypedBoundary(test_site, target, target_ty, source, empty, next);
+        try std.testing.expect(lowerer.result.store.getCFStmt(boundary) == .runtime_error);
+    }
 }
