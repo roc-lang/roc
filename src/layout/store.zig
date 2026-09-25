@@ -858,7 +858,7 @@ pub const Store = struct {
                         engine.component[i] = committed_component;
                         engine.digests[i] = graph.committedDigest(committed);
                     },
-                    else => {},
+                    .pending, .nominal, .box, .list, .closure, .erased_callable, .struct_, .tag_union => {},
                 }
             }
             for (graph.nodes.items, 0..) |node, i| {
@@ -1379,7 +1379,7 @@ pub const Store = struct {
                     mapping[i] = .{ .canonical = committed.idx };
                     continue;
                 },
-                else => {},
+                .pending, .nominal, .box, .list, .closure, .erased_callable, .struct_, .tag_union => {},
             }
             if (analysis.keys[i]) |key| {
                 if (self.interned_recursive_graphs.get(key)) |layout_idx| {
