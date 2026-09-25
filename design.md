@@ -11719,10 +11719,11 @@ function's error row into that callee. LIR consumes the retained source and
 destination types at the explicit return boundary.
 
 A terminal crash, failed compile-time exhaustiveness marker, or unreachable
-marker produces no value. When inferred without an expected slot, Lambda
-Solved assigns it an empty row rather than importing its source annotation.
-In particular, a checked-error crash contributes no return payload flow even
-when its retired source expression had a different type from the function.
+marker produces no value and contributes no return payload flow. Lambda Solved
+retains its source type for structural consumers, such as a field access on a
+checked-error record, but does not relate a terminal return operand to the
+function's destination type. In particular, a checked-error crash may retain
+a different source type from the function without unifying those types.
 
 When backwards LIR construction first reaches a local through a return use,
 it reserves storage at that local's solved producer type. The destination row

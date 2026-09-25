@@ -725,7 +725,7 @@ const Solver = struct {
                 const stmt = self.lifted.stmts[@intFromEnum(stmt_id)];
                 if (frame.cursor != 0) {
                     if (stmt == .let_) try self.bindPattern(stmt.let_.pat, self.inferredExpr(stmt.let_.value));
-                    if (stmt == .return_) try self.relateReturn(self.inferredExpr(stmt.return_.value), try self.returnTargetTy(stmt.return_.target));
+                    if (stmt == .return_) try self.relateReturnedExpr(stmt.return_.value, try self.returnTargetTy(stmt.return_.target));
                     return null;
                 }
                 frame.cursor = 1;
@@ -1040,7 +1040,7 @@ const Solver = struct {
             },
             .return_ => |ret| {
                 if (cursor == 0) return .{ .expr = .{ .id = ret.value } };
-                try self.relateReturn(self.inferredExpr(ret.value), try self.returnTargetTy(ret.target));
+                try self.relateReturnedExpr(ret.value, try self.returnTargetTy(ret.target));
             },
             .dbg, .expect => |child| {
                 if (cursor == 0) return .{ .expr = .{ .id = child } };
@@ -1053,6 +1053,14 @@ const Solver = struct {
             },
         }
         return null;
+    }
+
+    /// Terminal expressions retain their checked type for structural consumers,
+    /// but produce no value that can flow into a return destination.
+    fn relateReturnedExpr(self: *Solver, value: Lifted.ExprId, target: Type.TypeVarId) Allocator.Error!void {
+        const tag = std.meta.activeTag(self.lifted.exprs[@intFromEnum(value)].data);
+        if (tag == .crash or tag == .comptime_exhaustiveness_failed or tag == .@"unreachable") return;
+        try self.relateReturn(self.inferredExpr(value), target);
     }
 
     /// A checked return boundary carries a value from its source row into
@@ -1245,11 +1253,7 @@ const Solver = struct {
 
         const expr = self.lifted.exprs[index];
         const tag = std.meta.activeTag(expr.data);
-        // Terminal expressions produce no value, including checked-error
-        // crashes whose source annotation need not match the enclosing return.
-        const ty = if (tag == .crash or tag == .comptime_exhaustiveness_failed or tag == .@"unreachable")
-            try self.program.types.add(.{ .tag_union = .empty() })
-        else if (tag == .local)
+        const ty = if (tag == .local)
             self.localTy(expr.data.local)
         else if (tag == .fn_ref)
             self.program.fn_tys.items[@intFromEnum(expr.data.fn_ref.fn_id)]
