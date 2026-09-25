@@ -765,9 +765,11 @@ fn writeVar(self: *TypeWriter, writer: *ByteWrite, var_: Var, root_var: Var) err
 fn startAlias(self: *TypeWriter, writer: *ByteWrite, alias: Alias) error{ OutOfMemory, WriteFailed }!bool {
     try writer.writeAll(self.getDisplayName(alias.ident.ident_idx));
     // An alias stores its backing var as the first element of its span, so
-    // its arguments are the span with that element dropped.
+    // its arguments are the span with that element dropped. Only the
+    // declared arguments are written (`Store.sliceAliasDeclaredArgs`).
     var args = alias.vars.nonempty;
     args.dropFirstElem();
+    args.count = @intCast(self.types.sliceAliasDeclaredArgs(alias).len);
     if (alias.backing.isOpened() and self.opened_aliases == .name_and_backing) {
         if (args.len() > 0) try writer.writeAll("(");
         try self.frames.append(.{ .opened_alias = .{
@@ -1569,10 +1571,11 @@ fn collectCountChildren(self: *TypeWriter, content: Content) std.mem.Allocator.E
             }
         },
         .alias => |alias| {
-            // For aliases, we only count occurrences in the type arguments,
+            // For aliases, we only count occurrences in the declared type
+            // arguments, the ones written (a hidden argument is never
+            // written, so counting it would name a variable written once),
             // and in the backing when it is rendered too.
-            var args_iter = self.types.iterAliasArgs(alias);
-            while (args_iter.next()) |arg_var| {
+            for (self.types.sliceAliasDeclaredArgs(alias)) |arg_var| {
                 try self.count_pending.append(arg_var);
             }
             if (alias.backing.isOpened() and self.opened_aliases == .name_and_backing) {

@@ -5793,7 +5793,7 @@ fn walkSettledRoot(
                     .var_ = self.types.getAliasBackingVar(alias),
                     .starts_row = entry.starts_row,
                 });
-                try self.appendSettledTypeReachVars(walk_stack, self.types.sliceAliasArgs(alias), true);
+                try self.appendSettledTypeReachVars(walk_stack, self.types.sliceAliasDeclaredArgs(alias), true);
             },
             .structure => |flat_type| switch (flat_type) {
                 .tuple => |tuple| try self.appendSettledTypeReachVars(walk_stack, self.types.sliceVars(tuple.elems), true),
@@ -10577,7 +10577,7 @@ fn varIsConcreteHoistedConstTypeInternal(
         .field_presence,
         => false,
         .rigid => walk == .decl_template,
-        .alias => |alias| (try self.varsAreConcreteHoistedConstTypes(walk, purpose, self.types.sliceAliasArgs(alias), visited)) and
+        .alias => |alias| (try self.varsAreConcreteHoistedConstTypes(walk, purpose, self.types.sliceAliasDeclaredArgs(alias), visited)) and
             try self.varIsConcreteHoistedConstTypeInternal(walk, purpose, self.types.getAliasBackingVar(alias), visited),
         .structure => |flat| try self.flatTypeIsConcreteHoistedConst(walk, purpose, flat, visited),
     };
@@ -16832,7 +16832,7 @@ fn registerLocalNominalDecl(
 fn predeclaredAliasArgs(self: *const Self, decl_var: Var) ?[]Var {
     const resolved = self.types.resolveVar(decl_var).desc.content;
     if (resolved != .alias) return null;
-    return self.types.sliceAliasArgs(resolved.alias);
+    return self.types.sliceAliasDeclaredArgs(resolved.alias);
 }
 
 fn predeclaredNominalArgs(self: *const Self, decl_var: Var) ?[]Var {
@@ -20414,7 +20414,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     const decl_arg_vars, const decl_name = blk: {
                         if (decl_resolved == .alias) {
                             const decl_alias = decl_resolved.alias;
-                            break :blk .{ self.types.sliceAliasArgs(decl_alias), decl_alias.ident.ident_idx };
+                            break :blk .{ self.types.sliceAliasDeclaredArgs(decl_alias), decl_alias.ident.ident_idx };
                         } else if (decl_resolved == .structure and decl_resolved.structure == .nominal_type) {
                             const decl_nominal = decl_resolved.structure.nominal_type;
                             break :blk .{ self.types.sliceNominalArgs(decl_nominal), decl_nominal.ident.ident_idx };
@@ -20504,7 +20504,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         const ext_arg_vars, const ext_name = blk: {
                             switch (ext_resolved) {
                                 .alias => |decl_alias| {
-                                    break :blk .{ self.types.sliceAliasArgs(decl_alias), decl_alias.ident.ident_idx };
+                                    break :blk .{ self.types.sliceAliasDeclaredArgs(decl_alias), decl_alias.ident.ident_idx };
                                 },
                                 .structure => |flat_type| {
                                     if (flat_type == .nominal_type) {
@@ -26806,7 +26806,7 @@ fn singleParameterWrapperPayload(self: *Self, wrapper_var: Var) ?Var {
     const resolved = self.types.resolveVar(wrapper_var);
     return switch (resolved.desc.content) {
         .alias => |alias| blk: {
-            const args = self.types.sliceAliasArgs(alias);
+            const args = self.types.sliceAliasDeclaredArgs(alias);
             if (args.len != 1) break :blk null;
             break :blk args[0];
         },
@@ -36017,8 +36017,8 @@ fn dispatchEmbedCoupleGrade(
     {
         const small_alias = small_content.alias;
         const big_alias = big_content.alias;
-        const small_args = self.types.sliceAliasArgs(small_alias);
-        const big_args = self.types.sliceAliasArgs(big_alias);
+        const small_args = self.types.sliceAliasDeclaredArgs(small_alias);
+        const big_args = self.types.sliceAliasDeclaredArgs(big_alias);
         if (small_args.len != big_args.len) return .none;
         var strict = false;
         switch (try self.dispatchReceiverEmbedGrade(
@@ -36294,7 +36294,7 @@ fn dispatchEmbedDivesIntoChild(
             // An opened alias's arguments are presentation; its structure
             // is its backing alone, as `dispatchReceiverSizeInner` counts it.
             if (alias.backing.isOpened()) return false;
-            for (self.types.sliceAliasArgs(alias)) |arg| {
+            for (self.types.sliceAliasDeclaredArgs(alias)) |arg| {
                 if (try self.dispatchEmbedsInto(small_var, arg)) return true;
             }
             return false;
@@ -36461,7 +36461,7 @@ fn dispatchReceiverSizeInner(
             // An opened alias's arguments are presentation, not structure
             // (design.md "Opened Alias Instances").
             if (alias.backing.isOpened()) return;
-            for (self.types.sliceAliasArgs(alias)) |arg| {
+            for (self.types.sliceAliasDeclaredArgs(alias)) |arg| {
                 try self.dispatchReceiverSizeInner(active, arg, result);
             }
         },
@@ -38506,7 +38506,7 @@ fn varViolatesHostBoundaryRuleInternal(
     return switch (resolved.desc.content) {
         .structure => |flat_type| try self.flatTypeViolatesHostBoundaryRule(flat_type, visited, rule),
         .alias => |alias| blk: {
-            if (try self.varsViolateHostBoundaryRule(self.types.sliceAliasArgs(alias), visited, rule)) break :blk true;
+            if (try self.varsViolateHostBoundaryRule(self.types.sliceAliasDeclaredArgs(alias), visited, rule)) break :blk true;
             break :blk try self.varViolatesHostBoundaryRuleInternal(self.types.getAliasBackingVar(alias), visited, rule);
         },
         .flex, .rigid, .err, .field_presence => unreachable,
@@ -38607,7 +38607,7 @@ fn recordExtIsClosedForHostBoundary(
 
         switch (resolved.desc.content) {
             .alias => |alias| {
-                if (try self.varsViolateHostBoundaryRule(self.types.sliceAliasArgs(alias), visited, .closed_rows)) return false;
+                if (try self.varsViolateHostBoundaryRule(self.types.sliceAliasDeclaredArgs(alias), visited, .closed_rows)) return false;
                 current = self.types.getAliasBackingVar(alias);
             },
             .structure => |flat_type| switch (flat_type) {
@@ -38646,7 +38646,7 @@ fn tagUnionExtIsClosedForHostBoundary(
 
         switch (resolved.desc.content) {
             .alias => |alias| {
-                if (try self.varsViolateHostBoundaryRule(self.types.sliceAliasArgs(alias), visited, .closed_rows)) return false;
+                if (try self.varsViolateHostBoundaryRule(self.types.sliceAliasDeclaredArgs(alias), visited, .closed_rows)) return false;
                 current = self.types.getAliasBackingVar(alias);
             },
             .structure => |flat_type| switch (flat_type) {
@@ -41858,7 +41858,7 @@ fn analyzeDerivedMap(
             nominal = named;
         },
         .alias => |alias| {
-            const alias_args = try self.gpa.dupe(Var, self.types.sliceAliasArgs(alias));
+            const alias_args = try self.gpa.dupe(Var, self.types.sliceAliasDeclaredArgs(alias));
             defer self.gpa.free(alias_args);
             if (!try self.declaredMapArgsAreEligible(alias_args, env, region)) return null;
             backing_var = self.types.getAliasBackingVar(alias);

@@ -1217,11 +1217,28 @@ pub const Store = struct {
         return self.vars.get(alias.vars.nonempty.start).*;
     }
 
-    /// Get the arg vars for this alias type
+    /// Get every arg var of this alias type: the declared arguments followed by
+    /// the hidden ones (see `sliceAliasDeclaredArgs` / `aliasHiddenArgs`). A
+    /// graph walk (rank, occurs, reachability, copying, unification) visits
+    /// all of them; a reader that reads arguments by the declaration's
+    /// positions reads only the declared ones.
     pub fn sliceAliasArgs(self: *const Self, alias: Alias) []Var {
         std.debug.assert(alias.vars.nonempty.count > 0);
         const slice = self.vars.sliceRange(alias.vars.nonempty);
         return slice[1..];
+    }
+
+    /// The arguments written at the application, one per declared formal, in
+    /// the declaration's order: what arity checks, positional readers and
+    /// presentation read.
+    pub fn sliceAliasDeclaredArgs(self: *const Self, alias: Alias) []Var {
+        return self.sliceAliasArgs(alias);
+    }
+
+    /// The arguments the declaration added after its declared formals.
+    pub fn aliasHiddenArgs(self: *const Self, alias: Alias) []Var {
+        const args = self.sliceAliasArgs(alias);
+        return args[args.len..];
     }
 
     /// Get the an iterator arg vars for this alias type
