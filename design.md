@@ -13566,6 +13566,51 @@ hidden by an unused result.
 Interprocedural inlining, generated-procedure variants, global reachability,
 and ARC's solve remain outside this boundary.
 
+### Statement Provenance
+
+Every LIR statement records where it came from and why it exists. This is the
+data that `roc test` code coverage, runtime instrumentation, and debugger line
+tables consume, so it is explicit data stated by the producer, never recovered
+from context. `LirStore.addCFStmt(stmt, origin)` and
+`replaceCFStmt(id, stmt, origin)` require a `StmtOrigin`: source location,
+checked region, inline scope, and an `OriginKind`. The store keeps these as
+dense columns parallel to the statements. There is no ambient "current
+location" on the store, and a statement cannot be created without one.
+
+`OriginKind` states why the statement exists. `source` statements lower a user
+expression, statement, or pattern. `lowering_glue`, `derived`, and `scaffold`
+statements are introduced by lowering for boundaries and control flow,
+generated helpers such as structural equality and hashing, and generated
+procedures and rebuilt constants; each carries the location of the construct
+that required it. Each LIR rewrite has its own kind (`trmc`, `range_prove`,
+`join_scalarize`, `box_reuse`, `return_slot`, `str_append_fuse`,
+`loop_append_promote`, `tag_case_fusion`, `forwarding_join_inline`,
+`comptime_value_guard`) and keeps the location of the statement it rewrites.
+Clones inherit the original's origin with the inline scope remapped; clone
+callbacks receive that origin as a parameter.
+
+ARC states the ownership decision behind every statement it inserts.
+`arc_incref` and `arc_decref` carry the subject local and an `RcReason` taken
+from the ARC plan datum that produced the statement, and `arc_dismantle` covers
+the glue of a residual release. They carry the location of the statement whose
+ownership decision caused them. A consumer that reports where refcount traffic
+or a copy-on-write comes from reads these rows; it does not re-derive ownership.
+
+Backends read provenance and make no decisions of their own beyond the stated
+kind. ARC-inserted statements (`OriginKind.isArcInserted`) do not affect
+debugger stepping: LLVM gives them line 0 and the dev backend emits no
+line-table row for them.
+
+Procedure rewrites that replace a statement in the frozen coordinator prefix
+  record its new origin in the rewrite's own origin columns, which are provided
+with the statement on commit. A plain lowering shard never restamps prefix
+metadata. Pure link edits (`next`, `body`, `remainder`) and operand edits that
+do not change what a statement does keep its existing origin.
+
+Provenance adds one `OriginKind` column (12 bytes per statement) to the store and
+the LIR image. Procedure locations are likewise explicit: `addProcSpec(proc,
+loc)`.
+
 ### ARC
 
 The direct LIR builder emits ownership-neutral LIR. ARC insertion runs after

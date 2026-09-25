@@ -21,6 +21,8 @@ const JoinPoint = lir_defs.JoinPoint;
 const JoinPointSpan = lir_defs.JoinPointSpan;
 const InlineScope = lir_defs.InlineScope;
 const InlineScopeId = lir_defs.InlineScopeId;
+const OriginKind = lir_defs.OriginKind;
+const StmtOrigin = lir_defs.StmtOrigin;
 const LirProcSpec = lir_defs.LirProcSpec;
 const LirProcSpecId = lir_defs.LirProcSpecId;
 const Local = lir_defs.Local;
@@ -144,7 +146,13 @@ fn RewriteColumn(comptime T: type, comptime field: []const u8) type {
     };
 }
 
-const rewrite_columns = .{ "cf_stmts", "cf_switch_branches", "str_match_arms", "join_points" };
+const rewrite_columns = .{ "cf_stmts", "cf_switch_branches", "str_match_arms", "join_points" } ++ origin_columns;
+
+/// Statement provenance columns, parallel to `cf_stmts`. A procedure rewrite
+/// prepares them for exactly the statements it prepares, so replacing a
+/// prefix statement records the replacement's stated origin privately and
+/// publishes it with the statement on commit.
+const origin_columns = .{ "cf_stmt_locs", "cf_stmt_regions", "cf_stmt_inline_scopes", "cf_stmt_origin_kinds" };
 
 /// Exists only for opt-in procedure rewrites; ordinary lowering shards do not
 /// allocate overlays. All copies are prepared before infallible mutable borrows.
@@ -152,6 +160,10 @@ const ProcRewrite = struct {
     proc_id: LirProcSpecId,
     proc: LirProcSpec,
     cf_stmts: RewriteColumn(CFStmt, "cf_stmts"),
+    cf_stmt_locs: RewriteColumn(base.SourceLoc, "cf_stmt_locs"),
+    cf_stmt_regions: RewriteColumn(base.Region, "cf_stmt_regions"),
+    cf_stmt_inline_scopes: RewriteColumn(InlineScopeId, "cf_stmt_inline_scopes"),
+    cf_stmt_origin_kinds: RewriteColumn(OriginKind, "cf_stmt_origin_kinds"),
     cf_switch_branches: RewriteColumn(CFSwitchBranch, "cf_switch_branches"),
     str_match_arms: RewriteColumn(StrMatchArm, "str_match_arms"),
     join_points: RewriteColumn(JoinPoint, "join_points"),
@@ -211,6 +223,10 @@ pub fn cloneForProcRewrite(self: *const Self, allocator: Allocator, proc_id: Lir
         .proc_id = proc_id,
         .proc = self.getProcSpec(proc_id),
         .cf_stmts = .init(allocator),
+        .cf_stmt_locs = .init(allocator),
+        .cf_stmt_regions = .init(allocator),
+        .cf_stmt_inline_scopes = .init(allocator),
+        .cf_stmt_origin_kinds = .init(allocator),
         .cf_switch_branches = .init(allocator),
         .str_match_arms = .init(allocator),
         .join_points = .init(allocator),
@@ -221,6 +237,9 @@ pub fn cloneForProcRewrite(self: *const Self, allocator: Allocator, proc_id: Lir
     while (cursor < rewrite.cf_stmts.ids.items.len) : (cursor += 1) {
         const id = rewrite.cf_stmts.ids.items[cursor];
         try rewrite.prepareValue(self, allocator, CFStmt, self.getCFStmt(@enumFromInt(id)));
+    }
+    inline for (origin_columns) |field| {
+        for (rewrite.cf_stmts.ids.items) |id| _ = try @field(rewrite, field).prepare(allocator, id);
     }
     inline for (rewrite_columns) |field| try @field(rewrite, field).finish(allocator, self);
     return result;
@@ -448,9 +467,6 @@ pub fn cloneForBodyShard(self: *const Self, allocator: Allocator) Allocator.Erro
     result.body_prefix = self.captureBodyPrefix();
     result.strings_insertable = true;
     result.next_synthetic_symbol = self.next_synthetic_symbol;
-    result.current_loc = self.current_loc;
-    result.current_region = self.current_region;
-    result.current_inline_scope = self.current_inline_scope;
     return result;
 }
 
@@ -617,6 +633,7 @@ pub fn appendBodyShardWithJoinRelocation(
     if (source.cf_stmts.len() != source.cf_stmt_locs.len() or
         source.cf_stmts.len() != source.cf_stmt_regions.len() or
         source.cf_stmts.len() != source.cf_stmt_inline_scopes.len() or
+        source.cf_stmts.len() != source.cf_stmt_origin_kinds.len() or
         source.locals.len() != source.local_names.len())
     {
         return error.InvalidBodyPrefix;
@@ -665,6 +682,7 @@ pub fn appendBodyShardWithJoinRelocation(
     try self.cf_stmt_locs.ensureUnusedCapacity(self.allocator, stmt_len);
     try self.cf_stmt_regions.ensureUnusedCapacity(self.allocator, stmt_len);
     try self.cf_stmt_inline_scopes.ensureUnusedCapacity(self.allocator, stmt_len);
+    try self.cf_stmt_origin_kinds.ensureUnusedCapacity(self.allocator, stmt_len);
     try self.cf_switch_branches.ensureUnusedCapacity(self.allocator, source.cf_switch_branches.len() - source_prefix.cf_switch_branches);
     try self.str_match_steps.ensureUnusedCapacity(self.allocator, source.str_match_steps.len() - source_prefix.str_match_steps);
     try self.str_match_arms.ensureUnusedCapacity(self.allocator, source.str_match_arms.len() - source_prefix.str_match_arms);
@@ -729,6 +747,12 @@ pub fn appendBodyShardWithJoinRelocation(
             relocateBodyValue(InlineScopeId, scope, prefix, bases),
         );
     }
+    for (source.cf_stmt_origin_kinds.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |kind| {
+        try self.cf_stmt_origin_kinds.append(
+            self.allocator,
+            relocateBodyValue(OriginKind, kind, prefix, bases),
+        );
+    }
 
     return .{
         .relocation = bases,
@@ -789,6 +813,10 @@ cf_stmt_locs: GuardedList.List(base.SourceLoc, "LirStore.cf_stmt_locs"),
 cf_stmt_regions: GuardedList.List(base.Region, "LirStore.cf_stmt_regions"),
 /// Virtual inline scope per statement, parallel to `cf_stmts`.
 cf_stmt_inline_scopes: GuardedList.List(InlineScopeId, "LirStore.cf_stmt_inline_scopes"),
+/// Why each statement exists, parallel to `cf_stmts`. Together with
+/// `cf_stmt_locs`, `cf_stmt_regions`, and `cf_stmt_inline_scopes` this forms
+/// the statement's `StmtOrigin` (see `stmtOrigin`).
+cf_stmt_origin_kinds: GuardedList.List(OriginKind, "LirStore.cf_stmt_origin_kinds"),
 /// Interned virtual source-frame graph.
 inline_scopes: GuardedList.List(InlineScope, "LirStore.inline_scopes"),
 /// Immutable coordinator storage visible to a body worker. A null pointer
@@ -805,13 +833,6 @@ proc_debug_names: GuardedList.List(ProcDebugName, "LirStore.proc_debug_names"),
 /// Source-level name per local, parallel to `locals`: an index into
 /// `strings`, or `no_local_name` for compiler-generated temporaries.
 local_names: GuardedList.List(u32, "LirStore.local_names"),
-/// Ambient location recorded by `addCFStmt`/`addProcSpec`. Lowering sets
-/// this on entry to each source node it lowers.
-current_loc: base.SourceLoc,
-/// Ambient checked source region recorded by `addCFStmt`.
-current_region: base.Region,
-/// Ambient virtual source frame recorded by `addCFStmt`.
-current_inline_scope: InlineScopeId,
 /// Active procedure-construction scope. Never persisted in LIR images or
 /// transferred into another body worker; completed proofs live in LIR itself.
 tail_call_builder: ?*TailCallBuilder = null,
@@ -847,15 +868,13 @@ pub fn init(allocator: Allocator) Self {
         .cf_stmt_locs = .empty,
         .cf_stmt_regions = .empty,
         .cf_stmt_inline_scopes = .empty,
+        .cf_stmt_origin_kinds = .empty,
         .inline_scopes = .empty,
         .body_coordinator = null,
         .body_prefix = std.mem.zeroes(BodyPrefix),
         .proc_locs = .empty,
         .proc_debug_names = .empty,
         .local_names = .empty,
-        .current_loc = base.SourceLoc.none,
-        .current_region = base.Region.zero(),
-        .current_inline_scope = InlineScopeId.none,
     };
 }
 
@@ -909,6 +928,7 @@ pub fn releaseCode(self: *Self) void {
         "cf_stmt_locs",
         "cf_stmt_regions",
         "cf_stmt_inline_scopes",
+        "cf_stmt_origin_kinds",
         "local_names",
     }) |field| {
         @field(self, field).deinit(self.allocator);
@@ -942,6 +962,7 @@ pub fn deinit(self: *Self) void {
     self.cf_stmt_locs.deinit(self.allocator);
     self.cf_stmt_regions.deinit(self.allocator);
     self.cf_stmt_inline_scopes.deinit(self.allocator);
+    self.cf_stmt_origin_kinds.deinit(self.allocator);
     self.inline_scopes.deinit(self.allocator);
     self.proc_locs.deinit(self.allocator);
     self.proc_debug_names.deinit(self.allocator);
@@ -1054,6 +1075,11 @@ pub fn sourceFileQualifiedName(self: *const Self, file: u32) []const u8 {
 /// Source location of a statement.
 pub fn stmtLoc(self: *const Self, id: CFStmtId) base.SourceLoc {
     const index = @intFromEnum(id);
+    if (self.proc_rewrite) |*rewrite| {
+        if (rewrite.cf_stmt_locs.indices.get(index)) |private| {
+            if (rewrite.cf_stmt_locs.owned(private)) return rewrite.cf_stmt_locs.rows.get(private);
+        }
+    }
     if (self.body_coordinator) |coordinator| {
         if (index < self.body_prefix.cf_stmts) return coordinator.stmtLoc(id);
         return self.cf_stmt_locs.get(index - self.body_prefix.cf_stmts);
@@ -1064,6 +1090,11 @@ pub fn stmtLoc(self: *const Self, id: CFStmtId) base.SourceLoc {
 /// Virtual source frame associated with a statement.
 pub fn stmtInlineScope(self: *const Self, id: CFStmtId) InlineScopeId {
     const index = @intFromEnum(id);
+    if (self.proc_rewrite) |*rewrite| {
+        if (rewrite.cf_stmt_inline_scopes.indices.get(index)) |private| {
+            if (rewrite.cf_stmt_inline_scopes.owned(private)) return rewrite.cf_stmt_inline_scopes.rows.get(private);
+        }
+    }
     if (self.body_coordinator) |coordinator| {
         if (index < self.body_prefix.cf_stmts) return coordinator.stmtInlineScope(id);
         return self.cf_stmt_inline_scopes.get(index - self.body_prefix.cf_stmts);
@@ -1103,11 +1134,42 @@ pub fn addInlineScope(self: *Self, scope: InlineScope) Allocator.Error!InlineSco
 /// Checked source region of a statement.
 pub fn stmtRegion(self: *const Self, id: CFStmtId) base.Region {
     const index = @intFromEnum(id);
+    if (self.proc_rewrite) |*rewrite| {
+        if (rewrite.cf_stmt_regions.indices.get(index)) |private| {
+            if (rewrite.cf_stmt_regions.owned(private)) return rewrite.cf_stmt_regions.rows.get(private);
+        }
+    }
     if (self.body_coordinator) |coordinator| {
         if (index < self.body_prefix.cf_stmts) return coordinator.stmtRegion(id);
         return self.cf_stmt_regions.get(index - self.body_prefix.cf_stmts);
     }
     return self.cf_stmt_regions.get(index);
+}
+
+/// Origin kind recorded for a statement.
+pub fn stmtOriginKind(self: *const Self, id: CFStmtId) OriginKind {
+    const index = @intFromEnum(id);
+    if (self.proc_rewrite) |*rewrite| {
+        if (rewrite.cf_stmt_origin_kinds.indices.get(index)) |private| {
+            if (rewrite.cf_stmt_origin_kinds.owned(private)) return rewrite.cf_stmt_origin_kinds.rows.get(private);
+        }
+    }
+    if (self.body_coordinator) |coordinator| {
+        if (index < self.body_prefix.cf_stmts) return coordinator.stmtOriginKind(id);
+        return self.cf_stmt_origin_kinds.get(index - self.body_prefix.cf_stmts);
+    }
+    return self.cf_stmt_origin_kinds.get(index);
+}
+
+/// Complete provenance of a statement. Rewrites and copies pass this value to
+/// the statement they create in place of the one they replace.
+pub fn stmtOrigin(self: *const Self, id: CFStmtId) StmtOrigin {
+    return .{
+        .loc = self.stmtLoc(id),
+        .region = self.stmtRegion(id),
+        .inline_scope = self.stmtInlineScope(id),
+        .kind = self.stmtOriginKind(id),
+    };
 }
 
 /// Source location of a proc.
@@ -1458,75 +1520,53 @@ pub fn getErasedCallArgOffsets(self: *const Self, plan: ErasedCallArgsPlan) Stor
     return self.getU32Span(plan.offsets);
 }
 
-/// Appends a statement/control-flow node and returns its id.
-pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
-    const idx = self.cf_stmts.len() + if (self.body_coordinator != null) self.body_prefix.cf_stmts else 0;
-    try self.cf_stmts.append(self.allocator, stmt);
-    self.noteStmtShapes(stmt);
-    const has_source = switch (stmt) {
-        .incref,
-        .decref,
-        .decref_if_initialized,
-        .free,
-        => false,
+// Statement provenance API (design.md "Statement Provenance").
+//
+// `addCFStmt` and `replaceCFStmt` are the only statement-creation and
+// statement-replacement entry points; every producer states the origin of the
+// statement it creates. There is no ambient location state.
 
-        .init_uninitialized,
-        .assign_ref,
-        .assign_literal,
-        .assign_call,
-        .assign_call_erased,
-        .assign_packed_erased_fn,
-        .assign_boxy_desc_ref,
-        .assign_boxy_dict_ref,
-        .assign_boxy_box,
-        .assign_boxy_reuse_box,
-        .assign_boxy_unbox,
-        .assign_boxy_adapt,
-        .assign_boxy_inspect,
-        .assign_boxy_eq,
-        .assign_boxy_tag,
-        .assign_boxy_tag_payload,
-        .boxy_tag_match,
-        .assign_call_dict,
-        .assign_low_level,
-        .assign_list,
-        .assign_struct,
-        .assign_tag,
-        .store_struct,
-        .store_tag,
-        .set_local,
-        .debug,
-        .expect,
-        .expect_err,
-        .runtime_error,
-        .comptime_exhaustiveness_failed,
-        .comptime_branch_taken,
-        .switch_stmt,
-        .switch_initialized_payload,
-        .str_match,
-        .str_match_set,
-        .loop_continue,
-        .loop_break,
-        .join,
-        .jump,
-        .ret,
-        .crash,
-        => true,
-    };
-    const loc = if (has_source) self.current_loc else base.SourceLoc.none;
-    const region = if (has_source) self.current_region else base.Region.zero();
-    const inline_scope = if (has_source) self.current_inline_scope else InlineScopeId.none;
-    try self.cf_stmt_locs.append(self.allocator, loc);
-    try self.cf_stmt_regions.append(self.allocator, region);
-    try self.cf_stmt_inline_scopes.append(self.allocator, inline_scope);
+/// Appends a statement with its explicit provenance and returns its id.
+pub fn addCFStmt(self: *Self, stmt: CFStmt, origin: StmtOrigin) Allocator.Error!CFStmtId {
+    const idx = self.cf_stmts.len() + if (self.body_coordinator != null) self.body_prefix.cf_stmts else 0;
+    try self.cf_stmts.ensureUnusedCapacity(self.allocator, 1);
+    try self.cf_stmt_locs.ensureUnusedCapacity(self.allocator, 1);
+    try self.cf_stmt_regions.ensureUnusedCapacity(self.allocator, 1);
+    try self.cf_stmt_inline_scopes.ensureUnusedCapacity(self.allocator, 1);
+    try self.cf_stmt_origin_kinds.ensureUnusedCapacity(self.allocator, 1);
+    try self.cf_stmts.append(self.allocator, stmt);
+    try self.cf_stmt_locs.append(self.allocator, origin.loc);
+    try self.cf_stmt_regions.append(self.allocator, origin.region);
+    try self.cf_stmt_inline_scopes.append(self.allocator, origin.inline_scope);
+    try self.cf_stmt_origin_kinds.append(self.allocator, origin.kind);
+    self.noteStmtShapes(stmt);
     const id: CFStmtId = @enumFromInt(@as(u32, @intCast(idx)));
     if (self.tail_call_builder) |builder| try builder.record(id, stmt);
     return id;
 }
 
-/// Fill a producer-owned placeholder and record its final control-flow facts.
-pub fn replaceCFStmt(self: *Self, id: CFStmtId, stmt: CFStmt) Allocator.Error!void {
+/// Replaces a statement and its provenance. A procedure rewrite records the
+/// origin of a replaced coordinator-prefix statement in its private rows and
+/// publishes it on commit; any other body worker's prefix metadata is
+/// immutable, so it must restate a prefix statement's existing origin.
+pub fn replaceCFStmt(self: *Self, id: CFStmtId, stmt: CFStmt, origin: StmtOrigin) Allocator.Error!void {
     self.getCFStmtPtr(id).* = stmt;
+    const index = @intFromEnum(id);
+    if (self.body_coordinator != null and index < self.body_prefix.cf_stmts) {
+        if (self.proc_rewrite) |*rewrite| {
+            const coordinator = self.body_coordinator.?;
+            rewrite.cf_stmt_locs.rows.getPtrImmediate(rewrite.cf_stmt_locs.mark(coordinator, index, 1)).* = origin.loc;
+            rewrite.cf_stmt_regions.rows.getPtrImmediate(rewrite.cf_stmt_regions.mark(coordinator, index, 1)).* = origin.region;
+            rewrite.cf_stmt_inline_scopes.rows.getPtrImmediate(rewrite.cf_stmt_inline_scopes.mark(coordinator, index, 1)).* = origin.inline_scope;
+            rewrite.cf_stmt_origin_kinds.rows.getPtrImmediate(rewrite.cf_stmt_origin_kinds.mark(coordinator, index, 1)).* = origin.kind;
+        } else if (!std.meta.eql(self.stmtOrigin(id), origin)) self.assertBodyMetadataImmutable();
+    } else {
+        const own = index - if (self.body_coordinator != null) self.body_prefix.cf_stmts else 0;
+        self.cf_stmt_locs.getPtrImmediate(own).* = origin.loc;
+        self.cf_stmt_regions.getPtrImmediate(own).* = origin.region;
+        self.cf_stmt_inline_scopes.getPtrImmediate(own).* = origin.inline_scope;
+        self.cf_stmt_origin_kinds.getPtrImmediate(own).* = origin.kind;
+    }
     if (self.tail_call_builder) |builder| try builder.record(id, stmt);
 }
 
@@ -1728,7 +1768,7 @@ pub fn getJoinPointSpanMut(self: *Self, span: JoinPointSpan) StoreSpanBorrowMut(
 }
 
 /// Appends a proc specification and returns its id.
-pub fn addProcSpec(self: *Self, proc: LirProcSpec) Allocator.Error!LirProcSpecId {
+pub fn addProcSpec(self: *Self, proc: LirProcSpec, loc: base.SourceLoc) Allocator.Error!LirProcSpecId {
     self.assertBodyMetadataImmutable();
     const idx = self.proc_specs.len();
     // A procedure created with a body was built from statements this store
@@ -1737,7 +1777,7 @@ pub fn addProcSpec(self: *Self, proc: LirProcSpec) Allocator.Error!LirProcSpecId
     var spec = proc;
     if (spec.body != null) spec.shapes = spec.shapes.merged(self.shapes);
     try self.proc_specs.append(self.allocator, spec);
-    try self.proc_locs.append(self.allocator, self.current_loc);
+    try self.proc_locs.append(self.allocator, loc);
     return @enumFromInt(@as(u32, @intCast(idx)));
 }
 
@@ -1898,13 +1938,13 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
     var coordinator = Self.init(allocator);
     defer coordinator.deinit();
     const old_local = try coordinator.addLocal(.{ .layout_idx = .u64 });
-    const ret = try coordinator.addCFStmt(.{ .ret = .{ .value = old_local } });
+    const ret = try coordinator.addCFStmt(.{ .ret = .{ .value = old_local } }, .test_fixture);
     const branches = try coordinator.addCFSwitchBranches(&.{.{ .value = 0, .body = ret }});
     const root = try coordinator.addCFStmt(.{ .switch_stmt = .{
         .cond = old_local,
         .branches = branches,
         .default_branch = ret,
-    } });
+    } }, .test_fixture);
     const joins = try coordinator.addJoinPointSpan(&.{.{
         .id = @enumFromInt(77),
         .params = .empty(),
@@ -1917,17 +1957,17 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
         .ret_layout = .u64,
         .body = root,
         .join_points = joins,
-    });
-    const other_ret = try coordinator.addCFStmt(.{ .ret = .{ .value = old_local } });
+    }, .none);
+    const other_ret = try coordinator.addCFStmt(.{ .ret = .{ .value = old_local } }, .test_fixture);
     const second = try coordinator.addProcSpec(.{
         .identity = lir_defs.ProcIdentity.forTest(@intCast(coordinator.procSpecCount())),
         .name = coordinator.freshSyntheticSymbol(),
         .args = .empty(),
         .ret_layout = .u64,
         .body = other_ret,
-    });
+    }, .none);
     // Unrelated prefix size must not determine per-worker owned storage.
-    for (0..10000) |_| _ = try coordinator.addCFStmt(.{ .ret = .{ .value = old_local } });
+    for (0..10000) |_| _ = try coordinator.addCFStmt(.{ .ret = .{ .value = old_local } }, .test_fixture);
     var a = try coordinator.cloneForProcRewrite(allocator, first);
     defer a.deinit();
     var b = try coordinator.cloneForProcRewrite(allocator, second);
@@ -1940,7 +1980,7 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
     _ = a.getProcSpecPtr(first);
     try std.testing.expect(!a.procRewriteChanged());
     const local_a = try a.addLocal(.{ .layout_idx = .u64 });
-    const appended_a = try a.addCFStmt(.{ .ret = .{ .value = local_a } });
+    const appended_a = try a.addCFStmt(.{ .ret = .{ .value = local_a } }, .test_fixture);
     const span_a = try a.addLocalSpan(&.{local_a});
     a.getCFStmtPtr(ret).* = .{ .assign_call = .{
         .target = local_a,
@@ -1956,7 +1996,7 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
     a.getProcSpecPtr(first).tail_calls = .{ .head = appended_a, .loop = @enumFromInt(77) };
     a.getProcSpecPtr(first).tail_transform = .tce;
     const local_b = try b.addLocal(.{ .layout_idx = .u64 });
-    const appended_b = try b.addCFStmt(.{ .ret = .{ .value = local_b } });
+    const appended_b = try b.addCFStmt(.{ .ret = .{ .value = local_b } }, .test_fixture);
     const span_b = try b.addLocalSpan(&.{local_b});
     b.getCFStmtPtr(other_ret).* = .{ .assign_call = .{
         .target = local_b,
@@ -2002,7 +2042,7 @@ test "procedure rewrite relocates only generated joins across simultaneous shard
     var roots: [2]CFStmtId = undefined;
     var old_spans: [2]JoinPointSpan = undefined;
     for (0..2) |i| {
-        roots[i] = try coordinator.addCFStmt(.{ .jump = .{ .target = source } });
+        roots[i] = try coordinator.addCFStmt(.{ .jump = .{ .target = source } }, .test_fixture);
         old_spans[i] = try coordinator.addJoinPointSpan(&.{.{ .id = source, .params = .empty(), .body = roots[i] }});
         procs[i] = try coordinator.addProcSpec(.{
             .identity = lir_defs.ProcIdentity.forTest(@intCast(i)),
@@ -2011,27 +2051,27 @@ test "procedure rewrite relocates only generated joins across simultaneous shard
             .ret_layout = .zst,
             .body = roots[i],
             .join_points = old_spans[i],
-        });
+        }, .none);
     }
     var a = try coordinator.cloneForProcRewrite(allocator, procs[0]);
     defer a.deinit();
     var b = try coordinator.cloneForProcRewrite(allocator, procs[1]);
     defer b.deinit();
     for ([_]*Self{ &a, &b }, 0..) |worker, i| {
-        const external = try worker.addCFStmt(.{ .jump = .{ .target = source } });
-        const clone_jump = try worker.addCFStmt(.{ .jump = .{ .target = @enumFromInt(101) } });
+        const external = try worker.addCFStmt(.{ .jump = .{ .target = source } }, .test_fixture);
+        const clone_jump = try worker.addCFStmt(.{ .jump = .{ .target = @enumFromInt(101) } }, .test_fixture);
         const clone = try worker.addCFStmt(.{ .join = .{
             .id = @enumFromInt(101),
             .params = .empty(),
             .body = external,
             .remainder = clone_jump,
-        } });
+        } }, .test_fixture);
         const destination = try worker.addCFStmt(.{ .join = .{
             .id = fresh,
             .params = .empty(),
             .body = clone,
             .remainder = external,
-        } });
+        } }, .test_fixture);
         worker.getCFStmtPtr(roots[i]).jump.target = fresh;
         // An old join row can point to generated statements without changing identity.
         GuardedList.atPtr(worker.getJoinPointSpanMut(old_spans[i]), 0).body = destination;
@@ -2073,27 +2113,27 @@ test "procedure rewrite prepares tail chains and overlapping arm spans" {
     var coordinator = Self.init(allocator);
     defer coordinator.deinit();
     const local = try coordinator.addLocal(.{ .layout_idx = .str });
-    const ret = try coordinator.addCFStmt(.{ .ret = .{ .value = local } });
+    const ret = try coordinator.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     const proc = try coordinator.addProcSpec(.{
         .identity = lir_defs.ProcIdentity.forTest(@intCast(coordinator.procSpecCount())),
         .name = coordinator.freshSyntheticSymbol(),
         .args = .empty(),
         .ret_layout = .str,
-    });
+    }, .none);
     const tail = try coordinator.addCFStmt(.{ .assign_call = .{
         .target = local,
         .proc = proc,
         .args = .empty(),
         .next = ret,
         .tail_call = .{ .next = null },
-    } });
+    } }, .test_fixture);
     const head = try coordinator.addCFStmt(.{ .assign_call = .{
         .target = local,
         .proc = proc,
         .args = .empty(),
         .next = ret,
         .tail_call = .{ .next = tail },
-    } });
+    } }, .test_fixture);
     const text = try coordinator.insertString("prefix");
     const arm: StrMatchArm = .{
         .prefix = .{ .backing = text, .offset = 0, .len = 6 },
@@ -2107,12 +2147,12 @@ test "procedure rewrite prepares tail chains and overlapping arm spans" {
         .source = local,
         .arms = subset,
         .on_miss = ret,
-    } });
+    } }, .test_fixture);
     const root = try coordinator.addCFStmt(.{ .str_match_set = .{
         .source = local,
         .arms = arms,
         .on_miss = nested,
-    } });
+    } }, .test_fixture);
     coordinator.getProcSpecPtr(proc).body = root;
     coordinator.getProcSpecPtr(proc).tail_calls = .{ .head = head, .loop = @enumFromInt(42) };
     var worker = try coordinator.cloneForProcRewrite(allocator, proc);
@@ -2121,7 +2161,7 @@ test "procedure rewrite prepares tail chains and overlapping arm spans" {
         @intFromEnum(ret), @intFromEnum(tail), @intFromEnum(head), @intFromEnum(nested), @intFromEnum(root),
     }, worker.procRewriteStatementIds());
     try std.testing.expectEqual(@as(usize, 2), worker.proc_rewrite.?.str_match_arms.rows.len());
-    const appended = try worker.addCFStmt(.{ .ret = .{ .value = local } });
+    const appended = try worker.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     GuardedList.atPtr(worker.getStrMatchArmsMut(subset), 0).on_match = appended;
     worker.getCFStmtPtr(tail).assign_call.tail_call.?.next = appended;
     try std.testing.expectEqual(appended, GuardedList.at(worker.getStrMatchArms(arms), 1).on_match);
@@ -2138,14 +2178,14 @@ test "procedure rewrite allocation failures leave coordinator unchanged" {
             var coordinator = Self.init(allocator);
             defer coordinator.deinit();
             const local = try coordinator.addLocal(.{ .layout_idx = .u64 });
-            const ret = try coordinator.addCFStmt(.{ .ret = .{ .value = local } });
+            const ret = try coordinator.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
             const proc = try coordinator.addProcSpec(.{
                 .identity = lir_defs.ProcIdentity.forTest(@intCast(coordinator.procSpecCount())),
                 .name = coordinator.freshSyntheticSymbol(),
                 .args = .empty(),
                 .ret_layout = .u64,
                 .body = ret,
-            });
+            }, .none);
             const prefix = coordinator.captureBodyPrefix();
             const metadata = coordinator.getProcSpec(proc);
             var worker = try coordinator.cloneForProcRewrite(allocator, proc);
@@ -2153,7 +2193,7 @@ test "procedure rewrite allocation failures leave coordinator unchanged" {
             var appended = ret;
             for (0..100) |_| {
                 const new_local = try worker.addLocal(.{ .layout_idx = .u64 });
-                appended = try worker.addCFStmt(.{ .ret = .{ .value = new_local } });
+                appended = try worker.addCFStmt(.{ .ret = .{ .value = new_local } }, .test_fixture);
             }
             worker.getCFStmtPtr(ret).* = .{ .init_uninitialized = .{ .target = local, .next = appended } };
             worker.getProcSpecPtr(proc).body = appended;
@@ -2230,10 +2270,12 @@ test "body shard relocates nonzero local and body suffixes" {
     });
     const body_loc: base.SourceLoc = .{ .file = 7, .line = 8, .column = 9 };
     const body_region = base.Region.from_raw_offsets(10, 20);
-    worker.current_loc = body_loc;
-    worker.current_region = body_region;
-    worker.current_inline_scope = worker_inline_scope;
-    const ret = try worker.addCFStmt(.{ .ret = .{ .value = body_local } });
+    const ret = try worker.addCFStmt(.{ .ret = .{ .value = body_local } }, .{
+        .loc = body_loc,
+        .region = body_region,
+        .inline_scope = worker_inline_scope,
+        .kind = .source,
+    });
     const branches = try worker.addCFSwitchBranches(&.{.{ .value = 1, .body = ret }});
     const steps = try worker.addStrMatchSteps(&.{.{
         .capture = .{ .view = body_local },
@@ -2266,7 +2308,7 @@ test "body shard relocates nonzero local and body suffixes" {
     _ = try coordinator.addLocalSpan(&.{destination_local});
     _ = try coordinator.addU64Span(&.{3});
     _ = try coordinator.addU32Span(&.{4});
-    const destination_stmt = try coordinator.addCFStmt(.{ .ret = .{ .value = destination_local } });
+    const destination_stmt = try coordinator.addCFStmt(.{ .ret = .{ .value = destination_local } }, .test_fixture);
     _ = try coordinator.addCFSwitchBranches(&.{.{ .value = 0, .body = destination_stmt }});
     _ = try coordinator.addStrMatchSteps(&.{.{
         .capture = .discard,
@@ -2380,7 +2422,7 @@ test "body shard append preserves destination on every reserve-stage allocation 
             _ = try source.addPatternSpan(&pattern_ids);
             var source_stmt: CFStmtId = undefined;
             for (0..9) |index| {
-                const stmt = try source.addCFStmt(.{ .ret = .{ .value = local_ids[0] } });
+                const stmt = try source.addCFStmt(.{ .ret = .{ .value = local_ids[0] } }, .test_fixture);
                 if (index == 0) source_stmt = stmt;
             }
             _ = try source.addCFSwitchBranches(&([_]CFSwitchBranch{.{ .value = 1, .body = source_stmt }} ** 9));
@@ -2404,7 +2446,7 @@ test "body shard append preserves destination on every reserve-stage allocation 
             try destination.erased_call_arg_plans.append(destination.allocator, .{ .offsets = .{ .start = 0, .len = 1 }, .size = 4, .alignment = 4 });
             const destination_pattern = try destination.addPattern(.{ .wildcard = .{ .layout_idx = .zst } });
             _ = try destination.addPatternSpan(&.{destination_pattern});
-            const destination_stmt = try destination.addCFStmt(.{ .ret = .{ .value = destination_local } });
+            const destination_stmt = try destination.addCFStmt(.{ .ret = .{ .value = destination_local } }, .test_fixture);
             _ = try destination.addCFSwitchBranches(&.{.{ .value = 2, .body = destination_stmt }});
             _ = try destination.addStrMatchSteps(&.{.{ .capture = .discard, .delimiter = .{ .backing = .none, .offset = 0, .len = 0 } }});
             _ = try destination.addStrMatchArms(&.{.{
@@ -2441,6 +2483,7 @@ test "body shard append preserves destination on every reserve-stage allocation 
                 try std.testing.expectEqual(@as(usize, 1), destination.cf_stmt_locs.len());
                 try std.testing.expectEqual(@as(usize, 1), destination.cf_stmt_regions.len());
                 try std.testing.expectEqual(@as(usize, 1), destination.cf_stmt_inline_scopes.len());
+                try std.testing.expectEqual(@as(usize, 1), destination.cf_stmt_origin_kinds.len());
                 try std.testing.expectEqual(@as(usize, 1), destination.cf_switch_branches.len());
                 try std.testing.expectEqual(@as(usize, 1), destination.str_match_steps.len());
                 try std.testing.expectEqual(@as(usize, 1), destination.str_match_arms.len());
@@ -2478,7 +2521,7 @@ test "body shard reads coordinator prefix without copying it" {
     const global = try coordinator.addLocal(.{ .layout_idx = .zst });
     try coordinator.setLocalName(global, "global");
     const global_span = try coordinator.addLocalSpan(&.{global});
-    const global_stmt = try coordinator.addCFStmt(.{ .ret = .{ .value = global } });
+    const global_stmt = try coordinator.addCFStmt(.{ .ret = .{ .value = global } }, .test_fixture);
     const global_offsets = try coordinator.addU32Span(&.{4});
     const global_plan: ErasedCallArgsPlanId = @enumFromInt(@as(u32, @intCast(coordinator.erased_call_arg_plans.len())));
     try coordinator.erased_call_arg_plans.append(coordinator.allocator, .{
@@ -2501,7 +2544,7 @@ test "body shard reads coordinator prefix without copying it" {
 
     const suffix_local = try worker.addLocal(.{ .layout_idx = .zst });
     const suffix_span = try worker.addLocalSpan(&.{suffix_local});
-    const suffix_stmt = try worker.addCFStmt(.{ .ret = .{ .value = suffix_local } });
+    const suffix_stmt = try worker.addCFStmt(.{ .ret = .{ .value = suffix_local } }, .test_fixture);
     try std.testing.expectEqual(@as(u32, 1), @intFromEnum(suffix_local));
     try std.testing.expectEqual(@as(u32, 1), suffix_span.start);
     try std.testing.expectEqual(@as(u32, 1), @intFromEnum(suffix_stmt));
@@ -2564,24 +2607,28 @@ pub fn compactCFStmts(self: *Self, reachable: []const bool) void {
     std.debug.assert(self.cf_stmts.len() == self.cf_stmt_locs.len());
     std.debug.assert(self.cf_stmts.len() == self.cf_stmt_regions.len());
     std.debug.assert(self.cf_stmts.len() == self.cf_stmt_inline_scopes.len());
+    std.debug.assert(self.cf_stmts.len() == self.cf_stmt_origin_kinds.len());
 
     var write: usize = 0;
     const cf_stmts = self.cf_stmts.unsafeRawItemsMutForStore();
     const cf_stmt_locs = self.cf_stmt_locs.unsafeRawItemsMutForStore();
     const cf_stmt_regions = self.cf_stmt_regions.unsafeRawItemsMutForStore();
     const cf_stmt_inline_scopes = self.cf_stmt_inline_scopes.unsafeRawItemsMutForStore();
-    for (cf_stmts, cf_stmt_locs, cf_stmt_regions, cf_stmt_inline_scopes, 0..) |stmt, loc, region, inline_scope, index| {
+    const cf_stmt_origin_kinds = self.cf_stmt_origin_kinds.unsafeRawItemsMutForStore();
+    for (cf_stmts, cf_stmt_locs, cf_stmt_regions, cf_stmt_inline_scopes, cf_stmt_origin_kinds, 0..) |stmt, loc, region, inline_scope, origin_kind, index| {
         if (!reachable[index]) continue;
         cf_stmts[write] = stmt;
         cf_stmt_locs[write] = loc;
         cf_stmt_regions[write] = region;
         cf_stmt_inline_scopes[write] = inline_scope;
+        cf_stmt_origin_kinds[write] = origin_kind;
         write += 1;
     }
     self.cf_stmts.shrinkRetainingCapacity(write);
     self.cf_stmt_locs.shrinkRetainingCapacity(write);
     self.cf_stmt_regions.shrinkRetainingCapacity(write);
     self.cf_stmt_inline_scopes.shrinkRetainingCapacity(write);
+    self.cf_stmt_origin_kinds.shrinkRetainingCapacity(write);
 }
 
 /// Reports whether any local in a span has a layout that requires stack probing.
@@ -2657,7 +2704,7 @@ test "body shard relocates erased-call layouts into the program table" {
     const prefix = worker.captureBodyPrefix();
     const arg = try worker.addLocal(.{ .layout_idx = .u64 });
     const result = try worker.addLocal(.{ .layout_idx = .u64 });
-    const ret = try worker.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try worker.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const call = try worker.addCFStmt(.{ .assign_call_erased = .{
         .target = result,
         .closure = closure,
@@ -2665,7 +2712,7 @@ test "body shard relocates erased-call layouts into the program table" {
         .arg_layouts = .{ .start = 1, .len = 1 },
         .arg_plan = try worker.internErasedCallArgsPlan(&layouts, &.{.u64}),
         .next = ret,
-    } });
+    } }, .test_fixture);
     var runtime_layouts: std.ArrayList(layout.Idx) = .empty;
     defer runtime_layouts.deinit(allocator);
     try runtime_layouts.appendSlice(allocator, &.{ .u8, .u16 });
@@ -2699,7 +2746,7 @@ fn testTailCallRelocation(existing_join: ?u32) (AppendBodyError || error{ TestEx
         .identity = lir_defs.ProcIdentity.forTest(0),
         .args = try coordinator.addLocalSpan(&.{arg}),
         .ret_layout = .u64,
-    });
+    }, .none);
     var worker = try coordinator.cloneForBodyShard(allocator);
     defer worker.deinit();
     const prefix = worker.captureBodyPrefix();
@@ -2707,31 +2754,31 @@ fn testTailCallRelocation(existing_join: ?u32) (AppendBodyError || error{ TestEx
     defer builder.deinit();
     worker.tail_call_builder = &builder;
     const result = try worker.addLocal(.{ .layout_idx = .u64 });
-    const ret = try worker.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try worker.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const first = try worker.addCFStmt(.{ .assign_call = .{
         .proc = proc,
         .args = try worker.addLocalSpan(&.{arg}),
         .target = result,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const second = try worker.addCFStmt(.{ .assign_call = .{
         .proc = proc,
         .args = try worker.addLocalSpan(&.{arg}),
         .target = result,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const body = try worker.addCFStmt(.{ .switch_stmt = .{
         .cond = arg,
         .branches = try worker.addCFSwitchBranches(&.{.{ .value = 0, .body = first }}),
         .default_branch = second,
-    } });
+    } }, .test_fixture);
     const root = if (existing_join) |id|
         try worker.addCFStmt(.{ .join = .{
             .id = @enumFromInt(id),
             .params = .empty(),
             .body = body,
             .remainder = ret,
-        } })
+        } }, .test_fixture)
     else
         body;
     const frame = try worker.addLocalSpan(&.{ arg, result });
@@ -2739,7 +2786,7 @@ fn testTailCallRelocation(existing_join: ?u32) (AppendBodyError || error{ TestEx
     worker.tail_call_builder = null;
     const loop_id = if (existing_join) |id| id + 1 else 0;
     try std.testing.expectEqual(loop_id, @intFromEnum(sites.loop));
-    _ = try coordinator.addCFStmt(.{ .ret = .{ .value = arg } });
+    _ = try coordinator.addCFStmt(.{ .ret = .{ .value = arg } }, .test_fixture);
     const appended = try coordinator.appendBodyShard(try worker.captureBodyShard(prefix), root, frame, 100);
     const relocated_sites = appended.relocation.tailCalls(prefix, sites);
     const head = relocated_sites.head;

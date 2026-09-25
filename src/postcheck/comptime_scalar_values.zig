@@ -152,22 +152,23 @@ fn literalFitsLayout(literal: LIR.LiteralValue, layout_idx: layout.Idx) bool {
 
 /// Emits `target = construction` into `store`, continuing at `next`, and
 /// returns the entry statement; null when the construction does not fit
-/// the target's layout. `ctx` supplies locals:
+/// the target's layout. Every emitted statement carries `origin`: the
+/// caller's explicit provenance for the rebuilt constant. `ctx` supplies locals:
 /// `addLocal(layout.Idx) Allocator.Error!LIR.LocalId`. Every value the
 /// emitted code builds is fresh and consumed exactly once, so the code is
 /// complete without a reference-counting pass.
-pub fn emit(ctx: anytype, store: *core.LirStore, layouts: *const layout.Store, target: LIR.LocalId, construction: Construction, next: LIR.CFStmtId) Allocator.Error!?LIR.CFStmtId {
+pub fn emit(ctx: anytype, store: *core.LirStore, layouts: *const layout.Store, origin: LIR.StmtOrigin, target: LIR.LocalId, construction: Construction, next: LIR.CFStmtId) Allocator.Error!?LIR.CFStmtId {
     switch (construction) {
-        .literal => |literal| return try store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = literal, .next = next } }),
-        .zst => return try store.addCFStmt(.{ .assign_struct = .{ .target = target, .fields = LIR.LocalSpan.empty(), .next = next } }),
+        .literal => |literal| return try store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = literal, .next = next } }, origin),
+        .zst => return try store.addCFStmt(.{ .assign_struct = .{ .target = target, .fields = LIR.LocalSpan.empty(), .next = next } }, origin),
         .empty_str => return try store.addCFStmt(.{ .assign_literal = .{
             .target = target,
             .value = .{ .str_literal = try store.insertStringView("", 0, 0) },
             .next = next,
-        } }),
+        } }, origin),
         .empty_list => |capacity| {
             if (capacity > std.math.maxInt(i64)) return null;
-            return try emitWithCapacity(ctx, store, target, @intCast(capacity), next);
+            return try emitWithCapacity(ctx, store, origin, target, @intCast(capacity), next);
         },
         .record => |fields| {
             const layout_idx = store.getLocal(target).layout_idx;
@@ -183,11 +184,11 @@ pub fn emit(ctx: anytype, store: *core.LirStore, layouts: *const layout.Store, t
                 .target = target,
                 .fields = try store.addLocalSpan(field_locals),
                 .next = next,
-            } });
+            } }, origin);
             var index = fields.len;
             while (index > 0) {
                 index -= 1;
-                current = try emit(ctx, store, layouts, field_locals[index], fields[index], current) orelse return null;
+                current = try emit(ctx, store, layouts, origin, field_locals[index], fields[index], current) orelse return null;
             }
             return current;
         },
@@ -207,9 +208,9 @@ pub fn emit(ctx: anytype, store: *core.LirStore, layouts: *const layout.Store, t
                 .discriminant = tag.discriminant,
                 .payload = payload_local,
                 .next = next,
-            } });
+            } }, origin);
             if (tag.payload) |payload| {
-                return try emit(ctx, store, layouts, payload_local.?, payload.*, build);
+                return try emit(ctx, store, layouts, origin, payload_local.?, payload.*, build);
             }
             return build;
         },
@@ -218,7 +219,7 @@ pub fn emit(ctx: anytype, store: *core.LirStore, layouts: *const layout.Store, t
 
 /// `target = list_with_capacity(capacity)`, the runtime form of a completed
 /// empty list.
-fn emitWithCapacity(ctx: anytype, store: *core.LirStore, target: LIR.LocalId, capacity: i64, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+fn emitWithCapacity(ctx: anytype, store: *core.LirStore, origin: LIR.StmtOrigin, target: LIR.LocalId, capacity: i64, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
     const capacity_local = try ctx.addLocal(.u64);
     const build = try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
@@ -226,12 +227,12 @@ fn emitWithCapacity(ctx: anytype, store: *core.LirStore, target: LIR.LocalId, ca
         .rc_effect = LIR.LowLevel.list_with_capacity.rcEffect(),
         .args = try store.addLocalSpan(&[_]LIR.LocalId{capacity_local}),
         .next = next,
-    } });
+    } }, origin);
     return try store.addCFStmt(.{ .assign_literal = .{
         .target = capacity_local,
         .value = .{ .i64_literal = .{ .value = capacity, .layout_idx = .u64 } },
         .next = build,
-    } });
+    } }, origin);
 }
 
 /// Decodes a completed value into its construction by walking the same
@@ -576,8 +577,9 @@ test "completed empty list roots decode to their constructions; lists with eleme
     defer locals.deinit(allocator);
     const ctx = TestEmitContext{ .store = &reader.store, .locals = &locals };
     const empty_target = try ctx.addLocal(reader_list_layout);
-    const empty_ret = try reader.store.addCFStmt(.{ .ret = .{ .value = empty_target } });
-    const reserved = try emit(ctx, &reader.store, &reader.layouts, empty_target, values.constructionFor(.{}, @enumFromInt(1), reader_list_layout).?, empty_ret) orelse return error.TestUnexpectedResult;
+    const origin = LIR.StmtOrigin{ .loc = .none, .region = .zero(), .inline_scope = .none, .kind = .scaffold };
+    const empty_ret = try reader.store.addCFStmt(.{ .ret = .{ .value = empty_target } }, origin);
+    const reserved = try emit(ctx, &reader.store, &reader.layouts, origin, empty_target, values.constructionFor(.{}, @enumFromInt(1), reader_list_layout).?, empty_ret) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(i64, 16), reader.store.getCFStmt(reserved).assign_literal.value.i64_literal.value);
 }
 

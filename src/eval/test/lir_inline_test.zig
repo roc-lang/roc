@@ -11727,3 +11727,180 @@ test "issue 11470: tagged shared error composition executes in both strategies" 
         try runtime_env.checkForLeaks();
     }
 }
+
+/// Every statement reachable from `proc`'s body, in walk order.
+fn procStmts(
+    allocator: Allocator,
+    store: *const lir.LirStore,
+    proc: LIR.LirProcSpecId,
+) TestError![]LIR.CFStmtId {
+    var out = std.ArrayList(LIR.CFStmtId).empty;
+    errdefer out.deinit(allocator);
+    var work = std.ArrayList(LIR.CFStmtId).empty;
+    defer work.deinit(allocator);
+    var seen = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
+    defer seen.deinit();
+    try work.append(allocator, store.getProcSpec(proc).body orelse return error.MissingProcSpec);
+    while (work.pop()) |stmt_id| {
+        if ((try seen.getOrPut(stmt_id)).found_existing) continue;
+        try lir.BodyClone.appendSuccessorsWithAllocator(store, &work, stmt_id, allocator);
+        try out.append(allocator, stmt_id);
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+test "provenance: TRMC statements state their kind at the site they rewrite" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\LinkedList := [Nil, Cons(I64, LinkedList)]
+        \\
+        \\repeat : I64, I64 -> LinkedList
+        \\repeat = |value, n|
+        \\    if n <= 0.I64
+        \\        LinkedList.Nil
+        \\    else
+        \\        LinkedList.Cons(value, repeat(value, n - 1))
+        \\
+        \\main = repeat(7.I64, 3.I64)
+    , .none);
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    const repeat = try rootDirectCallTarget(allocator, &lowered_source.lowered);
+    try std.testing.expectEqual(LIR.TailTransform.trmc, store.getProcSpec(repeat).tail_transform);
+
+    const stmts = try procStmts(allocator, store, repeat);
+    defer allocator.free(stmts);
+
+    // The loop join TRMC wraps around the body sits at the procedure body.
+    const entry = store.getProcSpec(repeat).body.?;
+    try std.testing.expect(store.getCFStmt(entry) == .join);
+    try std.testing.expect(store.stmtOriginKind(entry) == .trmc);
+    try std.testing.expectEqual(@as(u32, 5), store.stmtLoc(entry).line);
+
+    var trmc_count: usize = 0;
+    var recursive_site_loop_backs: usize = 0;
+    for (stmts) |stmt_id| {
+        const kind = store.stmtOriginKind(stmt_id);
+        const loc = store.stmtLoc(stmt_id);
+        // Nothing in a user procedure is anonymous scaffolding, and every
+        // statement, including the ones TRMC created, names a line of
+        // `repeat` (lines 5-8).
+        try std.testing.expect(kind != .scaffold);
+        try std.testing.expect(loc.hasLocation());
+        try std.testing.expect(loc.line >= 5 and loc.line <= 8);
+        if (kind != .trmc) continue;
+        trmc_count += 1;
+        // The loop-back that replaces the recursive call carries the
+        // recursive call's location, not the procedure's.
+        if (store.getCFStmt(stmt_id) == .jump and loc.line == 8) recursive_site_loop_backs += 1;
+    }
+    try std.testing.expect(trmc_count > 0);
+    try std.testing.expectEqual(@as(usize, 1), recursive_site_loop_backs);
+}
+
+test "provenance: ARC RC statements state their subject, reason, and deciding location" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\pair : List(Str), Str -> List(Str)
+        \\pair = |xs, s|
+        \\    xs.append(s).append(s)
+        \\
+        \\main = pair(["a"], "b").len()
+    , .none);
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    const root = try rootProc(&lowered_source.lowered);
+    const pair = try rootDirectCallTarget(allocator, &lowered_source.lowered);
+
+    // Every RC statement in both procedures is ARC-inserted, names the local
+    // it operates on, and carries the location of the statement whose
+    // ownership decision produced it.
+    var increfs: usize = 0;
+    var decrefs: usize = 0;
+    for ([_]LIR.LirProcSpecId{ root, pair }) |proc| {
+        const stmts = try procStmts(allocator, store, proc);
+        defer allocator.free(stmts);
+        for (stmts) |stmt_id| {
+            const kind = store.stmtOriginKind(stmt_id);
+            switch (store.getCFStmt(stmt_id)) {
+                .incref => |rc| {
+                    try std.testing.expect(kind == .arc_incref);
+                    try std.testing.expectEqual(rc.value, kind.arc_incref.subject_local);
+                    try std.testing.expect(store.stmtLoc(stmt_id).hasLocation());
+                    increfs += 1;
+                },
+                .decref => |rc| {
+                    try std.testing.expect(kind == .arc_decref);
+                    try std.testing.expectEqual(rc.value, kind.arc_decref.subject_local);
+                    try std.testing.expect(store.stmtLoc(stmt_id).hasLocation());
+                    decrefs += 1;
+                },
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => try std.testing.expect(!kind.isArcInserted()),
+            }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), increfs);
+    try std.testing.expectEqual(@as(usize, 1), decrefs);
+
+    // `s` is appended twice: the first append aliases it while it stays live,
+    // so ARC retains it at that append (line 3).
+    const pair_stmts = try procStmts(allocator, store, pair);
+    defer allocator.free(pair_stmts);
+    for (pair_stmts) |stmt_id| {
+        if (store.getCFStmt(stmt_id) != .incref) continue;
+        try std.testing.expectEqual(LIR.RcReason.alias_bind, store.stmtOriginKind(stmt_id).arc_incref.reason);
+        try std.testing.expectEqual(@as(u32, 3), store.stmtLoc(stmt_id).line);
+    }
+
+    // The resulting list dies after `.len()` in `main` (line 5).
+    const root_stmts = try procStmts(allocator, store, root);
+    defer allocator.free(root_stmts);
+    for (root_stmts) |stmt_id| {
+        if (store.getCFStmt(stmt_id) != .decref) continue;
+        try std.testing.expectEqual(LIR.RcReason.dead_after_stmt, store.stmtOriginKind(stmt_id).arc_decref.reason);
+        try std.testing.expectEqual(@as(u32, 5), store.stmtLoc(stmt_id).line);
+    }
+}
+
+test "provenance: an overflow inside a TCE loop reports the overflowing line" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\count : U8, U8 -> U8
+        \\count = |n, acc|
+        \\    if n == 0
+        \\        acc
+        \\    else
+        \\        count(n - 1, acc + 100)
+        \\
+        \\main : U8
+        \\main = count(3, 0)
+    , .none);
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    const count = try rootDirectCallTarget(allocator, &lowered_source.lowered);
+    try std.testing.expectEqual(LIR.TailTransform.tce, store.getProcSpec(count).tail_transform);
+
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, store);
+    defer static_strings.deinit();
+    var interpreter = try eval.Interpreter.init(
+        allocator,
+        store,
+        &lowered_source.lowered.lir_result.layouts,
+        static_strings.view(),
+        runtime_env.get_ops(),
+    );
+    defer interpreter.deinit();
+
+    _ = interpreter.eval(.{ .proc_id = try rootProc(&lowered_source.lowered) }) catch |err| {
+        try std.testing.expectEqual(error.Crash, err);
+        const loc = interpreter.getFailedSourceLoc() orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(u32, 6), loc.line);
+        return;
+    };
+    return error.TestUnexpectedResult;
+}
