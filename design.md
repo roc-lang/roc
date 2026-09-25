@@ -7170,7 +7170,7 @@ Three consumers keep the rule exact:
   treats a repeated label as an invariant violation.
 
 Before `CheckedModule` is built, every tag and record row reachable from a
-type the checked module can output is checked once; rows that repeat a label
+type in the checked module's output is checked once; rows that repeat a label
 are normalized in ascending root order. Those types are the expression,
 pattern, and definition types and the roots inference recorded elsewhere: call
 and dispatch constraint functions, scheme-use substitutions and instances, and
@@ -7178,8 +7178,8 @@ codec requirements and derivations. A scheme-use substitution can hold a copy
 of an unnormalized row that no expression's type still reaches, such as a
 mutually recursive member's error row copied before its group settled.
 `CheckedModule` construction and this walk enumerate the recorded roots
-through the same `output_type_roots` functions, so a root the output adds is normalized
-without a second list to keep in step.
+through the same `output_type_roots` functions, so a root added to the output
+is normalized without a second list to keep in step.
 
 Normalization needs no metadata on type variables and adds no work where no
 label repeats: detection rides on the unifier's gather,
