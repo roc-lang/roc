@@ -7585,10 +7585,28 @@ pub const BoxyRuntime = struct {
             };
         }
 
-        return self.invariantFailedError(
-            "LIR/interpreter invariant violated: borrowed inspect argument had incompatible concrete layouts {d} and {d}",
-            .{ @intFromEnum(source.layout), @intFromEnum(target_layout) },
-        );
+        // Concrete storage that differs from the worker's argument storage (a
+        // `Wrap(Str)` stored concretely, inspected through `Wrap(a)`) is
+        // materialized into an owned argument from a new reference to the
+        // borrowed source.
+        const source_desc = source.source_desc orelse {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: borrowed concrete call argument layout {d} needed conversion to layout {d} without a descriptor",
+                .{ @intFromEnum(source.layout), @intFromEnum(target_layout) },
+            );
+        };
+        try self.performBoxyLayoutDrop(hooks, source.value, source.layout, source_desc, .incref, 1, .atomic);
+        return .{
+            .assigned = try self.materializeCallResult(
+                hooks,
+                source.value,
+                source.layout,
+                source_desc,
+                target_desc,
+                target_layout,
+            ),
+            .borrowed = false,
+        };
     }
 
     pub fn prepareInspectCall(
