@@ -484,9 +484,17 @@ pub const InterfaceConstraints = struct {
     }
 
     pub fn identityInto(self: InterfaceConstraints, graph: *InstGraph, allocator: Allocator) Allocator.Error!Identity {
-        var writer = IdentityWriter{ .graph = graph };
-        defer writer.bytes.deinit(graph.allocator);
-        defer writer.leaves.deinit(graph.allocator);
+        var writer = IdentityWriter{
+            .graph = graph,
+            .bytes = graph.identity_bytes_scratch,
+            .leaves = graph.identity_leaves_scratch,
+        };
+        defer {
+            writer.bytes.clearRetainingCapacity();
+            writer.leaves.clearRetainingCapacity();
+            graph.identity_bytes_scratch = writer.bytes;
+            graph.identity_leaves_scratch = writer.leaves;
+        }
         try writer.write(InterfaceConstraints, self);
         const bytes = try allocator.dupe(u8, writer.bytes.items);
         return .{ .bytes = bytes, .leaves = try allocator.dupe(Type.TypeId, writer.leaves.items) };
@@ -1492,6 +1500,9 @@ pub const InstGraph = struct {
     row_label_right_index: std.ArrayList(u32) = .empty,
     row_label_left_generation: std.ArrayList(u32) = .empty,
     row_label_generation: u32 = 0,
+    /// Buffers borrowed by every `InterfaceConstraints.identityInto`.
+    identity_bytes_scratch: std.ArrayList(u8) = .empty,
+    identity_leaves_scratch: std.ArrayList(Type.TypeId) = .empty,
     /// Maps and lists borrowed by every `InterfaceConstraints.capture`.
     capture_scratch: InterfaceConstraints.CaptureScratch,
     /// Roots whose every reachable node was found resolved, stamped with the
@@ -1704,6 +1715,8 @@ pub const InstGraph = struct {
         self.row_label_right_index.deinit(self.allocator);
         self.row_label_left_generation.deinit(self.allocator);
         self.capture_scratch.deinit(allocator);
+        self.identity_bytes_scratch.deinit(allocator);
+        self.identity_leaves_scratch.deinit(allocator);
         self.type_set_pool.deinit();
         var containment_entries = self.containment_cache.valueIterator();
         while (containment_entries.next()) |entry| {
