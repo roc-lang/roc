@@ -1652,6 +1652,9 @@ pub const ProgramBuilder = struct {
     proc_debug_names: ProcDebugNameMap,
     roots: ProgramList(Root, "roots"),
     literal_roots: ProgramList(LiteralRoot, "literal_roots"),
+    /// Each literal root by its definition's content identity: one literal
+    /// converted at one type.
+    literal_root_by_identity: std.AutoHashMapUnmanaged(names.TypeDigest, Common.LiteralRootId) = .empty,
     layout_requests: ProgramList(LayoutRequest, "layout_requests"),
     /// See `ProgramView.comptime_value_reads`.
     comptime_value_reads: ProgramList(Common.ComptimeValueRoot, "comptime_value_reads"),
@@ -1816,6 +1819,7 @@ pub const ProgramBuilder = struct {
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.literal_roots.deinit(self.allocator);
+        self.literal_root_by_identity.deinit(self.allocator);
         self.proc_debug_names.deinit();
         for (self.string_literals.unsafeRawItemsForView()) |literal| literal.deinit(self.allocator);
         var backings = self.const_blob_backings.valueIterator();

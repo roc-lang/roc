@@ -1004,17 +1004,35 @@ Run-only lowering uses the same explicit state-result binding without the
 consumer branch; it must not lower a mutating condition as an isolated Boolean
 whose state updates are lost to the enclosing continuation.
 
+Compile-time evaluation is a function of the checked program alone. Every
+command that finalizes checking evaluates the same roots, every checked
+module's compile-time requests plus the platform entrypoints of the
+program's root module, taken from its checked `runtime_requests`, under one fixed
+configuration (`compileTimeTarget`): the host's width, expects run, literal
+roots on, and the dev Solved policy (`.wrappers` inlining and
+iterator-fusion SpecConstr). Nothing a command asks of its runtime program
+reaches that evaluation, and the evaluator reads no object-cache entries.
+`roc check` and `roc build` therefore report the same compile-time errors
+and complete bit-identical values: a build cannot report an error that
+checking did not.
+
 Monotype lowering, lifting, SpecConstr, lambda solving, and inline analysis
-run once over the union of the compilation's compile-time and runtime root
-requests, and the frozen Solved program they produce is one immutable producer
-identity domain. Every consumer continuation borrows that one program: none
-copies it, and none reruns any of those stages. A consumer chooses its target
-width, the explicitly shared expect consumer mode, and the completed
-compile-time values it reads as literals; every other specialization option is
-captured by preparation and cannot differ between consumers, because the
-specializations were already lowered under it. Callable correspondence
-therefore compares ids from one producer domain, never ids allocated by
-separate solver runs. The producer program is released after its last consumer.
+run once for that evaluation over the union of its roots, and the frozen
+Solved program they produce is one immutable producer identity domain. A
+runtime consumer whose `SolvedPolicy` is the evaluation's continues that
+program and borrows it: none copies it, none reruns any of those stages, and
+callable correspondence compares ids from one producer domain, never ids
+allocated by separate solver runs. A consumer continuing it chooses its
+target width, the explicitly shared expect consumer mode, its LIR policy, and
+the completed compile-time values it reads as literals. Any other runtime
+consumer (an optimized build, the interpreter, or Boxy) specializes the
+checked modules itself under its own policy once evaluation has completed,
+and reads every compile-time value from the modules' `ConstStore`s. Solved
+programs built under different inlining and SpecConstr policies specialize
+one function into differently shaped members, because their lambda sets
+differ, so no member identity in one names a member of the other; the
+stores name each value independently of any Solved program. The producer
+program is released after its last consumer.
 
 Each consumer names its share of the producer program in an explicit root
 manifest, applied before LIR demand discovery. A manifest names producer root
@@ -1027,21 +1045,23 @@ from the named roots alone: a consumer generates no procedure, layout, static
 data, or ARC for another consumer's roots, and no consumer prunes another's
 code after lowering it.
 
-Two consumers share one program exactly when the code they would lower is the
-same code. The compile-time consumer lowers at the host's width with expects
-run, so a runtime consumer that asks for the same two answers names the union
+Two consumers share one lowered program exactly when the code they would
+lower is the same code. The compile-time consumer lowers at the host's width
+with expects run and the compile-time LIR policy, so a runtime consumer
+continuing its Solved program that asks for the same answers names the union
 of both root sets in one manifest: that program evaluates the compile-time
 roots and is then the runtime program, with its own roots selected out of it
-and its completed values read through the accessors it already had. A runtime
-consumer that asks for a different target width or expect mode cannot read
-that code, so each consumer names only its own roots: a runtime root request
-is then never lowered while checking finalizes, and a compile-time root's own
-body never reaches the runtime program, which reads each compile-time value
-through a slot the evaluation filled, whose frozen bytes are the value's
-definition there. Whether one program or two, no consumer lowers code only
-another consumer runs.
+and its completed values read through the accessors it already had. A
+runtime consumer that asks for anything else cannot read that code, so each
+consumer names only its own roots: a runtime root request is then never
+lowered while checking finalizes, and a compile-time root's own body never
+reaches the runtime program, which reads each compile-time value through a
+slot the evaluation filled, whose frozen bytes are the value's definition
+there. Whether one program or two, no consumer lowers code only another
+consumer runs.
 
-For a separate runtime consumer, completed values are transcoded while that
+For a separate runtime consumer continuing the evaluation's Solved program,
+completed values are transcoded while that
 consumer still owns its complete, uncompacted LIR representation tables. The
 resulting frozen graph participates in the consumer's one reachability pass:
 its explicit function relocations retain exactly the callable procedures that
@@ -4228,18 +4248,19 @@ Every live literal-origin record leaves checking with one explicit resolution:
   the `crash` statement, so a compile-time evaluation that reaches it reports
   the literal-specific diagnostic instead of a generic crash.
   A conversion at a specialization's concrete type depends on nothing at
-  runtime, so it is hoisted like any top-level-equivalent expression: a
+  runtime, so it is hoisted like any top-level-equivalent expression, and
+  hoisting is eager: a pattern literal's conversion is evaluated, and its
+  rejection or crash reported, whether or not matching would ever reach its
+  branch. A
   program whose compile-time work is evaluated with it (`literal_roots`) turns
   the conversion into a literal root. The conversion becomes a zero-argument
   definition the draft registers; the specialization reads the root's
   `comptime_value` slot (producer `.literal`); LIR carries `LiteralRootPlan`s
   beside the checked roots' plans; and finalization evaluates each literal root
-  on its first slot demand, and the rest after every checked root. Every native
-  build evaluates its literal roots: when no checked compile-time root shares
-  the runtime program, finalization prepares the runtime program itself, under
-  the runtime policy (object-cache hits at Monotype reservation included),
-  lowers a native consumer holding only the literal roots, evaluates them, and
-  the runtime consumer transcodes their completed values. Two object-cache
+  on its first slot demand, and the rest after every checked root. Every command
+  that finalizes checking evaluates the literal roots of its program roots,
+  with the rest of compile-time evaluation and under its fixed configuration,
+  so `roc check` reports every rejected or crashing conversion a build would. Two object-cache
   rules keep a specialization served from a pack equivalent to one lowered
   again, whose literal roots would be evaluated again: an entry whose closure
   still converts a specialized literal at runtime (a program lowered without
@@ -17081,9 +17102,9 @@ Compile-time dependency summaries are produced from explicit checked root data
 and `ConstStore` dependencies. They are not discovered by a later stage scanning
 bodies for missing data.
 
-Shared host and runtime consumers branch from one completed Lambda Solved
-program and its inline plan. The runtime continuation is an exact owned clone;
-Lift, SpecConstr, and Solve do not run again. Frozen callable correspondence
+A runtime consumer continuing the evaluation's Solved program branches from
+that one completed Lambda Solved program and its inline plan; Lift,
+SpecConstr, and Solve do not run again. Frozen callable correspondence
 retains the complete member specialization identity in that shared domain:
 capture ABI, lifted source function, solved function type, and producer capture
 span, or the source-owned capture count. Source-owned capture storage positions
@@ -17092,7 +17113,9 @@ multiple members with distinct capture contexts even when all their payloads
 are zero-sized; its source template or layout alone cannot identify which member
 was evaluated. Solved LIR lowering records `FrozenCallableContext` alongside the frozen
 Monotype function and generated worker identity. Transcoding consumes that
-complete identity and requires one exact target member.
+complete identity and requires one exact target member. These identities are
+positions in one Solved program, which is why a runtime consumer with another
+Solved policy reads the constant stores instead of transcoding.
 
 Shared compile-time execution completes slots on demand. Each declared
 value and failure slot carries its producer's exact checked module and root ID.

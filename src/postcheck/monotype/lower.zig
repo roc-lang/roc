@@ -17075,17 +17075,6 @@ const BodyDraftStore = struct {
         var comptime_roots = collections.DenseMap(DraftComptimeValueRootId, Common.ComptimeValueRootId).init(program.allocator);
         defer comptime_roots.deinit();
 
-        // A literal root commits with its definition, which commits exactly
-        // when the function owning it does; its read then names the root by
-        // its program id.
-        for (self.literal_roots.items) |root| {
-            if (emit_defs) |emit| if (!emit[@intFromEnum(root.def)]) continue;
-            const id = try program.addLiteralRoot(.{ .def = ids.def(root.def), .module = root.module, .site = root.site });
-            var descriptor = self.comptime_value_roots.items[@intFromEnum(root.read)];
-            descriptor.root = .{ .literal = id };
-            try comptime_roots.put(root.read, try program.addComptimeValueRoot(descriptor));
-        }
-
         for (self.string_literals.items, 0..) |literal, index| {
             if (!ids.retained(.string_literals, index)) continue;
             const id = if (literal.const_blob) |blob|
@@ -17230,6 +17219,26 @@ const BodyDraftStore = struct {
                 .ty = try pat.ty.sealCommitted(committed_types),
                 .data = try BodyDraftStore.sealCorePatData(committed_types, ids, pat.data),
             });
+        }
+
+        // A literal root commits with its definition, which commits exactly
+        // when the function owning it does; its read then names the root by
+        // its program id. The same literal at the same type is one literal
+        // root however many specializations convert it: its definition's
+        // content identity names the conversion, so a later one reads the
+        // first one's root.
+        for (self.literal_roots.items) |root| {
+            if (emit_defs) |emit| if (!emit[@intFromEnum(root.def)]) continue;
+            const def = self.defs.items[@intFromEnum(root.def)];
+            const seed = def.identity_seed orelse Common.invariant("literal root definition had no identity seed");
+            const identity = try sealedDefIdentity(program, committed_types, seed, ids.typedLocalSpan(def.args), try def.ret.sealCommitted(committed_types));
+            const entry = try program.literal_root_by_identity.getOrPut(program.allocator, identity);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = try program.addLiteralRoot(.{ .def = ids.def(root.def), .module = root.module, .site = root.site });
+            }
+            var descriptor = self.comptime_value_roots.items[@intFromEnum(root.read)];
+            descriptor.root = .{ .literal = entry.value_ptr.* };
+            try comptime_roots.put(root.read, try program.addComptimeValueRoot(descriptor));
         }
 
         var retained_expr_count: usize = 0;

@@ -47,8 +47,6 @@ pub const EventCallback = struct {
 };
 
 /// Where the compile-time evaluator splices object-cache entries from.
-pub const SpliceSource = backend.dev.SpliceSource;
-
 /// Runtime options for compile-time finalization.
 pub const Options = struct {
     pub const StderrWriter = struct {
@@ -81,10 +79,6 @@ pub const Options = struct {
     slow_root_threshold_ns: u64 = 3 * std.time.ns_per_s,
     slow_root_period_ns: u64 = std.time.ns_per_s,
     timing: ?*Timing = null,
-    /// The object cache's artifacts. A procedure the compile-time roots
-    /// reach that the cache served during lowering has no body; the
-    /// evaluator splices its entry into the image it runs.
-    splice_source: ?SpliceSource = null,
     /// Where a compile-time failure is reported when the source it names
     /// belongs to a checked module this finalization does not complete: a
     /// literal in a module whose checking finished in an earlier compilation,
@@ -255,38 +249,34 @@ const ModuleOwners = struct {
     }
 };
 
-/// Retains the compilation's specialization and host lowering across checking
-/// completion. Diagnostic destinations are consumed during finalizeProgram.
+/// Retains the compilation's compile-time results, and the specialized
+/// program its runtime consumer continues, across checking completion.
+/// Diagnostic destinations are consumed during finalizeProgram.
 pub const ProgramSession = struct {
     allocator: Allocator,
     modules: lir.CheckedPipeline.CheckedModuleSet,
     runtime_requests: []const checked.RootRequest,
     runtime_roots: lir.CheckedPipeline.RootRequestSet,
     runtime_target: ?lir.CheckedPipeline.TargetConfig,
+    /// The compile-time evaluation program, holding every completed value
+    /// the runtime consumer reads. Null when this compilation evaluated
+    /// nothing.
     host: ?lir.CheckedPipeline.LoweredProgram,
-    /// The prepared producer program the runtime consumer continues. It is
-    /// the same program the compile-time consumer was lowered from: both
-    /// borrow it, neither copies it.
+    /// The Solved program the runtime consumer continues, when its Solved
+    /// policy is compile-time evaluation's.
     runtime_prepared: ?lir.CheckedPipeline.PreparedSolved,
-    compile_time_root_count: usize,
-    native_artifacts: ?NativeProcCompiler.Retained = null,
-    /// Only a successful transfer of the original host LIR establishes the
-    /// producer-domain proof required by native artifact reuse.
-    runtime_owns_native_domain: bool = false,
+    /// The position of each runtime request in the specialized program's root
+    /// plan.
+    runtime_positions: []u32,
 
     pub fn deinit(self: *ProgramSession) void {
-        if (self.native_artifacts) |*artifacts| artifacts.deinit();
         if (self.host) |*host| host.deinit();
         if (self.runtime_prepared) |*prepared| prepared.deinit();
+        self.allocator.free(self.runtime_positions);
         self.allocator.free(self.modules.root.relation_modules);
         self.allocator.free(self.modules.imports);
         deinitRootRequests(self.allocator, self.runtime_roots);
         self.* = undefined;
-    }
-
-    pub fn runtimeNativeArtifacts(self: *const ProgramSession) ?*const NativeProcCompiler.Retained {
-        if (!self.runtime_owns_native_domain) return null;
-        return if (self.native_artifacts) |*artifacts| artifacts else null;
     }
 
     pub fn takeRuntime(
@@ -305,18 +295,6 @@ pub const ProgramSession = struct {
                 field == .lifted_expr_count_out or
                 field == .completed_scalar_values)
             {
-                // A completed host program has already published its outputs.
-                // Reusing it cannot silently redirect those results or count
-                // its producer work again in another metrics destination.
-                if (comptime field != .timing and field != .post_check_executor) {
-                    // A runtime program prepared during checking has
-                    // published its producer outputs too.
-                    const reuses_completed_host = target.specialization_strategy == .lss and
-                        ((self.compile_time_root_count != 0 and self.runtime_prepared == null) or
-                            (self.compile_time_root_count == 0 and self.runtime_prepared != null));
-                    if (reuses_completed_host and !std.meta.eql(@field(configured, @tagName(field)), @field(target, @tagName(field))))
-                        finalizationInvariant("completed runtime program cannot redirect previously published lowering outputs");
-                }
                 continue;
             }
             if (!std.meta.eql(@field(configured, @tagName(field)), @field(target, @tagName(field))))
@@ -332,48 +310,28 @@ pub const ProgramSession = struct {
                 }
             } else if (expected != actual) finalizationInvariant("runtime request policy differs from the declared consumer");
         }
-        if (target.specialization_strategy == .boxy or (self.host == null and self.runtime_prepared == null)) {
-            self.runtime_target = null;
-            return lir.CheckedPipeline.lowerCheckedModulesToLir(allocator, self.modules, roots, target);
-        }
-        if (self.runtime_prepared) |owned_prepared| {
-            self.runtime_prepared = null;
-            // A program prepared during checking with no literal root to
-            // evaluate is the runtime program itself.
-            const lowered = if (self.host == null)
-                try lir.CheckedPipeline.lowerPreparedSolvedToLir(owned_prepared)
-            else
-                try self.continueRuntimeConsumer(allocator, owned_prepared, target);
-            self.runtime_target = null;
-            return lowered;
-        }
-        // One program serves both consumers. Its runtime roots were lowered
-        // with the compile-time roots, so the runtime program is that program
-        // with its own roots selected.
-        var host = self.host orelse finalizationInvariant("runtime program was already consumed");
-        self.host = null;
-        errdefer host.deinit();
-        // The reused program read its roots before they were evaluated;
-        // the completed constructions now replace those reads.
-        const host_frozen = if (host.frozen_static_data) |*frozen| frozen else finalizationInvariant("host program omitted its completed frozen values");
-        try lir.ComptimeRootAccessors.rebuild(allocator, &host.lir_result, host_frozen);
-        const start = self.compile_time_root_count;
-        const runtime_count = self.runtime_requests.len;
-        if (host.lir_result.root_procs.items.len != start + runtime_count)
-            finalizationInvariant("shared root lowering changed the requested root count");
-        const runtime_indices = try allocator.alloc(u32, runtime_count);
-        defer allocator.free(runtime_indices);
-        for (runtime_indices, 0..) |*index, ordinal| index.* = @intCast(start + ordinal);
-        try lir.CheckedPipeline.retainRuntimeRoots(&host, runtime_indices);
         self.runtime_target = null;
-        self.runtime_owns_native_domain = true;
-        return host;
+        if (self.runtime_prepared) |prepared| {
+            self.runtime_prepared = null;
+            var owned = prepared;
+            lir.CheckedPipeline.requireHostedProceduresBound(self.modules, target) catch |err| {
+                owned.deinit();
+                return err;
+            };
+            return self.continueRuntimeConsumer(allocator, owned, target);
+        }
+        // Any other runtime consumer specializes the checked modules itself
+        // under its own policy, reading every compile-time value from the
+        // modules' constant stores. Solved programs built under different
+        // inlining and SpecConstr policies specialize one function
+        // differently, so only the stores name a value in both.
+        return lir.CheckedPipeline.lowerCheckedModulesToLir(allocator, self.modules, roots, target);
     }
 
-    /// Lower the runtime consumer's own share of the producer program, which
-    /// this compilation's compile-time consumer could not serve: a different
-    /// target width or expect mode means different code. The producer program
-    /// has no consumer after this one, so lowering releases it.
+    /// Lower the runtime consumer's own share of the specialized program,
+    /// under its own target and LIR policy, reading every compile-time value
+    /// from the completed evaluation. The specialized program has no consumer
+    /// after this one, so lowering releases it.
     fn continueRuntimeConsumer(
         self: *ProgramSession,
         allocator: Allocator,
@@ -383,23 +341,30 @@ pub const ProgramSession = struct {
         var owned = prepared;
         var owned_live = true;
         errdefer if (owned_live) owned.deinit();
-        const source = if (self.host) |*host| host else finalizationInvariant("target consumer omitted its completed host program");
+        const consumer_roots: lir.CheckedPipeline.ConsumerRoots = .{ .roots = self.runtime_positions, .literal_roots = false };
+        const source = if (self.host) |*host| host else {
+            // Nothing was evaluated, so the program reads no compile-time
+            // value slot.
+            owned_live = false;
+            return lir.CheckedPipeline.lowerFinalConsumerToLir(owned, .{
+                .roots = consumer_roots,
+                .target_usize = target.target_usize,
+                .inline_expects = target.inline_expects,
+                .observers = lir.CheckedPipeline.Observers.fromTarget(target),
+                .lir_policy = lir.CheckedPipeline.LirPolicy.fromTarget(target),
+            });
+        };
         const host_frozen = if (source.frozen_static_data) |*frozen| frozen else finalizationInvariant("host program omitted its completed frozen values");
         // The host program has completed, so its scalar roots lower as
         // literals here. The completed image is transcoded after target LIR
         // generation and before reachability compacts the target tables.
         var scalar_values = try lir.CheckedPipeline.CompletedScalarValues.init(allocator, &source.lir_result, host_frozen);
         defer scalar_values.deinit(allocator);
-        const manifest = try allocator.alloc(u32, self.runtime_requests.len);
-        defer allocator.free(manifest);
-        // Compile-time requests are published first, so the runtime requests
-        // are the positions after them, in their declared order.
-        for (manifest, 0..) |*position, ordinal| position.* = @intCast(self.compile_time_root_count + ordinal);
         var frozen_context = RuntimeFrozenMaterializer{ .source = source };
         defer frozen_context.successful_roots.deinit(allocator);
         owned_live = false;
         var lowered = try lir.CheckedPipeline.lowerFinalConsumerToLir(owned, .{
-            .roots = .{ .roots = manifest, .literal_roots = false },
+            .roots = consumer_roots,
             .target_usize = target.target_usize,
             .inline_expects = target.inline_expects,
             .completed_scalar_values = &scalar_values,
@@ -409,9 +374,10 @@ pub const ProgramSession = struct {
                 .complete_guards = RuntimeFrozenMaterializer.completeGuards,
             },
             .observers = lir.CheckedPipeline.Observers.fromTarget(target),
+            .lir_policy = lir.CheckedPipeline.LirPolicy.fromTarget(target),
         });
         errdefer lowered.deinit();
-        if (lowered.lir_result.root_procs.items.len != manifest.len)
+        if (lowered.lir_result.root_procs.items.len != self.runtime_positions.len)
             finalizationInvariant("runtime consumer lowering changed the requested root count");
         try lir.CheckedPipeline.adoptReachableCompletedComptimeValues(&lowered);
         // The host's procedures have no reader left: the runtime program has
@@ -569,12 +535,50 @@ fn deinitRootRequests(allocator: Allocator, roots: lir.CheckedPipeline.RootReque
     }
 }
 
-/// Lower the union of checking and runtime roots once, using the released
-/// frontend workers, then complete checked values in the caller's dependency order.
+/// The one target compile-time evaluation lowers under. Nothing a command
+/// configures reaches it: every command that checks a program evaluates the
+/// same roots through the same code and so produces the same values and the
+/// same reports. Its Solved policy is the one dev builds use, so a dev
+/// build's runtime program continues the same Solved program.
+fn compileTimeTarget(options: Options) lir.CheckedPipeline.TargetConfig {
+    return .{
+        .target_usize = base.target.TargetUsize.native,
+        .specialization_strategy = .lss,
+        .checked_module_state = .checking_finalization,
+        .comptime_value_reads = true,
+        .literal_roots = true,
+        .inline_expects = .run,
+        .inline_mode = .wrappers,
+        .spec_constr_clone_inlining = .iterator_fusion,
+        // The rewrites that only speed up the produced program stay off,
+        // as in dev builds: compile-time code runs once.
+        .fuse_tag_cases = false,
+        .scalarize_joins = false,
+        .reuse_boxes = false,
+        // Specialization records procedure names for every consumer of the
+        // program; a runtime consumer's diagnostics read them.
+        .proc_debug_names = true,
+        .post_check_executor = options.post_check_executor,
+        .timing = if (options.timing) |timing| &timing.lowering else null,
+    };
+}
+
+/// Complete checked values in the caller's dependency order, using the
+/// released frontend workers.
+///
+/// Compile-time evaluation specializes the modules' compile-time roots
+/// together with `program_roots`, the runtime roots the checked program
+/// itself declares, and evaluates the compile-time roots and every literal
+/// root that specialization registers, under `compileTimeTarget`. Neither the
+/// roots nor the policy depend on the command, so every command that checks
+/// a program performs the same evaluation. A runtime consumer
+/// (`runtime_roots`, which must be among `program_roots`) continues the
+/// specialized program afterwards and reads the completed values.
 pub fn finalizeProgram(
     allocator: Allocator,
     modules: []const ProgramModule,
     lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
+    program_roots: lir.CheckedPipeline.RootRequestSet,
     runtime_roots: lir.CheckedPipeline.RootRequestSet,
     runtime_target: ?lir.CheckedPipeline.TargetConfig,
     options: Options,
@@ -593,158 +597,111 @@ pub fn finalizeProgram(
         try source_modules.appendNTimes(allocator, entry.module.key, entry.module.root_requests.compile_time_requests.len);
     }
     const compile_time_root_count = requests.items.len;
-    const share_runtime = if (runtime_target) |target| target.specialization_strategy == .lss else false;
-    const lowering_runtime_roots = if (share_runtime) runtime_roots else lir.CheckedPipeline.RootRequestSet{};
-    try requests.appendSlice(allocator, lowering_runtime_roots.requests);
-    if (lowering_runtime_roots.source_modules.len == 0) {
-        try source_modules.appendNTimes(allocator, lowering_modules.root.module.key, lowering_runtime_roots.requests.len);
+    try requests.appendSlice(allocator, program_roots.requests);
+    if (program_roots.source_modules.len == 0) {
+        try source_modules.appendNTimes(allocator, lowering_modules.root.module.key, program_roots.requests.len);
     } else {
-        if (lowering_runtime_roots.source_modules.len != lowering_runtime_roots.requests.len) finalizationInvariant("runtime roots omitted their checked owners");
-        try source_modules.appendSlice(allocator, lowering_runtime_roots.source_modules);
+        if (program_roots.source_modules.len != program_roots.requests.len) finalizationInvariant("program roots omitted their checked owners");
+        try source_modules.appendSlice(allocator, program_roots.source_modules);
     }
+
+    const lss_runtime = if (runtime_target) |target| target.specialization_strategy == .lss else false;
+    const runtime_positions = try runtimeRootPositions(allocator, program_roots, runtime_roots, compile_time_root_count, lss_runtime);
+    var positions_owned = true;
+    errdefer if (positions_owned) allocator.free(runtime_positions);
     const owned_imports = try allocator.dupe(checked.ImportedModuleView, lowering_modules.imports);
     errdefer allocator.free(owned_imports);
     const owned_relations = try allocator.dupe(checked.ImportedModuleView, lowering_modules.root.relation_modules);
     errdefer allocator.free(owned_relations);
     const owned_runtime_roots = try cloneRootRequests(allocator, runtime_roots);
     errdefer deinitRootRequests(allocator, owned_runtime_roots);
-    const owned_runtime_requests = owned_runtime_roots.requests;
-    if (compile_time_root_count == 0) {
-        // With no compile-time root to share a program with, the runtime
-        // program is prepared here, under its own policy, so the literal
-        // roots its specializations register are evaluated with the rest of
-        // this compilation's compile-time work.
-        var runtime_prepared: ?lir.CheckedPipeline.PreparedSolved = null;
-        errdefer if (runtime_prepared) |*prepared| prepared.deinit();
-        var literal_host: ?lir.CheckedPipeline.LoweredProgram = null;
-        errdefer if (literal_host) |*host| host.deinit();
-        var native_artifacts: ?NativeProcCompiler.Retained = null;
-        errdefer if (native_artifacts) |*artifacts| artifacts.deinit();
-        // No module here has a compile-time root, so each one's evaluation is
-        // complete before its runtime program is prepared.
-        for (modules) |entry| {
-            if (entry.problem_store) |store| try finishPendingExhaustiveness(allocator, entry.module, store);
-            try entry.module.const_store.verifyComplete();
-            entry.module.evaluation_state = .finalized;
-        }
-        if (share_runtime) prepare: {
-            var prepared_target = runtime_target.?;
-            prepared_target.literal_roots = true;
-            const monotype = lir.CheckedPipeline.prepareCheckedModulesMonotype(allocator, lowering_modules, runtime_roots, prepared_target) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                // Such a program has no runtime program to prepare; its
-                // runtime consumer reports the unbound declaration.
-                error.HostedFunctionNotBound => break :prepare,
+
+    var host: ?lir.CheckedPipeline.LoweredProgram = null;
+    errdefer if (host) |*program| program.deinit();
+    var runtime_prepared: ?lir.CheckedPipeline.PreparedSolved = null;
+    errdefer if (runtime_prepared) |*prepared| prepared.deinit();
+
+    if (requests.items.len != 0) {
+        var union_roots = program_roots;
+        union_roots.requests = requests.items;
+        union_roots.source_modules = source_modules.items;
+        const union_test_metadata = try allocator.dupe(@typeInfo(@TypeOf(program_roots.test_plan_metadata)).pointer.child, program_roots.test_plan_metadata);
+        defer allocator.free(union_test_metadata);
+        for (union_test_metadata) |*metadata| metadata.request_index += @intCast(compile_time_root_count);
+        union_roots.test_plan_metadata = union_test_metadata;
+        var host_target = compileTimeTarget(options);
+        // Counting work observes the evaluation without shaping it.
+        if (runtime_target) |target| host_target.work_metrics = target.work_metrics;
+        var monotype = lir.CheckedPipeline.prepareCheckedModulesMonotype(allocator, lowering_modules, union_roots, host_target) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.HostedFunctionNotBound => finalizationInvariant("compile-time evaluation required every hosted procedure to be bound"),
+        };
+        var monotype_owned = true;
+        errdefer if (monotype_owned) monotype.deinit();
+        // A runtime consumer whose Solved policy is compile-time evaluation's
+        // continues the same Solved program; see `ProgramSession.takeRuntime`
+        // for every other one.
+        const shares_solved = lss_runtime and
+            std.meta.eql(lir.CheckedPipeline.SolvedPolicy.fromTarget(runtime_target.?), lir.CheckedPipeline.SolvedPolicy.fromTarget(host_target));
+        monotype_owned = false;
+        var prepared = try lir.CheckedPipeline.prepareMonotypeToSolved(monotype);
+        var prepared_owned = true;
+        errdefer if (prepared_owned) prepared.deinit();
+
+        if (compile_time_root_count != 0 or prepared.literalRootCount() != 0) {
+            // The compile-time roots are published first, so compile-time
+            // evaluation's own share of the root plan is the positions before
+            // the program roots; its literal roots join it.
+            const host_manifest = try allocator.alloc(u32, compile_time_root_count);
+            defer allocator.free(host_manifest);
+            for (host_manifest, 0..) |*position, ordinal| position.* = @intCast(ordinal);
+            // A runtime consumer continuing this Solved program reads its
+            // compile-time values out of this program's frozen data, so the
+            // roots the program records reads of materialize their completed
+            // values here.
+            const completed_values = if (shares_solved)
+                try collectCompletedValueRequests(allocator, modules, &prepared)
+            else
+                &[_]lir.CheckedPipeline.CompletedValueRequest{};
+            defer allocator.free(completed_values);
+            const host_consumer = lir.CheckedPipeline.Consumer{
+                .roots = .{
+                    .roots = host_manifest,
+                    .completed_values = completed_values,
+                    .layout_requests = false,
+                    .runtime_schema_requests = false,
+                },
+                .target_usize = host_target.target_usize,
+                .inline_expects = host_target.inline_expects,
+                .observers = lir.CheckedPipeline.Observers.fromTarget(host_target),
             };
-            runtime_prepared = try lir.CheckedPipeline.prepareMonotypeToSolved(monotype);
-            if (runtime_prepared.?.literalRootCount() != 0) {
-                literal_host = try lowerLiteralRootHost(&runtime_prepared.?, options);
-                var evaluation_options = options;
-                evaluation_options.debug_events = &debug_events;
-                native_artifacts = try evaluateLoweredRoots(allocator, modules, lowering_modules, &literal_host.?, 0, evaluation_options);
+            if (!shares_solved) prepared_owned = false;
+            host = (if (shares_solved)
+                lir.CheckedPipeline.lowerConsumerToLir(&prepared, host_consumer)
+            else
+                lir.CheckedPipeline.lowerFinalConsumerToLir(prepared, host_consumer)) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.HostedFunctionNotBound => finalizationInvariant("compile-time evaluation required every hosted procedure to be bound"),
+            };
+            if (host.?.lir_result.root_procs.items.len != compile_time_root_count)
+                finalizationInvariant("compile-time consumer lowering changed the requested root count");
+            var evaluation_options = options;
+            evaluation_options.debug_events = &debug_events;
+            try evaluateLoweredRoots(allocator, modules, lowering_modules, &host.?, compile_time_root_count, evaluation_options);
+        } else {
+            for (modules) |entry| {
+                if (entry.problem_store) |store| try finishPendingExhaustiveness(allocator, entry.module, store);
+                try entry.module.const_store.verifyComplete();
+            }
+            if (!shares_solved) {
+                prepared_owned = false;
+                prepared.deinit();
             }
         }
-        try debug_events.persist(modules);
-        if (!options.defer_debug_replay) try debug_events.replay(options);
-        var retained_root = lowering_modules.root;
-        retained_root.relation_modules = owned_relations;
-        const retained_roots = owned_runtime_roots;
-        return .{
-            .allocator = allocator,
-            .modules = .{ .root = retained_root, .imports = owned_imports },
-            .runtime_requests = owned_runtime_requests,
-            .runtime_roots = retained_roots,
-            .runtime_target = runtime_target,
-            .host = literal_host,
-            .runtime_prepared = runtime_prepared,
-            .compile_time_root_count = 0,
-            .native_artifacts = native_artifacts,
-        };
-    }
-    var union_roots = lowering_runtime_roots;
-    union_roots.requests = requests.items;
-    union_roots.source_modules = source_modules.items;
-    const union_test_metadata = try allocator.dupe(@typeInfo(@TypeOf(lowering_runtime_roots.test_plan_metadata)).pointer.child, lowering_runtime_roots.test_plan_metadata);
-    defer allocator.free(union_test_metadata);
-    for (union_test_metadata) |*metadata| metadata.request_index += @intCast(compile_time_root_count);
-    union_roots.test_plan_metadata = union_test_metadata;
-    var host_target = runtime_target orelse lir.CheckedPipeline.TargetConfig{};
-    host_target.target_usize = base.target.TargetUsize.native;
-    host_target.specialization_strategy = .lss;
-    host_target.checked_module_state = .checking_finalization;
-    host_target.comptime_value_reads = true;
-    host_target.literal_roots = true;
-    host_target.inline_expects = .run;
-    host_target.post_check_executor = options.post_check_executor;
-    host_target.timing = if (options.timing) |timing| &timing.lowering else null;
-    const monotype = lir.CheckedPipeline.prepareCheckedModulesMonotype(allocator, lowering_modules, union_roots, host_target) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.HostedFunctionNotBound => finalizationInvariant("prepared program contains an unbound hosted declaration"),
-    };
-    var prepared = try lir.CheckedPipeline.prepareMonotypeToSolved(monotype);
-    var prepared_owned = true;
-    errdefer if (prepared_owned) prepared.deinit();
-    // One program serves both consumers when the runtime consumer asks for
-    // the compile-time consumer's own target width and expect mode: the code
-    // it would lower is the code already lowered here. Any other runtime
-    // consumer needs its own continuation, and then neither consumer lowers
-    // the other's roots.
-    const reuse_host = share_runtime and
-        runtime_target.?.target_usize == host_target.target_usize and
-        runtime_target.?.inline_expects == host_target.inline_expects;
-    // The compile-time roots are published first, so the compile-time
-    // consumer's own share of the shared root plan is the positions before
-    // the runtime requests. Serving only that share also materializes none of
-    // the runtime consumer's layout, static-data or runtime-schema requests:
-    // those describe the target artifact, which such a program is not.
-    const host_root_count = if (reuse_host) requests.items.len else compile_time_root_count;
-    // A program that serves both consumers names the producer's whole root
-    // plan, which needs no list to say so.
-    const host_manifest: ?[]u32 = if (reuse_host) null else try allocator.alloc(u32, compile_time_root_count);
-    defer if (host_manifest) |positions| allocator.free(positions);
-    if (host_manifest) |positions| {
-        for (positions, 0..) |*position, ordinal| position.* = @intCast(ordinal);
-    }
-    // A separate runtime consumer reads its compile-time values out of this
-    // program's frozen data, so the roots the producer records reads of
-    // materialize their completed values here. A reused program reads its own
-    // slots and needs no materialization it did not already demand.
-    const completed_values = if (reuse_host)
-        &[_]lir.CheckedPipeline.CompletedValueRequest{}
-    else
-        try collectCompletedValueRequests(allocator, modules, &prepared);
-    defer allocator.free(completed_values);
-    const host_consumer = lir.CheckedPipeline.Consumer{
-        .roots = .{
-            .roots = host_manifest,
-            .completed_values = completed_values,
-            .layout_requests = reuse_host,
-            .runtime_schema_requests = reuse_host,
-        },
-        .target_usize = host_target.target_usize,
-        .inline_expects = host_target.inline_expects,
-        .observers = lir.CheckedPipeline.Observers.fromTarget(host_target),
-    };
-    // The producer program is released as soon as its last consumer no longer
-    // reads it, which is before that consumer's procedure passes and ARC.
-    const retains_producer = share_runtime and !reuse_host;
-    if (!retains_producer) prepared_owned = false;
-    var host = (if (retains_producer)
-        lir.CheckedPipeline.lowerConsumerToLir(&prepared, host_consumer)
-    else
-        lir.CheckedPipeline.lowerFinalConsumerToLir(prepared, host_consumer)) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.HostedFunctionNotBound => unreachable,
-    };
-    errdefer host.deinit();
-    if (host.lir_result.root_procs.items.len != host_root_count)
-        finalizationInvariant("compile-time consumer lowering changed the requested root count");
-    var native_artifacts: ?NativeProcCompiler.Retained = null;
-    errdefer if (native_artifacts) |*artifacts| artifacts.deinit();
-    var evaluation_options = options;
-    evaluation_options.debug_events = &debug_events;
-    if (compile_time_root_count != 0 or host.lir_result.literal_roots.items.len != 0) {
-        native_artifacts = try evaluateLoweredRoots(allocator, modules, lowering_modules, &host, compile_time_root_count, evaluation_options);
+        if (shares_solved) {
+            prepared_owned = false;
+            runtime_prepared = prepared;
+        }
     } else {
         for (modules) |entry| {
             if (entry.problem_store) |store| try finishPendingExhaustiveness(allocator, entry.module, store);
@@ -755,23 +712,52 @@ pub fn finalizeProgram(
     if (!options.defer_debug_replay) try debug_events.replay(options);
     var retained_root = lowering_modules.root;
     retained_root.relation_modules = owned_relations;
-    const retained_roots = owned_runtime_roots;
+    positions_owned = false;
     return .{
         .allocator = allocator,
         .modules = .{ .root = retained_root, .imports = owned_imports },
-        .runtime_requests = owned_runtime_requests,
-        .runtime_roots = retained_roots,
+        .runtime_requests = owned_runtime_roots.requests,
+        .runtime_roots = owned_runtime_roots,
         .runtime_target = runtime_target,
         .host = host,
-        .runtime_prepared = if (retains_producer) prepared else null,
-        .compile_time_root_count = compile_time_root_count,
-        .native_artifacts = native_artifacts,
+        .runtime_prepared = runtime_prepared,
+        .runtime_positions = runtime_positions,
     };
 }
 
+/// Where each runtime request sits in the specialized program's root plan.
+/// A runtime consumer continues the program compile-time evaluation
+/// specialized, so everything it lowers is among the program roots that
+/// specialization started from.
+fn runtimeRootPositions(
+    allocator: Allocator,
+    program_roots: lir.CheckedPipeline.RootRequestSet,
+    runtime_roots: lir.CheckedPipeline.RootRequestSet,
+    compile_time_root_count: usize,
+    lss_runtime: bool,
+) Allocator.Error![]u32 {
+    if (!lss_runtime) return try allocator.alloc(u32, 0);
+    if (runtime_roots.include_provided_data_exports and !program_roots.include_provided_data_exports)
+        finalizationInvariant("runtime consumer materializes provided data exports the program roots omit");
+    if (runtime_roots.include_internal_static_data and !program_roots.include_internal_static_data)
+        finalizationInvariant("runtime consumer materializes internal static data the program roots omit");
+    if (!std.meta.eql(runtime_roots.layout_requests, program_roots.layout_requests) and runtime_roots.layout_requests.len != 0)
+        finalizationInvariant("runtime consumer requested layouts the program roots omit");
+    if (!std.meta.eql(runtime_roots.static_data_requests, program_roots.static_data_requests) and runtime_roots.static_data_requests.len != 0)
+        finalizationInvariant("runtime consumer requested static data the program roots omit");
+    const positions = try allocator.alloc(u32, runtime_roots.requests.len);
+    for (runtime_roots.requests, positions) |request, *position| {
+        for (program_roots.requests, 0..) |program_request, index| {
+            if (!std.meta.eql(program_request, request)) continue;
+            position.* = @intCast(compile_time_root_count + index);
+            break;
+        } else finalizationInvariant("runtime consumer named a root compile-time evaluation did not specialize");
+    }
+    return positions;
+}
+
 /// Evaluate a lowered program's compile-time roots and literal roots, and
-/// freeze their completed values into it. Returns the native evaluator's
-/// retained procedure artifacts, when the native evaluator ran.
+/// freeze their completed values into it.
 fn evaluateLoweredRoots(
     allocator: Allocator,
     modules: []const ProgramModule,
@@ -779,13 +765,13 @@ fn evaluateLoweredRoots(
     host: *lir.CheckedPipeline.LoweredProgram,
     compile_time_root_count: usize,
     options: Options,
-) FinalizeError!?NativeProcCompiler.Retained {
+) FinalizeError!void {
     if (comptime compilerHostMustUseInterpreterForCtfe()) {
         const interpreted = try InterpreterProgram.init(allocator, lowering_modules, host, options);
         defer interpreted.deinit();
         try finalizeLoweredProgram(allocator, modules, host, compile_time_root_count, interpreted, options);
         host.frozen_static_data = try interpreted.slots.freezeCompleted();
-        return null;
+        return;
     }
     if (comptime !backend.host_lir_codegen_available) return error.UnsupportedPlatform;
     var native = try DevProgram.init(allocator, lowering_modules, host, options);
@@ -793,31 +779,6 @@ fn evaluateLoweredRoots(
     native.codegen.static_strings = native.static_strings.view();
     try finalizeLoweredProgram(allocator, modules, host, compile_time_root_count, &native, options);
     host.frozen_static_data = try native.freezeCompleted();
-    const artifacts = native.artifacts;
-    native.artifacts = null;
-    return artifacts;
-}
-
-/// The compile-time consumer of a runtime program's literal roots: they alone,
-/// lowered for the machine that evaluates them. The runtime consumer later
-/// reads their completed values from this program.
-fn lowerLiteralRootHost(
-    prepared: *lir.CheckedPipeline.PreparedSolved,
-    options: Options,
-) FinalizeError!lir.CheckedPipeline.LoweredProgram {
-    return lir.CheckedPipeline.lowerConsumerToLir(prepared, .{
-        .roots = .{
-            .roots = &.{},
-            .layout_requests = false,
-            .runtime_schema_requests = false,
-        },
-        .target_usize = base.target.TargetUsize.native,
-        .inline_expects = prepared.target.inline_expects,
-        .observers = .{ .post_check_executor = options.post_check_executor },
-    }) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.HostedFunctionNotBound => finalizationInvariant("literal root program contains an unbound hosted declaration"),
-    };
 }
 
 /// The compile-time consumer's materialization requests.
@@ -3101,7 +3062,6 @@ const DevProgram = struct {
             error.MissingStaticDataSymbol => finalizationInvariant("CTFE slot image omitted a declared static data symbol"),
             error.DuplicateStaticDataSymbol => finalizationInvariant("CTFE slot image contains conflicting static data symbols"),
         };
-        if (options.splice_source) |source| try splice.spliceExternal(&codegen, evaluation_demand, source);
         const static_rc_helpers = try static_data_exports.collectRequiredRcHelpers(allocator, slots.materialized);
         defer allocator.free(static_rc_helpers);
         var artifacts = try compileProcedures(allocator, &codegen, evaluation_demand, static_rc_helpers, options);

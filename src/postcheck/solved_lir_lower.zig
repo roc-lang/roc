@@ -701,6 +701,12 @@ const Lowerer = struct {
     result: LirProgram.Result,
     runtime_schemas: RuntimeSchemaStore,
     type_map: collections.DenseMap(SolvedType.TypeVarId, Type.TypeId),
+    /// For each Solved backing record of a nominal that declares padding, that
+    /// nominal. See `collectPaddedBackingOwners`.
+    padded_backing_owners: collections.DenseMap(SolvedType.TypeVarId, SolvedType.TypeVarId),
+    /// For each lowered padded backing record, its lowered nominal, whose
+    /// declared layout the backing takes.
+    padded_backing_nominals: collections.DenseMap(Type.TypeId, Type.TypeId),
     fn_specs: std.ArrayList(FnSpec),
     fn_entries: std.ArrayList(FnEntry),
     fn_spec_map: std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage),
@@ -954,6 +960,10 @@ const Lowerer = struct {
         errdefer recursive_value_capture_ids.deinit();
         try Lowerer.collectRecursiveValueLocals(&solved.lifted, &recursive_value_locals, &recursive_value_capture_ids);
 
+        var padded_backing_owners = collections.DenseMap(SolvedType.TypeVarId, SolvedType.TypeVarId).init(allocator);
+        errdefer padded_backing_owners.deinit();
+        try collectPaddedBackingOwners(solved.types.view(), &padded_backing_owners);
+
         const workspace_count = if (options.post_check_executor) |executor| executor.worker_count else 0;
         const worker_workspaces = try allocator.alloc(?FnBodyWorkspace, workspace_count);
         errdefer allocator.free(worker_workspaces);
@@ -968,6 +978,8 @@ const Lowerer = struct {
             .result = try LirProgram.Result.init(allocator, target_usize),
             .runtime_schemas = RuntimeSchemaStore.init(allocator),
             .type_map = collections.DenseMap(SolvedType.TypeVarId, Type.TypeId).init(allocator),
+            .padded_backing_owners = padded_backing_owners,
+            .padded_backing_nominals = collections.DenseMap(Type.TypeId, Type.TypeId).init(allocator),
             .fn_specs = .empty,
             .fn_entries = .empty,
             .fn_spec_map = std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
@@ -1159,6 +1171,8 @@ const Lowerer = struct {
         self.fn_entries.deinit(self.allocator);
         self.fn_specs.deinit(self.allocator);
         self.type_map.deinit();
+        self.padded_backing_owners.deinit();
+        self.padded_backing_nominals.deinit();
         self.types.deinit();
         self.runtime_schemas.deinit();
         self.result.deinit();
@@ -1221,6 +1235,8 @@ const Lowerer = struct {
         self.fn_entries.deinit(self.allocator);
         self.fn_specs.deinit(self.allocator);
         self.type_map.deinit();
+        self.padded_backing_owners.deinit();
+        self.padded_backing_nominals.deinit();
         self.types.deinit();
         self.result = undefined;
         self.runtime_schemas = RuntimeSchemaStore.init(self.allocator);
@@ -1957,6 +1973,10 @@ const Lowerer = struct {
                         try self.add(.{ .ty = ty });
                         if (l.recursive_value_locals.contains(id)) {
                             try self.add(.{ .ty = try l.boxedRecursiveSlotTypeOfType(ty) });
+                            // Binding the local also names its slot at the
+                            // runtime backing; see `rememberRecursiveSlotLocalForType`.
+                            const runtime_ty = l.runtimeBackingType(ty);
+                            if (runtime_ty != ty) try self.add(.{ .ty = try l.recursiveSlotTypeOfType(runtime_ty) });
                         }
                     },
                     .ty => |ty| {
@@ -3433,6 +3453,14 @@ const Lowerer = struct {
         if (self.worker_callback) {
             self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared type");
         }
+        // A padded backing is lowered through its nominal, which records the
+        // backing's layout owner before anything can lay the backing out.
+        if (self.padded_backing_owners.get(root)) |owner| {
+            if (!self.type_map.contains(self.solved.types.root(owner))) {
+                _ = try self.lowerType(owner);
+                return self.type_map.get(root) orelse Common.invariant("padded nominal lowering did not lower its backing");
+            }
+        }
 
         const content = self.solved.types.get(root);
         if (content == .func) {
@@ -3450,7 +3478,42 @@ const Lowerer = struct {
         const reserved = try self.types.add(.zst);
         try self.type_map.put(root, reserved);
         self.types.set(reserved, try self.lowerTypeContent(content));
+        if (content == .named and content.named.backing != null) {
+            const backing_root = self.solved.types.root(content.named.backing.?.ty);
+            if (self.padded_backing_owners.get(backing_root)) |owner| {
+                if (self.solved.types.root(owner) == root) {
+                    try self.padded_backing_nominals.put(self.type_map.get(backing_root).?, reserved);
+                }
+            }
+        }
         return reserved;
+    }
+
+    /// Records the nominal owning each Solved backing record whose nominal
+    /// declares padding. Such a backing is the same type as every record value
+    /// constructing that nominal, so it takes the nominal's declared layout
+    /// rather than the structural one; recording the owner up front makes that
+    /// independent of the order in which types are lowered and laid out. The
+    /// nominals sharing one backing are instances of one declaration and so
+    /// share its declared order; the lowest-numbered one is the owner.
+    fn collectPaddedBackingOwners(
+        types: SolvedType.Store.View,
+        owners: *collections.DenseMap(SolvedType.TypeVarId, SolvedType.TypeVarId),
+    ) Common.LowerError!void {
+        for (types.vars, 0..) |content, index| {
+            if (content != .named) continue;
+            const named = content.named;
+            if (named.kind == .alias or named.declared_order.len == 0) continue;
+            const backing = named.backing orelse continue;
+            const backing_root = types.root(backing.ty);
+            if (types.get(backing_root) != .record) continue;
+            const has_padding = for (types.declaredFieldSpan(named.declared_order)) |entry| {
+                if (entry == .padding) break true;
+            } else false;
+            if (!has_padding) continue;
+            const entry = try owners.getOrPut(backing_root);
+            if (!entry.found_existing) entry.value_ptr.* = @enumFromInt(@as(u32, @intCast(index)));
+        }
     }
 
     fn lowerTypeContent(self: *Lowerer, content: SolvedType.Content) Common.LowerError!Type.Content {
@@ -11868,6 +11931,7 @@ const Lowerer = struct {
 
         fn inputForType(self: *LayoutGraphBuilder, ty: Type.TypeId) Common.LowerError!layout.GraphInput {
             if (self.local_nodes.get(ty)) |node| return layout.localGraphInput(node);
+            if (self.lowerer.padded_backing_nominals.get(ty)) |nominal| return self.inputForType(nominal);
 
             switch (self.lowerer.types.get(ty)) {
                 .primitive => |primitive| return layout.committedGraphInput(Common.primitiveLayout(primitive)),
@@ -13353,6 +13417,54 @@ test "layout lowering keeps opted-in nominal record declaration order" {
     try std.testing.expectEqual(@as(u32, 4), lowerer.result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
     try std.testing.expectEqual(@as(u32, 0), lowerer.result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
     try std.testing.expectEqual(@as(u32, 8), lowerer.result.layouts.getStructSize(struct_idx));
+}
+
+test "a padded nominal's backing record takes the nominal's layout even when lowered first" {
+    const allocator = std.testing.allocator;
+
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+
+    const module_identity = try solved.lifted.names.internModuleIdentity(&([_]u8{0x7A} ** 32));
+    const padded_name = try solved.lifted.names.internTypeName("Padded");
+    const a_name = try solved.lifted.names.internRecordFieldLabel("a");
+    const z_name = try solved.lifted.names.internRecordFieldLabel("z");
+
+    const u32_ty = try solved.types.add(.{ .primitive = .u32 });
+    const padding_ty = try solved.types.add(.{ .primitive = .u32 });
+    const backing_fields = try solved.types.addFields(&.{
+        .{ .name = a_name, .ty = u32_ty, .default = null },
+        .{ .name = z_name, .ty = u32_ty, .default = null },
+    });
+    const backing = try solved.types.add(.{ .record = backing_fields });
+    const declared_order = try solved.types.addDeclaredFields(&.{
+        .{ .named = z_name },
+        .{ .padding = padding_ty },
+        .{ .named = a_name },
+    });
+    const padded = try solved.types.add(.{
+        .named = .{
+            .named_type = .{ .module = .{}, .ty = undefined },
+            .def = .{ .module = module_identity, .type_name = padded_name },
+            .kind = .nominal,
+            .args = .empty(),
+            .backing = .{ .ty = backing, .use = .inspectable },
+            .declared_order = declared_order,
+        },
+    });
+
+    var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+    defer lowerer.deinit();
+
+    // A record value constructing the nominal reaches lowering before the
+    // nominal itself does; its layout is still the declared one.
+    const backing_layout = try lowerer.layoutOfType(try lowerer.lowerType(backing));
+    const padded_layout = try lowerer.layoutOfType(try lowerer.lowerType(padded));
+    try std.testing.expectEqual(padded_layout, backing_layout);
+    const struct_idx = lowerer.result.layouts.getLayout(padded_layout).getStruct().idx;
+    try std.testing.expectEqual(@as(u32, 12), lowerer.result.layouts.getStructSize(struct_idx));
+    try std.testing.expectEqual(@as(u32, 0), lowerer.result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
+    try std.testing.expectEqual(@as(u32, 8), lowerer.result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
 }
 
 test "sparse local layout nodes commit in type id order" {

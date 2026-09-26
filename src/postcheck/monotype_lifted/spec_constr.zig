@@ -9407,23 +9407,23 @@ const Cloner = struct {
         branches_span: Ast.Span(Ast.Branch),
         bindings: *BindingChain,
     ) Common.LowerError!?Value {
-        return self.selectKnownMatchValue(scrutinee, branches_span, false, bindings);
+        return self.selectKnownMatchValue(scrutinee, branches_span, bindings);
     }
 
     /// Collapse a match whose scrutinee is a known constructor to the selected
-    /// branch's body. `decline_on_no_match` distinguishes the two callers: the
-    /// direct known-match collapse proves exhaustiveness for a non-empty branch
-    /// set, so a miss there is an invariant; case-of-case distribution instead
-    /// *offers* a value that a branch may not structurally cover (an opaque tag
-    /// payload the selection cannot verify), so it declines and leaves the
-    /// match materialized. An empty branch set is absurd elimination. A symbolic
+    /// branch's body. A value no branch matches leaves the match
+    /// materialized: case-of-case distribution *offers* a value a branch may
+    /// not structurally cover (an opaque tag payload the selection cannot
+    /// verify), and a match checking could not prove exhaustive has no branch
+    /// for some constructors, so the match's own failure path (its
+    /// compile-time site's exhaustiveness failure, or a runtime error) is
+    /// what that value reaches. An empty branch set is absurd elimination. A symbolic
     /// structural value does not prove reachability because an eager child may
     /// itself be an impossible expression, so that match must also remain.
     fn selectKnownMatchValue(
         self: *Cloner,
         scrutinee: Value,
         branches_span: Ast.Span(Ast.Branch),
-        decline_on_no_match: bool,
         bindings: *BindingChain,
     ) Common.LowerError!?Value {
         if (scrutinee == .expr) return null;
@@ -9454,8 +9454,7 @@ const Cloner = struct {
             self.subst.restore(change_start);
             return body;
         }
-        if (decline_on_no_match) return null;
-        Common.invariant("known constructor match had no matching branch");
+        return null;
     }
 
     fn bindPatToMatchValue(
@@ -10332,7 +10331,7 @@ const Cloner = struct {
         outer_branches_span: Ast.Span(Ast.Branch),
         bindings: *BindingChain,
     ) Common.LowerError!?Value {
-        if (try self.selectKnownMatchValue(inner_value, outer_branches_span, true, bindings)) |value| return value;
+        if (try self.selectKnownMatchValue(inner_value, outer_branches_span, bindings)) |value| return value;
         return switch (inner_value) {
             .expr => |expr| try self.cloneCaseOfCaseValue(ty, expr, outer_branches_span),
             .runtime_anchor, .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => null,
@@ -16680,7 +16679,7 @@ test "substitution resolves equivalent named types with distinct checked provena
     try std.testing.expectEqual(replacement, program.getExpr(boundary.value).data.local);
 }
 
-test "known match fold aborts on undecidable branches and trips the invariant when every branch is excluded" {
+test "known match fold aborts on undecidable branches and keeps the match when every branch is excluded" {
     const allocator = std.testing.allocator;
     var program = emptyLiftedProgramForTest(allocator);
     defer program.deinit();
@@ -16722,31 +16721,12 @@ test "known match fold aborts on undecidable branches and trips the invariant wh
     });
     try std.testing.expect((try cloner.simplifyKnownMatchValue(foo_value, folding_branches, &bindings)) != null);
 
-    // Every branch a definite no-match violates checker exhaustiveness. In
-    // Debug, the invariant panics; probe that abort from a fork on POSIX.
-    if (comptime @import("builtin").mode == .Debug and @import("builtin").os.tag != .windows) {
-        const excluded_branches = try program.addBranchSpan(&.{
-            .{ .pat = bar_pat, .body = body },
-        });
-        const pid = std.c.fork();
-        try std.testing.expect(pid >= 0);
-        if (pid == 0) {
-            const dev_null = std.c.open("/dev/null", .{ .ACCMODE = .WRONLY });
-            if (dev_null >= 0) {
-                _ = std.c.dup2(dev_null, 2);
-                _ = std.c.close(dev_null);
-            }
-            _ = cloner.simplifyKnownMatchValue(foo_value, excluded_branches, &bindings) catch std.c._exit(2);
-            // Reaching this line means the invariant did not fire.
-            std.c._exit(0);
-        }
-        var status: c_int = 0;
-        _ = std.c.waitpid(pid, &status, 0);
-        const raw_status: u32 = @bitCast(status);
-        const failed = std.posix.W.IFSIGNALED(raw_status) or
-            (std.posix.W.IFEXITED(raw_status) and std.posix.W.EXITSTATUS(raw_status) != 0);
-        try std.testing.expect(failed);
-    }
+    // A value no branch matches leaves the match in place: a match checking
+    // could not prove exhaustive fails through its own failure path.
+    const excluded_branches = try program.addBranchSpan(&.{
+        .{ .pat = bar_pat, .body = body },
+    });
+    try std.testing.expectEqual(@as(?Value, null), try cloner.simplifyKnownMatchValue(foo_value, excluded_branches, &bindings));
 }
 
 test "known match fold preserves absurd elimination of a structural product" {
