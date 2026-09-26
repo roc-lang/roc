@@ -1532,6 +1532,34 @@ pub const Evaluator = struct {
             .f64_from_str,
             => self.evalFromStr(op, args, result_ty),
 
+            .u8_from_str_prefix,
+            .u8_from_utf8_prefix,
+            .i8_from_str_prefix,
+            .i8_from_utf8_prefix,
+            .u16_from_str_prefix,
+            .u16_from_utf8_prefix,
+            .i16_from_str_prefix,
+            .i16_from_utf8_prefix,
+            .u32_from_str_prefix,
+            .u32_from_utf8_prefix,
+            .i32_from_str_prefix,
+            .i32_from_utf8_prefix,
+            .u64_from_str_prefix,
+            .u64_from_utf8_prefix,
+            .i64_from_str_prefix,
+            .i64_from_utf8_prefix,
+            .u128_from_str_prefix,
+            .u128_from_utf8_prefix,
+            .i128_from_str_prefix,
+            .i128_from_utf8_prefix,
+            .dec_from_str_prefix,
+            .dec_from_utf8_prefix,
+            .f32_from_str_prefix,
+            .f32_from_utf8_prefix,
+            .f64_from_str_prefix,
+            .f64_from_utf8_prefix,
+            => self.evalFromStrPrefix(op, args, result_ty),
+
             .compare => self.evalCompareOp(args, arg_types, result_ty),
             .dict_pseudo_seed => self.canonicalInt(self.primitiveOf(result_ty) orelse .u64, 0),
             .crash => self.crashAbort(args[0].str),
@@ -2394,6 +2422,50 @@ pub const Evaluator = struct {
         return self.buildResultTag(result_ty, outcome.ok, outcome.payload);
     }
 
+    /// Parse the longest numeric prefix of a `Str` or `List(U8)`. The result is
+    /// the raw `{ err : U8, rest : Str | List(U8), value : T }` record. Parsing
+    /// is delegated to the same builtins the runtime wrappers use, so the
+    /// grammar and the error codes (0 Ok, 1 NotANumber, 2 OutOfRange) match;
+    /// on error `rest` is empty.
+    fn evalFromStrPrefix(self: *Evaluator, op: base.LowLevel, args: []const Value, result_ty: Type.TypeId) EvalError!Value {
+        const spec = base.numeric_conversion.getNumericPrefixParseSpec(op) orelse return self.unsupported_("numeric prefix parse spec missing");
+        const bytes: []const u8 = switch (spec.source) {
+            .str => args[0].str,
+            .utf8 => blk: {
+                const elems = args[0].list;
+                const buf = self.alloc().alloc(u8, elems.len) catch return error.OutOfMemory;
+                for (elems, 0..) |e, i| buf[i] = @truncate(@as(u128, @bitCast(e.int)));
+                break :blk buf;
+            },
+        };
+        const outcome: PrefixParseOutcome = switch (spec.parse) {
+            .int => |int| switch (int.width_bytes) {
+                1 => if (int.signed) parseIntPrefixResult(i8, bytes) else parseIntPrefixResult(u8, bytes),
+                2 => if (int.signed) parseIntPrefixResult(i16, bytes) else parseIntPrefixResult(u16, bytes),
+                4 => if (int.signed) parseIntPrefixResult(i32, bytes) else parseIntPrefixResult(u32, bytes),
+                8 => if (int.signed) parseIntPrefixResult(i64, bytes) else parseIntPrefixResult(u64, bytes),
+                16 => if (int.signed) parseIntPrefixResult(i128, bytes) else parseIntPrefixResult(u128, bytes),
+                else => return self.unsupported_("unexpected integer parse width"),
+            },
+            .float => |float| switch (float.width_bytes) {
+                4 => parseFloatPrefixResult(f32, bytes),
+                8 => parseFloatPrefixResult(f64, bytes),
+                else => return self.unsupported_("unexpected float parse width"),
+            },
+            .dec => parseDecPrefixResult(bytes),
+        };
+        const rest_start: usize = if (outcome.err == 0) outcome.consumed else bytes.len;
+        const rest: Value = switch (spec.source) {
+            .str => .{ .str = args[0].str[rest_start..] },
+            .utf8 => .{ .list = args[0].list[rest_start..] },
+        };
+        return self.buildNamedRecord(result_ty, &.{
+            .{ .name = "err", .value = self.canonicalInt(.u8, outcome.err) },
+            .{ .name = "rest", .value = rest },
+            .{ .name = "value", .value = outcome.value },
+        });
+    }
+
     /// Build a `Result` tag union: `Ok payload` when `ok`, otherwise the `Err`
     /// variant filled with unit placeholders for its payload slots.
     fn buildResultTag(self: *Evaluator, result_ty: Type.TypeId, ok: bool, payload: Value) EvalError!Value {
@@ -3129,6 +3201,23 @@ fn parseFloatResult(comptime F: type, source: []const u8) ParseOutcome {
 fn parseDecResult(source: []const u8) ParseOutcome {
     const r = builtins.dec.fromStr(rocStrOf(source));
     return .{ .ok = r.errorcode == 0, .payload = .{ .dec = r.value } };
+}
+
+const PrefixParseOutcome = struct { err: u8, consumed: usize, value: Value };
+
+fn parseIntPrefixResult(comptime T: type, bytes: []const u8) PrefixParseOutcome {
+    const r = builtins.num.parseIntPrefix(T, bytes);
+    return .{ .err = r.errorcode, .consumed = @intCast(r.consumed), .value = makeInt(T, r.value) };
+}
+
+fn parseFloatPrefixResult(comptime F: type, bytes: []const u8) PrefixParseOutcome {
+    const r = builtins.num.parseFloatPrefix(F, bytes);
+    return .{ .err = r.errorcode, .consumed = @intCast(r.consumed), .value = if (F == f32) .{ .float32 = r.value } else .{ .float64 = r.value } };
+}
+
+fn parseDecPrefixResult(bytes: []const u8) PrefixParseOutcome {
+    const r = builtins.dec.parsePrefix(bytes);
+    return .{ .err = r.errorcode, .consumed = @intCast(r.consumed), .value = .{ .dec = r.value } };
 }
 
 fn allocAligned(allocator: std.mem.Allocator, len: usize, alignment: usize) ?[*]u8 {

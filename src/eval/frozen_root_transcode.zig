@@ -139,7 +139,7 @@ const Builder = struct {
     fn reserveAllocation(self: *Builder, key: AllocationKey, byte_count: usize, alignment_: u32, rc: bool, count: ?usize) Allocator.Error!struct { dest: Destination, fresh: bool } {
         if (self.allocations.get(key)) |dest| return .{ .dest = dest, .fresh = false };
         const offset = std.mem.alignForward(usize, (if (rc) @as(usize, 2) else 1) * self.word(), alignment_);
-        const name = try std.fmt.allocPrint(self.allocator, "roc__ctfe_{d}_{d}", .{ @intFromEnum(self.slot), self.nodes.items.len });
+        const name = try Program.staticDataNodeSymbolName(self.allocator, @intFromEnum(self.slot), @intCast(self.nodes.items.len));
         const symbol = try self.addNode(name, offset + byte_count, @intCast(@max(alignment_, self.word())));
         const dest = Destination{ .symbol = symbol, .offset = offset };
         if (rc) self.writeWord(.{ .symbol = symbol, .offset = offset - 2 * self.word() }, count orelse 0);

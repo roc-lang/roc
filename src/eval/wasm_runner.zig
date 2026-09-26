@@ -457,6 +457,12 @@ pub fn runWasmOutcomeWithStats(
         env_imports.addHostFunction("roc_int_from_str", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostIntFromStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_from_str", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecFromStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_float_from_str", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostFloatFromStr, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_int_from_str_prefix", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostIntFromStrPrefix, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_int_from_utf8_prefix", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostIntFromUtf8Prefix, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_dec_from_str_prefix", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecFromStrPrefix, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_dec_from_utf8_prefix", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecFromUtf8Prefix, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_float_from_str_prefix", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostFloatFromStrPrefix, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_float_from_utf8_prefix", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostFloatFromUtf8Prefix, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_append_unsafe", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListAppendUnsafe, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_concat", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListConcat, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_drop_at", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListDropAt, &run_state) catch return error.WasmExecFailed;
@@ -2826,6 +2832,176 @@ fn writeFloatParseResult(comptime T: type, buffer: []u8, out_ptr: usize, disc_of
     const value_bytes = std.mem.asBytes(&r.value);
     @memcpy(buffer[out_ptr..][0..value_bytes.len], value_bytes);
     buffer[out_ptr + disc_offset] = 1 - r.errorcode;
+}
+
+// --- Numeric prefix parsing ---
+
+/// Which input a numeric prefix parse reads and returns its `rest` as.
+const NumPrefixInput = enum { str, utf8 };
+
+/// Result-record field offsets passed as the trailing three i32 import params.
+const NumPrefixOffsets = struct {
+    err: usize,
+    rest: usize,
+    value: usize,
+
+    fn fromParams(params: [*]const bytebox.Val, first: usize) NumPrefixOffsets {
+        return .{
+            .err = @intCast(params[first].I32),
+            .rest = @intCast(params[first + 1].I32),
+            .value = @intCast(params[first + 2].I32),
+        };
+    }
+};
+
+fn wasmNumPrefixInputBytes(comptime input: NumPrefixInput, buffer: []u8, input_ptr: usize) []const u8 {
+    switch (input) {
+        .str => {
+            const str = readWasmStr(buffer, input_ptr);
+            return str.data[0..str.len];
+        },
+        .utf8 => {
+            const data_ptr: usize = @intCast(readIntLittle(u32, buffer, input_ptr));
+            const len: usize = @intCast(readIntLittle(u32, buffer, input_ptr + 4));
+            return buffer[data_ptr..][0..len];
+        },
+    }
+}
+
+/// Write the owned `rest` view of the list at `list_ptr` after `start` bytes.
+fn writeWasmListViewFromList(buffer: []u8, result_ptr: usize, list_ptr: usize, start: usize) void {
+    const data_ptr: usize = @intCast(readIntLittle(u32, buffer, list_ptr));
+    const len: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 4));
+    const encoded_cap: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 8));
+    if (start == len) {
+        writeWasmListHeader(buffer, result_ptr, 0, 0, 0);
+        return;
+    }
+
+    const alloc_ptr = wasmAllocPtrFromCapOrData(encoded_cap, data_ptr);
+    increfWasmDataPtr(buffer, alloc_ptr);
+    writeWasmListHeader(buffer, result_ptr, data_ptr + start, len - start, alloc_ptr | 1);
+}
+
+fn writeWasmNumPrefixResult(
+    comptime T: type,
+    comptime input: NumPrefixInput,
+    state: *WasmRunState,
+    module: *bytebox.ModuleInstance,
+    input_ptr: usize,
+    out_ptr: usize,
+    offsets: NumPrefixOffsets,
+    result: builtins.num.NumPrefixParseResult(T),
+) void {
+    const buffer = module.store.getMemory(0).buffer();
+    const value_bytes = std.mem.asBytes(&result.value);
+    @memcpy(buffer[out_ptr + offsets.value ..][0..value_bytes.len], value_bytes);
+    buffer[out_ptr + offsets.err] = result.errorcode;
+
+    const rest_ptr = out_ptr + offsets.rest;
+    const consumed: usize = @intCast(result.consumed);
+    switch (input) {
+        .str => {
+            if (result.errorcode != 0) {
+                writeWasmEmptyStr(buffer, rest_ptr);
+                return;
+            }
+            const str = readWasmStr(buffer, input_ptr);
+            if (consumed == str.len) {
+                writeWasmEmptyStr(buffer, rest_ptr);
+            } else {
+                writeWasmStrViewFromStr(state, module, buffer, rest_ptr, str, consumed, str.len - consumed);
+            }
+        },
+        .utf8 => {
+            if (result.errorcode != 0) {
+                writeWasmListHeader(buffer, rest_ptr, 0, 0, 0);
+                return;
+            }
+            writeWasmListViewFromList(buffer, rest_ptr, input_ptr, consumed);
+        },
+    }
+}
+
+fn hostIntFromPrefix(comptime input: NumPrefixInput, ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val) void {
+    const state: *WasmRunState = @ptrCast(@alignCast(ctx));
+    const buffer = module.store.getMemory(0).buffer();
+    const input_ptr: usize = @intCast(params[0].I32);
+    const out_ptr: usize = @intCast(params[1].I32);
+    const int_width: u8 = @intCast(params[2].I32);
+    const is_signed = params[3].I32 != 0;
+    const offsets = NumPrefixOffsets.fromParams(params, 4);
+    const bytes = wasmNumPrefixInputBytes(input, buffer, input_ptr);
+
+    if (is_signed) {
+        switch (int_width) {
+            1 => writeWasmNumPrefixResult(i8, input, state, module, input_ptr, out_ptr, offsets, builtins.num.parseIntPrefix(i8, bytes)),
+            2 => writeWasmNumPrefixResult(i16, input, state, module, input_ptr, out_ptr, offsets, builtins.num.parseIntPrefix(i16, bytes)),
+            4 => writeWasmNumPrefixResult(i32, input, state, module, input_ptr, out_ptr, offsets, builtins.num.parseIntPrefix(i32, bytes)),
+            8 => writeWasmNumPrefixResult(i64, input, state, module, input_ptr, out_ptr, offsets, builtins.num.parseIntPrefix(i64, bytes)),
+            16 => writeWasmNumPrefixResult(i128, input, state, module, input_ptr, out_ptr, offsets, builtins.num.parseIntPrefix(i128, bytes)),
+            else => unreachable,
+        }
+    } else {
+        switch (int_width) {
+            1 => writeWasmNumPrefixResult(u8, input, state, module, input_ptr, out_ptr, offsets, builtins.num.parseIntPrefix(u8, bytes)),
+            2 => writeWasmNumPrefixResult(u16, input, state, module, input_ptr, out_ptr, offsets, builtins.num.parseIntPrefix(u16, bytes)),
+            4 => writeWasmNumPrefixResult(u32, input, state, module, input_ptr, out_ptr, offsets, builtins.num.parseIntPrefix(u32, bytes)),
+            8 => writeWasmNumPrefixResult(u64, input, state, module, input_ptr, out_ptr, offsets, builtins.num.parseIntPrefix(u64, bytes)),
+            16 => writeWasmNumPrefixResult(u128, input, state, module, input_ptr, out_ptr, offsets, builtins.num.parseIntPrefix(u128, bytes)),
+            else => unreachable,
+        }
+    }
+}
+
+fn hostDecFromPrefix(comptime input: NumPrefixInput, ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val) void {
+    const state: *WasmRunState = @ptrCast(@alignCast(ctx));
+    const buffer = module.store.getMemory(0).buffer();
+    const input_ptr: usize = @intCast(params[0].I32);
+    const out_ptr: usize = @intCast(params[1].I32);
+    const offsets = NumPrefixOffsets.fromParams(params, 2);
+    const bytes = wasmNumPrefixInputBytes(input, buffer, input_ptr);
+    writeWasmNumPrefixResult(i128, input, state, module, input_ptr, out_ptr, offsets, builtins.dec.parsePrefix(bytes));
+}
+
+fn hostFloatFromPrefix(comptime input: NumPrefixInput, ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val) void {
+    const state: *WasmRunState = @ptrCast(@alignCast(ctx));
+    const buffer = module.store.getMemory(0).buffer();
+    const input_ptr: usize = @intCast(params[0].I32);
+    const out_ptr: usize = @intCast(params[1].I32);
+    const float_width: u8 = @intCast(params[2].I32);
+    const offsets = NumPrefixOffsets.fromParams(params, 3);
+    const bytes = wasmNumPrefixInputBytes(input, buffer, input_ptr);
+
+    switch (float_width) {
+        4 => writeWasmNumPrefixResult(f32, input, state, module, input_ptr, out_ptr, offsets, builtins.num.parseFloatPrefix(f32, bytes)),
+        8 => writeWasmNumPrefixResult(f64, input, state, module, input_ptr, out_ptr, offsets, builtins.num.parseFloatPrefix(f64, bytes)),
+        else => unreachable,
+    }
+}
+
+fn hostIntFromStrPrefix(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostIntFromPrefix(.str, ctx, module, params);
+}
+
+fn hostIntFromUtf8Prefix(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostIntFromPrefix(.utf8, ctx, module, params);
+}
+
+fn hostDecFromStrPrefix(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostDecFromPrefix(.str, ctx, module, params);
+}
+
+fn hostDecFromUtf8Prefix(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostDecFromPrefix(.utf8, ctx, module, params);
+}
+
+fn hostFloatFromStrPrefix(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostFloatFromPrefix(.str, ctx, module, params);
+}
+
+fn hostFloatFromUtf8Prefix(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostFloatFromPrefix(.utf8, ctx, module, params);
 }
 
 const WasmRocOps = builtins.host_abi.RocOps;
