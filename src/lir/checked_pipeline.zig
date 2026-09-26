@@ -910,12 +910,6 @@ pub const SolvedPolicy = struct {
         }
         return policy;
     }
-
-    pub fn applyTo(self: SolvedPolicy, target: *TargetConfig) void {
-        inline for (@typeInfo(SolvedPolicy).@"struct".fields) |field| {
-            @field(target, field.name) = @field(self, field.name);
-        }
-    }
 };
 
 /// The settings one consumer's LIR generation, procedure passes and ARC run
