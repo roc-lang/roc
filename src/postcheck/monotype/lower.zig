@@ -44803,6 +44803,7 @@ const BodyContext = struct {
                 .direct => {
                     out[k] = try self.materializeCheckedEvidenceRef(site_view, ref, param, purpose);
                     derived[k] = true;
+                    try self.debugAssertDirectTargetMatchesReceiver(schema.view, param, subst[param.slot.?], out[k]);
                 },
             };
             if (subst[param.slot.?] == .checked_error) {
@@ -44913,6 +44914,32 @@ const BodyContext = struct {
             try self.relateMaterializedEvidenceConstraints(&checked_ctx, schema, out);
         }
         return out;
+    }
+
+    /// Debug cross-check of a consumed `.direct` target: when the receiver's
+    /// owner and its method are visible from this context's scope, the
+    /// method selected there must be the checked target.
+    fn debugAssertDirectTargetMatchesReceiver(
+        self: *BodyContext,
+        view: ModuleView,
+        param: static_dispatch.EvidenceParamRecord,
+        slot: SubstSlot,
+        consumed: SpecEvidence,
+    ) Allocator.Error!void {
+        if (@import("builtin").mode != .Debug) return;
+        const node = switch (slot) {
+            .node => |node| node,
+            .checked_error => return,
+        };
+        const owner = self.methodOwnerFromNode(node) orelse return;
+        const found = (try self.lookupMethodTarget(owner, view, param.method)) orelse return;
+        const target = switch (consumed) {
+            .target => |target| target,
+            .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => Common.invariant("checked direct evidence did not name a target"),
+        };
+        if (found.target.module_idx != target.target.module_idx or found.target.def_idx != target.target.def_idx) {
+            Common.invariant("checked direct evidence target differed from the receiver owner's method");
+        }
     }
 
     /// Relate a selected target's callable to the constraint it satisfies,
