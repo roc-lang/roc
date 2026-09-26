@@ -5427,7 +5427,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // not a missing feature.
                 // Unimplemented ops
                 .num_log,
-                .num_round,
                 => {
                     std.debug.panic("UNIMPLEMENTED low-level op: {s}", .{@tagName(ll.op)});
                 },
@@ -7488,7 +7487,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_atan2,
                 .num_rem_by,
                 .num_rem_by_checked,
-                .num_round,
                 .num_shift_left_by,
                 .num_shift_right_by,
                 .num_shift_right_zf_by,
@@ -14121,34 +14119,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(reg);
 
-            var remaining = size;
-            var d = dst_offset;
-            var s = src_offset;
-            while (remaining >= 8) {
-                try self.codegen.emitLoadStack(.w64, reg, s);
-                try self.codegen.emitStoreStack(.w64, d, reg);
-                d += 8;
-                s += 8;
-                remaining -= 8;
-            }
-            if (remaining >= 4) {
-                try self.codegen.emitLoadStack(.w32, reg, s);
-                try self.codegen.emitStoreStack(.w32, d, reg);
-                d += 4;
-                s += 4;
-                remaining -= 4;
-            }
-            if (remaining >= 2) {
-                try self.emitLoadStackW16(reg, s);
-                try self.emitStoreStackW16(d, reg);
-                d += 2;
-                s += 2;
-                remaining -= 2;
-            }
-            if (remaining >= 1) {
-                try self.emitLoadStackW8(reg, s);
-                try self.emitStoreStackW8(d, reg);
-            }
+            try self.copyChunked(reg, frame_ptr, src_offset, frame_ptr, dst_offset, size);
         }
 
         fn requireExplicitListValueLocationToLayout(
@@ -17651,7 +17622,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.boxy_runtime_used = true;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addImmArg(0);
-            try builder.callRelocatable(try self.codegen.symbols.intern(self.allocator, "roc_boxy_init_embedded"), &self.codegen);
+            try builder.callRelocatable(try self.codegen.symbols.intern(self.allocator, "roc_boxy_init_embedded", .program), &self.codegen);
         }
 
         /// Resolve a boxy descriptor reference to an 8-byte stack slot holding
@@ -18631,11 +18602,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
             if (self.fragment_mode and self.fragment_source_mode != .object_file) {
                 if (entry.symbol == null) {
-                    const name = try std.fmt.allocPrint(self.allocator, "roc__binding_{s}", .{entry.name});
+                    const name = try std.fmt.allocPrint(self.allocator, "roc__b{d}", .{@intFromEnum(id)});
                     defer self.allocator.free(name);
-                    const owned_cell_symbol = try self.internSymbolName(name);
-                    const cell_symbol = try self.codegen.symbols.internInternal(self.allocator, self.symbolName(owned_cell_symbol));
-                    const target_symbol = try self.internSymbolName(entry.name);
+                    const owned_cell_symbol = try self.internSymbolName(name, .program);
+                    const cell_symbol = try self.codegen.symbols.internInternal(self.allocator, self.symbolName(owned_cell_symbol), .program);
+                    const target_symbol = try self.internSymbolName(entry.name, .program);
                     try self.binding_data_cells.append(self.allocator, .{
                         .name = self.symbolName(cell_symbol),
                         .target_name = self.symbolName(target_symbol),
@@ -18646,7 +18617,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitLoad(.w64, dst_reg, dst_reg, 0);
                 return;
             }
-            if (entry.symbol == null) entry.symbol = try self.codegen.symbols.internInternal(self.allocator, entry.name);
+            if (entry.symbol == null) entry.symbol = try self.codegen.symbols.internInternal(self.allocator, entry.name, .program);
             try self.codegen.emitLoadDataAddress(dst_reg, entry.symbol.?);
         }
 
@@ -18656,21 +18627,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn builtinSymbol(self: *Self, function: BuiltinFn) Allocator.Error!SymbolTable.Id {
             if (self.builtin_symbols.get(function)) |symbol| return symbol;
-            const symbol = try self.codegen.symbols.intern(self.allocator, function.symbolName());
+            const symbol = try self.codegen.symbols.intern(self.allocator, function.symbolName(), .shared);
             try self.builtin_symbols.put(function, symbol);
             return symbol;
         }
 
         fn boxySymbol(self: *Self, function: BoxyBuiltinFn) Allocator.Error!SymbolTable.Id {
             if (self.boxy_symbols.get(function)) |symbol| return symbol;
-            const symbol = try self.codegen.symbols.intern(self.allocator, function.symbolName());
+            const symbol = try self.codegen.symbols.intern(self.allocator, function.symbolName(), .program);
             try self.boxy_symbols.put(function, symbol);
             return symbol;
         }
 
         fn hostedSymbol(self: *Self, name: base.StringLiteral.Idx) Allocator.Error!SymbolTable.Id {
             if (self.hosted_symbols.get(name)) |symbol| return symbol;
-            const symbol = try self.codegen.symbols.intern(self.allocator, self.store.getString(name));
+            const symbol = try self.codegen.symbols.intern(self.allocator, self.store.getString(name), .shared);
             try self.hosted_symbols.put(name, symbol);
             return symbol;
         }
@@ -19331,73 +19302,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn copyStackToPtr(self: *Self, loc_in: ValueLocation, ptr_reg: GeneralReg, size: u32) Allocator.Error!void {
             var loc = loc_in;
             while (true) switch (loc) {
-                .stack => |s| {
-                    const stack_offset = s.offset;
-                    // Copy size bytes from stack to destination
+                .stack, .list_stack => {
+                    const offset = if (loc == .stack) loc.stack.offset else loc.list_stack.struct_offset;
                     const temp_reg = try self.allocTempGeneral();
-                    var remaining = size;
-                    var src_offset: i32 = stack_offset;
-                    var dst_offset: i32 = 0;
-
-                    // Copy 8 bytes at a time
-                    while (remaining >= 8) {
-                        try self.codegen.emitLoadStack(.w64, temp_reg, src_offset);
-                        try self.emitStoreToPtr(.w64, temp_reg, ptr_reg, dst_offset);
-                        src_offset += 8;
-                        dst_offset += 8;
-                        remaining -= 8;
-                    }
-
-                    // Handle remaining bytes (4, 2, 1)
-                    if (remaining >= 4) {
-                        try self.codegen.emitLoadStack(.w32, temp_reg, src_offset);
-                        try self.emitStoreToPtr(.w32, temp_reg, ptr_reg, dst_offset);
-                        src_offset += 4;
-                        dst_offset += 4;
-                        remaining -= 4;
-                    }
-                    if (remaining >= 2) {
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emitLoadStackHalfword(temp_reg, src_offset);
-                            try self.codegen.emit.strhRegMemSoff(temp_reg, ptr_reg, dst_offset);
-                        } else {
-                            try self.codegen.emitLoadStack(.w16, temp_reg, src_offset);
-                            try self.codegen.emit.movMemReg(.w16, ptr_reg, dst_offset, temp_reg);
-                        }
-                        src_offset += 2;
-                        dst_offset += 2;
-                        remaining -= 2;
-                    }
-                    if (remaining >= 1) {
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emitLoadStackByte(temp_reg, src_offset);
-                            try self.codegen.emit.strbRegMemSoff(temp_reg, ptr_reg, dst_offset);
-                        } else {
-                            try self.codegen.emitLoadStack(.w8, temp_reg, src_offset);
-                            try self.codegen.emit.movMemReg(.w8, ptr_reg, dst_offset, temp_reg);
-                        }
-                    }
-
-                    self.codegen.freeGeneral(temp_reg);
-                    return;
-                },
-                .list_stack => |list_info| {
-                    // Copy 24 bytes from list struct on stack to destination
-                    const temp_reg = try self.allocTempGeneral();
-                    var remaining = size;
-                    var src_offset: i32 = list_info.struct_offset;
-                    var dst_offset: i32 = 0;
-
-                    // Copy 8 bytes at a time
-                    while (remaining >= 8) {
-                        try self.codegen.emitLoadStack(.w64, temp_reg, src_offset);
-                        try self.emitStoreToPtr(.w64, temp_reg, ptr_reg, dst_offset);
-                        src_offset += 8;
-                        dst_offset += 8;
-                        remaining -= 8;
-                    }
-
-                    self.codegen.freeGeneral(temp_reg);
+                    defer self.codegen.freeGeneral(temp_reg);
+                    try self.copyChunked(temp_reg, frame_ptr, offset, ptr_reg, 0, size);
                     return;
                 },
                 .general_reg,
@@ -19945,6 +19854,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// with an overlapping copy of the tail, which re-copies earlier
         /// bytes; source and destination therefore must not overlap.
         fn copyChunked(self: *Self, temp_reg: GeneralReg, src_base: GeneralReg, src_offset: i32, dst_base: GeneralReg, dst_offset: i32, size: u32) Allocator.Error!void {
+            // Bound instruction size independently of the aggregate size. This
+            // is an encoding limit, not a representation or ownership decision.
+            if (size > 32) {
+                const src = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(src);
+                const dst = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(dst);
+                const count = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(count);
+                return self.copyLoop(temp_reg, src_base, src_offset, dst_base, dst_offset, size, src, dst, count);
+            }
             if (size == 0) return;
             if (size == 8) {
                 try self.emitLoad(.w64, temp_reg, src_base, src_offset);
@@ -19996,88 +19916,93 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn zeroStackArea(self: *Self, offset: i32, size: u32) Allocator.Error!void {
-            const reg = try self.allocTempGeneral();
-            defer self.codegen.freeGeneral(reg);
-            try self.codegen.emitLoadImm(reg, 0);
+        /// The caller supplies three distinct scratch registers, disjoint from
+        /// both bases and temp_reg. No call or frame allocation is emitted.
+        fn copyLoop(self: *Self, temp_reg: GeneralReg, src_base: GeneralReg, src_offset: i32, dst_base: GeneralReg, dst_offset: i32, size: u32, src: GeneralReg, dst: GeneralReg, count: GeneralReg) Allocator.Error!void {
+            std.debug.assert(size >= 8);
+            std.debug.assert(src != dst and src != count and dst != count);
+            inline for (.{ src, dst, count }) |reg| {
+                std.debug.assert(reg != temp_reg and reg != src_base and reg != dst_base);
+            }
+            // Materialize each address once, including large frame offsets.
+            try self.codegen.emitLoadImm(src, src_offset);
+            try self.emitAddRegs(.w64, src, src, src_base);
+            try self.codegen.emitLoadImm(dst, dst_offset);
+            try self.emitAddRegs(.w64, dst, dst, dst_base);
+            try self.codegen.emitLoadImm(count, size / 8);
+            const loop = self.codegen.currentOffset();
+            try self.emitLoad(.w64, temp_reg, src, 0);
+            try self.emitStore(.w64, dst, 0, temp_reg);
+            try self.emitAddImm(src, src, 8);
+            try self.emitAddImm(dst, dst, 8);
+            try self.emitSubImm(.w64, count, count, 1);
+            try self.emitCmpImm(count, 0);
+            const repeat = try self.emitJumpIfNotEqual();
+            try self.codegen.patchJump(repeat, loop);
+            // Pointers now address the exact tail; never touch padding outside
+            // caller-owned or heap storage.
+            try self.copyChunked(temp_reg, src, 0, dst, 0, size % 8);
+        }
 
-            var remaining = size;
-            var current_offset = offset;
-            while (remaining >= 8) {
-                try self.codegen.emitStoreStack(.w64, current_offset, reg);
-                current_offset += 8;
-                remaining -= 8;
-            }
-            if (remaining >= 4) {
-                try self.codegen.emitStoreStack(.w32, current_offset, reg);
-                current_offset += 4;
-                remaining -= 4;
-            }
-            if (remaining >= 2) {
-                try self.emitStoreStackW16(current_offset, reg);
-                current_offset += 2;
-                remaining -= 2;
-            }
-            if (remaining >= 1) {
-                try self.emitStoreStackW8(current_offset, reg);
-            }
+        fn zeroStackArea(self: *Self, offset: i32, size: u32) Allocator.Error!void {
+            try self.fillMem(frame_ptr, offset, size, 0);
         }
 
         fn poisonStackArea(self: *Self, offset: i32, size: u32) Allocator.Error!void {
-            const reg = try self.allocTempGeneral();
-            defer self.codegen.freeGeneral(reg);
-            try self.codegen.emitLoadImm(reg, @as(i64, @bitCast(@as(u64, 0xAAAAAAAAAAAAAAAA))));
+            try self.fillMem(frame_ptr, offset, size, 0xAAAAAAAAAAAAAAAA);
+        }
 
-            var remaining = size;
-            var current_offset = offset;
-            while (remaining >= 8) {
-                try self.codegen.emitStoreStack(.w64, current_offset, reg);
-                current_offset += 8;
-                remaining -= 8;
-            }
-            if (remaining >= 4) {
-                try self.codegen.emitStoreStack(.w32, current_offset, reg);
-                current_offset += 4;
-                remaining -= 4;
-            }
-            if (remaining >= 2) {
-                try self.emitStoreStackW16(current_offset, reg);
-                current_offset += 2;
-                remaining -= 2;
-            }
-            if (remaining >= 1) {
-                try self.emitStoreStackW8(current_offset, reg);
+        fn zeroMemAt(self: *Self, base_reg: GeneralReg, size: u32) Allocator.Error!void {
+            try self.fillMem(base_reg, 0, size, 0);
+        }
+
+        /// Bounded initialization uses the same exact byte extent as copies.
+        fn fillMem(self: *Self, base_reg: GeneralReg, offset: i32, size: u32, bits: u64) Allocator.Error!void {
+            if (size == 0) return;
+            const value = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(value);
+            try self.codegen.emitLoadImm(value, @bitCast(bits));
+            if (size > 32) {
+                const dst = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(dst);
+                const count = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(count);
+                try self.codegen.emitLoadImm(dst, offset);
+                try self.emitAddRegs(.w64, dst, dst, base_reg);
+                try self.codegen.emitLoadImm(count, size / 8);
+                const loop = self.codegen.currentOffset();
+                try self.emitStore(.w64, dst, 0, value);
+                try self.emitAddImm(dst, dst, 8);
+                try self.emitSubImm(.w64, count, count, 1);
+                try self.emitCmpImm(count, 0);
+                const repeat = try self.emitJumpIfNotEqual();
+                try self.codegen.patchJump(repeat, loop);
+                try self.fillSmall(value, dst, 0, size % 8);
+            } else {
+                try self.fillSmall(value, base_reg, offset, size);
             }
         }
 
-        /// Zero-fill `size` bytes through a base register (heap memory),
-        /// mirroring zeroStackArea's chunking.
-        fn zeroMemAt(self: *Self, base_reg: GeneralReg, size: u32) Allocator.Error!void {
-            if (size == 0) return;
-            const reg = try self.allocTempGeneral();
-            defer self.codegen.freeGeneral(reg);
-            try self.codegen.emitLoadImm(reg, 0);
-
+        fn fillSmall(self: *Self, value: GeneralReg, base_reg: GeneralReg, offset: i32, size: u32) Allocator.Error!void {
+            std.debug.assert(size <= 32);
             var remaining = size;
-            var off: i32 = 0;
+            var off = offset;
             while (remaining >= 8) {
-                try self.emitStore(.w64, base_reg, off, reg);
+                try self.emitStore(.w64, base_reg, off, value);
                 off += 8;
                 remaining -= 8;
             }
             if (remaining >= 4) {
-                try self.emitStore(.w32, base_reg, off, reg);
+                try self.emitStore(.w32, base_reg, off, value);
                 off += 4;
                 remaining -= 4;
             }
             if (remaining >= 2) {
-                try self.emitStoreW16(base_reg, off, reg);
+                try self.emitStoreW16(base_reg, off, value);
                 off += 2;
                 remaining -= 2;
             }
-            if (remaining >= 1) {
-                try self.emitStoreW8(base_reg, off, reg);
-            }
+            if (remaining >= 1) try self.emitStoreW8(base_reg, off, value);
         }
 
         const StoreWidth = enum { w32, w64 };
@@ -21799,6 +21724,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             initial_reg_idx: u8,
             has_runtime_ret_desc: bool,
         ) Allocator.Error!void {
+            // Incoming arguments remain live until every parameter has been
+            // captured. Copy-loop temporaries must not overwrite later args.
+            const incoming_free_general = self.codegen.free_general;
+            defer self.codegen.free_general = incoming_free_general;
+            for (0..max_arg_regs) |index| self.codegen.markRegisterInUse(self.getArgumentRegister(@intCast(index)));
+
             const locals = self.store.getLocalSpan(params);
             const param_count = locals.len + @intFromBool(has_runtime_ret_desc);
             self.runtime_ret_desc_ptr_slot = null;
@@ -21934,7 +21865,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         reg_idx = max_arg_regs;
                     }
 
-                    const temp_reg: GeneralReg = if (ptr_reg == scratch_reg) ret_reg_0 else scratch_reg;
+                    const temp_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(temp_reg);
                     const size = self.getLayoutSize(self.localLayout(local));
                     const stack_offset = self.codegen.allocStackSlot(@intCast(size));
                     try self.copyChunked(temp_reg, ptr_reg, 0, frame_ptr, stack_offset, size);
@@ -22362,7 +22294,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Load the return pointer from the saved stack slot
             try self.emitLoad(.w64, ptr_reg, frame_ptr, ret_ptr_stack_slot);
-            try self.copyChunked(temp_reg, frame_ptr, result_offset, ptr_reg, 0, ret_size);
+            const copy_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(copy_reg);
+            try self.copyChunked(copy_reg, frame_ptr, result_offset, ptr_reg, 0, ret_size);
         }
 
         fn copyValueToPointer(self: *Self, value_loc: ValueLocation, value_layout: layout.Idx, ptr_local: LocalId) Allocator.Error!void {
@@ -22516,7 +22450,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.stmt_locations.put(stmt_key, self.codegen.currentOffset());
 
                     const stmt_loc = self.store.stmtLoc(stmt_id);
-                    if (stmt_loc.hasLocation()) {
+                    // ARC-inserted statements get no line-table row so they
+                    // do not affect stepping; see `OriginKind.isArcInserted`.
+                    if (stmt_loc.hasLocation() and !self.store.stmtOriginKind(stmt_id).isArcInserted()) {
                         try self.line_entries.append(self.allocator, .{
                             .offset = @intCast(self.codegen.currentOffset()),
                             .loc = stmt_loc,
@@ -23863,7 +23799,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn staticStringSymbol(self: *Self, str_idx: base.StringLiteral.Idx) Allocator.Error!SymbolTable.Id {
             const ordinal = self.static_strings.ordinal(str_idx).?;
             if (self.literal_symbols.get(ordinal)) |symbol| return symbol;
-            const symbol = try self.codegen.symbols.internInternal(self.allocator, self.static_strings.entries[ordinal].symbol_name);
+            const symbol = try self.codegen.symbols.internInternal(self.allocator, self.static_strings.entries[ordinal].symbol_name, .shared);
             try self.literal_symbols.put(ordinal, symbol);
             return symbol;
         }
@@ -23903,7 +23839,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn callRuntimeSymbol(self: *Self, builder: *Builder, symbol: builtins.in_process_host.Symbol) Allocator.Error!void {
             switch (self.generation_mode) {
                 .native_execution => try builder.call(symbol.address()),
-                .shim_execution, .object_file => try builder.callRelocatable(try self.codegen.symbols.intern(self.allocator, symbol.name()), &self.codegen),
+                .shim_execution, .object_file => try builder.callRelocatable(try self.codegen.symbols.intern(self.allocator, symbol.name(), .shared), &self.codegen),
             }
         }
 
@@ -24016,7 +23952,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 };
                 try builder.call(address);
             } else {
-                try builder.callRelocatable(try self.internSymbolName(hook.symbolName()), &self.codegen);
+                try builder.callRelocatable(try self.internSymbolName(hook.symbolName(), .shared), &self.codegen);
             }
         }
 
@@ -24120,6 +24056,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             arg_layouts: []const layout.Idx,
             ret_layout: layout.Idx,
         ) Allocator.Error!ExportedSymbol {
+            // A wrapper is an independent function. Register reservations from
+            // its enclosing emitter cannot cross this procedure boundary.
+            const saved_free_general = self.codegen.free_general;
+            const saved_free_float = self.codegen.free_float;
+            const saved_available = self.codegen.callee_saved_available;
+            defer {
+                self.codegen.free_general = saved_free_general;
+                self.codegen.free_float = saved_free_float;
+                self.codegen.callee_saved_available = saved_available;
+            }
+            self.codegen.free_general = CodeGen.INITIAL_FREE_GENERAL;
+            self.codegen.free_float = CodeGen.INITIAL_FREE_FLOAT;
+            self.codegen.callee_saved_available = CodeGen.CALLEE_SAVED_GENERAL_MASK;
+
             self.assertImageOpen();
             const func_start = self.codegen.currentOffset();
             var prologue_size: u32 = 0;
@@ -24354,6 +24304,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// is prepended and the body's relocations and internal patches are
         /// shifted to their final positions.
         fn generateBoxyDictProcThunk(self: *Self, proc_id: lir.LIR.LirProcSpecId) Allocator.Error!usize {
+            // A wrapper is an independent function. Register reservations from
+            // its enclosing emitter cannot cross this procedure boundary.
+            const saved_free_general = self.codegen.free_general;
+            const saved_free_float = self.codegen.free_float;
+            const saved_available = self.codegen.callee_saved_available;
+            defer {
+                self.codegen.free_general = saved_free_general;
+                self.codegen.free_float = saved_free_float;
+                self.codegen.callee_saved_available = saved_available;
+            }
+            self.codegen.free_general = CodeGen.INITIAL_FREE_GENERAL;
+            self.codegen.free_float = CodeGen.INITIAL_FREE_FLOAT;
+            self.codegen.callee_saved_available = CodeGen.CALLEE_SAVED_GENERAL_MASK;
+
             const func_start = self.codegen.currentOffset();
 
             if (arch == .aarch64 or arch == .aarch64_be) {
@@ -25204,7 +25168,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .deref => |size| {
                         if (size == 0) continue;
                         try self.emitLoad(.w64, .IP1, frame_ptr, src_off);
-                        try self.copyChunked(.IP0, .IP1, 0, frame_ptr, copy.dest_off, size);
+                        if (size > 32) {
+                            // This prefix precedes incoming argument spills and
+                            // follows frame finalization. Use only non-argument
+                            // caller-saved registers, without touching allocation.
+                            try self.copyLoop(.IP0, .IP1, 0, frame_ptr, copy.dest_off, size, .X9, .X10, .X11);
+                        } else {
+                            try self.copyChunked(.IP0, .IP1, 0, frame_ptr, copy.dest_off, size);
+                        }
                     },
                 }
             }
@@ -25298,13 +25269,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.codegen.symbols.names.items[@intFromEnum(id)];
         }
 
-        /// Intern a symbol name for an assembled relocation.
-        pub fn internSymbolName(self: *Self, name: []const u8) Allocator.Error!SymbolTable.Id {
-            if (self.codegen.symbols.indices.get(name)) |id| return id;
+        /// The scope generated code declared for symbol `id`.
+        pub fn symbolScope(self: *const Self, id: SymbolTable.Id) SymbolTable.Scope {
+            return self.codegen.symbols.scope(id);
+        }
+
+        /// Intern a symbol name for an assembled relocation, with its scope.
+        pub fn internSymbolName(self: *Self, name: []const u8, scope: SymbolTable.Scope) Allocator.Error!SymbolTable.Id {
+            if (self.codegen.symbols.indices.get(name)) |id| return try self.codegen.symbols.intern(self.allocator, self.symbolName(id), scope);
             const owned = try self.allocator.dupe(u8, name);
             errdefer self.allocator.free(owned);
             try self.owned_symbol_names.ensureUnusedCapacity(self.allocator, 1);
-            const id = try self.codegen.symbols.intern(self.allocator, owned);
+            const id = try self.codegen.symbols.intern(self.allocator, owned, scope);
             self.owned_symbol_names.appendAssumeCapacity(owned);
             return id;
         }
@@ -25404,7 +25380,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .veneer = reference.veneer,
             };
             if (reference.target == .rc_helper) {
-                const symbol = try self.internSymbolName(reference.target.rc_helper);
+                const symbol = try self.internSymbolName(reference.target.rc_helper, .shared);
                 owned.target = .{ .rc_helper = self.symbolName(symbol) };
             }
             if (comptime target.toCpuArch() == .aarch64) {
@@ -25852,7 +25828,7 @@ fn addNoArgProc(store: *LirStore, body: CFStmtId, ret_layout: layout.Idx) Alloca
         .args = LocalSpan.empty(),
         .body = body,
         .ret_layout = ret_layout,
-    });
+    }, .none);
 }
 
 fn addProc(store: *LirStore, args: []const LocalId, body: CFStmtId, ret_layout: layout.Idx) Allocator.Error!lir.LIR.LirProcSpecId {
@@ -25862,24 +25838,24 @@ fn addProc(store: *LirStore, args: []const LocalId, body: CFStmtId, ret_layout: 
         .args = try store.addLocalSpan(args),
         .body = body,
         .ret_layout = ret_layout,
-    });
+    }, .none);
 }
 
 fn addLiteralProc(store: *LirStore, value: lir.LiteralValue, ret_layout: layout.Idx) Allocator.Error!lir.LIR.LirProcSpecId {
     const result = try addLocal(store, ret_layout);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const assign = try store.addCFStmt(.{ .assign_literal = .{
         .target = result,
         .value = value,
         .next = ret,
-    } });
+    } }, .test_fixture);
     return try addNoArgProc(store, assign, ret_layout);
 }
 
 fn addUnaryLowLevelProc(store: *LirStore, op: lir.LowLevel, operand_value: i64, operand_layout: layout.Idx, ret_layout: layout.Idx) Allocator.Error!lir.LIR.LirProcSpecId {
     const operand = try addLocal(store, operand_layout);
     const result = try addLocal(store, ret_layout);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const args = try store.addLocalSpan(&.{operand});
     const assign_op = try store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
@@ -25887,12 +25863,12 @@ fn addUnaryLowLevelProc(store: *LirStore, op: lir.LowLevel, operand_value: i64, 
         .rc_effect = op.rcEffect(),
         .args = args,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const assign_operand = try store.addCFStmt(.{ .assign_literal = .{
         .target = operand,
         .value = .{ .i64_literal = .{ .value = operand_value, .layout_idx = operand_layout } },
         .next = assign_op,
-    } });
+    } }, .test_fixture);
     return try addNoArgProc(store, assign_operand, ret_layout);
 }
 
@@ -25907,7 +25883,7 @@ fn addBinaryLowLevelProc(
     const lhs = try addLocal(store, operand_layout);
     const rhs = try addLocal(store, operand_layout);
     const result = try addLocal(store, ret_layout);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const args = try store.addLocalSpan(&.{ lhs, rhs });
     const assign_op = try store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
@@ -25915,17 +25891,17 @@ fn addBinaryLowLevelProc(
         .rc_effect = op.rcEffect(),
         .args = args,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const assign_rhs = try store.addCFStmt(.{ .assign_literal = .{
         .target = rhs,
         .value = .{ .i64_literal = .{ .value = rhs_value, .layout_idx = operand_layout } },
         .next = assign_op,
-    } });
+    } }, .test_fixture);
     const assign_lhs = try store.addCFStmt(.{ .assign_literal = .{
         .target = lhs,
         .value = .{ .i64_literal = .{ .value = lhs_value, .layout_idx = operand_layout } },
         .next = assign_rhs,
-    } });
+    } }, .test_fixture);
     return try addNoArgProc(store, assign_lhs, ret_layout);
 }
 
@@ -25933,7 +25909,7 @@ fn addBinaryF32LowLevelProc(store: *LirStore, op: lir.LowLevel, lhs_value: f32, 
     const lhs = try addLocal(store, .f32);
     const rhs = try addLocal(store, .f32);
     const result = try addLocal(store, .f32);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const args = try store.addLocalSpan(&.{ lhs, rhs });
     const assign_op = try store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
@@ -25941,17 +25917,17 @@ fn addBinaryF32LowLevelProc(store: *LirStore, op: lir.LowLevel, lhs_value: f32, 
         .rc_effect = op.rcEffect(),
         .args = args,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const assign_rhs = try store.addCFStmt(.{ .assign_literal = .{
         .target = rhs,
         .value = .{ .f32_literal = rhs_value },
         .next = assign_op,
-    } });
+    } }, .test_fixture);
     const assign_lhs = try store.addCFStmt(.{ .assign_literal = .{
         .target = lhs,
         .value = .{ .f32_literal = lhs_value },
         .next = assign_rhs,
-    } });
+    } }, .test_fixture);
     return try addNoArgProc(store, assign_lhs, .f32);
 }
 
@@ -25961,7 +25937,7 @@ fn addDeadTempChainProc(store: *LirStore, allocator: Allocator, temp_count: u32,
     const totals = try allocator.alloc(LocalId, temp_count + 1);
     defer allocator.free(totals);
     for (totals) |*total| total.* = try addLocal(store, .u64);
-    var stmt = try store.addCFStmt(.{ .ret = .{ .value = totals[temp_count] } });
+    var stmt = try store.addCFStmt(.{ .ret = .{ .value = totals[temp_count] } }, .test_fixture);
     var i: u32 = temp_count;
     while (i > 0) : (i -= 1) {
         stmt = try store.addCFStmt(.{ .assign_low_level = .{
@@ -25970,18 +25946,18 @@ fn addDeadTempChainProc(store: *LirStore, allocator: Allocator, temp_count: u32,
             .rc_effect = lir.LowLevel.num_int_add_wrap.rcEffect(),
             .args = try store.addLocalSpan(&.{ totals[i - 1], step }),
             .next = stmt,
-        } });
+        } }, .test_fixture);
     }
     stmt = try store.addCFStmt(.{ .assign_literal = .{
         .target = totals[0],
         .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
         .next = stmt,
-    } });
+    } }, .test_fixture);
     stmt = try store.addCFStmt(.{ .assign_literal = .{
         .target = step,
         .value = .{ .i64_literal = .{ .value = step_value, .layout_idx = .u64 } },
         .next = stmt,
-    } });
+    } }, .test_fixture);
     return try addNoArgProc(store, stmt, .u64);
 }
 
@@ -25996,6 +25972,187 @@ fn deadTempChainFrameSize(temp_count: u32, step_value: i64) Allocator.Error!u32 
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
     return codegen.proc_registry.get(@intFromEnum(proc)).?.frame_size;
+}
+
+test "aggregate entrypoint wrappers own independent register scopes" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var state = try TestLayoutState.init(allocator);
+    defer state.deinit();
+    const record_layout = try state.layout_store.putCaptureStruct(&([_]layout.Idx{.u64} ** 16));
+    const scalar = try addLocal(&store, .u64);
+    const record = try addLocal(&store, record_layout);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = record } }, .test_fixture);
+    const construct = try store.addCFStmt(.{ .assign_struct = .{
+        .target = record,
+        .fields = try store.addLocalSpan(&([_]LocalId{scalar} ** 16)),
+        .next = ret,
+    } }, .test_fixture);
+    const entry = try store.addCFStmt(.{ .assign_literal = .{
+        .target = scalar,
+        .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
+        .next = construct,
+    } }, .test_fixture);
+    const root = try addNoArgProc(&store, entry, record_layout);
+    inline for (.{ RocTarget.x64linux, RocTarget.x64win, RocTarget.arm64mac, RocTarget.arm64win }) |target| {
+        var cg = try LirCodeGen(target).init(allocator, &store, &state.layout_store, .{}, &.{}, .default);
+        defer cg.deinit();
+        try cg.compileAllProcSpecs(store.getProcSpecs());
+        // Reservations in another function are neither available temporaries
+        // nor live inputs to these independently callable wrappers.
+        cg.codegen.free_general = 0;
+        cg.codegen.free_float = 0;
+        cg.codegen.callee_saved_available = 0;
+        for (0..3) |_| {
+            _ = try cg.generateEntrypointWrapper("aggregate", root, &.{}, record_layout);
+            try std.testing.expectEqual(@as(u32, 0), cg.codegen.free_general);
+            try std.testing.expectEqual(@as(u32, 0), cg.codegen.free_float);
+            try std.testing.expectEqual(@as(u32, 0), cg.codegen.callee_saved_available);
+        }
+    }
+}
+
+test "aggregate parameter copy preserves following argument registers" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var state = try TestLayoutState.init(allocator);
+    defer state.deinit();
+    const record_layout = try state.layout_store.putCaptureStruct(&([_]layout.Idx{.u64} ** 16));
+    const record_param = try addLocal(&store, record_layout);
+    const scalar_param = try addLocal(&store, .u64);
+    const callee_return = try store.addCFStmt(.{ .ret = .{ .value = scalar_param } }, .test_fixture);
+    const callee = try addProc(&store, &.{ record_param, scalar_param }, callee_return, .u64);
+    const scalar = try addLocal(&store, .u64);
+    const record = try addLocal(&store, record_layout);
+    const result = try addLocal(&store, .u64);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const call = try store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = callee,
+        .args = try store.addLocalSpan(&.{ record, scalar }),
+        .next = ret,
+    } }, .test_fixture);
+    const construct = try store.addCFStmt(.{ .assign_struct = .{
+        .target = record,
+        .fields = try store.addLocalSpan(&([_]LocalId{scalar} ** 16)),
+        .next = call,
+    } }, .test_fixture);
+    const entry = try store.addCFStmt(.{ .assign_literal = .{
+        .target = scalar,
+        .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
+        .next = construct,
+    } }, .test_fixture);
+    const root = try addNoArgProc(&store, entry, .u64);
+    inline for (.{ RocTarget.x64linux, RocTarget.x64win, RocTarget.arm64mac, RocTarget.arm64win }) |target| {
+        var cg = try LirCodeGen(target).init(allocator, &store, &state.layout_store, .{}, &.{}, .default);
+        defer cg.deinit();
+        try cg.compileAllProcSpecs(store.getProcSpecs());
+    }
+    if (comptime builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .aarch64) {
+        try std.testing.expectEqual(@as(u64, 42), try runRootU64(&store, &state.layout_store, root, .u64));
+    }
+}
+
+test "aggregate copies have bounded native code size at large frame offsets" {
+    const allocator = std.testing.allocator;
+    inline for (.{ RocTarget.x64linux, RocTarget.x64win, RocTarget.arm64mac, RocTarget.arm64win }) |target| {
+        for ([_]u32{ 33, 64, 1024, 8192, 1024 * 1024 + 7 }) |size| {
+            var store = LirStore.init(allocator);
+            defer store.deinit();
+            var state = try TestLayoutState.init(allocator);
+            defer state.deinit();
+            var cg = try LirCodeGen(target).init(allocator, &store, &state.layout_store, .{}, &.{}, .default);
+            defer cg.deinit();
+            try cg.copyStackRange(0x110000, 0x70000, size);
+            try std.testing.expect(cg.codegen.getCode().len < 192);
+            const before_fill = cg.codegen.currentOffset();
+            try cg.zeroStackArea(0x110000, size);
+            try cg.poisonStackArea(0x110000, size);
+            try std.testing.expect(cg.codegen.currentOffset() - before_fill < 256);
+            if (comptime target.toCpuArch() == .aarch64) {
+                const before_entry = cg.codegen.currentOffset();
+                const free_general = cg.codegen.free_general;
+                const saved_mask = cg.codegen.callee_saved_used;
+                const stack_offset = cg.codegen.stack_offset;
+                try cg.emitEntryIncomingStackCopies(&.{.{
+                    .dest_off = 0x110000,
+                    .incoming_byte_offset = 64,
+                    .kind = .{ .deref = size },
+                }}, 0x70000);
+                try std.testing.expect(cg.codegen.currentOffset() - before_entry < 192);
+                try std.testing.expectEqual(free_general, cg.codegen.free_general);
+                try std.testing.expectEqual(saved_mask, cg.codegen.callee_saved_used);
+                try std.testing.expectEqual(stack_offset, cg.codegen.stack_offset);
+            }
+        }
+    }
+}
+
+test "aggregate copy loops preserve exact bytes and base registers" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var source: [8208]u8 = undefined;
+    var dest: [8208]u8 = undefined;
+    for (&source, 0..) |*byte, i| byte.* = @truncate(i *% 37 +% 11);
+    for (0..80) |case| {
+        const size: u32 = @intCast(if (case < 72) case else 8192 + case - 72);
+        @memset(&dest, 0xCD);
+        var store = LirStore.init(allocator);
+        defer store.deinit();
+        var state = try TestLayoutState.init(allocator);
+        defer state.deinit();
+        var cg = try HostLirCodeGen.init(allocator, &store, &state.layout_store, .{}, &.{}, .default);
+        defer cg.deinit();
+        const src = try cg.allocTempGeneral();
+        const dst = try cg.allocTempGeneral();
+        const temp = try cg.allocTempGeneral();
+        try cg.codegen.emitLoadImm(src, @bitCast(@intFromPtr(&source)));
+        try cg.codegen.emitLoadImm(dst, @bitCast(@intFromPtr(&dest)));
+        try cg.copyChunked(temp, src, 1, dst, 1, size);
+        // Reuse both original bases after the copy, detecting clobbered bases.
+        try cg.emitLoadW8(temp, src, 0);
+        try cg.emitStoreW8(dst, 0, temp);
+        try cg.codegen.emit.ret();
+        try std.testing.expectEqual(@as(u32, 0), cg.codegen.callee_saved_used);
+        var executable = try ExecutableMemory.init(cg.codegen.getCode());
+        defer executable.deinit();
+        const run: *const fn () callconv(.c) void = @ptrCast(executable.memory.ptr);
+        run();
+        try std.testing.expectEqualSlices(u8, source[0 .. size + 1], dest[0 .. size + 1]);
+        for (dest[size + 1 ..]) |byte| try std.testing.expectEqual(@as(u8, 0xCD), byte);
+    }
+}
+
+test "aggregate initialization loops preserve exact extent" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var dest: [8208]u8 = undefined;
+    for ([_]u8{ 0, 0xAA }) |byte| {
+        for (0..80) |case| {
+            const size: u32 = @intCast(if (case < 72) case else 8192 + case - 72);
+            @memset(&dest, 0xCD);
+            var store = LirStore.init(allocator);
+            defer store.deinit();
+            var state = try TestLayoutState.init(allocator);
+            defer state.deinit();
+            var cg = try HostLirCodeGen.init(allocator, &store, &state.layout_store, .{}, &.{}, .default);
+            defer cg.deinit();
+            const dst = try cg.allocTempGeneral();
+            try cg.codegen.emitLoadImm(dst, @bitCast(@intFromPtr(&dest)));
+            try cg.fillMem(dst, 1, size, @as(u64, byte) * 0x0101010101010101);
+            try cg.codegen.emit.ret();
+            try std.testing.expectEqual(@as(u32, 0), cg.codegen.callee_saved_used);
+            var executable = try ExecutableMemory.init(cg.codegen.getCode());
+            defer executable.deinit();
+            const run: *const fn () callconv(.c) void = @ptrCast(executable.memory.ptr);
+            run();
+            try std.testing.expectEqual(@as(u8, 0xCD), dest[0]);
+            for (dest[1 .. size + 1]) |actual| try std.testing.expectEqual(byte, actual);
+            for (dest[size + 1 ..]) |actual| try std.testing.expectEqual(@as(u8, 0xCD), actual);
+        }
+    }
 }
 
 test "frame size tracks peak liveness, not total temporary count" {
@@ -26018,7 +26175,7 @@ fn addSineChainProc(store: *LirStore, allocator: Allocator, count: u32) Allocato
     const locals = try allocator.alloc(LocalId, count + 1);
     defer allocator.free(locals);
     for (locals) |*local| local.* = try addLocal(store, .f64);
-    var body = try store.addCFStmt(.{ .ret = .{ .value = locals[count] } });
+    var body = try store.addCFStmt(.{ .ret = .{ .value = locals[count] } }, .test_fixture);
     var i = count;
     while (i > 0) : (i -= 1) {
         body = try store.addCFStmt(.{ .assign_low_level = .{
@@ -26027,17 +26184,18 @@ fn addSineChainProc(store: *LirStore, allocator: Allocator, count: u32) Allocato
             .rc_effect = lir.LowLevel.num_sin.rcEffect(),
             .args = try store.addLocalSpan(&.{locals[i - 1]}),
             .next = body,
-        } });
+        } }, .test_fixture);
     }
     body = try store.addCFStmt(.{ .assign_literal = .{
         .target = locals[0],
         .value = .{ .f64_literal = 0.0 },
         .next = body,
-    } });
+    } }, .test_fixture);
     return try addNoArgProc(store, body, .f64);
 }
 
 test "stack reuse does not allocate declaration-only join parameters" {
+    if (comptime !host_lir_codegen_available) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var sizes: [2]u32 = undefined;
     for ([_]usize{ 0, 128 }, &sizes) |count, *size| {
@@ -26049,8 +26207,8 @@ test "stack reuse does not allocate declaration-only join parameters" {
         const params = try allocator.alloc(LocalId, count);
         defer allocator.free(params);
         for (params) |*param| param.* = try addLocal(&store, .u64);
-        const body = try store.addCFStmt(.{ .ret = .{ .value = result } });
-        const remainder = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        const body = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+        const remainder = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
         var next_join_point: u32 = 0;
         // There is no incoming jump, so these parameters are never initialized
         // or read. The declaration must not create a storage lifetime.
@@ -26059,12 +26217,12 @@ test "stack reuse does not allocate declaration-only join parameters" {
             .params = try store.addLocalSpan(params),
             .body = body,
             .remainder = remainder,
-        } });
+        } }, .test_fixture);
         const entry = try store.addCFStmt(.{ .assign_literal = .{
             .target = result,
             .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
             .next = join,
-        } });
+        } }, .test_fixture);
         const proc = try addNoArgProc(&store, entry, .u64);
         var cg = try HostLirCodeGen.init(allocator, &store, &state.layout_store, .{}, &.{}, .default);
         defer cg.deinit();
@@ -26264,11 +26422,11 @@ test "dev lowering: init_uninitialized writes poison pattern" {
     defer test_state.deinit();
 
     const value = try addLocal(&store, .u64);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const init_stmt = try store.addCFStmt(.{ .init_uninitialized = .{
         .target = value,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const root_proc = try addNoArgProc(&store, init_stmt, .u64);
 
     try std.testing.expectEqual(@as(u64, 0xAAAAAAAAAAAAAAAA), try runRootU64(&store, &test_state.layout_store, root_proc, .u64));
@@ -26641,7 +26799,7 @@ test "proc params and mutable list cells use distinct stack slots" {
     const one = try addLocal(&store, .u32);
     const appended = try addLocal(&store, list_layout);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = appended } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = appended } }, .test_fixture);
     const append_args = try store.addLocalSpan(&.{ answer, one });
     const append_stmt = try store.addCFStmt(.{ .assign_low_level = .{
         .target = appended,
@@ -26649,18 +26807,18 @@ test "proc params and mutable list cells use distinct stack slots" {
         .rc_effect = lir.LowLevel.list_append_unsafe.rcEffect(),
         .args = append_args,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const one_stmt = try store.addCFStmt(.{ .assign_literal = .{
         .target = one,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u32 } },
         .next = append_stmt,
-    } });
+    } }, .test_fixture);
     const empty_elems = try store.addLocalSpan(&.{});
     const answer_stmt = try store.addCFStmt(.{ .assign_list = .{
         .target = answer,
         .elems = empty_elems,
         .next = one_stmt,
-    } });
+    } }, .test_fixture);
     const args = try store.addLocalSpan(&.{ start, end });
 
     var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
@@ -26702,38 +26860,38 @@ test "immutable aliases share storage but aliases of mutable locals do not" {
     const mutable_source = try addLocal(&store, .u64);
     const mutable_alias = try addLocal(&store, .u64);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = alias2 } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = alias2 } }, .test_fixture);
     const mutate = try store.addCFStmt(.{ .set_local = .{
         .target = mutable_source,
         .value = source,
         .mode = .initialize_join_param,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const mutable_alias_stmt = try store.addCFStmt(.{ .assign_ref = .{
         .target = mutable_alias,
         .op = .{ .local = mutable_source },
         .next = mutate,
-    } });
+    } }, .test_fixture);
     const mutable_source_stmt = try store.addCFStmt(.{ .assign_literal = .{
         .target = mutable_source,
         .value = .{ .i64_literal = .{ .value = 2, .layout_idx = .u64 } },
         .next = mutable_alias_stmt,
-    } });
+    } }, .test_fixture);
     const alias2_stmt = try store.addCFStmt(.{ .assign_ref = .{
         .target = alias2,
         .op = .{ .local = alias1 },
         .next = mutable_source_stmt,
-    } });
+    } }, .test_fixture);
     const alias1_stmt = try store.addCFStmt(.{ .assign_ref = .{
         .target = alias1,
         .op = .{ .local = source },
         .next = alias2_stmt,
-    } });
+    } }, .test_fixture);
     const source_stmt = try store.addCFStmt(.{ .assign_literal = .{
         .target = source,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
         .next = alias1_stmt,
-    } });
+    } }, .test_fixture);
 
     var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
     defer codegen.deinit();
@@ -26937,20 +27095,20 @@ test "two-arg proc list join loop returns full length" {
     var next_join_point: u32 = 0;
     const join_id = freshTestJoinPointId(&next_join_point);
 
-    const ret_acc = try store.addCFStmt(.{ .ret = .{ .value = acc } });
-    const loop_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const ret_acc = try store.addCFStmt(.{ .ret = .{ .value = acc } }, .test_fixture);
+    const loop_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const set_acc = try store.addCFStmt(.{ .set_local = .{
         .target = acc,
         .value = next_acc,
         .mode = .initialize_join_param,
         .next = loop_jump,
-    } });
+    } }, .test_fixture);
     const set_index = try store.addCFStmt(.{ .set_local = .{
         .target = index,
         .value = next_index,
         .mode = .initialize_join_param,
         .next = set_acc,
-    } });
+    } }, .test_fixture);
     const next_index_args = try store.addLocalSpan(&.{ index, one });
     const add_next_index = try store.addCFStmt(.{ .assign_low_level = .{
         .target = next_index,
@@ -26958,7 +27116,7 @@ test "two-arg proc list join loop returns full length" {
         .rc_effect = lir.LowLevel.num_int_add_crash_on_overflow.rcEffect(),
         .args = next_index_args,
         .next = set_index,
-    } });
+    } }, .test_fixture);
     const next_acc_args = try store.addLocalSpan(&.{ acc, one });
     const add_next_acc = try store.addCFStmt(.{ .assign_low_level = .{
         .target = next_acc,
@@ -26966,12 +27124,12 @@ test "two-arg proc list join loop returns full length" {
         .rc_effect = lir.LowLevel.num_int_add_crash_on_overflow.rcEffect(),
         .args = next_acc_args,
         .next = add_next_index,
-    } });
+    } }, .test_fixture);
     const one_stmt = try store.addCFStmt(.{ .assign_literal = .{
         .target = one,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
         .next = add_next_acc,
-    } });
+    } }, .test_fixture);
     const loop_branches = try store.addCFSwitchBranches(&.{.{
         .value = 1,
         .body = one_stmt,
@@ -26980,7 +27138,7 @@ test "two-arg proc list join loop returns full length" {
         .cond = cond,
         .branches = loop_branches,
         .default_branch = ret_acc,
-    } });
+    } }, .test_fixture);
     const cond_args = try store.addLocalSpan(&.{ index, len });
     const loop_body = try store.addCFStmt(.{ .assign_low_level = .{
         .target = cond,
@@ -26988,31 +27146,31 @@ test "two-arg proc list join loop returns full length" {
         .rc_effect = lir.LowLevel.num_is_lt.rcEffect(),
         .args = cond_args,
         .next = loop_switch,
-    } });
+    } }, .test_fixture);
 
-    const initial_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const initial_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const init_acc = try store.addCFStmt(.{ .set_local = .{
         .target = acc,
         .value = zero_acc,
         .mode = .initialize_join_param,
         .next = initial_jump,
-    } });
+    } }, .test_fixture);
     const init_index = try store.addCFStmt(.{ .set_local = .{
         .target = index,
         .value = zero_index,
         .mode = .initialize_join_param,
         .next = init_acc,
-    } });
+    } }, .test_fixture);
     const zero_acc_stmt = try store.addCFStmt(.{ .assign_literal = .{
         .target = zero_acc,
         .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
         .next = init_index,
-    } });
+    } }, .test_fixture);
     const zero_index_stmt = try store.addCFStmt(.{ .assign_literal = .{
         .target = zero_index,
         .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
         .next = zero_acc_stmt,
-    } });
+    } }, .test_fixture);
     const len_args = try store.addLocalSpan(&.{list_arg});
     const len_stmt = try store.addCFStmt(.{ .assign_low_level = .{
         .target = len,
@@ -27020,14 +27178,14 @@ test "two-arg proc list join loop returns full length" {
         .rc_effect = lir.LowLevel.list_len.rcEffect(),
         .args = len_args,
         .next = zero_index_stmt,
-    } });
+    } }, .test_fixture);
     const join_params = try store.addLocalSpan(&.{ index, acc });
     const join = try store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = join_params,
         .body = loop_body,
         .remainder = len_stmt,
-    } });
+    } }, .test_fixture);
     const len_proc = try addProc(&store, &.{ list_arg, ignored_arg }, join, .u64);
 
     const root_elems = [_]i64{ 10, 20, 30, 40, 50 };
@@ -27038,30 +27196,30 @@ test "two-arg proc list join loop returns full length" {
     const ignored = try addLocal(&store, .i64);
     const result = try addLocal(&store, .u64);
 
-    const ret_result = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret_result = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const drop_list = try store.addCFStmt(.{ .decref = .{
         .value = root_list,
         .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = list_layout }),
         .next = ret_result,
-    } });
+    } }, .test_fixture);
     const call_args = try store.addLocalSpan(&.{ root_list, ignored });
     const call_len = try store.addCFStmt(.{ .assign_call = .{
         .target = result,
         .proc = len_proc,
         .args = call_args,
         .next = drop_list,
-    } });
+    } }, .test_fixture);
     const ignored_stmt = try store.addCFStmt(.{ .assign_literal = .{
         .target = ignored,
         .value = .{ .i64_literal = .{ .value = 123, .layout_idx = .i64 } },
         .next = call_len,
-    } });
+    } }, .test_fixture);
     const list_elems = try store.addLocalSpan(&elem_locals);
     const list_stmt = try store.addCFStmt(.{ .assign_list = .{
         .target = root_list,
         .elems = list_elems,
         .next = ignored_stmt,
-    } });
+    } }, .test_fixture);
 
     var current = list_stmt;
     var i: usize = root_elems.len;
@@ -27071,7 +27229,7 @@ test "two-arg proc list join loop returns full length" {
             .target = elem_locals[i],
             .value = .{ .i64_literal = .{ .value = root_elems[i], .layout_idx = .i64 } },
             .next = current,
-        } });
+        } }, .test_fixture);
     }
     const root_proc = try addNoArgProc(&store, current, .u64);
 
@@ -27098,7 +27256,7 @@ test "ptr_alloca slot is zeroed and ptr_store/ptr_load round trip" {
     const post = try addLocal(&store, .u64);
     const sum = try addLocal(&store, .u64);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } }, .test_fixture);
     const add_args = try store.addLocalSpan(&.{ pre, post });
     const add = try store.addCFStmt(.{ .assign_low_level = .{
         .target = sum,
@@ -27106,7 +27264,7 @@ test "ptr_alloca slot is zeroed and ptr_store/ptr_load round trip" {
         .rc_effect = lir.LowLevel.num_int_add_crash_on_overflow.rcEffect(),
         .args = add_args,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const load_post_args = try store.addLocalSpan(&.{slot});
     const load_post = try store.addCFStmt(.{ .assign_low_level = .{
         .target = post,
@@ -27114,7 +27272,7 @@ test "ptr_alloca slot is zeroed and ptr_store/ptr_load round trip" {
         .rc_effect = lir.LowLevel.ptr_load.rcEffect(),
         .args = load_post_args,
         .next = add,
-    } });
+    } }, .test_fixture);
     const store_args = try store.addLocalSpan(&.{ slot, v });
     const store_v = try store.addCFStmt(.{ .assign_low_level = .{
         .target = st,
@@ -27122,12 +27280,12 @@ test "ptr_alloca slot is zeroed and ptr_store/ptr_load round trip" {
         .rc_effect = lir.LowLevel.ptr_store.rcEffect(),
         .args = store_args,
         .next = load_post,
-    } });
+    } }, .test_fixture);
     const v_lit = try store.addCFStmt(.{ .assign_literal = .{
         .target = v,
         .value = .{ .i64_literal = .{ .value = 41, .layout_idx = .u64 } },
         .next = store_v,
-    } });
+    } }, .test_fixture);
     // Loading before any store proves the alloca slot was zero-initialized.
     const load_pre_args = try store.addLocalSpan(&.{slot});
     const load_pre = try store.addCFStmt(.{ .assign_low_level = .{
@@ -27136,14 +27294,14 @@ test "ptr_alloca slot is zeroed and ptr_store/ptr_load round trip" {
         .rc_effect = lir.LowLevel.ptr_load.rcEffect(),
         .args = load_pre_args,
         .next = v_lit,
-    } });
+    } }, .test_fixture);
     const alloca = try store.addCFStmt(.{ .assign_low_level = .{
         .target = slot,
         .op = .ptr_alloca,
         .rc_effect = lir.LowLevel.ptr_alloca.rcEffect(),
         .args = try store.addLocalSpan(&.{}),
         .next = load_pre,
-    } });
+    } }, .test_fixture);
     const root_proc = try addNoArgProc(&store, alloca, .u64);
 
     try std.testing.expectEqual(@as(u64, 41), try runRootU64(&store, &test_state.layout_store, root_proc, .u64));
@@ -27171,14 +27329,14 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
     const post = try addLocal(&store, .u64);
     const sum = try addLocal(&store, .u64);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } }, .test_fixture);
     // The testing allocator behind TestRocOps fails the test on leaks, so this
     // decref also verifies the cell came from allocateWithRefcount with rc=1.
     const drop_cell = try store.addCFStmt(.{ .decref = .{
         .value = cell,
         .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = box_u64 }),
         .next = ret,
-    } });
+    } }, .test_fixture);
     const add_args = try store.addLocalSpan(&.{ pre, post });
     const add = try store.addCFStmt(.{ .assign_low_level = .{
         .target = sum,
@@ -27186,7 +27344,7 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
         .rc_effect = lir.LowLevel.num_int_add_crash_on_overflow.rcEffect(),
         .args = add_args,
         .next = drop_cell,
-    } });
+    } }, .test_fixture);
     const load_post_args = try store.addLocalSpan(&.{p});
     const load_post = try store.addCFStmt(.{ .assign_low_level = .{
         .target = post,
@@ -27194,7 +27352,7 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
         .rc_effect = lir.LowLevel.ptr_load.rcEffect(),
         .args = load_post_args,
         .next = add,
-    } });
+    } }, .test_fixture);
     const store_args = try store.addLocalSpan(&.{ p, v });
     const store_v = try store.addCFStmt(.{ .assign_low_level = .{
         .target = st,
@@ -27202,12 +27360,12 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
         .rc_effect = lir.LowLevel.ptr_store.rcEffect(),
         .args = store_args,
         .next = load_post,
-    } });
+    } }, .test_fixture);
     const v_lit = try store.addCFStmt(.{ .assign_literal = .{
         .target = v,
         .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u64 } },
         .next = store_v,
-    } });
+    } }, .test_fixture);
     // Loading before any store proves the heap cell payload was zero-filled.
     const load_pre_args = try store.addLocalSpan(&.{p});
     const load_pre = try store.addCFStmt(.{ .assign_low_level = .{
@@ -27216,7 +27374,7 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
         .rc_effect = lir.LowLevel.ptr_load.rcEffect(),
         .args = load_pre_args,
         .next = v_lit,
-    } });
+    } }, .test_fixture);
     const cast_args = try store.addLocalSpan(&.{cell});
     const cast = try store.addCFStmt(.{ .assign_low_level = .{
         .target = p,
@@ -27224,14 +27382,14 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
         .rc_effect = lir.LowLevel.ptr_cast.rcEffect(),
         .args = cast_args,
         .next = load_pre,
-    } });
+    } }, .test_fixture);
     const alloc = try store.addCFStmt(.{ .assign_low_level = .{
         .target = cell,
         .op = .box_alloc_zeroed,
         .rc_effect = lir.LowLevel.box_alloc_zeroed.rcEffect(),
         .args = try store.addLocalSpan(&.{}),
         .next = cast,
-    } });
+    } }, .test_fixture);
     const root_proc = try addNoArgProc(&store, alloc, .u64);
 
     try std.testing.expectEqual(@as(u64, 7), try runRootU64(&store, &test_state.layout_store, root_proc, .u64));
@@ -27264,14 +27422,14 @@ test "generate bool literal" {
     defer test_state.deinit();
 
     const result = try addLocal(&store, .bool);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const assign_true = try store.addCFStmt(.{ .assign_tag = .{
         .target = result,
         .variant_index = 1,
         .discriminant = 1,
         .payload = null,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const proc = try addNoArgProc(&store, assign_true, .bool);
 
     try std.testing.expectEqual(@as(u8, 1), try runRootU8(&store, &test_state.layout_store, proc, .bool));
@@ -27301,7 +27459,7 @@ test "tag payload bind invariant rejects mismatched pattern layout" {
     try std.testing.expectEqual(layout.Idx.u64, runtime_payload_layout);
     try std.testing.expect(runtime_payload_layout != store.getLocal(mismatched_target).layout_idx);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = mismatched_target } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = mismatched_target } }, .test_fixture);
     _ = try store.addCFStmt(.{ .assign_ref = .{
         .target = mismatched_target,
         .op = .{ .tag_payload = .{
@@ -27311,7 +27469,7 @@ test "tag payload bind invariant rejects mismatched pattern layout" {
             .tag_discriminant = 0,
         } },
         .next = ret,
-    } });
+    } }, .test_fixture);
 }
 
 test "generate addition" {
@@ -27363,7 +27521,7 @@ test "dev backend fuses overflow predicate with matching wrapping result" {
     const overflowed = try addLocal(&store, .bool);
     const result = try addLocal(&store, .u64);
 
-    const ret_result = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret_result = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const arithmetic_args = try store.addLocalSpan(&.{ lhs, rhs });
     const wrapping_result = try store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
@@ -27371,31 +27529,31 @@ test "dev backend fuses overflow predicate with matching wrapping result" {
         .rc_effect = lir.LowLevel.num_int_add_wrap.rcEffect(),
         .args = arithmetic_args,
         .next = ret_result,
-    } });
-    const ret_overflow = try store.addCFStmt(.{ .ret = .{ .value = lhs } });
+    } }, .test_fixture);
+    const ret_overflow = try store.addCFStmt(.{ .ret = .{ .value = lhs } }, .test_fixture);
     const branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = ret_overflow }});
     const choose = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = overflowed,
         .branches = branches,
         .default_branch = wrapping_result,
-    } });
+    } }, .test_fixture);
     const predicate = try store.addCFStmt(.{ .assign_low_level = .{
         .target = overflowed,
         .op = .num_int_add_overflows,
         .rc_effect = lir.LowLevel.num_int_add_overflows.rcEffect(),
         .args = arithmetic_args,
         .next = choose,
-    } });
+    } }, .test_fixture);
     const rhs_literal = try store.addCFStmt(.{ .assign_literal = .{
         .target = rhs,
         .value = .{ .i64_literal = .{ .value = 2, .layout_idx = .u64 } },
         .next = predicate,
-    } });
+    } }, .test_fixture);
     const lhs_literal = try store.addCFStmt(.{ .assign_literal = .{
         .target = lhs,
         .value = .{ .i64_literal = .{ .value = 40, .layout_idx = .u64 } },
         .next = rhs_literal,
-    } });
+    } }, .test_fixture);
     const proc = try addNoArgProc(&store, lhs_literal, .u64);
 
     const compiled = try compileRoot(&store, &test_state.layout_store, proc, .u64);
@@ -27451,7 +27609,7 @@ test "record equality uses layout-aware comparison" {
     const rhs_record = try addLocal(&store, record_layout);
     const eq_result = try addLocal(&store, .bool);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = eq_result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = eq_result } }, .test_fixture);
     const eq_args = try store.addLocalSpan(&.{ lhs_record, rhs_record });
     const eq_stmt = try store.addCFStmt(.{ .assign_low_level = .{
         .target = eq_result,
@@ -27459,39 +27617,39 @@ test "record equality uses layout-aware comparison" {
         .rc_effect = lir.LowLevel.num_is_eq.rcEffect(),
         .args = eq_args,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const rhs_fields = try store.addLocalSpan(&.{ rhs_small, rhs_large });
     const rhs_record_stmt = try store.addCFStmt(.{ .assign_struct = .{
         .target = rhs_record,
         .fields = rhs_fields,
         .next = eq_stmt,
-    } });
+    } }, .test_fixture);
     const lhs_fields = try store.addLocalSpan(&.{ lhs_small, lhs_large });
     const lhs_record_stmt = try store.addCFStmt(.{ .assign_struct = .{
         .target = lhs_record,
         .fields = lhs_fields,
         .next = rhs_record_stmt,
-    } });
+    } }, .test_fixture);
     const assign_rhs_large = try store.addCFStmt(.{ .assign_literal = .{
         .target = rhs_large,
         .value = .{ .i64_literal = .{ .value = 999, .layout_idx = .i64 } },
         .next = lhs_record_stmt,
-    } });
+    } }, .test_fixture);
     const assign_rhs_small = try store.addCFStmt(.{ .assign_literal = .{
         .target = rhs_small,
         .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u8 } },
         .next = assign_rhs_large,
-    } });
+    } }, .test_fixture);
     const assign_lhs_large = try store.addCFStmt(.{ .assign_literal = .{
         .target = lhs_large,
         .value = .{ .i64_literal = .{ .value = 999, .layout_idx = .i64 } },
         .next = assign_rhs_small,
-    } });
+    } }, .test_fixture);
     const assign_lhs_small = try store.addCFStmt(.{ .assign_literal = .{
         .target = lhs_small,
         .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u8 } },
         .next = assign_lhs_large,
-    } });
+    } }, .test_fixture);
     const proc = try addNoArgProc(&store, assign_lhs_small, .bool);
 
     try std.testing.expectEqual(@as(u8, 1), try runRootU8(&store, &test_state.layout_store, proc, .bool));
@@ -27974,20 +28132,20 @@ fn addHostedCallRoot(
         .args = try store.addLocalSpan(params),
         .ret_layout = .i64,
         .hosted = .{ .symbol = try store.insertString(symbol_name), .dispatch_index = 0 },
-    });
+    }, .none);
 
     const args = try allocator.alloc(LocalId, arg_layouts.len);
     defer allocator.free(args);
     for (arg_layouts, args) |arg_layout, *arg| arg.* = try addLocal(store, arg_layout);
 
     const observed = try addLocal(store, .i64);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = observed } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = observed } }, .test_fixture);
     var body = try store.addCFStmt(.{ .assign_call = .{
         .target = observed,
         .proc = hosted_proc,
         .args = try store.addLocalSpan(args),
         .next = ret,
-    } });
+    } }, .test_fixture);
 
     var i = arg_layouts.len;
     while (i > 0) {
@@ -27996,7 +28154,7 @@ fn addHostedCallRoot(
             .target = args[i],
             .value = .{ .i64_literal = .{ .value = values[i], .layout_idx = arg_layouts[i] } },
             .next = body,
-        } });
+        } }, .test_fixture);
     }
 
     return try addNoArgProc(store, body, .i64);
@@ -28073,9 +28231,9 @@ test "symbol producer caches reuse identities and reset with generated code" {
     defer store.deinit();
     const literal = try store.insertString("a readonly literal with more than twenty three bytes");
     const local = try store.addLocal(.{ .layout_idx = .str });
-    const end = try store.addCFStmt(.{ .ret = .{ .value = local } });
-    const body = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = literal, .offset = 0, .len = @intCast(store.getString(literal).len) } }, .next = end } });
-    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.LIR.ProcIdentity.forTest(11), .args = .empty(), .body = body, .ret_layout = .str });
+    const end = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = literal, .offset = 0, .len = @intCast(store.getString(literal).len) } }, .next = end } }, .test_fixture);
+    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.LIR.ProcIdentity.forTest(11), .args = .empty(), .body = body, .ret_layout = .str }, .none);
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
     inline for (.{ RocTarget.x64linux, RocTarget.arm64linux }) |target| {
@@ -28133,32 +28291,33 @@ test "independent fragment emits only requested procedure with unresolved self a
     inline for (.{ RocTarget.x64linux, RocTarget.arm64linux }) |target| {
         var store = LirStore.init(allocator);
         defer store.deinit();
-        store.current_loc = .{ .file = 0, .line = 11, .column = 2 };
+        var origin = LIR.StmtOrigin.test_fixture;
+        origin.loc = .{ .file = 0, .line = 11, .column = 2 };
         var layouts = try TestLayoutState.init(allocator);
         defer layouts.deinit();
         const other = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, .i64);
         const result = try addLocal(&store, .i64);
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, origin);
         const self_id: LIR.LirProcSpecId = @enumFromInt(store.procSpecCount());
         const recursive = try store.addCFStmt(.{ .assign_call = .{
             .target = result,
             .proc = self_id,
             .args = .empty(),
             .next = ret,
-        } });
+        } }, origin);
         const call = try store.addCFStmt(.{ .assign_call = .{
             .target = result,
             .proc = other,
             .args = .empty(),
             .next = recursive,
-        } });
+        } }, origin);
         const proc = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(81),
             .args = .empty(),
             .body = call,
             .ret_layout = .i64,
-        });
+        }, .none);
         var cg = try LirCodeGen(target).init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
         defer cg.deinit();
         try cg.emitProcFragment(proc);
@@ -28179,18 +28338,19 @@ test "independent fragment emits only requested procedure with unresolved self a
 }
 
 test "independent fragment defers shared RC helper demand" {
+    if (comptime !host_lir_codegen_available) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var store = LirStore.init(allocator);
     defer store.deinit();
     var layouts = try TestLayoutState.init(allocator);
     defer layouts.deinit();
     const string = try addLocal(&store, .str);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = string } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = string } }, .test_fixture);
     const drop = try store.addCFStmt(.{ .decref = .{
         .value = string,
         .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .str }),
         .next = ret,
-    } });
+    } }, .test_fixture);
     const proc = try addProc(&store, &.{string}, drop, .str);
     var cg = try HostLirCodeGen.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
     defer cg.deinit();
@@ -28226,20 +28386,20 @@ test "independent fragment symbolic calls resolve after all procedures are place
         defer layouts.deinit();
         const callee = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, .i64);
         const result = try addLocal(&store, .i64);
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
         const call = try store.addCFStmt(.{ .assign_call = .{
             .target = result,
             .proc = callee,
             .args = .empty(),
             .next = ret,
-        } });
+        } }, .test_fixture);
         const caller = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(99),
             .args = .empty(),
             .body = call,
             .ret_layout = .i64,
-        });
+        }, .none);
         var image = try CG.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
         defer image.deinit();
         for ([_]LIR.LirProcSpecId{ caller, callee }) |id| {
@@ -28279,7 +28439,7 @@ test "AArch64 finalized artifacts preserve external calls across changed placeme
         var original = try CG.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
         defer original.deinit();
         original.codegen.branch_reach_limit = 4096;
-        const symbol = try original.internSymbolName("artifact_external_target");
+        const symbol = try original.internSymbolName("artifact_external_target", .shared);
         while (original.codegen.currentOffset() < 4096) try original.codegen.emit.buf.appendSlice(allocator, &.{ 0x1f, 0x20, 0x03, 0xd5 });
         const call_offset = original.codegen.currentOffset();
         try original.codegen.emitExternCall(symbol);
@@ -28354,6 +28514,7 @@ test "AArch64 finalized artifacts preserve external calls across changed placeme
 }
 
 test "independent fragment ownership survives allocation failure" {
+    if (comptime !host_lir_codegen_available) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var store = LirStore.init(allocator);
     defer store.deinit();
@@ -28372,6 +28533,7 @@ test "independent fragment ownership survives allocation failure" {
 }
 
 test "independent fragment symbolic hooks record actual context use" {
+    if (comptime !host_lir_codegen_available) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const Hooks = struct {
         fn one(_: u32) callconv(.c) void {}
@@ -28415,7 +28577,7 @@ test "independent fragment symbolic hooks record actual context use" {
     try std.testing.expect(cg.getFragmentContextDependencies().static_data);
     try std.testing.expectEqual(@as(usize, 0), source.getSymbolNames().len);
     try std.testing.expectEqual(@as(usize, 1), cg.bindingDataCells().len);
-    try std.testing.expectEqualStrings("roc__binding_fragment_static_value", cg.bindingDataCells()[0].name);
+    try std.testing.expectEqualStrings("roc__b8", cg.bindingDataCells()[0].name);
     try std.testing.expectEqualStrings("fragment_static_value", cg.bindingDataCells()[0].target_name);
     var found_hook = false;
     for (cg.getRelocations()) |reloc| {

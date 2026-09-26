@@ -20,9 +20,9 @@ pub fn transcodeRoot(allocator: Allocator, source_program: *const Program.Result
 /// Re-encode the same checked root value for the destination slot representation.
 pub fn transcodeValueSlot(allocator: Allocator, source_program: *const Program.Result, source_slot: Program.StaticDataValue, source_exports: []const static_data.StaticDataExport, source_symbol: SymbolId, target_program: *const Program.Result, target_slot: lir.LIR.StaticDataId) Allocator.Error![]static_data.StaticDataExport {
     const target = target_program.static_data_values.items[@intFromEnum(target_slot)];
-    const source_identity = source_slot.compile_time_root orelse invariant("source slot lacks checked root authority");
-    const target_identity = target.compile_time_root orelse invariant("target slot lacks checked root authority");
-    if (!std.meta.eql(source_identity.module, target_identity.module) or source_identity.root != target_identity.root or std.meta.activeTag(source_identity.role) != std.meta.activeTag(target_identity.role)) invariant("paired slots do not name the same checked root role");
+    const source_identity = source_slot.compile_time_root orelse invariant("source slot lacks compile-time producer authority");
+    const target_identity = target.compile_time_root orelse invariant("target slot lacks compile-time producer authority");
+    if (!std.meta.eql(source_identity.module, target_identity.module) or !source_identity.root.eql(target_identity.root) or std.meta.activeTag(source_identity.role) != std.meta.activeTag(target_identity.role)) invariant("paired slots do not name the same producer role");
     return transcodePlans(allocator, source_program, .{ .plan = source_slot.compile_time_root.?.role.value.plan, .layout_idx = source_slot.layout_idx }, source_exports, source_symbol, target_program, .{ .plan = target.compile_time_root.?.role.value.plan, .layout_idx = target.layout_idx }, target_slot);
 }
 
@@ -40,9 +40,9 @@ fn transcodePlans(allocator: Allocator, source_program: *const Program.Result, s
 /// Re-encode failure status and message using the paired slots' explicit fields.
 pub fn transcodeFailure(allocator: Allocator, source_program: *const Program.Result, source_slot: Program.StaticDataValue, source_exports: []const static_data.StaticDataExport, source_symbol: SymbolId, target_program: *const Program.Result, target_slot: lir.LIR.StaticDataId) Allocator.Error![]static_data.StaticDataExport {
     const target = target_program.static_data_values.items[@intFromEnum(target_slot)];
-    const source_identity = source_slot.compile_time_root orelse invariant("source slot lacks checked root authority");
-    const target_identity = target.compile_time_root orelse invariant("target slot lacks checked root authority");
-    if (!std.meta.eql(source_identity.module, target_identity.module) or source_identity.root != target_identity.root or std.meta.activeTag(source_identity.role) != std.meta.activeTag(target_identity.role)) invariant("paired slots do not name the same checked root role");
+    const source_identity = source_slot.compile_time_root orelse invariant("source slot lacks compile-time producer authority");
+    const target_identity = target.compile_time_root orelse invariant("target slot lacks compile-time producer authority");
+    if (!std.meta.eql(source_identity.module, target_identity.module) or !source_identity.root.eql(target_identity.root) or std.meta.activeTag(source_identity.role) != std.meta.activeTag(target_identity.role)) invariant("paired slots do not name the same producer role");
     const source_fields = source_slot.compile_time_root.?.role.failure_message;
     const target_fields = target.compile_time_root.?.role.failure_message;
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -139,7 +139,7 @@ const Builder = struct {
     fn reserveAllocation(self: *Builder, key: AllocationKey, byte_count: usize, alignment_: u32, rc: bool, count: ?usize) Allocator.Error!struct { dest: Destination, fresh: bool } {
         if (self.allocations.get(key)) |dest| return .{ .dest = dest, .fresh = false };
         const offset = std.mem.alignForward(usize, (if (rc) @as(usize, 2) else 1) * self.word(), alignment_);
-        const name = try std.fmt.allocPrint(self.allocator, "roc__ctfe_{d}_{d}", .{ @intFromEnum(self.slot), self.nodes.items.len });
+        const name = try Program.staticDataNodeSymbolName(self.allocator, @intFromEnum(self.slot), @intCast(self.nodes.items.len));
         const symbol = try self.addNode(name, offset + byte_count, @intCast(@max(alignment_, self.word())));
         const dest = Destination{ .symbol = symbol, .offset = offset };
         if (rc) self.writeWord(.{ .symbol = symbol, .offset = offset - 2 * self.word() }, count orelse 0);
@@ -530,9 +530,9 @@ test "frozen root transcode maps erased worker and drop identities across target
     defer source.deinit();
     var target = try Program.Result.init(allocator, .u32);
     defer target.deinit();
-    const source_proc = try source.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(42), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst });
-    const other_proc = try target.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(71), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst });
-    const target_proc = try target.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(99), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst });
+    const source_proc = try source.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(42), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst }, .none);
+    const other_proc = try target.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(71), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst }, .none);
+    const target_proc = try target.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(99), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst }, .none);
     const str_plan: Program.ConstPlanId = @enumFromInt(source.const_plans.items.len);
     const source_layout = try source.layouts.insertErasedCallable();
     const target_layout = try target.layouts.insertErasedCallable();
@@ -583,7 +583,7 @@ fn failureSlot(allocator: Allocator, program: *Program.Result, root: @import("ch
     const idx = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
     const data = program.layouts.getLayout(idx).getStruct().idx;
     const id: lir.LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
-    try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = idx, .compile_time_root = .{ .module = .{ .bytes = @splat(0) }, .root = root, .const_locator = null, .role = .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(data, 0), .message_offset = program.layouts.getStructFieldOffsetByOriginalIndex(data, 1) } } } });
+    try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = idx, .compile_time_root = .{ .module = .{ .bytes = @splat(0) }, .root = .{ .checked = root }, .const_locator = null, .role = .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(data, 0), .message_offset = program.layouts.getStructFieldOffsetByOriginalIndex(data, 1) } } } });
     return id;
 }
 
@@ -755,7 +755,7 @@ test "frozen root transcode re-points a boxed slot at its payload across pointer
         allocator,
         &source,
         source_slot_id,
-        testRoot(source_plan, source_tag),
+        testRoot(source_plan, source_tag).shape(),
         .{ .ptr = value_bytes.ptr },
         .{},
         source_box,
@@ -803,7 +803,7 @@ fn boxedValueSlot(
         .layout_idx = box_idx,
         .compile_time_root = .{
             .module = .{},
-            .root = root,
+            .root = .{ .checked = root },
             .const_locator = null,
             .role = .{ .value = .{ .failure_slot = failure_slot, .plan = plan } },
         },

@@ -44,9 +44,10 @@
 //! A chain value with any unrecognized use is tainted (something may retain or
 //! observe it); a tainted value may end the chain (escape to the loop's
 //! result) but must not feed further chain edges, since a later unchecked
-//! append through it could write into shared memory. Lowering emits one
-//! `ref.local` alias per use, so a taint lands on the single-purpose alias
-//! and leaves the chain spine clean.
+//! append through it could write into shared memory. In addition, control-flow
+//! use ordering follows pure aliases: a consumption with another live use
+//! splits the value, so its outgoing transfers establish fresh metadata instead
+//! of forwarding a uniqueness observation made before that split.
 //!
 //! Element overwrites on a carried list thread an owned flag beside the
 //! limit: one once the list uniquely owns a non-slice allocation, measured on
@@ -69,6 +70,7 @@ const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 const body_clone = @import("body_clone.zig");
+const UseOrder = @import("use_order.zig").UseOrder;
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -193,6 +195,8 @@ const Edge = struct {
     /// Classified once for the current candidate, before validating or emitting
     /// metadata. Entry definitions supply a new list rather than chain facts.
     flow: enum { outside, carried, entry } = .outside,
+    /// False when this transfer can split a value from another live use.
+    preserves_metadata: bool = true,
 };
 
 /// Source adjacency is immutable for one scan round. A carrier is enqueued only
@@ -1007,6 +1011,117 @@ const Pass = struct {
         return false;
     }
 
+    /// Alias families describe one logical list value. A join write or a
+    /// merged definition starts a new family; an operation result also starts
+    /// a new value even when its allocation can be reused at runtime.
+    ///
+    /// Metadata can cross a consuming use only if that family has no other
+    /// live use. Otherwise every transfer out of the family re-establishes
+    /// metadata after acquiring its own unit. Looking through aliases is
+    /// essential: an old view can outlive a redefinition of its source.
+    fn classifyMetadataTransfers(self: *Pass, scan: *Scan, proc_id: LIR.LirProcSpecId) ResourceError!void {
+        const allocator = self.allocator;
+        var parents = collections.DenseMap(LocalId, LocalId).init(allocator);
+        defer parents.deinit();
+        for (scan.edges.items) |edge| {
+            if (!parents.contains(edge.source)) try parents.put(edge.source, edge.source);
+            if (!parents.contains(edge.target)) try parents.put(edge.target, edge.target);
+        }
+        const Family = struct {
+            fn root(map: *collections.DenseMap(LocalId, LocalId), local: LocalId) LocalId {
+                var result = local;
+                while (map.get(result).? != result) result = map.get(result).?;
+                var cursor = local;
+                while (cursor != result) {
+                    const next = map.get(cursor).?;
+                    map.getPtr(cursor).?.* = result;
+                    cursor = next;
+                }
+                return result;
+            }
+        };
+        for (scan.edges.items) |edge| {
+            if (edge.kind != .alias or scan.param_join.contains(edge.target) or
+                (scan.assigned_targets.get(edge.target) orelse 0) != 1) continue;
+            const source = Family.root(&parents, edge.source);
+            const target = Family.root(&parents, edge.target);
+            parents.getPtr(target).?.* = source;
+        }
+        var families = collections.DenseMap(LocalId, std.ArrayList(LocalId)).init(allocator);
+        defer {
+            var it = families.valueIterator();
+            while (it.next()) |members| members.deinit(allocator);
+            families.deinit();
+        }
+        // Resolve before iterating so path compression cannot invalidate keys.
+        var locals = parents.keyIterator();
+        while (locals.next()) |local| {
+            const root = Family.root(&parents, local.*);
+            const entry = try families.getOrPut(root);
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            try entry.value_ptr.append(allocator, local.*);
+        }
+        var order = try UseOrder.initFromStore(allocator, self.store, proc_id);
+        defer order.deinit();
+        var split = collections.DenseMap(LocalId, void).init(allocator);
+        defer split.deinit();
+        var consumes = collections.DenseMap(CFStmtId, void).init(allocator);
+        defer consumes.deinit();
+        var occurrences = collections.DenseMap(CFStmtId, usize).init(allocator);
+        defer occurrences.deinit();
+        var groups = families.iterator();
+        while (groups.next()) |group| {
+            consumes.clearRetainingCapacity();
+            occurrences.clearRetainingCapacity();
+            for (group.value_ptr.items) |member| {
+                for (order.topology.reads_of.row(member)) |raw| {
+                    const stmt_id: CFStmtId = @enumFromInt(raw);
+                    const stmt = self.store.getCFStmt(stmt_id);
+                    // A transparent alias names the same value; account for
+                    // its actual uses, including ones after its source dies.
+                    if (stmt == .assign_ref and stmt.assign_ref.op == .local and
+                        parents.contains(stmt.assign_ref.target) and
+                        Family.root(&parents, stmt.assign_ref.target) == group.key_ptr.*) continue;
+                    const occurrence = try occurrences.getOrPut(stmt_id);
+                    if (!occurrence.found_existing) occurrence.value_ptr.* = 0;
+                    occurrence.value_ptr.* += 1;
+                    if (stmt == .assign_low_level) {
+                        const op = stmt.assign_low_level.op;
+                        if (op == .list_len or op == .list_get_unsafe or
+                            op == .list_slack_unique or op == .list_owned_unique) continue;
+                    }
+                    try consumes.put(stmt_id, {});
+                }
+            }
+            var shared = false;
+            var consume_it = consumes.keyIterator();
+            while (consume_it.next()) |stmt| {
+                if (occurrences.get(stmt.*).? > 1) {
+                    shared = true;
+                    break;
+                }
+            }
+            // Group by member so the backward reachability marks are built
+            // once per local, then reused for all its consumption queries.
+            outer: for (group.value_ptr.items) |member| {
+                if (shared) break;
+                consume_it = consumes.keyIterator();
+                while (consume_it.next()) |stmt| {
+                    if (try order.usesAfter(@intFromEnum(stmt.*), member)) {
+                        shared = true;
+                        break :outer;
+                    }
+                }
+            }
+            if (shared) try split.put(group.key_ptr.*, {});
+        }
+        for (scan.edges.items) |*edge| {
+            const root = Family.root(&parents, edge.source);
+            const same_value_alias = edge.kind == .alias and Family.root(&parents, edge.target) == root;
+            edge.preserves_metadata = same_value_alias or !split.contains(root);
+        }
+    }
+
     // Per-parameter qualification and rewrite
 
     fn transformProc(self: *Pass, proc_id: LIR.LirProcSpecId) ResourceError!void {
@@ -1046,6 +1161,7 @@ const Pass = struct {
             try self.scanProc(self.store.getProcSpec(proc_id).body.?, &scan);
             max_join_id = @max(max_join_id, scan.max_join_id);
             if (scan.edges.items.len == 0) break;
+            try self.classifyMetadataTransfers(&scan, proc_id);
             var edge_index = try EdgeIndex.init(allocator, scan.edges.items);
             defer edge_index.deinit(allocator);
             outer: for (scan.joins.items) |info| {
@@ -1105,7 +1221,11 @@ const Pass = struct {
         try chain_params.put(list_param, loop_stmt);
 
         for (scan.edges.items) |*edge| {
-            edge.flow = if (!carriers.contains(edge.target)) .outside else if (carriers.contains(edge.source)) .carried else .entry;
+            edge.flow = if (!carriers.contains(edge.target)) .outside else if (carriers.contains(edge.source) and edge.preserves_metadata) .carried else .entry;
+            if (edge.flow != .outside and edge.kind == .param_write) {
+                const owner = scan.param_join.get(edge.target) orelse return false;
+                try chain_params.put(edge.target, owner);
+            }
             if (edge.flow != .carried) continue;
             switch (edge.kind) {
                 .append_call, .range_append => rewrite_site_count += 1,
@@ -1113,10 +1233,7 @@ const Pass = struct {
                     rewrite_site_count += 1;
                     has_sets = true;
                 },
-                .param_write => {
-                    const owner = scan.param_join.get(edge.target) orelse return false;
-                    try chain_params.put(edge.target, owner);
-                },
+                .param_write => {},
                 .alias, .refresh_op => {},
             }
         }
@@ -1210,6 +1327,7 @@ const Pass = struct {
         limit_target: LocalId,
         next: CFStmtId,
         new_locals: *std.ArrayList(LocalId),
+        origin: LIR.StmtOrigin,
     ) ResourceError!CFStmtId {
         const spare = try self.freshLocal(.u64, new_locals);
         const len = try self.freshLocal(.u64, new_locals);
@@ -1219,21 +1337,21 @@ const Pass = struct {
             .rc_effect = LowLevelOp.num_int_add_wrap.rcEffect(),
             .args = try self.store.addLocalSpan(&.{ len, spare }),
             .next = next,
-        } });
+        } }, origin);
         const measure_len = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = len,
             .op = .list_len,
             .rc_effect = LowLevelOp.list_len.rcEffect(),
             .args = try self.store.addLocalSpan(&.{list}),
             .next = add,
-        } });
+        } }, origin);
         return try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = spare,
             .op = .list_slack_unique,
             .rc_effect = LowLevelOp.list_slack_unique.rcEffect(),
             .args = try self.store.addLocalSpan(&.{list}),
             .next = measure_len,
-        } });
+        } }, origin);
     }
 
     fn freshLocal(self: *Pass, layout_idx: layout_mod.Idx, new_locals: *std.ArrayList(LocalId)) ResourceError!LocalId {
@@ -1244,7 +1362,7 @@ const Pass = struct {
 
     /// Observe an incoming ownership unit after its consuming definition. Both
     /// measurements describe this list, including its current slice encoding.
-    fn seedMetadata(self: *Pass, list: LocalId, limit: LocalId, owned: ?LocalId, next: CFStmtId, new_locals: *std.ArrayList(LocalId)) ResourceError!CFStmtId {
+    fn seedMetadata(self: *Pass, list: LocalId, limit: LocalId, owned: ?LocalId, next: CFStmtId, new_locals: *std.ArrayList(LocalId), origin: LIR.StmtOrigin) ResourceError!CFStmtId {
         var continuation = next;
         if (owned) |flag| {
             try self.noteOwnedDef(flag, .measured);
@@ -1254,9 +1372,9 @@ const Pass = struct {
                 .rc_effect = LowLevelOp.list_owned_unique.rcEffect(),
                 .args = try self.store.addLocalSpan(&.{list}),
                 .next = continuation,
-            } });
+            } }, origin);
         }
-        return self.seedLimit(list, limit, continuation, new_locals);
+        return self.seedLimit(list, limit, continuation, new_locals, origin);
     }
 
     fn apply(
@@ -1357,6 +1475,7 @@ const Pass = struct {
                 if (edge.flow == .outside or edge.kind == .param_write) continue;
                 if (slack_of.contains(edge.target) and !shared_slack.contains(edge.target)) continue;
                 if (rewritten.contains(edge.stmt)) continue;
+                const origin = promoteOrigin(self.store.stmtOrigin(edge.stmt));
                 if (edge.flow == .entry) {
                     const limit = shared_slack.get(edge.target) orelse try self.freshLocal(.u64, new_locals);
                     const owned = try self.ownedOutFor(edge.target, has_sets, &shared_owned, new_locals);
@@ -1367,18 +1486,18 @@ const Pass = struct {
                         .refresh_op, .range_append, .set_op => stmt.assign_low_level.next,
                         .param_write => unreachable,
                     };
-                    const seed = try self.seedMetadata(edge.target, limit, owned, next, new_locals);
+                    const seed = try self.seedMetadata(edge.target, limit, owned, next, new_locals, origin);
                     switch (edge.kind) {
                         // A plain alias can still borrow from an outside holder.
                         // Transfer ownership before observing its refcount, so
                         // ARC preserves any other live uses before the query.
-                        .alias => self.store.getCFStmtPtr(edge.stmt).* = .{ .assign_low_level = .{
+                        .alias => try self.store.replaceCFStmt(edge.stmt, .{ .assign_low_level = .{
                             .target = edge.target,
                             .op = .list_map_prepare_reuse,
                             .rc_effect = LowLevelOp.list_map_prepare_reuse.rcEffect(),
                             .args = try self.store.addLocalSpan(&.{edge.source}),
                             .next = seed,
-                        } },
+                        } }, origin),
                         .append_call => self.store.getCFStmtPtr(edge.stmt).assign_call.next = seed,
                         .refresh_op, .range_append, .set_op => self.store.getCFStmtPtr(edge.stmt).assign_low_level.next = seed,
                         .param_write => unreachable,
@@ -1406,13 +1525,13 @@ const Pass = struct {
                                     .target = flag,
                                     .op = .{ .local = source_owned },
                                     .next = next,
-                                } });
+                                } }, origin);
                             }
                             const copy = try self.store.addCFStmt(.{ .assign_ref = .{
                                 .target = sx,
                                 .op = .{ .local = source_slack },
                                 .next = next,
-                            } });
+                            } }, origin);
                             self.store.getCFStmtPtr(edge.stmt).assign_ref.next = copy;
                         } else {
                             try slack_of.put(edge.target, source_slack);
@@ -1464,10 +1583,10 @@ const Pass = struct {
                                 .target = flag,
                                 .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
                                 .next = next,
-                            } });
+                            } }, origin);
                             try owned_of.put(edge.target, flag);
                         }
-                        const recompute = try self.seedLimit(edge.target, slack_out, next, new_locals);
+                        const recompute = try self.seedLimit(edge.target, slack_out, next, new_locals, origin);
                         self.store.getCFStmtPtr(edge.stmt).assign_low_level.next = recompute;
                         try slack_of.put(edge.target, slack_out);
                         resolving = true;
@@ -1498,11 +1617,13 @@ const Pass = struct {
             if (!chain_params.contains(edge.target)) continue;
             const slack_param = slack_params.get(edge.target).?;
             var original = self.store.getCFStmt(edge.stmt).set_local;
+            const original_origin = self.store.stmtOrigin(edge.stmt);
+            const origin = promoteOrigin(original_origin);
             if (edge.flow == .carried) {
                 // Resolved by the fixpoint: every carrier's slack derives from
                 // a chain parameter.
                 const slack = slack_of.get(edge.source).?;
-                var forward = try self.store.addCFStmt(.{ .set_local = original });
+                var forward = try self.store.addCFStmt(.{ .set_local = original }, original_origin);
                 if (has_sets) {
                     const owned_param = owned_params.get(edge.target).?;
                     const owned = owned_of.get(edge.source).?;
@@ -1513,14 +1634,14 @@ const Pass = struct {
                         .value = owned,
                         .mode = .initialize_join_param,
                         .next = forward,
-                    } });
+                    } }, origin);
                 }
-                self.store.getCFStmtPtr(edge.stmt).* = .{ .set_local = .{
+                try self.store.replaceCFStmt(edge.stmt, .{ .set_local = .{
                     .target = slack_param,
                     .value = slack,
                     .mode = .initialize_join_param,
                     .next = forward,
-                } };
+                } }, origin);
             } else {
                 std.debug.assert(edge.flow == .entry);
                 // Entry edge: acquire the incoming ownership unit before
@@ -1528,7 +1649,7 @@ const Pass = struct {
                 const incoming = try self.freshLocal(self.store.getLocal(edge.source).layout_idx, new_locals);
                 original.value = incoming;
                 const measured = try self.freshLocal(.u64, new_locals);
-                var forward = try self.store.addCFStmt(.{ .set_local = original });
+                var forward = try self.store.addCFStmt(.{ .set_local = original }, original_origin);
                 var owned: ?LocalId = null;
                 if (has_sets) {
                     const measured_owned = try self.freshLocal(.u64, new_locals);
@@ -1541,22 +1662,22 @@ const Pass = struct {
                         .value = measured_owned,
                         .mode = .initialize_join_param,
                         .next = forward,
-                    } });
+                    } }, origin);
                 }
                 const write_slack = try self.store.addCFStmt(.{ .set_local = .{
                     .target = slack_param,
                     .value = measured,
                     .mode = .initialize_join_param,
                     .next = forward,
-                } });
-                const seed = try self.seedMetadata(incoming, measured, owned, write_slack, new_locals);
-                self.store.getCFStmtPtr(edge.stmt).* = .{ .assign_low_level = .{
+                } }, origin);
+                const seed = try self.seedMetadata(incoming, measured, owned, write_slack, new_locals, origin);
+                try self.store.replaceCFStmt(edge.stmt, .{ .assign_low_level = .{
                     .target = incoming,
                     .op = .list_map_prepare_reuse,
                     .rc_effect = LowLevelOp.list_map_prepare_reuse.rcEffect(),
                     .args = try self.store.addLocalSpan(&.{edge.source}),
                     .next = seed,
-                } };
+                } }, origin);
             }
         }
     }
@@ -1589,6 +1710,7 @@ const Pass = struct {
         slack_out: LocalId,
         max_join_id: *u32,
     ) ResourceError!void {
+        const origin = promoteOrigin(self.store.stmtOrigin(edge.stmt));
         const call = self.store.getCFStmt(edge.stmt).assign_low_level;
 
         const join_id: LIR.JoinPointId = @enumFromInt(max_join_id.*);
@@ -1600,31 +1722,31 @@ const Pass = struct {
             .target = slack_out,
             .op = .{ .local = slack_in },
             .next = call.next,
-        } });
+        } }, origin);
         try self.noteOwnedDef(owned_out, .one);
         const owned_lit = try self.store.addCFStmt(.{ .assign_literal = .{
             .target = owned_out,
             .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
             .next = slack_copy,
-        } });
+        } }, origin);
 
-        const hot_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        const hot_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } }, origin);
         const hot_set = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = call.target,
             .op = .list_set_in_place_unsafe,
             .rc_effect = LowLevelOp.list_set_in_place_unsafe.rcEffect(),
             .args = call.args,
             .next = hot_jump,
-        } });
+        } }, origin);
 
-        const cold_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        const cold_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } }, origin);
         const cold_set = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = call.target,
             .op = call.op,
             .rc_effect = call.rc_effect,
             .args = call.args,
             .next = cold_jump,
-        } });
+        } }, origin);
 
         const branches = try self.store.addCFSwitchBranches(&.{.{ .value = 1, .body = hot_set }});
         const dispatch = try self.store.addCFStmt(.{ .switch_stmt = .{
@@ -1633,15 +1755,15 @@ const Pass = struct {
             .default_branch = cold_set,
             .default_is_cold = true,
             .continuation = null,
-        } });
+        } }, origin);
         try self.set_dispatches.put(dispatch, {});
 
-        self.store.getCFStmtPtr(edge.stmt).* = .{ .join = .{
+        try self.store.replaceCFStmt(edge.stmt, .{ .join = .{
             .id = join_id,
             .params = try self.store.addLocalSpan(&.{}),
             .body = owned_lit,
             .remainder = dispatch,
-        } };
+        } }, origin);
     }
 
     /// Rewrite `target = append(list, elem); next` into the slack-guarded
@@ -1655,6 +1777,7 @@ const Pass = struct {
         max_join_id: *u32,
         new_locals: *std.ArrayList(LocalId),
     ) ResourceError!void {
+        const origin = promoteOrigin(self.store.stmtOrigin(edge.stmt));
         const call = self.store.getCFStmt(edge.stmt).assign_call;
         const args = self.store.getLocalSpan(call.args);
         const list_arg = GuardedList.at(args, 0);
@@ -1678,58 +1801,58 @@ const Pass = struct {
             .target = slack_out,
             .op = .{ .local = merged_slack },
             .next = call.next,
-        } });
+        } }, origin);
         const unsafe_append = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = call.target,
             .op = .list_append_unsafe,
             .rc_effect = LowLevelOp.list_append_unsafe.rcEffect(),
             .args = try self.store.addLocalSpan(&.{ merged_list, elem_arg }),
             .next = forward_limit,
-        } });
+        } }, origin);
 
         // Fast path: hand the list and its remaining slack to the join.
-        const fast_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        const fast_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } }, origin);
         const fast_set_slack = try self.store.addCFStmt(.{ .set_local = .{
             .target = merged_slack,
             .value = slack_in,
             .mode = .initialize_join_param,
             .next = fast_jump,
-        } });
+        } }, origin);
         const fast_set_list = try self.store.addCFStmt(.{ .set_local = .{
             .target = merged_list,
             .value = list_arg,
             .mode = .initialize_join_param,
             .next = fast_set_slack,
-        } });
+        } }, origin);
 
         // Grow path: the checked reserve uniquifies and grows, then the slack
         // is measured fresh.
-        const grow_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        const grow_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } }, origin);
         const grow_set_slack = try self.store.addCFStmt(.{ .set_local = .{
             .target = merged_slack,
             .value = grown_slack,
             .mode = .initialize_join_param,
             .next = grow_jump,
-        } });
+        } }, origin);
         const grow_set_list = try self.store.addCFStmt(.{ .set_local = .{
             .target = merged_list,
             .value = grown,
             .mode = .initialize_join_param,
             .next = grow_set_slack,
-        } });
-        const grow_measure = try self.seedLimit(grown, grown_slack, grow_set_list, new_locals);
+        } }, origin);
+        const grow_measure = try self.seedLimit(grown, grown_slack, grow_set_list, new_locals, origin);
         const grow_reserve = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = grown,
             .op = .list_reserve,
             .rc_effect = LowLevelOp.list_reserve.rcEffect(),
             .args = try self.store.addLocalSpan(&.{ list_arg, grow_spare }),
             .next = grow_measure,
-        } });
+        } }, origin);
         const grow_spare_lit = try self.store.addCFStmt(.{ .assign_literal = .{
             .target = grow_spare,
             .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
             .next = grow_reserve,
-        } });
+        } }, origin);
 
         // Dispatch: a list filled to its limit takes the cold grow path.
         const branches = try self.store.addCFSwitchBranches(&.{.{ .value = 0, .body = fast_set_list }});
@@ -1739,21 +1862,21 @@ const Pass = struct {
             .default_branch = grow_spare_lit,
             .default_is_cold = true,
             .continuation = null,
-        } });
+        } }, origin);
         const compare = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = is_full,
             .op = .num_is_eq,
             .rc_effect = LowLevelOp.num_is_eq.rcEffect(),
             .args = try self.store.addLocalSpan(&.{ cur_len, slack_in }),
             .next = dispatch,
-        } });
+        } }, origin);
         const measure_len = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = cur_len,
             .op = .list_len,
             .rc_effect = LowLevelOp.list_len.rcEffect(),
             .args = try self.store.addLocalSpan(&.{list_arg}),
             .next = compare,
-        } });
+        } }, origin);
 
         // The call statement becomes the whole construct in place.
         var body = unsafe_append;
@@ -1764,14 +1887,14 @@ const Pass = struct {
                 .target = flag,
                 .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
                 .next = body,
-            } });
+            } }, origin);
         }
-        self.store.getCFStmtPtr(edge.stmt).* = .{ .join = .{
+        try self.store.replaceCFStmt(edge.stmt, .{ .join = .{
             .id = join_id,
             .params = try self.store.addLocalSpan(&.{ merged_list, merged_slack }),
             .body = body,
             .remainder = measure_len,
-        } };
+        } }, origin);
     }
 
     /// Rewrite `target = list_append_range_within(list, start, count); next`
@@ -1792,6 +1915,7 @@ const Pass = struct {
         max_join_id: *u32,
         new_locals: *std.ArrayList(LocalId),
     ) ResourceError!void {
+        const origin = promoteOrigin(self.store.stmtOrigin(edge.stmt));
         const call = self.store.getCFStmt(edge.stmt).assign_low_level;
         const args = self.store.getLocalSpan(call.args);
         const list_arg = GuardedList.at(args, 0);
@@ -1814,30 +1938,30 @@ const Pass = struct {
 
         // Hot path: the unchecked append bumps the length by the count, so
         // the limit passes through untouched.
-        const hot_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        const hot_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } }, origin);
         const hot_forward = try self.store.addCFStmt(.{ .assign_ref = .{
             .target = slack_out,
             .op = .{ .local = slack_in },
             .next = hot_jump,
-        } });
+        } }, origin);
         const hot_append = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = call.target,
             .op = .list_append_range_within_unsafe,
             .rc_effect = LowLevelOp.list_append_range_within_unsafe.rcEffect(),
             .args = call.args,
             .next = hot_forward,
-        } });
+        } }, origin);
 
         // Cold path: the original checked call, then a fresh measurement.
-        const cold_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } });
-        const cold_measure = try self.seedLimit(call.target, slack_out, cold_jump, new_locals);
+        const cold_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } }, origin);
+        const cold_measure = try self.seedLimit(call.target, slack_out, cold_jump, new_locals, origin);
         const cold_append = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = call.target,
             .op = call.op,
             .rc_effect = call.rc_effect,
             .args = call.args,
             .next = cold_measure,
-        } });
+        } }, origin);
 
         // Dispatch: only `fits == 1` takes the unchecked path.
         const branches = try self.store.addCFSwitchBranches(&.{.{ .value = 1, .body = hot_append }});
@@ -1847,35 +1971,35 @@ const Pass = struct {
             .default_branch = cold_append,
             .default_is_cold = true,
             .continuation = null,
-        } });
+        } }, origin);
         const combine = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = fits,
             .op = .num_bitwise_and,
             .rc_effect = LowLevelOp.num_bitwise_and.rcEffect(),
             .args = try self.store.addLocalSpan(&.{ enough_for_slop, enough_for_count }),
             .next = dispatch,
-        } });
+        } }, origin);
         const compare_count = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = enough_for_count,
             .op = .num_is_gte,
             .rc_effect = LowLevelOp.num_is_gte.rcEffect(),
             .args = try self.store.addLocalSpan(&.{ adjusted, count_arg }),
             .next = combine,
-        } });
+        } }, origin);
         const subtract_slop = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = adjusted,
             .op = .num_int_sub_wrap,
             .rc_effect = LowLevelOp.num_int_sub_wrap.rcEffect(),
             .args = try self.store.addLocalSpan(&.{ spare, slop }),
             .next = compare_count,
-        } });
+        } }, origin);
         const compare_slop = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = enough_for_slop,
             .op = .num_is_gte,
             .rc_effect = LowLevelOp.num_is_gte.rcEffect(),
             .args = try self.store.addLocalSpan(&.{ spare, slop }),
             .next = subtract_slop,
-        } });
+        } }, origin);
         // The chain invariant keeps the length at most the limit, so this
         // difference cannot wrap.
         const measure_spare = try self.store.addCFStmt(.{ .assign_low_level = .{
@@ -1884,19 +2008,19 @@ const Pass = struct {
             .rc_effect = LowLevelOp.num_int_sub_wrap.rcEffect(),
             .args = try self.store.addLocalSpan(&.{ slack_in, cur_len }),
             .next = compare_slop,
-        } });
+        } }, origin);
         const measure_len = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = cur_len,
             .op = .list_len,
             .rc_effect = LowLevelOp.list_len.rcEffect(),
             .args = try self.store.addLocalSpan(&.{list_arg}),
             .next = measure_spare,
-        } });
+        } }, origin);
         const slop_lit = try self.store.addCFStmt(.{ .assign_literal = .{
             .target = slop,
             .value = .{ .i64_literal = .{ .value = @intCast(slop_elements), .layout_idx = .u64 } },
             .next = measure_len,
-        } });
+        } }, origin);
 
         // The call statement becomes the whole construct in place.
         var body = call.next;
@@ -1907,14 +2031,14 @@ const Pass = struct {
                 .target = flag,
                 .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
                 .next = body,
-            } });
+            } }, origin);
         }
-        self.store.getCFStmtPtr(edge.stmt).* = .{ .join = .{
+        try self.store.replaceCFStmt(edge.stmt, .{ .join = .{
             .id = join_id,
             .params = try self.store.addLocalSpan(&.{}),
             .body = body,
             .remainder = slop_lit,
-        } };
+        } }, origin);
     }
 
     // Loop versioning
@@ -2056,6 +2180,7 @@ const Pass = struct {
     /// Split one promoted loop into a head that dispatches on its owned
     /// flags and a nested unique-only copy of its body.
     fn versionLoop(self: *Pass, proc_body: CFStmtId, loop_stmt: CFStmtId, max_join_id: *u32, new_locals: *std.ArrayList(LocalId)) ResourceError!void {
+        const origin = promoteOrigin(self.store.stmtOrigin(loop_stmt));
         const allocator = self.allocator;
         const join = self.store.getCFStmt(loop_stmt).join;
         const version = self.loop_versions.getPtr(loop_stmt).?;
@@ -2154,13 +2279,13 @@ const Pass = struct {
         const body_copy = try cloner.cloneStmt(join.body);
         try new_locals.appendSlice(allocator, cloner.new_locals.items);
 
-        const back = try self.store.addCFStmt(.{ .jump = .{ .target = unique_id } });
+        const back = try self.store.addCFStmt(.{ .jump = .{ .target = unique_id } }, origin);
         const unique_loop = try self.store.addCFStmt(.{ .join = .{
             .id = unique_id,
             .params = join.params,
             .body = body_copy,
             .remainder = back,
-        } });
+        } }, origin);
 
         // Dispatch on the conjunction of the flags; a shared entry takes the
         // cold arm, which is the body as promoted.
@@ -2175,7 +2300,7 @@ const Pass = struct {
             .default_branch = join.body,
             .default_is_cold = true,
             .continuation = null,
-        } });
+        } }, origin);
         var index = combined.items.len;
         while (index > 0) {
             index -= 1;
@@ -2186,7 +2311,7 @@ const Pass = struct {
                 .rc_effect = LowLevelOp.num_bitwise_and.rcEffect(),
                 .args = try self.store.addLocalSpan(&.{ left, flags[index + 1] }),
                 .next = head,
-            } });
+            } }, origin);
         }
         self.store.getCFStmtPtr(loop_stmt).join.body = head;
     }
@@ -2195,6 +2320,13 @@ const Pass = struct {
 /// Clones a promoted loop body into its unique-only copy: nested joins get
 /// fresh ids, back edges that keep the flags at one return to the copy, and
 /// set-site dispatches whose flag is one collapse to the unchecked store.
+/// Origin of a statement this pass produces for, or in place of, `anchor`.
+fn promoteOrigin(anchor: LIR.StmtOrigin) LIR.StmtOrigin {
+    var origin = anchor;
+    origin.kind = .loop_append_promote;
+    return origin;
+}
+
 const VersionRewriter = struct {
     loop_id: LIR.JoinPointId,
     unique_id: LIR.JoinPointId,
@@ -2210,11 +2342,11 @@ const VersionRewriter = struct {
         return !self.renamable.contains(local);
     }
 
-    pub fn cloneRet(_: *VersionRewriter, cloner: anytype, value: LocalId) ResourceError!CFStmtId {
-        return try cloner.store.addCFStmt(.{ .ret = .{ .value = try cloner.mapLocal(value) } });
+    pub fn cloneRet(_: *VersionRewriter, cloner: anytype, value: LocalId, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
+        return try cloner.store.addCFStmt(.{ .ret = .{ .value = try cloner.mapLocal(value) } }, origin);
     }
 
-    pub fn interceptStmt(self: *VersionRewriter, cloner: anytype, old_id: CFStmtId, stmt: LIR.CFStmt) ResourceError!?CFStmtId {
+    pub fn interceptStmt(self: *VersionRewriter, cloner: anytype, old_id: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) ResourceError!?CFStmtId {
         switch (stmt) {
             .join => |s| {
                 const fresh: LIR.JoinPointId = @enumFromInt(self.max_join_id.*);
@@ -2231,14 +2363,14 @@ const VersionRewriter = struct {
                     .maybe_uninitialized_condition_masks = s.maybe_uninitialized_condition_masks,
                     .body = body,
                     .remainder = remainder,
-                } });
+                } }, origin);
             },
             .jump => |s| {
                 const target = if (s.target == self.loop_id)
                     (if (self.retarget.contains(old_id)) self.unique_id else self.loop_id)
                 else
                     (self.join_map.get(s.target) orelse s.target);
-                return try cloner.store.addCFStmt(.{ .jump = .{ .target = target } });
+                return try cloner.store.addCFStmt(.{ .jump = .{ .target = target } }, origin);
             },
             .switch_stmt => |s| {
                 if (!self.fold.contains(old_id)) return null;
@@ -2297,12 +2429,12 @@ const VersionRewriter = struct {
 const testing = std.testing;
 
 fn testEdge(store: *LirStore, source: LocalId, target: LocalId) Allocator.Error!Edge {
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = target } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = target } }, .test_fixture);
     const stmt = try store.addCFStmt(.{ .assign_ref = .{
         .target = target,
         .op = .{ .local = source },
         .next = ret,
-    } });
+    } }, .test_fixture);
     return .{ .kind = .alias, .stmt = stmt, .source = source, .target = target };
 }
 
@@ -2385,19 +2517,19 @@ test "promote loop scan counts independent loops and remainder-only entries once
     var f = try PromoteTest.init(testing.allocator);
     defer f.deinit();
     const value = try f.store.addLocal(.{ .layout_idx = .u8 });
-    const ret = try f.store.addCFStmt(.{ .ret = .{ .value = value } });
+    const ret = try f.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     try expectLoopScan(&f, ret, 1, 0, 0);
     var root = ret;
     const n = 128;
     for (0..n) |_| {
         const id = f.freshJoinPointId();
-        const jump = try f.store.addCFStmt(.{ .jump = .{ .target = id } });
+        const jump = try f.store.addCFStmt(.{ .jump = .{ .target = id } }, .test_fixture);
         root = try f.store.addCFStmt(.{ .join = .{
             .id = id,
             .params = LIR.LocalSpan.empty(),
             .body = jump,
             .remainder = root,
-        } });
+        } }, .test_fixture);
     }
     try expectLoopScan(&f, root, 2 * n + 1, n, n);
 
@@ -2405,13 +2537,13 @@ test "promote loop scan counts independent loops and remainder-only entries once
     root = ret;
     for (0..n) |_| {
         const id = f.freshJoinPointId();
-        const jump = try f.store.addCFStmt(.{ .jump = .{ .target = id } });
+        const jump = try f.store.addCFStmt(.{ .jump = .{ .target = id } }, .test_fixture);
         root = try f.store.addCFStmt(.{ .join = .{
             .id = id,
             .params = LIR.LocalSpan.empty(),
             .body = root,
             .remainder = jump,
-        } });
+        } }, .test_fixture);
     }
     try expectLoopScan(&f, root, 2 * n + 1, n, 0);
 }
@@ -2420,42 +2552,42 @@ test "promote loop scan counts nested loops with shared continuations once" {
     var f = try PromoteTest.init(testing.allocator);
     defer f.deinit();
     const value = try f.store.addLocal(.{ .layout_idx = .u8 });
-    var root = try f.store.addCFStmt(.{ .ret = .{ .value = value } });
+    var root = try f.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const n = 128;
     for (0..n) |_| {
         const id = f.freshJoinPointId();
-        const jump = try f.store.addCFStmt(.{ .jump = .{ .target = id } });
+        const jump = try f.store.addCFStmt(.{ .jump = .{ .target = id } }, .test_fixture);
         const body = try f.store.addCFStmt(.{ .switch_stmt = .{
             .cond = value,
             .branches = try f.store.addCFSwitchBranches(&.{.{ .value = 1, .body = jump }}),
             .default_branch = root,
             .continuation = jump,
-        } });
+        } }, .test_fixture);
         root = try f.store.addCFStmt(.{ .join = .{
             .id = id,
             .params = LIR.LocalSpan.empty(),
             .body = body,
             .remainder = jump,
-        } });
+        } }, .test_fixture);
     }
     try expectLoopScan(&f, root, 3 * n + 1, n, n);
 
     // The inner join's body and remainder share an outer back edge.
     const outer_id = f.freshJoinPointId();
     const inner_id = f.freshJoinPointId();
-    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = outer_id } });
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = outer_id } }, .test_fixture);
     const inner = try f.store.addCFStmt(.{ .join = .{
         .id = inner_id,
         .params = LIR.LocalSpan.empty(),
         .body = jump,
         .remainder = jump,
-    } });
+    } }, .test_fixture);
     const outer = try f.store.addCFStmt(.{ .join = .{
         .id = outer_id,
         .params = LIR.LocalSpan.empty(),
         .body = inner,
         .remainder = jump,
-    } });
+    } }, .test_fixture);
     try expectLoopScan(&f, outer, 3, 1, 1);
 }
 
@@ -2497,33 +2629,33 @@ const PromoteTest = struct {
         const reserved = try store.addLocal(.{ .layout_idx = self.list });
         const appended = try store.addLocal(.{ .layout_idx = self.list });
 
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = appended } });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = appended } }, .test_fixture);
         const unsafe_append = try store.addCFStmt(.{ .assign_low_level = .{
             .target = appended,
             .op = .list_append_unsafe,
             .rc_effect = LowLevelOp.list_append_unsafe.rcEffect(),
             .args = try store.addLocalSpan(&.{ reserved, elem_arg }),
             .next = ret,
-        } });
+        } }, .test_fixture);
         const reserve = try store.addCFStmt(.{ .assign_low_level = .{
             .target = reserved,
             .op = .list_reserve,
             .rc_effect = LowLevelOp.list_reserve.rcEffect(),
             .args = try store.addLocalSpan(&.{ list_arg, spare }),
             .next = unsafe_append,
-        } });
+        } }, .test_fixture);
         const spare_lit = try store.addCFStmt(.{ .assign_literal = .{
             .target = spare,
             .value = .{ .i128_literal = .{ .value = 1, .layout_idx = .u64 } },
             .next = reserve,
-        } });
+        } }, .test_fixture);
         return try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(99),
             .args = try store.addLocalSpan(&.{ list_arg, elem_arg }),
             .body = spare_lit,
             .ret_layout = self.list,
-        });
+        }, .none);
     }
 };
 
@@ -2539,7 +2671,7 @@ test "promote prepared summaries are frozen across long forward helper chains an
             .args = LIR.LocalSpan.empty(),
             .body = null,
             .ret_layout = f.list,
-        });
+        }, .none);
     }
     const helper = try f.addAppendHelper();
     const args = store.getProcSpec(helper).args;
@@ -2550,18 +2682,18 @@ test "promote prepared summaries are frozen across long forward helper chains an
             .target = list_arg,
             .op = .{ .local = list_arg },
             .next = helper_body,
-        } });
+        } }, .test_fixture);
     }
     store.getProcSpecPtr(helper).body = helper_body;
     for (wrappers, 0..) |proc, i| {
         const result = try store.addLocal(.{ .layout_idx = f.list });
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
         const call = try store.addCFStmt(.{ .assign_call = .{
             .target = result,
             .proc = if (i + 1 < wrappers.len) wrappers[i + 1] else helper,
             .args = args,
             .next = ret,
-        } });
+        } }, .test_fixture);
         store.getProcSpecPtr(proc).args = args;
         store.getProcSpecPtr(proc).body = call;
     }
@@ -2596,15 +2728,15 @@ test "promote summaries reject ignored recursive calls in either procedure order
             .proc = b,
             .args = args,
             .next = f.store.getProcSpec(a).body.?,
-        } });
+        } }, .test_fixture);
         f.store.getProcSpecPtr(a).body = body;
-        const ret = try f.store.addCFStmt(.{ .ret = .{ .value = ignored } });
+        const ret = try f.store.addCFStmt(.{ .ret = .{ .value = ignored } }, .test_fixture);
         const recursive = try f.store.addCFStmt(.{ .assign_call = .{
             .target = ignored,
             .proc = a,
             .args = args,
             .next = ret,
-        } });
+        } }, .test_fixture);
         f.store.getProcSpecPtr(b).args = args;
         f.store.getProcSpecPtr(b).body = recursive;
         var prepared = try prepareCallees(&f.store, testing.allocator);
@@ -2629,7 +2761,7 @@ test "promote summaries reject discarded operations before checked append" {
                 .rc_effect = low_level.rcEffect(),
                 .args = args,
                 .next = next,
-            } })
+            } }, .test_fixture)
         else blk: {
             const unknown = try f.store.addProcSpec(.{
                 .identity = LIR.ProcIdentity.forTest(@intCast(f.store.procSpecCount())),
@@ -2641,13 +2773,13 @@ test "promote summaries reject discarded operations before checked append" {
                     .symbol = try f.store.insertString("roc_test_ignored"),
                     .dispatch_index = 0,
                 },
-            });
+            }, .none);
             break :blk try f.store.addCFStmt(.{ .assign_call = .{
                 .target = ignored,
                 .proc = unknown,
                 .args = args,
                 .next = next,
-            } });
+            } }, .test_fixture);
         };
         f.store.getProcSpecPtr(helper).body = prefix;
         var prepared = try prepareCallees(&f.store, testing.allocator);
@@ -2663,28 +2795,28 @@ test "promote summaries preserve direct reserve and unsafe append wrappers" {
         const helper = try f.addAppendHelper();
         const args = f.store.getProcSpec(helper).args;
         const result = try f.store.addLocal(.{ .layout_idx = f.list });
-        const ret = try f.store.addCFStmt(.{ .ret = .{ .value = result } });
+        const ret = try f.store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
         const body = try f.store.addCFStmt(.{ .assign_low_level = .{
             .target = result,
             .op = op,
             .rc_effect = op.rcEffect(),
             .args = args,
             .next = ret,
-        } });
+        } }, .test_fixture);
         f.store.getProcSpecPtr(helper).body = body;
         const wrapper_body = try f.store.addCFStmt(.{ .assign_call = .{
             .target = result,
             .proc = helper,
             .args = args,
             .next = ret,
-        } });
+        } }, .test_fixture);
         const wrapper = try f.store.addProcSpec(.{
             .identity = LIR.ProcIdentity.forTest(@intCast(f.store.procSpecCount())),
             .name = f.store.freshSyntheticSymbol(),
             .args = args,
             .body = wrapper_body,
             .ret_layout = f.list,
-        });
+        }, .none);
         var prepared = try prepareCallees(&f.store, testing.allocator);
         defer prepared.deinit();
         const expected: ProcKind = if (op == .list_reserve) .reserve else .append_unsafe;
@@ -2714,21 +2846,21 @@ test "promote summary provenance distinguishes aliased reserve siblings" {
                 .rc_effect = LowLevelOp.list_reserve.rcEffect(),
                 .args = reserve.args,
                 .next = next,
-            } });
+            } }, .test_fixture);
         }
         const alias = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = reserved_alias,
             .op = .{ .local = reserve.target },
             .next = next,
-        } });
+        } }, .test_fixture);
         f.store.getCFStmtPtr(literal.next).assign_low_level.next = alias;
         const result_alias = try f.store.addLocal(.{ .layout_idx = f.list });
-        const ret = try f.store.addCFStmt(.{ .ret = .{ .value = result_alias } });
+        const ret = try f.store.addCFStmt(.{ .ret = .{ .value = result_alias } }, .test_fixture);
         const return_alias = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = result_alias,
             .op = .{ .local = append.target },
             .next = ret,
-        } });
+        } }, .test_fixture);
         f.store.getCFStmtPtr(reserve.next).assign_low_level.next = return_alias;
         var prepared = try prepareCallees(&f.store, testing.allocator);
         defer prepared.deinit();
@@ -2737,6 +2869,103 @@ test "promote summary provenance distinguishes aliased reserve siblings" {
             prepared.kinds.get(helper).?,
         );
     }
+}
+
+/// Check the immutable metadata plan without changing the test procedure.
+fn testMetadataTransfer(f: *PromoteTest, proc: LIR.LirProcSpecId, site_entry: CFStmtId, expected: bool) (Allocator.Error || error{ TestExpectedEqual, MissingTransfer })!void {
+    // addSetSite emits the index and element literals before the actual set.
+    const element = f.store.getCFStmt(site_entry).assign_literal.next;
+    const site = f.store.getCFStmt(element).assign_literal.next;
+    const allocator = testing.allocator;
+    var analysis = body_clone.AnalysisScratch.init(allocator);
+    defer analysis.deinit();
+    var pass = Pass.init(&f.store, &f.layouts, allocator, &analysis);
+    defer pass.deinit();
+    var scan = Pass.Scan{
+        .total_uses = collections.DenseMap(LocalId, u32).init(allocator),
+        .tracked_uses = collections.DenseMap(LocalId, u32).init(allocator),
+        .param_join = collections.DenseMap(LocalId, CFStmtId).init(allocator),
+        .dirty_targets = collections.DenseMap(LocalId, void).init(allocator),
+        .assigned_targets = collections.DenseMap(LocalId, u32).init(allocator),
+    };
+    defer scan.deinit(allocator);
+    try pass.scanProc(f.store.getProcSpec(proc).body.?, &scan);
+    try pass.classifyMetadataTransfers(&scan, proc);
+    for (scan.edges.items) |edge| if (edge.stmt == site) {
+        try testing.expectEqual(expected, edge.preserves_metadata);
+        return;
+    };
+    return error.MissingTransfer;
+}
+
+test "promote metadata follows alias observations across source redefinitions" {
+    // The saved view remains observable even after its source is rebound.
+    // Moving the observation before the mutation instead proves linear use.
+    for ([_]bool{ false, true }) |observe_after| {
+        var f = try PromoteTest.init(testing.allocator);
+        defer f.deinit();
+        const store = &f.store;
+        const input = try store.addLocal(.{ .layout_idx = f.list });
+        const saved = try store.addLocal(.{ .layout_idx = f.list });
+        const changed = try store.addLocal(.{ .layout_idx = f.list });
+        const item = try store.addLocal(.{ .layout_idx = .u8 });
+        const index = try store.addLocal(.{ .layout_idx = .u64 });
+        const done = try store.addCFStmt(.{ .ret = .{ .value = changed } }, .test_fixture);
+        const read = try store.addCFStmt(.{ .assign_low_level = .{
+            .target = item,
+            .op = .list_get_unsafe,
+            .rc_effect = LowLevelOp.list_get_unsafe.rcEffect(),
+            .args = try store.addLocalSpan(&.{ saved, index }),
+            .next = done,
+        } }, .test_fixture);
+        const rebind = try store.addCFStmt(.{ .set_local = .{
+            .target = input,
+            .value = changed,
+            .mode = .initialize_join_param,
+            .next = if (observe_after) read else done,
+        } }, .test_fixture);
+        const site = try addSetSite(&f, changed, input, rebind);
+        if (!observe_after) store.getCFStmtPtr(read).assign_low_level.next = site;
+        const alias = try store.addCFStmt(.{ .assign_ref = .{
+            .target = saved,
+            .op = .{ .local = input },
+            .next = if (observe_after) site else read,
+        } }, .test_fixture);
+        const proc = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(11661),
+            .args = try store.addLocalSpan(&.{ input, index }),
+            .body = alias,
+            .ret_layout = f.list,
+        }, .none);
+        try testMetadataTransfer(&f, proc, site, !observe_after);
+    }
+}
+
+test "promote metadata preserves exclusive consuming branches" {
+    var f = try PromoteTest.init(testing.allocator);
+    defer f.deinit();
+    const store = &f.store;
+    const input = try store.addLocal(.{ .layout_idx = f.list });
+    const output = try store.addLocal(.{ .layout_idx = f.list });
+    const cond = try store.addLocal(.{ .layout_idx = .bool });
+    const done = try store.addCFStmt(.{ .ret = .{ .value = output } }, .test_fixture);
+    const left = try addSetSite(&f, output, input, done);
+    const right = try addSetSite(&f, output, input, done);
+    const branch = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = cond,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = left }}),
+        .default_branch = right,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(11662),
+        .args = try store.addLocalSpan(&.{ input, cond }),
+        .body = branch,
+        .ret_layout = f.list,
+    }, .none);
+    try testMetadataTransfer(&f, proc, left, true);
+    try testMetadataTransfer(&f, proc, right, true);
 }
 
 test "promote threads slack through an append-only loop" {
@@ -2757,50 +2986,50 @@ test "promote threads slack through an append-only loop" {
     const b = try store.addLocal(.{ .layout_idx = f.list });
     const join_id = f.freshJoinPointId();
 
-    const back_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const back_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const back_set = try store.addCFStmt(.{ .set_local = .{
         .target = out,
         .value = b,
         .mode = .initialize_join_param,
         .next = back_jump,
-    } });
+    } }, .test_fixture);
     const alias_b = try store.addCFStmt(.{ .assign_ref = .{
         .target = b,
         .op = .{ .local = appended },
         .next = back_set,
-    } });
+    } }, .test_fixture);
     const append_call = try store.addCFStmt(.{ .assign_call = .{
         .target = appended,
         .proc = append_proc,
         .args = try store.addLocalSpan(&.{ a, elem }),
         .next = alias_b,
-    } });
+    } }, .test_fixture);
     const alias_a = try store.addCFStmt(.{ .assign_ref = .{
         .target = a,
         .op = .{ .local = out },
         .next = append_call,
-    } });
+    } }, .test_fixture);
 
-    const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const entry_set = try store.addCFStmt(.{ .set_local = .{
         .target = out,
         .value = init_list,
         .mode = .initialize_join_param,
         .next = entry_jump,
-    } });
+    } }, .test_fixture);
     const loop = try store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try store.addLocalSpan(&.{out}),
         .body = alias_a,
         .remainder = entry_set,
-    } });
+    } }, .test_fixture);
     const proc_id = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(6),
         .args = LIR.LocalSpan.empty(),
         .body = loop,
         .ret_layout = f.list,
-    });
+    }, .none);
 
     {
         var scratch = std.heap.ArenaAllocator.init(testing.allocator);
@@ -3007,50 +3236,50 @@ test "promote leaves a tainted chain alone" {
     const boxed = try store.addLocal(.{ .layout_idx = pair });
     const join_id = f.freshJoinPointId();
 
-    const back_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const back_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const back_set = try store.addCFStmt(.{ .set_local = .{
         .target = out,
         .value = appended,
         .mode = .initialize_join_param,
         .next = back_jump,
-    } });
+    } }, .test_fixture);
     const escape = try store.addCFStmt(.{ .assign_struct = .{
         .target = boxed,
         .fields = try store.addLocalSpan(&.{appended}),
         .next = back_set,
-    } });
+    } }, .test_fixture);
     const append_call = try store.addCFStmt(.{ .assign_call = .{
         .target = appended,
         .proc = append_proc,
         .args = try store.addLocalSpan(&.{ a, elem }),
         .next = escape,
-    } });
+    } }, .test_fixture);
     const alias_a = try store.addCFStmt(.{ .assign_ref = .{
         .target = a,
         .op = .{ .local = out },
         .next = append_call,
-    } });
+    } }, .test_fixture);
 
-    const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const entry_set = try store.addCFStmt(.{ .set_local = .{
         .target = out,
         .value = init_list,
         .mode = .initialize_join_param,
         .next = entry_jump,
-    } });
+    } }, .test_fixture);
     const loop = try store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try store.addLocalSpan(&.{out}),
         .body = alias_a,
         .remainder = entry_set,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(5),
         .args = LIR.LocalSpan.empty(),
         .body = loop,
         .ret_layout = f.list,
-    });
+    }, .none);
 
     try run(store, &f.layouts);
 
@@ -3076,38 +3305,38 @@ test "promote ignores a join without a back edge" {
     const appended = try store.addLocal(.{ .layout_idx = f.list });
     const join_id = f.freshJoinPointId();
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = appended } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = appended } }, .test_fixture);
     const append_call = try store.addCFStmt(.{ .assign_call = .{
         .target = appended,
         .proc = append_proc,
         .args = try store.addLocalSpan(&.{ a, elem }),
         .next = ret,
-    } });
+    } }, .test_fixture);
     const alias_a = try store.addCFStmt(.{ .assign_ref = .{
         .target = a,
         .op = .{ .local = out },
         .next = append_call,
-    } });
-    const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    } }, .test_fixture);
+    const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const entry_set = try store.addCFStmt(.{ .set_local = .{
         .target = out,
         .value = init_list,
         .mode = .initialize_join_param,
         .next = entry_jump,
-    } });
+    } }, .test_fixture);
     const loop = try store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try store.addLocalSpan(&.{out}),
         .body = alias_a,
         .remainder = entry_set,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(4),
         .args = LIR.LocalSpan.empty(),
         .body = loop,
         .ret_layout = f.list,
-    });
+    }, .none);
 
     try run(store, &f.layouts);
 
@@ -3200,17 +3429,17 @@ fn addSetSite(f: *PromoteTest, target: LocalId, list: LocalId, next: CFStmtId) A
         .rc_effect = LowLevelOp.list_set.rcEffect(),
         .args = try store.addLocalSpan(&.{ list, idx, elem }),
         .next = next,
-    } });
+    } }, .test_fixture);
     const elem_lit = try store.addCFStmt(.{ .assign_literal = .{
         .target = elem,
         .value = .{ .i64_literal = .{ .value = 9, .layout_idx = .u8 } },
         .next = set_stmt,
-    } });
+    } }, .test_fixture);
     return try store.addCFStmt(.{ .assign_literal = .{
         .target = idx,
         .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
         .next = elem_lit,
-    } });
+    } }, .test_fixture);
 }
 
 test "promote versions a set loop into a dispatching head and a unique-only copy" {
@@ -3229,45 +3458,45 @@ test "promote versions a set loop into a dispatching head and a unique-only copy
     const b = try store.addLocal(.{ .layout_idx = f.list });
     const join_id = f.freshJoinPointId();
 
-    const back_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const back_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const back_set = try store.addCFStmt(.{ .set_local = .{
         .target = out,
         .value = b,
         .mode = .initialize_join_param,
         .next = back_jump,
-    } });
+    } }, .test_fixture);
     const alias_b = try store.addCFStmt(.{ .assign_ref = .{
         .target = b,
         .op = .{ .local = s },
         .next = back_set,
-    } });
+    } }, .test_fixture);
     const site = try addSetSite(&f, s, a, alias_b);
     const alias_a = try store.addCFStmt(.{ .assign_ref = .{
         .target = a,
         .op = .{ .local = out },
         .next = site,
-    } });
+    } }, .test_fixture);
 
-    const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const entry_set = try store.addCFStmt(.{ .set_local = .{
         .target = out,
         .value = init_list,
         .mode = .initialize_join_param,
         .next = entry_jump,
-    } });
+    } }, .test_fixture);
     const loop = try store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try store.addLocalSpan(&.{out}),
         .body = alias_a,
         .remainder = entry_set,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(3),
         .args = LIR.LocalSpan.empty(),
         .body = loop,
         .ret_layout = f.list,
-    });
+    }, .none);
 
     try run(store, &f.layouts);
 
@@ -3322,70 +3551,70 @@ test "promote keeps a foreign back edge on the head inside the copy" {
     const o = try store.addLocal(.{ .layout_idx = f.list });
     const join_id = f.freshJoinPointId();
 
-    const set_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const set_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const set_write = try store.addCFStmt(.{ .set_local = .{
         .target = out,
         .value = b,
         .mode = .initialize_join_param,
         .next = set_jump,
-    } });
+    } }, .test_fixture);
     const alias_b = try store.addCFStmt(.{ .assign_ref = .{
         .target = b,
         .op = .{ .local = s },
         .next = set_write,
-    } });
+    } }, .test_fixture);
     const site = try addSetSite(&f, s, a, alias_b);
 
-    const foreign_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const foreign_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const foreign_write = try store.addCFStmt(.{ .set_local = .{
         .target = out,
         .value = o,
         .mode = .initialize_join_param,
         .next = foreign_jump,
-    } });
+    } }, .test_fixture);
     const alias_o = try store.addCFStmt(.{ .assign_ref = .{
         .target = o,
         .op = .{ .local = other },
         .next = foreign_write,
-    } });
+    } }, .test_fixture);
 
     const branch = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = c,
         .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = site }}),
         .default_branch = alias_o,
         .continuation = null,
-    } });
+    } }, .test_fixture);
     const cond_lit = try store.addCFStmt(.{ .assign_literal = .{
         .target = c,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u8 } },
         .next = branch,
-    } });
+    } }, .test_fixture);
     const alias_a = try store.addCFStmt(.{ .assign_ref = .{
         .target = a,
         .op = .{ .local = out },
         .next = cond_lit,
-    } });
+    } }, .test_fixture);
 
-    const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const entry_set = try store.addCFStmt(.{ .set_local = .{
         .target = out,
         .value = init_list,
         .mode = .initialize_join_param,
         .next = entry_jump,
-    } });
+    } }, .test_fixture);
     const loop = try store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try store.addLocalSpan(&.{out}),
         .body = alias_a,
         .remainder = entry_set,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{other}),
         .body = loop,
         .ret_layout = f.list,
-    });
+    }, .none);
 
     try run(store, &f.layouts);
 
@@ -3418,58 +3647,58 @@ test "promote initializes merged metadata on every incoming definition" {
     const merged = try store.addLocal(.{ .layout_idx = f.list });
     const loop_id = f.freshJoinPointId();
     const merge_id = f.freshJoinPointId();
-    const back_jump = try store.addCFStmt(.{ .jump = .{ .target = loop_id } });
+    const back_jump = try store.addCFStmt(.{ .jump = .{ .target = loop_id } }, .test_fixture);
     const back_write = try store.addCFStmt(.{ .set_local = .{
         .target = out,
         .value = merged,
         .mode = .initialize_join_param,
         .next = back_jump,
-    } });
-    const tracked_jump = try store.addCFStmt(.{ .jump = .{ .target = merge_id } });
+    } }, .test_fixture);
+    const tracked_jump = try store.addCFStmt(.{ .jump = .{ .target = merge_id } }, .test_fixture);
     const tracked = try store.addCFStmt(.{ .assign_ref = .{
         .target = merged,
         .op = .{ .local = updated },
         .next = tracked_jump,
-    } });
+    } }, .test_fixture);
     const set_site = try addSetSite(&f, updated, out, tracked);
-    const foreign_jump = try store.addCFStmt(.{ .jump = .{ .target = merge_id } });
+    const foreign_jump = try store.addCFStmt(.{ .jump = .{ .target = merge_id } }, .test_fixture);
     const foreign = try store.addCFStmt(.{ .assign_ref = .{
         .target = merged,
         .op = .{ .local = other },
         .next = foreign_jump,
-    } });
+    } }, .test_fixture);
     const branch = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = condition,
         .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = set_site }}),
         .default_branch = foreign,
         .continuation = null,
-    } });
+    } }, .test_fixture);
     const merge = try store.addCFStmt(.{ .join = .{
         .id = merge_id,
         .params = LIR.LocalSpan.empty(),
         .body = back_write,
         .remainder = branch,
-    } });
-    const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = loop_id } });
+    } }, .test_fixture);
+    const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = loop_id } }, .test_fixture);
     const entry = try store.addCFStmt(.{ .set_local = .{
         .target = out,
         .value = initial,
         .mode = .initialize_join_param,
         .next = entry_jump,
-    } });
+    } }, .test_fixture);
     const loop = try store.addCFStmt(.{ .join = .{
         .id = loop_id,
         .params = try store.addLocalSpan(&.{out}),
         .body = merge,
         .remainder = entry,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{ initial, other, condition }),
         .body = loop,
         .ret_layout = f.list,
-    });
+    }, .none);
 
     try run(store, &f.layouts);
 

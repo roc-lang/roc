@@ -799,7 +799,7 @@ const CheckTypeCheckerPatternsStep = struct {
         // report.zig compares already-formatted diagnostic text only to avoid
         // printing two visually identical types. This is presentation logic,
         // not a type-checking or identifier comparison.
-        .{ .file = "report.zig", .start = 581, .end = 581 },
+        .{ .file = "report.zig", .start = 583, .end = 583 },
     };
 
     fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {
@@ -1771,12 +1771,10 @@ const CoverageSummaryStep = struct {
     /// - macOS (ARM64 and x86_64): Uses libdwarf for DWARF parsing
     /// - Linux ARM64: Uses libdw (elfutils) for DWARF parsing
     ///
-    /// TODO ZIG 16: re-check if this DWARF bug is fixed in 0.16—may be able to enable x86_64 coverage
-    /// Coverage does NOT work on Linux x86_64 due to a Zig 0.15.2 compiler bug that
-    /// generates invalid DWARF .debug_line sections. libdw fails with "invalid
-    /// .debug_line section" when parsing user code compilation units, while stdlib
-    /// CUs parse successfully. This causes kcov to find only stdlib files, not user
-    /// source files. ARM64 Zig generates valid DWARF, so coverage works there.
+    /// Coverage is not enabled on Linux x86_64. With Zig 0.15.2 the x86_64 backend
+    /// emitted DWARF .debug_line sections that libdw rejects ("invalid .debug_line
+    /// section") for user compilation units while stdlib CUs parse, so kcov found
+    /// only stdlib files. That has not been re-measured with kcov on Zig 0.16.
     /// See: https://github.com/roc-lang/roc/pull/8864 for investigation details.
     fn create(b: *std.Build, coverage_dir: []const u8, exe_name: []const u8) *CoverageSummaryStep {
         return createWithOptions(b, coverage_dir, exe_name, "PARSER", 28.0);
@@ -3002,6 +3000,39 @@ fn setupTestPlatforms(
     build_test_hosts_step.dependOn(clear_cache_step);
 
     return wasm_host_step;
+}
+
+const WasmStaticLibAppBuild = struct {
+    run: *Step.Run,
+    wasm: std.Build.LazyPath,
+};
+
+/// `roc build --target=wasm32` of one app staged in `sources`, which holds the
+/// app, its platform's Roc modules, and the wasm host. Every file the build
+/// reads lives under that staged directory, whose path is derived from all of
+/// their contents, so the step is cached exactly when its inputs are unchanged.
+///
+/// The run follows `build_roc_step`, which installs `roc`: a run hashes an
+/// artifact by its installed path once installed and by its cache path before,
+/// so ordering it after the install keeps its cache key from depending on
+/// which of the two the scheduler happened to reach first.
+fn addWasmStaticLibAppBuild(
+    b: *std.Build,
+    roc_exe: *Step.Compile,
+    build_roc_step: *Step,
+    sources: *Step.WriteFile,
+    app: []const u8,
+    options: []const []const u8,
+    output_basename: []const u8,
+) WasmStaticLibAppBuild {
+    const run = b.addRunArtifact(roc_exe);
+    run.step.dependOn(build_roc_step);
+    run.addArg("build");
+    run.addFileArg(sources.getDirectory().path(b, app));
+    run.addArgs(options);
+    run.addArg("--target=wasm32");
+    const wasm = run.addPrefixedOutputFileArg("--output=", output_basename);
+    return .{ .run = run, .wasm = wasm };
 }
 
 fn configureZigCacheEnvironment(b: *std.Build) void {
@@ -4966,326 +4997,130 @@ pub fn build(b: *std.Build) void {
         provided_callable_wasm_host.link_function_sections = true;
         provided_callable_wasm_host.link_data_sections = true;
 
-        const copy_provided_callable_wasm_host = b.addUpdateSourceFiles();
-        copy_provided_callable_wasm_host.addCopyFileToSource(
-            provided_callable_wasm_host.getEmittedBin(),
-            "test/provided-callable-host/platform/targets/wasm32/host.wasm",
-        );
-
-        const build_wasm_provided_callable_app = b.addRunArtifact(roc_exe);
-        build_wasm_provided_callable_app.addArgs(&.{
-            "build",
-            "test/provided-callable-host/app.roc",
-            "--target=wasm32",
-            "--output=test/provided-callable-host/app.wasm",
+        // Each app tree is staged with its platform's Roc modules and wasm
+        // host, so every input a `roc build` below reads is a hashed input of
+        // its cached step, and the built modules are declared outputs.
+        const provided_callable_app_sources = b.addWriteFiles();
+        _ = provided_callable_app_sources.addCopyDirectory(b.path("test/provided-callable-host"), ".", .{
+            .include_extensions = &.{".roc"},
         });
-        build_wasm_provided_callable_app.step.dependOn(&copy_provided_callable_wasm_host.step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_provided_callable_app.step);
+        _ = provided_callable_app_sources.addCopyFile(provided_callable_wasm_host.getEmittedBin(), "platform/targets/wasm32/host.wasm");
 
-        const build_wasm_app = b.addRunArtifact(roc_exe);
-        build_wasm_app.addArgs(&.{
-            "build",
-            "test/wasm/app.roc",
-            "--target=wasm32",
-            "--output=test/wasm/app.wasm",
+        const wasm_app_sources = b.addWriteFiles();
+        _ = wasm_app_sources.addCopyDirectory(b.path("test/wasm"), ".", .{
+            .include_extensions = &.{".roc"},
         });
-        build_wasm_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_app.step);
+        _ = wasm_app_sources.addCopyFile(b.path("test/wasm/platform/targets/wasm32/host.wasm"), "platform/targets/wasm32/host.wasm");
+        wasm_app_sources.step.dependOn(wasm_host_step);
 
-        const build_wasm_list_builtin_app = b.addRunArtifact(roc_exe);
-        build_wasm_list_builtin_app.addArgs(&.{
-            "build",
-            "test/wasm/list_builtin_static_lib_app.roc",
-            "--target=wasm32",
-            "--output=test/wasm/list_builtin_static_lib_app.wasm",
-        });
-        build_wasm_list_builtin_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_list_builtin_app.step);
+        const build_wasm_provided_callable_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, provided_callable_app_sources, "app.roc", &.{}, "app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_provided_callable_app.run.step);
 
-        const build_wasm_builtin_routing_app = b.addRunArtifact(roc_exe);
-        build_wasm_builtin_routing_app.addArgs(&.{
-            "build",
-            "test/wasm/builtin_routing_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/builtin_routing_static_lib_app.wasm.a",
-        });
-        build_wasm_builtin_routing_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_builtin_routing_app.step);
+        const build_wasm_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "app.roc", &.{}, "app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_app.run.step);
 
-        const build_wasm_single_variant_hosted_app = b.addRunArtifact(roc_exe);
-        build_wasm_single_variant_hosted_app.addArgs(&.{
-            "build",
-            "test/wasm/single_variant_hosted_static_lib_app.roc",
-            "--opt=speed",
-            "--target=wasm32",
-            "--output=test/wasm/single_variant_hosted_static_lib_app.wasm",
-        });
-        build_wasm_single_variant_hosted_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_single_variant_hosted_app.step);
+        const build_wasm_list_builtin_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "list_builtin_static_lib_app.roc", &.{}, "list_builtin_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_list_builtin_app.run.step);
+
+        const build_wasm_builtin_routing_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "builtin_routing_static_lib_app.roc", &.{"--opt=dev"}, "builtin_routing_static_lib_app.wasm.a");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_builtin_routing_app.run.step);
+
+        const build_wasm_single_variant_hosted_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "single_variant_hosted_static_lib_app.roc", &.{"--opt=speed"}, "single_variant_hosted_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_single_variant_hosted_app.run.step);
 
         // Host ABI gate on wasm32: a hosted Try unwrapped with `?` into a wider
         // error row must still reach the host through its declared boundary,
         // which the cart shows by returning the host's own "ok".
-        const build_wasm_hosted_try_widen_app = b.addRunArtifact(roc_exe);
-        build_wasm_hosted_try_widen_app.addArgs(&.{
-            "build",
-            "test/wasm/hosted_try_widen_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/hosted_try_widen_static_lib_app.wasm",
-        });
-        build_wasm_hosted_try_widen_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_hosted_try_widen_app.step);
+        const build_wasm_hosted_try_widen_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "hosted_try_widen_static_lib_app.roc", &.{"--opt=dev"}, "hosted_try_widen_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_hosted_try_widen_app.run.step);
 
-        const build_wasm_str_concat_join_app = b.addRunArtifact(roc_exe);
-        build_wasm_str_concat_join_app.addArgs(&.{
-            "build",
-            "test/wasm/str_concat_join_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/str_concat_join_static_lib_app.wasm",
-        });
-        build_wasm_str_concat_join_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_str_concat_join_app.step);
+        const build_wasm_str_concat_join_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "str_concat_join_static_lib_app.roc", &.{"--opt=dev"}, "str_concat_join_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_str_concat_join_app.run.step);
 
-        const build_wasm_issue_10957_app = b.addRunArtifact(roc_exe);
-        build_wasm_issue_10957_app.addArgs(&.{
-            "build",
-            "test/wasm/issue_10957_json_camel_long_field_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/issue_10957_json_camel_long_field_static_lib_app.wasm",
-        });
-        build_wasm_issue_10957_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_10957_app.step);
+        const build_wasm_issue_10957_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "issue_10957_json_camel_long_field_static_lib_app.roc", &.{"--opt=dev"}, "issue_10957_json_camel_long_field_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_10957_app.run.step);
 
-        const build_wasm_str_interp_leading_literal_app = b.addRunArtifact(roc_exe);
-        build_wasm_str_interp_leading_literal_app.addArgs(&.{
-            "build",
-            "test/wasm/str_interp_leading_literal_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/str_interp_leading_literal_static_lib_app.wasm",
-        });
-        build_wasm_str_interp_leading_literal_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_str_interp_leading_literal_app.step);
+        const build_wasm_str_interp_leading_literal_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "str_interp_leading_literal_static_lib_app.roc", &.{"--opt=dev"}, "str_interp_leading_literal_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_str_interp_leading_literal_app.run.step);
 
-        const build_wasm_str_concat_unique_reuse_app = b.addRunArtifact(roc_exe);
-        build_wasm_str_concat_unique_reuse_app.addArgs(&.{
-            "build",
-            "test/wasm/str_concat_unique_reuse_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/str_concat_unique_reuse_static_lib_app.wasm",
-        });
-        build_wasm_str_concat_unique_reuse_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_str_concat_unique_reuse_app.step);
+        const build_wasm_str_concat_unique_reuse_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "str_concat_unique_reuse_static_lib_app.roc", &.{"--opt=dev"}, "str_concat_unique_reuse_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_str_concat_unique_reuse_app.run.step);
 
         // End-to-end cart gate for the minted-iterator `for`-loop drive. The
         // size build covers the LLVM cart path, and the dev build covers wasm
         // composite loop-state rebinding for recursive generated iterators.
-        const build_wasm_iter_for_app = b.addRunArtifact(roc_exe);
-        build_wasm_iter_for_app.addArgs(&.{
-            "build",
-            "test/wasm/iter_for_static_lib_app.roc",
-            "--opt=size",
-            "--target=wasm32",
-            "--output=test/wasm/iter_for_static_lib_app.wasm",
-        });
-        build_wasm_iter_for_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_for_app.step);
+        const build_wasm_iter_for_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "iter_for_static_lib_app.roc", &.{"--opt=size"}, "iter_for_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_for_app.run.step);
 
-        const build_wasm_iter_for_dev_app = b.addRunArtifact(roc_exe);
-        build_wasm_iter_for_dev_app.addArgs(&.{
-            "build",
-            "test/wasm/iter_for_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/iter_for_static_lib_app_dev.wasm",
-        });
-        build_wasm_iter_for_dev_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_for_dev_app.step);
+        const build_wasm_iter_for_dev_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "iter_for_static_lib_app.roc", &.{"--opt=dev"}, "iter_for_static_lib_app_dev.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_for_dev_app.run.step);
 
         // Dev-mode recursive iterator construction must converge at the
         // explicit forced-dynamic representation tier.
-        const build_wasm_iter_recursive_concat_app = b.addRunArtifact(roc_exe);
-        build_wasm_iter_recursive_concat_app.addArgs(&.{
-            "build",
-            "test/wasm/iter_recursive_concat_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/iter_recursive_concat_static_lib_app.wasm",
-        });
-        build_wasm_iter_recursive_concat_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_recursive_concat_app.step);
+        const build_wasm_iter_recursive_concat_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "iter_recursive_concat_static_lib_app.roc", &.{"--opt=dev"}, "iter_recursive_concat_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_recursive_concat_app.run.step);
 
         // Static-data hoisting gate: a constant list literal consumed via
         // `.iter()` must materialize as static data and allocate nothing, so the
         // whole minted chain (base list included) is zero-alloc on the cart path.
-        const build_wasm_iter_list_hoist_app = b.addRunArtifact(roc_exe);
-        build_wasm_iter_list_hoist_app.addArgs(&.{
-            "build",
-            "test/wasm/iter_list_hoist_static_lib_app.roc",
-            "--opt=size",
-            "--target=wasm32",
-            "--output=test/wasm/iter_list_hoist_static_lib_app.wasm",
-        });
-        build_wasm_iter_list_hoist_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_list_hoist_app.step);
+        const build_wasm_iter_list_hoist_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "iter_list_hoist_static_lib_app.roc", &.{"--opt=size"}, "iter_list_hoist_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_list_hoist_app.run.step);
 
         // Noiter twin: the same sums over plain list literals. The runner prints
         // each cart's byte size, so the iter build minus this baseline is the
         // minted-adapter premium tracked in CI (the fusion pass's target).
-        const build_wasm_iter_noiter_app = b.addRunArtifact(roc_exe);
-        build_wasm_iter_noiter_app.addArgs(&.{
-            "build",
-            "test/wasm/iter_for_noiter_static_lib_app.roc",
-            "--opt=size",
-            "--target=wasm32",
-            "--output=test/wasm/iter_for_noiter_static_lib_app.wasm",
-        });
-        build_wasm_iter_noiter_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_noiter_app.step);
+        const build_wasm_iter_noiter_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "iter_for_noiter_static_lib_app.roc", &.{"--opt=size"}, "iter_for_noiter_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_noiter_app.run.step);
 
-        const build_wasm_rc_cleanup_app = b.addRunArtifact(roc_exe);
-        build_wasm_rc_cleanup_app.addArgs(&.{
-            "build",
-            "test/wasm/rc_cleanup_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/rc_cleanup_static_lib_app.wasm",
-        });
-        build_wasm_rc_cleanup_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_rc_cleanup_app.step);
+        const build_wasm_rc_cleanup_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "rc_cleanup_static_lib_app.roc", &.{"--opt=dev"}, "rc_cleanup_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_rc_cleanup_app.run.step);
 
-        const build_wasm_rc_cleanup_model_list_app = b.addRunArtifact(roc_exe);
-        build_wasm_rc_cleanup_model_list_app.addArgs(&.{
-            "build",
-            "test/wasm/rc_cleanup_model_list_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/rc_cleanup_model_list_static_lib_app.wasm",
-        });
-        build_wasm_rc_cleanup_model_list_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_rc_cleanup_model_list_app.step);
+        const build_wasm_rc_cleanup_model_list_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "rc_cleanup_model_list_static_lib_app.roc", &.{"--opt=dev"}, "rc_cleanup_model_list_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_rc_cleanup_model_list_app.run.step);
 
-        const build_wasm_box_zst_app = b.addRunArtifact(roc_exe);
-        build_wasm_box_zst_app.addArgs(&.{
-            "build",
-            "test/wasm/box_zst_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/box_zst_static_lib_app.wasm",
-        });
-        build_wasm_box_zst_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_box_zst_app.step);
+        const build_wasm_box_zst_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "box_zst_static_lib_app.roc", &.{"--opt=dev"}, "box_zst_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_box_zst_app.run.step);
 
-        const build_wasm_boxed_model_update_app = b.addRunArtifact(roc_exe);
-        build_wasm_boxed_model_update_app.addArgs(&.{
-            "build",
-            "test/wasm/boxed_model_update_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/boxed_model_update_static_lib_app.wasm",
-        });
-        build_wasm_boxed_model_update_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_boxed_model_update_app.step);
+        const build_wasm_boxed_model_update_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "boxed_model_update_static_lib_app.roc", &.{"--opt=dev"}, "boxed_model_update_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_boxed_model_update_app.run.step);
 
-        const build_wasm_issue_10836_app = b.addRunArtifact(roc_exe);
-        build_wasm_issue_10836_app.addArgs(&.{
-            "build",
-            "test/wasm/issue_10836_boxed_low_alignment_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/issue_10836_boxed_low_alignment_static_lib_app.wasm",
-        });
-        build_wasm_issue_10836_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_10836_app.step);
+        const build_wasm_issue_10836_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "issue_10836_boxed_low_alignment_static_lib_app.roc", &.{"--opt=dev"}, "issue_10836_boxed_low_alignment_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_10836_app.run.step);
 
         // A constant record whose pointer fields are laid out in the opposite
         // order to their field order: its relocations must still reach the
         // object in offset order, or wasm-ld refuses it (#11419).
-        const build_wasm_issue_11419_app = b.addRunArtifact(roc_exe);
-        build_wasm_issue_11419_app.addArgs(&.{
-            "build",
-            "test/wasm/issue_11419_static_record_reloc_order_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/issue_11419_static_record_reloc_order_static_lib_app.wasm",
-        });
-        build_wasm_issue_11419_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11419_app.step);
+        const build_wasm_issue_11419_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "issue_11419_static_record_reloc_order_static_lib_app.roc", &.{"--opt=dev"}, "issue_11419_static_record_reloc_order_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11419_app.run.step);
 
         // Two `List.concat` calls over different refcounted element types keep
         // the element incref/decref callbacks indirect, so the generated RC
         // helpers must carry the callback ABI's signature exactly or wasm traps
         // at the `call_indirect` (#11454). Only the optimizing backend reaches
         // the indirect call, so this cart is built at `--opt=speed`.
-        const build_wasm_issue_11454_app = b.addRunArtifact(roc_exe);
-        build_wasm_issue_11454_app.addArgs(&.{
-            "build",
-            "test/wasm/issue_11454_concat_rc_callback_static_lib_app.roc",
-            "--opt=speed",
-            "--target=wasm32",
-            "--output=test/wasm/issue_11454_concat_rc_callback_static_lib_app.wasm",
-        });
-        build_wasm_issue_11454_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11454_app.step);
+        const build_wasm_issue_11454_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "issue_11454_concat_rc_callback_static_lib_app.roc", &.{"--opt=speed"}, "issue_11454_concat_rc_callback_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11454_app.run.step);
 
         // A boxed erased callable whose capture is refcounted: the helper in its
         // `Payload.on_drop` slot must carry the published host on-drop
         // signature, which wasm checks at the runtime's `call_indirect`.
-        const build_wasm_on_drop_app = b.addRunArtifact(roc_exe);
-        build_wasm_on_drop_app.addArgs(&.{
-            "build",
-            "test/wasm/erased_callable_on_drop_static_lib_app.roc",
-            "--opt=speed",
-            "--target=wasm32",
-            "--output=test/wasm/erased_callable_on_drop_static_lib_app.wasm",
-        });
-        build_wasm_on_drop_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_on_drop_app.step);
+        const build_wasm_on_drop_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "erased_callable_on_drop_static_lib_app.roc", &.{"--opt=speed"}, "erased_callable_on_drop_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_on_drop_app.run.step);
 
         // The same cart on the wasm backend, whose generated on-drop adapter is
         // a separate code path from the optimizing backend's.
-        const build_wasm_on_drop_dev_app = b.addRunArtifact(roc_exe);
-        build_wasm_on_drop_dev_app.addArgs(&.{
-            "build",
-            "test/wasm/erased_callable_on_drop_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/erased_callable_on_drop_dev_static_lib_app.wasm",
-        });
-        build_wasm_on_drop_dev_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_on_drop_dev_app.step);
+        const build_wasm_on_drop_dev_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "erased_callable_on_drop_static_lib_app.roc", &.{"--opt=dev"}, "erased_callable_on_drop_dev_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_on_drop_dev_app.run.step);
 
         // A nominal tag union carrying `Box({})`, a box of a zero-sized
         // payload, as the payload of a multi-variant tag union matched at a
         // runtime value. The dev wasm backend must emit a module that
         // validates and runs (#11455).
-        const build_wasm_issue_11455_app = b.addRunArtifact(roc_exe);
-        build_wasm_issue_11455_app.addArgs(&.{
-            "build",
-            "test/wasm/issue_11455_boxed_zst_nominal_payload_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/issue_11455_boxed_zst_nominal_payload_static_lib_app.wasm",
-        });
-        build_wasm_issue_11455_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11455_app.step);
+        const build_wasm_issue_11455_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "issue_11455_boxed_zst_nominal_payload_static_lib_app.roc", &.{"--opt=dev"}, "issue_11455_boxed_zst_nominal_payload_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11455_app.run.step);
 
-        const build_wasm_issue_11529_app = b.addRunArtifact(roc_exe);
-        build_wasm_issue_11529_app.addArgs(&.{
-            "build",
-            "test/wasm/issue_11529_top_level_boxed_function_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--no-cache",
-            "--output=test/wasm/issue_11529_top_level_boxed_function_static_lib_app.wasm",
-        });
-        build_wasm_issue_11529_app.step.dependOn(wasm_host_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11529_app.step);
+        const build_wasm_issue_11529_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "issue_11529_top_level_boxed_function_static_lib_app.roc", &.{ "--opt=dev", "--no-cache" }, "issue_11529_top_level_boxed_function_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11529_app.run.step);
 
         const wasm_test_exe = b.addExecutable(.{
             .name = "wasm_static_lib_test",
@@ -5313,8 +5148,8 @@ pub fn build(b: *std.Build) void {
         });
         configureBackend(wasm_dce_check_exe, target);
         const run_wasm_dce_check = b.addRunArtifact(wasm_dce_check_exe);
+        run_wasm_dce_check.addFileArg(build_wasm_app.wasm);
         run_wasm_dce_check.addArgs(&.{
-            "test/wasm/app.wasm",
             "--absent",
             "roc_unused_host_canary_7f3a9c",
             "--absent",
@@ -5325,29 +5160,29 @@ pub fn build(b: *std.Build) void {
             "ROC_DCE_WASM_DEAD_HELPER_BLOB_f25a77",
             "ROC_DCE_WASM_SHARED_BLOB_31e82f",
         });
-        run_wasm_dce_check.step.dependOn(&build_wasm_app.step);
         run_test_wasm_static_lib_step.dependOn(&run_wasm_dce_check.step);
 
         const run_wasm_test = b.addRunArtifact(wasm_test_exe);
         const run_wasm_issue_11529_test = b.addRunArtifact(wasm_test_exe);
+        run_wasm_issue_11529_test.addArg("--wasm-path");
+        run_wasm_issue_11529_test.addFileArg(build_wasm_issue_11529_app.wasm);
         run_wasm_issue_11529_test.addArgs(&.{
-            "--wasm-path",
-            "test/wasm/issue_11529_top_level_boxed_function_static_lib_app.wasm",
             "--expected",
             "x",
         });
         run_wasm_issue_11529_test.step.dependOn(&install.step);
-        run_wasm_issue_11529_test.step.dependOn(&build_wasm_issue_11529_app.step);
         repro_issue_11529_step.dependOn(&run_wasm_issue_11529_test.step);
+        run_wasm_test.addArg("--wasm-path");
+        run_wasm_test.addFileArg(build_wasm_app.wasm);
         if (run_args.len != 0) {
             run_wasm_test.addArgs(run_args);
         } else {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11529_test.step);
 
             const run_wasm_provided_callable_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_provided_callable_test.addArg("--wasm-path");
+            run_wasm_provided_callable_test.addFileArg(build_wasm_provided_callable_app.wasm);
             run_wasm_provided_callable_test.addArgs(&.{
-                "--wasm-path",
-                "test/provided-callable-host/app.wasm",
                 "--expected",
                 "42",
                 "--assert-alloc-balanced",
@@ -5358,9 +5193,9 @@ pub fn build(b: *std.Build) void {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_provided_callable_test.step);
 
             const run_wasm_list_builtin_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_list_builtin_test.addArg("--wasm-path");
+            run_wasm_list_builtin_test.addFileArg(build_wasm_list_builtin_app.wasm);
             run_wasm_list_builtin_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/list_builtin_static_lib_app.wasm",
                 "--expected",
                 "ok",
             });
@@ -5368,9 +5203,9 @@ pub fn build(b: *std.Build) void {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_list_builtin_test.step);
 
             const run_wasm_single_variant_hosted_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_single_variant_hosted_test.addArg("--wasm-path");
+            run_wasm_single_variant_hosted_test.addFileArg(build_wasm_single_variant_hosted_app.wasm);
             run_wasm_single_variant_hosted_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/single_variant_hosted_static_lib_app.wasm",
                 "--expected",
                 "ok",
             });
@@ -5378,9 +5213,9 @@ pub fn build(b: *std.Build) void {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_single_variant_hosted_test.step);
 
             const run_wasm_hosted_try_widen_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_hosted_try_widen_test.addArg("--wasm-path");
+            run_wasm_hosted_try_widen_test.addFileArg(build_wasm_hosted_try_widen_app.wasm);
             run_wasm_hosted_try_widen_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/hosted_try_widen_static_lib_app.wasm",
                 "--expected",
                 "ok",
             });
@@ -5388,9 +5223,9 @@ pub fn build(b: *std.Build) void {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_hosted_try_widen_test.step);
 
             const run_wasm_str_concat_join_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_str_concat_join_test.addArg("--wasm-path");
+            run_wasm_str_concat_join_test.addFileArg(build_wasm_str_concat_join_app.wasm);
             run_wasm_str_concat_join_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/str_concat_join_static_lib_app.wasm",
                 "--expected",
                 "X:1Y:2",
                 "--max-allocs",
@@ -5400,9 +5235,9 @@ pub fn build(b: *std.Build) void {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_str_concat_join_test.step);
 
             const run_wasm_issue_10957_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_issue_10957_test.addArg("--wasm-path");
+            run_wasm_issue_10957_test.addFileArg(build_wasm_issue_10957_app.wasm);
             run_wasm_issue_10957_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/issue_10957_json_camel_long_field_static_lib_app.wasm",
                 "--expected",
                 "14",
             });
@@ -5410,9 +5245,9 @@ pub fn build(b: *std.Build) void {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_10957_test.step);
 
             const run_wasm_str_interp_leading_literal_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_str_interp_leading_literal_test.addArg("--wasm-path");
+            run_wasm_str_interp_leading_literal_test.addFileArg(build_wasm_str_interp_leading_literal_app.wasm);
             run_wasm_str_interp_leading_literal_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/str_interp_leading_literal_static_lib_app.wasm",
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
@@ -5425,9 +5260,9 @@ pub fn build(b: *std.Build) void {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_str_interp_leading_literal_test.step);
 
             const run_wasm_str_concat_unique_reuse_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_str_concat_unique_reuse_test.addArg("--wasm-path");
+            run_wasm_str_concat_unique_reuse_test.addFileArg(build_wasm_str_concat_unique_reuse_app.wasm);
             run_wasm_str_concat_unique_reuse_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/str_concat_unique_reuse_static_lib_app.wasm",
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
@@ -5445,9 +5280,9 @@ pub fn build(b: *std.Build) void {
             // iterators and terminated). `--assert-alloc-balanced` also catches a
             // per-step allocate/free leak in the drive.
             const run_wasm_iter_for_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_iter_for_test.addArg("--wasm-path");
+            run_wasm_iter_for_test.addFileArg(build_wasm_iter_for_app.wasm);
             run_wasm_iter_for_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/iter_for_static_lib_app.wasm",
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
@@ -5462,9 +5297,9 @@ pub fn build(b: *std.Build) void {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_for_test.step);
 
             const run_wasm_iter_recursive_concat_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_iter_recursive_concat_test.addArg("--wasm-path");
+            run_wasm_iter_recursive_concat_test.addFileArg(build_wasm_iter_recursive_concat_app.wasm);
             run_wasm_iter_recursive_concat_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/iter_recursive_concat_static_lib_app.wasm",
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
@@ -5481,9 +5316,9 @@ pub fn build(b: *std.Build) void {
             // static data, so the whole chain allocates nothing. `--max-allocs 0`
             // is a strictly stronger assertion than `--assert-alloc-balanced`.
             const run_wasm_iter_list_hoist_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_iter_list_hoist_test.addArg("--wasm-path");
+            run_wasm_iter_list_hoist_test.addFileArg(build_wasm_iter_list_hoist_app.wasm);
             run_wasm_iter_list_hoist_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/iter_list_hoist_static_lib_app.wasm",
                 "--expected",
                 "ok",
                 "--max-allocs",
@@ -5493,9 +5328,9 @@ pub fn build(b: *std.Build) void {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_list_hoist_test.step);
 
             const run_wasm_iter_for_dev_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_iter_for_dev_test.addArg("--wasm-path");
+            run_wasm_iter_for_dev_test.addFileArg(build_wasm_iter_for_dev_app.wasm);
             run_wasm_iter_for_dev_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/iter_for_static_lib_app_dev.wasm",
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
@@ -5506,9 +5341,9 @@ pub fn build(b: *std.Build) void {
             // Noiter twin—asserts correctness and prints its size so CI logs
             // carry both numbers for premium tracking.
             const run_wasm_iter_noiter_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_iter_noiter_test.addArg("--wasm-path");
+            run_wasm_iter_noiter_test.addFileArg(build_wasm_iter_noiter_app.wasm);
             run_wasm_iter_noiter_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/iter_for_noiter_static_lib_app.wasm",
                 "--expected",
                 "ok",
             });
@@ -5516,9 +5351,9 @@ pub fn build(b: *std.Build) void {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_noiter_test.step);
 
             const run_wasm_rc_cleanup_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_rc_cleanup_test.addArg("--wasm-path");
+            run_wasm_rc_cleanup_test.addFileArg(build_wasm_rc_cleanup_app.wasm);
             run_wasm_rc_cleanup_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/rc_cleanup_static_lib_app.wasm",
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
@@ -5529,9 +5364,9 @@ pub fn build(b: *std.Build) void {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_rc_cleanup_test.step);
 
             const run_wasm_rc_cleanup_model_list_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_rc_cleanup_model_list_test.addArg("--wasm-path");
+            run_wasm_rc_cleanup_model_list_test.addFileArg(build_wasm_rc_cleanup_model_list_app.wasm);
             run_wasm_rc_cleanup_model_list_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/rc_cleanup_model_list_static_lib_app.wasm",
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
@@ -5542,9 +5377,9 @@ pub fn build(b: *std.Build) void {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_rc_cleanup_model_list_test.step);
 
             const run_wasm_box_zst_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_box_zst_test.addArg("--wasm-path");
+            run_wasm_box_zst_test.addFileArg(build_wasm_box_zst_app.wasm);
             run_wasm_box_zst_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/box_zst_static_lib_app.wasm",
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
@@ -5553,9 +5388,9 @@ pub fn build(b: *std.Build) void {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_box_zst_test.step);
 
             const run_wasm_boxed_model_update_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_boxed_model_update_test.addArg("--wasm-path");
+            run_wasm_boxed_model_update_test.addFileArg(build_wasm_boxed_model_update_app.wasm);
             run_wasm_boxed_model_update_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/boxed_model_update_static_lib_app.wasm",
                 "--expected",
                 "ok",
             });
@@ -5563,9 +5398,9 @@ pub fn build(b: *std.Build) void {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_boxed_model_update_test.step);
 
             const run_wasm_issue_10836_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_issue_10836_test.addArg("--wasm-path");
+            run_wasm_issue_10836_test.addFileArg(build_wasm_issue_10836_app.wasm);
             run_wasm_issue_10836_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/issue_10836_boxed_low_alignment_static_lib_app.wasm",
                 "--expected",
                 "7,9;11,13;Inc(42)",
             });
@@ -5573,9 +5408,9 @@ pub fn build(b: *std.Build) void {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_10836_test.step);
 
             const run_wasm_issue_11419_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_issue_11419_test.addArg("--wasm-path");
+            run_wasm_issue_11419_test.addFileArg(build_wasm_issue_11419_app.wasm);
             run_wasm_issue_11419_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/issue_11419_static_record_reloc_order_static_lib_app.wasm",
                 "--expected",
                 "id=txt",
             });
@@ -5583,9 +5418,9 @@ pub fn build(b: *std.Build) void {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11419_test.step);
 
             const run_wasm_issue_11454_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_issue_11454_test.addArg("--wasm-path");
+            run_wasm_issue_11454_test.addFileArg(build_wasm_issue_11454_app.wasm);
             run_wasm_issue_11454_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/issue_11454_concat_rc_callback_static_lib_app.wasm",
                 "--expected",
                 "{\"favoritesCount\":14} a, {\"favoritesCount\":14} b, {\"favoritesCount\":14} c, {\"favoritesCount\":14} d",
             });
@@ -5593,9 +5428,9 @@ pub fn build(b: *std.Build) void {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11454_test.step);
 
             const run_wasm_on_drop_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_on_drop_test.addArg("--wasm-path");
+            run_wasm_on_drop_test.addFileArg(build_wasm_on_drop_app.wasm);
             run_wasm_on_drop_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/erased_callable_on_drop_static_lib_app.wasm",
                 "--expected",
                 "{\"favoritesCount\":14} ok",
             });
@@ -5603,9 +5438,9 @@ pub fn build(b: *std.Build) void {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_on_drop_test.step);
 
             const run_wasm_on_drop_dev_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_on_drop_dev_test.addArg("--wasm-path");
+            run_wasm_on_drop_dev_test.addFileArg(build_wasm_on_drop_dev_app.wasm);
             run_wasm_on_drop_dev_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/erased_callable_on_drop_dev_static_lib_app.wasm",
                 "--expected",
                 "{\"favoritesCount\":14} ok",
             });
@@ -5613,9 +5448,9 @@ pub fn build(b: *std.Build) void {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_on_drop_dev_test.step);
 
             const run_wasm_issue_11455_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_issue_11455_test.addArg("--wasm-path");
+            run_wasm_issue_11455_test.addFileArg(build_wasm_issue_11455_app.wasm);
             run_wasm_issue_11455_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/issue_11455_boxed_zst_nominal_payload_static_lib_app.wasm",
                 "--expected",
                 "{\"favoritesCount\":14}",
             });
@@ -6636,10 +6471,6 @@ pub fn build(b: *std.Build) void {
     if (is_coverage_supported and isNativeishOrMusl(target)) {
         // Get the kcov dependency and build it from source
         // lazyDependency returns null on first pass; Zig re-runs build() after fetching
-        // TODO ZIG 16: re-check if lazy dependency bug is fixed—may be able to restructure this block
-        // ALL coverage-related code must be inside this block due to Zig 0.15.2 lazy dependency bug
-        // where dependencies added to a step outside the lazy block are not executed when the step
-        // also has dependencies added inside the lazy block.
         if (b.lazyDependency("kcov", .{})) |kcov_dep| {
             // Create parse module unit tests for coverage
             // We only use the parse unit tests (not snapshot tool) because:
@@ -6784,9 +6615,6 @@ pub fn build(b: *std.Build) void {
             }
 
             // Cross-compile for Windows to verify comptime branches compile
-            // TODO ZIG 16: re-check if this lazy dependency bug is fixed
-            // NOTE: This must be inside the lazy block due to Zig 0.15.2 bug where
-            // dependencies added outside the lazy block prevent those inside from executing
             const windows_target = b.resolveTargetQuery(.{
                 .cpu_arch = .x86_64,
                 .os_tag = .windows,
@@ -6804,9 +6632,7 @@ pub fn build(b: *std.Build) void {
             // Just compile, don't run - verifies Windows comptime branches
             build_coverage_tools_step.dependOn(&windows_parse_build.step);
 
-            // Add explicit dependencies on install steps to the build step itself
-            // TODO ZIG 16: re-check if lazy dependency issues are fixed
-            // to work around Zig 0.15.2 lazy dependency issues
+            // The coverage tools step builds and installs the instrumented test and kcov.
             build_coverage_tools_step.dependOn(&install_parse_test.step);
             build_coverage_tools_step.dependOn(&install_kcov.step);
 
@@ -6848,6 +6674,9 @@ pub fn build(b: *std.Build) void {
     build_ci_step.dependOn(build_test_serialization_sizes_step);
     build_ci_step.dependOn(build_test_builtin_bake_reproducible_step);
     build_ci_step.dependOn(build_test_wasm_static_lib_runner_step);
+    // `run-test-simd-differential` runs the installed Lambda Mono runner; build
+    // it here so MiniCI shards running with `--minici-skip-build` reuse it.
+    build_ci_step.dependOn(build_test_lambda_mono_differential_step);
     build_ci_step.dependOn(build_coverage_tools_step);
 
     const fuzz = b.option(bool, "fuzz", "Build fuzz targets including AFL++ and tooling") orelse false;

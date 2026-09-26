@@ -127,40 +127,40 @@ test "range prove ordered procedure runs match whole-store constant arithmetic a
         const lhs = try store.addLocal(.{ .layout_idx = .u64 });
         const rhs = try store.addLocal(.{ .layout_idx = .u64 });
         const result = try store.addLocal(.{ .layout_idx = .u64 });
-        const done = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        const done = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
         const add = try store.addCFStmt(.{ .assign_low_level = .{
             .target = result,
             .op = .num_int_add_crash_on_overflow,
             .rc_effect = .none(),
             .args = try store.addLocalSpan(&.{ lhs, rhs }),
             .next = done,
-        } });
+        } }, .test_fixture);
         const right = try store.addCFStmt(.{ .assign_literal = .{
             .target = rhs,
             .value = .{ .i64_literal = .{ .value = 2, .layout_idx = .u64 } },
             .next = add,
-        } });
+        } }, .test_fixture);
         const body = try store.addCFStmt(.{ .assign_literal = .{
             .target = lhs,
             .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
             .next = right,
-        } });
+        } }, .test_fixture);
         _ = try store.addProcSpec(.{
             .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
             .name = store.freshSyntheticSymbol(),
             .args = .empty(),
             .body = body,
             .ret_layout = .u64,
-        });
+        }, .none);
         const arg = try store.addLocal(.{ .layout_idx = .u64 });
-        const noop_body = try store.addCFStmt(.{ .ret = .{ .value = arg } });
+        const noop_body = try store.addCFStmt(.{ .ret = .{ .value = arg } }, .test_fixture);
         const noop = try store.addProcSpec(.{
             .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
             .name = store.freshSyntheticSymbol(),
             .args = try store.addLocalSpan(&.{arg}),
             .body = noop_body,
             .ret_layout = .u64,
-        });
+        }, .none);
         if (procedure_local) {
             for (0..store.procSpecCount()) |index| {
                 var scratch = std.heap.ArenaAllocator.init(testing.allocator);
@@ -2234,20 +2234,23 @@ const Pass = struct {
             self.max_join_id += 2;
 
             const empty_params = try self.store.addLocalSpan(&.{});
+            const join_origin = self.store.stmtOrigin(join_stmt);
+            var split_join_origin = join_origin;
+            split_join_origin.kind = .range_prove;
             const false_join = try self.store.addCFStmt(.{ .join = .{
                 .id = false_id,
                 .params = empty_params,
                 .retained = join.retained,
                 .body = false_arm,
                 .remainder = join.remainder,
-            } });
-            self.store.getCFStmtPtr(join_stmt).* = .{ .join = .{
+            } }, split_join_origin);
+            try self.store.replaceCFStmt(join_stmt, .{ .join = .{
                 .id = true_id,
                 .params = empty_params,
                 .retained = join.retained,
                 .body = true_arm,
                 .remainder = false_join,
-            } };
+            } }, join_origin);
 
             for (self.jump_records.items) |record| {
                 if (record.target != join.id) continue;
@@ -2301,15 +2304,18 @@ const Pass = struct {
                     .assign_call_dict,
                     => continue,
                 }
-                const true_jump = try self.store.addCFStmt(.{ .jump = .{ .target = true_id } });
-                const false_jump = try self.store.addCFStmt(.{ .jump = .{ .target = false_id } });
+                const site_origin = self.store.stmtOrigin(record.stmt);
+                var split_site_origin = site_origin;
+                split_site_origin.kind = .range_prove;
+                const true_jump = try self.store.addCFStmt(.{ .jump = .{ .target = true_id } }, split_site_origin);
+                const false_jump = try self.store.addCFStmt(.{ .jump = .{ .target = false_id } }, split_site_origin);
                 const site_branches = try self.store.addCFSwitchBranches(&.{.{ .value = 1, .body = true_jump }});
-                self.store.getCFStmtPtr(record.stmt).* = .{ .switch_stmt = .{
+                try self.store.replaceCFStmt(record.stmt, .{ .switch_stmt = .{
                     .cond = param,
                     .branches = site_branches,
                     .default_branch = false_jump,
                     .continuation = null,
-                } };
+                } }, site_origin);
             }
 
             threaded += 1;
@@ -3216,7 +3222,6 @@ const Pass = struct {
             .num_acos,
             .num_atan,
             .num_log,
-            .num_round,
             .num_floor,
             .num_ceiling,
             .num_to_str,

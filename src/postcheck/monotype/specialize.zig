@@ -65,10 +65,15 @@ pub const Counters = struct {
     interface_replay_digest_root_requests: u64 = 0,
     interface_replay_digest_node_misses: u64 = 0,
     interface_summary_hits: u64 = 0,
+    /// Summary hits whose expansion contributed no constraint beyond its input.
+    interface_summary_unchanged_hits: u64 = 0,
+    /// Relation requests whose settled parametric instantiations were captured as holes.
+    interface_parametric_requests: u64 = 0,
     interface_summary_expansions: u64 = 0,
     interface_summary_verifications: u64 = 0,
     interface_relation_requests: u64 = 0,
     interface_replay_hits: u64 = 0,
+    interface_closed_expansions: u64 = 0,
     exact_type_checks: u64 = 0,
     /// Declaration-backed nominal backings served from the per-graph
     /// instantiation cache. Reuse compares argument cells by union-find root,

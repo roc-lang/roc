@@ -44,7 +44,7 @@ pub fn freezeRoot(
     value: Value,
     callables: CallableResolver,
 ) Error![]static_data.StaticDataExport {
-    return freezeRootIntoSlot(allocator, program, slot, root, value, callables, root.ret_layout);
+    return freezeRootIntoSlot(allocator, program, slot, root.shape(), value, callables, root.ret_layout);
 }
 
 /// Freeze a root whose slot may hold a pointer to the value rather than the
@@ -56,7 +56,7 @@ pub fn freezeRootIntoSlot(
     allocator: Allocator,
     program: *const Program.Result,
     slot: lir.LIR.StaticDataId,
-    root: Program.ConstRootPlan,
+    root: Program.RootShape,
     value: Value,
     callables: CallableResolver,
     slot_layout: layout.Idx,
@@ -195,7 +195,7 @@ const Builder = struct {
         if (self.allocations.get(key)) |existing| return .{ .dest = existing, .fresh = false };
         const header_size: usize = if (contains_refcounted) 2 * word_size else word_size;
         const payload_offset = std.mem.alignForward(usize, header_size, alignment_);
-        const name = try std.fmt.allocPrint(self.allocator, "roc__ctfe_{d}_{d}", .{ @intFromEnum(self.slot), self.nodes.items.len });
+        const name = try Program.staticDataNodeSymbolName(self.allocator, @intFromEnum(self.slot), @intCast(self.nodes.items.len));
         const symbol = try self.addNode(name, payload_offset + byte_count, @max(alignment_, word_size));
         const dest = Destination{ .symbol = symbol, .offset = payload_offset };
         // A zero RC header is the runtime's immutable/static allocation marker.
@@ -699,7 +699,7 @@ test "native root export preserves erased callable procedure and drop helper ide
     const allocator = std.testing.allocator;
     var program = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
     defer program.deinit();
-    const proc = try program.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(42), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst });
+    const proc = try program.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(42), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst }, .none);
     const str_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
     const fn_layout = try program.layouts.insertErasedCallable();
     try program.const_plans.append(allocator, .str);

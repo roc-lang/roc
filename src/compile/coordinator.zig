@@ -2941,6 +2941,9 @@ pub const Coordinator = struct {
         options.splice_source = if (self.runtime_lowering) |config| config.splice_source else null;
         var runtime_target: ?lir.CheckedPipeline.TargetConfig = if (self.runtime_lowering) |config| config.target else null;
         if (runtime_target) |*target| target.post_check_executor = self.postCheckExecutor();
+        var unfinalized = UnfinalizedReportDestinations{ .coordinator = self, .program_root = root.key };
+        defer unfinalized.deinit();
+        options.unfinalized_reports = .{ .context = &unfinalized, .module = UnfinalizedReportDestinations.module };
         std.debug.assert(self.program_session == null);
         self.program_session = try eval.CompileTimeFinalization.finalizeProgram(
             self.gpa,
@@ -2951,7 +2954,116 @@ pub const Coordinator = struct {
             options,
         );
         for (entries.items) |entry| try self.commitPreparedModule(entry.mod);
+        try unfinalized.commit();
     }
+
+    /// Report destinations for checked modules whose finalization completed
+    /// in an earlier compilation. A literal such a module owns can still be
+    /// rejected by a specialization this program makes of it; the report
+    /// joins that module's reports without touching its cached result, since
+    /// every compilation that makes the specialization evaluates it again.
+    ///
+    /// The builtin module belongs to no package, so its reports render against
+    /// its own source and join the reports of the program's root module.
+    const UnfinalizedReportDestinations = struct {
+        coordinator: *Coordinator,
+        program_root: CheckedArtifact.ModuleId,
+        modules: std.ArrayList(*ModuleState) = .empty,
+        builtin_problems: ?*messages.PendingEvaluationState = null,
+
+        fn newState(coord: *Coordinator) Allocator.Error!*messages.PendingEvaluationState {
+            const state = try coord.gpa.create(messages.PendingEvaluationState);
+            state.* = .{
+                .allocator = coord.gpa,
+                .problems = check.problem.Store.initEmpty(coord.gpa),
+                .import_mapping = @import("types").import_mapping.ImportMapping.init(coord.gpa),
+                .imported_envs = &.{},
+                .reported_problem_count = 0,
+            };
+            return state;
+        }
+
+        fn moduleState(coord: *Coordinator, key: CheckedArtifact.ModuleId) *ModuleState {
+            const location = coord.checked_artifact_index.get(key.bytes) orelse
+                coordinatorInvariant("compile-time report named a checked module the coordinator does not hold", .{});
+            const pkg = coord.packages.get(location.pkg_name) orelse
+                coordinatorInvariant("checked artifact registry points at missing package {s}", .{location.pkg_name});
+            return pkg.getModule(location.module_id) orelse
+                coordinatorInvariant("checked artifact registry points at missing module {d}", .{location.module_id});
+        }
+
+        fn module(context: *anyopaque, key: CheckedArtifact.ModuleId) Allocator.Error!eval.CompileTimeFinalization.ReportDestination {
+            const self: *UnfinalizedReportDestinations = @ptrCast(@alignCast(context));
+            const coord = self.coordinator;
+            const builtin_artifact = &coord.builtin_modules.checked_artifact;
+            if (builtin_artifact.key.eql(key)) {
+                if (self.builtin_problems == null) self.builtin_problems = try newState(coord);
+                return .{ .module = builtin_artifact, .problem_store = &self.builtin_problems.?.problems };
+            }
+            const mod = moduleState(coord, key);
+            if (mod.pending_evaluation == null) {
+                const state = try newState(coord);
+                mod.pending_evaluation = state;
+                self.modules.append(coord.gpa, mod) catch |err| {
+                    state.deinit();
+                    mod.pending_evaluation = null;
+                    return err;
+                };
+            }
+            return .{ .module = mod.checkedArtifact().?, .problem_store = &mod.pending_evaluation.?.problems };
+        }
+
+        fn commit(self: *UnfinalizedReportDestinations) Allocator.Error!void {
+            const coord = self.coordinator;
+            if (self.builtin_problems) |state| {
+                defer {
+                    state.deinit();
+                    self.builtin_problems = null;
+                }
+                const root_mod = moduleState(coord, self.program_root);
+                var rb = try check.ReportBuilder.initEvaluation(
+                    coord.gpa,
+                    coord.builtin_modules.builtin_module.env,
+                    &state.problems,
+                    "Builtin.roc",
+                    &.{},
+                    &state.import_mapping,
+                );
+                defer rb.deinit();
+                for (state.problems.problems.items) |problem| {
+                    try root_mod.reports.append(coord.gpa, try rb.build(problem));
+                }
+            }
+            while (self.modules.pop()) |mod| {
+                const state = mod.pending_evaluation.?;
+                defer {
+                    state.deinit();
+                    mod.pending_evaluation = null;
+                }
+                var rb = try check.ReportBuilder.initEvaluation(
+                    coord.gpa,
+                    mod.moduleEnv().?,
+                    &state.problems,
+                    mod.path,
+                    state.imported_envs,
+                    &state.import_mapping,
+                );
+                defer rb.deinit();
+                for (state.problems.problems.items) |problem| {
+                    try mod.reports.append(coord.gpa, try rb.build(problem));
+                }
+            }
+        }
+
+        fn deinit(self: *UnfinalizedReportDestinations) void {
+            if (self.builtin_problems) |state| state.deinit();
+            for (self.modules.items) |mod| {
+                mod.pending_evaluation.?.deinit();
+                mod.pending_evaluation = null;
+            }
+            self.modules.deinit(self.coordinator.gpa);
+        }
+    };
 
     fn commitPreparedModule(self: *Coordinator, mod: *ModuleState) CoordinatorError!void {
         const state = mod.pending_evaluation.?;
@@ -6393,8 +6505,12 @@ const AppRootIdentity = struct {
     /// requirement solutions it carries must be a pure function of the artifacts
     /// they relate.
     app_root_bytes: []u8,
+    /// Everything the compile wrote to stderr, such as compile-time `dbg`
+    /// output, captured rather than written to the test process's stderr.
+    stderr_bytes: []u8,
 
     fn deinit(self: *AppRootIdentity, allocator: Allocator) void {
+        allocator.free(self.stderr_bytes);
         allocator.free(self.app_root_bytes);
         allocator.free(self.executable_root_bytes);
         self.* = undefined;
@@ -6452,6 +6568,17 @@ fn compileAppRootIdentityWithConstants(
     return compileAppRootIdentityExpecting(allocator, cache_dir, app_path, mode, expected_constants, &.{});
 }
 
+/// Collects a compile's stderr writes in memory.
+const StderrCapture = struct {
+    allocator: Allocator,
+    bytes: std.ArrayList(u8) = .empty,
+
+    fn write(raw: ?*anyopaque, _: std.Io, bytes: []const u8) CoreCtx.StdioError!void {
+        const self: *StderrCapture = @ptrCast(@alignCast(raw.?));
+        self.bytes.appendSlice(self.allocator, bytes) catch return error.IoError;
+    }
+};
+
 fn compileAppRootIdentityExpecting(
     allocator: Allocator,
     cache_dir: []const u8,
@@ -6460,7 +6587,11 @@ fn compileAppRootIdentityExpecting(
     expected_constants: []const ExpectedPairingConstant,
     expected_errors: []const []const u8,
 ) CheckedModuleCacheRunError!AppRootIdentity {
-    const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    var stderr_capture: StderrCapture = .{ .allocator = allocator };
+    defer stderr_capture.bytes.deinit(allocator);
+    var roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    roc_ctx.ctx = &stderr_capture;
+    roc_ctx.vtable.writeStderr = StderrCapture.write;
     var cache_manager = CacheManager.init(allocator, .{
         .enabled = true,
         .cache_dir = cache_dir,
@@ -6518,6 +6649,8 @@ fn compileAppRootIdentityExpecting(
     errdefer allocator.free(executable_root_bytes);
     const app_root_bytes = try serializedCheckedArtifactBytes(allocator, coord.appRootCheckedArtifact());
     errdefer allocator.free(app_root_bytes);
+    const stderr_bytes = try stderr_capture.bytes.toOwnedSlice(allocator);
+    errdefer allocator.free(stderr_bytes);
     var where_method_scheme_use_count: usize = 0;
     for (root.moduleEnvConst().scheme_uses.items.items) |record| {
         if (record.slot_kind == @intFromEnum(can.ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
@@ -6545,6 +6678,7 @@ fn compileAppRootIdentityExpecting(
         .direct_required_call_count = direct_required_call_count,
         .executable_root_bytes = executable_root_bytes,
         .app_root_bytes = app_root_bytes,
+        .stderr_bytes = stderr_bytes,
     };
 }
 
@@ -7030,9 +7164,11 @@ test "issue 11389 pairing cache retains exported constants and debug observation
     var cold = try compileAppRootIdentityWithConstants(allocator, cache, app, .executable_artifacts, &.{.{ .name = "value", .value = 42 }});
     defer cold.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 1), cold.compile_time_debug_count);
+    try std.testing.expectEqualStrings("[dbg] 41\n", cold.stderr_bytes);
     var warm = try compileAppRootIdentityWithConstants(allocator, cache, app, .executable_artifacts, &.{.{ .name = "value", .value = 42 }});
     defer warm.deinit(allocator);
     try std.testing.expectEqual(@as(u32, 0), warm.platform_pairing_count);
+    try std.testing.expectEqualStrings("[dbg] 41\n", warm.stderr_bytes);
     try std.testing.expectEqualSlices(u8, cold.executable_root_bytes, warm.executable_root_bytes);
 }
 

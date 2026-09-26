@@ -86,7 +86,7 @@ pub fn literalSymbolName(allocator: Allocator, bytes: []const u8, alignment: u32
     hasher.update(&alignment_bytes);
     hasher.update(bytes);
     const digest = hasher.finalResult();
-    return std.fmt.allocPrint(allocator, "roc__static_str_{s}", .{&std.fmt.bytesToHex(digest[0..16].*, .lower)});
+    return std.fmt.allocPrint(allocator, lir.Program.content_data_symbol_prefix ++ "{s}", .{&std.fmt.bytesToHex(digest[0..16].*, .lower)});
 }
 
 /// Build readonly data exports from the exact LIR procedure backing demand.
@@ -222,11 +222,11 @@ test "build emits demanded literal backing with static refcount headers" {
 
     const dead = try store.insertString("compile-time-only intermediate must not be emitted");
     const local = try store.addLocal(.{ .layout_idx = .str });
-    const end = try store.addCFStmt(.{ .ret = .{ .value = local } });
-    _ = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = dead, .offset = 0, .len = @intCast(store.getString(dead).len) } }, .next = end } });
-    const tail = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = large, .offset = 0, .len = @intCast(store.getString(large).len) } }, .next = end } });
-    const head = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = small, .offset = 0, .len = 5 } }, .next = tail } });
-    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .body = head, .ret_layout = .str });
+    const end = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
+    _ = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = dead, .offset = 0, .len = @intCast(store.getString(dead).len) } }, .next = end } }, .test_fixture);
+    const tail = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = large, .offset = 0, .len = @intCast(store.getString(large).len) } }, .next = end } }, .test_fixture);
+    const head = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = small, .offset = 0, .len = 5 } }, .next = tail } }, .test_fixture);
+    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .body = head, .ret_layout = .str }, .none);
 
     var table = try build(allocator, &store, .x64linux);
     defer table.deinit();

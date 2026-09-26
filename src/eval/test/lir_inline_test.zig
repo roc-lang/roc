@@ -2305,13 +2305,15 @@ test "interface summaries relocate across bodies and executor lanes" {
         }
     };
     const source =
-        \\leaf : Str -> Str
-        \\leaf = |s| Str.concat(s, "!")
-        \\left : Str -> Str
-        \\left = |s| leaf(s)
-        \\right : Str -> Str
-        \\right = |s| leaf(s)
-        \\main : Str -> (Str, Str)
+        \\inner : a -> List(a)
+        \\inner = |x| [x]
+        \\leaf : a -> List(a)
+        \\leaf = |x| inner(x)
+        \\left : a -> List(a)
+        \\left = |x| leaf(x)
+        \\right : a -> List(a)
+        \\right = |x| leaf(x)
+        \\main : Str -> (List(Str), List(Str))
         \\main = |s| (left(s), right(s))
     ;
     var first_executor = Executor{ .allocator = allocator, .next_lane = 0 };
@@ -2346,31 +2348,95 @@ test "interface summaries relocate across bodies and executor lanes" {
     }
 }
 
+test "issue 11326 callers of a closed procedure do not pay for its body" {
+    // Repro for https://github.com/roc-lang/roc/issues/11326: a procedure
+    // whose checked signature has no quantified variables has a complete
+    // specialization interface already, so requesting it must not replay its
+    // body's relations inside the caller's graph. Adding callers of one shared
+    // closed procedure therefore costs the same Monotype graph work whether
+    // that procedure's body is trivial or large.
+    const allocator = std.testing.allocator;
+    const light_four = try closedCalleeCallersGraphNodes(allocator, 4, .light);
+    const light_eight = try closedCalleeCallersGraphNodes(allocator, 8, .light);
+    const heavy_four = try closedCalleeCallersGraphNodes(allocator, 4, .heavy);
+    const heavy_eight = try closedCalleeCallersGraphNodes(allocator, 8, .heavy);
+
+    const light_per_four_callers = light_eight - light_four;
+    const heavy_per_four_callers = heavy_eight - heavy_four;
+    if (heavy_per_four_callers != light_per_four_callers) {
+        std.debug.print(
+            "four more callers of a closed procedure created {d} graph nodes when its body was trivial " ++
+                "but {d} when its body was large (totals: trivial {d}->{d}, large {d}->{d})\n",
+            .{ light_per_four_callers, heavy_per_four_callers, light_four, light_eight, heavy_four, heavy_eight },
+        );
+    }
+    try std.testing.expectEqual(light_per_four_callers, heavy_per_four_callers);
+}
+
+const ClosedCalleeBody = enum { light, heavy };
+
+fn closedCalleeCallersGraphNodes(allocator: Allocator, callers: usize, body: ClosedCalleeBody) TestError!u64 {
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "Page : { title : Str, body : Str, count : U64, tags : List(Str) }\n");
+    try source.appendSlice(allocator, "page : Str, U64 -> Str\n");
+    switch (body) {
+        .light => try source.appendSlice(allocator, "page = |name, _n| name\n"),
+        .heavy => try source.appendSlice(allocator,
+            \\page = |name, n| {
+            \\    body = match n {
+            \\        0 => "zero"
+            \\        1 => "one ${name}"
+            \\        _ => "many ${name} ${n.to_str()}"
+            \\    }
+            \\    tags = List.map([name, "p"], |t| Str.concat(t, "!"))
+            \\    record : Page
+            \\    record = { title: "page", body: body, count: n + 1, tags: tags }
+            \\    "${record.title}|${record.body}|${record.count.to_str()}|${Str.join_with(record.tags, ",")}"
+            \\}
+            \\
+        ),
+    }
+    for (0..callers) |index| {
+        try source.print(allocator, "caller_{d} : Str, U64 -> Str\ncaller_{d} = |name, n| page(name, n + {d})\n", .{ index, index, index });
+    }
+    try source.appendSlice(allocator, "main : Str -> List(Str)\nmain = |name| [");
+    for (0..callers) |index| {
+        if (index != 0) try source.appendSlice(allocator, ", ");
+        try source.print(allocator, "caller_{d}(name, {d})", .{ index, index });
+    }
+    try source.appendSlice(allocator, "]\n");
+
+    var diagnostics: MonoLower.Diagnostics = .{};
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source.items, .{ .diagnostics = &diagnostics });
+    defer lowered.deinit(allocator);
+    return diagnostics.graph.nodes_created;
+}
+
 test "issue 10529 ten-level open Try chain with inline callback stays bounded" {
     const allocator = std.testing.allocator;
-    const source =
-        \\take0 = |b| Ok({ val: b.get(0).map_err(|_| End)?, rest: b.drop_first(1) })
-        \\take1 = |b| Ok({ val: take0(b)?.val, rest: take0(b)?.rest })
-        \\take2 = |b| Ok({ val: take1(b)?.val, rest: take1(b)?.rest })
-        \\take3 = |b| Ok({ val: take2(b)?.val, rest: take2(b)?.rest })
-        \\take4 = |b| Ok({ val: take3(b)?.val, rest: take3(b)?.rest })
-        \\take5 = |b| Ok({ val: take4(b)?.val, rest: take4(b)?.rest })
-        \\take6 = |b| Ok({ val: take5(b)?.val, rest: take5(b)?.rest })
-        \\take7 = |b| Ok({ val: take6(b)?.val, rest: take6(b)?.rest })
-        \\take8 = |b| Ok({ val: take7(b)?.val, rest: take7(b)?.rest })
-        \\take9 = |b| Ok({ val: take8(b)?.val, rest: take8(b)?.rest })
-        \\
-        \\main : {} -> Try({ val : U8, rest : List(U8) }, [End, ..])
-        \\main = |_| take9([1, 2, 3])
-    ;
+    for ([_]usize{ 6, 8, 10 }) |depth| {
+        const counters = try openTryChainCounters(allocator, depth);
+        // Preserve the original ten-level limits while also checking shorter
+        // chains. Complete method contracts belong in reusable summaries;
+        // applying them before every cache lookup repeats transitive work.
+        if (counters.template_misses > 8 * depth or counters.nominal_backing_instantiations > 310 * depth) {
+            std.debug.print("Try chain depth {d}: {d} nominal backings, {d} template misses\n", .{ depth, counters.nominal_backing_instantiations, counters.template_misses });
+        }
+        try std.testing.expect(counters.template_misses <= 8 * depth);
+        try std.testing.expect(counters.nominal_backing_instantiations <= 310 * depth);
+    }
+}
 
-    const counters = try monotypeCountersForModule(allocator, source);
-    // Each helper adds a bounded amount of work: completed transitive interface
-    // summaries replay without coupling the two independent calls. Resolving
-    // hidden defaultable evidence at checked edges adds exact specializations
-    // to this chain, but does not restore its prior combinatorial growth.
-    try std.testing.expect(counters.template_misses <= 80);
-    try std.testing.expect(counters.nominal_backing_instantiations <= 3100);
+fn openTryChainCounters(allocator: Allocator, depth: usize) TestError!MonoLower.SpecializationCounters {
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "take0 = |b| Ok({ val: b.get(0).map_err(|_| End)?, rest: b.drop_first(1) })\n");
+    for (1..depth) |level| {
+        try source.print(allocator, "take{d} = |b| Ok({{ val: take{d}(b)?.val, rest: take{d}(b)?.rest }})\n", .{ level, level - 1, level - 1 });
+    }
+    try source.print(allocator, "main : {{}} -> Try({{ val : U8, rest : List(U8) }}, [End, ..])\nmain = |_| take{d}([1, 2, 3])\n", .{depth - 1});
+    return monotypeCountersForModule(allocator, source.items);
 }
 
 test "independent same-name helper requirements lower separately" {
@@ -2845,18 +2911,20 @@ test "alias-heavy generic specialization count does not exceed backing types" {
 }
 
 test "nested function specializations keep equal types at different sites distinct" {
+    // Each lambda captures its enclosing function's `n`, so it stays a nested
+    // function of that function.
     const allocator = std.testing.allocator;
     const source =
         \\first : U64 -> U64
         \\first = |n| {
-        \\    id = |x| x
-        \\    id(n)
+        \\    add_n = |x| x + n
+        \\    add_n(n)
         \\}
         \\
         \\second : U64 -> U64
         \\second = |n| {
-        \\    id = |x| x
-        \\    id(n)
+        \\    add_n = |x| x + n
+        \\    add_n(n)
         \\}
         \\
         \\main : { first : U64, second : U64 }
@@ -2884,12 +2952,13 @@ test "nested function specializations keep equal types at different sites distin
 }
 
 test "one nested function site specializes at multiple closed function types" {
+    // The lambda captures `value`, so it stays a nested function of `choose`.
     const allocator = std.testing.allocator;
     const source =
         \\choose : a -> a
         \\choose = |value| {
-        \\    id = |x| x
-        \\    id(value)
+        \\    get = |{}| value
+        \\    get({})
         \\}
         \\
         \\main : { n : U64, s : Str }
@@ -7908,6 +7977,32 @@ test "iterdiff: stream per-element effects agree across inline modes" {
     );
 }
 
+test "iterdiff: Stream.custom advance effects agree across inline modes" {
+    // A custom effectful source runs its advance exactly once per pull, and
+    // `map` effects interleave per element; every lowering must reproduce the
+    // same ordered trace, including the final `NoMore` advance.
+    try expectSameObservationsAcrossInlineModes(
+        \\up_to_three! : I64 => Try((I64, I64), [NoMore])
+        \\up_to_three! = |n| {
+        \\    dbg n
+        \\    if n < 3 { Ok((n, n + 1)) } else { Err(NoMore) }
+        \\}
+        \\
+        \\main : () => List(I64)
+        \\main = || {
+        \\    stream =
+        \\        Stream.custom(0.I64, Unknown, up_to_three!)
+        \\            .map(|n| {
+        \\                dbg n * 2
+        \\                n * 2
+        \\            })
+        \\    result = Stream.collect!(stream)
+        \\    dbg result
+        \\    result
+        \\}
+    );
+}
+
 // Pre-existing divergence: a bounded prefix (`take_first`) of an infinite custom
 // iterator (`Iter.custom`, the Fibonacci unfold below) diverges between the two
 // lowerings, and the seed+step representation does NOT fix it: the divergence is
@@ -8338,8 +8433,8 @@ test "custom literal field default gets an ordinary conversion root" {
     var numeral_roots: usize = 0;
     var quote_roots: usize = 0;
     for (resources.checked_artifact.checked_bodies.default_exprs.items) |entry| {
-        const conversion = resources.checked_artifact.compile_time_roots.lookupNumeralRootByExpr(entry.checked_expr) orelse
-            return error.TestUnexpectedResult;
+        const conversion = resources.checked_artifact.compile_time_roots.root(resources.checked_artifact.checked_bodies.literalConversionRoot(entry.checked_expr) orelse
+            return error.TestUnexpectedResult);
         switch (conversion.kind) {
             .numeral_conversion => numeral_roots += 1,
             .quote_conversion => quote_roots += 1,
@@ -11659,4 +11754,181 @@ test "issue 11470: tagged shared error composition executes in both strategies" 
         }
         try runtime_env.checkForLeaks();
     }
+}
+
+/// Every statement reachable from `proc`'s body, in walk order.
+fn procStmts(
+    allocator: Allocator,
+    store: *const lir.LirStore,
+    proc: LIR.LirProcSpecId,
+) TestError![]LIR.CFStmtId {
+    var out = std.ArrayList(LIR.CFStmtId).empty;
+    errdefer out.deinit(allocator);
+    var work = std.ArrayList(LIR.CFStmtId).empty;
+    defer work.deinit(allocator);
+    var seen = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
+    defer seen.deinit();
+    try work.append(allocator, store.getProcSpec(proc).body orelse return error.MissingProcSpec);
+    while (work.pop()) |stmt_id| {
+        if ((try seen.getOrPut(stmt_id)).found_existing) continue;
+        try lir.BodyClone.appendSuccessorsWithAllocator(store, &work, stmt_id, allocator);
+        try out.append(allocator, stmt_id);
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+test "provenance: TRMC statements state their kind at the site they rewrite" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\LinkedList := [Nil, Cons(I64, LinkedList)]
+        \\
+        \\repeat : I64, I64 -> LinkedList
+        \\repeat = |value, n|
+        \\    if n <= 0.I64
+        \\        LinkedList.Nil
+        \\    else
+        \\        LinkedList.Cons(value, repeat(value, n - 1))
+        \\
+        \\main = repeat(7.I64, 3.I64)
+    , .none);
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    const repeat = try rootDirectCallTarget(allocator, &lowered_source.lowered);
+    try std.testing.expectEqual(LIR.TailTransform.trmc, store.getProcSpec(repeat).tail_transform);
+
+    const stmts = try procStmts(allocator, store, repeat);
+    defer allocator.free(stmts);
+
+    // The loop join TRMC wraps around the body sits at the procedure body.
+    const entry = store.getProcSpec(repeat).body.?;
+    try std.testing.expect(store.getCFStmt(entry) == .join);
+    try std.testing.expect(store.stmtOriginKind(entry) == .trmc);
+    try std.testing.expectEqual(@as(u32, 5), store.stmtLoc(entry).line);
+
+    var trmc_count: usize = 0;
+    var recursive_site_loop_backs: usize = 0;
+    for (stmts) |stmt_id| {
+        const kind = store.stmtOriginKind(stmt_id);
+        const loc = store.stmtLoc(stmt_id);
+        // Nothing in a user procedure is anonymous scaffolding, and every
+        // statement, including the ones TRMC created, names a line of
+        // `repeat` (lines 5-8).
+        try std.testing.expect(kind != .scaffold);
+        try std.testing.expect(loc.hasLocation());
+        try std.testing.expect(loc.line >= 5 and loc.line <= 8);
+        if (kind != .trmc) continue;
+        trmc_count += 1;
+        // The loop-back that replaces the recursive call carries the
+        // recursive call's location, not the procedure's.
+        if (store.getCFStmt(stmt_id) == .jump and loc.line == 8) recursive_site_loop_backs += 1;
+    }
+    try std.testing.expect(trmc_count > 0);
+    try std.testing.expectEqual(@as(usize, 1), recursive_site_loop_backs);
+}
+
+test "provenance: ARC RC statements state their subject, reason, and deciding location" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\pair : List(Str), Str -> List(Str)
+        \\pair = |xs, s|
+        \\    xs.append(s).append(s)
+        \\
+        \\main = pair(["a"], "b").len()
+    , .none);
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    const root = try rootProc(&lowered_source.lowered);
+    const pair = try rootDirectCallTarget(allocator, &lowered_source.lowered);
+
+    // Every RC statement in both procedures is ARC-inserted, names the local
+    // it operates on, and carries the location of the statement whose
+    // ownership decision produced it.
+    var increfs: usize = 0;
+    var decrefs: usize = 0;
+    for ([_]LIR.LirProcSpecId{ root, pair }) |proc| {
+        const stmts = try procStmts(allocator, store, proc);
+        defer allocator.free(stmts);
+        for (stmts) |stmt_id| {
+            const kind = store.stmtOriginKind(stmt_id);
+            switch (store.getCFStmt(stmt_id)) {
+                .incref => |rc| {
+                    try std.testing.expect(kind == .arc_incref);
+                    try std.testing.expectEqual(rc.value, kind.arc_incref.subject_local);
+                    try std.testing.expect(store.stmtLoc(stmt_id).hasLocation());
+                    increfs += 1;
+                },
+                .decref => |rc| {
+                    try std.testing.expect(kind == .arc_decref);
+                    try std.testing.expectEqual(rc.value, kind.arc_decref.subject_local);
+                    try std.testing.expect(store.stmtLoc(stmt_id).hasLocation());
+                    decrefs += 1;
+                },
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => try std.testing.expect(!kind.isArcInserted()),
+            }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), increfs);
+    try std.testing.expectEqual(@as(usize, 1), decrefs);
+
+    // `s` is appended twice: the first append aliases it while it stays live,
+    // so ARC retains it at that append (line 3).
+    const pair_stmts = try procStmts(allocator, store, pair);
+    defer allocator.free(pair_stmts);
+    for (pair_stmts) |stmt_id| {
+        if (store.getCFStmt(stmt_id) != .incref) continue;
+        try std.testing.expectEqual(LIR.RcReason.alias_bind, store.stmtOriginKind(stmt_id).arc_incref.reason);
+        try std.testing.expectEqual(@as(u32, 3), store.stmtLoc(stmt_id).line);
+    }
+
+    // The resulting list dies after `.len()` in `main` (line 5).
+    const root_stmts = try procStmts(allocator, store, root);
+    defer allocator.free(root_stmts);
+    for (root_stmts) |stmt_id| {
+        if (store.getCFStmt(stmt_id) != .decref) continue;
+        try std.testing.expectEqual(LIR.RcReason.dead_after_stmt, store.stmtOriginKind(stmt_id).arc_decref.reason);
+        try std.testing.expectEqual(@as(u32, 5), store.stmtLoc(stmt_id).line);
+    }
+}
+
+test "provenance: an overflow inside a TCE loop reports the overflowing line" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\count : U8, U8 -> U8
+        \\count = |n, acc|
+        \\    if n == 0
+        \\        acc
+        \\    else
+        \\        count(n - 1, acc + 100)
+        \\
+        \\main : U8
+        \\main = count(3, 0)
+    , .none);
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    const count = try rootDirectCallTarget(allocator, &lowered_source.lowered);
+    try std.testing.expectEqual(LIR.TailTransform.tce, store.getProcSpec(count).tail_transform);
+
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, store);
+    defer static_strings.deinit();
+    var interpreter = try eval.Interpreter.init(
+        allocator,
+        store,
+        &lowered_source.lowered.lir_result.layouts,
+        static_strings.view(),
+        runtime_env.get_ops(),
+    );
+    defer interpreter.deinit();
+
+    _ = interpreter.eval(.{ .proc_id = try rootProc(&lowered_source.lowered) }) catch |err| {
+        try std.testing.expectEqual(error.Crash, err);
+        const loc = interpreter.getFailedSourceLoc() orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(u32, 6), loc.line);
+        return;
+    };
+    return error.TestUnexpectedResult;
 }

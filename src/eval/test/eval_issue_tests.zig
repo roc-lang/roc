@@ -266,6 +266,138 @@ const issue11377GenericNominalCollectionSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "issue 11661: closure relaxation preserves previous loop list",
+        .source_kind = .module,
+        .source =
+        \\answer : U64 -> Str
+        \\answer = |n| {
+        \\    edges = List.map_with_index(List.repeat(0, n - 1), |_, i| { from: n - 1 - i, to: n - 2 - i, cost: 1 })
+        \\    relax = |d| List.fold(edges, d, |acc, e| {
+        \\        via = (List.get(acc, e.to) ?? 1000) + e.cost
+        \\        if via < (List.get(acc, e.from) ?? 1000) {
+        \\            List.set(acc, e.from, via) ?? crash("relax: out of range")
+        \\        } else { acc }
+        \\    })
+        \\    start = List.set(List.repeat(1000, n), 0, 0) ?? crash("start")
+        \\    var $d = start
+        \\    var $next = relax(start)
+        \\    var $passes = 1
+        \\    while $next != $d {
+        \\        $d = $next
+        \\        $next = relax($d)
+        \\        $passes = $passes + 1
+        \\    }
+        \\    "passes ${U64.to_str($passes)}: ${Str.join_with(List.map($d, I64.to_str), " ")}"
+        \\}
+        \\main = answer(10)
+        ,
+        .expected = .{ .inspect_str = "\"passes 10: 0 1 2 3 4 5 6 7 8 9\"" },
+    },
+    .{
+        .name = "issue 11632: annotated Try parser keeps its listed tags",
+        .source_kind = .module,
+        .source =
+        \\parse : Str -> Try([A, B], _)
+        \\parse = |json| Json.parse(json)
+        \\main = match parse("\"C\"") {
+        \\    Ok(_) => False
+        \\    Err(_) => True
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "issue 11632: single inferred tag still derives",
+        .source_kind = .module,
+        .source =
+        \\main = Ok(Friendly) == Json.parse("\"Friendly\"")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "issue 11632: nested inferred encoder row",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    value = { tags: [A] }
+        \\    encoded = Json.to_str(value)
+        \\    all_a = List.all(value.tags, |tag| match tag {
+        \\        A => True
+        \\        B => False
+        \\    })
+        \\    encoded == "{\"tags\":[\"A\"]}" and all_a
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "issue 11632: parser branch order A then B",
+        .source_kind = .module,
+        .source =
+        \\run = |json| {
+        \\    w = Json.parse(json)
+        \\    match w {
+        \\        Ok(A(s)) => s == ""
+        \\        Ok(B) => True
+        \\        Err(_) => False
+        \\    }
+        \\}
+        \\main = run("\"B\"") and run("{\"A\":\"\"}")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "issue 11632: parser branch order B then A",
+        .source_kind = .module,
+        .source =
+        \\run = |json| {
+        \\    w = Json.parse(json)
+        \\    match w {
+        \\        Ok(B) => True
+        \\        Ok(A(s)) => s == ""
+        \\        Err(_) => False
+        \\    }
+        \\}
+        \\main = run("\"B\"") and run("{\"A\":\"\"}")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "issue 11632: encoder before later match",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    v = if 1 == 1 A else B
+        \\    s = Json.to_str(v)
+        \\    extra = match v {
+        \\        A => 1
+        \\        B => 2
+        \\        C => 3
+        \\    }
+        \\    s == "\"A\"" and extra == 1
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "issue 11632: fresh caller openness remains inferred",
+        .source_kind = .module,
+        .source =
+        \\make : {} -> [A, B]
+        \\make = |_| A
+        \\main = {
+        \\    value = make({})
+        \\    encoded = Json.to_str(value)
+        \\    match value {
+        \\        A => encoded == "\"A\""
+        \\        B => False
+        \\        C => False
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "issue 11377: nested nominal alias applications retain outer parameters",
         .source_kind = .module,
         .source =
@@ -323,6 +455,46 @@ pub const tests = [_]TestCase{
         .source_kind = .module,
         .source = issue11377GenericNominalCollectionSource,
         .expected = .{ .inspect_str = "\"same\"" },
+    },
+    .{
+        .name = "issue 11626: different tags keep independent return rows",
+        .source_kind = .module,
+        .source = @import("issue_11626_source.zig").source ++ "\nmain = (stats_page(\"\"), lead_page(\"\"), stats_page(\"ok\"), lead_page(\"ok\"))\n",
+        .expected = .{ .inspect_str = "(Err(NotFound(IndexStats)), Err(NotFound(LeadMissing)), Ok(\"stats\"), Ok(\"lead\"))" },
+    },
+    .{
+        .name = "issue 11626: different base types keep independent return rows",
+        .source_kind = .module,
+        .source = @import("issue_11626_source.zig").source ++ "\nmain = (text_page(\"\"), number_page(\"\"), text_page(\"ok\"), number_page(\"ok\"))\n",
+        .expected = .{ .inspect_str = "(Err(NotFound(\"owned error payload longer than an inline string\")), Err(NotFound(7)), Ok(\"text\"), Ok(\"number\"))" },
+    },
+    .{
+        .name = "issue 11626: higher order calls keep independent return rows",
+        .source_kind = .module,
+        .source = @import("issue_11626_source.zig").source ++ "\nmain = (run(\"\", stats_page), run(\"\", lead_page), run(\"ok\", stats_page), run(\"ok\", lead_page))\n",
+        .expected = .{ .inspect_str = "(Err(NotFound(IndexStats)), Err(NotFound(LeadMissing)), Ok(\"stats\"), Ok(\"lead\"))" },
+    },
+    .{
+        .name = "issue 11626: composed returns carry captured callable payloads",
+        .source_kind = .module,
+        .source =
+        \\find = |text, what| if text == "" Err(NotFound(what)) else Ok(text)
+        \\respond = |text| Ok(|{}| text)
+        \\stats_page = |text| {
+        \\    _ = find(text, IndexStats)?
+        \\    respond(text)
+        \\}
+        \\lead_page = |text| {
+        \\    _ = find(text, LeadMissing)?
+        \\    respond(text)
+        \\}
+        \\call = |result| match result {
+        \\    Ok(f) => f({})
+        \\    Err(_) => "missing"
+        \\}
+        \\main = (call(stats_page("owned stats response longer than an inline string")), call(lead_page("owned lead response longer than an inline string")))
+        ,
+        .expected = .{ .inspect_str = "(\"owned stats response longer than an inline string\", \"owned lead response longer than an inline string\")" },
     },
     .{
         .name = "issue 11470: imported polymorphic error composition preserves shared tails",
@@ -3236,5 +3408,185 @@ pub const tests = [_]TestCase{
         \\main = split(["a", "b"]).map(|group| group.len())
         ,
         .expected = .{ .inspect_str = "[1, 1]" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11622
+        // `run` is unannotated, so its body reads `stmt.host` on an open
+        // record parameter. The call from `query` lifts the opaque `Stmt` into
+        // that record inside `Stmt`'s own module, which the checker permits,
+        // so the specialization at `Stmt` must read the field through the
+        // opaque backing. `prepare` and `step` share the `DbErr` tag, so the
+        // two `?` error rows must merge into one union.
+        .name = "issue 11622: unannotated opaque method reading its backing field, dispatched after ?",
+        .source_kind = .module,
+        .source =
+        \\Stmt :: { host : U64 }.{
+        \\    run = |stmt|
+        \\        match step(stmt.host)? {
+        \\            Done => Ok(stmt.host)
+        \\            Row => Err(TooManyRows)
+        \\        }
+        \\}
+        \\
+        \\prepare : Str -> Try(Stmt, [DbErr(Str)])
+        \\prepare = |_sql| Ok(Stmt.{ host: 0 })
+        \\
+        \\query = |sql| {
+        \\    stmt = prepare(sql)?
+        \\    stmt.run()
+        \\}
+        \\
+        \\step : U64 -> Try([Row, Done], [DbErr(Str)])
+        \\step = |_host| Ok(Done)
+        \\
+        \\main = query("select 1")
+        ,
+        .expected = .{ .inspect_str = "Ok(0)" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11622
+        // `inner_host` is an unannotated record-polymorphic helper. Both opaque
+        // types are lifted into its record parameter inside their own module,
+        // so each segment of `r.inner.host` must read through an opaque
+        // backing in the specialization at `Outer`.
+        .name = "issue 11622: record-polymorphic helper reads a field chain through nested opaque types",
+        .source_kind = .module,
+        .source =
+        \\Inner :: { host : U64 }
+        \\
+        \\Outer :: { inner : Inner, port : U64 }
+        \\
+        \\inner_host = |r| r.inner.host + r.port
+        \\
+        \\main = inner_host(Outer.{ inner: Inner.{ host: 40 }, port: 2 })
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11668
+        // The literal's target `Sql(a)` gets `a` from the record argument, whose
+        // field kind is still open when the literal is lowered, so the
+        // `from_quote` call must lower at the open target instead of demanding
+        // its finished type.
+        .name = "issue 11668: from_quote literal argument whose type parameter comes from a record argument",
+        .source_kind = .module,
+        .source =
+        \\Sql(a) := { text : Str }.{
+        \\    from_quote : Str -> Try(Sql(a), [BadQuotedBytes(Str)])
+        \\    from_quote = |raw| Ok(Sql.{ text: raw })
+        \\}
+        \\
+        \\query : Sql(a), a -> Str
+        \\query = |sql, _| sql.text
+        \\
+        \\run : {} -> Str
+        \\run = |_| query("select 1", { id: 1.I32 })
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "\"select 1\"" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11668
+        // The numeral flavor of the same open-target literal conversion.
+        .name = "issue 11668: from_numeral literal argument whose type parameter comes from a record argument",
+        .source_kind = .module,
+        .source =
+        \\Tally(a) := { count : I64 }.{
+        \\    from_numeral : Numeral -> Try(Tally(a), [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Ok(Tally.{ count: 7 })
+        \\}
+        \\
+        \\total : Tally(a), a -> I64
+        \\total = |tally, _| tally.count
+        \\
+        \\run : {} -> I64
+        \\run = |_| total(3, { id: 1.I32 })
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "7" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11668
+        // The literal's target `Sql({ n : Str })` is fixed by a later field
+        // access in the same monomorphic body.
+        .name = "issue 11668: from_quote literal whose target record is fixed by a later use",
+        .source_kind = .module,
+        .source =
+        \\Sql(a) := { text : Str }.{
+        \\    from_quote : Str -> Try(Sql(a), [BadQuotedBytes(Str)])
+        \\    from_quote = |raw| Ok(Sql.{ text: raw })
+        \\}
+        \\
+        \\query : Sql(a) -> Try(a, [X])
+        \\query = |_| Err(X)
+        \\
+        \\run : {} -> Try(Str, [X])
+        \\run = |_| {
+        \\    row = query("select 1")?
+        \\    Ok(row.n)
+        \\}
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "Err(X)" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11674
+        // `from_quote`'s `where` clause asks for a derived `I32.parser_for`;
+        // the literal inside `run` converts at `Sql(I32)`.
+        .name = "issue 11674: from_quote literal whose where clause needs a derived parser_for",
+        .source_kind = .module,
+        .source =
+        \\Sql(a) := { text : Str }.{
+        \\    from_quote : Str -> Try(Sql(a), [BadQuotedBytes(Str)])
+        \\        where [a.parser_for : Fmt -> (U8 -> Try({ value : a, rest : U8 }, [Bad]))]
+        \\    from_quote = |raw| Ok(Sql.{ text: raw })
+        \\}
+        \\
+        \\Fmt := [Default].{
+        \\    parse_i32 : Fmt, U8 -> Try({ value : I32, rest : U8 }, [Bad])
+        \\    parse_i32 = |_, state| Ok({ value: 0, rest: state })
+        \\}
+        \\
+        \\query : Sql(a) -> Try(List(a), [X])
+        \\query = |_| Ok([])
+        \\
+        \\run : {} -> Try(List(I32), [X])
+        \\run = |_| query("select 1")
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "Ok([])" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11669
+        // `from_quote` calls a derived `I32.parser_for` whose error row is the
+        // `where` clause's open `err`, which includes the parser's `Bad`.
+        .name = "issue 11669: from_quote calling a derived parser_for with an open error row",
+        .source_kind = .module,
+        .source =
+        \\Sql(a) := { text : Str }.{
+        \\    from_quote : Str -> Try(Sql(a), [BadQuotedBytes(Str)])
+        \\        where [a.parser_for : Fmt -> (U8 -> Try({ value : a, rest : U8 }, err))]
+        \\    from_quote = |raw| {
+        \\        A : a
+        \\        _ = A.parser_for(Fmt.Default)
+        \\        Ok(Sql.{ text: raw })
+        \\    }
+        \\}
+        \\
+        \\Fmt := [Default].{
+        \\    parse_i32 : Fmt, U8 -> Try({ value : I32, rest : U8 }, [Bad])
+        \\    parse_i32 = |_, state| Ok({ value: 0, rest: state })
+        \\}
+        \\
+        \\sql : Sql(I32)
+        \\sql = "select 1"
+        \\
+        \\main = sql.text
+        ,
+        .expected = .{ .inspect_str = "\"select 1\"" },
     },
 };

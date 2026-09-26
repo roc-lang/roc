@@ -342,7 +342,7 @@ pub fn main(init: std.process.Init) anyerror!void {
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    var wasm_path: []const u8 = "test/wasm/app.wasm";
+    var wasm_path_arg: ?[]const u8 = null;
     var expected_output: []const u8 = "Hello from Roc WASM!";
     var options: TestOptions = .{};
 
@@ -353,7 +353,7 @@ pub fn main(init: std.process.Init) anyerror!void {
         if (std.mem.eql(u8, arg, "--help")) {
             std.debug.print("Usage: zig build run-test-wasm-static-lib -- [options]\n", .{});
             std.debug.print("Options:\n", .{});
-            std.debug.print("  --wasm-path PATH     Path to the WASM file (default: test/wasm/app.wasm)\n", .{});
+            std.debug.print("  --wasm-path PATH     Path to the WASM file (required)\n", .{});
             std.debug.print("  --expected OUTPUT    Expected output string\n", .{});
             std.debug.print("  --assert-alloc-balanced  Assert canonical roc_alloc and roc_dealloc counts match\n", .{});
             std.debug.print("  --min-allocs N       Minimum canonical roc_alloc count when counting allocations\n", .{});
@@ -361,7 +361,7 @@ pub fn main(init: std.process.Init) anyerror!void {
             std.debug.print("  --help               Display this help message\n", .{});
             return;
         } else if (std.mem.eql(u8, arg, "--wasm-path")) {
-            wasm_path = arg_iter.next() orelse {
+            wasm_path_arg = arg_iter.next() orelse {
                 std.debug.print("Error: --wasm-path requires an argument\n", .{});
                 return;
             };
@@ -402,6 +402,11 @@ pub fn main(init: std.process.Init) anyerror!void {
         }
     }
 
+    const wasm_path = wasm_path_arg orelse {
+        std.debug.print("Error: --wasm-path is required\n", .{});
+        return error.MissingWasmPath;
+    };
+
     std.debug.print("=== WASM Static Library Test ===\n", .{});
     std.debug.print("WASM file: {s}\n", .{wasm_path});
     std.debug.print("Expected output: \"{s}\"\n\n", .{expected_output});
@@ -418,19 +423,4 @@ pub fn main(init: std.process.Init) anyerror!void {
     if (!result.passed) {
         return error.TestFailed;
     }
-}
-
-test "wasm static lib - hello world" {
-    // This test is run via `zig build run-test-wasm-static-lib`
-    // It requires the WASM file to be built first
-    const gpa = std.testing.allocator;
-    var arena_impl = std.heap.ArenaAllocator.init(gpa);
-    defer arena_impl.deinit();
-    const arena = arena_impl.allocator();
-
-    const result = runTest(gpa, arena, std.testing.io, "test/wasm/app.wasm", "Hello from Roc WASM!", .{});
-    if (!result.passed) {
-        std.debug.print("Test failed: {s}\n", .{result.message});
-    }
-    try std.testing.expect(result.passed);
 }

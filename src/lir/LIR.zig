@@ -64,7 +64,7 @@ pub const ProcIdentity = struct {
     }
 
     /// Bytes that every procedure symbol name begins with.
-    pub const symbol_name_prefix = "roc__proc_";
+    pub const symbol_name_prefix = "roc__p";
 
     /// Length of a procedure symbol name. The identity encoding fixes it: the
     /// prefix plus the hex of the leading 128 bits.
@@ -211,6 +211,203 @@ pub const InlineScope = extern struct {
     parent: InlineScopeId,
 };
 
+/// Complete provenance of one stored statement. Every statement-creating call
+/// states this explicitly; the store keeps no ambient provenance.
+///
+/// A pass that rewrites or copies an existing statement passes that
+/// statement's origin (`LirStore.stmtOrigin(old)`), changing only what it
+/// explicitly changes (inlining replaces `inline_scope`). Origins are copied by
+/// value and never reference other statement ids, so statement compaction and
+/// body-shard relocation cannot leave an origin dangling.
+pub const StmtOrigin = struct {
+    loc: base.SourceLoc,
+    region: base.Region,
+    inline_scope: InlineScopeId,
+    kind: OriginKind,
+
+    /// Origin of a statement a unit test builds by hand: scaffolding with no
+    /// source construct. Production producers never use it.
+    pub const test_fixture: StmtOrigin = .{
+        .loc = base.SourceLoc.none,
+        .region = base.Region.zero(),
+        .inline_scope = InlineScopeId.none,
+        .kind = .scaffold,
+    };
+};
+
+/// Why a statement exists. Variants are derived from the statement-creating
+/// sites that exist in the post-check lowerings and LIR passes; a pass that
+/// only mutates a statement in place keeps that statement's existing kind.
+pub const OriginKind = union(enum(u8)) {
+    /// Lowered directly from the checked source construct named by the
+    /// origin's `loc`/`region` (expression, statement, pattern, match arm).
+    source,
+    /// Control flow or representation glue that lowering introduces to realize
+    /// the semantics of the source construct named by `loc`/`region`: joins and
+    /// jumps for `if`/`match`/`?`, pattern-miss edges, discriminant switches,
+    /// representation boundaries, iterator-loop glue.
+    lowering_glue,
+    /// Body of compiler-derived code with no user-written node of its own
+    /// (derived equality, hashing, inspect, generated encoders/decoders).
+    /// `loc`/`region` name the construct whose type demanded the derivation.
+    derived,
+    /// Procedure scaffolding with no source construct: host wrappers, callable
+    /// and static-method adapters, workers, cached-proc forwarders, compile-time
+    /// root accessors, static-initializer bodies, and compile-time constant
+    /// value reconstruction.
+    scaffold,
+    /// ARC-inserted `incref` of `subject_local` for `reason`.
+    arc_incref: ArcRc,
+    /// ARC-inserted `decref`, `decref_if_initialized`, or `free` of
+    /// `subject_local` for `reason`.
+    arc_decref: ArcRc,
+    /// Non-RC statement ARC synthesizes while dismantling `subject_local`
+    /// (field loads and the tag-dispatch switch of a residual release).
+    arc_dismantle: ArcLocal,
+    /// `scalarize_joins`: field seeding and forwarding for a scalarized join
+    /// parameter.
+    join_scalarize,
+    /// `box_reuse`: load and cast that replace a box allocation.
+    box_reuse,
+    /// `return_slot`: stores into, and the return of, a caller-provided slot.
+    return_slot,
+    /// `str_append`: fused in-place string-append rewrite.
+    str_append_fuse,
+    /// `loop_append_promote`: loop versioning, capacity seeding, and promoted
+    /// append/set rewrites.
+    loop_append_promote,
+    /// `tag_case_fusion`: fused join and redirected producer edges.
+    tag_case_fusion,
+    /// `forwarding_join_inline`: statement produced when inlining a forwarding
+    /// join body.
+    forwarding_join_inline,
+    /// `comptime_value_guards`: failure guard wrapped around a compile-time
+    /// value use.
+    comptime_value_guard,
+    /// `trmc`: tail-call and tail-recursion-modulo-cons loop scaffolding (the
+    /// loop join and its entry, parameter moves, hole cell allocation and
+    /// stores) at the origin of the recursive site or body it replaces.
+    trmc,
+    /// `range_prove`: per-arm joins and per-site jumps that split a join over
+    /// a proven boolean parameter, at the origin of the join or jump split.
+    range_prove,
+
+    /// True for statements ARC inserted (`arc_incref`, `arc_decref`,
+    /// `arc_dismantle`). Their origin carries the location of the statement
+    /// whose ownership decision produced them, but backends do not attribute
+    /// them to a source line for debugger stepping: LLVM gives them line 0
+    /// (compiler-generated) and the dev backend emits no line-table row for
+    /// them. The decision is read from the stated origin kind only.
+    pub fn isArcInserted(self: OriginKind) bool {
+        return switch (self) {
+            .arc_incref, .arc_decref, .arc_dismantle => true,
+            .source, .lowering_glue, .derived, .scaffold, .join_scalarize, .box_reuse, .return_slot, .str_append_fuse, .loop_append_promote, .tag_case_fusion, .forwarding_join_inline, .comptime_value_guard, .trmc, .range_prove => false,
+        };
+    }
+
+    /// Subject of an ARC-inserted RC statement and the solver decision that
+    /// produced it.
+    pub const ArcRc = struct {
+        /// Local whose ownership decision caused the statement. For a
+        /// dismantled residual release this is the container, not the field
+        /// load the statement operates on.
+        subject_local: LocalId,
+        reason: RcReason,
+    };
+
+    /// Subject of ARC-synthesized non-RC glue.
+    pub const ArcLocal = struct {
+        subject_local: LocalId,
+    };
+};
+
+/// Solver decision that produced an ARC RC statement. Every value names the
+/// planned-emission datum in `arc.zig` (`ArcPlanStep`, `ArcPlanTerminal`,
+/// `ReleaseDecision`) that the emitter already holds when it emits the
+/// statement; no reason is reconstructed after the fact.
+pub const RcReason = enum(u8) {
+    // -- increfs --
+    /// `ArcPlanStep.retain_assign_ref_target` / `retain_set_target`
+    /// (`AliasBindTransfer.retain_target`): an alias binding whose source
+    /// remains owned elsewhere.
+    alias_bind,
+    /// `ArcPlanStep.retain_call_result`: the callee's solved `RcSig.ret_mode`
+    /// returns a borrow the caller must own.
+    borrowed_call_result,
+    /// `ArcPlanStep.pre_retain` from `transfer.args.retain_args`: the callee
+    /// signature (`RcSig` param mode owned) demands ownership of an argument
+    /// that stays live after the call.
+    owned_param_demand,
+    /// `ArcPlanStep.pre_retain` of the closure when `reuse_closure` is false.
+    closure_call_capture,
+    /// `ArcPlanStep.pre_retain` of a reuse source that must survive
+    /// (`preserve_reuse_source` / `transfer.preserve_reuse`).
+    reuse_source_preserved,
+    /// `ArcPlanStep.preserve_consumed_args`: a low-level op consumes an
+    /// argument that is still live afterwards.
+    low_level_consumed_arg_live,
+    /// `LowLevel.RcEffect.retain_args` minus `transfer_mask`.
+    low_level_arg_effect,
+    /// `LowLevel.RcEffect.retain_result` without `skip_result_retain`.
+    low_level_result_effect,
+    /// `assign_boxy_eq` with `source_mode == .move`: the equality consumes
+    /// both operands, so the emitter retains `lhs` and `rhs` ahead of it.
+    boxy_eq_move_arg,
+    /// `assign_call_dict` argument outside `ArcPlanStep.transfer_mask`: the
+    /// dictionary method takes ownership of an argument the caller keeps.
+    dict_call_arg,
+    /// `box_unbox` normalization to `box_unbox_borrowed`: the payload retain
+    /// paired with the `consumed_box` release of the outer box.
+    box_unbox_normalize,
+    /// `transfer_mask`/`transfer_positions` complement: an element stored into
+    /// a newly built list, struct, or tag while still owned elsewhere.
+    stored_in_aggregate,
+    /// `transfer_single` false: a payload or capture stored while still owned
+    /// elsewhere.
+    stored_payload,
+    /// `ArcPlanTerminal.str_match{,_set}.capture_retain_count(s)`.
+    str_match_capture,
+    /// `ArcPlanTerminal.terminal.retain_value`: a returned, crashed, or
+    /// `expect_err` value that is borrowed at the terminal.
+    terminal_value_borrowed,
+
+    // -- decrefs --
+    /// `ArcPlanStep.pre_release` (`release_old_target` / fresh-bind transfer):
+    /// the previous owned value of a rebound target.
+    rebind_old_value,
+    /// `ArcPlanStep.post_release` (`postStmtDeaths` / unused call result): the
+    /// value's last use is this statement.
+    dead_after_stmt,
+    /// `ArcPlanStep.pre_release_extra` of an `assign_boxy_desc_ref`
+    /// (`planValuesInvalidatedByDescriptorUpdate`): owned values whose
+    /// descriptor the statement rebinds.
+    descriptor_invalidated,
+    /// `ArcPlanStep.pre_release_extra` (`releaseTailCallerFrame`): owned state
+    /// of a frame that a tail call replaces.
+    tail_call_frame,
+    /// Closure released after a call that did not reuse it (`reuse_closure`
+    /// false).
+    closure_after_call,
+    /// Boxed value released after a consuming unbox.
+    consumed_box,
+    /// `ArcPlanTerminal.stop.releases`: owned state minus the switch
+    /// summary's common keep set.
+    switch_branch_balance,
+    /// `ArcPlanTerminal.jump.releases`: owned state minus the join body keep
+    /// set (including restitution keeps).
+    jump_balance,
+    /// `ArcPlanTerminal.join.releases`: owned state minus the join entry keep.
+    join_entry_balance,
+    /// `ArcPlanTerminal.terminal.releases`: owned state not kept past a
+    /// terminal statement.
+    scope_exit,
+};
+
+comptime {
+    std.debug.assert(@sizeOf(RcReason) == 1);
+    std.debug.assert(@sizeOf(OriginKind) == 12);
+}
+
 /// Identifier of a compile-time-observed control-flow site.
 pub const ComptimeSiteId = enum(u32) {
     _,
@@ -250,6 +447,55 @@ pub const LoweringModuleId = enum(u32) {
     /// The first row of a lowering's module table.
     first = 0,
     _,
+};
+
+/// The kind of literal whose checked conversion rejected it.
+pub const LiteralRejectionKind = enum(u8) {
+    numeral,
+    quote,
+};
+
+/// The source literal a literal-rejection crash reports: the checked
+/// expression, in its owning module, whose `from_numeral` or `from_quote`
+/// conversion returned `Err`.
+pub const LiteralRejectionSite = struct {
+    owner: LoweringModuleId,
+    /// The literal's `CheckedExprId` in `owner`.
+    checked_expr: u32,
+    kind: LiteralRejectionKind,
+};
+
+/// Program-local index of one literal root: a custom literal's conversion at
+/// one specialization's concrete type, which only post-check lowering can name.
+pub const LiteralRootId = enum(u32) { _ };
+
+/// The producer of one compile-time value: a checked compile-time root of its
+/// module, or a literal root of the lowered program.
+pub const ComptimeProducer = union(enum) {
+    checked: check.CheckedModule.ComptimeRootId,
+    literal: LiteralRootId,
+
+    pub fn eql(a: ComptimeProducer, b: ComptimeProducer) bool {
+        return switch (a) {
+            .checked => |root| switch (b) {
+                .checked => |other| root == other,
+                .literal => false,
+            },
+            .literal => |root| switch (b) {
+                .checked => false,
+                .literal => |other| root == other,
+            },
+        };
+    }
+
+    /// Feed this producer's tag and index to `hasher`.
+    pub fn hash(self: ComptimeProducer, hasher: anytype) void {
+        const tag: u8, const index: u32 = switch (self) {
+            .checked => |root| .{ 0, @intFromEnum(root) },
+            .literal => |root| .{ 1, @intFromEnum(root) },
+        };
+        hasher.update(&[_]u8{ tag, @truncate(index), @truncate(index >> 8), @truncate(index >> 16), @truncate(index >> 24) });
+    }
 };
 
 /// Source control-flow construct observed during compile-time finalization.
@@ -1236,6 +1482,10 @@ pub const CFStmt = union(enum) {
     },
     crash: struct {
         msg: CrashMessage,
+        /// Set when this crash is a literal conversion rejecting its literal:
+        /// compile-time evaluation reports the literal's own diagnostic with
+        /// `msg`, the conversion's error message.
+        literal_rejection: ?LiteralRejectionSite = null,
     },
 };
 

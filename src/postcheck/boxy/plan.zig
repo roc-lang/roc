@@ -8106,6 +8106,17 @@ const Builder = struct {
                     const source_fn_type = CheckedTypeIdentity{ .module = lookup.view.key, .ty = lookup.target.callable_ty };
                     _ = try self.analyzeType(lookup.view, lookup.target.callable_ty);
                     const worker = try self.ensureWorker(source, source_fn_type, null);
+                    // An eligible inspect override has type `T -> Str` where `T`
+                    // is the owning nominal (design.md "Inspect Overrides"), so
+                    // the worker's receiver is its only argument, analyzed in
+                    // the override's declaring view.
+                    const source_fn_rep = self.plan.repForSourceType(source_fn_type) orelse
+                        boxyPlanInvariant("planned boxy inspect override callable type was not analyzed");
+                    const source_function = self.repQuery().functionChildren(source_fn_rep) orelse
+                        boxyPlanInvariant("planned boxy inspect override callable type was not callable");
+                    if (source_function.arg_count != 1) {
+                        boxyPlanInvariant("planned boxy inspect override callable had unexpected receiver arity");
+                    }
                     try self.plan.inspect_methods.append(self.allocator, .{
                         .source_rep = rep_id,
                         .worker = worker,
@@ -10616,7 +10627,19 @@ const Builder = struct {
                 => null,
             };
             var call_source: ?u32 = null;
-            if (argument_source == null) {
+            // A call descriptor describes the requirement's storage of the
+            // actual. It serves a worker descriptor for a bare type variable,
+            // whose storage is the actual's own, and one whose actual needs
+            // runtime instantiation. A structured worker position with a
+            // concrete actual gets a static descriptor of the worker's own
+            // storage, which differs (a concrete `List(U64)` key reaching a
+            // `List(item)` worker stores its items boxed).
+            const param_value = self.plan.representations.items[@intFromEnum(param.rep)];
+            const param_is_bare_variable = param_value.kind == .dynamic and param_value.children.len == 0 and
+                param_value.tag_variants.len == 0 and param_value.declared_fields.len == 0;
+            if (argument_source == null and
+                (param_is_bare_variable or try self.repQuery().repSubtreeHasDescriptor(worker_arg.rep)))
+            {
                 const requirement_source_identity = self.repQuery().descriptorArgumentIdentityRep(worker_arg.rep);
                 for (requirement_args, 0..) |requirement_arg, call_index| {
                     const requirement_call_identity = self.repQuery().descriptorArgumentIdentityRep(requirement_arg.rep);
@@ -11906,8 +11929,8 @@ const Builder = struct {
             .direct_closed, .direct_parametric => {},
             .direct_pending, .structural => boxyPlanInvariant("quote conversion had an invalid checked dispatch resolution"),
         }
-        const root = view.compile_time_roots.lookupNumeralRootByExpr(expr_id) orelse
-            boxyPlanInvariant("checked from_quote expression had no compile-time conversion root");
+        const root = view.compile_time_roots.root(view.checked_bodies.literalConversionRoot(expr_id) orelse
+            boxyPlanInvariant("checked from_quote expression had no compile-time conversion root"));
         switch (root.payload) {
             .const_node => |node| {
                 const store = view.const_store orelse
@@ -11933,7 +11956,7 @@ const Builder = struct {
         expr_id: checked.CheckedExprId,
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
     ) Allocator.Error!void {
-        const root = view.compile_time_roots.lookupNumeralRootByExpr(expr_id) orelse return;
+        const root = view.compile_time_roots.root(view.checked_bodies.literalConversionRoot(expr_id) orelse return);
         switch (root.payload) {
             .const_node => |node| {
                 const store = view.const_store orelse
@@ -12848,6 +12871,8 @@ const Builder = struct {
         const statement = view.checked_bodies.statement(statement_id);
         switch (statement.data) {
             .pending => boxyPlanInvariant("pending checked statement reached boxy body type planning"),
+            // A promoted procedure is planned as its own template.
+            .promoted_proc => {},
             .decl => |decl| {
                 if (view.checked_bodies.expr(decl.expr).data == .runtime_error) return;
                 try self.analyzePatternTypes(view, decl.pattern);

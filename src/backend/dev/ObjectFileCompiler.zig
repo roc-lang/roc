@@ -772,7 +772,7 @@ fn appendDefinition(
     definitions: *std.ArrayList(SymbolDefinition),
     symbol: ObjectWriter.Symbol,
 ) Allocator.Error!void {
-    const id = try table.intern(allocator, symbol.name);
+    const id = try table.internEmitted(allocator, symbol.name);
     try definitions.append(allocator, .{ .id = id, .symbol = symbol });
 }
 
@@ -828,7 +828,7 @@ fn appendStaticDataExports(
 ) CompilationError!void {
     const data_symbols = allocator.alloc(SymbolTable.Id, exports.len) catch return CompilationError.OutOfMemory;
     defer allocator.free(data_symbols);
-    for (exports, data_symbols) |data_export, *id| id.* = table.intern(allocator, data_export.symbol_name) catch return CompilationError.OutOfMemory;
+    for (exports, data_symbols) |data_export, *id| id.* = table.internEmitted(allocator, data_export.symbol_name) catch return CompilationError.OutOfMemory;
     var functions = collections.DenseMap(lir.LIR.LirProcSpecId, SymbolTable.Id).init(allocator);
     defer functions.deinit();
     var helpers = std.AutoHashMap(layout.RcHelperKey, SymbolTable.Id).init(allocator);
@@ -843,17 +843,17 @@ fn appendStaticDataExports(
                 .named => blk: {
                     if (relocation.procedure) |proc| {
                         if (functions.get(proc)) |id| break :blk id;
-                        const id = table.intern(allocator, relocation.target_symbol_name) catch return CompilationError.OutOfMemory;
+                        const id = table.internEmitted(allocator, relocation.target_symbol_name) catch return CompilationError.OutOfMemory;
                         functions.put(proc, id) catch return CompilationError.OutOfMemory;
                         break :blk id;
                     }
                     if (relocation.rc_helper) |helper| {
                         if (helpers.get(helper)) |id| break :blk id;
-                        const id = table.intern(allocator, relocation.target_symbol_name) catch return CompilationError.OutOfMemory;
+                        const id = table.internEmitted(allocator, relocation.target_symbol_name) catch return CompilationError.OutOfMemory;
                         helpers.put(helper, id) catch return CompilationError.OutOfMemory;
                         break :blk id;
                     }
-                    break :blk table.intern(allocator, relocation.target_symbol_name) catch return CompilationError.OutOfMemory;
+                    break :blk table.internEmitted(allocator, relocation.target_symbol_name) catch return CompilationError.OutOfMemory;
                 },
             };
             relocations.append(allocator, .{
@@ -1040,19 +1040,19 @@ test "ObjectFileCompiler native emission skips static initializers and captures 
     var layouts = try layout.Store.init(allocator, @import("base").target.TargetUsize.native);
     defer layouts.deinit();
     const result_local = try store.addLocal(.{ .layout_idx = .i64 });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result_local } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result_local } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_literal = .{
         .target = result_local,
         .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } },
         .next = ret,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = lir.LIR.ProcIdentity.forTest(1),
         .args = lir.LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = .i64,
-    });
+    }, .none);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = lir.LIR.ProcIdentity.forTest(2),
@@ -1060,7 +1060,7 @@ test "ObjectFileCompiler native emission skips static initializers and captures 
         .body = body,
         .ret_layout = .i64,
         .is_static_initializer = true,
-    });
+    }, .none);
 
     var timing = ObjectFileCompiler.Timing.init(std.testing.io);
     var compiler = ObjectFileCompiler.initForPack(allocator);
@@ -1095,7 +1095,9 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
     const PackFile = @import("PackFile.zig");
     const text = "immutable runtime data survives its producer";
     const identity = lir.ProcIdentity.forTest(717);
-    inline for (.{ RocTarget.x64linux, RocTarget.arm64linux, comptime RocTarget.detectNative() }) |target| {
+    // The native target joins the fixed ones only where native LIR codegen exists.
+    const native_targets = if (LirCodeGenMod.host_lir_codegen_available) .{comptime RocTarget.detectNative()} else .{};
+    inline for (.{ RocTarget.x64linux, RocTarget.arm64linux } ++ native_targets) |target| {
         var result = producer: {
             var arena = std.heap.ArenaAllocator.init(allocator);
             defer arena.deinit();
@@ -1105,19 +1107,19 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
             var layouts = try layout.Store.init(a, .u64);
             defer layouts.deinit();
             const local = try store.addLocal(.{ .layout_idx = .str });
-            const ret = try store.addCFStmt(.{ .ret = .{ .value = local } });
+            const ret = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
             const body = try store.addCFStmt(.{ .assign_literal = .{
                 .target = local,
                 .value = .{ .static_data = @enumFromInt(7) },
                 .next = ret,
-            } });
+            } }, .test_fixture);
             _ = try store.addProcSpec(.{
                 .name = store.freshSyntheticSymbol(),
                 .identity = identity,
                 .args = .empty(),
                 .body = body,
                 .ret_layout = .str,
-            });
+            }, .none);
             const descriptor = try a.alloc(u8, 24);
             @memset(descriptor, 0);
             std.mem.writeInt(u64, descriptor[8..16], text.len << 1, .little);
@@ -1129,12 +1131,12 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
             const relocation = try a.alloc(StaticDataRelocation, 1);
             relocation[0] = .{
                 .offset = 0,
-                .target_symbol_name = try a.dupe(u8, "roc__static_producer_leaf"),
+                .target_symbol_name = try a.dupe(u8, "roc__d7_1"),
                 .target = .{ .data_symbol = @enumFromInt(1) },
                 .addend = 8,
             };
             exports[0] = .{
-                .symbol_name = try a.dupe(u8, "roc__static_producer_root"),
+                .symbol_name = try a.dupe(u8, "roc__d7"),
                 .value_id = @enumFromInt(7),
                 .bytes = descriptor,
                 .alignment = 8,
@@ -1142,14 +1144,14 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
                 .relocations = relocation,
             };
             exports[1] = .{
-                .symbol_name = try a.dupe(u8, "roc__static_producer_leaf"),
+                .symbol_name = try a.dupe(u8, "roc__d7_1"),
                 .bytes = backing,
                 .symbol_offset = 8,
                 .alignment = 8,
                 .is_exported = false,
             };
             exports[2] = .{
-                .symbol_name = try a.dupe(u8, "roc__static_unreachable"),
+                .symbol_name = try a.dupe(u8, "roc__d8"),
                 .bytes = try a.dupe(u8, "must not travel in the pack"),
                 .alignment = 1,
                 .is_exported = false,
@@ -1170,8 +1172,8 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
         try std.testing.expectEqual(@as(usize, 2), artifact.data.len);
         for (artifact.data) |item| {
             try std.testing.expect(std.mem.startsWith(u8, item.name, ProcArtifact.content_data_prefix));
-            try std.testing.expect(!std.mem.eql(u8, item.name, "roc__static_producer_root"));
-            try std.testing.expect(!std.mem.eql(u8, item.name, "roc__static_producer_leaf"));
+            try std.testing.expect(!std.mem.eql(u8, item.name, "roc__d7"));
+            try std.testing.expect(!std.mem.eql(u8, item.name, "roc__d7_1"));
             for (item.relocations) |relocation| {
                 try std.testing.expect(!relocation.external);
                 try std.testing.expect(std.mem.startsWith(u8, relocation.name, ProcArtifact.content_data_prefix));
@@ -1200,7 +1202,7 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
         defer data.deinit(allocator);
         try ProcArtifact.splice(CG, allocator, &receiver, &pack.set, &.{0}, &procs, &placed, &data);
         try receiver.finishImage();
-        if (comptime target == RocTarget.detectNative() and LirCodeGenMod.host_lir_codegen_available) {
+        if (comptime target == RocTarget.detectNative()) {
             var splice = @import("HostSplice.zig").HostSplice.init(allocator);
             defer splice.deinit();
             try splice.addDataItems(data.items);

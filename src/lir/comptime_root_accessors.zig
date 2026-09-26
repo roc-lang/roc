@@ -47,9 +47,19 @@ pub fn rebuild(allocator: Allocator, result: *Program.Result, frozen: *const Pro
         const construction = values.constructionFor(root.module, root.root, entry.layout_idx) orelse continue;
         new_locals.clearRetainingCapacity();
         const context = EmitContext{ .store = store, .new_locals = &new_locals };
+        // The rebuilt body is compile-time constant reconstruction: it keeps
+        // the location of the accessor body it replaces, which names the read
+        // that requested the accessor.
+        const replaced = store.stmtOrigin(store.getProcSpec(accessor).body.?);
+        const origin = LIR.StmtOrigin{
+            .loc = replaced.loc,
+            .region = replaced.region,
+            .inline_scope = replaced.inline_scope,
+            .kind = .scaffold,
+        };
         const value = try context.addLocal(entry.layout_idx);
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = value } });
-        const body = try scalar_values.emit(context, store, &result.layouts, value, construction, ret) orelse continue;
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, origin);
+        const body = try scalar_values.emit(context, store, &result.layouts, origin, value, construction, ret) orelse continue;
         const locals = try store.addLocalSpan(new_locals.items);
         const proc = store.getProcSpecPtr(accessor);
         proc.body = body;
@@ -91,7 +101,7 @@ fn testRebuild(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqua
         .layout_idx = failure_layout,
         .compile_time_root = .{
             .module = .{},
-            .root = undefined, // Accessor reconstruction reads slot roles, not checked-root identity.
+            .root = .{ .checked = @enumFromInt(1) },
             .const_locator = null,
             .role = .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = failed_offset, .message_offset = message_offset } },
         },
@@ -102,14 +112,15 @@ fn testRebuild(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqua
         .layout_idx = list_layout,
         .compile_time_root = .{
             .module = .{},
-            .root = undefined, // Accessor reconstruction reads slot roles, not checked-root identity.
+            .root = .{ .checked = @enumFromInt(1) },
             .const_locator = null,
             .role = .{ .value = .{ .failure_slot = failure_slot, .plan = list_plan } },
         },
     });
     const value = try program.store.addLocal(.{ .layout_idx = list_layout });
-    const ret = try program.store.addCFStmt(.{ .ret = .{ .value = value } });
-    const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = value_slot }, .next = ret } });
+    const origin = LIR.StmtOrigin{ .loc = .none, .region = .zero(), .inline_scope = .none, .kind = .scaffold };
+    const ret = try program.store.addCFStmt(.{ .ret = .{ .value = value } }, origin);
+    const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = value_slot }, .next = ret } }, origin);
     const accessor = try program.store.addProcSpec(.{
         .name = .fromRaw(1),
         .identity = LIR.ProcIdentity.forTest(1),
@@ -117,7 +128,7 @@ fn testRebuild(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqua
         .frame_locals = try program.store.addLocalSpan(&.{value}),
         .body = body,
         .ret_layout = list_layout,
-    });
+    }, .none);
     program.static_data_values.items[@intFromEnum(value_slot)].accessor = accessor;
     try @import("comptime_value_guards.zig").insert(allocator, &program);
     var failure_record = [_]u8{0} ** 32;

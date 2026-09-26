@@ -8740,6 +8740,15 @@ fn packFileBytes(
     defer specs.deinit(allocator);
     var withheld: usize = 0;
     const procs = lowered.lir_result.store.getProcSpecs();
+    const converting = try lir.PackProgram.literalConvertingProcs(allocator, &lowered.lir_result.store);
+    defer allocator.free(converting);
+    var literal_converters = std.AutoHashMap(lir.ProcIdentity, void).init(allocator);
+    defer literal_converters.deinit();
+    for (procs, converting) |proc, converts| {
+        if (converts) try literal_converters.put(proc.identity, {});
+    }
+    var closure = try SpliceClosure.init(allocator, set);
+    defer closure.deinit();
     for (lowered.lir_result.spec_procs.items) |spec_proc| {
         const proc = procs[@intFromEnum(spec_proc.proc)];
         const artifact = artifact_by_identity.get(proc.identity) orelse continue;
@@ -8747,7 +8756,8 @@ fn packFileBytes(
         // constant holding a code pointer names code the pack may not carry;
         // an entry that reaches either cannot be linked elsewhere, so it is
         // not offered.
-        if (try artifactClosureNamesProgramLocalSymbols(allocator, set, artifact)) {
+        const placed = try closure.of(artifact);
+        if (closureNamesProgramLocalSymbols(set, placed) or closureConvertsLiteral(set, &literal_converters, placed)) {
             withheld += 1;
             continue;
         }
@@ -8765,30 +8775,216 @@ fn packFileBytes(
     return try backend.dev.PackFile.write(allocator, set, specs.items);
 }
 
-/// Whether any artifact reachable from `root` relocates against static data
-/// that only its own program defines.
-fn artifactClosureNamesProgramLocalSymbols(allocator: Allocator, set: *const backend.dev.ProcArtifact.Set, root: u32) Allocator.Error!bool {
-    var seen = std.AutoHashMap(u32, void).init(allocator);
-    defer seen.deinit();
-    var stack = std.ArrayList(u32).empty;
-    defer stack.deinit(allocator);
-    try stack.append(allocator, root);
-    while (stack.pop()) |index| {
-        const gop = try seen.getOrPut(index);
-        if (gop.found_existing) continue;
+/// The artifacts a splice of one entry places (`ProcArtifact.splice`): the
+/// entry, and everything it reaches through set-local references and stable
+/// references to definitions in the same set. The set's definitions are
+/// indexed once; each query reuses the walk's storage.
+const SpliceClosure = struct {
+    allocator: Allocator,
+    set: *const backend.dev.ProcArtifact.Set,
+    procs: std.AutoHashMap(lir.ProcIdentity, u32),
+    thunks: std.AutoHashMap(lir.ProcIdentity, u32),
+    helpers: std.StringHashMap(u32),
+    seen: std.AutoHashMap(u32, void),
+    order: std.ArrayList(u32) = .empty,
+
+    fn init(allocator: Allocator, set: *const backend.dev.ProcArtifact.Set) Allocator.Error!SpliceClosure {
+        var self = SpliceClosure{
+            .allocator = allocator,
+            .set = set,
+            .procs = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator),
+            .thunks = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator),
+            .helpers = std.StringHashMap(u32).init(allocator),
+            .seen = std.AutoHashMap(u32, void).init(allocator),
+        };
+        errdefer self.deinit();
+        for (set.artifacts, 0..) |artifact, index| {
+            switch (artifact.kind) {
+                .proc => |identity| _ = try self.procs.getOrPutValue(identity, @intCast(index)),
+                .boxy_thunk => |identity| _ = try self.thunks.getOrPutValue(identity, @intCast(index)),
+                .rc_helper => |name| _ = try self.helpers.getOrPutValue(name, @intCast(index)),
+                .entrypoint, .message_pool_run, .branch_island => {},
+            }
+        }
+        return self;
+    }
+
+    fn deinit(self: *SpliceClosure) void {
+        self.order.deinit(self.allocator);
+        self.seen.deinit();
+        self.helpers.deinit();
+        self.thunks.deinit();
+        self.procs.deinit();
+    }
+
+    /// Indices of the artifacts a splice of `root` places, valid until the
+    /// next query.
+    fn of(self: *SpliceClosure, root: u32) Allocator.Error![]const u32 {
+        self.seen.clearRetainingCapacity();
+        self.order.clearRetainingCapacity();
+        try self.visit(root);
+        var cursor: usize = 0;
+        while (cursor < self.order.items.len) : (cursor += 1) {
+            const artifact = self.set.artifacts[self.order.items[cursor]];
+            for (artifact.refs) |ref| try self.visit(ref.target);
+            for (artifact.symbolic_refs) |ref| {
+                const target = switch (ref.target) {
+                    .proc => |identity| self.procs.get(identity),
+                    .boxy_thunk => |identity| self.thunks.get(identity),
+                    .rc_helper => |name| self.helpers.get(name),
+                };
+                if (target) |index| try self.visit(index);
+            }
+        }
+        return self.order.items;
+    }
+
+    fn visit(self: *SpliceClosure, index: u32) Allocator.Error!void {
+        if ((try self.seen.getOrPut(index)).found_existing) return;
+        try self.order.append(self.allocator, index);
+    }
+};
+
+/// Whether any procedure a splice places converts a specialized custom
+/// literal when it runs (`PackProgram.procConvertsLiteralAtRuntime`).
+fn closureConvertsLiteral(
+    set: *const backend.dev.ProcArtifact.Set,
+    literal_converters: *const std.AutoHashMap(lir.ProcIdentity, void),
+    placed: []const u32,
+) bool {
+    for (placed) |index| switch (set.artifacts[index].kind) {
+        .proc => |identity| if (literal_converters.contains(identity)) return true,
+        .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
+    };
+    return false;
+}
+
+/// Whether any artifact a splice places refers to something only its own
+/// program defines: a program-scope symbol it does not carry, such as the Boxy
+/// runtime, whose calls index this program's descriptor sidecar, or a constant
+/// holding a code pointer.
+fn closureNamesProgramLocalSymbols(set: *const backend.dev.ProcArtifact.Set, placed: []const u32) bool {
+    for (placed) |index| {
         const artifact = set.artifacts[index];
         for (artifact.relocations) |relocation| {
-            if (std.mem.startsWith(u8, relocation.name, "roc__static_") and
-                !std.mem.startsWith(u8, relocation.name, "roc__static_str_") and
-                !std.mem.startsWith(u8, relocation.name, backend.dev.ProcArtifact.content_data_prefix)) return true;
-            if (std.mem.startsWith(u8, relocation.name, "roc_boxy_")) return true;
+            if (relocation.scope == .program and !carriesData(artifact, relocation.name)) return true;
         }
         for (artifact.data) |item| {
             for (item.relocations) |relocation| if (relocation.function) return true;
         }
-        for (artifact.refs) |ref| try stack.append(allocator, ref.target);
     }
     return false;
+}
+
+fn carriesData(artifact: backend.dev.ProcArtifact.Artifact, name: []const u8) bool {
+    for (artifact.data) |item| {
+        if (std.mem.eql(u8, item.name, name)) return true;
+    }
+    return false;
+}
+
+/// Test helper: whether the entry at `root` is withheld for program-local symbols.
+fn testNamesProgramLocalSymbols(set: *const backend.dev.ProcArtifact.Set, root: u32) Allocator.Error!bool {
+    var closure = try SpliceClosure.init(std.testing.allocator, set);
+    defer closure.deinit();
+    return closureNamesProgramLocalSymbols(set, try closure.of(root));
+}
+
+test "pack withholds an entry whose stable references reach a constant holding a code pointer" {
+    const ProcArtifact = backend.dev.ProcArtifact;
+    const callee = lir.ProcIdentity.forTest(2);
+    const artifacts = [_]ProcArtifact.Artifact{
+        .{
+            .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
+            .code = "call",
+            .entry = 0,
+            .frame = null,
+            .refs = &.{},
+            .symbolic_refs = &.{.{ .site = 0, .form = .call, .target = .{ .proc = callee } }},
+            .relocations = &.{},
+            .data = &.{},
+        },
+        .{
+            .kind = .{ .proc = callee },
+            .code = "read",
+            .entry = 0,
+            .frame = null,
+            .refs = &.{},
+            .relocations = &.{.{ .offset = 0, .name = "roc__d0", .scope = .program, .kind = .{ .data = .rel32 } }},
+            .data = &.{.{
+                .name = "roc__d0",
+                .bytes = "\x00" ** 8,
+                .alignment = 8,
+                .symbol_offset = 0,
+                .relocations = &.{.{ .offset = 0, .name = "roc__pcallback", .addend = 0, .function = true }},
+                .program_local_name = true,
+            }},
+        },
+    };
+    const set = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(std.testing.allocator), .artifacts = &artifacts };
+    try std.testing.expect(try testNamesProgramLocalSymbols(&set, 0));
+    try std.testing.expect(try testNamesProgramLocalSymbols(&set, 1));
+}
+
+test "pack withholds an entry whose stable references reach a literal-converting procedure" {
+    const ProcArtifact = backend.dev.ProcArtifact;
+    const converter = lir.ProcIdentity.forTest(2);
+    const artifacts = [_]ProcArtifact.Artifact{
+        .{
+            .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
+            .code = "call",
+            .entry = 0,
+            .frame = null,
+            .refs = &.{},
+            .symbolic_refs = &.{.{ .site = 0, .form = .call, .target = .{ .proc = converter } }},
+            .relocations = &.{},
+            .data = &.{},
+        },
+        .{ .kind = .{ .proc = converter }, .code = "conv", .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{} },
+    };
+    const set = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(std.testing.allocator), .artifacts = &artifacts };
+    var converters = std.AutoHashMap(lir.ProcIdentity, void).init(std.testing.allocator);
+    defer converters.deinit();
+    try converters.put(converter, {});
+    var closure = try SpliceClosure.init(std.testing.allocator, &set);
+    defer closure.deinit();
+    try std.testing.expect(closureConvertsLiteral(&set, &converters, try closure.of(0)));
+}
+
+test "pack offers an entry that carries its program data and withholds one that calls the Boxy runtime" {
+    const ProcArtifact = backend.dev.ProcArtifact;
+    const artifacts = [_]ProcArtifact.Artifact{
+        .{
+            .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
+            .code = "read",
+            .entry = 0,
+            .frame = null,
+            .refs = &.{},
+            .relocations = &.{
+                .{ .offset = 0, .name = "roc__d0", .scope = .program, .kind = .{ .data = .rel32 } },
+                .{ .offset = 4, .name = "roc_builtins_str_concat", .scope = .shared, .kind = .function },
+            },
+            .data = &.{.{
+                .name = "roc__d0",
+                .bytes = "\x00" ** 8,
+                .alignment = 8,
+                .symbol_offset = 0,
+                .program_local_name = true,
+            }},
+        },
+        .{
+            .kind = .{ .proc = lir.ProcIdentity.forTest(2) },
+            .code = "call",
+            .entry = 0,
+            .frame = null,
+            .refs = &.{},
+            .relocations = &.{.{ .offset = 0, .name = "roc_boxy_eq", .scope = .program, .kind = .function }},
+            .data = &.{},
+        },
+    };
+    const set = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(std.testing.allocator), .artifacts = &artifacts };
+    try std.testing.expect(!try testNamesProgramLocalSymbols(&set, 0));
+    try std.testing.expect(try testNamesProgramLocalSymbols(&set, 1));
 }
 
 fn nativeBuildEntrypoints(
@@ -10733,7 +10929,10 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     );
     defer lowered.deinit();
     finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
-    if (loaded_packs) |packs| {
+    // Cache statistics are diagnostic output. Ordinary successful builds must
+    // leave stderr empty so build runners do not report false warnings.
+    if (loaded_packs != null and std.c.getenv("ROC_PACK_STATS") != null) {
+        const packs = loaded_packs.?;
         var external_procs: usize = 0;
         for (lowered.lir_result.store.getProcSpecs()) |proc| {
             if (proc.external) external_procs += 1;
@@ -10843,7 +11042,11 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
     reporter.recordCounters("Native artifact emission", &nativeEmissionCounters(backend_timing.snapshot().native_emission));
     try writePackObjects(ctx, &build_env, root_artifact, imported_artifacts, relation_artifacts, &lowered, args, target, final_output_path);
-    if (object_store) |*store| {
+    // A literal root that failed reported an error. Its specializations
+    // must not be served to a later build, which would skip evaluating it
+    // and so skip its diagnostic, so a build with errors writes no packs.
+    if (object_store != null and diag.errors == 0) {
+        const store = &object_store.?;
         try writePacksToStore(ctx, &build_env, store, root_artifact, imported_artifacts, relation_artifacts, &lowered, if (object_compiler.captured_artifacts) |*set| set else null, args, target);
     }
 
@@ -16769,7 +16972,7 @@ fn recordDevTestExecution(reporter: *progress.Reporter, timing: *const eval.test
     );
 }
 
-fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]progress.Counter {
+fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]progress.Counter {
     const counters = diagnostics.specialization;
     return .{
         .{ .name = "Template requests", .count = counters.template_requests },
@@ -16792,6 +16995,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
         .{ .name = "Interface replay digest node misses", .count = counters.interface_replay_digest_node_misses },
         .{ .name = "Interface relation requests", .count = counters.interface_relation_requests },
         .{ .name = "Interface replay hits", .count = counters.interface_replay_hits },
+        .{ .name = "Interface closed expansions", .count = counters.interface_closed_expansions },
         .{ .name = "Exact type checks", .count = counters.exact_type_checks },
         .{ .name = "Nominal backing reuses", .count = counters.nominal_backing_reuses },
         .{ .name = "Nominal backing instantiations", .count = counters.nominal_backing_instantiations },
