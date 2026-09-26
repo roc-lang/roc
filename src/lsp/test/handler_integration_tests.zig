@@ -36,12 +36,17 @@ fn jsonEscape(allocator: std.mem.Allocator, source: []const u8) std.mem.Allocato
     return escaped.toOwnedSlice(allocator);
 }
 
-/// Get the path to the test platform for creating valid Roc files
-fn platformPath(allocator: std.mem.Allocator) integration_spec.SpecError![]u8 {
-    // Resolve from repo root to ensure absolute path
+/// Get the platform spelling for creating valid Roc files. The platform at
+/// `test/str/platform/main.roc` is spelled relative to the app's directory:
+/// platform paths must be relative (see issues 8549 and 11714).
+fn platformPath(allocator: std.mem.Allocator, app_dir: []const u8) integration_spec.SpecError![]u8 {
+    // Resolve from repo root to find the platform file
     const repo_root = try std.Io.Dir.cwd().realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(repo_root);
-    const path = try std.fs.path.join(allocator, &.{ repo_root, "test", "str", "platform", "main.roc" });
+    const platform_abs = try std.fs.path.join(allocator, &.{ repo_root, "test", "str", "platform", "main.roc" });
+    defer allocator.free(platform_abs);
+    const path = try std.fs.path.relative(allocator, app_dir, null, app_dir, platform_abs);
+    errdefer allocator.free(path);
     // Convert backslashes to forward slashes for cross-platform Roc source compatibility
     // Roc interprets backslashes as escape sequences in string literals
     for (path) |*c| {
@@ -402,7 +407,7 @@ pub fn documentSymbolHandlerExtractsFunctionDeclarations() integration_spec.Spec
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const roc_source = try std.fmt.allocPrint(allocator,
@@ -608,7 +613,7 @@ pub fn documentHighlightHandlerResolvesFromReferenceSite() integration_spec.Spec
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const roc_source = try std.fmt.allocPrint(allocator,
@@ -720,7 +725,7 @@ pub fn documentHighlightHandlerIncludesAnnotationName() integration_spec.SpecErr
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const roc_source = try std.fmt.allocPrint(allocator,
@@ -874,7 +879,7 @@ pub fn renameHandlerRewritesEveryOccurrence() integration_spec.SpecError!void {
     const fixture = try renameFixture(allocator, tmp_path, "rename_all.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const source = try std.fmt.allocPrint(allocator,
@@ -934,7 +939,7 @@ pub fn renameHandlerRewritesVarReassignment() integration_spec.SpecError!void {
     const fixture = try renameFixture(allocator, tmp_path, "rename_reassign.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const source = try std.fmt.allocPrint(allocator,
@@ -1056,7 +1061,7 @@ fn checkReassignmentHandlers(body: []const u8, occurrences: []const Reassignment
     const fixture = try renameFixture(allocator, tmp_path, "write_occurrences.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     // Equal-length names keep the explicit expected ranges the same. `$` is
@@ -1182,7 +1187,7 @@ pub fn renameHandlerRefusesNameAlreadyInScope() integration_spec.SpecError!void 
     const fixture = try renameFixture(allocator, tmp_path, "rename_capture.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const source = try std.fmt.allocPrint(allocator,
@@ -1238,7 +1243,7 @@ pub fn renameHandlerRefusesMeaningChangingName() integration_spec.SpecError!void
     const fixture = try renameFixture(allocator, tmp_path, "rename_meaning.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const source = try std.fmt.allocPrint(allocator,
@@ -1289,7 +1294,7 @@ pub fn renameHandlerRefusesUncompilableDocument() integration_spec.SpecError!voi
     const fixture = try renameFixture(allocator, tmp_path, "rename_broken.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     // `n *` is left dangling, so the document does not parse.
@@ -1338,7 +1343,7 @@ pub fn prepareRenameReportsOccurrenceUnderCursor() integration_spec.SpecError!vo
     const fixture = try renameFixture(allocator, tmp_path, "rename_prepare.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const source = try std.fmt.allocPrint(allocator,
@@ -1425,7 +1430,7 @@ pub fn referencesHandlerHonoursIncludeDeclaration() integration_spec.SpecError!v
     const fixture = try renameFixture(allocator, tmp_path, "references_decl.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const source = try std.fmt.allocPrint(allocator,
@@ -1498,7 +1503,7 @@ pub fn referencesHandlerRespectsShadowing() integration_spec.SpecError!void {
     const fixture = try renameFixture(allocator, tmp_path, "references_shadow.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const source = try std.fmt.allocPrint(allocator,
@@ -1561,7 +1566,7 @@ pub fn annotationNameResolvesLikeAnyOccurrence() integration_spec.SpecError!void
     const fixture = try renameFixture(allocator, tmp_path, "annotation_start.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const source = try std.fmt.allocPrint(allocator,
@@ -1644,7 +1649,7 @@ pub fn positionsUseUtf16CodeUnits() integration_spec.SpecError!void {
     const fixture = try renameFixture(allocator, tmp_path, "utf16_positions.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     // U+00E9: two UTF-8 bytes, one UTF-16 code unit. Written as bytes because a
@@ -1711,7 +1716,7 @@ pub fn renameRefusesNonIsolatedDeclaration() integration_spec.SpecError!void {
     const fixture = try renameFixture(allocator, tmp_path, "rename_orphan_anno.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     // `orphan` is annotated but never defined.
@@ -1795,7 +1800,7 @@ pub fn inlayHintsShowInferredTypes() integration_spec.SpecError!void {
     const fixture = try renameFixture(allocator, tmp_path, "inlay_types.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const source = try std.fmt.allocPrint(allocator,
@@ -1856,7 +1861,7 @@ pub fn inlayHintsRespectRangeAndLength() integration_spec.SpecError!void {
     const fixture = try renameFixture(allocator, tmp_path, "inlay_range.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const source = try std.fmt.allocPrint(allocator,
@@ -1921,7 +1926,7 @@ pub fn inlayHintsSurviveOutOfRangeEndLine() integration_spec.SpecError!void {
     const fixture = try renameFixture(allocator, tmp_path, "inlay_overflow.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const source = try std.fmt.allocPrint(allocator,
@@ -1967,7 +1972,7 @@ pub fn definitionHandlerFindsLocalVariableDefinition() integration_spec.SpecErro
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
     const roc_source = try std.fmt.allocPrint(allocator,
         \\app [main] {{ pf: platform "{s}" }}
@@ -2065,7 +2070,7 @@ pub fn definitionHandlerReturnsNullForUndefinedSymbol() integration_spec.SpecErr
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const init_body =
@@ -2154,7 +2159,7 @@ pub fn hoverHandlerReturnsTypeInfoForTypeAnnotation() integration_spec.SpecError
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const init_body =
@@ -2251,7 +2256,7 @@ pub fn definitionHandlerNavigatesToBuiltinTypeFromTypeAnnotation() integration_s
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const init_body =
@@ -2338,7 +2343,7 @@ pub fn documentSymbolsWorksAfterGotoDefinitionRegressionTest() integration_spec.
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
     const roc_source = try std.fmt.allocPrint(allocator,
         \\app [result] {{ pf: platform "{s}" }}
@@ -2451,7 +2456,7 @@ pub fn multipleGotoDefinitionCallsDontBreakDocumentSymbols() integration_spec.Sp
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
     const roc_source = try std.fmt.allocPrint(allocator,
         \\app [baz] {{ pf: platform "{s}" }}
@@ -2580,7 +2585,7 @@ pub fn documentSymbolHandlerReturnsSymbolsWithCorrectNames() integration_spec.Sp
     defer allocator.free(file_uri);
 
     // Get the platform path for valid Roc syntax
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     // Create a valid Roc app with proper header and definitions
@@ -2699,7 +2704,7 @@ pub fn documentSymbolHandlerWorksIndependentlyOfCheck() integration_spec.SpecErr
     defer allocator.free(file_uri);
 
     // Get the platform path for valid Roc syntax
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     // Create a valid Roc app with proper header
@@ -2812,7 +2817,7 @@ pub fn completionHandlerReturnsModuleDefinitions() integration_spec.SpecError!vo
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const init_body =
@@ -2901,7 +2906,7 @@ pub fn completionHandlerReturnsModuleMembersAfterDot() integration_spec.SpecErro
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const init_body =
@@ -3079,7 +3084,7 @@ pub fn completionHandlerReturnsTypesAfterColon() integration_spec.SpecError!void
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
 
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const init_body =
@@ -3169,7 +3174,7 @@ pub fn completionHandlerReturnsListModuleMembersAfterListDot() integration_spec.
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
 
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
     const init_body =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
@@ -3263,7 +3268,7 @@ pub fn completionHandlerReturnsLocalVariablesInBlockScope() integration_spec.Spe
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const init_body =
@@ -3356,7 +3361,7 @@ pub fn completionHandlerReturnsLambdaParameters() integration_spec.SpecError!voi
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const init_body =
@@ -3375,7 +3380,7 @@ pub fn completionHandlerReturnsLambdaParameters() integration_spec.SpecError!voi
     // add = |first, second| first + second
     // Cursor position should be inside the lambda body
     const open_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [add] {{ pf: platform \"{s}\" }}\\n\\nadd = |first, second| first + second"}}}}}}
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [add] {{ pf: platform \"{s}\" }}\n\nadd = |first, second| first + second"}}}}}}
     , .{ file_uri, platform_path });
     defer allocator.free(open_body);
     const open_msg = try frame(allocator, open_body);
@@ -3535,7 +3540,7 @@ pub fn completionHandlerReturnsRecordFieldsAfterDot() integration_spec.SpecError
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const init_body =
@@ -3640,7 +3645,7 @@ pub fn definitionHandlerNavigatesToBuiltinDeclarations() integration_spec.SpecEr
     defer allocator.free(main_path);
     const main_uri = try uriFromPath(allocator, main_path);
     defer allocator.free(main_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const init_body =
@@ -3770,7 +3775,7 @@ pub fn workspaceDocumentEndingInBuiltinRocBuildsAndProducesDiagnostics() integra
     defer allocator.free(my_builtin_path);
     const my_builtin_uri = try uriFromPath(allocator, my_builtin_path);
     defer allocator.free(my_builtin_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const init_body =
@@ -3946,7 +3951,7 @@ pub fn definitionHandlerNavigatesToExternalModuleMembers() integration_spec.Spec
     defer allocator.free(main_path);
     const main_uri = try uriFromPath(allocator, main_path);
     defer allocator.free(main_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const helper_source =
@@ -4079,7 +4084,7 @@ pub fn definitionHandlerNavigatesToExposedImportMemberInImportStatement() integr
     defer allocator.free(main_path);
     const main_uri = try uriFromPath(allocator, main_path);
     defer allocator.free(main_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const helper_source =
@@ -4188,7 +4193,7 @@ pub fn definitionHandlerNavigatesToUnqualifiedExposedImportFunctionCall() integr
     defer allocator.free(main_path);
     const main_uri = try uriFromPath(allocator, main_path);
     defer allocator.free(main_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const helper_source =
@@ -4293,7 +4298,7 @@ pub fn definitionHandlerNavigatesToTagDeclarationInPatternMatch() integration_sp
     defer allocator.free(main_path);
     const main_uri = try uriFromPath(allocator, main_path);
     defer allocator.free(main_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const init_body =
@@ -4387,7 +4392,7 @@ pub fn definitionHandlerNavigatesToExposedTypeAliasInTypeAnnotation() integratio
     defer allocator.free(main_path);
     const main_uri = try uriFromPath(allocator, main_path);
     defer allocator.free(main_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const helper_source =
@@ -4491,7 +4496,7 @@ pub fn semanticTokensHandlerHandlesFileImportsWithoutCrashing() integration_spec
     defer allocator.free(main_path);
     const main_uri = try uriFromPath(allocator, main_path);
     defer allocator.free(main_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     // Create the input file to import
@@ -4619,7 +4624,7 @@ pub fn definitionHandlerNavigatesToFileImportPath() integration_spec.SpecError!v
     defer allocator.free(main_path);
     const main_uri = try uriFromPath(allocator, main_path);
     defer allocator.free(main_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     // Create the target input file
@@ -4744,7 +4749,7 @@ pub fn definitionHandlerNavigatesToEchoPlatformDefinition() integration_spec.Spe
     defer allocator.free(main_path);
     const main_uri = try uriFromPath(allocator, main_path);
     defer allocator.free(main_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const init_body =
@@ -4837,7 +4842,7 @@ pub fn definitionHandlerResolvesPackageShorthandQualifiedImport() integration_sp
     try tmp.dir.writeFile(test_env.io, .{ .sub_path = "pkg/main.roc", .data = "package [Thing] {}\n" });
     try tmp.dir.writeFile(test_env.io, .{ .sub_path = "pkg/Thing.roc", .data = "module [new]\n\nnew = |x| x + 1\n" });
 
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
@@ -4970,7 +4975,7 @@ pub fn definitionHandlerDisambiguatesSameNamedModuleAcrossPackages() integration
     try tmp.dir.writeFile(test_env.io, .{ .sub_path = "pkg/Common.roc", .data = "module [pkg_val]\n\npkg_val = 42\n" });
     try tmp.dir.writeFile(test_env.io, .{ .sub_path = "Common.roc", .data = "module [local_val]\n\nlocal_val = 100\n" });
 
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
@@ -5152,7 +5157,7 @@ pub fn definitionHandlerResolvesShorthandInImportingPackageContext() integration
     try tmp.dir.writeFile(test_env.io, .{ .sub_path = "pkg_b/main.roc", .data = "package [ModB] { dep: \"../dep_b/main.roc\" }\n" });
     try tmp.dir.writeFile(test_env.io, .{ .sub_path = "pkg_b/ModB.roc", .data = "module [val_b]\n\nimport dep.Helper\n\nval_b = Helper.helper_b\n" });
 
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
@@ -5313,7 +5318,7 @@ pub fn definitionHandlerNavigatesToTagDeclarationInPackageQualifiedImport() inte
     defer allocator.free(main_path);
     const main_uri = try uriFromPath(allocator, main_path);
     defer allocator.free(main_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const init_body =
@@ -5413,7 +5418,7 @@ pub fn definitionHandlerDisambiguatesSameNamedTagAcrossImportedModules() integra
     defer allocator.free(main_path);
     const main_uri = try uriFromPath(allocator, main_path);
     defer allocator.free(main_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const init_body =
@@ -5512,7 +5517,7 @@ pub fn definitionHandlerBranchValueOpenTagDoesNotNavigateToMatchConditionType() 
     defer allocator.free(main_path);
     const main_uri = try uriFromPath(allocator, main_path);
     defer allocator.free(main_uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const init_body =
@@ -5658,7 +5663,7 @@ pub fn codeActionsAnnotateInferredBinding() integration_spec.SpecError!void {
     const fixture = try renameFixture(allocator, tmp_path, "code_action_annotate.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const source = try std.fmt.allocPrint(allocator,
@@ -5720,7 +5725,7 @@ pub fn codeActionsGenerateExpectTest() integration_spec.SpecError!void {
     const fixture = try renameFixture(allocator, tmp_path, "code_action_expect.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const source = try std.fmt.allocPrint(allocator,
@@ -5794,7 +5799,7 @@ pub fn codeActionsLeaveOutUnwritableTest() integration_spec.SpecError!void {
     const fixture = try renameFixture(allocator, tmp_path, "code_action_unwritable.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     // A function is not a value this can write down.
@@ -5838,7 +5843,7 @@ pub fn codeActionsOfferNothingWithoutTypes() integration_spec.SpecError!void {
     const fixture = try renameFixture(allocator, tmp_path, "code_action_broken.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     // `n *` is left dangling, so the document does not parse.
@@ -5878,7 +5883,7 @@ pub fn codeActionsOfferBothForOneFunction() integration_spec.SpecError!void {
     const fixture = try renameFixture(allocator, tmp_path, "code_action_both.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const source = try std.fmt.allocPrint(allocator,
@@ -5929,7 +5934,7 @@ pub fn codeActionsAnnotateNestedBinding() integration_spec.SpecError!void {
     const fixture = try renameFixture(allocator, tmp_path, "code_action_nested.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const source = try std.fmt.allocPrint(allocator,
@@ -5980,7 +5985,7 @@ pub fn codeActionsLeaveLambdaParametersAlone() integration_spec.SpecError!void {
     const fixture = try renameFixture(allocator, tmp_path, "code_action_param.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const source = try std.fmt.allocPrint(allocator,
@@ -6028,7 +6033,7 @@ pub fn inlayHintsCarryTheirAnnotationEdit() integration_spec.SpecError!void {
     const fixture = try renameFixture(allocator, tmp_path, "inlay_edits.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const source = try std.fmt.allocPrint(allocator,
@@ -6095,7 +6100,7 @@ pub fn codeActionsOfferOnePerBinding() integration_spec.SpecError!void {
     const fixture = try renameFixture(allocator, tmp_path, "code_action_several.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const source = try std.fmt.allocPrint(allocator,
@@ -6171,7 +6176,7 @@ pub fn codeActionsKeepTrailingComment() integration_spec.SpecError!void {
     const fixture = try renameFixture(allocator, tmp_path, "code_action_comment.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const source = try std.fmt.allocPrint(allocator,
@@ -6224,7 +6229,7 @@ pub fn codeActionsOfferOneTestPerFunction() integration_spec.SpecError!void {
     const fixture = try renameFixture(allocator, tmp_path, "code_action_several_functions.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const source = try std.fmt.allocPrint(allocator,
@@ -6304,7 +6309,7 @@ pub fn codeActionsSurviveOutOfRangeSelectionEnd() integration_spec.SpecError!voi
     const fixture = try renameFixture(allocator, tmp_path, "code_action_overflow.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     const source = try std.fmt.allocPrint(allocator,
@@ -6361,7 +6366,7 @@ pub fn codeActionsMatchDocumentLineEndings() integration_spec.SpecError!void {
     const fixture = try renameFixture(allocator, tmp_path, "code_action_crlf.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
-    const platform_path = try platformPath(allocator);
+    const platform_path = try platformPath(allocator, tmp_path);
     defer allocator.free(platform_path);
 
     // Written out rather than as a multiline literal, which only spells `\n`.

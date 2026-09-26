@@ -9,11 +9,17 @@ const document_symbol_handler = @import("lsp").handlers.document_symbol;
 const integration_spec = @import("integration_spec.zig");
 const test_env = @import("integration_env.zig");
 
-fn platformPath(allocator: std.mem.Allocator) integration_spec.SpecError![]u8 {
-    // Resolve from repo root to ensure absolute path
+/// Get the platform spelling for creating valid Roc files. The platform at
+/// `test/str/platform/main.roc` is spelled relative to the app's directory:
+/// platform paths must be relative (see issues 8549 and 11714).
+fn platformPath(allocator: std.mem.Allocator, app_dir: []const u8) integration_spec.SpecError![]u8 {
+    // Resolve from repo root to find the platform file
     const repo_root = try std.Io.Dir.cwd().realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(repo_root);
-    const path = try std.fs.path.join(allocator, &.{ repo_root, "test", "str", "platform", "main.roc" });
+    const platform_abs = try std.fs.path.join(allocator, &.{ repo_root, "test", "str", "platform", "main.roc" });
+    defer allocator.free(platform_abs);
+    const path = try std.fs.path.relative(allocator, app_dir, null, app_dir, platform_abs);
+    errdefer allocator.free(path);
     // Convert backslashes to forward slashes for cross-platform Roc source compatibility
     // Roc interprets backslashes as escape sequences in string literals
     for (path) |*c| {
@@ -42,7 +48,9 @@ const TestHarness = struct {
         var checker = SyntaxChecker.init(allocator, test_env.io, .{}, null);
         errdefer checker.deinit();
         test_env.configureChecker(&checker, ".zig-cache/tmp");
-        const platform_path = try platformPath(allocator);
+        const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+        defer allocator.free(tmp_path);
+        const platform_path = try platformPath(allocator, tmp_path);
         return .{
             .allocator = allocator,
             .checker = checker,
