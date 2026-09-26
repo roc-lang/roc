@@ -84,7 +84,7 @@ pub const ScopeMap = struct {
     fn processStatement(self: *ScopeMap, module_env: *ModuleEnv, stmt_idx: CIR.Statement.Idx, scope_end: u32, depth: usize) Allocator.Error!void {
         if (depth > 128) return;
 
-        const stmt = module_env.store.getStatement(stmt_idx);
+        const stmt = module_env.store.getSourceStatement(stmt_idx);
         const stmt_region = module_env.store.getStatementRegion(stmt_idx);
 
         switch (stmt) {
@@ -148,7 +148,7 @@ pub const ScopeMap = struct {
     fn traverseExpr(self: *ScopeMap, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, scope_end: u32, depth: usize) Allocator.Error!void {
         if (depth > 128) return;
 
-        const expr = module_env.store.getExpr(expr_idx);
+        const expr = module_env.store.getSourceExpr(expr_idx);
 
         switch (expr) {
             .e_block => |block| {
@@ -177,7 +177,7 @@ pub const ScopeMap = struct {
             },
             .e_closure => |closure| {
                 // Closure wraps a lambda - get the lambda and process it
-                const lambda_expr = module_env.store.getExpr(closure.lambda_idx);
+                const lambda_expr = module_env.store.getSourceExpr(closure.lambda_idx);
                 if (lambda_expr == .e_lambda) {
                     const lambda = lambda_expr.e_lambda;
                     const body_region = module_env.store.getExprRegion(lambda.body);
