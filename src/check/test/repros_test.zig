@@ -24,12 +24,12 @@ test "check - mismatched reassignment becomes a runtime error statement" {
         const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
         const node = test_env.module_env.store.nodes.get(node_idx);
         if (node.tag != .malformed) continue;
-        const diagnostic = node.getPayload().diag_single_value.value;
+        const diagnostic = node.getPayload().malformed.diagnostic;
         var same_diagnostic_count: usize = 0;
         var other_raw_node_idx: u32 = 0;
         while (other_raw_node_idx < test_env.module_env.store.nodes.len()) : (other_raw_node_idx += 1) {
             const other_node = test_env.module_env.store.nodes.get(@enumFromInt(other_raw_node_idx));
-            if (other_node.tag == .malformed and other_node.getPayload().diag_single_value.value == diagnostic) {
+            if (other_node.tag == .malformed and other_node.getPayload().malformed.diagnostic == diagnostic) {
                 same_diagnostic_count += 1;
             }
         }

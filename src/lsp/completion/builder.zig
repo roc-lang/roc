@@ -287,7 +287,7 @@ pub const CompletionBuilder = struct {
         // Add imported module names from import statements
         const import_statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (import_statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             if (stmt == .s_import) {
                 const import_stmt = stmt.s_import;
                 // Use alias if available, otherwise use the module name
@@ -462,7 +462,7 @@ pub const CompletionBuilder = struct {
         // Statement-bound defs (app-style declarations).
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             const parts = getStatementParts(stmt);
             const pattern_idx = parts.pattern orelse continue;
             const ident_idx = module_lookup.extractIdentFromPattern(&module_env.store, pattern_idx) orelse continue;
@@ -508,7 +508,7 @@ pub const CompletionBuilder = struct {
     fn addTypeNamesFromModuleEnv(self: *CompletionBuilder, module_env: *ModuleEnv) Allocator.Error!void {
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             const header_idx = statementTypeHeader(stmt) orelse continue;
             const header = module_env.store.getTypeHeader(header_idx);
             const name = module_env.getIdentText(header.name);
@@ -588,7 +588,7 @@ pub const CompletionBuilder = struct {
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
-            const pattern = module_env.store.getPattern(def.pattern);
+            const pattern = module_env.store.getSourcePattern(def.pattern);
 
             const ident_idx = patternIdent(pattern) orelse continue;
 
@@ -597,7 +597,7 @@ pub const CompletionBuilder = struct {
             if (std.mem.findScalar(u8, name, '.') != null) continue;
 
             // Determine completion kind based on the expression type
-            const expr = module_env.store.getExpr(def.expr);
+            const expr = module_env.store.getSourceExpr(def.expr);
             const kind = completionKindForExpr(expr);
 
             // Get type information for the definition
@@ -634,11 +634,11 @@ pub const CompletionBuilder = struct {
         // Also check statements (apps use statements for definitions)
         const local_statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (local_statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             const stmt_parts = getStatementParts(stmt);
 
             if (stmt_parts.pattern) |pattern_idx| {
-                const pattern = module_env.store.getPattern(pattern_idx);
+                const pattern = module_env.store.getSourcePattern(pattern_idx);
 
                 const ident_idx = patternIdent(pattern) orelse continue;
 
@@ -649,7 +649,7 @@ pub const CompletionBuilder = struct {
                 // Determine completion kind
                 var kind: u32 = @intFromEnum(CompletionItemKind.variable);
                 if (stmt_parts.expr) |expr_idx| {
-                    const expr = module_env.store.getExpr(expr_idx);
+                    const expr = module_env.store.getSourceExpr(expr_idx);
                     kind = completionKindForExpr(expr);
                 }
 
@@ -709,7 +709,7 @@ pub const CompletionBuilder = struct {
 
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
-            const pattern = module_env.store.getPattern(def.pattern);
+            const pattern = module_env.store.getSourcePattern(def.pattern);
 
             const ident_idx = patternIdent(pattern) orelse continue;
 
@@ -730,10 +730,10 @@ pub const CompletionBuilder = struct {
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         self.logDebug("addRecordFieldCompletions: checking {d} statements", .{statements_slice.len});
         for (statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             const pattern_idx = statementPattern(stmt) orelse continue;
 
-            const pattern = module_env.store.getPattern(pattern_idx);
+            const pattern = module_env.store.getSourcePattern(pattern_idx);
             const ident_idx = patternIdent(pattern) orelse continue;
 
             const name = module_env.getIdentText(ident_idx);
@@ -1072,7 +1072,7 @@ pub const CompletionBuilder = struct {
             self.logDebug("addMethodCompletions: checking {d} top-level defs", .{defs_slice.len});
             for (defs_slice) |def_idx| {
                 const def = module_env.store.getDef(def_idx);
-                const pattern = module_env.store.getPattern(def.pattern);
+                const pattern = module_env.store.getSourcePattern(def.pattern);
 
                 const ident_idx = patternIdent(pattern) orelse continue;
 
@@ -1092,10 +1092,10 @@ pub const CompletionBuilder = struct {
             const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
             self.logDebug("addMethodCompletions: checking {d} statements", .{statements_slice.len});
             for (statements_slice) |stmt_idx| {
-                const stmt = module_env.store.getStatement(stmt_idx);
+                const stmt = module_env.store.getSourceStatement(stmt_idx);
                 const pattern_idx = statementPattern(stmt) orelse continue;
 
-                const pattern = module_env.store.getPattern(pattern_idx);
+                const pattern = module_env.store.getSourcePattern(pattern_idx);
                 const ident_idx = patternIdent(pattern) orelse continue;
 
                 const name = module_env.getIdentText(ident_idx);
@@ -1250,7 +1250,7 @@ pub const CompletionBuilder = struct {
 
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             const stmt_parts = getStatementParts(stmt);
             if (stmt_parts.pattern) |stmt_pattern_idx| {
                 if (stmt_pattern_idx == pattern_idx) {
@@ -1334,7 +1334,7 @@ pub const CompletionBuilder = struct {
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
-            const pattern = module_env.store.getPattern(def.pattern);
+            const pattern = module_env.store.getSourcePattern(def.pattern);
 
             const ident_idx = patternIdent(pattern) orelse continue;
 
@@ -1351,10 +1351,10 @@ pub const CompletionBuilder = struct {
         // Fall back to statements (apps use s_decl/s_var for definitions).
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             const pattern_idx = statementPattern(stmt) orelse continue;
 
-            const pattern = module_env.store.getPattern(pattern_idx);
+            const pattern = module_env.store.getSourcePattern(pattern_idx);
             const ident_idx = patternIdent(pattern) orelse continue;
 
             if (ident_idx.eql(qualified_ident)) {
@@ -1377,7 +1377,7 @@ pub const CompletionBuilder = struct {
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
-            const pattern = module_env.store.getPattern(def.pattern);
+            const pattern = module_env.store.getSourcePattern(def.pattern);
 
             const ident_idx = patternIdent(pattern) orelse continue;
 
@@ -1389,10 +1389,10 @@ pub const CompletionBuilder = struct {
         // Also check statements
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             const pattern_idx = statementPattern(stmt) orelse continue;
 
-            const pattern = module_env.store.getPattern(pattern_idx);
+            const pattern = module_env.store.getSourcePattern(pattern_idx);
             const ident_idx = patternIdent(pattern) orelse continue;
 
             if (ident_idx.eql(qualified_ident)) {
@@ -1418,7 +1418,7 @@ pub const CompletionBuilder = struct {
         // Search all_statements for s_nominal_decl matching type_name
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             if (std.meta.activeTag(stmt) != .s_nominal_decl) continue;
             const nom_decl = stmt.s_nominal_decl;
             const header = module_env.store.getTypeHeader(nom_decl.header);

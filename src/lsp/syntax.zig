@@ -1149,7 +1149,7 @@ pub const SyntaxChecker = struct {
         if (lookup_result_opt) |lookup_result| {
             switch (lookup_result) {
                 .expr => |lookup_expr_idx| {
-                    const lookup_expr = module_env.store.getExpr(lookup_expr_idx);
+                    const lookup_expr = module_env.store.getSourceExpr(lookup_expr_idx);
                     if (lookup_expr == .e_method_call) {
                         const method_call = lookup_expr.e_method_call;
                         const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
@@ -1339,7 +1339,7 @@ pub const SyntaxChecker = struct {
         // Check statements
         const statements_slice = store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = store.getStatement(stmt_idx);
+            const stmt = store.getSourceStatement(stmt_idx);
             const stmt_region = store.getStatementRegion(stmt_idx);
 
             if (cir_queries.regionContainsOffset(stmt_region, region.start.offset)) {
@@ -1364,7 +1364,7 @@ pub const SyntaxChecker = struct {
             .expr => |idx| idx,
             .field_access => return null,
         };
-        const expr = store.getExpr(expr_idx);
+        const expr = store.getSourceExpr(expr_idx);
         const importing_pkg = env.findPackageForModulePath(doc_path);
 
         const expr_tag = std.meta.activeTag(expr);
@@ -1471,7 +1471,7 @@ pub const SyntaxChecker = struct {
 
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse continue;
 
             const ident_idx = module_lookup.extractIdentFromPattern(&module_env.store, pattern_idx) orelse continue;
@@ -1592,7 +1592,7 @@ pub const SyntaxChecker = struct {
         // Fall back to statements.
         const statements_slice = store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = store.getStatement(stmt_idx);
+            const stmt = store.getSourceStatement(stmt_idx);
             if (std.meta.activeTag(stmt) != .s_decl) continue;
             const pattern_idx = stmt.s_decl.pattern;
 
@@ -1734,7 +1734,7 @@ pub const SyntaxChecker = struct {
         // Iterate through all statements to check imports
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
 
             // Handle import statements specially - navigate to the imported module or exposed item
             if (stmt == .s_import) {
@@ -1825,7 +1825,7 @@ pub const SyntaxChecker = struct {
                 .expr => |idx| idx,
                 .field_access => return null,
             };
-            const expr = module_env.store.getExpr(expr_idx);
+            const expr = module_env.store.getSourceExpr(expr_idx);
             const expr_tag = std.meta.activeTag(expr);
             if (expr_tag == .e_lookup_local) {
                 const lookup = expr.e_lookup_local;
@@ -2039,7 +2039,7 @@ pub const SyntaxChecker = struct {
     fn findTagInModuleEnv(mod_env: *ModuleEnv, tag_name: []const u8) ?Region {
         const statements_slice = mod_env.store.sliceStatements(mod_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = mod_env.store.getStatement(stmt_idx);
+            const stmt = mod_env.store.getSourceStatement(stmt_idx);
             const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
                 .s_alias_decl => |a| a.anno,
                 .s_nominal_decl => |n| n.anno,
@@ -2103,7 +2103,7 @@ pub const SyntaxChecker = struct {
                         const target_node_idx: CIR.Node.Idx = @enumFromInt(nom_ext.target_node_idx);
                         const node_tag = target_mod_env.store.nodes.get(target_node_idx).tag;
                         if (node_tag == .statement_nominal_decl or node_tag == .statement_alias_decl) {
-                            const stmt = target_mod_env.store.getStatement(@enumFromInt(@intFromEnum(target_node_idx)));
+                            const stmt = target_mod_env.store.getSourceStatement(@enumFromInt(@intFromEnum(target_node_idx)));
                             const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
                                 .s_alias_decl => |a| a.anno,
                                 .s_nominal_decl => |n| n.anno,
@@ -2162,7 +2162,7 @@ pub const SyntaxChecker = struct {
         // 2. If the tag reference carries an explicit local nominal declaration identity,
         // navigate directly to that local statement.
         if (tag_ref.nominal_decl) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
                 .s_alias_decl => |a| a.anno,
                 .s_nominal_decl => |n| n.anno,
@@ -2209,7 +2209,7 @@ pub const SyntaxChecker = struct {
             if (origin_info.origin_module == module_env.selfModuleIdentity()) {
                 // Defined in current module
                 if (origin_info.source_decl.toOptional()) |stmt_num| {
-                    const stmt = module_env.store.getStatement(@enumFromInt(stmt_num));
+                    const stmt = module_env.store.getSourceStatement(@enumFromInt(stmt_num));
                     const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
                         .s_alias_decl => |a| a.anno,
                         .s_nominal_decl => |n| n.anno,
@@ -2265,7 +2265,7 @@ pub const SyntaxChecker = struct {
                 if (findModuleByContentIdentity(build_env, origin_hash)) |target_mod_state| {
                     if (target_mod_state.moduleEnv()) |target_mod_env| {
                         if (origin_info.source_decl.toOptional()) |stmt_num| {
-                            const stmt = target_mod_env.store.getStatement(@enumFromInt(stmt_num));
+                            const stmt = target_mod_env.store.getSourceStatement(@enumFromInt(stmt_num));
                             const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
                                 .s_alias_decl => |a| a.anno,
                                 .s_nominal_decl => |n| n.anno,
@@ -2483,7 +2483,7 @@ pub const SyntaxChecker = struct {
             return cir_queries.regionToRange(mod_env, decl_region);
         }
         for (mod_env.store.sliceStatements(mod_env.all_statements)) |stmt_idx| {
-            const stmt = mod_env.store.getStatement(stmt_idx);
+            const stmt = mod_env.store.getSourceStatement(stmt_idx);
             const header_idx: ?CIR.TypeHeader.Idx = switch (stmt) {
                 .s_alias_decl => |a| a.header,
                 .s_nominal_decl => |n| n.header,
@@ -2805,14 +2805,14 @@ pub const SyntaxChecker = struct {
         current_uri: []const u8,
         oom: *?Allocator.Error,
     ) ?DefinitionResult {
-        const expr = module_env.store.getExpr(expr_idx);
+        const expr = module_env.store.getSourceExpr(expr_idx);
 
         switch (expr) {
             .e_block => |block| {
                 // Check statements in the block for type annotations
                 const stmts = module_env.store.sliceStatements(block.stmts);
                 for (stmts) |stmt_idx| {
-                    const stmt = module_env.store.getStatement(stmt_idx);
+                    const stmt = module_env.store.getSourceStatement(stmt_idx);
 
                     // Extract type annotation from statement
                     const maybe_type_anno = statementTypeAnno(module_env, stmt);
@@ -3630,9 +3630,9 @@ pub const SyntaxChecker = struct {
 
     /// Produce the edits that rename the symbol at the given position.
     ///
-    /// Returns null when the document could not be built or the position maps
-    /// nowhere; a built document with nothing renameable at that position is
-    /// reported as a rejection instead, so the editor can say why.
+    /// Returns null when the document could not be built; a built document
+    /// with nothing renameable at that position is reported as a rejection
+    /// instead, so the editor can say why.
     pub fn getRenameEditsAtPosition(
         self: *SyntaxChecker,
         uri: []const u8,
@@ -3655,7 +3655,8 @@ pub const SyntaxChecker = struct {
         }
 
         const module_env = build.getModuleEnv() orelse return null;
-        const target_offset = pos.positionToOffset(module_env, line, character) orelse return null;
+        const target_offset = pos.positionToOffset(module_env, line, character) orelse
+            return RenameOutcome{ .rejected = .not_a_local_binding };
 
         const target = renameTargetAt(module_env, target_offset) orelse
             return RenameOutcome{ .rejected = .not_a_local_binding };
@@ -3740,7 +3741,7 @@ pub const SyntaxChecker = struct {
         // Also check top-level statements (some module types use these)
         const local_statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (local_statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             const stmt_tag = std.meta.activeTag(stmt);
             if (stmt_tag == .s_alias_decl) {
                 if (extractSymbolFromTypeDecl(module_env, stmt.s_alias_decl.header, stmt_idx, uri, &line_offsets, .class)) |symbol| {
@@ -3794,7 +3795,7 @@ pub const SyntaxChecker = struct {
 
         const import_statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (import_statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             if (stmt != .s_import) continue;
 
             const import_stmt = stmt.s_import;
@@ -4374,7 +4375,7 @@ fn extractSymbolFromDecl(
     line_offsets: *const pos.LineOffsets,
 ) ?document_symbol_handler.SymbolInformation {
     // Check if RHS is a function
-    const expr = module_env.store.getExpr(expr_idx);
+    const expr = module_env.store.getSourceExpr(expr_idx);
     const expr_tag = std.meta.activeTag(expr);
     const is_function = expr_tag == .e_closure or expr_tag == .e_lambda or expr_tag == .e_hosted_lambda;
 
@@ -4401,7 +4402,7 @@ const RenameTarget = struct {
 /// refused rather than half-renamed.
 fn renameTargetAt(module_env: *ModuleEnv, offset: u32) ?RenameTarget {
     const pattern_idx = cir_queries.resolveSymbolAtOffset(module_env, offset) orelse return null;
-    return switch (module_env.store.getPattern(pattern_idx)) {
+    return switch (module_env.store.getSourcePattern(pattern_idx)) {
         .assign => |assign| .{ .pattern = pattern_idx, .ident = assign.ident },
         .var_assign => |assign| .{ .pattern = pattern_idx, .ident = assign.ident },
         .as,

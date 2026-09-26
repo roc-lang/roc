@@ -4204,7 +4204,7 @@ fn replaceExprWithRuntimeError(
     diagnostic_idx: CIR.Diagnostic.Idx,
 ) Allocator.Error!void {
     try self.invalidateExprSubtreeMetadata(expr_idx);
-    self.cir.store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+    try self.cir.store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
 }
 
 fn invalidateExprSubtreeMetadata(self: *Self, root: CIR.Expr.Idx) Allocator.Error!void {
@@ -4306,7 +4306,7 @@ fn retirePatternMetadata(self: *Self, pattern_idx: CIR.Pattern.Idx, diagnostic: 
             }
         },
         .num_literal, .num_from_numeral_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal => {
-            if (diagnostic) |diag| self.cir.store.replacePatternWithRuntimeError(pattern_idx, diag);
+            if (diagnostic) |diag| try self.cir.store.replacePatternWithRuntimeError(pattern_idx, diag);
         },
         .assign, .var_assign, .underscore, .runtime_error => {},
         .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
@@ -7146,7 +7146,7 @@ fn resolvePendingTupleAccesses(
         // independently used bindings. Retire the access without poisoning
         // either solved class. No solver work observes the batched retirement.
         try self.invalidateExprSubtreeMetadataWithScratch(expr, &work);
-        self.cir.store.replaceExprWithRuntimeError(expr, diagnostic);
+        try self.cir.store.replaceExprWithRuntimeError(expr, diagnostic);
     }
     // Tuple-access roots cannot own omitted record fields; their discarded
     // descendants were marked above, so one compaction retires the whole batch.
@@ -11648,7 +11648,7 @@ fn replaceRejectedPatternStatement(
         try self.markHoistInvalidatedExprChildren(work.items[next], &work);
     }
     self.retireInvalidatedRecordDefaults(null);
-    self.cir.store.replaceStatementWithRuntimeError(stmt_idx, diagnostic);
+    try self.cir.store.replaceStatementWithRuntimeError(stmt_idx, diagnostic);
 }
 
 fn literalDispatchPlanMatchesConstraint(
