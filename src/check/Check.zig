@@ -16920,57 +16920,70 @@ fn aliasFormalOccursOffSpine(self: *Self, formal_root: Var) std.mem.Allocator.Er
         stack.clearRetainingCapacity();
         seen.clearRetainingCapacity();
     }
-    // Every link of the spine but its end is visited; the edge from one to
-    // the next is the spine's own.
-    for (path[0 .. path.len - 1]) |link| try stack.append(self.gpa, link);
+    // Along the spine itself, each link's spine child (and an alias layer's
+    // own spine slot, which a copy re-points) is the spine's edge, not an
+    // occurrence. Every other child is off the spine.
+    for (path[0 .. path.len - 1], 1..) |link, next| {
+        try self.pushAliasSlotWalkChildren(link, path[next]);
+    }
+    // Off the spine every edge counts, including one into a spine link: a
+    // link the body also reaches elsewhere (`N(x) : x -> x` applied to
+    // `[A, ..e]` puts one row at the input and on the spine) carries its
+    // spine child, and so the formal, at that other position too.
     while (stack.pop()) |current| {
         const resolved = self.types.resolveVar(current);
         if (resolved.var_ == formal_root) return true;
         const entry = try seen.getOrPut(self.gpa, resolved.var_);
         if (entry.found_existing) continue;
-        const on_path_at: ?usize = for (path[0 .. path.len - 1], 0..) |link, index| {
-            if (link == resolved.var_) break index;
-        } else null;
-        const spine_child: ?Var = if (on_path_at) |index| path[index + 1] else null;
-        switch (resolved.desc.content) {
-            .rigid, .flex, .field_presence, .err => {},
-            .alias => |alias| {
-                const slot_index: ?usize = if (on_path_at != null) self.types.aliasSpineSlotIndex(alias) else null;
-                for (self.types.sliceAliasArgs(alias), 0..) |arg, index| {
-                    if (slot_index == index) continue;
-                    try stack.append(self.gpa, arg);
-                }
-                if (spine_child == null) try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
-            },
-            .structure => |flat| switch (flat) {
-                .empty_record, .empty_tag_union => {},
-                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
-                .nominal_type => |nominal| for (self.types.sliceNominalArgs(nominal), 0..) |arg, index| {
-                    if (spine_child != null and index == try_error_type_arg_index and self.types.resolveVar(arg).var_ == spine_child.?) continue;
-                    try stack.append(self.gpa, arg);
-                },
-                .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
-                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
-                    if (spine_child == null) try stack.append(self.gpa, func.ret);
-                },
-                .record => |record| {
-                    try stack.append(self.gpa, record.ext);
-                    for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
-                        if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
-                        try stack.append(self.gpa, presence.typeVar());
-                    }
-                },
-                .tag_union => |tag_union| {
-                    for (self.types.getTagsSlice(tag_union.tags).items(.args)) |args| {
-                        try stack.appendSlice(self.gpa, self.types.sliceVars(args));
-                    }
-                    if (spine_child == null) try stack.append(self.gpa, tag_union.ext);
-                },
-            },
-        }
+        try self.pushAliasSlotWalkChildren(resolved.var_, null);
     }
     return false;
+}
+
+/// Push `var_`'s children onto the off-spine worklist of
+/// `aliasFormalOccursOffSpine`. With `spine_child` set, `var_` is walked as a
+/// link of the spine: the edge to `spine_child`, and an alias layer's spine
+/// slot, are left out.
+fn pushAliasSlotWalkChildren(self: *Self, var_: Var, spine_child: ?Var) std.mem.Allocator.Error!void {
+    const stack = &self.alias_slot_stack;
+    const resolved = self.types.resolveVar(var_);
+    switch (resolved.desc.content) {
+        .rigid, .flex, .field_presence, .err => {},
+        .alias => |alias| {
+            const slot_index: ?usize = if (spine_child != null) self.types.aliasSpineSlotIndex(alias) else null;
+            for (self.types.sliceAliasArgs(alias), 0..) |arg, index| {
+                if (slot_index == index) continue;
+                try stack.append(self.gpa, arg);
+            }
+            if (spine_child == null) try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+        },
+        .structure => |flat| switch (flat) {
+            .empty_record, .empty_tag_union => {},
+            .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+            .nominal_type => |nominal| for (self.types.sliceNominalArgs(nominal), 0..) |arg, index| {
+                if (spine_child != null and index == try_error_type_arg_index and self.types.resolveVar(arg).var_ == spine_child.?) continue;
+                try stack.append(self.gpa, arg);
+            },
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                try stack.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
+                if (spine_child == null) try stack.append(self.gpa, func.ret);
+            },
+            .record => |record| {
+                try stack.append(self.gpa, record.ext);
+                for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                    if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
+                    try stack.append(self.gpa, presence.typeVar());
+                }
+            },
+            .tag_union => |tag_union| {
+                for (self.types.getTagsSlice(tag_union.tags).items(.args)) |args| {
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(args));
+                }
+                if (spine_child == null) try stack.append(self.gpa, tag_union.ext);
+            },
+        },
+    }
 }
 
 fn aliasSpineEnd(self: *Self, root: Var) std.mem.Allocator.Error!SpineEnd {
@@ -30643,10 +30656,13 @@ fn beginCommitProbe(self: *Self, env: *Env) std.mem.Allocator.Error!CommitProbe 
 /// module, is its declaration's body under ALL of its arguments. The
 /// declaration's backing is re-instantiated with every template argument,
 /// declared and hidden, mapped to the instance's argument at the same index,
-/// and the copy is unified with the instance's backing in a rolled-back
-/// probe. A template variable that is no argument would reach the rigid
-/// substitution below with no entry for it, which asserts. Returns null for an
-/// alias this module did not declare.
+/// and the copy, rolled back afterwards, is compared with the instance's
+/// backing. A template variable that is no argument would reach the rigid
+/// substitution below with no entry for it, which asserts. The comparison is
+/// structural with identical leaves (`typesStructurallyIdentical`), not a
+/// unification, which would accept a backing more specific than its body
+/// under its arguments. Returns null for an alias this module did not
+/// declare.
 pub fn aliasInstanceIsFaithful(self: *Self, instance_var: Var) Allocator.Error!?bool {
     const instance = switch (self.types.resolveVar(instance_var).desc.content) {
         .alias => |alias| alias,
@@ -30682,7 +30698,148 @@ pub fn aliasInstanceIsFaithful(self: *Self, instance_var: Var) Allocator.Error!?
     };
     const copy = try instantiator.instantiateVar(self.types.getAliasBackingVar(decl));
     self.var_map.clearRetainingCapacity();
-    return try self.probeUnifyWithoutRecordingProblems(copy, self.types.getAliasBackingVar(instance));
+    return try self.typesStructurallyIdentical(copy, self.types.getAliasBackingVar(instance));
+}
+
+/// Test harness half of `aliasInstanceIsFaithful`: whether `a` and `b` are
+/// the same type STRUCTURALLY, with every leaf (flex, rigid, row tail) the
+/// same variable on both sides. Unification would accept a `b` more specific
+/// than `a`; this does not. Aliases are read through their backing (each
+/// instance is checked on its own), and rows are compared down their whole
+/// extension chains, since a merge can flatten one side's chain.
+fn typesStructurallyIdentical(self: *Self, a: Var, b: Var) Allocator.Error!bool {
+    var pairs: std.ArrayListUnmanaged([2]Var) = .empty;
+    defer pairs.deinit(self.gpa);
+    var visited: std.AutoHashMapUnmanaged([2]Var, void) = .empty;
+    defer visited.deinit(self.gpa);
+    var a_tags: std.ArrayListUnmanaged(types_mod.Tag) = .empty;
+    defer a_tags.deinit(self.gpa);
+    var b_tags: std.ArrayListUnmanaged(types_mod.Tag) = .empty;
+    defer b_tags.deinit(self.gpa);
+    try pairs.append(self.gpa, .{ a, b });
+    while (pairs.pop()) |pair| {
+        const left = self.types.resolveVar(self.aliasBackingThrough(pair[0]));
+        const right = self.types.resolveVar(self.aliasBackingThrough(pair[1]));
+        if (left.var_ == right.var_) continue;
+        const key = [2]Var{ left.var_, right.var_ };
+        if ((try visited.getOrPut(self.gpa, key)).found_existing) continue;
+        const left_flat = switch (left.desc.content) {
+            .structure => |flat| flat,
+            // Distinct leaves: the two sides name different variables.
+            .flex, .rigid, .field_presence, .err, .alias => return false,
+        };
+        const right_flat = switch (right.desc.content) {
+            .structure => |flat| flat,
+            .flex, .rigid, .field_presence, .err, .alias => return false,
+        };
+        switch (left_flat) {
+            .tag_union, .empty_tag_union => {
+                switch (right_flat) {
+                    .tag_union, .empty_tag_union => {},
+                    .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record => return false,
+                }
+                a_tags.clearRetainingCapacity();
+                b_tags.clearRetainingCapacity();
+                const left_tail = try self.collectRowTags(left.var_, &a_tags);
+                const right_tail = try self.collectRowTags(right.var_, &b_tags);
+                if (a_tags.items.len != b_tags.items.len) return false;
+                for (a_tags.items) |left_tag| {
+                    const right_tag = for (b_tags.items) |candidate| {
+                        if (candidate.name.eql(left_tag.name)) break candidate;
+                    } else return false;
+                    const left_args = self.types.sliceVars(left_tag.args);
+                    const right_args = self.types.sliceVars(right_tag.args);
+                    if (left_args.len != right_args.len) return false;
+                    for (left_args, right_args) |x, y| try pairs.append(self.gpa, .{ x, y });
+                }
+                try pairs.append(self.gpa, .{ left_tail, right_tail });
+            },
+            .fn_pure, .fn_effectful, .fn_unbound => |left_func| {
+                const right_func = switch (right_flat) {
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| func,
+                    .tag_union, .empty_tag_union, .record, .tuple, .nominal_type, .empty_record => return false,
+                };
+                if (std.meta.activeTag(left_flat) != std.meta.activeTag(right_flat)) return false;
+                const left_args = self.types.sliceVars(left_func.args);
+                const right_args = self.types.sliceVars(right_func.args);
+                if (left_args.len != right_args.len) return false;
+                for (left_args, right_args) |x, y| try pairs.append(self.gpa, .{ x, y });
+                try pairs.append(self.gpa, .{ left_func.ret, right_func.ret });
+            },
+            .nominal_type => |left_nominal| {
+                const right_nominal = switch (right_flat) {
+                    .nominal_type => |nominal| nominal,
+                    .tag_union, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .empty_record => return false,
+                };
+                if (!left_nominal.ident.ident_idx.eql(right_nominal.ident.ident_idx) or left_nominal.origin_module != right_nominal.origin_module) return false;
+                const left_args = self.types.sliceNominalArgs(left_nominal);
+                const right_args = self.types.sliceNominalArgs(right_nominal);
+                if (left_args.len != right_args.len) return false;
+                for (left_args, right_args) |x, y| try pairs.append(self.gpa, .{ x, y });
+            },
+            .tuple => |left_tuple| {
+                const right_tuple = switch (right_flat) {
+                    .tuple => |tuple| tuple,
+                    .tag_union, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound, .record, .nominal_type, .empty_record => return false,
+                };
+                const left_elems = self.types.sliceVars(left_tuple.elems);
+                const right_elems = self.types.sliceVars(right_tuple.elems);
+                if (left_elems.len != right_elems.len) return false;
+                for (left_elems, right_elems) |x, y| try pairs.append(self.gpa, .{ x, y });
+            },
+            .empty_record => switch (right_flat) {
+                .empty_record => {},
+                .tag_union, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound, .record, .nominal_type, .tuple => return false,
+            },
+            .record => |left_record| {
+                const right_record = switch (right_flat) {
+                    .record => |record| record,
+                    .tag_union, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound, .tuple, .nominal_type, .empty_record => return false,
+                };
+                const left_fields = self.types.getRecordFieldsSlice(left_record.fields);
+                const right_fields = self.types.getRecordFieldsSlice(right_record.fields);
+                if (left_fields.len != right_fields.len) return false;
+                for (left_fields.items(.name), left_fields.items(.presence), right_fields.items(.name), right_fields.items(.presence)) |ln, lp, rn, rp| {
+                    if (!ln.eql(rn)) return false;
+                    try pairs.append(self.gpa, .{ lp.typeVar(), rp.typeVar() });
+                }
+                try pairs.append(self.gpa, .{ left_record.ext, right_record.ext });
+            },
+        }
+    }
+    return true;
+}
+
+/// `var_` read through alias backings.
+fn aliasBackingThrough(self: *Self, var_: Var) Var {
+    var current = var_;
+    while (true) {
+        switch (self.types.resolveVar(current).desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .flex, .rigid, .structure, .field_presence, .err => return current,
+        }
+    }
+}
+
+/// Append every tag the row `row` lists, down its extension chain through
+/// alias links, to `out`; return the chain's tail.
+fn collectRowTags(self: *Self, row: Var, out: *std.ArrayListUnmanaged(types_mod.Tag)) Allocator.Error!Var {
+    var current = row;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| {
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.name), tags.items(.args)) |name, args| try out.append(self.gpa, .{ .name = name, .args = args });
+                    current = tag_union.ext;
+                },
+                .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record => return resolved.var_,
+            },
+            .flex, .rigid, .field_presence, .err => return resolved.var_,
+        }
+    }
 }
 
 fn probeUnifyWithoutRecordingProblems(

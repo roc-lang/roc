@@ -4674,15 +4674,17 @@ const ProcedureBuilder = struct {
         const identity_rep = self.descriptorIdentityRep(rep_id);
         const worker_layout = self.layout_plan.rep_layouts[@intFromEnum(rep_id)].worker.layoutIdx();
         const identity_worker_layout = self.layout_plan.rep_layouts[@intFromEnum(identity_rep)].worker.layoutIdx();
-        // Stored the same way, the value is described by its identity
-        // representation, as `typeDescForRep` describes it: an alias over a
-        // dynamic row carries no descriptor requirement of its own, so its
-        // own descriptor payload layout would be the row's erased storage,
-        // which lists none of the row's tags.
-        return if (worker_layout != identity_worker_layout)
-            worker_layout
-        else
-            self.descriptorPayloadLayoutForRep(identity_rep);
+        if (worker_layout != identity_worker_layout) return worker_layout;
+        // An alias is its backing: it carries no descriptor requirement of
+        // its own, so its own descriptor payload layout would be its storage
+        // (for an alias over a dynamic row, the row's erased box, which lists
+        // none of the row's tags). It is described by its identity
+        // representation, as `typeDescForRep` describes it.
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        return switch (rep.kind) {
+            .alias => self.descriptorPayloadLayoutForRep(identity_rep),
+            .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => self.descriptorPayloadLayoutForRep(rep_id),
+        };
     }
 
     fn layoutIsBoxStorage(self: *const ProcedureBuilder, layout_idx: layout.Idx) bool {

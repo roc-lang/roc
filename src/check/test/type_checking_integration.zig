@@ -10665,6 +10665,61 @@ test "check type - hidden alias arguments - a local's alias result whose only fr
     try checkTypesModule(source, .{ .pass = .last_def }, "Str");
 }
 
+test "check type - hidden alias arguments - a formal reached through a nested alias's shared argument is split, not declared" {
+    // `N(x) : x -> x` substitutes `x` and `x⁺` with one row `[A, ..e]`, so
+    // `e` stands at `N`'s input too: it gets a hidden `e⁺` (`.formal`), and
+    // `O([B])` behaves like the inline `[A, B] -> [A, B]`.
+    const widened =
+        \\N(x) : x -> x
+        \\
+        \\O(e) : N([A, ..e])
+        \\
+        \\mk : O([B])
+        \\mk = |x| x
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| mk(x)
+    ;
+    try checkTypesModule(widened, .{ .pass = .last_def }, "[A, B] -> [A, B, C]");
+
+    const input_stays_closed =
+        \\N(x) : x -> x
+        \\
+        \\O(e) : N([A, ..e])
+        \\
+        \\mk : O([B])
+        \\mk = |x| x
+        \\
+        \\bad : [A, B, C] -> [A, B, C]
+        \\bad = |x| mk(x)
+    ;
+    try checkTypesModule(input_stays_closed, .fail, "Type Mismatch");
+}
+
+test "check type - hidden alias arguments - a nested alias layer never relates a drifted backing by its arguments" {
+    // `f`'s input is `[A, C]`; `g` passes it `D`. `N`'s `e` is shared with
+    // `M`'s input, so it is split, and `N`'s layers stay faithful: the
+    // mismatch is found rather than hidden behind `N`'s arguments.
+    const source =
+        \\M(x) : x -> x
+        \\
+        \\N(e) : M([A, ..e])
+        \\
+        \\O2 : N([C])
+        \\
+        \\P : N([C, D])
+        \\
+        \\f : O2
+        \\f = |x| match x { A => A, C => C }
+        \\
+        \\g : P -> [A, C, D]
+        \\g = |h| h(D)
+        \\
+        \\r = g(f)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
 test "check type - hidden alias arguments - an arity error counts only the declared arguments" {
     // `Base : [Other]` has one hidden argument, its marker; its arity is 0.
     const source =
@@ -10754,11 +10809,74 @@ test "check type - hidden alias arguments - every alias instance is its declarat
         \\use : Str -> [A, B, C]
         \\use = |s| mk(s)
         ,
+        \\N(x) : x -> x
+        \\
+        \\O(e) : N([A, ..e])
+        \\
+        \\mk : O([B])
+        \\mk = |x| x
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| mk(x)
+        ,
+        \\M(x) : x -> x
+        \\
+        \\N(e) : M([A, ..e])
+        \\
+        \\O2 : N([C])
+        \\
+        \\f : O2
+        \\f = |x| match x { A => A, C => C }
+        \\
+        \\use : [A, C] -> [A, C, D]
+        \\use = |x| f(x)
+        ,
     };
     for (programs) |source| {
         var test_env = try TestEnv.init("Test", source);
         defer test_env.deinit();
         try expectEveryAliasInstanceFaithful(&test_env);
+    }
+}
+
+test "check type - hidden alias arguments - the faithfulness harness rejects a backing more specific than its body" {
+    // `Pair(a) : (a, a)` applied to a flex with a `({}, {})` backing:
+    // unification would relate `(a, a)` with it, but that backing is not the
+    // body under the argument. The same argument with an `(a, a)` backing is.
+    const source =
+        \\Pair(a) : (a, a)
+        \\
+        \\p : Pair(Str)
+        \\p = ("x", "y")
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    const module_env = test_env.module_env;
+    const types_store = &module_env.types;
+    const decl_stmt: u32 = for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+        if (module_env.store.getStatement(statement_idx) == .s_alias_decl) break @intFromEnum(statement_idx);
+    } else return error.TestUnexpectedResult;
+    const decl_alias = types_store.resolveVar(@enumFromInt(decl_stmt)).desc.content.alias;
+
+    const arg = try types_store.fresh();
+    const unit = try types_store.freshFromContent(.{ .structure = .empty_record });
+    const backings = [_]struct { elems: [2]types.Var, faithful: bool }{
+        .{ .elems = .{ arg, arg }, .faithful = true },
+        .{ .elems = .{ unit, unit }, .faithful = false },
+    };
+    for (backings) |case| {
+        const backing = try types_store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try types_store.appendVars(&case.elems) } } });
+        const instance = try types_store.freshFromContent(try types_store.mkAliasWithSourceDeclAndBuiltinOrigin(
+            decl_alias.ident,
+            backing,
+            &.{arg},
+            decl_alias.origin_module,
+            decl_stmt,
+            false,
+            1,
+            decl_alias.spine,
+        ));
+        try std.testing.expectEqual(@as(?bool, case.faithful), try test_env.checker.aliasInstanceIsFaithful(instance));
     }
 }
 

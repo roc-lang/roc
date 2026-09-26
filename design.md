@@ -2362,7 +2362,12 @@ The hidden arguments are:
     position keeps `e`. An ordinary reference substitutes both by name, to the
     same argument, so `Fwd(e) : e -> e` still relates `e` at both positions.
   - `.declared`: a formal the body uses nowhere else (`Id(a) : a`,
-    `Wrap(ext) : [HostErr(U64), ..ext]`). The declared argument is the slot
+    `Wrap(ext) : [HostErr(U64), ..ext]`): no edge of the body reaches it but
+    the spine's own (`Check.aliasFormalOccursOffSpine`). The spine's edges are
+    only those taken while walking the spine; a spine link the body ALSO
+    reaches from elsewhere carries its spine child to that other position,
+    so `N(e) : M([A, ..e])` with `M(x) : x -> x` puts `e` at `M`'s input
+    too and splits it (`.formal`). The declared argument is the slot
     itself. Splitting such a formal would leave the declared `e` with no body
     position, related only through the argument list: a forwarder's body
     closes it, and a caller's wider same-alias annotation then fails to
@@ -2399,8 +2404,15 @@ Where the spine slot takes something other than the argument:
 
 Unification relates two applications of one alias by all their arguments,
 pairwise; their backings, being the body under those arguments, are then
-related without a separate report (`unifyTwoAliases`). Two applications of one
-alias agree in every argument once related, so neither is more widened than
+related without a separate report (`unifyTwoAliases`). That is sound only
+because every instance is faithful—its backing IS its declaration's body
+under its arguments—so the backings cannot disagree once the arguments agree;
+a misclassified spine (a shared formal taken for `.declared`) would break
+exactly that, which is why `Check.aliasInstanceIsFaithful` compares an
+instance's backing with the body under its arguments STRUCTURALLY, with
+identical leaves, rather than by unification, which accepts a backing more
+specific than the body. Two applications of one alias agree in every argument
+once related, so neither is more widened than
 the other, and the merge keeps b's view.
 
 A WIDENED instance never wins a merge. An alias meeting a structure is related
@@ -2433,7 +2445,11 @@ Readers of alias arguments fall in two groups. A graph walk visits every
 argument, since each is a variable of the graph: rank (generalization ranks an
 alias by the max over all its arguments, now exactly its body's variables),
 occurs, reachability, copying, `copy_import`, checked module data
-(`CheckedAliasType` carries every argument and its `declared_arity`), dispatch
+(`CheckedAliasType` carries every argument and its `declared_arity`; an
+alias application the checked module data builds from a declaration's syntax
+carries the declaration's hidden arguments too, its hidden formal taking its
+formal's argument and each marker slot the closed row the builder writes, so
+it keys and compares like the checker's instance), dispatch
 evidence, and every post-check stage, which reads the backing. A reader that
 reads arguments by the declaration's positions reads only the declared ones
 (`Store.sliceAliasDeclaredArgs`, `CheckedAliasType.declaredArgs`): arity
@@ -2443,7 +2459,8 @@ concreteness, settled value rows, host-boundary rules, static-dispatch
 receiver embedding and size, and every presentation (the TypeWriter, error
 snapshots, docs, and the package API's arity and references). Boxy describes an
 alias by its backing's representation, including in a descriptor template
-(`descriptorTemplatePayloadLayoutForRep`).
+(`descriptorTemplatePayloadLayoutForRep`, for an alias representation only;
+nominal and box wrappers keep their own descriptor payload layout).
 
 Presentation reads the hidden arguments to decide whether an instance is
 WIDENED (`TypeWriter.aliasIsWidened`): a marker slot resolves, through alias
@@ -2475,7 +2492,10 @@ alias's declared arguments"; rejected—the same tests' input sides, "a phantom
 formal at index 16", "a zero-argument alias opened at the result is related by
 its backing", "a twin copied down an alias chain is related by its backing", "an
 imported opened alias instance is related by its backing", "an alias whose
-formal stands only on the result row still bounds its row"), "every alias
+formal stands only on the result row still bounds its row", "a formal reached
+through a nested alias's shared argument is split, not declared" and "a nested
+alias layer never relates a drifted backing by its arguments"), "the
+faithfulness harness rejects a backing more specific than its body", "every alias
 instance is its declaration's body under all its arguments" (the faithfulness
 harness `Check.aliasInstanceIsFaithful`), `unify_test.zig` ("a hidden argument
 carries a widened row into the relation", "an open hidden slot meets a closed

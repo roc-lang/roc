@@ -6898,12 +6898,34 @@ fn appendInstantiatedAliasDeclarationApplication(
         alias.anno,
     );
 
+    // Built from the declaration's syntax under its actual arguments. The
+    // application carries the declaration's hidden arguments too, as the
+    // checker's own instances do (`types.Alias.declared_arity`), so both
+    // spellings of one type key and compare alike. The builder above closes
+    // every row the body writes without an extension, which is what each
+    // marker slot stands for, and the spine's hidden formal `e⁺` takes its
+    // formal's actual argument, as an ordinary reference substitutes it.
+    const decl_alias = switch (module.typeStoreConst().resolveVar(ModuleEnv.varFrom(statement_idx)).desc.content) {
+        .alias => |decl_alias| decl_alias,
+        .flex, .rigid, .structure, .field_presence, .err => checkedArtifactInvariant("checked declaration template alias application declaration was not an alias", .{}),
+    };
+    if (decl_alias.declared_arity != actual_args.len) {
+        checkedArtifactInvariant("checked declaration template alias application arity mismatch", .{});
+    }
+    const hidden_count = module.typeStoreConst().aliasHiddenArgs(decl_alias).len;
     // The payload owns `payload_args` and releases it on failure.
-    const payload_args = if (actual_args.len == 0) &.{} else try allocator.dupe(CheckedTypeId, actual_args);
+    const payload_args = try allocator.alloc(CheckedTypeId, actual_args.len + hidden_count);
+    var payload_args_owned = true;
+    errdefer if (payload_args_owned) allocator.free(payload_args);
+    @memcpy(payload_args[0..actual_args.len], actual_args);
+    for (payload_args[actual_args.len..], 0..) |*hidden, index| {
+        hidden.* = switch (decl_alias.spine.kind) {
+            .formal => if (index == 0) actual_args[decl_alias.spine.base] else try appendExplicitCheckedTypePayload(allocator, names, store, .empty_tag_union),
+            .none, .marker, .declared => try appendExplicitCheckedTypePayload(allocator, names, store, .empty_tag_union),
+        };
+    }
+    payload_args_owned = false;
 
-    // Built from the declaration's syntax under its actual arguments: the
-    // declared arguments alone. Nothing after checking relates alias
-    // applications by their arguments, so no hidden argument is needed.
     return try appendExplicitCheckedTypePayload(allocator, names, store, .{ .alias = .{
         .name = alias_name,
         .origin_module = origin_module,
@@ -6912,7 +6934,7 @@ fn appendInstantiatedAliasDeclarationApplication(
         .builtin_origin = builtin_origin,
         .backing = backing,
         .args = payload_args,
-        .declared_arity = @intCast(actual_args.len),
+        .declared_arity = decl_alias.declared_arity,
     } });
 }
 
@@ -9853,6 +9875,74 @@ test "optional record fields publish through the declaration annotation path" {
     try testing.expectEqual(CheckedFieldKind.Tag.optional, fields[0].kind.tag);
     try testing.expectEqualStrings("req", names.recordFieldLabelText(fields[1].name));
     try testing.expectEqual(CheckedFieldKind.Tag.required, fields[1].kind.tag);
+}
+
+test "a declaration-template alias application carries the hidden arguments the checker's instance carries" {
+    // `Fwd(e) : e -> e` is `Fwd(e; e⁺)` (design.md "Hidden Alias
+    // Arguments"). Built from its syntax under `{}` for a nominal backing, the
+    // application lists `e⁺` too, so it is the same checked type as the
+    // checker's own instance of `Fwd({})`.
+    const testing = std.testing;
+    const TestEnv = @import("test/TestEnv.zig");
+    const allocator = testing.allocator;
+
+    var test_env = try TestEnv.init("Main",
+        \\Fwd(e) : e -> e
+        \\
+        \\Holder := { f : Fwd({}) }
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const source_modules = [_]TypedCIR.Modules.SourceModule{
+        .{ .precompiled = test_env.module_env },
+    };
+    var modules = try TypedCIR.Modules.init(allocator, &source_modules);
+    defer modules.deinit();
+    const module = modules.module(0);
+    const module_env = module.moduleEnvConst();
+
+    var fwd_stmt: ?CIR.Statement.Idx = null;
+    var field_anno: ?CIR.TypeAnno.Idx = null;
+    for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+        const statement = module_env.store.getStatement(statement_idx);
+        if (statement == .s_alias_decl) fwd_stmt = statement_idx;
+        if (statement == .s_nominal_decl) {
+            const record = module_env.store.getTypeAnno(statement.s_nominal_decl.anno).record;
+            field_anno = module_env.store.getAnnoRecordField(module_env.store.sliceAnnoRecordFields(record.fields)[0]).ty;
+        }
+    }
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+    var active = try CheckedSourceTypeRoots.init(allocator, module);
+    defer active.deinit();
+    const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1), .direct = &.{} };
+    var source_nodes = try CheckedSourceNodes.init(allocator, module);
+    defer source_nodes.deinit(allocator);
+    var local_type_declarations = try LocalTypeDeclarationIndex.init(allocator, module, &source_nodes);
+    defer local_type_declarations.deinit();
+
+    const unit = try appendExplicitCheckedTypePayload(allocator, &names, &store, .empty_record);
+    const template_built = try appendInstantiatedAliasDeclarationApplication(
+        allocator,
+        module,
+        &names,
+        imports,
+        &store,
+        &active,
+        &local_type_declarations,
+        fwd_stmt orelse return error.TestUnexpectedResult,
+        &.{unit},
+    );
+    const checker_built = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, ModuleEnv.varFrom(field_anno orelse return error.TestUnexpectedResult));
+
+    const template_alias = store.payload(template_built).alias;
+    try testing.expectEqual(@as(u32, 1), template_alias.declared_arity);
+    try testing.expectEqual(store.payload(checker_built).alias.args.len, template_alias.args.len);
+    try testing.expect(try store.view().rootExactEql(allocator, template_built, checker_built));
 }
 
 const EmptyTagCheckedOutputTestError = @import("test/TestEnv.zig").TestEnvError || error{

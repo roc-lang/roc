@@ -285,7 +285,12 @@ pub const Constants = struct {
     /// 120: A widened alias instance never wins a merge: after its backing is
     ///      related to a structure it joins the structure's class, so a
     ///      definition's type keeps its annotation's rows as written.
-    pub const CACHE_VERSION = 120;
+    /// 121: A formal reached off the spine through a spine link the body
+    ///      also reaches elsewhere is split with a hidden `e⁺` rather than
+    ///      taken as the spine slot itself, and an alias application checked
+    ///      module data builds from a declaration's syntax carries the
+    ///      declaration's hidden arguments.
+    pub const CACHE_VERSION = 121;
 };
 
 /// Configuration for the Roc cache system.
