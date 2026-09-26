@@ -152,14 +152,34 @@ const Builder = struct {
         try self.relocate(job.dest, allocation.dest);
         if (allocation.fresh) try self.enqueue(sp, sl, tp, tl, src, allocation.dest, .value, .value);
     }
+    /// Each program lays out a recursive type for itself, choosing where its
+    /// values sit behind a box, so one value may be boxed in the source and
+    /// stored inline in the target, or the reverse. Returns false when
+    /// neither side boxes it.
+    fn recursionBoxed(self: *Builder, job: Job, source_boxed: bool, source_inner: layout.Idx, target_boxed: bool, target_inner: layout.Idx) Allocator.Error!bool {
+        if (!source_boxed and !target_boxed) return false;
+        const src = if (source_boxed) self.pointer(job.source) else job.source;
+        const sl = if (source_boxed) source_inner else job.source_layout;
+        if (!target_boxed) {
+            try self.enqueue(job.source_plan, sl, job.plan, job.layout_idx, src, job.dest, .value, .value);
+            return true;
+        }
+        const allocation = try self.reserveAllocation(.{ .source = src, .plan = job.plan, .layout_idx = target_inner, .count = 1, .kind = .value }, self.size(target_inner), self.alignment(target_inner), self.program.layouts.layoutContainsRefcounted(self.program.layouts.getLayout(target_inner)), null);
+        try self.relocate(job.dest, allocation.dest);
+        if (allocation.fresh) try self.enqueue(job.source_plan, sl, job.plan, target_inner, src, allocation.dest, .value, .value);
+        return true;
+    }
     fn visit(self: *Builder, job: Job) Allocator.Error!void {
         const source_physical = self.source_program.layouts.getLayout(job.source_layout);
         const physical = self.program.layouts.getLayout(job.layout_idx);
-        if (job.source_storage != job.storage) invariant("paired capture storage differs");
-        if (job.storage == .recursive_box) return self.boxed(job, job.source_plan, source_physical.getIdx(), job.plan, physical.getIdx());
         const source_plan = self.source_program.const_plans.items[@intFromEnum(job.source_plan)];
         const plan = self.program.const_plans.items[@intFromEnum(job.plan)];
         if (std.meta.activeTag(source_plan) != std.meta.activeTag(plan)) invariant("paired canonical const plan shapes differ");
+        // An explicit `Box` is part of the value; any other box breaks a
+        // recursive type's cycle in that program's layout.
+        const source_boxed = job.source_storage == .recursive_box or (source_physical.tag == .box and source_plan != .box);
+        const target_boxed = job.storage == .recursive_box or (physical.tag == .box and plan != .box);
+        if (try self.recursionBoxed(job, source_boxed, if (source_physical.tag == .box) source_physical.getIdx() else job.source_layout, target_boxed, if (physical.tag == .box) physical.getIdx() else job.layout_idx)) return;
         switch (plan) {
             .pending, .layout_only => invariant("incomplete paired const plan"),
             .zst => {},
@@ -180,13 +200,11 @@ const Builder = struct {
                 .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .tag_union, .ptr, .erased_box => invariant("invalid box layout"),
             },
             .tuple, .record => |children_| {
-                if (physical.tag == .box) return self.boxed(job, job.source_plan, source_physical.getIdx(), job.plan, physical.getIdx());
                 if (physical.tag == .box_of_zst) return;
                 const source_children = if (source_plan == .tuple) source_plan.tuple else source_plan.record;
                 try self.children(source_children, job.source_layout, children_, job.layout_idx, job.source, job.dest, false);
             },
             .tag_union => |variants| {
-                if (physical.tag == .box) return self.boxed(job, job.source_plan, source_physical.getIdx(), job.plan, physical.getIdx());
                 const disc = self.discriminant(job.source_layout, job.source);
                 const source_variant = for (source_plan.tag_union) |variant| {
                     if (variant.discriminant == disc) break variant;
@@ -200,7 +218,6 @@ const Builder = struct {
                 invariant("target tag absent from plan");
             },
             .fn_value => |set_id| {
-                if (physical.tag == .box) return self.boxed(job, job.source_plan, source_physical.getIdx(), job.plan, physical.getIdx());
                 const disc = self.discriminant(job.source_layout, job.source);
                 const source_set = self.source_program.fn_sets.items[@intFromEnum(source_plan.fn_value)];
                 const source_variant = for (source_set.variants) |variant| {
