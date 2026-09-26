@@ -457,31 +457,36 @@ Builtin :: [].{
 				Err(Json.invalid_json)
 			}
 
-			parse_json_unsigned_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
-			parse_json_unsigned_int = |raw, parse_num| {
+			## Parse a JSON integer or float scalar with a numeric prefix parser. The prefix
+			## parser consumes the longest Roc numeric token; that token must also be a valid
+			## JSON literal and must end at a JSON scalar delimiter or at the end of input.
+			## Every Roc-only continuation (`_`, radix prefixes, `+`, `inf`, int exponents)
+			## is therefore consumed into the token and rejected by `is_json_literal`.
+			parse_json_number_prefix : Str, (Str -> { err : U8, rest : Str, value : a }), (Str -> Bool) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
+			parse_json_number_prefix = |raw, parse_prefix, is_json_literal| {
 				trimmed = json_trim_start(raw)
-				parts = Json.split_json_scalar_tail(trimmed)?
+				parsed = parse_prefix(trimmed)
 
-				if Json.is_json_unsigned_int_literal(parts.value) {
-					match parse_num(parts.value) {
-						Ok(value) => Ok({ value, rest: JsonState.Input(json_trim_start(parts.after)) })
-						Err(_) => Err(Json.invalid_json)
-					}
-				} else {
-					Err(Json.invalid_json)
+				if parsed.err != 0 {
+					return Err(Json.invalid_json)
 				}
-			}
 
-			parse_json_signed_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
-			parse_json_signed_int = |raw, parse_num| {
-				trimmed = json_trim_start(raw)
-				parts = Json.split_json_scalar_tail(trimmed)?
+				rest_len = Str.count_utf8_bytes(parsed.rest)
+				ends_scalar = rest_len == 0 or is_json_scalar_delimiter(str_get_utf8_byte_unsafe(parsed.rest, 0))
 
-				if Json.is_json_signed_int_literal(parts.value) {
-					match parse_num(parts.value) {
-						Ok(value) => Ok({ value, rest: JsonState.Input(json_trim_start(parts.after)) })
-						Err(_) => Err(Json.invalid_json)
+				if !ends_scalar {
+					return Err(Json.invalid_json)
+				}
+
+				token = match Str.drop_last_bytes(trimmed, rest_len) {
+					Ok(t) => t
+					Err(BadUtf8) => {
+						crash "Json number prefix invariant violated: numeric token did not end on a UTF-8 boundary"
 					}
+				}
+
+				if is_json_literal(token) {
+					Ok({ value: parsed.value, rest: JsonState.Input(json_trim_start(parsed.rest)) })
 				} else {
 					Err(Json.invalid_json)
 				}
@@ -1520,61 +1525,61 @@ Builtin :: [].{
 			parse_u8 : JsonEncoding, JsonState -> Try({ value : U8, rest : JsonState }, [InvalidJson(Str)])
 			parse_u8 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_unsigned_int(raw, u8_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, u8_from_str_prefix_raw, Json.is_json_unsigned_int_literal)
 				}
 
 			parse_i8 : JsonEncoding, JsonState -> Try({ value : I8, rest : JsonState }, [InvalidJson(Str)])
 			parse_i8 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_signed_int(raw, i8_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, i8_from_str_prefix_raw, Json.is_json_signed_int_literal)
 				}
 
 			parse_u16 : JsonEncoding, JsonState -> Try({ value : U16, rest : JsonState }, [InvalidJson(Str)])
 			parse_u16 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_unsigned_int(raw, u16_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, u16_from_str_prefix_raw, Json.is_json_unsigned_int_literal)
 				}
 
 			parse_i16 : JsonEncoding, JsonState -> Try({ value : I16, rest : JsonState }, [InvalidJson(Str)])
 			parse_i16 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_signed_int(raw, i16_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, i16_from_str_prefix_raw, Json.is_json_signed_int_literal)
 				}
 
 			parse_u32 : JsonEncoding, JsonState -> Try({ value : U32, rest : JsonState }, [InvalidJson(Str)])
 			parse_u32 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_unsigned_int(raw, u32_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, u32_from_str_prefix_raw, Json.is_json_unsigned_int_literal)
 				}
 
 			parse_i32 : JsonEncoding, JsonState -> Try({ value : I32, rest : JsonState }, [InvalidJson(Str)])
 			parse_i32 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_signed_int(raw, i32_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, i32_from_str_prefix_raw, Json.is_json_signed_int_literal)
 				}
 
 			parse_u64 : JsonEncoding, JsonState -> Try({ value : U64, rest : JsonState }, [InvalidJson(Str)])
 			parse_u64 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_unsigned_int(raw, u64_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, u64_from_str_prefix_raw, Json.is_json_unsigned_int_literal)
 				}
 
 			parse_i64 : JsonEncoding, JsonState -> Try({ value : I64, rest : JsonState }, [InvalidJson(Str)])
 			parse_i64 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_signed_int(raw, i64_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, i64_from_str_prefix_raw, Json.is_json_signed_int_literal)
 				}
 
 			parse_u128 : JsonEncoding, JsonState -> Try({ value : U128, rest : JsonState }, [InvalidJson(Str)])
 			parse_u128 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_unsigned_int(raw, u128_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, u128_from_str_prefix_raw, Json.is_json_unsigned_int_literal)
 				}
 
 			parse_i128 : JsonEncoding, JsonState -> Try({ value : I128, rest : JsonState }, [InvalidJson(Str)])
 			parse_i128 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_signed_int(raw, i128_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, i128_from_str_prefix_raw, Json.is_json_signed_int_literal)
 				}
 
 			parse_dec : JsonEncoding, JsonState -> Try({ value : Dec, rest : JsonState }, [InvalidJson(Str)])
@@ -1586,13 +1591,13 @@ Builtin :: [].{
 			parse_f32 : JsonEncoding, JsonState -> Try({ value : F32, rest : JsonState }, [InvalidJson(Str)])
 			parse_f32 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_number(raw, f32_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, f32_from_str_prefix_raw, Json.is_json_number)
 				}
 
 			parse_f64 : JsonEncoding, JsonState -> Try({ value : F64, rest : JsonState }, [InvalidJson(Str)])
 			parse_f64 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_number(raw, f64_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, f64_from_str_prefix_raw, Json.is_json_number)
 				}
 
 			parse_null : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str)])
@@ -7118,6 +7123,66 @@ Builtin :: [].{
 			## ```
 			from_str : Str -> Try(U8, [BadNumStr])
 
+			## Parse a [U8] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [U8.from_str]
+			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
+			## separated by single underscores. A `.` is never part of an integer, so
+			## `"1.2.3"` parses `1` and leaves `".2.3"`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [U8], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect U8.from_str_prefix("42,rest") == Ok({ value: 42, rest: ",rest" })
+			##
+			## expect U8.from_str_prefix("300,") == Err(OutOfRange)
+			##
+			## expect U8.from_str_prefix("abc") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : U8, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = u8_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [U8] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [U8.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect U8.from_utf8_prefix([0x35, 0x0D, 0xFF]) == Ok({ value: 5, rest: [0x0D, 0xFF] })
+			##
+			## expect U8.from_utf8_prefix([0x33, 0x30, 0x30]) == Err(OutOfRange)
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : U8, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = u8_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
 			## Iterator of integers beginning with this `U8` and ending with the other `U8`.
 			## (Use [U8.until] instead to end with the other `U8` minus one.)
 			## Returns an empty iterator if this `U8` is greater than the other.
@@ -7924,6 +7989,66 @@ Builtin :: [].{
 			## ```
 			from_str : Str -> Try(I8, [BadNumStr])
 
+			## Parse a [I8] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [I8.from_str]
+			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
+			## separated by single underscores. A `.` is never part of an integer, so
+			## `"1.2.3"` parses `1` and leaves `".2.3"`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [I8], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect I8.from_str_prefix("12,34") == Ok({ value: 12, rest: ",34" })
+			##
+			## expect I8.from_str_prefix("-7abc") == Ok({ value: -7, rest: "abc" })
+			##
+			## expect I8.from_str_prefix("0b12") == Ok({ value: 1, rest: "2" })
+			##
+			## expect I8.from_str_prefix("abc") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : I8, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = i8_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [I8] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [I8.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect I8.from_utf8_prefix([0x35, 0x0D, 0xFF]) == Ok({ value: 5, rest: [0x0D, 0xFF] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : I8, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = i8_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
 			## No-op: leave an [I8] unchanged as an [I8].
 			to_i8 : I8 -> I8
 			to_i8 = |self| self
@@ -8662,6 +8787,66 @@ Builtin :: [].{
 			## expect U16.from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U16, [BadNumStr])
+
+			## Parse a [U16] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [U16.from_str]
+			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
+			## separated by single underscores. A `.` is never part of an integer, so
+			## `"1.2.3"` parses `1` and leaves `".2.3"`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [U16], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect U16.from_str_prefix("12,34") == Ok({ value: 12, rest: ",34" })
+			##
+			## expect U16.from_str_prefix("-5") == Err(OutOfRange)
+			##
+			## expect U16.from_str_prefix("0b12") == Ok({ value: 1, rest: "2" })
+			##
+			## expect U16.from_str_prefix("abc") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : U16, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = u16_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [U16] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [U16.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect U16.from_utf8_prefix([0x35, 0x0D, 0xFF]) == Ok({ value: 5, rest: [0x0D, 0xFF] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : U16, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = u16_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
 
 			# Conversions to signed integers
 
@@ -9462,6 +9647,66 @@ Builtin :: [].{
 			## ```
 			from_str : Str -> Try(I16, [BadNumStr])
 
+			## Parse a [I16] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [I16.from_str]
+			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
+			## separated by single underscores. A `.` is never part of an integer, so
+			## `"1.2.3"` parses `1` and leaves `".2.3"`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [I16], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect I16.from_str_prefix("12,34") == Ok({ value: 12, rest: ",34" })
+			##
+			## expect I16.from_str_prefix("-7abc") == Ok({ value: -7, rest: "abc" })
+			##
+			## expect I16.from_str_prefix("0b12") == Ok({ value: 1, rest: "2" })
+			##
+			## expect I16.from_str_prefix("abc") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : I16, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = i16_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [I16] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [I16.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect I16.from_utf8_prefix([0x35, 0x0D, 0xFF]) == Ok({ value: 5, rest: [0x0D, 0xFF] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : I16, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = i16_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
 			# Conversions to signed integers
 
 			## Convert an [I16] to an [I8], wrapping on overflow. Values from `-128`
@@ -10215,6 +10460,66 @@ Builtin :: [].{
 			## expect U32.from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U32, [BadNumStr])
+
+			## Parse a [U32] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [U32.from_str]
+			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
+			## separated by single underscores. A `.` is never part of an integer, so
+			## `"1.2.3"` parses `1` and leaves `".2.3"`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [U32], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect U32.from_str_prefix("12,34") == Ok({ value: 12, rest: ",34" })
+			##
+			## expect U32.from_str_prefix("-5") == Err(OutOfRange)
+			##
+			## expect U32.from_str_prefix("0b12") == Ok({ value: 1, rest: "2" })
+			##
+			## expect U32.from_str_prefix("abc") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : U32, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = u32_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [U32] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [U32.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect U32.from_utf8_prefix([0x35, 0x0D, 0xFF]) == Ok({ value: 5, rest: [0x0D, 0xFF] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : U32, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = u32_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
 
 			# Conversions to signed integers
 
@@ -11047,6 +11352,66 @@ Builtin :: [].{
 			## ```
 			from_str : Str -> Try(I32, [BadNumStr])
 
+			## Parse a [I32] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [I32.from_str]
+			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
+			## separated by single underscores. A `.` is never part of an integer, so
+			## `"1.2.3"` parses `1` and leaves `".2.3"`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [I32], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect I32.from_str_prefix("12,34") == Ok({ value: 12, rest: ",34" })
+			##
+			## expect I32.from_str_prefix("-7abc") == Ok({ value: -7, rest: "abc" })
+			##
+			## expect I32.from_str_prefix("0b12") == Ok({ value: 1, rest: "2" })
+			##
+			## expect I32.from_str_prefix("abc") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : I32, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = i32_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [I32] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [I32.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect I32.from_utf8_prefix([0x35, 0x0D, 0xFF]) == Ok({ value: 5, rest: [0x0D, 0xFF] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : I32, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = i32_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
 			# Conversions to signed integers
 
 			## Convert an [I32] to an [I8], wrapping on overflow. Values from `-128`
@@ -11844,6 +12209,66 @@ Builtin :: [].{
 			## expect U64.from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U64, [BadNumStr])
+
+			## Parse a [U64] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [U64.from_str]
+			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
+			## separated by single underscores. A `.` is never part of an integer, so
+			## `"1.2.3"` parses `1` and leaves `".2.3"`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [U64], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect U64.from_str_prefix("12,34") == Ok({ value: 12, rest: ",34" })
+			##
+			## expect U64.from_str_prefix("-5") == Err(OutOfRange)
+			##
+			## expect U64.from_str_prefix("0b12") == Ok({ value: 1, rest: "2" })
+			##
+			## expect U64.from_str_prefix("abc") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : U64, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = u64_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [U64] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [U64.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect U64.from_utf8_prefix([0x35, 0x0D, 0xFF]) == Ok({ value: 5, rest: [0x0D, 0xFF] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : U64, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = u64_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
 
 			# Conversions to signed integers
 
@@ -12719,6 +13144,66 @@ Builtin :: [].{
 			## ```
 			from_str : Str -> Try(I64, [BadNumStr])
 
+			## Parse a [I64] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [I64.from_str]
+			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
+			## separated by single underscores. A `.` is never part of an integer, so
+			## `"1.2.3"` parses `1` and leaves `".2.3"`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [I64], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect I64.from_str_prefix("12,34") == Ok({ value: 12, rest: ",34" })
+			##
+			## expect I64.from_str_prefix("-7abc") == Ok({ value: -7, rest: "abc" })
+			##
+			## expect I64.from_str_prefix("0b12") == Ok({ value: 1, rest: "2" })
+			##
+			## expect I64.from_str_prefix("abc") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : I64, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = i64_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [I64] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [I64.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect I64.from_utf8_prefix([0x35, 0x0D, 0xFF]) == Ok({ value: 5, rest: [0x0D, 0xFF] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : I64, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = i64_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
 			# Conversions to signed integers
 
 			## Convert an [I64] to an [I8], wrapping on overflow. Values from `-128`
@@ -13514,6 +13999,66 @@ Builtin :: [].{
 			## expect U128.from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U128, [BadNumStr])
+
+			## Parse a [U128] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [U128.from_str]
+			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
+			## separated by single underscores. A `.` is never part of an integer, so
+			## `"1.2.3"` parses `1` and leaves `".2.3"`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [U128], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect U128.from_str_prefix("12,34") == Ok({ value: 12, rest: ",34" })
+			##
+			## expect U128.from_str_prefix("-5") == Err(OutOfRange)
+			##
+			## expect U128.from_str_prefix("0b12") == Ok({ value: 1, rest: "2" })
+			##
+			## expect U128.from_str_prefix("abc") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : U128, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = u128_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [U128] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [U128.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect U128.from_utf8_prefix([0x35, 0x0D, 0xFF]) == Ok({ value: 5, rest: [0x0D, 0xFF] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : U128, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = u128_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
 
 			# Conversions to signed integers
 
@@ -14428,6 +14973,66 @@ Builtin :: [].{
 			## expect I128.from_str("-1") == Ok(-1)
 			## ```
 			from_str : Str -> Try(I128, [BadNumStr])
+
+			## Parse a [I128] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [I128.from_str]
+			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
+			## separated by single underscores. A `.` is never part of an integer, so
+			## `"1.2.3"` parses `1` and leaves `".2.3"`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [I128], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect I128.from_str_prefix("12,34") == Ok({ value: 12, rest: ",34" })
+			##
+			## expect I128.from_str_prefix("-7abc") == Ok({ value: -7, rest: "abc" })
+			##
+			## expect I128.from_str_prefix("0b12") == Ok({ value: 1, rest: "2" })
+			##
+			## expect I128.from_str_prefix("abc") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : I128, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = i128_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [I128] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [I128.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect I128.from_utf8_prefix([0x35, 0x0D, 0xFF]) == Ok({ value: 5, rest: [0x0D, 0xFF] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : I128, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = i128_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
 
 			# Conversions to signed integers
 
@@ -15531,6 +16136,60 @@ Builtin :: [].{
 			## ```
 			from_str : Str -> Try(Dec, [BadNumStr])
 
+			## Parse a [Dec] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [Dec.from_str]
+			## accepts: an optional sign, decimal digits (with single `_` between digits),
+			## an optional fraction and an optional exponent. There is no hex, `inf`, or `nan`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [Dec], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect Dec.from_str_prefix("1.5]") == Ok({ value: 1.5, rest: "]" })
+			##
+			## expect Dec.from_str_prefix("inf") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : Dec, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = dec_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [Dec] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [Dec.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect Dec.from_utf8_prefix([0x31, 0x2E, 0x35, 0x5D]) == Ok({ value: 1.5, rest: [0x5D] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : Dec, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = dec_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
 			# Conversions to signed integers (all lossy - truncates fractional part)
 
 			## Convert a [Dec] to an [I8]. The fractional part is truncated
@@ -16582,6 +17241,60 @@ Builtin :: [].{
 			## ```
 			from_str : Str -> Try(F32, [BadNumStr])
 
+			## Parse a [F32] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [F32.from_str]
+			## accepts: an optional sign, then `inf`, `infinity` or `nan` (any case), a decimal
+			## mantissa with an optional exponent, or a `0x` hex float with an optional `p` exponent.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [F32], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect F32.from_str_prefix("1.5e3]") == Ok({ value: 1500.0, rest: "]" })
+			##
+			## expect F32.from_str_prefix("x1") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : F32, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = f32_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [F32] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [F32.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect F32.from_utf8_prefix([0x32, 0x2E, 0x35, 0x2C]) == Ok({ value: 2.5, rest: [0x2C] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : F32, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = f32_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
 			# Conversions to signed integers (all lossy - truncation + range check)
 
 			## Convert an [F32] to an [I8]. The fractional part is truncated
@@ -17541,6 +18254,60 @@ Builtin :: [].{
 			## expect Try.is_err(F64.from_str("not a number"))
 			## ```
 			from_str : Str -> Try(F64, [BadNumStr])
+
+			## Parse a [F64] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [F64.from_str]
+			## accepts: an optional sign, then `inf`, `infinity` or `nan` (any case), a decimal
+			## mantissa with an optional exponent, or a `0x` hex float with an optional `p` exponent.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [F64], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect F64.from_str_prefix("1.5e3]") == Ok({ value: 1500.0, rest: "]" })
+			##
+			## expect F64.from_str_prefix("x1") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : F64, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = f64_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [F64] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [F64.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect F64.from_utf8_prefix([0x32, 0x2E, 0x35, 0x2C]) == Ok({ value: 2.5, rest: [0x2C] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : F64, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = f64_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
 
 			# Conversions to signed integers (all lossy - truncation + range check)
 
@@ -22055,6 +22822,58 @@ dec_from_str : Str -> Try(Dec, [BadNumStr])
 f32_from_str : Str -> Try(F32, [BadNumStr])
 
 f64_from_str : Str -> Try(F64, [BadNumStr])
+
+u8_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : U8 }
+
+u8_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : U8 }
+
+i8_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : I8 }
+
+i8_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : I8 }
+
+u16_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : U16 }
+
+u16_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : U16 }
+
+i16_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : I16 }
+
+i16_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : I16 }
+
+u32_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : U32 }
+
+u32_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : U32 }
+
+i32_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : I32 }
+
+i32_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : I32 }
+
+u64_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : U64 }
+
+u64_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : U64 }
+
+i64_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : I64 }
+
+i64_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : I64 }
+
+u128_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : U128 }
+
+u128_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : U128 }
+
+i128_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : I128 }
+
+i128_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : I128 }
+
+dec_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : Dec }
+
+dec_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : Dec }
+
+f32_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : F32 }
+
+f32_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : F32 }
+
+f64_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : F64 }
+
+f64_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : F64 }
 
 u8_from_int_digits : List(U8) -> Try(U8, [OutOfRange])
 u8_from_int_digits = |digits| int_from_digits(digits, |str| u8_from_str(str))

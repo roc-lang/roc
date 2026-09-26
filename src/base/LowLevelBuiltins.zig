@@ -155,6 +155,25 @@ pub fn numFromStr(class: NumericClass) BuiltinFn {
     };
 }
 
+/// Where a prefix-parsing op reads its text from.
+pub const PrefixParseSource = @import("numeric_conversion.zig").PrefixParseSource;
+
+/// Numeric parsing of the longest numeric prefix of a `Str` or UTF-8 list.
+pub fn numFromStrPrefix(class: NumericClass, source: PrefixParseSource) BuiltinFn {
+    return switch (source) {
+        .str => switch (class) {
+            .int => .int_from_str_prefix,
+            .float => .float_from_str_prefix,
+            .dec => .dec_from_str_prefix,
+        },
+        .utf8 => switch (class) {
+            .int => .int_from_utf8_prefix,
+            .float => .float_from_utf8_prefix,
+            .dec => .dec_from_utf8_prefix,
+        },
+    };
+}
+
 /// Checked integer narrowing. Sources up to 64 bits use the bounds-checked
 /// scalar wrappers; 128-bit sources use the range-checked i128 wrappers.
 pub fn intTryConvert(src_is_128: bool, src_is_signed: bool) BuiltinFn {

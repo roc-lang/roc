@@ -42,9 +42,6 @@ UNEXPECTED EXPRESSION SYNTAX - let_polymorphism_lists.md:13:26:13:27
 UNEXPECTED STATEMENT - let_polymorphism_lists.md:13:28:13:41
 UNEXPECTED EXPRESSION SYNTAX - let_polymorphism_lists.md:14:30:14:31
 UNEXPECTED STATEMENT - let_polymorphism_lists.md:14:32:14:45
-UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:12:16:12:27
-UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:13:16:13:27
-UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
 # PROBLEMS
 ~~~clojure
 (reports
@@ -197,37 +194,7 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
 			(reflow "Names that start with lowercase letters are value names or record field names, depending on the surrounding syntax.")
 			(line-break)
 			(line-break)
-			(source-region (file "let_polymorphism_lists.md") (start 14 32) (end 14 45) (annotation error) (line-text "all_float_list = float_list ++ my_empty_list"))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 12 16) (end 12 27))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "let_polymorphism_lists.md") (start 12 16) (end 12 27) (annotation error) (line-text "all_int_list = int_list ++ my_empty_list"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 13 16) (end 13 27))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "let_polymorphism_lists.md") (start 13 16) (end 13 27) (annotation error) (line-text "all_str_list = str_list ++ my_empty_list"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 14 18) (end 14 31))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "let_polymorphism_lists.md") (start 14 18) (end 14 31) (annotation error) (line-text "all_float_list = float_list ++ my_empty_list"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo."))))
+			(source-region (file "let_polymorphism_lists.md") (start 14 32) (end 14 45) (annotation error) (line-text "all_float_list = float_list ++ my_empty_list")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -418,13 +385,13 @@ main = |_| {
 				(e-dec-small (numerator "33") (denominator-power-of-ten "1") (value "3.3")))))
 	(d-let
 		(p-assign (ident "all_int_list"))
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "all_str_list"))
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "all_float_list"))
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "get_empty"))
 		(e-lambda
@@ -433,13 +400,13 @@ main = |_| {
 			(e-empty_list)))
 	(d-let
 		(p-assign (ident "empty_int_list"))
-		(e-call (constraint-fn-var 349)
+		(e-call (constraint-fn-var 352)
 			(e-lookup-local
 				(p-assign (ident "get_empty")))
 			(e-num (value "42"))))
 	(d-let
 		(p-assign (ident "empty_str_list"))
-		(e-call (constraint-fn-var 362)
+		(e-call (constraint-fn-var 365)
 			(e-lookup-local
 				(p-assign (ident "get_empty")))
 			(e-string

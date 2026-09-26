@@ -232,7 +232,10 @@ pub const Constants = struct {
     ///      already covers names the derivation that covers it.
     /// 106: A stored nested-function use records its scheme substitution and
     ///      the checked instance its containing value stores.
-    pub const CACHE_VERSION = 106;
+    /// 107: An expression that did not parse canonicalizes to a runtime error
+    ///      carrying `expr_syntax_error`, and the canonicalize diagnostic tags
+    ///      no stage produces are gone.
+    pub const CACHE_VERSION = 107;
 };
 
 /// Configuration for the Roc cache system.

@@ -753,7 +753,13 @@ invalid declarations to the same worklist, which is then propagated incrementall
 before value checking without rebuilding the dependency graph. Every invalid
 type declaration has its declaration root and backing template poisoned to the
 error type, and invalid nominal declarations are also marked invalid in the
-declaration table.
+declaration table. Poisoning rewrites only the declaration's own root and
+backing, not copies made from them earlier, so only type declarations are
+generated before finalization. Where aliases and standalone annotations are
+annotations, which no type declaration can reference; they are generated once
+validity is final, so a reference from any annotation to an invalid
+declaration resolves to the error type rather than to an application of a
+declaration that `CheckedModule` construction omits.
 
 Recursion shape is not the only declaration-level validity rule: a nominal
 declaration group must also admit a finite set of instantiations, because
@@ -1693,6 +1699,16 @@ the only compiler stages allowed to do so. Recovery must still output explicit
 malformed AST nodes and diagnostics; later stages must not recover missing
 syntax on their own.
 
+The expression kernel in `src/canonicalize` turns every AST expression into a
+CIR expression. A malformed AST expression becomes a runtime-error expression
+carrying `expr_syntax_error`, and that diagnostic is not registered for
+reporting, because the parser already reported the syntax error. The enclosing
+expression is built around it exactly as it would be around any other child: a
+list keeps the item, a call keeps the argument, a record keeps the field, and a
+`match` branch keeps its guard. Nothing downstream of the kernel receives a
+missing child, so no consumer can drop one, report it a second time, or discard
+the valid expression around it.
+
 The parser implementation must not keep the old recursive-descent or
 per-subgrammar instruction-interpreter architecture. Old expression, pattern,
 statement, block, and type-annotation parser entrypoints are forbidden
@@ -1784,9 +1800,8 @@ iterative.
 
 The main expression, block, and associated-item path should be implemented as a
 direct labeled-switch kernel rather than as a generic frame pop loop. The
-public entry points can remain small wrappers such as `canonicalizeExpr` and
-`canonicalizeExprOrMalformed`, but the internal worker should look like a state
-machine:
+public entry points can remain small wrappers such as `canonicalizeExpr`, but
+the internal worker should look like a state machine:
 
 ```zig
 const CanLabel = enum {
@@ -12391,6 +12406,20 @@ builder owns:
 
 These are builder responsibilities, not a separate meaning-carrying IR.
 
+The LSS layout graph builder never substitutes a store-interned layout index for a
+previously committed composite child: such an opaque leaf would hide recursive
+paths from the store's recursive-graph analysis and give an unrolled copy of a
+committed recursive node different slot boxing. Instead, every layout commit
+returns the recursive-graph digest each node settled to, the builder records it
+per type, and a cached child re-enters a later graph as a `committed` leaf that
+carries its layout and that digest. The analysis digests the leaf exactly as it
+would digest a re-expansion of the same subgraph, and the store persists the
+one-step unfolding of every committed recursive member, so an unrolled copy
+committed later resolves to the recursive layout it unrolls. A type committed
+without a digest resolved to a store-interned layout ref (a primitive or builtin
+layout through nominals) and is expanded again directly. The shared layout store
+owns recursive graph reduction and interning.
+
 The `.lss` builder may maintain temporary maps such as `TypeId -> layout.Idx`,
 `LambdaMonoFnId -> LirProcSpecId`, `LiftedLocalId -> LirLocalId`, and
 `LiftedExprId -> lowered logical expression` while lowering one function
@@ -12811,6 +12840,29 @@ for the template's contents. The descriptor source still names the original
 call operand root plus the exact instantiated descendant; it never changes to
 a sibling value merely because the substitution was learned from the
 wrapper's explicit argument metadata.
+
+Checking also relates a wrapper to its backing's structure without a wrapper
+on the other side: an alias always, a nominal whenever its declaration is
+transparent (`:=`) or, when opaque, inside its origin module. An unannotated
+callee that matches on `Ok` therefore has a structural parameter row, while
+its call passes `Try(U64, U8)`. At such a boundary the worker position is a
+structure and the call position is a wrapper of it; the wrapper's own value
+supplies the position's descriptor, and the structure's children align with
+the wrapper's backing, seen through every alias and nominal layer. Each
+nominal layer binds its use's formals for that descent, so a backing child
+resolves to the use's exact actual, never to the shared template. Evidence
+paths are written against the callee's type in the same way: a structural
+step that reaches a call-side wrapper applies to its backing under that use's
+formal bindings. Hidden descriptor and dictionary parameters, dictionary-call
+descriptors, erased captures, static dictionary descriptor sources, and
+callable adapters all use this one relation; an adapter relates its two
+callables in both directions, so it applies the relation with the wrapper on
+either side. Lowering follows the same relation where a value crosses it: a
+tag expression or pattern whose checked type is the structure while its
+representation is the wrapper descends the wrapper's backing with the checked
+type unchanged, and the descriptor of an alias or backed nominal without
+declared padding names its backing record's fields, so a structural record
+receives the wrapper's value by field name.
 
 A callable parameter's descriptor source survives traversal from the arguments
 into the result. A result nominal's declaration formal resolves through its

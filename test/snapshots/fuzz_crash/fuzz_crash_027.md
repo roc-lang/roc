@@ -245,9 +245,7 @@ NAME NOT IN SCOPE - fuzz_crash_027.md:97:2:97:6
 UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
 VAR NAME MISSING `$` - fuzz_crash_027.md:102:6:102:12
 NAME NOT IN SCOPE - fuzz_crash_027.md:103:9:103:13
-UNRECOGNIZED SYNTAX - fuzz_crash_027.md:110:2:110:5
 NAME NOT IN SCOPE - fuzz_crash_027.md:114:2:114:11
-UNRECOGNIZED SYNTAX - fuzz_crash_027.md:1:1:1:1
 UNUSED VARIABLE - fuzz_crash_027.md:104:2:104:5
 UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
 UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
@@ -1948,16 +1946,6 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 			(source-region (file "fuzz_crash_027.md") (start 103 9) (end 103 13) (annotation error) (line-text "\texpect blah == 1"))))
 	(report
 		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 110 2) (end 110 5))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "fuzz_crash_027.md") (start 110 2) (end 110 5) (annotation error) (line-text "\t..."))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
 		(title "Name Not In Scope")
 		(region (start 114 2) (end 114 11))
 		(headline
@@ -1969,16 +1957,6 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 			(line-break)
 			(line-break)
 			(source-region (file "fuzz_crash_027.md") (start 114 2) (end 114 11) (annotation error) (line-text "\tsome_func("))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 1 1) (end 1 1))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "fuzz_crash_027.md") (start 1 1) (end 1 1) (annotation error) (line-text "# Thnt!"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
 	(report
 		(severity warning)
 		(title "Unused Variable")

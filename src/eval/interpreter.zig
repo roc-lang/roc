@@ -5882,6 +5882,29 @@ pub const Interpreter = struct {
 
     const valueToRocStr = boxy_runtime.valueToRocStr;
 
+    const PrefixParseSource = union(enum) { str: RocStr, utf8: RocList };
+    const PrefixParseOut = struct { err: [*]u8, rest: [*]u8, value: [*]u8 };
+
+    /// Store a prefix-parse result into its `{ err, rest, value }` record.
+    /// `rest` is built by the same runtime helpers the compiled wrappers use,
+    /// so it is owned (a retained slice of the borrowed source) or empty.
+    fn writePrefixParse(self: *LirInterpreter, comptime T: type, out: PrefixParseOut, source: PrefixParseSource, result: builtins.num.NumPrefixParseResult(T)) void {
+        const value_bytes = std.mem.asBytes(&result.value);
+        @memcpy(out.value[0..value_bytes.len], value_bytes);
+        out.err[0] = result.errorcode;
+        const consumed: usize = @intCast(result.consumed);
+        switch (source) {
+            .str => |rs| {
+                const rest = if (result.errorcode == 0) builtins.str.strFromStrPrefixRest(rs, consumed, &self.roc_ops) else RocStr.empty();
+                @memcpy(out.rest[0..@sizeOf(RocStr)], std.mem.asBytes(&rest));
+            },
+            .utf8 => |rl| {
+                const rest = if (result.errorcode == 0) builtins.list.listFromUtf8PrefixRest(rl, consumed, &self.roc_ops) else RocList.empty();
+                @memcpy(out.rest[0..@sizeOf(RocList)], std.mem.asBytes(&rest));
+            },
+        }
+    }
+
     fn rocStrToValue(self: *LirInterpreter, rs: RocStr, ret_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
         @memcpy(val.ptr[0..@sizeOf(RocStr)], std.mem.asBytes(&rs));
@@ -7472,6 +7495,83 @@ pub const Interpreter = struct {
                     ),
                 }
                 break :blk result;
+            },
+
+            .u8_from_str_prefix,
+            .u8_from_utf8_prefix,
+            .i8_from_str_prefix,
+            .i8_from_utf8_prefix,
+            .u16_from_str_prefix,
+            .u16_from_utf8_prefix,
+            .i16_from_str_prefix,
+            .i16_from_utf8_prefix,
+            .u32_from_str_prefix,
+            .u32_from_utf8_prefix,
+            .i32_from_str_prefix,
+            .i32_from_utf8_prefix,
+            .u64_from_str_prefix,
+            .u64_from_utf8_prefix,
+            .i64_from_str_prefix,
+            .i64_from_utf8_prefix,
+            .u128_from_str_prefix,
+            .u128_from_utf8_prefix,
+            .i128_from_str_prefix,
+            .i128_from_utf8_prefix,
+            .dec_from_str_prefix,
+            .dec_from_utf8_prefix,
+            .f32_from_str_prefix,
+            .f32_from_utf8_prefix,
+            .f64_from_str_prefix,
+            .f64_from_utf8_prefix,
+            => blk: {
+                const spec = numeric_conversion.getNumericPrefixParseSpec(ll.op) orelse
+                    return self.runtimeError("prefix parse low-level missing numeric prefix parse spec");
+                const layout_val = self.layout_store.getLayout(ll.ret_layout);
+                if (layout_val.tag != .struct_) {
+                    return self.runtimeError("prefix parse expected a record return layout");
+                }
+                const record_idx = layout_val.getStruct().idx;
+                const fields = self.layout_store.struct_fields.sliceRange(self.layout_store.getStructData(record_idx).getFields());
+                if (fields.len != 3 or self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .u8) {
+                    return self.runtimeError("prefix parse expected fields err : U8, rest, value");
+                }
+
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+
+                const source: PrefixParseSource = switch (spec.source) {
+                    .str => .{ .str = valueToRocStr(args[0]) },
+                    .utf8 => .{ .utf8 = self.valueToRocListForLayout(args[0], try self.lowLevelArgLayout(ll, 0)) },
+                };
+                const bytes: []const u8 = switch (source) {
+                    .str => |rs| rs.asSlice(),
+                    .utf8 => |rl| if (rl.bytes) |ptr| ptr[0..rl.length] else &.{},
+                };
+                const val = try self.alloc(ll.ret_layout);
+                const out = PrefixParseOut{
+                    .err = val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 0)).ptr,
+                    .rest = val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 1)).ptr,
+                    .value = val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 2)).ptr,
+                };
+                switch (spec.parse) {
+                    .int => |int| switch (int.width_bytes) {
+                        1 => if (int.signed) self.writePrefixParse(i8, out, source, builtins.num.parseIntPrefix(i8, bytes)) else self.writePrefixParse(u8, out, source, builtins.num.parseIntPrefix(u8, bytes)),
+                        2 => if (int.signed) self.writePrefixParse(i16, out, source, builtins.num.parseIntPrefix(i16, bytes)) else self.writePrefixParse(u16, out, source, builtins.num.parseIntPrefix(u16, bytes)),
+                        4 => if (int.signed) self.writePrefixParse(i32, out, source, builtins.num.parseIntPrefix(i32, bytes)) else self.writePrefixParse(u32, out, source, builtins.num.parseIntPrefix(u32, bytes)),
+                        8 => if (int.signed) self.writePrefixParse(i64, out, source, builtins.num.parseIntPrefix(i64, bytes)) else self.writePrefixParse(u64, out, source, builtins.num.parseIntPrefix(u64, bytes)),
+                        16 => if (int.signed) self.writePrefixParse(i128, out, source, builtins.num.parseIntPrefix(i128, bytes)) else self.writePrefixParse(u128, out, source, builtins.num.parseIntPrefix(u128, bytes)),
+                        else => return self.runtimeError("prefix parse: unexpected integer width"),
+                    },
+                    .float => |float| switch (float.width_bytes) {
+                        4 => self.writePrefixParse(f32, out, source, builtins.num.parseFloatPrefix(f32, bytes)),
+                        8 => self.writePrefixParse(f64, out, source, builtins.num.parseFloatPrefix(f64, bytes)),
+                        else => return self.runtimeError("prefix parse: unexpected float width"),
+                    },
+                    .dec => self.writePrefixParse(i128, out, source, builtins.dec.parsePrefix(bytes)),
+                }
+                break :blk val;
             },
 
             // ── Numeric conversions ──

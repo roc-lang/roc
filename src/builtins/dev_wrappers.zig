@@ -51,6 +51,13 @@ pub const StrDropPrefixCaselessAsciiLayout = extern struct {
     found_offset: u32,
 };
 
+/// Field offsets for a numeric prefix parse result record `{ err, rest, value }`.
+pub const NumPrefixParseLayout = extern struct {
+    err_offset: u32,
+    rest_offset: u32,
+    value_offset: u32,
+};
+
 // Re-export commonly used functions
 pub const rcNone = utils.rcNone;
 pub const copy_fallback = list.copy_fallback;
@@ -2546,6 +2553,134 @@ pub fn roc_builtins_float_from_str(
     }
 }
 
+// ── Numeric prefix parse wrappers ──
+
+/// Which input a numeric prefix parse reads and returns its `rest` as.
+const NumPrefixInput = enum { str, utf8 };
+
+fn listBytes(bytes: ?[*]u8, len: usize) []const u8 {
+    return if (bytes) |ptr| ptr[0..len] else &.{};
+}
+
+fn writeNumPrefixParseResult(
+    comptime T: type,
+    comptime input: NumPrefixInput,
+    out: *anyopaque,
+    bytes: ?[*]u8,
+    len: usize,
+    cap: usize,
+    layout: *const NumPrefixParseLayout,
+    result: num.NumPrefixParseResult(T),
+) void {
+    const out_bytes: [*]u8 = @ptrCast(out);
+    const value_bytes = std.mem.asBytes(&result.value);
+    @memcpy(out_bytes[layout.value_offset..][0..value_bytes.len], value_bytes);
+    out_bytes[layout.err_offset] = result.errorcode;
+
+    const roc_ops = in_process_host.ops();
+    const consumed: usize = @intCast(result.consumed);
+    switch (input) {
+        .str => {
+            const source = RocStr{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
+            const rest = if (result.errorcode == 0) str.strFromStrPrefixRest(source, consumed, roc_ops) else RocStr.empty();
+            @as(*RocStr, @ptrCast(@alignCast(out_bytes + layout.rest_offset))).* = rest;
+        },
+        .utf8 => {
+            const source = RocList{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
+            const rest = if (result.errorcode == 0) list.listFromUtf8PrefixRest(source, consumed, roc_ops) else RocList.empty();
+            @as(*RocList, @ptrCast(@alignCast(out_bytes + layout.rest_offset))).* = rest;
+        },
+    }
+}
+
+fn intFromPrefix(
+    comptime input: NumPrefixInput,
+    out: *anyopaque,
+    bytes: ?[*]u8,
+    len: usize,
+    cap: usize,
+    input_bytes: []const u8,
+    int_width: u8,
+    is_signed: bool,
+    layout: *const NumPrefixParseLayout,
+) void {
+    if (is_signed) {
+        switch (int_width) {
+            1 => writeNumPrefixParseResult(i8, input, out, bytes, len, cap, layout, num.parseIntPrefix(i8, input_bytes)),
+            2 => writeNumPrefixParseResult(i16, input, out, bytes, len, cap, layout, num.parseIntPrefix(i16, input_bytes)),
+            4 => writeNumPrefixParseResult(i32, input, out, bytes, len, cap, layout, num.parseIntPrefix(i32, input_bytes)),
+            8 => writeNumPrefixParseResult(i64, input, out, bytes, len, cap, layout, num.parseIntPrefix(i64, input_bytes)),
+            16 => writeNumPrefixParseResult(i128, input, out, bytes, len, cap, layout, num.parseIntPrefix(i128, input_bytes)),
+            else => unreachable,
+        }
+    } else {
+        switch (int_width) {
+            1 => writeNumPrefixParseResult(u8, input, out, bytes, len, cap, layout, num.parseIntPrefix(u8, input_bytes)),
+            2 => writeNumPrefixParseResult(u16, input, out, bytes, len, cap, layout, num.parseIntPrefix(u16, input_bytes)),
+            4 => writeNumPrefixParseResult(u32, input, out, bytes, len, cap, layout, num.parseIntPrefix(u32, input_bytes)),
+            8 => writeNumPrefixParseResult(u64, input, out, bytes, len, cap, layout, num.parseIntPrefix(u64, input_bytes)),
+            16 => writeNumPrefixParseResult(u128, input, out, bytes, len, cap, layout, num.parseIntPrefix(u128, input_bytes)),
+            else => unreachable,
+        }
+    }
+}
+
+fn floatFromPrefix(
+    comptime input: NumPrefixInput,
+    out: *anyopaque,
+    bytes: ?[*]u8,
+    len: usize,
+    cap: usize,
+    input_bytes: []const u8,
+    float_width: u8,
+    layout: *const NumPrefixParseLayout,
+) void {
+    switch (float_width) {
+        4 => writeNumPrefixParseResult(f32, input, out, bytes, len, cap, layout, num.parseFloatPrefix(f32, input_bytes)),
+        8 => writeNumPrefixParseResult(f64, input, out, bytes, len, cap, layout, num.parseFloatPrefix(f64, input_bytes)),
+        else => unreachable,
+    }
+}
+
+/// `{int}_from_str_prefix`: parse the longest integer token at the start of a
+/// borrowed Str into `{ err, rest, value }`. `rest` is owned; empty on error.
+pub fn roc_builtins_int_from_str_prefix(out: *anyopaque, bytes: ?[*]u8, len: usize, cap: usize, int_width: u8, is_signed: bool, layout: *const NumPrefixParseLayout) callconv(.c) void {
+    // A small Str keeps its bytes inline, so the view must live in this frame.
+    const source = RocStr{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
+    intFromPrefix(.str, out, bytes, len, cap, source.asSlice(), int_width, is_signed, layout);
+}
+
+/// `{int}_from_utf8_prefix`: like `roc_builtins_int_from_str_prefix` over a borrowed List(U8).
+pub fn roc_builtins_int_from_utf8_prefix(out: *anyopaque, bytes: ?[*]u8, len: usize, cap: usize, int_width: u8, is_signed: bool, layout: *const NumPrefixParseLayout) callconv(.c) void {
+    intFromPrefix(.utf8, out, bytes, len, cap, listBytes(bytes, len), int_width, is_signed, layout);
+}
+
+/// `dec_from_str_prefix`: parse the longest Dec token at the start of a
+/// borrowed Str into `{ err, rest, value }`. `rest` is owned; empty on error.
+pub fn roc_builtins_dec_from_str_prefix(out: *anyopaque, bytes: ?[*]u8, len: usize, cap: usize, layout: *const NumPrefixParseLayout) callconv(.c) void {
+    // A small Str keeps its bytes inline, so the view must live in this frame.
+    const source = RocStr{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
+    writeNumPrefixParseResult(i128, .str, out, bytes, len, cap, layout, dec.parsePrefix(source.asSlice()));
+}
+
+/// `dec_from_utf8_prefix`: like `roc_builtins_dec_from_str_prefix` over a borrowed List(U8).
+pub fn roc_builtins_dec_from_utf8_prefix(out: *anyopaque, bytes: ?[*]u8, len: usize, cap: usize, layout: *const NumPrefixParseLayout) callconv(.c) void {
+    writeNumPrefixParseResult(i128, .utf8, out, bytes, len, cap, layout, dec.parsePrefix(listBytes(bytes, len)));
+}
+
+/// `{f32,f64}_from_str_prefix`: parse the longest float token at the start of a
+/// borrowed Str into `{ err, rest, value }`. `rest` is owned; empty on error.
+pub fn roc_builtins_float_from_str_prefix(out: *anyopaque, bytes: ?[*]u8, len: usize, cap: usize, float_width: u8, layout: *const NumPrefixParseLayout) callconv(.c) void {
+    // A small Str keeps its bytes inline, so the view must live in this frame.
+    const source = RocStr{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
+    floatFromPrefix(.str, out, bytes, len, cap, source.asSlice(), float_width, layout);
+}
+
+/// `{f32,f64}_from_utf8_prefix`: like `roc_builtins_float_from_str_prefix` over a borrowed List(U8).
+pub fn roc_builtins_float_from_utf8_prefix(out: *anyopaque, bytes: ?[*]u8, len: usize, cap: usize, float_width: u8, layout: *const NumPrefixParseLayout) callconv(.c) void {
+    floatFromPrefix(.utf8, out, bytes, len, cap, listBytes(bytes, len), float_width, layout);
+}
+
 // ── List equality and reverse wrappers ──
 
 /// Compare two lists of flat (non-refcounted) elements for equality.
@@ -2680,4 +2815,127 @@ pub fn roc_builtins_i64_mod_by(a: i64, b: i64) callconv(.c) i64 {
 /// u64 modulo (floored division mod, not truncated remainder)
 pub fn roc_builtins_u64_mod_by(a: u64, b: u64) callconv(.c) u64 {
     return @mod(a, b);
+}
+
+const NumPrefixTestRecord = extern struct {
+    rest: [3]usize,
+    value: [2]u64,
+    err: u8,
+};
+
+const num_prefix_test_layout = NumPrefixParseLayout{
+    .err_offset = @offsetOf(NumPrefixTestRecord, "err"),
+    .rest_offset = @offsetOf(NumPrefixTestRecord, "rest"),
+    .value_offset = @offsetOf(NumPrefixTestRecord, "value"),
+};
+
+fn numPrefixRecordRestStr(record: *const NumPrefixTestRecord) RocStr {
+    return @as(*const RocStr, @ptrCast(&record.rest)).*;
+}
+
+fn numPrefixRecordRestList(record: *const NumPrefixTestRecord) RocList {
+    return @as(*const RocList, @ptrCast(&record.rest)).*;
+}
+
+test "numeric prefix wrappers return an owned rest slice and borrow the input" {
+    var env = utils.TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const saved_host = in_process_host.enter(env.getOps(), null);
+    defer in_process_host.leave(saved_host);
+    const ops = env.getOps();
+
+    const heap_text = "12345,and a tail long enough to live on the heap";
+    const source_str = RocStr.init(heap_text, heap_text.len, ops);
+    defer source_str.decref(ops);
+    try std.testing.expect(!source_str.isSmallStr());
+
+    var record: NumPrefixTestRecord = undefined;
+    roc_builtins_int_from_str_prefix(&record, source_str.bytes, source_str.length, source_str.capacity_or_alloc_ptr, 4, false, &num_prefix_test_layout);
+    try std.testing.expectEqual(@as(u8, 0), record.err);
+    try std.testing.expectEqual(@as(u32, 12345), @as(*const u32, @ptrCast(&record.value)).*);
+    const rest_str = numPrefixRecordRestStr(&record);
+    try std.testing.expectEqualStrings(heap_text[5..], rest_str.asSlice());
+    try std.testing.expect(!source_str.isUnique());
+    rest_str.decref(ops);
+    try std.testing.expect(source_str.isUnique());
+
+    // On error the rest is empty and the source is not retained.
+    roc_builtins_int_from_str_prefix(&record, source_str.bytes, source_str.length, source_str.capacity_or_alloc_ptr, 1, false, &num_prefix_test_layout);
+    try std.testing.expectEqual(num.prefix_parse_out_of_range, record.err);
+    try std.testing.expectEqual(@as(usize, 0), numPrefixRecordRestStr(&record).len());
+    try std.testing.expect(source_str.isUnique());
+
+    const bytes = [_]u8{ '5', 0x0D, 0xFF, 'x', 'y', 'z' } ** 8;
+    const source_list = RocList.fromSlice(u8, &bytes, false, ops);
+    defer source_list.decref(@alignOf(u8), @sizeOf(u8), false, null, list.rcNone, ops);
+    roc_builtins_int_from_utf8_prefix(&record, source_list.bytes, source_list.length, source_list.capacity_or_alloc_ptr, 1, false, &num_prefix_test_layout);
+    try std.testing.expectEqual(@as(u8, 0), record.err);
+    try std.testing.expectEqual(@as(u8, 5), @as(*const u8, @ptrCast(&record.value)).*);
+    const rest_list = numPrefixRecordRestList(&record);
+    try std.testing.expectEqualSlices(u8, bytes[1..], rest_list.elements(u8).?[0..rest_list.len()]);
+    try std.testing.expect(!source_list.isUnique(ops));
+    rest_list.decref(@alignOf(u8), @sizeOf(u8), false, null, list.rcNone, ops);
+    try std.testing.expect(source_list.isUnique(ops));
+
+    // A fully consumed input has an empty rest and is not retained.
+    const whole_list = RocList.fromSlice(u8, "1.5e3", false, ops);
+    defer whole_list.decref(@alignOf(u8), @sizeOf(u8), false, null, list.rcNone, ops);
+    roc_builtins_dec_from_utf8_prefix(&record, whole_list.bytes, whole_list.length, whole_list.capacity_or_alloc_ptr, &num_prefix_test_layout);
+    try std.testing.expectEqual(@as(u8, 0), record.err);
+    try std.testing.expectEqual(@as(usize, 0), numPrefixRecordRestList(&record).len());
+    try std.testing.expect(whole_list.isUnique(ops));
+}
+
+test "numeric prefix Str and List(U8) wrappers agree on generated inputs" {
+    var env = utils.TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const saved_host = in_process_host.enter(env.getOps(), null);
+    defer in_process_host.leave(saved_host);
+    const ops = env.getOps();
+
+    var prng = std.Random.DefaultPrng.init(0x7010_5712_0118);
+    const random = prng.random();
+    var buf: [48]u8 = undefined;
+
+    var iteration: usize = 0;
+    while (iteration < 2_000) : (iteration += 1) {
+        const text = num.prefix_parse_testing.randomText(random, &buf);
+        const source_str = RocStr.init(text.ptr, text.len, ops);
+        defer source_str.decref(ops);
+        const source_list = RocList.fromSlice(u8, text, false, ops);
+        defer source_list.decref(@alignOf(u8), @sizeOf(u8), false, null, list.rcNone, ops);
+
+        inline for (.{ "int_signed", "int_unsigned", "dec", "f32", "f64" }) |family| {
+            var from_str: NumPrefixTestRecord = std.mem.zeroes(NumPrefixTestRecord);
+            var from_utf8: NumPrefixTestRecord = std.mem.zeroes(NumPrefixTestRecord);
+            const s = .{ source_str.bytes, source_str.length, source_str.capacity_or_alloc_ptr };
+            const l = .{ source_list.bytes, source_list.length, source_list.capacity_or_alloc_ptr };
+            if (comptime std.mem.eql(u8, family, "int_signed")) {
+                roc_builtins_int_from_str_prefix(&from_str, s[0], s[1], s[2], 8, true, &num_prefix_test_layout);
+                roc_builtins_int_from_utf8_prefix(&from_utf8, l[0], l[1], l[2], 8, true, &num_prefix_test_layout);
+            } else if (comptime std.mem.eql(u8, family, "int_unsigned")) {
+                roc_builtins_int_from_str_prefix(&from_str, s[0], s[1], s[2], 16, false, &num_prefix_test_layout);
+                roc_builtins_int_from_utf8_prefix(&from_utf8, l[0], l[1], l[2], 16, false, &num_prefix_test_layout);
+            } else if (comptime std.mem.eql(u8, family, "dec")) {
+                roc_builtins_dec_from_str_prefix(&from_str, s[0], s[1], s[2], &num_prefix_test_layout);
+                roc_builtins_dec_from_utf8_prefix(&from_utf8, l[0], l[1], l[2], &num_prefix_test_layout);
+            } else if (comptime std.mem.eql(u8, family, "f32")) {
+                roc_builtins_float_from_str_prefix(&from_str, s[0], s[1], s[2], 4, &num_prefix_test_layout);
+                roc_builtins_float_from_utf8_prefix(&from_utf8, l[0], l[1], l[2], 4, &num_prefix_test_layout);
+            } else {
+                roc_builtins_float_from_str_prefix(&from_str, s[0], s[1], s[2], 8, &num_prefix_test_layout);
+                roc_builtins_float_from_utf8_prefix(&from_utf8, l[0], l[1], l[2], 8, &num_prefix_test_layout);
+            }
+
+            try std.testing.expectEqual(from_str.err, from_utf8.err);
+            try std.testing.expectEqual(from_str.value, from_utf8.value);
+            const rest_str = numPrefixRecordRestStr(&from_str);
+            const rest_list = numPrefixRecordRestList(&from_utf8);
+            const rest_list_bytes: []const u8 = if (rest_list.elements(u8)) |ptr| ptr[0..rest_list.len()] else &.{};
+            try std.testing.expectEqualStrings(rest_str.asSlice(), rest_list_bytes);
+            if (from_str.err != 0) try std.testing.expectEqual(@as(usize, 0), rest_str.len());
+            rest_str.decref(ops);
+            rest_list.decref(@alignOf(u8), @sizeOf(u8), false, null, list.rcNone, ops);
+        }
+    }
 }

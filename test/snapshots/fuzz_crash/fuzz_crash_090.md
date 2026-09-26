@@ -13,7 +13,6 @@ UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_090.md:2:7:2:8
 EXPECTED CLOSING BRACE - fuzz_crash_090.md:3:1:3:1
 EXPECTED TUPLE SEPARATOR - fuzz_crash_090.md:3:1:3:1
 EXPECTED CLOSING BRACE - fuzz_crash_090.md:3:1:3:1
-UNRECOGNIZED SYNTAX - fuzz_crash_090.md:1:1:1:1
 # PROBLEMS
 ~~~clojure
 (reports
@@ -128,17 +127,7 @@ UNRECOGNIZED SYNTAX - fuzz_crash_090.md:1:1:1:1
 			(reflow "I reached the end of the file before this construct was complete.")
 			(line-break)
 			(line-break)
-			(source-region (file "fuzz_crash_090.md") (start 3 1) (end 3 1) (annotation error) (line-text ""))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 1 1) (end 1 1))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "fuzz_crash_090.md") (start 1 1) (end 1 1) (annotation error) (line-text "e={({\\\\"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo."))))
+			(source-region (file "fuzz_crash_090.md") (start 3 1) (end 3 1) (annotation error) (line-text "")))))
 ~~~
 # TOKENS
 ~~~zig

@@ -33,9 +33,7 @@ test "record literals canonicalize to record expressions" {
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
-            return error.CanonicalizeError;
-        };
+        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx);
 
         const canonical_expr = env.store.getExpr(canonical_expr_idx.idx);
         // Check that it's a record
@@ -61,9 +59,7 @@ test "record literals canonicalize to record expressions" {
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
-            return error.CanonicalizeError;
-        };
+        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx);
 
         const canonical_expr = env.store.getExpr(canonical_expr_idx.idx);
         // Check that it's an empty_record
@@ -89,9 +85,7 @@ test "record literals canonicalize to record expressions" {
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
-            return error.CanonicalizeError;
-        };
+        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx);
 
         const canonical_expr = env.store.getExpr(canonical_expr_idx.idx);
         // Check that it's a record
@@ -130,9 +124,7 @@ test "record with unset fields collects them into the unsets span" {
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
-            return error.CanonicalizeError;
-        };
+        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx);
 
         const canonical_expr = env.store.getExpr(canonical_expr_idx.idx);
         if (canonical_expr != .e_record) return error.ExpectedRecord;
@@ -163,9 +155,7 @@ test "record with unset fields collects them into the unsets span" {
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
-            return error.CanonicalizeError;
-        };
+        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx);
 
         const canonical_expr = env.store.getExpr(canonical_expr_idx.idx);
         if (canonical_expr != .e_record) return error.ExpectedRecord;

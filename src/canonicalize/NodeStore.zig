@@ -205,15 +205,10 @@ const DiagnosticNodeTag = enum {
     diag_invalid_top_level_statement,
     diag_invalid_associated_statement,
     diag_expr_not_canonicalized,
-    diag_invalid_string_interpolation,
+    diag_expr_syntax_error,
     diag_unreachable_string_pattern_capture,
     diag_pattern_arg_invalid,
     diag_pattern_not_canonicalized,
-    diag_can_lambda_not_implemented,
-    diag_lambda_body_not_canonicalized,
-    diag_if_condition_not_canonicalized,
-    diag_if_then_not_canonicalized,
-    diag_if_else_not_canonicalized,
     diag_if_expr_without_else,
     diag_var_across_function_boundary,
     diag_shadowing_warning,
@@ -221,7 +216,6 @@ const DiagnosticNodeTag = enum {
     diag_type_redeclared,
     diag_undeclared_type,
     diag_type_alias_but_needed_nominal,
-    diag_tuple_elem_not_canonicalized,
     diag_file_import_not_found,
     diag_file_import_io_error,
     diag_file_import_absolute_path,
@@ -269,8 +263,6 @@ const DiagnosticNodeTag = enum {
     diag_duplicate_tag,
     diag_crash_expects_string,
     diag_f64_pattern_literal,
-    diag_unused_type_var_name,
-    diag_type_var_marked_unused,
     diag_type_var_starting_with_dollar,
     diag_underscore_in_type_declaration,
     diag_break_outside_loop,
@@ -828,7 +820,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 97;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 89;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
@@ -5587,8 +5579,8 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_expr_not_canonicalized;
             region = r.region;
         },
-        .invalid_string_interpolation => |r| {
-            node.tag = .diag_invalid_string_interpolation;
+        .expr_syntax_error => |r| {
+            node.tag = .diag_expr_syntax_error;
             region = r.region;
         },
         .unreachable_string_pattern_capture => |r| {
@@ -5601,26 +5593,6 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         },
         .pattern_not_canonicalized => |r| {
             node.tag = .diag_pattern_not_canonicalized;
-            region = r.region;
-        },
-        .can_lambda_not_implemented => |r| {
-            node.tag = .diag_can_lambda_not_implemented;
-            region = r.region;
-        },
-        .lambda_body_not_canonicalized => |r| {
-            node.tag = .diag_lambda_body_not_canonicalized;
-            region = r.region;
-        },
-        .if_condition_not_canonicalized => |r| {
-            node.tag = .diag_if_condition_not_canonicalized;
-            region = r.region;
-        },
-        .if_then_not_canonicalized => |r| {
-            node.tag = .diag_if_then_not_canonicalized;
-            region = r.region;
-        },
-        .if_else_not_canonicalized => |r| {
-            node.tag = .diag_if_else_not_canonicalized;
             region = r.region;
         },
         .if_expr_without_else => |r| {
@@ -5768,10 +5740,6 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.redeclared_region;
             node.setPayload(.{ .diag_ident_with_region = .{ .ident = @bitCast(r.name), .region_start = r.original_region.start.offset, .region_end = r.original_region.end.offset } });
         },
-        .tuple_elem_not_canonicalized => |r| {
-            node.tag = .diag_tuple_elem_not_canonicalized;
-            region = r.region;
-        },
         .file_import_not_found => |r| {
             node.tag = .diag_file_import_not_found;
             region = r.region;
@@ -5912,16 +5880,6 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .f64_pattern_literal => |r| {
             node.tag = .diag_f64_pattern_literal;
             region = r.region;
-        },
-        .unused_type_var_name => |r| {
-            node.tag = .diag_unused_type_var_name;
-            region = r.region;
-            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.name), .ident2 = @bitCast(r.suggested_name) } });
-        },
-        .type_var_marked_unused => |r| {
-            node.tag = .diag_type_var_marked_unused;
-            region = r.region;
-            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.name), .ident2 = @bitCast(r.suggested_name) } });
         },
         .type_var_starting_with_dollar => |r| {
             node.tag = .diag_type_var_starting_with_dollar;
@@ -6096,7 +6054,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_expr_not_canonicalized => return CIR.Diagnostic{ .expr_not_canonicalized = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_invalid_string_interpolation => return CIR.Diagnostic{ .invalid_string_interpolation = .{
+        .diag_expr_syntax_error => return CIR.Diagnostic{ .expr_syntax_error = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_unreachable_string_pattern_capture => return CIR.Diagnostic{ .unreachable_string_pattern_capture = .{
@@ -6106,21 +6064,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_pattern_not_canonicalized => return CIR.Diagnostic{ .pattern_not_canonicalized = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_can_lambda_not_implemented => return CIR.Diagnostic{ .can_lambda_not_implemented = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_lambda_body_not_canonicalized => return CIR.Diagnostic{ .lambda_body_not_canonicalized = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_if_condition_not_canonicalized => return CIR.Diagnostic{ .if_condition_not_canonicalized = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_if_then_not_canonicalized => return CIR.Diagnostic{ .if_then_not_canonicalized = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_if_else_not_canonicalized => return CIR.Diagnostic{ .if_else_not_canonicalized = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_if_expr_without_else => return CIR.Diagnostic{ .if_expr_without_else = .{
@@ -6165,9 +6108,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_type_alias_but_needed_nominal => return CIR.Diagnostic{ .type_alias_but_needed_nominal = .{
             .name = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_tuple_elem_not_canonicalized => return CIR.Diagnostic{ .tuple_elem_not_canonicalized = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_file_import_not_found => return CIR.Diagnostic{ .file_import_not_found = .{
@@ -6451,22 +6391,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_f64_pattern_literal => return CIR.Diagnostic{ .f64_pattern_literal = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_unused_type_var_name => {
-            const p = payload.diag_two_idents;
-            return CIR.Diagnostic{ .unused_type_var_name = .{
-                .name = @bitCast(p.ident1),
-                .suggested_name = @bitCast(p.ident2),
-                .region = store.getRegionAt(node_idx),
-            } };
-        },
-        .diag_type_var_marked_unused => {
-            const p = payload.diag_two_idents;
-            return CIR.Diagnostic{ .type_var_marked_unused = .{
-                .name = @bitCast(p.ident1),
-                .suggested_name = @bitCast(p.ident2),
-                .region = store.getRegionAt(node_idx),
-            } };
-        },
         .diag_type_var_starting_with_dollar => {
             const p = payload.diag_two_idents;
             return CIR.Diagnostic{ .type_var_starting_with_dollar = .{

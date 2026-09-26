@@ -2354,6 +2354,551 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"12.5\"" },
     },
     .{
+        .name = "low_level - from_str_prefix worked example from issue 7010",
+        .source =
+        \\{
+        \\    expect_lit : Str, Str -> Try(Str, [Expected(Str)])
+        \\    expect_lit = |s, lit|
+        \\        if Str.starts_with(s, lit) Ok(Str.drop_prefix(s, lit)) else Err(Expected(lit))
+        \\
+        \\    parse_line : Str -> Try(((U64, U64), U64), [OutOfRange, NotANumber, Expected(Str)])
+        \\    parse_line = |line| {
+        \\        { value: a, rest: r1 } = U64.from_str_prefix(line)?
+        \\        r2 = expect_lit(r1, ",")?
+        \\        { value: b, rest: r3 } = U64.from_str_prefix(r2)?
+        \\        r4 = expect_lit(r3, " -> ")?
+        \\        { value: c, rest: r5 } = U64.from_str_prefix(r4)?
+        \\        if Str.is_empty(r5) Ok(((a, b), c)) else Err(Expected("end of line"))
+        \\    }
+        \\
+        \\    parse_line("12,34 -> 56") == Ok(((12, 34), 56))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - Json number decoding rejects Roc-only numeric continuations",
+        .source =
+        \\{
+        \\    i : Str -> Try(List(I64), _)
+        \\    i = |s| Json.parse(s)
+        \\    u : Str -> Try(U8, _)
+        \\    u = |s| Json.parse(s)
+        \\    f : Str -> Try(F64, _)
+        \\    f = |s| Json.parse(s)
+        \\    ok = i("[ 1 , -2,0,12 ]") == Ok([1, -2, 0, 12]) and u(" 255 ") == Ok(255) and f("-0.5E+1") == Ok(-5.0) and f("1e2") == Ok(100.0)
+        \\    bad_ints = ["[1_0]", "[0x1]", "[1e5]", "[01]", "[+1]", "[1.5]", "[1a]", "[1:]", "[-]", "[1e-0]"].all(|s| i(s).is_err())
+        \\    bad_u8 = ["256", "-1", "0b1", "1 x"].all(|s| u(s).is_err())
+        \\    bad_f = ["inf", "-infinity", "nan", "1.", ".5", "1_0.0", "0x1p3", "1e", "+1.0", "1.0f"].all(|s| f(s).is_err())
+        \\    ok and bad_ints and bad_u8 and bad_f
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - from_str_prefix issue 7010 expects",
+        .source =
+        \\{
+        \\    a = I64.from_str_prefix("-7abc") == Ok({ value: -7, rest: "abc" })
+        \\    b = F64.from_str_prefix("1.5e3]") == Ok({ value: 1500.0, rest: "]" })
+        \\    c = U8.from_str_prefix("300,") == Err(OutOfRange)
+        \\    d = U8.from_utf8_prefix([0x35, 0x0D, 0xFF]) == Ok({ value: 5, rest: [0x0D, 0xFF] })
+        \\    e = U8.from_str_prefix("abc") == Err(NotANumber)
+        \\    f = U8.from_utf8_prefix([]) == Err(NotANumber)
+        \\    [a, b, c, d, e, f]
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[True, True, True, True, True, True]" },
+    },
+    .{
+        .name = "low_level - U8.from_str_prefix boundaries",
+        .source =
+        \\{
+        \\    show : Try({ value : U8, rest : Str }, [OutOfRange, NotANumber]) -> Str
+        \\    show = |r| match r {
+        \\        Ok({ value, rest }) => U8.to_str(value).concat("|").concat(rest)
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\    Str.join_with([show(U8.from_str_prefix("255x")), show(U8.from_str_prefix("256x")), show(U8.from_str_prefix("-0,")), show(U8.from_str_prefix("-5"))], ",")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"255|x,OutOfRange,0|,,OutOfRange\"" },
+    },
+    .{
+        .name = "low_level - U8.from_utf8_prefix matches from_str_prefix",
+        .source =
+        \\{
+        \\    match U8.from_utf8_prefix([0x32, 0x35, 0x35, 0x78]) {
+        \\        Ok({ value, rest }) => U8.to_str(value).concat("|").concat(Str.from_utf8_lossy(rest))
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"255|x\"" },
+    },
+    .{
+        .name = "low_level - I8.from_str_prefix boundaries",
+        .source =
+        \\{
+        \\    show : Try({ value : I8, rest : Str }, [OutOfRange, NotANumber]) -> Str
+        \\    show = |r| match r {
+        \\        Ok({ value, rest }) => I8.to_str(value).concat("|").concat(rest)
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\    Str.join_with([show(I8.from_str_prefix("127 ")), show(I8.from_str_prefix("-128)")), show(I8.from_str_prefix("128")), show(I8.from_str_prefix("-129"))], ",")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"127| ,-128|),OutOfRange,OutOfRange\"" },
+    },
+    .{
+        .name = "low_level - I8.from_utf8_prefix matches from_str_prefix",
+        .source =
+        \\{
+        \\    match I8.from_utf8_prefix([0x31, 0x32, 0x37, 0x20]) {
+        \\        Ok({ value, rest }) => I8.to_str(value).concat("|").concat(Str.from_utf8_lossy(rest))
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"127| \"" },
+    },
+    .{
+        .name = "low_level - U16.from_str_prefix boundaries",
+        .source =
+        \\{
+        \\    show : Try({ value : U16, rest : Str }, [OutOfRange, NotANumber]) -> Str
+        \\    show = |r| match r {
+        \\        Ok({ value, rest }) => U16.to_str(value).concat("|").concat(rest)
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\    Str.join_with([show(U16.from_str_prefix("65535;")), show(U16.from_str_prefix("65536")), show(U16.from_str_prefix("0x1Fz"))], ",")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"65535|;,OutOfRange,31|z\"" },
+    },
+    .{
+        .name = "low_level - U16.from_utf8_prefix matches from_str_prefix",
+        .source =
+        \\{
+        \\    match U16.from_utf8_prefix([0x36, 0x35, 0x35, 0x33, 0x35, 0x3B]) {
+        \\        Ok({ value, rest }) => U16.to_str(value).concat("|").concat(Str.from_utf8_lossy(rest))
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"65535|;\"" },
+    },
+    .{
+        .name = "low_level - I16.from_str_prefix boundaries",
+        .source =
+        \\{
+        \\    show : Try({ value : I16, rest : Str }, [OutOfRange, NotANumber]) -> Str
+        \\    show = |r| match r {
+        \\        Ok({ value, rest }) => I16.to_str(value).concat("|").concat(rest)
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\    Str.join_with([show(I16.from_str_prefix("32767.5")), show(I16.from_str_prefix("-32768")), show(I16.from_str_prefix("-32769"))], ",")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"32767|.5,-32768|,OutOfRange\"" },
+    },
+    .{
+        .name = "low_level - I16.from_utf8_prefix matches from_str_prefix",
+        .source =
+        \\{
+        \\    match I16.from_utf8_prefix([0x33, 0x32, 0x37, 0x36, 0x37, 0x2E, 0x35]) {
+        \\        Ok({ value, rest }) => I16.to_str(value).concat("|").concat(Str.from_utf8_lossy(rest))
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"32767|.5\"" },
+    },
+    .{
+        .name = "low_level - U32.from_str_prefix boundaries",
+        .source =
+        \\{
+        \\    show : Try({ value : U32, rest : Str }, [OutOfRange, NotANumber]) -> Str
+        \\    show = |r| match r {
+        \\        Ok({ value, rest }) => U32.to_str(value).concat("|").concat(rest)
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\    Str.join_with([show(U32.from_str_prefix("4294967295]")), show(U32.from_str_prefix("4294967296")), show(U32.from_str_prefix("0b12"))], ",")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"4294967295|],OutOfRange,1|2\"" },
+    },
+    .{
+        .name = "low_level - U32.from_utf8_prefix matches from_str_prefix",
+        .source =
+        \\{
+        \\    match U32.from_utf8_prefix([0x34, 0x32, 0x39, 0x34, 0x39, 0x36, 0x37, 0x32, 0x39, 0x35, 0x5D]) {
+        \\        Ok({ value, rest }) => U32.to_str(value).concat("|").concat(Str.from_utf8_lossy(rest))
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"4294967295|]\"" },
+    },
+    .{
+        .name = "low_level - I32.from_str_prefix boundaries",
+        .source =
+        \\{
+        \\    show : Try({ value : I32, rest : Str }, [OutOfRange, NotANumber]) -> Str
+        \\    show = |r| match r {
+        \\        Ok({ value, rest }) => I32.to_str(value).concat("|").concat(rest)
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\    Str.join_with([show(I32.from_str_prefix("2147483647,")), show(I32.from_str_prefix("-2147483648")), show(I32.from_str_prefix("2147483648"))], ",")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"2147483647|,,-2147483648|,OutOfRange\"" },
+    },
+    .{
+        .name = "low_level - I32.from_utf8_prefix matches from_str_prefix",
+        .source =
+        \\{
+        \\    match I32.from_utf8_prefix([0x32, 0x31, 0x34, 0x37, 0x34, 0x38, 0x33, 0x36, 0x34, 0x37, 0x2C]) {
+        \\        Ok({ value, rest }) => I32.to_str(value).concat("|").concat(Str.from_utf8_lossy(rest))
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"2147483647|,\"" },
+    },
+    .{
+        .name = "low_level - U64.from_str_prefix boundaries",
+        .source =
+        \\{
+        \\    show : Try({ value : U64, rest : Str }, [OutOfRange, NotANumber]) -> Str
+        \\    show = |r| match r {
+        \\        Ok({ value, rest }) => U64.to_str(value).concat("|").concat(rest)
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\    Str.join_with([show(U64.from_str_prefix("18446744073709551615 ")), show(U64.from_str_prefix("18446744073709551616")), show(U64.from_str_prefix("2e5ast")), show(U64.from_str_prefix("1.2.3"))], ",")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"18446744073709551615| ,OutOfRange,200000|ast,1|.2.3\"" },
+    },
+    .{
+        .name = "low_level - U64.from_utf8_prefix matches from_str_prefix",
+        .source =
+        \\{
+        \\    match U64.from_utf8_prefix([0x31, 0x38, 0x34, 0x34, 0x36, 0x37, 0x34, 0x34, 0x30, 0x37, 0x33, 0x37, 0x30, 0x39, 0x35, 0x35, 0x31, 0x36, 0x31, 0x35, 0x20]) {
+        \\        Ok({ value, rest }) => U64.to_str(value).concat("|").concat(Str.from_utf8_lossy(rest))
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"18446744073709551615| \"" },
+    },
+    .{
+        .name = "low_level - I64.from_str_prefix boundaries",
+        .source =
+        \\{
+        \\    show : Try({ value : I64, rest : Str }, [OutOfRange, NotANumber]) -> Str
+        \\    show = |r| match r {
+        \\        Ok({ value, rest }) => I64.to_str(value).concat("|").concat(rest)
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\    Str.join_with([show(I64.from_str_prefix("9223372036854775807x")), show(I64.from_str_prefix("-9223372036854775808x")), show(I64.from_str_prefix("9223372036854775808")), show(I64.from_str_prefix("-"))], ",")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"9223372036854775807|x,-9223372036854775808|x,OutOfRange,NotANumber\"" },
+    },
+    .{
+        .name = "low_level - I64.from_utf8_prefix matches from_str_prefix",
+        .source =
+        \\{
+        \\    match I64.from_utf8_prefix([0x39, 0x32, 0x32, 0x33, 0x33, 0x37, 0x32, 0x30, 0x33, 0x36, 0x38, 0x35, 0x34, 0x37, 0x37, 0x35, 0x38, 0x30, 0x37, 0x78]) {
+        \\        Ok({ value, rest }) => I64.to_str(value).concat("|").concat(Str.from_utf8_lossy(rest))
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"9223372036854775807|x\"" },
+    },
+    .{
+        .name = "low_level - U128.from_str_prefix boundaries",
+        .source =
+        \\{
+        \\    show : Try({ value : U128, rest : Str }, [OutOfRange, NotANumber]) -> Str
+        \\    show = |r| match r {
+        \\        Ok({ value, rest }) => U128.to_str(value).concat("|").concat(rest)
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\    Str.join_with([show(U128.from_str_prefix("340282366920938463463374607431768211455!")), show(U128.from_str_prefix("340282366920938463463374607431768211456")), show(U128.from_str_prefix("1_000_"))], ",")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"340282366920938463463374607431768211455|!,OutOfRange,1000|_\"" },
+    },
+    .{
+        .name = "low_level - U128.from_utf8_prefix matches from_str_prefix",
+        .source =
+        \\{
+        \\    match U128.from_utf8_prefix([0x33, 0x34, 0x30, 0x32, 0x38, 0x32, 0x33, 0x36, 0x36, 0x39, 0x32, 0x30, 0x39, 0x33, 0x38, 0x34, 0x36, 0x33, 0x34, 0x36, 0x33, 0x33, 0x37, 0x34, 0x36, 0x30, 0x37, 0x34, 0x33, 0x31, 0x37, 0x36, 0x38, 0x32, 0x31, 0x31, 0x34, 0x35, 0x35, 0x21]) {
+        \\        Ok({ value, rest }) => U128.to_str(value).concat("|").concat(Str.from_utf8_lossy(rest))
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"340282366920938463463374607431768211455|!\"" },
+    },
+    .{
+        .name = "low_level - I128.from_str_prefix boundaries",
+        .source =
+        \\{
+        \\    show : Try({ value : I128, rest : Str }, [OutOfRange, NotANumber]) -> Str
+        \\    show = |r| match r {
+        \\        Ok({ value, rest }) => I128.to_str(value).concat("|").concat(rest)
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\    Str.join_with([show(I128.from_str_prefix("170141183460469231731687303715884105727?")), show(I128.from_str_prefix("-170141183460469231731687303715884105728?")), show(I128.from_str_prefix("170141183460469231731687303715884105728")), show(I128.from_str_prefix("2e-1"))], ",")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"170141183460469231731687303715884105727|?,-170141183460469231731687303715884105728|?,OutOfRange,OutOfRange\"" },
+    },
+    .{
+        .name = "low_level - I128.from_utf8_prefix matches from_str_prefix",
+        .source =
+        \\{
+        \\    match I128.from_utf8_prefix([0x31, 0x37, 0x30, 0x31, 0x34, 0x31, 0x31, 0x38, 0x33, 0x34, 0x36, 0x30, 0x34, 0x36, 0x39, 0x32, 0x33, 0x31, 0x37, 0x33, 0x31, 0x36, 0x38, 0x37, 0x33, 0x30, 0x33, 0x37, 0x31, 0x35, 0x38, 0x38, 0x34, 0x31, 0x30, 0x35, 0x37, 0x32, 0x37, 0x3F]) {
+        \\        Ok({ value, rest }) => I128.to_str(value).concat("|").concat(Str.from_utf8_lossy(rest))
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"170141183460469231731687303715884105727|?\"" },
+    },
+    .{
+        .name = "low_level - Dec.from_str_prefix boundaries",
+        .source =
+        \\{
+        \\    show : Try({ value : Dec, rest : Str }, [OutOfRange, NotANumber]) -> Str
+        \\    show = |r| match r {
+        \\        Ok({ value, rest }) => Dec.to_str(value).concat("|").concat(rest)
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\    Str.join_with([show(Dec.from_str_prefix("1.5]")), show(Dec.from_str_prefix("-.5x")), show(Dec.from_str_prefix("1e-19")), show(Dec.from_str_prefix("inf"))], ",")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"1.5|],-0.5|x,OutOfRange,NotANumber\"" },
+    },
+    .{
+        .name = "low_level - Dec.from_utf8_prefix matches from_str_prefix",
+        .source =
+        \\{
+        \\    match Dec.from_utf8_prefix([0x31, 0x2E, 0x35, 0x5D]) {
+        \\        Ok({ value, rest }) => Dec.to_str(value).concat("|").concat(Str.from_utf8_lossy(rest))
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"1.5|]\"" },
+    },
+    .{
+        .name = "low_level - F32.from_str_prefix boundaries",
+        .source =
+        \\{
+        \\    show : Try({ value : F32, rest : Str }, [OutOfRange, NotANumber]) -> Str
+        \\    show = |r| match r {
+        \\        Ok({ value, rest }) => F32.to_str(value).concat("|").concat(rest)
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\    Str.join_with([show(F32.from_str_prefix("3.5,")), show(F32.from_str_prefix(".5x")), show(F32.from_str_prefix("1e400")), show(F32.from_str_prefix("nan?"))], ",")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"3.5|,,0.5|x,OutOfRange,nan|?\"" },
+    },
+    .{
+        .name = "low_level - F32.from_utf8_prefix matches from_str_prefix",
+        .source =
+        \\{
+        \\    match F32.from_utf8_prefix([0x33, 0x2E, 0x35, 0x2C]) {
+        \\        Ok({ value, rest }) => F32.to_str(value).concat("|").concat(Str.from_utf8_lossy(rest))
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"3.5|,\"" },
+    },
+    .{
+        .name = "low_level - F64.from_str_prefix boundaries",
+        .source =
+        \\{
+        \\    show : Try({ value : F64, rest : Str }, [OutOfRange, NotANumber]) -> Str
+        \\    show = |r| match r {
+        \\        Ok({ value, rest }) => F64.to_str(value).concat("|").concat(rest)
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\    Str.join_with([show(F64.from_str_prefix("1.5e3]")), show(F64.from_str_prefix("0x1p3 ")), show(F64.from_str_prefix("1e-400;")), show(F64.from_str_prefix("1e400")), show(F64.from_str_prefix("+inf!"))], ",")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"1500|],8| ,0|;,OutOfRange,inf|!\"" },
+    },
+    .{
+        .name = "low_level - F64.from_utf8_prefix matches from_str_prefix",
+        .source =
+        \\{
+        \\    match F64.from_utf8_prefix([0x31, 0x2E, 0x35, 0x65, 0x33, 0x5D]) {
+        \\        Ok({ value, rest }) => F64.to_str(value).concat("|").concat(Str.from_utf8_lossy(rest))
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"1500|]\"" },
+    },
+    .{
+        .name = "low_level - from_utf8_prefix keeps a non-UTF-8 payload in rest",
+        .source =
+        \\{
+        \\    bytes = [0x24, 0x31, 0x32, 0x0D, 0x0A, 0xFF, 0xFE, 0x00, 0xC3]
+        \\    match U32.from_utf8_prefix(List.drop_first(bytes, 1)) {
+        \\        Ok({ value, rest }) => (value, rest, List.len(bytes))
+        \\        Err(_) => (0, [], 0)
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(12, [13, 10, 255, 254, 0, 195], 9)" },
+    },
+    .{
+        .name = "low_level - from_str_prefix small rest reused after",
+        .source =
+        \\{
+        \\    source = "42,xy"
+        \\    match U8.from_str_prefix(source) {
+        \\        Ok({ value, rest }) => Str.join_with([rest, rest, source, U8.to_str(value)], "/")
+        \\        Err(_) => "bad"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\",xy/,xy/42,xy/42\"" },
+    },
+    .{
+        .name = "low_level - from_str_prefix heap rest reused after",
+        .source =
+        \\{
+        \\    source = Str.concat("-1234", " is followed by a tail long enough to live on the heap")
+        \\    match I32.from_str_prefix(source) {
+        \\        Ok({ value, rest }) => {
+        \\            again = Str.concat(rest, rest)
+        \\            Str.join_with([I32.to_str(value), U64.to_str(Str.count_utf8_bytes(again)), U64.to_str(Str.count_utf8_bytes(source)), Str.drop_prefix(rest, " is")], "|")
+        \\        }
+        \\        Err(_) => "bad"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"-1234|108|59| followed by a tail long enough to live on the heap\"" },
+    },
+    .{
+        .name = "low_level - from_utf8_prefix heap rest reused after",
+        .source =
+        \\{
+        \\    source = Str.to_utf8("77 is followed by a tail long enough to live on the heap")
+        \\    match U16.from_utf8_prefix(source) {
+        \\        Ok({ value, rest }) => {
+        \\            again = List.concat(rest, rest)
+        \\            (value, List.len(rest), List.len(again), List.len(source), Str.from_utf8_lossy(rest) == " is followed by a tail long enough to live on the heap")
+        \\        }
+        \\        Err(_) => (0, 0, 0, 0, False)
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(77, 54, 108, 56, True)" },
+    },
+    .{
+        .name = "low_level - from_str_prefix error leaves rest empty and source intact",
+        .source =
+        \\{
+        \\    source = Str.concat("99999999999", " is followed by a tail long enough to live on the heap")
+        \\    r = U32.from_str_prefix(source)
+        \\    (r == Err(OutOfRange), Str.count_utf8_bytes(source))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(True, 65)" },
+    },
+    .{
+        .name = "low_level - from_str_prefix on runtime-built small and heap strings",
+        .source =
+        \\{
+        \\    tail = Str.repeat("z", 30)
+        \\    run = |s| match U32.from_str_prefix(s) {
+        \\        Ok({ value, rest }) => U32.to_str(value).concat("|").concat(U64.to_str(Str.count_utf8_bytes(Str.concat(rest, rest))))
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\    small = List.map(["7", "4294967296", "x", "12"], |p| Str.concat(p, ","))
+        \\    heap = List.map(["88", "abc", "99999999999"], |p| Str.concat(p, tail))
+        \\    Str.join_with(List.map(List.concat(small, heap), run), ";")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"7|2;OutOfRange;NotANumber;12|2;88|60;NotANumber;OutOfRange\"" },
+    },
+    .{
+        .name = "low_level - from_utf8_prefix on runtime-built small and heap lists",
+        .source =
+        \\{
+        \\    tail = List.repeat(0xFF, 30)
+        \\    run = |bytes| match I16.from_utf8_prefix(bytes) {
+        \\        Ok({ value, rest }) => I16.to_str(value).concat("|").concat(U64.to_str(List.len(List.concat(rest, rest))))
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\    small = List.map(["-5", "40000", "-"], |p| List.append(Str.to_utf8(p), 0xC3))
+        \\    heap = List.map(["321", "q"], |p| List.concat(Str.to_utf8(p), tail))
+        \\    Str.join_with(List.map(List.concat(small, heap), run), ";")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"-5|2;OutOfRange;NotANumber;321|60;NotANumber\"" },
+    },
+    .{
+        .name = "low_level - F64 and Dec prefix parse on runtime-built heap inputs",
+        .source =
+        \\{
+        \\    tail = Str.repeat(" tail", 8)
+        \\    f = |s| match F64.from_str_prefix(s) {
+        \\        Ok({ value, rest }) => F64.to_str(value).concat("|").concat(U64.to_str(Str.count_utf8_bytes(rest)))
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\    d = |s| match Dec.from_utf8_prefix(Str.to_utf8(s)) {
+        \\        Ok({ value, rest }) => Dec.to_str(value).concat("|").concat(U64.to_str(List.len(rest)))
+        \\        Err(OutOfRange) => "OutOfRange"
+        \\        Err(NotANumber) => "NotANumber"
+        \\    }
+        \\    inputs = List.map(["2.5", "1e400", "nope"], |p| Str.concat(p, tail))
+        \\    Str.join_with(List.concat(List.map(inputs, f), List.map(inputs, d)), ";")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"2.5|40;OutOfRange;NotANumber;2.5|40;OutOfRange;NotANumber\"" },
+    },
+    .{
         .name = "low_level - exact from_str accepts exponent notation issue 10550",
         .source =
         \\{

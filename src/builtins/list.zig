@@ -1491,6 +1491,21 @@ pub fn listSwap(
     return newList;
 }
 
+/// The `rest` of a numeric prefix parse (`T.from_utf8_prefix`): the bytes of
+/// `list` after its first `consumed` bytes.
+///
+/// ## Ownership
+/// - `list`: **borrows** - caller retains ownership
+/// - Returns: **owned** - a retained seamless slice of `list`, or empty
+pub fn listFromUtf8PrefixRest(list: RocList, consumed: usize, roc_ops: *RocOps) RocList {
+    const list_len = list.len();
+    std.debug.assert(consumed <= list_len);
+    if (consumed == list_len) return RocList.empty();
+
+    list.incref(1, false, roc_ops);
+    return listSublistBorrowed(list, @sizeOf(u8), consumed, list_len - consumed, false, roc_ops);
+}
+
 /// Construct a sublist view borrowed from `list`.
 ///
 /// This operation never changes a reference count or consumes `list`. ARC
