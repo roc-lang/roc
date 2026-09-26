@@ -1285,6 +1285,10 @@ const ProcedureBuilder = struct {
     type_desc_ids: []?LIR.BoxyTypeDescId,
     generated_evidence_desc_ids: [4]?LIR.BoxyTypeDescId,
     static_dict_cache: std.ArrayList(StaticDictCacheEntry),
+    /// Reused buffer for a static method adapter's argument descriptors,
+    /// used as a stack: an adapter built while another is being gathered
+    /// appends above it and truncates back.
+    method_adapter_arg_descs: std.ArrayList(LIR.BoxyDescRef),
     inspect_method_slot_cache: std.ArrayList(InspectMethodSlotCacheEntry),
     callable_adapter_cache: std.ArrayList(CallableAdapterCacheEntry),
     pending_direct_call_descriptor_abis: std.ArrayList(PendingDirectCallDescriptorAbi),
@@ -1401,6 +1405,7 @@ const ProcedureBuilder = struct {
             .type_desc_ids = &.{},
             .generated_evidence_desc_ids = .{ null, null, null, null },
             .static_dict_cache = .empty,
+            .method_adapter_arg_descs = .empty,
             .inspect_method_slot_cache = .empty,
             .callable_adapter_cache = .empty,
             .pending_direct_call_descriptor_abis = .empty,
@@ -1423,6 +1428,7 @@ const ProcedureBuilder = struct {
         self.callable_adapter_cache.deinit(self.allocator);
         self.inspect_method_slot_cache.deinit(self.allocator);
         self.static_dict_cache.deinit(self.allocator);
+        self.method_adapter_arg_descs.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
         self.allocator.free(self.type_desc_ids);
         self.allocator.free(self.hosted_external_procs);
@@ -2206,9 +2212,8 @@ const ProcedureBuilder = struct {
         // described by that frame; the template captures it.
         // Materializing a descriptor can append nested references to the
         // program's table, so the span is appended contiguously afterwards.
-        var arg_descs = std.ArrayList(LIR.BoxyDescRef).empty;
-        defer arg_descs.deinit(self.allocator);
-        try arg_descs.ensureTotalCapacityPrecise(self.allocator, requirement_args.len);
+        const arg_descs_base = self.method_adapter_arg_descs.items.len;
+        defer self.method_adapter_arg_descs.shrinkRetainingCapacity(arg_descs_base);
         for (requirement_args) |arg| {
             const desc = frame_desc: {
                 if (slot_template) |frame_template| {
@@ -2226,10 +2231,10 @@ const ProcedureBuilder = struct {
                     desc_context,
                 );
             };
-            arg_descs.appendAssumeCapacity(desc);
+            try self.method_adapter_arg_descs.append(self.allocator, desc);
         }
         const arg_descs_start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
-        try self.result.boxy_desc_refs.appendSlice(self.allocator, arg_descs.items);
+        try self.result.boxy_desc_refs.appendSlice(self.allocator, self.method_adapter_arg_descs.items[arg_descs_base..]);
 
         const call_desc_plan = if (requirement_desc_sources) |sources|
             try self.staticMethodCallDescRefsForEvidence(

@@ -893,6 +893,15 @@ dispatch_derivation_by_child_fn_var: std.AutoHashMapUnmanaged(Var, Var) = .empty
 /// constraint var of its own, so this is where its component obligations,
 /// derived under that constraint (`dispatch_derivations`), are reached from.
 structural_rewrite_constraints: std.ArrayListUnmanaged(StructuralRewriteConstraint) = .empty,
+/// Storage for the dispatch-target join, rebuilt (not reallocated) by each
+/// settled-state pass that consumes it: the default-cycle walk and hoisted-
+/// root pruning. It is keyed by resolved classes, and solving continues
+/// between those passes, so each pass rebuilds it at its own settled state.
+dispatch_join_scratch: DispatchJoinIndex = .{},
+/// Per-root scratch of hoisted-root pruning's evidence walk, cleared for
+/// every root.
+hoist_evidence_seen_vars: std.AutoHashMapUnmanaged(Var, void) = .empty,
+hoist_evidence_type_vars: std.AutoHashMapUnmanaged(Var, void) = .empty,
 /// Reusable scratch for the receiver-embedding walk of recursive-dispatch
 /// detection: the in-progress (small, big) pair stack that cuts cyclic
 /// structure, and the completed-pair memo that keeps shared substructure
@@ -3275,6 +3284,9 @@ pub fn deinit(self: *Self) void {
     self.where_method_use_record_by_fn_var.deinit(self.gpa);
     self.dispatch_derivations.deinit(self.gpa);
     self.structural_rewrite_constraints.deinit(self.gpa);
+    self.dispatch_join_scratch.deinit(self.gpa);
+    self.hoist_evidence_seen_vars.deinit(self.gpa);
+    self.hoist_evidence_type_vars.deinit(self.gpa);
     self.dispatch_derivation_by_child_fn_var.deinit(self.gpa);
     self.scratch_embed_active_pairs.deinit(self.gpa);
     self.scratch_embed_memo.deinit(self.gpa);
@@ -10326,13 +10338,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     defer self.gpa.free(keep_roots);
     @memset(keep_roots, false);
 
-    var dispatch_join: ?DispatchJoinIndex = null;
-    defer if (dispatch_join) |*join| join.deinit(self.gpa);
-    if (root_count != 0) {
-        dispatch_join = .{};
-        try self.buildDispatchJoinIndex(&dispatch_join.?);
-    }
-    const dispatch_join_ref: ?*const DispatchJoinIndex = if (dispatch_join) |*join| join else null;
+    const dispatch_join_ref: ?*const DispatchJoinIndex = if (root_count != 0) try self.fillDispatchJoinIndex() else null;
 
     var keep_oracle = try HoistedRootKeepOracle.init(self.gpa, self.selected_hoisted_roots.items, keep_roots);
     defer keep_oracle.deinit(self.gpa);
@@ -10837,17 +10843,17 @@ fn hoistedRootReachesBlockLocalMethod(
     context: *HoistedDependencyContext,
     join: *const DispatchJoinIndex,
 ) Allocator.Error!bool {
-    var visited = std.AutoHashMapUnmanaged(Var, void){};
-    defer visited.deinit(self.gpa);
-    var type_visited = std.AutoHashMapUnmanaged(Var, void){};
-    defer type_visited.deinit(self.gpa);
+    const visited = &self.hoist_evidence_seen_vars;
+    visited.clearRetainingCapacity();
+    const type_visited = &self.hoist_evidence_type_vars;
+    type_visited.clearRetainingCapacity();
     while (context.dispatch_seeds.pop()) |seed| {
         const resolved = self.types.resolveVar(seed).var_;
         if ((try visited.getOrPut(self.gpa, resolved)).found_existing) continue;
         // Inspection selects a type's `to_inspect` override by the type
         // itself, with no dispatch constraint: any type the root instantiates
         // is one inspection inside the root may reach.
-        if (try self.typeReachesBlockLocalInspectOverride(resolved, &type_visited)) return true;
+        if (try self.typeReachesBlockLocalInspectOverride(resolved, type_visited)) return true;
         if (join.children_by_parent.get(resolved)) |children| {
             try context.dispatch_seeds.appendSlice(self.gpa, children.items);
         }
@@ -31771,6 +31777,7 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     var evidence = DefaultWalkEvidence{
         .omitted_defaults_by_expr = .init(self.gpa),
         .next_omitted_default = try self.gpa.alloc(?u32, self.cir.record_omitted_defaults.items.items.len),
+        .join = &self.dispatch_join_scratch,
     };
     defer evidence.deinit(self.gpa);
     for (self.cir.record_omitted_defaults.items.items, 0..) |omitted, index| {
@@ -31793,7 +31800,7 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
         }
     }
 
-    try self.buildDispatchJoinIndex(&evidence.join);
+    _ = try self.fillDispatchJoinIndex();
 
     for (self.pending_default_checks.items) |pending| {
         // An erroring default already reported (an explicitly recorded
@@ -32045,13 +32052,12 @@ const DefaultWalkEvidence = struct {
     omitted_defaults_by_expr: collections.DenseMap(CIR.Expr.Idx, u32),
     next_omitted_default: []?u32,
     pattern_to_def_expr: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
-    join: DispatchJoinIndex = .{},
+    join: *const DispatchJoinIndex,
 
     fn deinit(evidence: *DefaultWalkEvidence, gpa: std.mem.Allocator) void {
         evidence.omitted_defaults_by_expr.deinit();
         gpa.free(evidence.next_omitted_default);
         evidence.pattern_to_def_expr.deinit(gpa);
-        evidence.join.deinit(gpa);
     }
 };
 
@@ -32087,6 +32093,23 @@ const DispatchJoinIndex = struct {
     /// (`structural_rewrite_constraints`).
     structural_rewrites_by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, std.ArrayListUnmanaged(Var)) = .empty,
 
+    /// Empty every index, keeping the outer tables' capacity.
+    fn clear(index: *DispatchJoinIndex, gpa: std.mem.Allocator) void {
+        var node_lists = index.node_to_scheme_uses.valueIterator();
+        while (node_lists.next()) |list| list.deinit(gpa);
+        index.node_to_scheme_uses.clearRetainingCapacity();
+        index.dispatch_scheme_uses.clearRetainingCapacity();
+        var inst_lists = index.instantiations_by_var.valueIterator();
+        while (inst_lists.next()) |list| list.deinit(gpa);
+        index.instantiations_by_var.clearRetainingCapacity();
+        var child_lists = index.children_by_parent.valueIterator();
+        while (child_lists.next()) |list| list.deinit(gpa);
+        index.children_by_parent.clearRetainingCapacity();
+        var rewrite_lists = index.structural_rewrites_by_expr.valueIterator();
+        while (rewrite_lists.next()) |list| list.deinit(gpa);
+        index.structural_rewrites_by_expr.clearRetainingCapacity();
+    }
+
     fn deinit(index: *DispatchJoinIndex, gpa: std.mem.Allocator) void {
         var child_lists = index.children_by_parent.valueIterator();
         while (child_lists.next()) |list| list.deinit(gpa);
@@ -32103,6 +32126,15 @@ const DispatchJoinIndex = struct {
         index.instantiations_by_var.deinit(gpa);
     }
 };
+
+/// Fill `dispatch_join_scratch` from the current settled state, reusing its
+/// storage.
+fn fillDispatchJoinIndex(self: *Self) Allocator.Error!*const DispatchJoinIndex {
+    const index = &self.dispatch_join_scratch;
+    index.clear(self.gpa);
+    try self.buildDispatchJoinIndex(index);
+    return index;
+}
 
 fn buildDispatchJoinIndex(self: *Self, index: *DispatchJoinIndex) Allocator.Error!void {
     for (self.cir.scheme_uses.items.items, 0..) |record, record_index| {
