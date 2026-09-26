@@ -17234,7 +17234,7 @@ const BodyDraftStore = struct {
             const identity = try sealedDefIdentity(program, committed_types, seed, ids.typedLocalSpan(def.args), try def.ret.sealCommitted(committed_types));
             const entry = try program.literal_root_by_identity.getOrPut(program.allocator, identity);
             if (!entry.found_existing) {
-                entry.value_ptr.* = try program.addLiteralRoot(.{ .def = ids.def(root.def), .module = root.module, .site = root.site });
+                entry.value_ptr.* = try program.addLiteralRoot(.{ .def = ids.def(root.def), .module = root.module, .site = root.site, .identity = identity });
             }
             var descriptor = self.comptime_value_roots.items[@intFromEnum(root.read)];
             descriptor.root = .{ .literal = entry.value_ptr.* };

@@ -1036,12 +1036,20 @@ target width, the explicitly shared expect consumer mode, its LIR policy, and
 the completed compile-time values it reads as literals. Any other runtime
 consumer (an optimized build, the interpreter, or Boxy) specializes the
 checked modules itself under its own policy once evaluation has completed,
-and reads every compile-time value from the modules' `ConstStore`s. Solved
+and reads every checked root's value from the modules' `ConstStore`s. Solved
 programs built under different inlining and SpecConstr policies specialize
 one function into differently shaped members, because their lambda sets
 differ, so no member identity in one names a member of the other; the
-stores name each value independently of any Solved program. The producer
-program is released after its last consumer.
+stores name each value independently of any Solved program. Literal roots
+belong to no module's store, so such a runtime program lowers its own
+literal roots and evaluates them at compile time itself before its runtime
+consumer reads their frozen values: `--opt` never moves a conversion to
+runtime. Compile-time evaluation already reported every literal, so this
+evaluation prints nothing and checks each conversion's outcome against the
+one evaluation recorded under the literal's content identity
+(`LiteralRootPlan.identity`, the literal and its concrete type), which every
+program lowered from the same checked modules shares. The producer program
+is released after its last consumer.
 
 Each consumer names its share of the producer program in an explicit root
 manifest, applied before LIR demand discovery. A manifest names producer root

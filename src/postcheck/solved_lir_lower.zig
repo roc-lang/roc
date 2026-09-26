@@ -502,6 +502,7 @@ const LiteralRootEntry = struct {
     fn_id: Type.FnId,
     module: check.CheckedModule.ModuleId,
     site: Common.LiteralRejectionSite,
+    identity: check.CheckedNames.TypeDigest,
 };
 
 const LayoutRequest = struct {
@@ -1300,6 +1301,7 @@ const Lowerer = struct {
                     .fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite),
                     .module = root.module,
                     .site = root.site,
+                    .identity = root.identity,
                 });
             }
         }
@@ -3807,6 +3809,7 @@ const Lowerer = struct {
                 .module = root.module,
                 .id = id,
                 .site = root.site,
+                .identity = root.identity,
                 .proc = try self.markReachableFn(root.fn_id),
                 .ret_layout = ret_layout,
                 .plan = try self.constPlanOfType(entry.ret),

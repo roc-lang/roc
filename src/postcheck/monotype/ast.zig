@@ -1387,6 +1387,10 @@ pub const LiteralRoot = struct {
     /// Checked module that owns the literal.
     module: checked.ModuleId,
     site: Common.LiteralRejectionSite,
+    /// Content identity of this conversion: the literal and the concrete
+    /// type it converts to. Every program lowered from the same checked
+    /// modules names one conversion by the same identity.
+    identity: names.TypeDigest,
 };
 
 /// Runtime layout requested for a checked data value.

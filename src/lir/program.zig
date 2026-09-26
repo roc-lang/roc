@@ -452,6 +452,9 @@ pub const LiteralRootPlan = struct {
     module: checked.ModuleId,
     id: LIR.LiteralRootId,
     site: LIR.LiteralRejectionSite,
+    /// Content identity of the conversion (`Mono.LiteralRoot.identity`),
+    /// shared by every program lowered from the same checked modules.
+    identity: names.TypeDigest,
     proc: LIR.LirProcSpecId,
     ret_layout: layout.Idx,
     plan: ConstPlanId,
