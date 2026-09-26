@@ -1265,6 +1265,10 @@ pub const Coordinator = struct {
     /// result. Post-check work shares those channels and cannot start earlier.
     frontend_complete: bool,
     runtime_lowering: ?compile_build.RuntimeLoweringConfig = null,
+    /// The checked modules whose `expect`s are the developer's own tests, in
+    /// the order their test roots join compile-time evaluation. Every command
+    /// that checks the program evaluates the same tests' compile-time work.
+    program_test_modules: []const CheckedArtifact.CheckedModuleArtifactKey = &.{},
     program_session: ?eval.CompileTimeFinalization.ProgramSession = null,
 
     /// Total modules remaining across all packages
@@ -2918,7 +2922,11 @@ pub const Coordinator = struct {
         // such as `roc test`) is its own program. Every other command
         // evaluates the program its checked root declares.
         const explicit_runtime = if (self.runtime_lowering) |config| config.explicit_roots != null else false;
-        if (ordered_modules.items.len == 0 and cached_debug_modules.items.len == 0 and program_root == null and !explicit_runtime) return;
+        // A compilation that pairs its app with the platform evaluates the
+        // program's tests with it; the pre-pairing pass evaluates the
+        // platform's own modules only.
+        const test_modules = if (dependency_root == null) self.program_test_modules else &.{};
+        if (ordered_modules.items.len == 0 and cached_debug_modules.items.len == 0 and program_root == null and test_modules.len == 0 and !explicit_runtime) return;
 
         // With no program, the first module in the explicit evaluation order
         // is the checked-program ownership anchor. Qualified requests retain
@@ -2929,6 +2937,8 @@ pub const Coordinator = struct {
             program
         else if (ordered_modules.items.len != 0)
             ordered_modules.items[0].module
+        else if (test_modules.len != 0)
+            self.checkedArtifactByKey(test_modules[0]) orelse coordinatorInvariant("program test module has no checked module data", .{})
         else
             cached_debug_modules.items[0];
         const relations = try self.collectRelationArtifactViews(self.gpa, root);
@@ -2954,11 +2964,30 @@ pub const Coordinator = struct {
         else
             &.{};
         defer if (!explicit_runtime and program_root != null) self.gpa.free(entrypoint_requests);
+        // Then the program's tests, each owned by the module declaring it.
+        var program_requests = std.ArrayList(CheckedArtifact.RootRequest).empty;
+        defer program_requests.deinit(self.gpa);
+        var program_sources = std.ArrayList(CheckedArtifact.CheckedModuleArtifactKey).empty;
+        defer program_sources.deinit(self.gpa);
+        if (!explicit_runtime) {
+            try program_requests.appendSlice(self.gpa, entrypoint_requests);
+            try program_sources.appendNTimes(self.gpa, root.key, entrypoint_requests.len);
+            for (test_modules) |key| {
+                const artifact = self.checkedArtifactByKey(key) orelse
+                    coordinatorInvariant("program test module has no checked module data", .{});
+                for (artifact.root_requests.requests) |request| {
+                    if (request.kind != .test_expect) continue;
+                    try program_requests.append(self.gpa, request);
+                    try program_sources.append(self.gpa, key);
+                }
+            }
+        }
         const program_roots: lir.CheckedPipeline.RootRequestSet = if (explicit_runtime)
             self.runtime_lowering.?.explicit_roots.?
         else
             .{
-                .requests = entrypoint_requests,
+                .requests = program_requests.items,
+                .source_modules = program_sources.items,
                 .include_provided_data_exports = true,
                 .include_internal_static_data = true,
             };

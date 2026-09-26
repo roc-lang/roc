@@ -1007,7 +1007,9 @@ whose state updates are lost to the enclosing continuation.
 Compile-time evaluation is a function of the checked program alone. Every
 command that finalizes checking evaluates the same roots, every checked
 module's compile-time requests plus the platform entrypoints of the
-program's root module, taken from its checked `runtime_requests`, under one fixed
+program's root module, taken from its checked `runtime_requests`, and the
+`test_expect` requests of every module `roc test` would run (the root
+package and the packages it reaches through filesystem paths), under one fixed
 configuration (`compileTimeTarget`): the host's width, expects run, literal
 roots on, and the dev Solved policy (`.wrappers` inlining and
 iterator-fusion SpecConstr). Nothing a command asks of its runtime program
