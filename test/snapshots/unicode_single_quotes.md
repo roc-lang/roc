@@ -53,16 +53,6 @@ UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:15:5:15:11
 UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:16:5:16:9
 UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:19:5:19:7
 UNEXPECTED STATEMENT - unicode_single_quotes.md:22:1:22:3
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 # PROBLEMS
 ~~~clojure
 (reports
@@ -451,71 +441,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 			(text " here.")
 			(line-break)
 			(line-break)
-			(source-region (file "unicode_single_quotes.md") (start 22 1) (end 22 3) (annotation error) (line-text "'\\"))))
-	(report
-		(severity runtime_error)
-		(title "Invalid Tuple Element")
-		(headline
-			(reflow "This tuple element is malformed or contains invalid syntax."))
-		(document))
-	(report
-		(severity runtime_error)
-		(title "Invalid Tuple Element")
-		(headline
-			(reflow "This tuple element is malformed or contains invalid syntax."))
-		(document))
-	(report
-		(severity runtime_error)
-		(title "Invalid Tuple Element")
-		(headline
-			(reflow "This tuple element is malformed or contains invalid syntax."))
-		(document))
-	(report
-		(severity runtime_error)
-		(title "Invalid Tuple Element")
-		(headline
-			(reflow "This tuple element is malformed or contains invalid syntax."))
-		(document))
-	(report
-		(severity runtime_error)
-		(title "Invalid Tuple Element")
-		(headline
-			(reflow "This tuple element is malformed or contains invalid syntax."))
-		(document))
-	(report
-		(severity runtime_error)
-		(title "Invalid Tuple Element")
-		(headline
-			(reflow "This tuple element is malformed or contains invalid syntax."))
-		(document))
-	(report
-		(severity runtime_error)
-		(title "Invalid Tuple Element")
-		(headline
-			(reflow "This tuple element is malformed or contains invalid syntax."))
-		(document))
-	(report
-		(severity runtime_error)
-		(title "Invalid Tuple Element")
-		(headline
-			(reflow "This tuple element is malformed or contains invalid syntax."))
-		(document))
-	(report
-		(severity runtime_error)
-		(title "Invalid Tuple Element")
-		(headline
-			(reflow "This tuple element is malformed or contains invalid syntax."))
-		(document))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 19 5) (end 19 7))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "unicode_single_quotes.md") (start 19 5) (end 19 7) (annotation error) (line-text "y = 'u"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo."))))
+			(source-region (file "unicode_single_quotes.md") (start 22 1) (end 22 3) (annotation error) (line-text "'\\")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -584,7 +510,7 @@ y =
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "y"))
-		(e-runtime-error (tag "expr_not_canonicalized"))))
+		(e-runtime-error (tag "expr_syntax_error"))))
 ~~~
 # TYPES
 ~~~clojure

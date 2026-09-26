@@ -287,11 +287,7 @@ test "hexadecimal integer literals" {
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = try czer.canonicalizeExpr(expr_idx) orelse {
-            std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
-            try std.testing.expect(false);
-            continue;
-        };
+        const canonical_expr_idx = try czer.canonicalizeExpr(expr_idx);
 
         const expr = env.store.getExpr(canonical_expr_idx.get_idx());
         try std.testing.expect(expr == .e_num);
@@ -350,11 +346,7 @@ test "binary integer literals" {
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = try czer.canonicalizeExpr(expr_idx) orelse {
-            std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
-            try std.testing.expect(false);
-            continue;
-        };
+        const canonical_expr_idx = try czer.canonicalizeExpr(expr_idx);
 
         const expr = env.store.getExpr(canonical_expr_idx.get_idx());
         try std.testing.expect(expr == .e_num);
@@ -413,11 +405,7 @@ test "octal integer literals" {
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = try czer.canonicalizeExpr(expr_idx) orelse {
-            std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
-            try std.testing.expect(false);
-            continue;
-        };
+        const canonical_expr_idx = try czer.canonicalizeExpr(expr_idx);
 
         const expr = env.store.getExpr(canonical_expr_idx.get_idx());
         try std.testing.expect(expr == .e_num);

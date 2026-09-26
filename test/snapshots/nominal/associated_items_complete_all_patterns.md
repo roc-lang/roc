@@ -726,77 +726,50 @@ UNEXPECTED STATEMENT - associated_items_complete_all_patterns.md:433:1:433:2
 NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:6:8:6:18
 NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:11:8:11:16
 NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:20:8:20:22
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:21:8:21:38
 TYPE REDECLARED - associated_items_complete_all_patterns.md:24:5:26:6
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:28:5:28:14
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:30:8:30:43
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:33:5:33:14
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:33:17:33:52
 TYPE REDECLARED - associated_items_complete_all_patterns.md:35:5:37:6
 NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:39:8:39:27
 TYPE REDECLARED - associated_items_complete_all_patterns.md:42:5:44:6
 NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:46:26:46:39
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:51:16:51:39
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:58:8:58:31
 NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:71:8:71:26
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:72:8:72:34
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:73:8:73:37
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:76:5:76:9
 TYPE REDECLARED - associated_items_complete_all_patterns.md:78:5:84:6
 NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:86:8:86:26
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:87:8:87:34
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:88:8:88:37
 TYPE REDECLARED - associated_items_complete_all_patterns.md:91:5:95:6
 NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:97:14:97:24
 TYPE REDECLARED - associated_items_complete_all_patterns.md:101:5:107:6
 TYPE REDECLARED - associated_items_complete_all_patterns.md:111:5:117:6
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:119:5:119:9
 NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:121:8:121:27
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:122:8:122:35
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:123:8:123:38
 TYPE REDECLARED - associated_items_complete_all_patterns.md:126:5:136:6
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:138:5:138:9
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:140:8:140:44
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:143:5:143:9
 TYPE REDECLARED - associated_items_complete_all_patterns.md:145:5:155:6
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:157:8:157:44
 TYPE REDECLARED - associated_items_complete_all_patterns.md:160:5:170:6
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:172:5:172:9
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:174:8:174:38
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:177:5:177:9
 TYPE REDECLARED - associated_items_complete_all_patterns.md:179:5:189:6
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:191:8:191:36
 TYPE REDECLARED - associated_items_complete_all_patterns.md:194:5:201:6
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:203:8:203:40
 TYPE REDECLARED - associated_items_complete_all_patterns.md:206:5:216:6
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:218:8:218:40
 TYPE REDECLARED - associated_items_complete_all_patterns.md:221:5:231:6
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:233:5:233:9
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:235:8:235:40
 TYPE REDECLARED - associated_items_complete_all_patterns.md:238:5:244:6
 NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:246:11:246:17
 TYPE REDECLARED - associated_items_complete_all_patterns.md:250:5:258:6
 TYPE REDECLARED - associated_items_complete_all_patterns.md:262:5:270:6
 TYPE REDECLARED - associated_items_complete_all_patterns.md:274:5:288:6
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:290:5:290:9
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:292:8:292:47
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:295:5:295:9
 TYPE REDECLARED - associated_items_complete_all_patterns.md:297:5:311:6
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:313:8:313:47
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:316:5:316:9
 TYPE REDECLARED - associated_items_complete_all_patterns.md:318:5:332:6
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:334:8:334:43
 TYPE REDECLARED - associated_items_complete_all_patterns.md:337:5:347:6
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:349:8:349:43
 TYPE REDECLARED - associated_items_complete_all_patterns.md:352:5:364:6
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:366:8:366:43
 TYPE REDECLARED - associated_items_complete_all_patterns.md:369:5:383:6
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:385:5:385:9
 NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:387:8:387:22
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:388:8:388:30
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:389:8:389:33
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:390:8:390:36
-UNRECOGNIZED SYNTAX - associated_items_complete_all_patterns.md:391:9:391:40
 TYPE REDECLARED - associated_items_complete_all_patterns.md:394:5:402:6
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:404:5:404:8
 NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:404:11:404:22
@@ -8835,16 +8808,6 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 			(source-region (file "associated_items_complete_all_patterns.md") (start 20 8) (end 20 22) (annotation error) (line-text "d2_1 = d2_inner_first.outer_val"))))
 	(report
 		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 21 8) (end 21 38))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 21 8) (end 21 38) (annotation error) (line-text "d2_2 = d2_inner_first.Inner.inner_val"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
 		(title "Type Redeclared")
 		(region (start 24 5) (end 26 6))
 		(headline
@@ -8886,16 +8849,6 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 18 5) (end 18 14) (annotation dim) (line-text "    outer_val = 300"))))
 	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 30 8) (end 30 43))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 30 8) (end 30 43) (annotation error) (line-text "d2_3 = d2_outer_val_middle.Inner.inner_val"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
 		(severity warning)
 		(title "Duplicate Definition")
 		(region (start 33 5) (end 33 14))
@@ -8916,16 +8869,6 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 			(reflow ":")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 28 5) (end 28 14) (annotation dim) (line-text "    outer_val = 500"))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 33 17) (end 33 52))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 33 17) (end 33 52) (annotation error) (line-text "    outer_val = d2_outer_refs_inner.Inner.inner_val"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
 	(report
 		(severity runtime_error)
 		(title "Type Redeclared")
@@ -8996,26 +8939,6 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 			(source-region (file "associated_items_complete_all_patterns.md") (start 46 26) (end 46 39) (annotation error) (line-text "    outer_trying_inner = inner_private"))))
 	(report
 		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 51 16) (end 51 39))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 51 16) (end 51 39) (annotation error) (line-text "        valA = d2_siblings.InnerB.valB + 1"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 58 8) (end 58 31))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 58 8) (end 58 31) (annotation error) (line-text "d2_5 = d2_siblings.InnerA.valA"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
 		(title "Name Not In Scope")
 		(region (start 71 8) (end 71 26))
 		(headline
@@ -9027,26 +8950,6 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 			(line-break)
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 71 8) (end 71 26) (annotation error) (line-text "d3_1 = d3_types_then_vals.val1"))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 72 8) (end 72 34))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 72 8) (end 72 34) (annotation error) (line-text "d3_2 = d3_types_then_vals.L2.val2"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 73 8) (end 73 37))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 73 8) (end 73 37) (annotation error) (line-text "d3_3 = d3_types_then_vals.L2.L3.val3"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
 	(report
 		(severity warning)
 		(title "Duplicate Definition")
@@ -9102,26 +9005,6 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 			(line-break)
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 86 8) (end 86 26) (annotation error) (line-text "d3_4 = d3_vals_then_types.val1"))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 87 8) (end 87 34))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 87 8) (end 87 34) (annotation error) (line-text "d3_5 = d3_vals_then_types.L2.val2"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 88 8) (end 88 37))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 88 8) (end 88 37) (annotation error) (line-text "d3_6 = d3_vals_then_types.L2.L3.val3"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
 	(report
 		(severity runtime_error)
 		(title "Type Redeclared")
@@ -9234,26 +9117,6 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 			(source-region (file "associated_items_complete_all_patterns.md") (start 121 8) (end 121 27) (annotation error) (line-text "d3_7 = d3_val_after_nested.val1"))))
 	(report
 		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 122 8) (end 122 35))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 122 8) (end 122 35) (annotation error) (line-text "d3_8 = d3_val_after_nested.L2.val2"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 123 8) (end 123 38))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 123 8) (end 123 38) (annotation error) (line-text "d3_9 = d3_val_after_nested.L2.L3.val3"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
 		(title "Type Redeclared")
 		(region (start 126 5) (end 136 6))
 		(headline
@@ -9294,16 +9157,6 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 			(reflow ":")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 119 5) (end 119 9) (annotation dim) (line-text "    val1 = 5"))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 140 8) (end 140 44))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 140 8) (end 140 44) (annotation error) (line-text "d4_1 = d4_all_types_then_vals.L2.L3.L4.val4"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
 	(report
 		(severity warning)
 		(title "Duplicate Definition")
@@ -9348,16 +9201,6 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
 		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 157 8) (end 157 44))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 157 8) (end 157 44) (annotation error) (line-text "d4_2 = d4_all_vals_then_types.L2.L3.L4.val4"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
 		(title "Type Redeclared")
 		(region (start 160 5) (end 170 6))
 		(headline
@@ -9398,16 +9241,6 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 			(reflow ":")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 143 5) (end 143 9) (annotation dim) (line-text "    val1 = 10"))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 174 8) (end 174 38))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 174 8) (end 174 38) (annotation error) (line-text "d4_3 = d4_reverse_types.L2.L3.L4.val4"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
 	(report
 		(severity warning)
 		(title "Duplicate Definition")
@@ -9452,16 +9285,6 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
 		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 191 8) (end 191 36))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 191 8) (end 191 36) (annotation error) (line-text "d4_4 = d4_interleaved.L2.L3.L4.val4"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
 		(title "Type Redeclared")
 		(region (start 194 5) (end 201 6))
 		(headline
@@ -9483,16 +9306,6 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
 		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 203 8) (end 203 40))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 203 8) (end 203 40) (annotation error) (line-text "d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
 		(title "Type Redeclared")
 		(region (start 206 5) (end 216 6))
 		(headline
@@ -9512,16 +9325,6 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 			(reflow ":")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 218 8) (end 218 40))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 218 8) (end 218 40) (annotation error) (line-text "d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
 	(report
 		(severity runtime_error)
 		(title "Type Redeclared")
@@ -9564,16 +9367,6 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 			(reflow ":")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 177 5) (end 177 9) (annotation dim) (line-text "    val1 = 15"))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 235 8) (end 235 40))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 235 8) (end 235 40) (annotation error) (line-text "d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
 	(report
 		(severity runtime_error)
 		(title "Type Redeclared")
@@ -9693,16 +9486,6 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 233 5) (end 233 9) (annotation dim) (line-text "    val1 = 3"))))
 	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 292 8) (end 292 47))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 292 8) (end 292 47) (annotation error) (line-text "d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
 		(severity warning)
 		(title "Duplicate Definition")
 		(region (start 295 5) (end 295 9))
@@ -9744,16 +9527,6 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 			(reflow ":")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 313 8) (end 313 47))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 313 8) (end 313 47) (annotation error) (line-text "d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
 	(report
 		(severity warning)
 		(title "Duplicate Definition")
@@ -9798,16 +9571,6 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
 		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 334 8) (end 334 43))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 334 8) (end 334 43) (annotation error) (line-text "d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
 		(title "Type Redeclared")
 		(region (start 337 5) (end 347 6))
 		(headline
@@ -9829,16 +9592,6 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
 	(report
 		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 349 8) (end 349 43))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 349 8) (end 349 43) (annotation error) (line-text "d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
 		(title "Type Redeclared")
 		(region (start 352 5) (end 364 6))
 		(headline
@@ -9858,16 +9611,6 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 			(reflow ":")
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 61 5) (end 67 6) (annotation dim) (line-text "    L2 := [Q].{\n        L3 := [R].{\n            val3 = val1 + val2\n        }\n\n        val2 = 20\n    }"))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 366 8) (end 366 43))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 366 8) (end 366 43) (annotation error) (line-text "d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
 	(report
 		(severity runtime_error)
 		(title "Type Redeclared")
@@ -9923,46 +9666,6 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 			(line-break)
 			(line-break)
 			(source-region (file "associated_items_complete_all_patterns.md") (start 387 8) (end 387 22) (annotation error) (line-text "d5_6 = d5_l1_val_last.val1"))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 388 8) (end 388 30))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 388 8) (end 388 30) (annotation error) (line-text "d5_7 = d5_l1_val_last.L2.val2"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 389 8) (end 389 33))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 389 8) (end 389 33) (annotation error) (line-text "d5_8 = d5_l1_val_last.L2.L3.val3"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 390 8) (end 390 36))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 390 8) (end 390 36) (annotation error) (line-text "d5_9 = d5_l1_val_last.L2.L3.L4.val4"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 391 9) (end 391 40))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "associated_items_complete_all_patterns.md") (start 391 9) (end 391 40) (annotation error) (line-text "d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
 	(report
 		(severity runtime_error)
 		(title "Type Redeclared")

@@ -54,11 +54,11 @@ EndOfFile,
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(e-binop (op "add")
+	(e-num (value "1"))
+	(e-runtime-error (tag "expr_syntax_error")))
 ~~~
 # TYPES
 ~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+(expr (type "Error"))
 ~~~

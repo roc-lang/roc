@@ -1208,7 +1208,6 @@ fn processSnapshotContent(
         },
         .snippet, .statement, .header, .expr, .mono, .reporting => blk: {
             // For snippet/statement/header/expr/mono tests, type check the already-canonicalized IR
-            // Note: .expr and .mono can reach here if canonicalizeExpr returned null (error during canonicalization)
             var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
 
             if (config.builtin_module) |builtin_env| {

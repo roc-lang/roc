@@ -9,7 +9,6 @@ r = 1..5
 ~~~
 # EXPECTED
 NOT A RANGE OPERATOR - range_bare_double_dot_error.md:1:8:1:9
-UNRECOGNIZED SYNTAX - range_bare_double_dot_error.md:1:8:1:9
 # PROBLEMS
 ~~~clojure
 (reports
@@ -38,17 +37,7 @@ UNRECOGNIZED SYNTAX - range_bare_double_dot_error.md:1:8:1:9
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(source-region (file "range_bare_double_dot_error.md") (start 1 8) (end 1 9) (annotation error) (line-text "r = 1..5"))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 1 8) (end 1 9))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "range_bare_double_dot_error.md") (start 1 8) (end 1 9) (annotation error) (line-text "r = 1..5"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo."))))
+			(source-region (file "range_bare_double_dot_error.md") (start 1 8) (end 1 9) (annotation error) (line-text "r = 1..5")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -73,7 +62,7 @@ r =
 (can-ir
 	(d-let
 		(p-assign (ident "r"))
-		(e-runtime-error (tag "expr_not_canonicalized"))))
+		(e-runtime-error (tag "expr_syntax_error"))))
 ~~~
 # TYPES
 ~~~clojure

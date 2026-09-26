@@ -9,7 +9,6 @@ x = (1 + 2
 ~~~
 # EXPECTED
 EXPECTED TUPLE SEPARATOR - reporting_syntax_error.md:2:1:2:1
-UNRECOGNIZED SYNTAX - reporting_syntax_error.md:1:1:1:1
 # REPORT
 ~~~clojure
 (reports
@@ -36,17 +35,7 @@ UNRECOGNIZED SYNTAX - reporting_syntax_error.md:1:1:1:1
 			(reflow "I reached the end of the file before this construct was complete.")
 			(line-break)
 			(line-break)
-			(source-region (file "reporting_syntax_error.md") (start 2 1) (end 2 1) (annotation error) (line-text ""))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 1 1) (end 1 1))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "reporting_syntax_error.md") (start 1 1) (end 1 1) (annotation error) (line-text "x = (1 + 2"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo."))))
+			(source-region (file "reporting_syntax_error.md") (start 2 1) (end 2 1) (annotation error) (line-text "")))))
 ~~~
 # CLI
 ~~~text
@@ -64,15 +53,6 @@ For example:
     (x, y)
 
 I reached the end of the file before this construct was complete.
-
-── ✗ unrecognized syntax ───────────────────────── reporting_syntax_error.md:1:1
-
-I don't recognize this syntax.
-
-x = (1 + 2
-^
-
-This might be a syntax error, an unsupported language feature, or a typo.
 
 ~~~
 # MARKDOWN
@@ -92,15 +72,6 @@ I reached the end of the file before this construct was complete.
 ^
 
 
-**Unrecognized Syntax**
-I don't recognize this syntax.
-```roc
-x = (1 + 2
-```
-^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
 ~~~
 # HTML
 ~~~html
@@ -119,15 +90,6 @@ I reached the end of the file before this construct was complete.<br>
 ^
 </pre></div></div>
 </div>
-<div class="report error">
-<h1 class="report-title">unrecognized syntax</h1>
-<div class="report-content">
-I don&#39;t recognize this syntax.<br>
-<div class="source-region"><pre class="error">x = (1 + 2
-^
-</pre></div><br>
-This might be a syntax error, an unsupported language feature, or a typo.</div>
-</div>
 ~~~
 # LSP
 ~~~text
@@ -143,11 +105,4 @@ I reached the end of the file before this construct was complete.
 
 
 ^
-unrecognized syntax
-
-I don't recognize this syntax.
-x = (1 + 2
-^
-
-This might be a syntax error, an unsupported language feature, or a typo.
 ~~~

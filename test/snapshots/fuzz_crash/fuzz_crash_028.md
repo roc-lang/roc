@@ -228,7 +228,6 @@ UNDECLARED TYPE - fuzz_crash_028.md:95:10:95:16
 UNDECLARED TYPE - fuzz_crash_028.md:95:21:95:27
 VAR NAME MISSING `$` - fuzz_crash_028.md:98:6:98:12
 NAME NOT IN SCOPE - fuzz_crash_028.md:99:9:99:13
-UNRECOGNIZED SYNTAX - fuzz_crash_028.md:103:2:103:5
 NAME NOT IN SCOPE - fuzz_crash_028.md:107:1:107:3
 NAME NOT IN SCOPE - fuzz_crash_028.md:116:1:116:3
 NAME NOT IN SCOPE - fuzz_crash_028.md:119:11:119:15
@@ -1745,16 +1744,6 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(line-break)
 			(line-break)
 			(source-region (file "fuzz_crash_028.md") (start 99 9) (end 99 13) (annotation error) (line-text "\texpect blah == 1"))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 103 2) (end 103 5))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "fuzz_crash_028.md") (start 103 2) (end 103 5) (annotation error) (line-text "\t..."))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
 	(report
 		(severity runtime_error)
 		(title "Name Not In Scope")

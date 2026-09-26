@@ -1676,6 +1676,16 @@ the only compiler stages allowed to do so. Recovery must still output explicit
 malformed AST nodes and diagnostics; later stages must not recover missing
 syntax on their own.
 
+The expression kernel in `src/canonicalize` turns every AST expression into a
+CIR expression. A malformed AST expression becomes a runtime-error expression
+carrying `expr_syntax_error`, and that diagnostic is not registered for
+reporting, because the parser already reported the syntax error. The enclosing
+expression is built around it exactly as it would be around any other child: a
+list keeps the item, a call keeps the argument, a record keeps the field, and a
+`match` branch keeps its guard. Nothing downstream of the kernel receives a
+missing child, so no consumer can drop one, report it a second time, or discard
+the valid expression around it.
+
 The parser implementation must not keep the old recursive-descent or
 per-subgrammar instruction-interpreter architecture. Old expression, pattern,
 statement, block, and type-annotation parser entrypoints are forbidden
@@ -1767,9 +1777,8 @@ iterative.
 
 The main expression, block, and associated-item path should be implemented as a
 direct labeled-switch kernel rather than as a generic frame pop loop. The
-public entry points can remain small wrappers such as `canonicalizeExpr` and
-`canonicalizeExprOrMalformed`, but the internal worker should look like a state
-machine:
+public entry points can remain small wrappers such as `canonicalizeExpr`, but
+the internal worker should look like a state machine:
 
 ```zig
 const CanLabel = enum {

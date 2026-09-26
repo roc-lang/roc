@@ -3829,7 +3829,7 @@ fn canonicalizeAssociatedDeclBodyNow(
         self.defining_bound_vars = try self.beginDefiningBoundVars(work.pattern_idx, self.scratch_reassign_targets.top());
     }
 
-    const can_expr = try self.canonicalizeExprOrMalformed(work.ast_body);
+    const can_expr = try self.canonicalizeExpr(work.ast_body);
 
     self.endDefiningBoundVars(saved_defining_bound_vars);
     try self.finishAssociatedDeclBody(work, can_expr);
@@ -4073,7 +4073,7 @@ fn canonicalizeAssociatedExpect(
     self.in_expect = true;
     defer self.in_expect = was_in_expect;
 
-    const body = try self.canonicalizeExprOrMalformed(expect_stmt.body);
+    const body = try self.canonicalizeExpr(expect_stmt.body);
     const stmt_idx = try self.env.addStatement(Statement{ .s_expect = .{
         .body = body.idx,
     } }, region);
@@ -4696,18 +4696,7 @@ pub fn canonicalizeFile(
                 defer self.in_expect = was_in_expect;
 
                 // Canonicalize the expect expression
-                const can_expect = try self.canonicalizeExpr(e.body) orelse {
-                    // If canonicalization fails, create a malformed expression
-                    const malformed = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                        .region = region,
-                    } });
-                    const expect_stmt = Statement{ .s_expect = .{
-                        .body = malformed,
-                    } };
-                    const expect_stmt_idx = try self.env.addStatement(expect_stmt, region);
-                    try self.env.store.addScratchStatement(expect_stmt_idx);
-                    continue;
-                };
+                const can_expect = try self.canonicalizeExpr(e.body);
 
                 // Create expect statement
                 const expect_stmt = Statement{ .s_expect = .{
@@ -5684,7 +5673,7 @@ fn canonicalizeDestructuredLiteralDef(
     }
     self.scratch_reassign_targets.clearFrom(reassign_targets_start);
 
-    const can_expr = try self.canonicalizeExprOrMalformed(item.value_expr);
+    const can_expr = try self.canonicalizeExpr(item.value_expr);
 
     self.endDefiningBoundVars(saved_defining_bound_vars);
 
@@ -7890,7 +7879,7 @@ fn canonicalizeDeclWithAnnotation(
     }
     self.scratch_reassign_targets.clearFrom(reassign_targets_start);
 
-    const can_expr = try self.canonicalizeExprOrMalformed(decl.body);
+    const can_expr = try self.canonicalizeExpr(decl.body);
 
     self.endDefiningBoundVars(saved_defining_bound_vars);
 
@@ -7945,7 +7934,7 @@ fn canonicalizeSingleQuote(
     token: Token.Idx,
     type_suffix: ?AST.LiteralTypeSuffix,
     comptime Idx: type,
-) std.mem.Allocator.Error!?Idx {
+) std.mem.Allocator.Error!Idx {
     const region = self.parse_ir.tokenizedRegionToRegion(token_region);
 
     const suffix = if (type_suffix) |suffix| switch (try self.resolveLiteralTypeSuffix(suffix, region)) {
@@ -8090,7 +8079,7 @@ fn canonicalizeNumeralPattern(
 pub fn canonicalizeExpr(
     self: *Self,
     ast_expr_idx: AST.Expr.Idx,
-) std.mem.Allocator.Error!?CanonicalizedExpr {
+) std.mem.Allocator.Error!CanonicalizedExpr {
     return self.runExprKernel(ast_expr_idx);
 }
 
@@ -9208,22 +9197,6 @@ fn finishSingleQuestionBinop(
     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
 }
 
-fn exprOrMalformedFromResult(
-    self: *Self,
-    maybe_expr: ?CanonicalizedExpr,
-    ast_expr_idx: AST.Expr.Idx,
-) std.mem.Allocator.Error!CanonicalizedExpr {
-    return maybe_expr orelse blk: {
-        const ast_expr = self.parse_ir.store.getExpr(ast_expr_idx);
-        break :blk CanonicalizedExpr{
-            .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                .region = self.parse_ir.tokenizedRegionToRegion(ast_expr.to_tokenized_region()),
-            } }),
-            .free_vars = DataSpan.empty(),
-        };
-    };
-}
-
 fn blockContextFromState(block: BlockState) BlockStatementContext {
     return .{
         .captures_top = block.captures_top,
@@ -9896,7 +9869,6 @@ fn scheduleBlockDeclContinuation(
                         .next = next,
                         .region = ident_region,
                         .pattern_idx = existing_pattern_idx,
-                        .ast_expr = d.body,
                         .type_var_scope = type_var_scope,
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = d.body, .target = .scratch });
@@ -9971,7 +9943,6 @@ fn scheduleBlockDeclContinuation(
         .pattern_idx = pattern_idx,
         .pattern_reused_existing_var = pattern_reused_existing_var,
         .annotation = mb_validated_anno,
-        .ast_expr = d.body,
         .saved_defining_bound_vars = saved_defining_bound_vars,
         .saved_current_local_def_ident = saved_current_local_def_ident,
         .saved_current_local_def_index = saved_current_local_def_index,
@@ -10208,7 +10179,7 @@ fn canonicalizeStandaloneBlockStatement(
         },
         .expr => |expr_stmt| {
             const region = self.parse_ir.tokenizedRegionToRegion(expr_stmt.region);
-            const expr = try self.canonicalizeExprOrMalformed(expr_stmt.expr);
+            const expr = try self.canonicalizeExpr(expr_stmt.expr);
             const stmt_idx = try self.env.addStatement(Statement{ .s_expr = .{
                 .expr = expr.idx,
             } }, region);
@@ -10219,7 +10190,7 @@ fn canonicalizeStandaloneBlockStatement(
         },
         .dbg => |dbg_stmt| {
             const region = self.parse_ir.tokenizedRegionToRegion(dbg_stmt.region);
-            const expr = try self.canonicalizeExprOrMalformed(dbg_stmt.expr);
+            const expr = try self.canonicalizeExpr(dbg_stmt.expr);
             const stmt_idx = try self.env.addStatement(Statement{ .s_dbg = .{
                 .expr = expr.idx,
             } }, region);
@@ -10231,7 +10202,7 @@ fn canonicalizeStandaloneBlockStatement(
             self.in_expect = true;
             defer self.in_expect = was_in_expect;
 
-            const expr = try self.canonicalizeExprOrMalformed(expect_stmt.body);
+            const expr = try self.canonicalizeExpr(expect_stmt.body);
             const stmt_idx = try self.env.addStatement(Statement{ .s_expect = .{
                 .body = expr.idx,
             } }, region);
@@ -10245,7 +10216,7 @@ fn canonicalizeStandaloneBlockStatement(
         },
         .@"return" => |return_stmt| {
             const region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region);
-            const expr = try self.canonicalizeExprOrMalformed(return_stmt.expr);
+            const expr = try self.canonicalizeExpr(return_stmt.expr);
             try self.warnTrailingTrySuffix(expr.idx);
             const stmt_idx = if (self.enclosing_lambda) |lambda_idx|
                 try self.env.addStatement(Statement{ .s_return = .{
@@ -10346,7 +10317,7 @@ fn canonicalizeStandaloneBlockDecl(
                         return CanonicalizedStatement{ .idx = reassign_idx, .free_vars = DataSpan.empty() };
                     }
 
-                    const expr = try self.canonicalizeExprOrMalformed(decl.body);
+                    const expr = try self.canonicalizeExpr(decl.body);
                     const reassign_idx = try self.env.addStatement(Statement{ .s_reassign = .{
                         .pattern_idx = existing_pattern_idx,
                         .expr = expr.idx,
@@ -10417,7 +10388,7 @@ fn canonicalizeStandaloneBlockDecl(
     self.scratch_reassign_targets.clearFrom(reassign_targets_start);
     defer self.endDefiningBoundVars(saved_defining_bound_vars);
 
-    const expr = try self.canonicalizeExprOrMalformed(decl.body);
+    const expr = try self.canonicalizeExpr(decl.body);
     const stmt_idx = if (pattern_reused_existing_var)
         try self.env.addStatement(Statement{ .s_reassign = .{
             .pattern_idx = pattern_idx,
@@ -10452,7 +10423,7 @@ fn canonicalizeStandaloneVarStatement(
     };
 
     const body = var_stmt.body orelse return try self.createUninitializedVarStatement(var_name, annotation, region, name_region);
-    const expr = try self.canonicalizeExprOrMalformed(body);
+    const expr = try self.canonicalizeExpr(body);
     const pattern_idx = try self.env.addPattern(Pattern{ .var_assign = .{ .ident = var_name } }, name_region);
     const introduced = try self.scopeIntroduceVar(var_name, pattern_idx, name_region, true, Pattern.Idx);
     if (introduced == pattern_idx) try self.warnAboutBindingName(var_name, name_region, .mutable);
@@ -10486,7 +10457,7 @@ fn canonicalizeStandaloneCrashStatement(
     crash_stmt: @TypeOf(@as(AST.Statement, undefined).crash),
 ) std.mem.Allocator.Error!CanonicalizedStatement {
     const region = self.parse_ir.tokenizedRegionToRegion(crash_stmt.region);
-    const msg = try self.canonicalizeExprOrMalformed(crash_stmt.expr);
+    const msg = try self.canonicalizeExpr(crash_stmt.expr);
     const crash_expr = try self.addCrashExpr(msg.idx, region);
     const stmt_idx = try self.env.addStatement(Statement{ .s_expr = .{
         .expr = crash_expr,
@@ -10558,7 +10529,7 @@ fn canonicalizeStandaloneWhileStatement(
     defer self.scratch_captures.clearFrom(captures_top);
 
     const cond_free_vars_start = self.scratch_free_vars.top();
-    const cond = try self.canonicalizeExprOrMalformed(while_stmt.cond);
+    const cond = try self.canonicalizeExpr(while_stmt.cond);
     const cond_free_vars_slice = self.scratch_free_vars.sliceFromSpan(cond.free_vars);
     for (cond_free_vars_slice) |fv| {
         try self.appendPropagatedFreeVar(captures_top, fv);
@@ -10569,7 +10540,7 @@ fn canonicalizeStandaloneWhileStatement(
     defer self.loop_depth -= 1;
 
     const body_free_vars_start = self.scratch_free_vars.top();
-    const body = try self.canonicalizeExprOrMalformed(while_stmt.body);
+    const body = try self.canonicalizeExpr(while_stmt.body);
     const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body.free_vars);
     for (body_free_vars_slice) |fv| {
         try self.appendPropagatedFreeVar(captures_top, fv);
@@ -10945,7 +10916,7 @@ fn canonicalizeStandaloneForStatement(
     defer self.scratch_captures.clearFrom(captures_top);
 
     const list_free_vars_start = self.scratch_free_vars.top();
-    const list_expr = try self.canonicalizeExprOrMalformed(for_stmt.expr);
+    const list_expr = try self.canonicalizeExpr(for_stmt.expr);
     const list_free_vars_slice = self.scratch_free_vars.sliceFromSpan(list_expr.free_vars);
     for (list_free_vars_slice) |fv| {
         try self.appendPropagatedFreeVarExcludingBound(captures_top, for_bound_vars_top, fv);
@@ -10962,7 +10933,7 @@ fn canonicalizeStandaloneForStatement(
     defer self.loop_depth -= 1;
 
     const body_free_vars_start = self.scratch_free_vars.top();
-    const body = try self.canonicalizeExprOrMalformed(for_stmt.body);
+    const body = try self.canonicalizeExpr(for_stmt.body);
     const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body.free_vars);
     for (body_free_vars_slice) |fv| {
         try self.appendPropagatedFreeVarExcludingBound(captures_top, for_bound_vars_top, fv);
@@ -10987,7 +10958,7 @@ fn canonicalizeStandaloneForStatement(
 fn runExprKernel(
     self: *Self,
     ast_expr_idx: AST.Expr.Idx,
-) std.mem.Allocator.Error!?CanonicalizedExpr {
+) std.mem.Allocator.Error!CanonicalizedExpr {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -11139,10 +11110,7 @@ fn runExprKernel(
                     try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
                 },
                 .single_quote => |e| {
-                    const expr_idx = try self.canonicalizeSingleQuote(e.region, e.token, e.type_suffix, Expr.Idx) orelse {
-                        try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                        continue :expr_kernel_loop .dispatch;
-                    };
+                    const expr_idx = try self.canonicalizeSingleQuote(e.region, e.token, e.type_suffix, Expr.Idx);
                     try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
                 },
                 .string => |e| {
@@ -11322,7 +11290,7 @@ fn runExprKernel(
                         try stacks.pushFinishTuple(frame_allocator, .{
                             .region = region,
                             .free_vars_start = self.scratch_free_vars.top(),
-                            .items = items_slice,
+                            .item_count = items_slice.len,
                         });
                         var i = items_slice.len;
                         while (i > 0) {
@@ -11388,6 +11356,7 @@ fn runExprKernel(
 
                         try field_work.append(frame_allocator, .{
                             .field_idx = field_idx,
+                            .name = field_name_ident,
                             .value_expr_idx = value_expr_idx,
                         });
                     }
@@ -11592,7 +11561,6 @@ fn runExprKernel(
                         .region = region,
                         .args_span = args_span,
                         .lambda_idx = lambda_idx,
-                        .body_ast_idx = e.body,
                         .body_free_vars_start = self.scratch_free_vars.top(),
                         .captures_top = self.scratch_captures.top(),
                         .saved_enclosing_lambda = saved_enclosing_lambda,
@@ -11630,7 +11598,6 @@ fn runExprKernel(
                         .free_vars_start = self.scratch_free_vars.top(),
                         .captures_top = self.scratch_captures.top(),
                         .branches = branches,
-                        .final_else = current_if.@"else",
                     });
 
                     try stacks.pushParse(frame_allocator, .{ .idx = current_if.@"else", .target = .scratch });
@@ -11655,8 +11622,6 @@ fn runExprKernel(
                         .region = region,
                         .free_vars_start = self.scratch_free_vars.top(),
                         .captures_top = self.scratch_captures.top(),
-                        .condition = e.condition,
-                        .then = e.then,
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = e.then, .target = .scratch });
                     try stacks.pushParse(frame_allocator, .{ .idx = e.condition, .target = .scratch });
@@ -11672,7 +11637,6 @@ fn runExprKernel(
                         .region = self.parse_ir.tokenizedRegionToRegion(e.region),
                         .ast_patt = e.patt,
                         .ast_body = e.body,
-                        .ast_list_expr = e.expr,
                         .list_free_vars_start = self.scratch_free_vars.top(),
                         .captures_top = self.scratch_captures.top(),
                         .bound_vars_top = self.scratch_bound_vars.top(),
@@ -11998,8 +11962,12 @@ fn runExprKernel(
                     }
                     try stacks.pushParse(frame_allocator, .{ .idx = e.@"fn", .target = .scratch });
                 },
-                .malformed => {
-                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
+                .malformed => |m| {
+                    // The parser already reported this expression, so the
+                    // runtime error standing in for it registers nothing new.
+                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, try self.canonicalizedRuntimeErrorExpr(Diagnostic{ .expr_syntax_error = .{
+                        .region = self.parse_ir.tokenizedRegionToRegion(m.region),
+                    } }));
                 },
             }
 
@@ -12067,7 +12035,7 @@ fn runExprKernel(
             self.endDefiningBoundVars(state.saved_defining_bound_vars);
 
             const result_start = child_slots.items.len - 1;
-            const can_expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.work.ast_body);
+            const can_expr = child_slots.items[result_start].expr;
             child_slots.shrinkRetainingCapacity(result_start);
             try self.finishAssociatedDeclBody(state.work, can_expr);
             try stacks.pushAssociatedNext(frame_allocator, state.work.state);
@@ -12095,7 +12063,6 @@ fn runExprKernel(
                     .expr => |expr_stmt| {
                         try stacks.pushFinishBlockFinalExpr(frame_allocator, .{
                             .block = work,
-                            .ast_expr = expr_stmt.expr,
                         });
                         try stacks.pushParse(frame_allocator, .{ .idx = expr_stmt.expr, .target = .scratch });
                     },
@@ -12104,7 +12071,6 @@ fn runExprKernel(
                             .block = work,
                             .next = next,
                             .region = self.parse_ir.tokenizedRegionToRegion(dbg_stmt.region),
-                            .ast_expr = dbg_stmt.expr,
                             .final_expr = true,
                         });
                         try stacks.pushParse(frame_allocator, .{ .idx = dbg_stmt.expr, .target = .scratch });
@@ -12114,7 +12080,6 @@ fn runExprKernel(
                             .block = work,
                             .next = next,
                             .region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region),
-                            .ast_expr = return_stmt.expr,
                             .final_expr = true,
                         });
                         try stacks.pushParse(frame_allocator, .{ .idx = return_stmt.expr, .target = .scratch });
@@ -12124,7 +12089,6 @@ fn runExprKernel(
                             .block = work,
                             .next = next,
                             .region = self.parse_ir.tokenizedRegionToRegion(crash_stmt.region),
-                            .ast_expr = crash_stmt.expr,
                             .final_expr = true,
                         });
                         try stacks.pushParse(frame_allocator, .{ .idx = crash_stmt.expr, .target = .scratch });
@@ -12165,7 +12129,6 @@ fn runExprKernel(
                         .name_region = self.parse_ir.tokens.resolve(v.name),
                         .var_name = var_name,
                         .annotation = null,
-                        .ast_expr = ast_expr,
                         .type_var_scope = null,
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = ast_expr, .target = .scratch });
@@ -12175,7 +12138,6 @@ fn runExprKernel(
                         .block = work,
                         .next = next,
                         .region = self.parse_ir.tokenizedRegionToRegion(expr_stmt.region),
-                        .ast_expr = expr_stmt.expr,
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = expr_stmt.expr, .target = .scratch });
                 },
@@ -12184,7 +12146,6 @@ fn runExprKernel(
                         .block = work,
                         .next = next,
                         .region = self.parse_ir.tokenizedRegionToRegion(c.region),
-                        .ast_expr = c.expr,
                         .final_expr = false,
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = c.expr, .target = .scratch });
@@ -12194,7 +12155,6 @@ fn runExprKernel(
                         .block = work,
                         .next = next,
                         .region = self.parse_ir.tokenizedRegionToRegion(d.region),
-                        .ast_expr = d.expr,
                         .final_expr = false,
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = d.expr, .target = .scratch });
@@ -12204,7 +12164,6 @@ fn runExprKernel(
                         .block = work,
                         .next = next,
                         .region = self.parse_ir.tokenizedRegionToRegion(e_.region),
-                        .ast_expr = e_.body,
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = e_.body, .target = .scratch });
                 },
@@ -12213,7 +12172,6 @@ fn runExprKernel(
                         .block = work,
                         .next = next,
                         .region = self.parse_ir.tokenizedRegionToRegion(r.region),
-                        .ast_expr = r.expr,
                         .final_expr = false,
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = r.expr, .target = .scratch });
@@ -12319,7 +12277,6 @@ fn runExprKernel(
                                         .name_region = self.parse_ir.tokens.resolve(var_stmt.name),
                                         .var_name = name_ident,
                                         .annotation = annotation_idx,
-                                        .ast_expr = ast_expr,
                                         .type_var_scope = type_var_scope,
                                     });
                                     try stacks.pushParse(frame_allocator, .{ .idx = ast_expr, .target = .scratch });
@@ -12375,7 +12332,6 @@ fn runExprKernel(
                         .region = self.parse_ir.tokenizedRegionToRegion(for_stmt.region),
                         .ast_patt = for_stmt.patt,
                         .ast_body = for_stmt.body,
-                        .ast_list_expr = for_stmt.expr,
                         .list_free_vars_start = list_free_vars_start,
                         .captures_top = captures_top,
                         .bound_vars_top = for_bound_vars_top,
@@ -12391,7 +12347,6 @@ fn runExprKernel(
                         .block = work,
                         .next = next,
                         .region = self.parse_ir.tokenizedRegionToRegion(while_stmt.region),
-                        .cond_ast = while_stmt.cond,
                         .body_ast = while_stmt.body,
                         .captures_top = captures_top,
                         .cond_free_vars_start = cond_free_vars_start,
@@ -12440,7 +12395,7 @@ fn runExprKernel(
         .finish_block_final_expr => {
             const state = stacks.takeFinishBlockFinalExpr();
             const result_start = child_slots.items.len - 1;
-            const final_expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
+            const final_expr = child_slots.items[result_start].expr;
             const block_expr = try self.finishBlockState(state.block, final_expr);
             child_slots.shrinkRetainingCapacity(state.block.result_start);
             try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, block_expr);
@@ -12450,7 +12405,7 @@ fn runExprKernel(
         .finish_block_expr_stmt => {
             const state = stacks.takeFinishBlockExprStmt();
             const result_start = child_slots.items.len - 1;
-            const expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
+            const expr = child_slots.items[result_start].expr;
             const stmt_idx = try self.env.addStatement(Statement{ .s_expr = .{
                 .expr = expr.idx,
             } }, state.region);
@@ -12463,7 +12418,7 @@ fn runExprKernel(
         .finish_block_dbg_stmt => {
             const state = stacks.takeFinishBlockDbgStmt();
             const result_start = child_slots.items.len - 1;
-            const expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
+            const expr = child_slots.items[result_start].expr;
             const dbg_expr = try self.env.addExpr(Expr{ .e_dbg = .{
                 .expr = expr.idx,
             } }, state.region);
@@ -12485,7 +12440,7 @@ fn runExprKernel(
         .finish_block_crash_stmt => {
             const state = stacks.takeFinishBlockCrashStmt();
             const result_start = child_slots.items.len - 1;
-            const msg = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
+            const msg = child_slots.items[result_start].expr;
             const crash_expr = try self.addCrashExpr(msg.idx, state.region);
             const can_crash = CanonicalizedExpr{ .idx = crash_expr, .free_vars = msg.free_vars };
             child_slots.shrinkRetainingCapacity(state.block.result_start);
@@ -12505,7 +12460,7 @@ fn runExprKernel(
         .finish_block_expect_stmt => {
             const state = stacks.takeFinishBlockExpectStmt();
             const result_start = child_slots.items.len - 1;
-            const expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
+            const expr = child_slots.items[result_start].expr;
             const stmt_idx = try self.env.addStatement(Statement{ .s_expect = .{
                 .body = expr.idx,
             } }, state.region);
@@ -12518,7 +12473,7 @@ fn runExprKernel(
         .finish_block_return_stmt => {
             const state = stacks.takeFinishBlockReturnStmt();
             const result_start = child_slots.items.len - 1;
-            const expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
+            const expr = child_slots.items[result_start].expr;
             child_slots.shrinkRetainingCapacity(state.block.result_start);
             try self.warnTrailingTrySuffix(expr.idx);
             if (state.final_expr) {
@@ -12556,7 +12511,7 @@ fn runExprKernel(
             const state = stacks.takeFinishBlockVarStmt();
             defer if (state.type_var_scope) |scope_idx| self.scopeExitTypeVar(scope_idx);
             const result_start = child_slots.items.len - 1;
-            const expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
+            const expr = child_slots.items[result_start].expr;
             const pattern_idx = try self.env.addPattern(Pattern{ .var_assign = .{ .ident = state.var_name } }, state.name_region);
             const introduced = try self.scopeIntroduceVar(state.var_name, pattern_idx, state.name_region, true, Pattern.Idx);
             if (introduced == pattern_idx) try self.warnAboutBindingName(state.var_name, state.name_region, .mutable);
@@ -12575,7 +12530,7 @@ fn runExprKernel(
             const state = stacks.takeFinishBlockReassignStmt();
             defer if (state.type_var_scope) |scope_idx| self.scopeExitTypeVar(scope_idx);
             const result_start = child_slots.items.len - 1;
-            const expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
+            const expr = child_slots.items[result_start].expr;
             const stmt_idx = try self.env.addStatement(Statement{ .s_reassign = .{
                 .pattern_idx = state.pattern_idx,
                 .expr = expr.idx,
@@ -12594,7 +12549,7 @@ fn runExprKernel(
             defer self.current_local_def_index = state.saved_current_local_def_index;
 
             const result_start = child_slots.items.len - 1;
-            const expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
+            const expr = child_slots.items[result_start].expr;
             const stmt_idx = if (state.pattern_reused_existing_var)
                 try self.env.addStatement(Statement{ .s_reassign = .{
                     .pattern_idx = state.pattern_idx,
@@ -12616,7 +12571,7 @@ fn runExprKernel(
             const state = stacks.takeBlockWhileAfterCond();
             errdefer self.scratch_captures.clearFrom(state.captures_top);
             const result_start = child_slots.items.len - 1;
-            const cond = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.cond_ast);
+            const cond = child_slots.items[result_start].expr;
             const free_vars_slice = self.scratch_free_vars.sliceFromSpan(cond.free_vars);
             for (free_vars_slice) |fv| {
                 try self.appendPropagatedFreeVar(state.captures_top, fv);
@@ -12631,7 +12586,6 @@ fn runExprKernel(
                 .block = state.block,
                 .next = state.next,
                 .region = state.region,
-                .body_ast = state.body_ast,
                 .cond = cond,
                 .captures_top = state.captures_top,
                 .body_free_vars_start = body_free_vars_start,
@@ -12646,7 +12600,7 @@ fn runExprKernel(
             errdefer self.scratch_captures.clearFrom(state.captures_top);
 
             const result_start = child_slots.items.len - 1;
-            const body = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.body_ast);
+            const body = child_slots.items[result_start].expr;
             const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body.free_vars);
             for (body_free_vars_slice) |fv| {
                 try self.appendPropagatedFreeVar(state.captures_top, fv);
@@ -12680,7 +12634,7 @@ fn runExprKernel(
             errdefer self.scratch_captures.clearFrom(state.captures_top);
 
             const result_start = child_slots.items.len - 1;
-            const list_expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_list_expr);
+            const list_expr = child_slots.items[result_start].expr;
             const free_vars_slice = self.scratch_free_vars.sliceFromSpan(list_expr.free_vars);
             for (free_vars_slice) |fv| {
                 try self.appendPropagatedFreeVarExcludingBound(state.captures_top, state.bound_vars_top, fv);
@@ -12702,7 +12656,6 @@ fn runExprKernel(
                 .block = state.block,
                 .next = state.next,
                 .region = state.region,
-                .ast_body = state.ast_body,
                 .list_expr = list_expr,
                 .patt = ptrn,
                 .body_free_vars_start = body_free_vars_start,
@@ -12725,7 +12678,7 @@ fn runExprKernel(
             errdefer self.scratch_captures.clearFrom(state.captures_top);
 
             const result_start = child_slots.items.len - 1;
-            const body = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_body);
+            const body = child_slots.items[result_start].expr;
             const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body.free_vars);
             for (body_free_vars_slice) |fv| {
                 try self.appendPropagatedFreeVarExcludingBound(state.captures_top, state.bound_vars_top, fv);
@@ -12804,15 +12757,7 @@ fn runExprKernel(
                         buffer_region = null;
                         prev_was_string_part = false;
 
-                        if (interpolation_results[interpolation_i].expr) |can_expr| {
-                            try self.env.store.addScratchExpr(can_expr.idx);
-                        } else {
-                            const region = self.parse_ir.tokenizedRegionToRegion(part_node.to_tokenized_region());
-                            const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_string_interpolation = .{
-                                .region = region,
-                            } });
-                            try self.env.store.addScratchExpr(malformed_idx);
-                        }
+                        try self.env.store.addScratchExpr(interpolation_results[interpolation_i].expr.idx);
                         interpolation_i += 1;
                     }
                 }
@@ -12832,15 +12777,7 @@ fn runExprKernel(
                         };
                         try self.addStringLiteralToScratch(processed_text, part_node.to_tokenized_region());
                     } else {
-                        if (interpolation_results[interpolation_i].expr) |can_expr| {
-                            try self.env.store.addScratchExpr(can_expr.idx);
-                        } else {
-                            const region = self.parse_ir.tokenizedRegionToRegion(part_node.to_tokenized_region());
-                            const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_string_interpolation = .{
-                                .region = region,
-                            } });
-                            try self.env.store.addScratchExpr(malformed_idx);
-                        }
+                        try self.env.store.addScratchExpr(interpolation_results[interpolation_i].expr.idx);
                         interpolation_i += 1;
                     }
                 }
@@ -12878,22 +12815,11 @@ fn runExprKernel(
             const child_slice = child_slots.items[result_start..];
 
             const scratch_top = self.env.store.scratchExprTop();
-            for (child_slice) |maybe_item| {
-                if (maybe_item.expr) |can_item| {
-                    try self.env.store.addScratchExpr(can_item.idx);
-                }
+            for (child_slice) |item| {
+                try self.env.store.addScratchExpr(item.expr.idx);
             }
 
             const elems_span = try self.env.store.exprSpanFrom(scratch_top);
-            if (elems_span.span.len == 0) {
-                child_slots.shrinkRetainingCapacity(result_start);
-                const expr_idx = try self.env.addExpr(CIR.Expr{
-                    .e_empty_list = .{},
-                }, state.region);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
-                continue :expr_kernel_loop .dispatch;
-            }
-
             const expr_idx = try self.env.addExpr(CIR.Expr{
                 .e_list = .{ .elems = elems_span },
             }, state.region);
@@ -12906,20 +12832,12 @@ fn runExprKernel(
         },
         .finish_tuple => {
             const state = stacks.takeFinishTuple();
-            const result_start = child_slots.items.len - state.items.len;
+            const result_start = child_slots.items.len - state.item_count;
             const child_slice = child_slots.items[result_start..];
 
             const scratch_top = self.env.store.scratchExprTop();
-            for (child_slice, 0..) |maybe_item, item_idx| {
-                const item_expr_idx = if (maybe_item.expr) |can_item| can_item.idx else blk: {
-                    const ast_body = self.parse_ir.store.getExpr(state.items[item_idx]);
-                    const body_region = self.parse_ir.tokenizedRegionToRegion(ast_body.to_tokenized_region());
-                    break :blk try self.env.pushMalformed(Expr.Idx, Diagnostic{
-                        .tuple_elem_not_canonicalized = .{ .region = body_region },
-                    });
-                };
-
-                try self.env.store.addScratchExpr(item_expr_idx);
+            for (child_slice) |item| {
+                try self.env.store.addScratchExpr(item.expr.idx);
             }
 
             const elems_span = try self.env.store.exprSpanFrom(scratch_top);
@@ -12938,11 +12856,7 @@ fn runExprKernel(
         .finish_dbg => {
             const state = stacks.takeFinishDbg();
             const result_start = child_slots.items.len - 1;
-            const can_inner = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_inner = child_slots.items[result_start].expr;
 
             const dbg_expr = try self.env.addExpr(Expr{ .e_dbg = .{
                 .expr = can_inner.idx,
@@ -12956,11 +12870,7 @@ fn runExprKernel(
         .finish_crash => {
             const state = stacks.takeFinishCrash();
             const result_start = child_slots.items.len - 1;
-            const can_message = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_message = child_slots.items[result_start].expr;
 
             const crash_expr = try self.addCrashExpr(can_message.idx, state.region);
 
@@ -12972,11 +12882,7 @@ fn runExprKernel(
         .finish_return => {
             const state = stacks.takeFinishReturn();
             const result_start = child_slots.items.len - 1;
-            const can_inner = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_inner = child_slots.items[result_start].expr;
 
             try self.warnTrailingTrySuffix(can_inner.idx);
             const return_expr = if (self.enclosing_lambda) |lambda_idx|
@@ -12999,11 +12905,7 @@ fn runExprKernel(
         .finish_tuple_access => {
             const state = stacks.takeFinishTupleAccess();
             const result_start = child_slots.items.len - 1;
-            const can_tuple = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_tuple = child_slots.items[result_start].expr;
 
             const elem_index_str = self.parse_ir.resolve(state.elem_token);
             const index_str = if (elem_index_str.len > 0 and elem_index_str[0] == '.') elem_index_str[1..] else elem_index_str;
@@ -13034,11 +12936,7 @@ fn runExprKernel(
         .finish_suffix_single_question => {
             const state = stacks.takeFinishSuffixSingleQuestion();
             const result_start = child_slots.items.len - 1;
-            const can_cond = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_cond = child_slots.items[result_start].expr;
 
             const can_expr = try self.finishSuffixSingleQuestionExpr(state.region, can_cond, state.free_vars_start);
             child_slots.shrinkRetainingCapacity(result_start);
@@ -13050,22 +12948,10 @@ fn runExprKernel(
             const state = stacks.takeFinishSingleQuestionBinop();
             const child_count: usize = if (state.rhs_is_bare_tag) 1 else 2;
             const result_start = child_slots.items.len - child_count;
-            const can_lhs = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_lhs = child_slots.items[result_start].expr;
 
             const can_rhs_idx: ?Expr.Idx = if (state.rhs_is_bare_tag) null else blk: {
-                const can_rhs = child_slots.items[result_start + 1].expr orelse {
-                    const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                        .region = state.region,
-                    } });
-                    child_slots.shrinkRetainingCapacity(result_start);
-                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                    continue :expr_kernel_loop .dispatch;
-                };
-                break :blk can_rhs.idx;
+                break :blk child_slots.items[result_start + 1].expr.idx;
             };
 
             const can_expr = try self.finishSingleQuestionBinop(state.bin_op, state.region, can_lhs, can_rhs_idx, state.free_vars_start);
@@ -13077,11 +12963,7 @@ fn runExprKernel(
         .finish_unary => {
             const state = stacks.takeFinishUnary();
             const result_start = child_slots.items.len - 1;
-            const can_operand = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_operand = child_slots.items[result_start].expr;
 
             const operator_token = self.parse_ir.tokens.tokens.get(state.operator);
             const expr_idx = if (operator_token.tag == .OpUnaryMinus)
@@ -13101,16 +12983,8 @@ fn runExprKernel(
         .finish_bin_op => {
             const state = stacks.takeFinishBinOp();
             const result_start = child_slots.items.len - 2;
-            const can_lhs = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
-            const can_rhs = child_slots.items[result_start + 1].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_lhs = child_slots.items[result_start].expr;
+            const can_rhs = child_slots.items[result_start + 1].expr;
 
             const op_token = self.parse_ir.tokens.tokens.get(state.bin_op.operator);
             const op: Expr.Binop.Op = op_blk: {
@@ -13226,10 +13100,8 @@ fn runExprKernel(
             var args_span = Expr.Span{ .span = DataSpan.empty() };
             if (state.arg_count > 0) {
                 const scratch_top = self.env.store.scratchExprTop();
-                for (child_slice) |maybe_arg| {
-                    if (maybe_arg.expr) |can_arg| {
-                        try self.env.store.addScratchExpr(can_arg.idx);
-                    }
+                for (child_slice) |arg| {
+                    try self.env.store.addScratchExpr(arg.expr.idx);
                 }
                 args_span = try self.env.store.exprSpanFrom(scratch_top);
             }
@@ -13246,17 +13118,11 @@ fn runExprKernel(
             const result_start = child_slots.items.len - child_count;
             const child_slice = child_slots.items[result_start..];
 
-            const can_receiver = child_slice[0].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_receiver = child_slice[0].expr;
 
             const scratch_top = self.env.store.scratchExprTop();
-            for (child_slice[1..]) |maybe_arg| {
-                if (maybe_arg.expr) |can_arg| {
-                    try self.env.store.addScratchExpr(can_arg.idx);
-                }
+            for (child_slice[1..]) |arg| {
+                try self.env.store.addScratchExpr(arg.expr.idx);
             }
             const args_span = try self.env.store.exprSpanFrom(scratch_top);
 
@@ -13279,23 +13145,13 @@ fn runExprKernel(
             const result_start = child_slots.items.len - child_count;
             const child_slice = child_slots.items[result_start..];
 
-            const can_first_arg = child_slice[0].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
-            const can_fn_expr = child_slice[1].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_first_arg = child_slice[0].expr;
+            const can_fn_expr = child_slice[1].expr;
 
             const scratch_top = self.env.store.scratchExprTop();
             try self.env.store.addScratchExpr(can_first_arg.idx);
-            for (child_slice[2..]) |maybe_arg| {
-                if (maybe_arg.expr) |can_arg| {
-                    try self.env.store.addScratchExpr(can_arg.idx);
-                }
+            for (child_slice[2..]) |arg| {
+                try self.env.store.addScratchExpr(arg.expr.idx);
             }
             const args_span = try self.env.store.exprSpanFrom(scratch_top);
 
@@ -13319,11 +13175,7 @@ fn runExprKernel(
             const result_start = child_slots.items.len - child_count;
             const child_slice = child_slots.items[result_start..];
 
-            const can_first_arg = child_slice[0].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_first_arg = child_slice[0].expr;
             const tag_name = self.parse_ir.tokens.resolveIdentifier(state.tag.token) orelse {
                 const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
                     .region = state.region,
@@ -13335,10 +13187,8 @@ fn runExprKernel(
 
             const scratch_top = self.env.store.scratchExprTop();
             try self.env.store.addScratchExpr(can_first_arg.idx);
-            for (child_slice[1..]) |maybe_arg| {
-                if (maybe_arg.expr) |can_arg| {
-                    try self.env.store.addScratchExpr(can_arg.idx);
-                }
+            for (child_slice[1..]) |arg| {
+                try self.env.store.addScratchExpr(arg.expr.idx);
             }
             const args_span = try self.env.store.exprSpanFrom(scratch_top);
 
@@ -13358,16 +13208,8 @@ fn runExprKernel(
         .finish_arrow_call => {
             const state = stacks.takeFinishArrowCall();
             const result_start = child_slots.items.len - 2;
-            const can_first_arg = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
-            const can_fn_expr = child_slots.items[result_start + 1].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_first_arg = child_slots.items[result_start].expr;
+            const can_fn_expr = child_slots.items[result_start + 1].expr;
 
             const scratch_top = self.env.store.scratchExprTop();
             try self.env.store.addScratchExpr(can_first_arg.idx);
@@ -13390,11 +13232,7 @@ fn runExprKernel(
         .finish_arrow_tag_single => {
             const state = stacks.takeFinishArrowTagSingle();
             const result_start = child_slots.items.len - 1;
-            const can_first_arg = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_first_arg = child_slots.items[result_start].expr;
             const tag_name = self.parse_ir.tokens.resolveIdentifier(state.tag.token) orelse {
                 const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
                     .region = state.region,
@@ -13427,9 +13265,7 @@ fn runExprKernel(
             std.debug.assert(ast_segments.len > 0);
 
             const result_start = child_slots.items.len - 1;
-            const receiver_idx = if (child_slots.items[result_start].expr) |can_receiver| can_receiver.idx else try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                .region = state.region,
-            } });
+            const receiver_idx = child_slots.items[result_start].expr.idx;
 
             const path_builder = try self.env.startFieldAccessPath(@intCast(ast_segments.len));
             var path_finished = false;
@@ -13467,17 +13303,11 @@ fn runExprKernel(
             const result_start = child_slots.items.len - child_count;
             const child_slice = child_slots.items[result_start..];
 
-            const can_fn_expr = child_slice[0].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_fn_expr = child_slice[0].expr;
 
             const scratch_top = self.env.store.scratchExprTop();
-            for (child_slice[1..]) |maybe_arg| {
-                if (maybe_arg.expr) |can_arg| {
-                    try self.env.store.addScratchExpr(can_arg.idx);
-                }
+            for (child_slice[1..]) |arg| {
+                try self.env.store.addScratchExpr(arg.expr.idx);
             }
 
             const args_span = try self.env.store.exprSpanFrom(scratch_top);
@@ -13501,10 +13331,8 @@ fn runExprKernel(
             const child_slice = child_slots.items[result_start..];
 
             const scratch_top = self.env.store.scratchExprTop();
-            for (child_slice) |maybe_arg| {
-                if (maybe_arg.expr) |can_arg| {
-                    try self.env.store.addScratchExpr(can_arg.idx);
-                }
+            for (child_slice) |arg| {
+                try self.env.store.addScratchExpr(arg.expr.idx);
             }
             const args_span = try self.env.store.exprSpanFrom(scratch_top);
 
@@ -13532,9 +13360,9 @@ fn runExprKernel(
             var child_i: usize = 0;
 
             const ext_expr: ?Expr.Idx = if (state.ext != null) blk: {
-                const maybe_ext = child_slice[child_i];
+                const ext = child_slice[child_i];
                 child_i += 1;
-                break :blk if (maybe_ext.expr) |can_ext| can_ext.idx else null;
+                break :blk ext.expr.idx;
             } else null;
 
             if (state.fields.len == 0 and state.unsets.len == 0) {
@@ -13549,20 +13377,13 @@ fn runExprKernel(
             const scratch_top = self.env.store.scratch.?.record_fields.top();
             for (state.fields) |field_work| {
                 const ast_field = self.parse_ir.store.getRecordField(field_work.field_idx);
-                const field_name = self.parse_ir.tokens.resolveIdentifier(ast_field.name) orelse {
-                    child_i += 1;
-                    continue :expr_kernel_loop .dispatch;
+                const cir_field = RecordField{
+                    .name = field_work.name,
+                    .value = child_slice[child_i].expr.idx,
                 };
-
-                if (child_slice[child_i].expr) |can_value| {
-                    const cir_field = RecordField{
-                        .name = field_name,
-                        .value = can_value.idx,
-                    };
-                    const field_region = self.parse_ir.tokenizedRegionToRegion(ast_field.region);
-                    const can_field_idx = try self.env.addRecordField(cir_field, field_region);
-                    try self.env.store.scratch.?.record_fields.append(can_field_idx);
-                }
+                const field_region = self.parse_ir.tokenizedRegionToRegion(ast_field.region);
+                const can_field_idx = try self.env.addRecordField(cir_field, field_region);
+                try self.env.store.scratch.?.record_fields.append(can_field_idx);
                 child_i += 1;
             }
 
@@ -13594,12 +13415,7 @@ fn runExprKernel(
             defer self.scratch_captures.clearFrom(state.captures_top);
 
             const result_start = child_slots.items.len - 1;
-            const backing_expr = child_slots.items[result_start].expr orelse blk: {
-                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                    .region = state.region,
-                } });
-                break :blk CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
-            };
+            const backing_expr = child_slots.items[result_start].expr;
 
             const result_expr = try self.finishNominalConstructionExpr(state.mapper, backing_expr.idx, .record, state.region, backing_expr.free_vars);
 
@@ -13613,12 +13429,7 @@ fn runExprKernel(
             defer self.scratch_captures.clearFrom(state.captures_top);
 
             const result_start = child_slots.items.len - 1;
-            const backing_expr = child_slots.items[result_start].expr orelse blk: {
-                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                    .region = state.region,
-                } });
-                break :blk CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
-            };
+            const backing_expr = child_slots.items[result_start].expr;
 
             const result_expr = try self.finishNominalConstructionExpr(state.mapper, backing_expr.idx, state.backing_type, state.region, backing_expr.free_vars);
 
@@ -13645,12 +13456,7 @@ fn runExprKernel(
                 try self.scratch_idents.append(field.name);
 
                 if (field.value_expr != null) {
-                    const can_value = child_slice[child_i].expr orelse blk: {
-                        const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                            .region = state.region,
-                        } });
-                        break :blk CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
-                    };
+                    const can_value = child_slice[child_i].expr;
                     child_i += 1;
                     try self.scratch_expr_ids.append(can_value.idx);
 
@@ -13723,17 +13529,7 @@ fn runExprKernel(
             defer self.scratch_captures.clearFrom(state.captures_top);
 
             const result_start = child_slots.items.len - 1;
-            const can_body = child_slots.items[result_start].expr orelse {
-                const ast_body = self.parse_ir.store.getExpr(state.body_ast_idx);
-                const body_region = self.parse_ir.tokenizedRegionToRegion(ast_body.to_tokenized_region());
-                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{
-                    .lambda_body_not_canonicalized = .{ .region = body_region },
-                });
-                self.scratch_free_vars.clearFrom(state.body_free_vars_start);
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_body = child_slots.items[result_start].expr;
 
             const bound_vars_top = self.scratch_bound_vars.top();
             defer self.scratch_bound_vars.clearFrom(bound_vars_top);
@@ -13813,34 +13609,14 @@ fn runExprKernel(
             const scratch_top = self.env.store.scratchIfBranchTop();
             var child_i: usize = 0;
             for (state.branches) |branch| {
-                const can_cond = child_slice[child_i].expr orelse {
-                    const ast_cond = self.parse_ir.store.getExpr(branch.condition);
-                    const cond_region = self.parse_ir.tokenizedRegionToRegion(ast_cond.to_tokenized_region());
-                    const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{
-                        .if_condition_not_canonicalized = .{ .region = cond_region },
-                    });
-                    self.scratch_free_vars.clearFrom(state.free_vars_start);
-                    child_slots.shrinkRetainingCapacity(result_start);
-                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                    continue :expr_kernel_loop .dispatch;
-                };
+                const can_cond = child_slice[child_i].expr;
                 child_i += 1;
                 const cond_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_cond.free_vars);
                 for (cond_free_vars_slice) |fv| {
                     try self.appendPropagatedFreeVar(state.captures_top, fv);
                 }
 
-                const can_then = child_slice[child_i].expr orelse {
-                    const ast_then = self.parse_ir.store.getExpr(branch.then);
-                    const then_region = self.parse_ir.tokenizedRegionToRegion(ast_then.to_tokenized_region());
-                    const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{
-                        .if_then_not_canonicalized = .{ .region = then_region },
-                    });
-                    self.scratch_free_vars.clearFrom(state.free_vars_start);
-                    child_slots.shrinkRetainingCapacity(result_start);
-                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                    continue :expr_kernel_loop .dispatch;
-                };
+                const can_then = child_slice[child_i].expr;
                 child_i += 1;
                 const then_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_then.free_vars);
                 for (then_free_vars_slice) |fv| {
@@ -13854,17 +13630,7 @@ fn runExprKernel(
                 try self.env.store.addScratchIfBranch(if_branch_idx);
             }
 
-            const can_else = child_slice[child_i].expr orelse {
-                const else_expr = self.parse_ir.store.getExpr(state.final_else);
-                const else_region = self.parse_ir.tokenizedRegionToRegion(else_expr.to_tokenized_region());
-                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{
-                    .if_else_not_canonicalized = .{ .region = else_region },
-                });
-                self.scratch_free_vars.clearFrom(state.free_vars_start);
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_else = child_slice[child_i].expr;
 
             const else_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_else.free_vars);
             for (else_free_vars_slice) |fv| {
@@ -13900,33 +13666,13 @@ fn runExprKernel(
             defer self.scratch_captures.clearFrom(state.captures_top);
 
             const result_start = child_slots.items.len - 2;
-            const can_cond = child_slots.items[result_start].expr orelse {
-                const ast_cond = self.parse_ir.store.getExpr(state.condition);
-                const cond_region = self.parse_ir.tokenizedRegionToRegion(ast_cond.to_tokenized_region());
-                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{
-                    .if_condition_not_canonicalized = .{ .region = cond_region },
-                });
-                self.scratch_free_vars.clearFrom(state.free_vars_start);
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_cond = child_slots.items[result_start].expr;
             const cond_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_cond.free_vars);
             for (cond_free_vars_slice) |fv| {
                 try self.appendPropagatedFreeVar(state.captures_top, fv);
             }
 
-            const can_then = child_slots.items[result_start + 1].expr orelse {
-                const ast_then = self.parse_ir.store.getExpr(state.then);
-                const then_region = self.parse_ir.tokenizedRegionToRegion(ast_then.to_tokenized_region());
-                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{
-                    .if_then_not_canonicalized = .{ .region = then_region },
-                });
-                self.scratch_free_vars.clearFrom(state.free_vars_start);
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_then = child_slots.items[result_start + 1].expr;
             const then_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_then.free_vars);
             for (then_free_vars_slice) |fv| {
                 try self.appendPropagatedFreeVar(state.captures_top, fv);
@@ -13965,15 +13711,7 @@ fn runExprKernel(
         .for_after_list => {
             const state = stacks.takeForAfterList();
             const result_start = child_slots.items.len - 1;
-            const list_expr = child_slots.items[result_start].expr orelse blk: {
-                const ast_list = self.parse_ir.store.getExpr(state.ast_list_expr);
-                const list_region = self.parse_ir.tokenizedRegionToRegion(ast_list.to_tokenized_region());
-                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                    .region = list_region,
-                } });
-                break :blk CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
-            };
-            child_slots.items[result_start].expr = list_expr;
+            const list_expr = child_slots.items[result_start].expr;
 
             const list_free_vars_slice = self.scratch_free_vars.sliceFromSpan(list_expr.free_vars);
             for (list_free_vars_slice) |fv| {
@@ -13992,7 +13730,6 @@ fn runExprKernel(
 
             try stacks.pushFinishForExpr(frame_allocator, .{
                 .region = state.region,
-                .ast_body = state.ast_body,
                 .patt = ptrn,
                 .body_free_vars_start = self.scratch_free_vars.top(),
                 .captures_top = state.captures_top,
@@ -14014,15 +13751,8 @@ fn runExprKernel(
             defer self.scratch_captures.clearFrom(state.captures_top);
 
             const result_start = child_slots.items.len - 2;
-            const list_expr = child_slots.items[result_start].expr.?;
-            const body = child_slots.items[result_start + 1].expr orelse blk: {
-                const ast_body = self.parse_ir.store.getExpr(state.ast_body);
-                const body_region = self.parse_ir.tokenizedRegionToRegion(ast_body.to_tokenized_region());
-                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                    .region = body_region,
-                } });
-                break :blk CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
-            };
+            const list_expr = child_slots.items[result_start].expr;
+            const body = child_slots.items[result_start + 1].expr;
 
             const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body.free_vars);
             for (body_free_vars_slice) |fv| {
@@ -14053,11 +13783,7 @@ fn runExprKernel(
         .match_after_cond => {
             const state = stacks.takeMatchAfterCond();
             const result_start = child_slots.items.len - 1;
-            const can_cond = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_cond = child_slots.items[result_start].expr;
 
             try stacks.pushMatchNext(frame_allocator, .{
                 .region = state.region,
@@ -14209,7 +13935,6 @@ fn runExprKernel(
                     .branch_pat_span = branch_pat_span,
                     .branch_bound_vars_top = branch_bound_vars_top,
                     .body_free_vars_start_after_guard = body_free_vars_start,
-                    .body_ast = ast_branch.body,
                     .can_guard = null,
                     .saved_defining_bound_vars = saved_defining_bound_vars,
                 });
@@ -14221,27 +13946,26 @@ fn runExprKernel(
         .match_after_guard => {
             const state = stacks.takeMatchAfterGuard();
             const result_start = child_slots.items.len - 1;
-            const can_guard: ?Expr.Idx = if (child_slots.items[result_start].expr) |can_guard_result| blk: {
-                if (can_guard_result.free_vars.len > 0) {
-                    const guard_fv_slice = self.scratch_free_vars.sliceFromSpan(can_guard_result.free_vars);
-                    const guard_free_vars_copy = try self.env.gpa.alloc(Pattern.Idx, guard_fv_slice.len);
-                    defer self.env.gpa.free(guard_free_vars_copy);
-                    @memcpy(guard_free_vars_copy, guard_fv_slice);
+            const can_guard_result = child_slots.items[result_start].expr;
+            if (can_guard_result.free_vars.len > 0) {
+                const guard_fv_slice = self.scratch_free_vars.sliceFromSpan(can_guard_result.free_vars);
+                const guard_free_vars_copy = try self.env.gpa.alloc(Pattern.Idx, guard_fv_slice.len);
+                defer self.env.gpa.free(guard_free_vars_copy);
+                @memcpy(guard_free_vars_copy, guard_fv_slice);
 
-                    self.scratch_free_vars.clearFrom(state.body_free_vars_start);
-                    var bound_vars_view = try self.scratch_bound_vars.setViewFrom(state.branch_bound_vars_top, self.env.gpa);
-                    defer bound_vars_view.deinit();
-                    for (guard_free_vars_copy) |fv| {
-                        if (!bound_vars_view.contains(fv) and
-                            !self.isGloballyResolvablePattern(fv) and
-                            !self.isLocalFunctionPattern(fv))
-                        {
-                            try self.scratch_free_vars.append(fv);
-                        }
+                self.scratch_free_vars.clearFrom(state.body_free_vars_start);
+                var bound_vars_view = try self.scratch_bound_vars.setViewFrom(state.branch_bound_vars_top, self.env.gpa);
+                defer bound_vars_view.deinit();
+                for (guard_free_vars_copy) |fv| {
+                    if (!bound_vars_view.contains(fv) and
+                        !self.isGloballyResolvablePattern(fv) and
+                        !self.isLocalFunctionPattern(fv))
+                    {
+                        try self.scratch_free_vars.append(fv);
                     }
                 }
-                break :blk can_guard_result.idx;
-            } else null;
+            }
+            const can_guard = can_guard_result.idx;
 
             const body_free_vars_start_after_guard = self.scratch_free_vars.top();
             child_slots.shrinkRetainingCapacity(result_start);
@@ -14256,7 +13980,6 @@ fn runExprKernel(
                 .branch_pat_span = state.branch_pat_span,
                 .branch_bound_vars_top = state.branch_bound_vars_top,
                 .body_free_vars_start_after_guard = body_free_vars_start_after_guard,
-                .body_ast = state.body_ast,
                 .can_guard = can_guard,
                 .saved_defining_bound_vars = state.saved_defining_bound_vars,
             });
@@ -14271,16 +13994,7 @@ fn runExprKernel(
             defer self.endDefiningBoundVars(state.saved_defining_bound_vars);
 
             const result_start = child_slots.items.len - 1;
-            const can_body = child_slots.items[result_start].expr orelse {
-                const body = self.parse_ir.store.getExpr(state.body_ast);
-                const body_region = self.parse_ir.tokenizedRegionToRegion(body.to_tokenized_region());
-                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                    .region = body_region,
-                } });
-                child_slots.shrinkRetainingCapacity(state.result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_body = child_slots.items[result_start].expr;
 
             if (can_body.free_vars.len > 0) {
                 const body_fv_slice = self.scratch_free_vars.sliceFromSpan(can_body.free_vars);
@@ -14328,7 +14042,7 @@ fn runExprKernel(
     }
 
     std.debug.assert(child_slots.items.len == 0);
-    return last_expr;
+    return last_expr orelse unreachable;
 }
 
 /// Logical negation always calls the compiler-owned Bool.not, independent of
@@ -14424,22 +14138,6 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
             }, region);
         },
         .local_alias => @panic("Bool type binding was not a nominal type during boolean operator canonicalization"),
-    };
-}
-
-/// Canonicalize an expr. If it fails, convert it to a malormed expr node
-fn canonicalizeExprOrMalformed(
-    self: *Self,
-    ast_expr_idx: AST.Expr.Idx,
-) std.mem.Allocator.Error!CanonicalizedExpr {
-    return try self.canonicalizeExpr(ast_expr_idx) orelse blk: {
-        const ast_expr = self.parse_ir.store.getExpr(ast_expr_idx);
-        break :blk CanonicalizedExpr{
-            .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                .region = self.parse_ir.tokenizedRegionToRegion(ast_expr.to_tokenized_region()),
-            } }),
-            .free_vars = DataSpan.empty(),
-        };
     };
 }
 
@@ -16572,7 +16270,7 @@ const ExprParseWork = struct {
 };
 
 const ExprChildSlot = struct {
-    expr: ?CanonicalizedExpr,
+    expr: CanonicalizedExpr,
 };
 
 const ExprChildSlots = std.ArrayList(ExprChildSlot);
@@ -16582,7 +16280,7 @@ fn storeExprKernelOutput(
     child_slots: *ExprChildSlots,
     allocator: std.mem.Allocator,
     target: ExprResultTarget,
-    result: ?CanonicalizedExpr,
+    result: CanonicalizedExpr,
 ) std.mem.Allocator.Error!void {
     switch (target) {
         .return_value => last_expr.* = result,
@@ -16610,19 +16308,16 @@ const ExprFinishBlockExprStmtWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
-    ast_expr: AST.Expr.Idx,
 };
 
 const ExprFinishBlockFinalExprWork = struct {
     block: BlockState,
-    ast_expr: AST.Expr.Idx,
 };
 
 const ExprFinishBlockDbgStmtWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
-    ast_expr: AST.Expr.Idx,
     final_expr: bool,
 };
 
@@ -16630,7 +16325,6 @@ const ExprFinishBlockCrashStmtWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
-    ast_expr: AST.Expr.Idx,
     final_expr: bool,
 };
 
@@ -16638,14 +16332,12 @@ const ExprFinishBlockExpectStmtWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
-    ast_expr: AST.Expr.Idx,
 };
 
 const ExprFinishBlockReturnStmtWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
-    ast_expr: AST.Expr.Idx,
     final_expr: bool,
 };
 
@@ -16656,7 +16348,6 @@ const ExprFinishBlockVarStmtWork = struct {
     name_region: Region,
     var_name: Ident.Idx,
     annotation: ?Annotation.Idx,
-    ast_expr: AST.Expr.Idx,
     type_var_scope: ?TypeVarScopeIdx,
 };
 
@@ -16665,7 +16356,6 @@ const ExprFinishBlockReassignStmtWork = struct {
     next: usize,
     region: Region,
     pattern_idx: Pattern.Idx,
-    ast_expr: AST.Expr.Idx,
     type_var_scope: ?TypeVarScopeIdx,
 };
 
@@ -16676,7 +16366,6 @@ const ExprFinishBlockDeclStmtWork = struct {
     pattern_idx: Pattern.Idx,
     pattern_reused_existing_var: bool,
     annotation: ?Annotation.Idx,
-    ast_expr: AST.Expr.Idx,
     saved_defining_bound_vars: ?DataSpan,
     saved_current_local_def_ident: ?Ident.Idx,
     saved_current_local_def_index: ?usize,
@@ -16687,7 +16376,6 @@ const ExprBlockWhileAfterCondWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
-    cond_ast: AST.Expr.Idx,
     body_ast: AST.Expr.Idx,
     captures_top: u32,
     cond_free_vars_start: u32,
@@ -16697,7 +16385,6 @@ const ExprFinishBlockWhileStmtWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
-    body_ast: AST.Expr.Idx,
     cond: CanonicalizedExpr,
     captures_top: u32,
     body_free_vars_start: u32,
@@ -16709,7 +16396,6 @@ const ExprBlockForAfterListWork = struct {
     region: Region,
     ast_patt: AST.Pattern.Idx,
     ast_body: AST.Expr.Idx,
-    ast_list_expr: AST.Expr.Idx,
     list_free_vars_start: u32,
     captures_top: u32,
     bound_vars_top: u32,
@@ -16721,7 +16407,6 @@ const ExprFinishBlockForStmtWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
-    ast_body: AST.Expr.Idx,
     list_expr: CanonicalizedExpr,
     patt: Pattern.Idx,
     body_free_vars_start: u32,
@@ -16751,7 +16436,7 @@ const ExprFinishListWork = struct {
 const ExprFinishTupleWork = struct {
     region: Region,
     free_vars_start: u32,
-    items: []const AST.Expr.Idx,
+    item_count: usize,
 };
 
 const ExprFinishDbgWork = struct {
@@ -16866,7 +16551,6 @@ const ExprFinishLambdaWork = struct {
     region: Region,
     args_span: Pattern.Span,
     lambda_idx: Expr.Idx,
-    body_ast_idx: AST.Expr.Idx,
     body_free_vars_start: u32,
     captures_top: u32,
     saved_enclosing_lambda: ?Expr.Idx,
@@ -16880,15 +16564,12 @@ const ExprFinishIfThenElseWork = struct {
     free_vars_start: u32,
     captures_top: u32,
     branches: []const ExprIfBranchWork,
-    final_else: AST.Expr.Idx,
 };
 
 const ExprFinishIfWithoutElseWork = struct {
     region: Region,
     free_vars_start: u32,
     captures_top: u32,
-    condition: AST.Expr.Idx,
-    then: AST.Expr.Idx,
 };
 
 const ExprFinishRecordBuilderWork = struct {
@@ -16916,7 +16597,6 @@ const ExprForAfterListWork = struct {
     region: Region,
     ast_patt: AST.Pattern.Idx,
     ast_body: AST.Expr.Idx,
-    ast_list_expr: AST.Expr.Idx,
     list_free_vars_start: u32,
     captures_top: u32,
     bound_vars_top: u32,
@@ -16926,7 +16606,6 @@ const ExprForAfterListWork = struct {
 
 const ExprFinishForExprWork = struct {
     region: Region,
-    ast_body: AST.Expr.Idx,
     patt: Pattern.Idx,
     body_free_vars_start: u32,
     captures_top: u32,
@@ -16977,7 +16656,6 @@ const ExprMatchAfterBodyWork = struct {
     branch_pat_span: Expr.Match.BranchPattern.Span,
     branch_bound_vars_top: u32,
     body_free_vars_start_after_guard: u32,
-    body_ast: AST.Expr.Idx,
     can_guard: ?Expr.Idx,
     saved_defining_bound_vars: ?DataSpan,
 };
@@ -17840,6 +17518,7 @@ const ExprKernelWork = struct {
 
 const ExprRecordFieldWork = struct {
     field_idx: AST.RecordField.Idx,
+    name: base.Ident.Idx,
     value_expr_idx: AST.Expr.Idx,
 };
 
@@ -19704,10 +19383,10 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
             // type and rejects effectful defaults; the end-of-module cycle
             // pass rejects name-resolvable materialization cycles
             // (design.md "Defaulted Fields").
-            const default_value: ?CIR.Expr.Idx = if (state.ast_default_value) |ast_default| blk: {
-                const can_default = (try self.canonicalizeExpr(ast_default)) orelse break :blk null;
-                break :blk can_default.idx;
-            } else null;
+            const default_value: ?CIR.Expr.Idx = if (state.ast_default_value) |ast_default|
+                (try self.canonicalizeExpr(ast_default)).idx
+            else
+                null;
             const field_cir_idx = try self.env.addAnnoRecordField(.{
                 .name = state.field_name,
                 .ty = canonicalized_ty,
