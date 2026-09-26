@@ -2935,7 +2935,14 @@ const ProcedureBuilder = struct {
 
         if (worker_rep.children.len == 0) return;
 
-        if (requirement_rep.kind == .empty_tag_union) {
+        // Children align with the structure the requirement's value stands for.
+        var wrapper_bindings: Plan.CallWrapperBindings = .{};
+        defer wrapper_bindings.deinit(self.allocator);
+        const structure_call_rep_id = try self.repQuery().bindCallWrappedStructure(self.allocator, worker_rep_id, requirement_rep_id, &wrapper_bindings);
+        const through_wrapper = structure_call_rep_id != requirement_rep_id;
+        const structure_rep = self.plan.representations.items[@intFromEnum(structure_call_rep_id)];
+
+        if (structure_rep.kind == .empty_tag_union) {
             for (self.plan.childSlice(worker_rep.children)) |worker_child| {
                 if (!self.plan.childCarriesHiddenDescriptor(worker_rep_id, worker_child)) continue;
                 if (!try self.repSubtreeHasCallSuppliedDescriptor(worker_child.rep, params, descriptor_sources)) continue;
@@ -2955,15 +2962,20 @@ const ProcedureBuilder = struct {
 
         const worker_children = self.plan.childSlice(worker_rep.children);
         const requirement_children = self.plan.childSlice(requirement_rep.children);
+        const requirement_structure_children = self.plan.childSlice(structure_rep.children);
         for (worker_children) |worker_child| {
             if (!self.plan.childCarriesHiddenDescriptor(worker_rep_id, worker_child)) continue;
             const has_call_supplied_desc = try self.repSubtreeHasCallSuppliedDescriptor(worker_child.rep, params, descriptor_sources);
-            if (self.namedQuery().rowInstantiationTarget(worker_rep_id, requirement_rep_id, worker_child)) |row_target| {
+            if (self.namedQuery().rowInstantiationTarget(worker_rep_id, structure_call_rep_id, worker_child)) |structure_row_target| {
+                const row_target = if (structure_row_target == structure_call_rep_id)
+                    requirement_rep_id
+                else
+                    Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, structure_row_target);
                 try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, row_target, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                 continue;
             }
-            if (self.namedQuery().findMatchingChildByRole(requirement_children, worker_child)) |requirement_child| {
-                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
+            if (self.namedQuery().findMatchingChildByRole(requirement_structure_children, worker_child)) |requirement_child| {
+                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, requirement_child.rep), params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                 continue;
             }
             if (self.repQuery().structuralWrapperBackingRep(requirement_rep_id)) |requirement_backing| {
@@ -2978,7 +2990,7 @@ const ProcedureBuilder = struct {
                 try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_rep_id, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                 continue;
             }
-            if (worker_child.role == .tag_ext and requirement_children.len == 0 and requirement_rep.descriptor != null) {
+            if (worker_child.role == .tag_ext and requirement_structure_children.len == 0 and requirement_rep.descriptor != null) {
                 try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_rep_id, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                 continue;
             }
@@ -3165,7 +3177,13 @@ const ProcedureBuilder = struct {
         if (worker_rep.children.len == 0) return;
 
         const requirement_rep = self.plan.representations.items[@intFromEnum(requirement_rep_id)];
-        if (requirement_rep.kind == .empty_tag_union) {
+        // Children align with the structure the requirement's value stands for.
+        var wrapper_bindings: Plan.CallWrapperBindings = .{};
+        defer wrapper_bindings.deinit(self.allocator);
+        const structure_call_rep_id = try self.repQuery().bindCallWrappedStructure(self.allocator, worker_rep_id, requirement_rep_id, &wrapper_bindings);
+        const through_wrapper = structure_call_rep_id != requirement_rep_id;
+        const structure_rep = self.plan.representations.items[@intFromEnum(structure_call_rep_id)];
+        if (structure_rep.kind == .empty_tag_union) {
             for (self.plan.childSlice(worker_rep.children)) |worker_child| {
                 if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
                 try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(
@@ -3183,15 +3201,19 @@ const ProcedureBuilder = struct {
         }
 
         const worker_children = self.plan.childSlice(worker_rep.children);
-        const requirement_children = self.plan.childSlice(requirement_rep.children);
+        const requirement_children = self.plan.childSlice(structure_rep.children);
         for (worker_children) |worker_child| {
             if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
-            if (self.namedQuery().rowInstantiationTarget(worker_rep_id, requirement_rep_id, worker_child)) |row_target| {
+            if (self.namedQuery().rowInstantiationTarget(worker_rep_id, structure_call_rep_id, worker_child)) |structure_row_target| {
+                const row_target = if (structure_row_target == structure_call_rep_id)
+                    requirement_rep_id
+                else
+                    Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, structure_row_target);
                 try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(worker_child.rep, row_target, owner_requirement_rep_id, source_rep_id, params, binding_scope, sources, seen);
                 continue;
             }
             if (self.namedQuery().findMatchingChildByRole(requirement_children, worker_child)) |requirement_child| {
-                try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(worker_child.rep, requirement_child.rep, owner_requirement_rep_id, source_rep_id, params, binding_scope, sources, seen);
+                try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(worker_child.rep, Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, requirement_child.rep), owner_requirement_rep_id, source_rep_id, params, binding_scope, sources, seen);
                 continue;
             }
             if (self.repQuery().structuralWrapperBackingRep(requirement_rep_id)) |requirement_backing| {
@@ -3238,7 +3260,14 @@ const ProcedureBuilder = struct {
 
         if (worker_rep.children.len == 0) return;
 
-        if (source_rep.kind == .empty_tag_union) {
+        // Children align with the structure the source's value stands for.
+        var wrapper_bindings: Plan.CallWrapperBindings = .{};
+        defer wrapper_bindings.deinit(self.allocator);
+        const structure_call_rep_id = try self.repQuery().bindCallWrappedStructure(self.allocator, identity_worker, identity_source, &wrapper_bindings);
+        const through_wrapper = structure_call_rep_id != identity_source;
+        const structure_rep = self.plan.representations.items[@intFromEnum(structure_call_rep_id)];
+
+        if (structure_rep.kind == .empty_tag_union) {
             for (self.plan.childSlice(worker_rep.children)) |worker_child| {
                 if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
                 try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, identity_source, params, binding_scope, sources, seen);
@@ -3247,15 +3276,19 @@ const ProcedureBuilder = struct {
         }
 
         const worker_children = self.plan.childSlice(worker_rep.children);
-        const source_children = self.plan.childSlice(source_rep.children);
+        const source_children = self.plan.childSlice(structure_rep.children);
         for (worker_children) |worker_child| {
             if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
-            if (self.namedQuery().rowInstantiationTarget(identity_worker, identity_source, worker_child)) |row_target| {
+            if (self.namedQuery().rowInstantiationTarget(identity_worker, structure_call_rep_id, worker_child)) |structure_row_target| {
+                const row_target = if (structure_row_target == structure_call_rep_id)
+                    identity_source
+                else
+                    Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, structure_row_target);
                 try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, row_target, params, binding_scope, sources, seen);
                 continue;
             }
             if (self.namedQuery().findMatchingChildByRole(source_children, worker_child)) |source_child| {
-                try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, source_child.rep, params, binding_scope, sources, seen);
+                try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, source_child.rep), params, binding_scope, sources, seen);
                 continue;
             }
             if (self.repQuery().structuralWrapperBackingRep(identity_source)) |source_backing| {
@@ -3685,7 +3718,9 @@ const ProcedureBuilder = struct {
         defer descs.deinit(self.allocator);
         for (payloads, 0..) |child, index| {
             const field_layout = self.tagVariantPayloadFieldLayout(variant_payload_layout, index, payloads.len);
-            const desc_rep = self.tagPayloadStorageDescRepForLayout(child.rep, field_layout, false) orelse continue;
+            // Concrete payloads carry descriptors too; see
+            // `staticPayloadDescRefsForTagVariant`.
+            const desc_rep = self.tagPayloadStorageDescRepForLayout(child.rep, field_layout, true) orelse continue;
             const source_child = self.matchingTagPayloadInstantiationSource(source_payloads, child);
             try descs.append(self.allocator, .{
                 .payload_index = @intCast(index),
@@ -4881,7 +4916,10 @@ const ProcedureBuilder = struct {
 
     /// Record field names for a record-shaped representation, in payload field
     /// order. Returns an empty span for non-record shapes (tuples and other
-    /// payloads print positionally).
+    /// payloads print positionally). An alias or backed nominal without
+    /// declared padding stores exactly its backing's fields in the backing's
+    /// order, so it names them; a structural record can then receive it by
+    /// field name.
     fn staticFieldNamesForRep(self: *ProcedureBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.BoxySpan {
         // Field names describe the same payload the nested descriptors do.
         if (self.descriptorBackingShapeRep(rep_id)) |backing_rep| return try self.staticFieldNamesForRep(backing_rep);
@@ -21698,7 +21736,7 @@ const ProcBodyBuilder = struct {
             ),
             .nominal => |kind| switch (kind) {
                 .transparent, .builtin_other => {
-                    const backing_ty = resolvedNominalBacking(self.module, tag_ty);
+                    const backing_ty = checkedTypeAtNominalBacking(self.module, tag_ty);
                     const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
                     const scope = try self.enterNominalBackingFormalScope(rep_id);
                     defer self.dropNominalBackingFormalScope(scope);
@@ -24298,7 +24336,7 @@ const ProcBodyBuilder = struct {
             ),
             .nominal => |kind| switch (kind) {
                 .transparent, .builtin_other => {
-                    const backing_ty = resolvedNominalBacking(self.module, tag_ty);
+                    const backing_ty = checkedTypeAtNominalBacking(self.module, tag_ty);
                     const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
                     const scope = try self.enterNominalBackingFormalScope(rep_id);
                     defer self.dropNominalBackingFormalScope(scope);
@@ -26829,7 +26867,14 @@ const ProcBodyBuilder = struct {
 
         if (worker_rep.children.len == 0) return;
 
-        if (call_rep.kind == .empty_tag_union) {
+        // Children align with the structure the call's value stands for.
+        var wrapper_bindings: Plan.CallWrapperBindings = .{};
+        defer wrapper_bindings.deinit(self.parent.allocator);
+        const structure_call_rep_id = try self.repQuery().bindCallWrappedStructure(self.parent.allocator, worker_rep_id, call_rep_id, &wrapper_bindings);
+        const through_wrapper = structure_call_rep_id != call_rep_id;
+        const structure_rep = self.parent.plan.representations.items[@intFromEnum(structure_call_rep_id)];
+
+        if (structure_rep.kind == .empty_tag_union) {
             for (self.parent.plan.childSlice(worker_rep.children)) |worker_child| {
                 if (!self.parent.plan.childCarriesHiddenDescriptor(worker_rep_id, worker_child)) continue;
                 if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
@@ -26839,12 +26884,20 @@ const ProcBodyBuilder = struct {
         }
 
         const worker_children = self.parent.plan.childSlice(worker_rep.children);
-        const call_children = self.parent.plan.childSlice(call_rep.children);
+        const call_children = self.parent.plan.childSlice(structure_rep.children);
         for (worker_children) |worker_child| {
             if (!self.parent.plan.childCarriesHiddenDescriptor(worker_rep_id, worker_child)) continue;
             if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
+            if (self.namedQuery().rowInstantiationTarget(worker_rep_id, structure_call_rep_id, worker_child)) |structure_row_target| {
+                const row_target = if (structure_row_target == structure_call_rep_id)
+                    call_rep_id
+                else
+                    Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, structure_row_target);
+                try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, row_target, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
+                continue;
+            }
             if (self.namedQuery().findMatchingChildByRole(call_children, worker_child)) |call_child| {
-                try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
+                try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, call_child.rep), source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
                 continue;
             }
             if (self.repQuery().structuralWrapperBackingRep(call_rep_id)) |call_backing| {
@@ -36611,7 +36664,7 @@ const ProcBodyBuilder = struct {
             ),
             .nominal => |kind| switch (kind) {
                 .transparent, .builtin_other => {
-                    const backing_ty = resolvedNominalBacking(self.module, tag_ty);
+                    const backing_ty = checkedTypeAtNominalBacking(self.module, tag_ty);
                     const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
                     return try self.appliedTagPatternRepCanMiss(backing_ty, backing_rep, name, args, payload_can_miss);
                 },
@@ -37174,7 +37227,14 @@ const ProcBodyBuilder = struct {
 
         if (worker_rep.children.len == 0) return;
 
-        if (value_rep.kind == .empty_tag_union) {
+        // Children align with the structure the call's value stands for.
+        var wrapper_bindings: Plan.CallWrapperBindings = .{};
+        defer wrapper_bindings.deinit(self.parent.allocator);
+        const structure_call_rep_id = try self.repQuery().bindCallWrappedStructure(self.parent.allocator, worker_rep_id, effective_value_rep_id, &wrapper_bindings);
+        const through_wrapper = structure_call_rep_id != effective_value_rep_id;
+        const structure_rep = self.parent.plan.representations.items[@intFromEnum(structure_call_rep_id)];
+
+        if (structure_rep.kind == .empty_tag_union) {
             for (self.parent.plan.childSlice(worker_rep.children)) |worker_child| {
                 if (self.parent.plan.childIsSharedBackingTemplate(worker_rep_id, worker_child)) continue;
                 if (!try self.repQuery().repSubtreeHasDictionary(worker_child.rep)) continue;
@@ -37184,12 +37244,20 @@ const ProcBodyBuilder = struct {
         }
 
         const worker_children = self.parent.plan.childSlice(worker_rep.children);
-        const value_children = self.parent.plan.childSlice(value_rep.children);
+        const value_children = self.parent.plan.childSlice(structure_rep.children);
         for (worker_children) |worker_child| {
             if (self.parent.plan.childIsSharedBackingTemplate(worker_rep_id, worker_child)) continue;
             if (!try self.repQuery().repSubtreeHasDictionary(worker_child.rep)) continue;
+            if (self.namedQuery().rowInstantiationTarget(worker_rep_id, structure_call_rep_id, worker_child)) |structure_row_target| {
+                const row_target = if (structure_row_target == structure_call_rep_id)
+                    effective_value_rep_id
+                else
+                    Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, structure_row_target);
+                try self.collectErasedCaptureDictionaryReps(worker_child.rep, row_target, mapped, seen_rep_pairs);
+                continue;
+            }
             if (self.namedQuery().findMatchingChildByRole(value_children, worker_child)) |value_child| {
-                try self.collectErasedCaptureDictionaryReps(worker_child.rep, value_child.rep, mapped, seen_rep_pairs);
+                try self.collectErasedCaptureDictionaryReps(worker_child.rep, Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, value_child.rep), mapped, seen_rep_pairs);
                 continue;
             }
             if (self.repQuery().structuralWrapperBackingRep(effective_value_rep_id)) |value_backing| {
@@ -37917,6 +37985,17 @@ fn resolvedNominalPayload(module: ProcedureModuleView, checked_ty: checked.Check
     return switch (resolvedTypePayload(module, checked_ty)) {
         .nominal => |nominal| nominal,
         .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("ConstStore nominal child lookup reached a non-nominal checked type"),
+    };
+}
+
+/// The checked type at a nominal representation's backing. A checked nominal
+/// names its backing template. Any other checked type is already the
+/// structure that the nominal instantiates at this position, as when an
+/// unannotated worker's structural row is instantiated by a call's `Try`.
+fn checkedTypeAtNominalBacking(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypeId {
+    return switch (resolvedTypePayload(module, checked_ty)) {
+        .nominal => resolvedNominalBacking(module, checked_ty),
+        .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => checked_ty,
     };
 }
 
