@@ -107,7 +107,7 @@ pub fn CirVisitor(comptime Context: type) type {
         pub fn walkExpr(self: *Self, store: *const NodeStore, expr_idx: CIR.Expr.Idx) void {
             if (self.stopped) return;
 
-            const expr = store.getExpr(expr_idx);
+            const expr = store.getSourceExpr(expr_idx);
 
             // Pre-visit callback
             if (self.visit_expr_pre) |hook| {
@@ -362,7 +362,7 @@ pub fn CirVisitor(comptime Context: type) type {
         pub fn walkStatement(self: *Self, store: *const NodeStore, stmt_idx: CIR.Statement.Idx) void {
             if (self.stopped) return;
 
-            const stmt = store.getStatement(stmt_idx);
+            const stmt = store.getSourceStatement(stmt_idx);
 
             // Pre-visit callback
             if (self.visit_stmt_pre) |hook| {

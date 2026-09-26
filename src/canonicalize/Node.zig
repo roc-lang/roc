@@ -436,6 +436,7 @@ pub const Payload = extern union {
     diag_empty: DiagEmpty,
     diag_single_ident: DiagSingleIdent,
     diag_single_value: DiagSingleValue,
+    retired_runtime_error: RetiredRuntimeError,
     diag_two_idents: DiagTwoIdents,
     diag_three_idents: DiagThreeIdents,
     diag_internal_builtin_type: DiagInternalBuiltinType,
@@ -1255,6 +1256,18 @@ pub const Payload = extern union {
     pub const DiagSingleValue = extern struct {
         value: u32,
         _padding: [12]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    };
+
+    /// A `malformed` expression or statement that checking wrote over a source
+    /// node. `diagnostic` shares its offset with `DiagSingleValue.value`, so every
+    /// reader of the checked tree sees an ordinary runtime error. `retired_source`
+    /// is one past the index of the overwritten node in
+    /// `NodeStore.retired_source_nodes`, or zero when the node was already
+    /// malformed at canonicalization and so had no source node to retain.
+    pub const RetiredRuntimeError = extern struct {
+        diagnostic: u32,
+        retired_source: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     /// Diagnostics with two identifiers.
