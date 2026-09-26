@@ -298,7 +298,7 @@ pub const Constants = struct {
     /// 125: A block-local alias of a value is not generalized.
     /// 126: A hoisted root is rejected by its checked dispatch evidence
     ///      naming a block-local nominal's method, not by syntax.
-    pub const CACHE_VERSION = 126;
+    pub const CACHE_VERSION = 127;
 };
 
 /// Configuration for the Roc cache system.

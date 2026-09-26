@@ -554,3 +554,75 @@ test "a separate runtime consumer keeps the producer's root order and test-plan 
         try std.testing.expectEqual(@as(?u32, declared.root_index), if (metadata.test_plan) |plan| plan.root_index else null);
     }
 }
+
+test "a nominal declaration template over an imported alias carries no unbound variable" {
+    // `State`'s backing names `Res(U64)`, whose body names the imported
+    // `E.Err`. The template is the checker's own backing, with every alias
+    // instance's markers closed as a nominal body writes them, so a nominal
+    // with no formals has no variable anywhere in its template.
+    if (is_freestanding) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try writeEchoPlatform(tmp_dir.dir, io);
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "E.roc", .data =
+        \\module [Err]
+        \\
+        \\Err : [Bad]
+        \\
+    });
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "main.roc", .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\import E
+        \\
+        \\Res(a) : Try(a, E.Err)
+        \\
+        \\State := { r : Res(U64) }
+        \\
+        \\main! = |_args| {
+        \\    state : State
+        \\    state = { r: Ok(1) }
+        \\    Echo.line!(match state.r { Ok(n) => Str.inspect(n), Err(Bad) => "bad" })
+        \\    Ok({})
+        \\}
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", allocator);
+    defer allocator.free(app_path);
+
+    var builtin_modules = try eval.BuiltinModules.init(allocator);
+    defer builtin_modules.deinit();
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.os(allocator, allocator, io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+    var arena = base.SingleThreadArena.init(allocator);
+    defer arena.deinit();
+    try coord.start();
+    try coord.discoverAppFromPath(arena.allocator(), .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    var found = false;
+    var packages = coord.packages.iterator();
+    while (packages.next()) |package| {
+        for (package.value_ptr.*.modules.items) |*mod| {
+            const artifact = mod.checkedArtifact() orelse continue;
+            for (artifact.checked_types.nominal_declarations.items) |declaration| {
+                if (!std.mem.eql(u8, artifact.canonical_names.typeNameText(declaration.nominal.type_name), "State")) continue;
+                found = true;
+                try std.testing.expect(!artifact.checked_types.roots.items[@intFromEnum(declaration.backing)].contains_identity_variables);
+            }
+        }
+    }
+    try std.testing.expect(found);
+}

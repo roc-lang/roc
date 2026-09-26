@@ -6091,8 +6091,12 @@ const Builder = struct {
         backing: TypeSource,
     ) Allocator.Error!Span {
         const source = self.nominalDeclaredSource(view, nominal) orelse return Span.empty();
-        const backing_fields = switch (backing.view.checked_types.payload(backing.ty)) {
-            .record => |record| record.fields,
+        // The backing is the checker's declaration backing, a record whose
+        // row may be stored as an extension chain (checked roots are shared
+        // by type, not by storage shape), so its fields are read down the
+        // whole chain, as a structural record's are.
+        switch (backing.view.checked_types.payload(backing.ty)) {
+            .record => {},
             .pending,
             .err,
             .flex,
@@ -6105,7 +6109,34 @@ const Builder = struct {
             .tag_union,
             .empty_tag_union,
             => boxyPlanInvariant("checked nominal declared field order had a non-record backing"),
-        };
+        }
+        var backing_row = std.ArrayList(checked.CheckedRecordField).empty;
+        defer backing_row.deinit(self.allocator);
+        var current = backing.ty;
+        while (true) {
+            switch (backing.view.checked_types.payload(current)) {
+                .record => |record| {
+                    try backing_row.appendSlice(self.allocator, record.fields);
+                    // A closed row's empty tail may be stored as a zero-field
+                    // record extending itself.
+                    if (record.ext == current) break;
+                    current = record.ext;
+                },
+                .alias => |alias| current = alias.backing,
+                .empty_record => break,
+                .pending,
+                .err,
+                .flex,
+                .rigid,
+                .tuple,
+                .nominal,
+                .function,
+                .tag_union,
+                .empty_tag_union,
+                => boxyPlanInvariant("checked nominal declared field order had a backing row that was not closed"),
+            }
+        }
+        const backing_fields = backing_row.items;
 
         // Layout field indices are alphabetical-by-name, matching the index
         // space structural records use, so a value that materializes across an

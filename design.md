@@ -2441,13 +2441,10 @@ Readers of alias arguments fall in two groups. A graph walk visits every
 argument, since each is a variable of the graph: rank (generalization ranks an
 alias by the max over all its arguments, now exactly its body's variables),
 occurs, reachability, copying, `copy_import`, checked module data
-(`CheckedAliasType` carries every argument and its `declared_arity`; an
-alias application the checked module data builds from a declaration's syntax
-carries the declaration's hidden arguments too, its hidden formal taking its
-formal's argument and each marker slot the closed row the builder writes, so
-it keys and compares like the checker's instance; a reference to an alias
-with no declared arguments is built the same way, never as the declaration's
-own root, whose markers are unbound), dispatch evidence (an `alias_arg` step
+(`CheckedAliasType` carries every argument and its `declared_arity`; a
+nominal declaration's template is the checker's own backing, so every alias
+instance in it carries the arguments the checker gave it, markers closed as
+the nominal body writes them), dispatch evidence (an `alias_arg` step
 indexes all the arguments, and the declared ones keep their declared
 indices), and every post-check stage, which reads the backing. A reader that
 reads arguments by the declaration's positions reads only the declared ones
@@ -2508,11 +2505,13 @@ carries a widened row into the relation", "an open hidden slot meets a closed
 one through the arguments", "a declared argument the body does not use is
 related exactly", "a flex never takes an alias view whose backing is that
 flex"), `test_rigid_instantiation.zig`, the generalizer's "an alias is ranked
-by its hidden arguments too", the checked module data tests "a
-declaration-template alias application carries the hidden arguments the
-checker's instance carries" (a hidden formal, a marker, both, and a nested
-alias's marker) and "compile-time roots read an alias's declared arguments,
-not its hidden ones", the LIR tests "row
+by its hidden arguments too", the checked module data tests "a nominal
+declaration template is the checker's backing, with every alias argument
+closed" (a hidden formal, a marker, both, and a nested alias's marker), "a
+nominal declaration template's formal occurrences are its formal roots" and
+"compile-time roots read an alias's declared arguments, not its hidden ones",
+the compile test "a nominal declaration template over an imported alias
+carries no unbound variable", the LIR tests "row
 subsumption - an opened alias application widens into a wider application of
 its alias" and "... a re-opened alias application ...", and the CLI fixtures
 `test/fx-open/hosted_repeated_formal.roc` (a hosted `H(e) : e => Try(Str, e)`
@@ -11278,11 +11277,17 @@ declaration backing through those cells. The result is a backing type in which
 every formal occurrence has the same monomorphic meaning as the named type
 argument that instantiated it.
 
-When declaration output expands an alias containing a local nominal
-application, it must build that application from the arguments translated in
-the current declaration's formal scope. Reusing the original annotation's
-nominal instance would retain the alias declaration's independent parameters
-inside an otherwise correctly substituted outer backing template.
+A local nominal declaration's template backing is the checker's own
+declaration backing (`types.NominalDecl.backing`), read as checked roots, not
+rebuilt from the declaration's syntax. The checker generates it with every
+referenced alias, local or imported, instantiated under its arguments and its
+polarity markers closed as written (a nominal body has no use-site polarity),
+and every alias instance is its declaration's body under all its arguments
+("Hidden Alias Arguments"). So no alias declaration's own parameters or
+markers survive into the template, and a formal occurrence is the header
+variable itself, which is the root `formal_args` names. Only the declared
+record-field order, labels and unnamed padding positions are read from the
+declaration, and a padding field's type is the checker's variable for it.
 
 Monotype must use the declaration backing template for ordinary local nominal
 declarations. For local declarations, the `backing` root on a nominal-use
