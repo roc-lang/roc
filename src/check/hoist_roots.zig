@@ -7,7 +7,7 @@ const CIR = can.CIR;
 const Allocator = std.mem.Allocator;
 
 /// Version tag for the checked-stage hoisted-root selection algorithm.
-pub const selection_algorithm_version: u64 = 7;
+pub const selection_algorithm_version: u64 = 8;
 
 /// Collection of hoisted roots selected for a checked module.
 pub const SelectedHoistedRootSet = struct {

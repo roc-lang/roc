@@ -331,9 +331,80 @@ test "hoist roots are not selected for a closed call whose evidence is a local n
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
+    try expectNoSelectedCallRoot(&test_env);
+}
+
+test "hoist roots are not selected for a call whose local nominal receiver flows through a binding" {
+    // The evidence names `Loc.get` although the call mentions only `l`.
+    var test_env = try TestEnv.init("Test",
+        \\getit : a -> Str where [a.get : a -> Str]
+        \\getit = |x| x.get()
+        \\
+        \\main = |arg| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "p"
+        \\    }
+        \\    l : Loc
+        \\    l = Loc.L
+        \\    x = getit(l)
+        \\    Str.concat(x, arg)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try expectNoSelectedCallRoot(&test_env);
+}
+
+test "hoist roots are not selected for a call on a local nominal value that escaped its block" {
+    var test_env = try TestEnv.init("Test",
+        \\getit : a -> Str where [a.get : a -> Str]
+        \\getit = |x| x.get()
+        \\
+        \\main = |arg| {
+        \\    z = {
+        \\        Loc := [L].{
+        \\            get : Loc -> Str
+        \\            get = |_| "e"
+        \\        }
+        \\        Loc.L
+        \\    }
+        \\    Str.concat(getit(z), arg)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try expectNoSelectedCallRoot(&test_env);
+}
+
+test "hoist roots are still selected for constant data built from a local nominal" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    Loc := [L, M].{
+        \\        get : Loc -> Str
+        \\        get = |_| "p"
+        \\    }
+        \\    table : List(Loc)
+        \\    table = [Loc.L, Loc.M, Loc.L]
+        \\    List.len(table) + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    var binding_roots: usize = 0;
     for (test_env.checker.selectedHoistedRoots()) |root| {
-        try std.testing.expect(root.pattern == null);
-        try expectExprTag(&test_env, root.expr, .e_tag);
+        if (root.pattern != null) binding_roots += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), binding_roots);
+}
+
+fn expectNoSelectedCallRoot(test_env: *const TestEnv) error{TestUnexpectedResult}!void {
+    for (test_env.checker.selectedHoistedRoots()) |root| {
+        const tag = std.meta.activeTag(test_env.checker.cir.store.getExpr(root.expr));
+        if (tag == .e_call or tag == .e_binop or tag == .e_dispatch_call) return error.TestUnexpectedResult;
     }
 }
 

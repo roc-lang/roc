@@ -726,14 +726,6 @@ hoist_known_value_scope_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx),
 hoist_contextual_bindings: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, usize),
 /// Lexical scope stack for `hoist_contextual_bindings`.
 hoist_contextual_binding_scope_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx),
-/// Nominal types declared by a block inside a function body, keyed by their
-/// declaration statement; the value is the index of the declaring block's
-/// hoist frame. Such a type, and every method it declares, belongs to that
-/// block, so any expression inside the block that refers to it is not
-/// top-level-equivalent. Temporary checker facts, scoped lexically.
-hoist_contextual_type_decls: std.AutoHashMapUnmanaged(CIR.Statement.Idx, usize),
-/// Lexical scope stack for `hoist_contextual_type_decls`.
-hoist_contextual_type_decl_scope: std.ArrayListUnmanaged(CIR.Statement.Idx),
 /// Selected local binding roots, keyed by their binding pattern. The value is
 /// the index into `selected_hoisted_roots`.
 hoist_selected_bindings: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32),
@@ -3018,8 +3010,6 @@ fn initAssumePrepared(
         .hoist_known_value_scope_patterns = .empty,
         .hoist_contextual_bindings = .{},
         .hoist_contextual_binding_scope_patterns = .empty,
-        .hoist_contextual_type_decls = .{},
-        .hoist_contextual_type_decl_scope = .empty,
         .hoist_selected_bindings = .{},
         .hoist_selected_exprs = .{},
         .hoist_selected_pattern_validations = .{},
@@ -3177,8 +3167,6 @@ pub fn deinit(self: *Self) void {
     self.hoist_known_value_scope_patterns.deinit(self.gpa);
     self.hoist_contextual_bindings.deinit(self.gpa);
     self.hoist_contextual_binding_scope_patterns.deinit(self.gpa);
-    self.hoist_contextual_type_decls.deinit(self.gpa);
-    self.hoist_contextual_type_decl_scope.deinit(self.gpa);
     self.hoist_selected_bindings.deinit(self.gpa);
     self.hoist_selected_exprs.deinit(self.gpa);
     self.hoist_selected_pattern_validations.deinit(self.gpa);
@@ -3370,11 +3358,9 @@ fn noteRigidVarLookupForLocalProcedures(self: *Self, rigid_var: CIR.TypeAnno.Idx
 }
 
 /// A reference to a type declared inside a function body makes every
-/// local-function candidate being checked contextual, and every hoist frame
-/// between the declaring block and the reference contextual: such a type,
-/// and any method it declares, belongs to the function body that declares it.
-fn noteTypeDeclReference(self: *Self, decl_idx: CIR.Statement.Idx) Allocator.Error!void {
-    self.markHoistContextualDependencyForTypeDecl(decl_idx);
+/// candidate being checked contextual: such a type, and any method it
+/// declares, belongs to the function body that declares it.
+fn noteTypeDeclReferenceForLocalProcedures(self: *Self, decl_idx: CIR.Statement.Idx) Allocator.Error!void {
     if (self.local_procedure_candidate_stack.items.len == 0) return;
     if (self.module_type_decls.count() == 0) {
         for (self.cir.store.sliceStatements(self.cir.type_decls)) |module_decl| {
@@ -4130,35 +4116,6 @@ fn markHoistContextualDependencyForLookup(self: *Self, pattern: CIR.Pattern.Idx)
     return true;
 }
 
-/// Record the nominal types a block declares, owned by the block's frame.
-fn recordHoistContextualTypeDecls(self: *Self, stmts: CIR.Statement.Span, block_expr: CIR.Expr.Idx) Allocator.Error!void {
-    var owner_frame_index: ?usize = null;
-    for (self.cir.store.sliceStatements(stmts)) |stmt_idx| {
-        if (std.meta.activeTag(self.cir.store.getStatement(stmt_idx)) != .s_nominal_decl) continue;
-        const owner = owner_frame_index orelse self.currentHoistFrameIndexForExpr(block_expr);
-        owner_frame_index = owner;
-        try self.hoist_contextual_type_decl_scope.ensureUnusedCapacity(self.gpa, 1);
-        const entry = try self.hoist_contextual_type_decls.getOrPut(self.gpa, stmt_idx);
-        if (!entry.found_existing) self.hoist_contextual_type_decl_scope.appendAssumeCapacity(stmt_idx);
-        entry.value_ptr.* = owner;
-    }
-}
-
-/// A reference to a nominal type a block declares makes every expression
-/// between that block and the reference contextual: the type and its methods
-/// exist only in the block, so a root evaluated on its own could not reach
-/// them.
-fn markHoistContextualDependencyForTypeDecl(self: *Self, decl_idx: CIR.Statement.Idx) void {
-    const owner_frame_index = self.hoist_contextual_type_decls.get(decl_idx) orelse return;
-    if (owner_frame_index >= self.hoist_frames.items.len) {
-        std.debug.panic("check invariant violated: contextual hoist type declaration outlived its owner frame", .{});
-    }
-    var frame_index = owner_frame_index + 1;
-    while (frame_index < self.hoist_frames.items.len) : (frame_index += 1) {
-        self.hoist_frames.items[frame_index].has_contextual_dependency = true;
-    }
-}
-
 fn currentHoistFrameIndexForExpr(self: *const Self, expr: CIR.Expr.Idx) usize {
     if (self.hoist_frames.items.len == 0) {
         std.debug.panic("check invariant violated: missing contextual hoist owner frame", .{});
@@ -4174,7 +4131,6 @@ const HoistLexicalScope = struct {
     binding_candidate_start: usize,
     known_value_start: usize,
     contextual_binding_start: usize,
-    contextual_type_decl_start: usize,
 };
 
 fn beginHoistLexicalScope(self: *const Self) HoistLexicalScope {
@@ -4182,15 +4138,10 @@ fn beginHoistLexicalScope(self: *const Self) HoistLexicalScope {
         .binding_candidate_start = self.hoist_binding_scope_patterns.items.len,
         .known_value_start = self.hoist_known_value_scope_patterns.items.len,
         .contextual_binding_start = self.hoist_contextual_binding_scope_patterns.items.len,
-        .contextual_type_decl_start = self.hoist_contextual_type_decl_scope.items.len,
     };
 }
 
 fn endHoistLexicalScope(self: *Self, scope: HoistLexicalScope) void {
-    for (self.hoist_contextual_type_decl_scope.items[scope.contextual_type_decl_start..]) |decl| {
-        _ = self.hoist_contextual_type_decls.remove(decl);
-    }
-    self.hoist_contextual_type_decl_scope.shrinkRetainingCapacity(scope.contextual_type_decl_start);
     self.popHoistContextualBindingScope(scope.contextual_binding_start);
     self.popHoistKnownValueScope(scope.known_value_start);
     self.popHoistBindingCandidateScope(scope.binding_candidate_start);
@@ -4683,8 +4634,6 @@ const HoistSelectionTestState = struct {
         checker.hoist_known_value_scope_patterns = .empty;
         checker.hoist_contextual_bindings = .{};
         checker.hoist_contextual_binding_scope_patterns = .empty;
-        checker.hoist_contextual_type_decls = .{};
-        checker.hoist_contextual_type_decl_scope = .empty;
         checker.hoist_selected_bindings = .{};
         checker.hoist_selected_exprs = .{};
         checker.hoist_selected_pattern_validations = .{};
@@ -4711,8 +4660,6 @@ const HoistSelectionTestState = struct {
         self.checker.hoist_known_value_scope_patterns.deinit(self.allocator);
         self.checker.hoist_contextual_bindings.deinit(self.allocator);
         self.checker.hoist_contextual_binding_scope_patterns.deinit(self.allocator);
-        self.checker.hoist_contextual_type_decls.deinit(self.allocator);
-        self.checker.hoist_contextual_type_decl_scope.deinit(self.allocator);
         self.checker.hoist_selected_bindings.deinit(self.allocator);
         self.checker.hoist_selected_exprs.deinit(self.allocator);
         self.checker.hoist_selected_pattern_validations.deinit(self.allocator);
@@ -10359,8 +10306,17 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     defer self.gpa.free(keep_roots);
     @memset(keep_roots, false);
 
+    var dispatch_join: ?DispatchJoinIndex = null;
+    defer if (dispatch_join) |*join| join.deinit(self.gpa);
+    if (self.selectedAnyBlockLocalMethod()) {
+        dispatch_join = .{};
+        try self.buildDispatchJoinIndex(&dispatch_join.?);
+    }
+    const dispatch_join_ref: ?*const DispatchJoinIndex = if (dispatch_join) |*join| join else null;
+
     var keep_oracle = try HoistedRootKeepOracle.init(self.gpa, self.selected_hoisted_roots.items, keep_roots);
     defer keep_oracle.deinit(self.gpa);
+    keep_oracle.dispatch_join = dispatch_join_ref;
 
     var kept_count: usize = 0;
     var kept_expr_count: u32 = 0;
@@ -10455,7 +10411,16 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     std.debug.assert(kept == kept_count);
     self.selected_hoisted_roots.shrinkRetainingCapacity(kept);
     self.debugAssertHoistSelectionConsistent();
-    try self.debugVerifyKeptHoistedRootDependencies();
+    try self.debugVerifyKeptHoistedRootDependencies(dispatch_join_ref);
+}
+
+/// Whether checking selected a method of a nominal declared in a function
+/// body as any dispatch target of this module.
+fn selectedAnyBlockLocalMethod(self: *const Self) bool {
+    for (self.dispatch_target_instantiations.items) |instantiation| {
+        if (self.methodBindingIsBlockLocal(instantiation.target_env, instantiation.target_binding)) return true;
+    }
+    return false;
 }
 
 fn hoistedRootIsIntrinsicallyKept(
@@ -10507,7 +10472,7 @@ fn hoistedRootIsIntrinsicallyKept(
     return try self.varIsConcreteHoistedConstType(type_var);
 }
 
-fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
+fn debugVerifyKeptHoistedRootDependencies(self: *Self, dispatch_join: ?*const DispatchJoinIndex) Allocator.Error!void {
     if (builtin.mode != .Debug) return;
 
     const root_count = self.selected_hoisted_roots.items.len;
@@ -10517,6 +10482,7 @@ fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
 
     var keep_oracle = try HoistedRootKeepOracle.init(self.gpa, self.selected_hoisted_roots.items, keep_roots);
     defer keep_oracle.deinit(self.gpa);
+    keep_oracle.dispatch_join = dispatch_join;
 
     for (self.selected_hoisted_roots.items, 0..) |root, i| {
         if (root.body == .pattern_error) {
@@ -10738,11 +10704,14 @@ const HoistedDependencyContext = struct {
     callable_stability: std.AutoHashMapUnmanaged(HoistedCallableKey, HoistedCallableState) = .{},
     /// Stability of promoted local procedures, keyed by their lambda.
     local_procedure_stability: std.AutoHashMapUnmanaged(CIR.Expr.Idx, HoistedCallableState) = .{},
+    /// Constraint vars whose selected dispatch targets the root reaches.
+    dispatch_seeds: std.ArrayListUnmanaged(Var) = .empty,
 
     fn deinit(self: *@This(), allocator: Allocator) void {
         self.bindings.deinit(allocator);
         self.callable_stability.deinit(allocator);
         self.local_procedure_stability.deinit(allocator);
+        self.dispatch_seeds.deinit(allocator);
     }
 
     fn mark(self: *const @This()) usize {
@@ -10781,6 +10750,10 @@ fn hoistSelectionInvariant(comptime message: []const u8) noreturn {
 }
 
 const HoistedRootKeepOracle = struct {
+    /// The dispatch-target join when this module selected any method of a
+    /// block-local nominal; null when it selected none, so no root can reach
+    /// one.
+    dispatch_join: ?*const DispatchJoinIndex = null,
     pattern_roots: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
     expr_roots: std.AutoHashMapUnmanaged(CIR.Expr.Idx, u32) = .{},
     keep_roots: []const bool,
@@ -10838,7 +10811,75 @@ fn hoistedRootDependenciesAreKept(
 ) Allocator.Error!bool {
     var context = HoistedDependencyContext{};
     defer context.deinit(self.gpa);
-    return try self.hoistedRootDependenciesAreKeptInternal(expr, &context, keep_oracle);
+    if (!try self.hoistedRootDependenciesAreKeptInternal(expr, &context, keep_oracle)) return false;
+    const join = keep_oracle.dispatch_join orelse return true;
+    return !try self.hoistedRootReachesBlockLocalMethod(&context, join);
+}
+
+/// Whether a dispatch target the root's checked evidence selects, directly
+/// or nested in another selected target's evidence, is a method of a
+/// nominal declared in a function body. Such a method exists only in the
+/// block that declares it, and a kept root never contains that declaration
+/// (its method is a lambda, which a root never keeps), so the root cannot be
+/// evaluated on its own.
+fn hoistedRootReachesBlockLocalMethod(
+    self: *Self,
+    context: *HoistedDependencyContext,
+    join: *const DispatchJoinIndex,
+) Allocator.Error!bool {
+    var visited = std.AutoHashMapUnmanaged(Var, void){};
+    defer visited.deinit(self.gpa);
+    while (context.dispatch_seeds.pop()) |seed| {
+        const resolved = self.types.resolveVar(seed).var_;
+        if ((try visited.getOrPut(self.gpa, resolved)).found_existing) continue;
+        const inst_indices = join.instantiations_by_var.get(resolved) orelse continue;
+        for (inst_indices.items) |inst_index| {
+            const instantiation = self.dispatch_target_instantiations.items[inst_index];
+            if (self.methodBindingIsBlockLocal(instantiation.target_env, instantiation.target_binding)) return true;
+            const record_index = join.dispatch_scheme_uses.get(@intFromEnum(instantiation.constraint_fn_var)) orelse continue;
+            try self.appendSchemeUseSeeds(record_index, &context.dispatch_seeds);
+        }
+    }
+    return false;
+}
+
+fn methodBindingIsBlockLocal(self: *const Self, env: *const ModuleEnv, binding: ModuleEnv.MethodBinding) bool {
+    if (env != self.cir) return false;
+    return self.cir.store.nodes.get(binding.type_node_idx).tag == .statement_decl;
+}
+
+fn appendSchemeUseSeeds(self: *Self, record_index: u32, seeds: *std.ArrayListUnmanaged(Var)) Allocator.Error!void {
+    const record = self.cir.scheme_uses.items.items[record_index];
+    const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+    for (pairs) |pair| try seeds.append(self.gpa, @enumFromInt(pair.fresh_var));
+}
+
+/// Record the dispatch constraints an expression of a root instantiates or
+/// discharges, for `hoistedRootReachesBlockLocalMethod`.
+fn noteHoistedRootDispatchSeeds(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    context: *HoistedDependencyContext,
+    keep_oracle: *const HoistedRootKeepOracle,
+) Allocator.Error!void {
+    const join = keep_oracle.dispatch_join orelse return;
+    if (join.node_to_scheme_uses.get(@intFromEnum(expr_idx))) |record_indices| {
+        for (record_indices.items) |record_index| try self.appendSchemeUseSeeds(record_index, &context.dispatch_seeds);
+    }
+    const expr = self.cir.store.getExpr(expr_idx);
+    const constraint_fn_var: ?Var = if (expr == .e_dispatch_call)
+        expr.e_dispatch_call.constraint_fn_var
+    else if (expr == .e_method_eq)
+        expr.e_method_eq.constraint_fn_var
+    else if (expr == .e_type_dispatch_call)
+        expr.e_type_dispatch_call.constraint_fn_var
+    else if (expr == .e_interpolation)
+        expr.e_interpolation.constraint_fn_var
+    else if (expr == .e_call)
+        expr.e_call.constraint_fn_var
+    else
+        null;
+    if (constraint_fn_var) |fn_var| try context.dispatch_seeds.append(self.gpa, fn_var);
 }
 
 /// Whether a binding a hoisted root reads stays available once the root is
@@ -10864,11 +10905,17 @@ fn hoistedRootDependenciesAreKeptInternal(
 ) Allocator.Error!bool {
     if (self.hoistExprInvalidated(expr)) return false;
     if (self.exprHasDedicatedLiteralConversionRoot(expr)) return false;
+    try self.noteHoistedRootDispatchSeeds(expr, context, keep_oracle);
 
     return switch (self.cir.store.getExpr(expr)) {
         .e_lookup_local => |lookup| self.hoistedRootBindingIsKept(lookup.pattern_idx, context, keep_oracle),
+        // A method of a nominal declared in a function body exists only in
+        // that body's block.
+        .e_lookup_associated_local => |lookup| if (self.cir.lookupMethodBindingForOwnerConst(@enumFromInt(lookup.type_node_idx), lookup.item_ident)) |binding|
+            !self.methodBindingIsBlockLocal(self.cir, binding)
+        else
+            true,
         .e_lookup_external,
-        .e_lookup_associated_local,
         .e_lookup_associated,
         .e_lookup_associated_resolved,
         .e_str_segment,
@@ -16695,7 +16742,7 @@ fn ensureTypeDeclGenerated(
     decl_idx: CIR.Statement.Idx,
     env: *Env,
 ) std.mem.Allocator.Error!bool {
-    try self.noteTypeDeclReference(decl_idx);
+    try self.noteTypeDeclReferenceForLocalProcedures(decl_idx);
     switch (self.typeDeclGenerationState(decl_idx)) {
         .generated => return true,
         .generating => return switch (self.cir.store.getStatement(decl_idx)) {
@@ -22334,7 +22381,7 @@ fn checkPatternHelp(
         },
         // nominal //
         .nominal => |nominal| {
-            try self.noteTypeDeclReference(nominal.nominal_type_decl);
+            try self.noteTypeDeclReferenceForLocalProcedures(nominal.nominal_type_decl);
             // Check the backing pattern first
             const actual_backing_var = try self.checkPatternHelp(nominal.backing_pattern, ctx, env, out_var, valid);
 
@@ -24113,7 +24160,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
         },
         // nominal //
         .e_nominal => |nominal| {
-            try self.noteTypeDeclReference(nominal.nominal_type_decl);
+            try self.noteTypeDeclReferenceForLocalProcedures(nominal.nominal_type_decl);
             const prepared = try self.prepareNominalTypeUsage(
                 expr_var,
                 ModuleEnv.varFrom(nominal.nominal_type_decl),
@@ -24576,7 +24623,6 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
         .e_block => |block| {
             const hoist_scope = self.beginHoistLexicalScope();
             defer self.endHoistLexicalScope(hoist_scope);
-            try self.recordHoistContextualTypeDecls(block.stmts, expr_idx);
 
             // Check all statements in the block
             const stmt_result = try self.checkBlockStatements(block.stmts, env, expr_region, nested_expected.forStatement());
@@ -25523,7 +25569,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             }
             const did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, arg_expr_idxs);
 
-            try self.noteTypeDeclReference(method_call.type_dispatch_stmt);
+            try self.noteTypeDeclReferenceForLocalProcedures(method_call.type_dispatch_stmt);
             if (!did_err) {
                 const dispatcher_var = self.typeDispatchOwnerVar(method_call.type_dispatch_stmt);
                 const constraint_fn_var = try self.mkTypeMethodCallConstraint(
@@ -25550,7 +25596,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             }
         },
         .e_type_dispatch_call => |method_call| {
-            try self.noteTypeDeclReference(method_call.type_dispatch_stmt);
+            try self.noteTypeDeclReferenceForLocalProcedures(method_call.type_dispatch_stmt);
             const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
             for (arg_expr_idxs) |arg_expr_idx| {
                 self.checking_call_arg = true;
@@ -29778,7 +29824,7 @@ fn checkLocalAssociatedLookup(
     region: Region,
     env: *Env,
 ) Allocator.Error!void {
-    try self.noteTypeDeclReference(@enumFromInt(lookup.type_node_idx));
+    try self.noteTypeDeclReferenceForLocalProcedures(@enumFromInt(lookup.type_node_idx));
     try self.checkAssociatedLookupFromOwnerVar(
         expr_idx,
         expr_var,
@@ -31510,59 +31556,7 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
         }
     }
 
-    // Scheme-use evidence indexes for the dispatch joins. A dispatch fired
-    // inside an INSTANTIATED scheme carries the instantiation copy's
-    // constraint var, never the var written at the body's dispatch site
-    // (generalization copies it per use), so var equality alone can only
-    // join monomorphic sites. The recorded scheme-use pairs are the exact
-    // (scheme var -> fresh copy) linkage:
-    //  - value_use / nested_function_use records key by their LOCAL
-    //    instantiating node, so any walked expression that instantiated a
-    //    scheme (a generic def lookup, a foreign helper lookup) seeds the
-    //    fresh copies of that scheme's constrained vars;
-    //  - dispatch_target records key by the discharged constraint's raw fn
-    //    var ("unique per constraint instantiation"), chaining a followed
-    //    target's OWN interior dispatches without node ambiguity (a
-    //    dispatch_target record's node_idx may be a foreign module's CIR
-    //    index and is never compared against local nodes here).
-    for (self.cir.scheme_uses.items.items, 0..) |record, record_index| {
-        const slot: ModuleEnv.SchemeUseRecord.Slot = @enumFromInt(record.slot_kind);
-        switch (slot) {
-            .value_use, .nested_function_use => {
-                const entry = try evidence.node_to_scheme_uses.getOrPut(self.gpa, record.node_idx);
-                if (!entry.found_existing) entry.value_ptr.* = .empty;
-                try entry.value_ptr.append(self.gpa, @intCast(record_index));
-            },
-            .dispatch_target => {
-                // Keyed by the discharged constraint's raw fn var, which is
-                // unique per constraint instantiation (see above). A clash
-                // would silently drop a dispatch chain link and let a real
-                // cycle through, so it must fail loudly, in release too.
-                const entry = try evidence.dispatch_scheme_uses.getOrPut(self.gpa, record.slot_data);
-                if (entry.found_existing) {
-                    std.debug.panic(
-                        "type checker invariant violated: two dispatch_target scheme-use records share constraint fn var {d}",
-                        .{record.slot_data},
-                    );
-                }
-                entry.value_ptr.* = @intCast(record_index);
-            },
-            // A shared use copies no vars (it shares the in-flight
-            // definition's), so it has no fresh pairs to seed; the walk
-            // reaches the shared body through the ordinary reference edge.
-            .shared_value_use, .recursive_dispatch_target, .recursive_reference => {},
-            // A where-method use carries a complete structural copy map, but
-            // only to relate callable identities during checked-artifact construction.
-            // It has no child dispatch requirements and is not an edge in the default walk.
-            .where_method_use => {},
-        }
-    }
-    for (self.dispatch_target_instantiations.items, 0..) |instantiation, index| {
-        const resolved = self.types.resolveVar(instantiation.constraint_fn_var).var_;
-        const entry = try evidence.instantiations_by_var.getOrPut(self.gpa, resolved);
-        if (!entry.found_existing) entry.value_ptr.* = .empty;
-        try entry.value_ptr.append(self.gpa, @intCast(index));
-    }
+    try self.buildDispatchJoinIndex(&evidence.join);
 
     for (self.pending_default_checks.items) |pending| {
         // An erroring default already reported (an explicitly recorded
@@ -31814,6 +31808,32 @@ const DefaultWalkEvidence = struct {
     omitted_defaults_by_expr: collections.DenseMap(CIR.Expr.Idx, u32),
     next_omitted_default: []?u32,
     pattern_to_def_expr: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
+    join: DispatchJoinIndex = .{},
+
+    fn deinit(evidence: *DefaultWalkEvidence, gpa: std.mem.Allocator) void {
+        evidence.omitted_defaults_by_expr.deinit();
+        gpa.free(evidence.next_omitted_default);
+        evidence.pattern_to_def_expr.deinit(gpa);
+        evidence.join.deinit(gpa);
+    }
+};
+
+/// Scheme-use evidence indexes joining an expression to the dispatch targets
+/// selected for it. A dispatch fired inside an INSTANTIATED scheme carries the
+/// instantiation copy's constraint var, never the var written at the body's
+/// dispatch site (generalization copies it per use), so var equality alone can
+/// only join monomorphic sites. The recorded scheme-use pairs are the exact
+/// (scheme var -> fresh copy) linkage:
+///  - value_use / nested_function_use records key by their LOCAL
+///    instantiating node, so any expression that instantiated a scheme (a
+///    generic def lookup, a foreign helper lookup) seeds the fresh copies of
+///    that scheme's constrained vars;
+///  - dispatch_target records key by the discharged constraint's raw fn var
+///    ("unique per constraint instantiation"), chaining a followed target's
+///    OWN interior dispatches without node ambiguity (a dispatch_target
+///    record's node_idx may be a foreign module's CIR index and is never
+///    compared against local nodes).
+const DispatchJoinIndex = struct {
     /// Local instantiating node -> scheme-use record indices
     /// (`value_use`/`nested_function_use` slots only).
     node_to_scheme_uses: std.AutoHashMapUnmanaged(u32, std.ArrayListUnmanaged(u32)) = .empty,
@@ -31823,19 +31843,57 @@ const DefaultWalkEvidence = struct {
     /// Resolved constraint fn var -> `dispatch_target_instantiations` indices.
     instantiations_by_var: std.AutoHashMapUnmanaged(Var, std.ArrayListUnmanaged(u32)) = .empty,
 
-    fn deinit(evidence: *DefaultWalkEvidence, gpa: std.mem.Allocator) void {
-        evidence.omitted_defaults_by_expr.deinit();
-        gpa.free(evidence.next_omitted_default);
-        evidence.pattern_to_def_expr.deinit(gpa);
-        var node_lists = evidence.node_to_scheme_uses.valueIterator();
+    fn deinit(index: *DispatchJoinIndex, gpa: std.mem.Allocator) void {
+        var node_lists = index.node_to_scheme_uses.valueIterator();
         while (node_lists.next()) |list| list.deinit(gpa);
-        evidence.node_to_scheme_uses.deinit(gpa);
-        evidence.dispatch_scheme_uses.deinit(gpa);
-        var inst_lists = evidence.instantiations_by_var.valueIterator();
+        index.node_to_scheme_uses.deinit(gpa);
+        index.dispatch_scheme_uses.deinit(gpa);
+        var inst_lists = index.instantiations_by_var.valueIterator();
         while (inst_lists.next()) |list| list.deinit(gpa);
-        evidence.instantiations_by_var.deinit(gpa);
+        index.instantiations_by_var.deinit(gpa);
     }
 };
+
+fn buildDispatchJoinIndex(self: *Self, index: *DispatchJoinIndex) Allocator.Error!void {
+    for (self.cir.scheme_uses.items.items, 0..) |record, record_index| {
+        const slot: ModuleEnv.SchemeUseRecord.Slot = @enumFromInt(record.slot_kind);
+        switch (slot) {
+            .value_use, .nested_function_use => {
+                const entry = try index.node_to_scheme_uses.getOrPut(self.gpa, record.node_idx);
+                if (!entry.found_existing) entry.value_ptr.* = .empty;
+                try entry.value_ptr.append(self.gpa, @intCast(record_index));
+            },
+            .dispatch_target => {
+                // Keyed by the discharged constraint's raw fn var, which is
+                // unique per constraint instantiation (`DispatchJoinIndex`). A clash
+                // would silently drop a dispatch chain link and let a real
+                // cycle through, so it must fail loudly, in release too.
+                const entry = try index.dispatch_scheme_uses.getOrPut(self.gpa, record.slot_data);
+                if (entry.found_existing) {
+                    std.debug.panic(
+                        "type checker invariant violated: two dispatch_target scheme-use records share constraint fn var {d}",
+                        .{record.slot_data},
+                    );
+                }
+                entry.value_ptr.* = @intCast(record_index);
+            },
+            // A shared use copies no vars (it shares the in-flight
+            // definition's), so it has no fresh pairs to seed; the walk
+            // reaches the shared body through the ordinary reference edge.
+            .shared_value_use, .recursive_dispatch_target, .recursive_reference => {},
+            // A where-method use carries a complete structural copy map, but
+            // only to relate callable identities during checked-artifact construction.
+            // It has no child dispatch requirements and is not an edge in the default walk.
+            .where_method_use => {},
+        }
+    }
+    for (self.dispatch_target_instantiations.items, 0..) |instantiation, instantiation_index| {
+        const resolved = self.types.resolveVar(instantiation.constraint_fn_var).var_;
+        const entry = try index.instantiations_by_var.getOrPut(self.gpa, resolved);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(self.gpa, @intCast(instantiation_index));
+    }
+}
 
 /// Whether materializing `root` transitively reaches a construction omitting
 /// the field that carries `root` as its own default. The walk descends every
@@ -31910,7 +31968,7 @@ fn defaultMaterializationIsRecursive(
             const resolved_seed = self.types.resolveVar(seed_var).var_;
             const seen_seed = try visited_seed_vars.getOrPut(self.gpa, resolved_seed);
             if (seen_seed.found_existing) continue;
-            const inst_indices = evidence.instantiations_by_var.get(resolved_seed) orelse continue;
+            const inst_indices = evidence.join.instantiations_by_var.get(resolved_seed) orelse continue;
             for (inst_indices.items) |inst_index| {
                 const seen_inst = try visited_instantiations.getOrPut(self.gpa, inst_index);
                 if (seen_inst.found_existing) continue;
@@ -31920,7 +31978,7 @@ fn defaultMaterializationIsRecursive(
                     // call, so its function body walks.
                     try invoked_work.append(self.gpa, self.cir.store.getDef(instantiation.target_binding.def_idx).expr);
                 }
-                if (evidence.dispatch_scheme_uses.get(@intFromEnum(instantiation.constraint_fn_var))) |record_index| {
+                if (evidence.join.dispatch_scheme_uses.get(@intFromEnum(instantiation.constraint_fn_var))) |record_index| {
                     const record = self.cir.scheme_uses.items.items[record_index];
                     const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
                     for (pairs) |pair| {
@@ -32057,7 +32115,7 @@ fn defaultMaterializationIsRecursive(
         // This is how a dispatch performed INSIDE an instantiated scheme
         // body—local or foreign—reaches its stamped target: the body-side
         // dispatch node carries the pristine scheme's var, never the copy.
-        if (evidence.node_to_scheme_uses.get(@intFromEnum(expr_idx))) |record_indices| {
+        if (evidence.join.node_to_scheme_uses.get(@intFromEnum(expr_idx))) |record_indices| {
             for (record_indices.items) |record_index| {
                 const record = self.cir.scheme_uses.items.items[record_index];
                 const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];

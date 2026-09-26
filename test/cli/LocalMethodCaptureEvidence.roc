@@ -38,7 +38,20 @@ direct = |prefix| {
     l.get() == "p"
 }
 
+captured_flow : Str -> Str
+captured_flow = |prefix| {
+    Loc := [L].{
+        get : Loc -> Str
+        get = |_| prefix
+    }
+
+    l : Loc
+    l = Loc.L
+    getit(l)
+}
+
 expect capturing("p")
 expect !capturing("q")
 expect echoed("p") == "p" and echoed("q") == "q"
 expect direct("p")
+expect captured_flow("p") == "p" and captured_flow("q") == "q"
