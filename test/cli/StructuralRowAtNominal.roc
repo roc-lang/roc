@@ -1,4 +1,4 @@
-## Structural tag rows returned by unannotated generalized functions, used
+## Structural tag rows and records returned by unannotated generalized functions, used
 ## where the checker unified them with a nominal type's backing (`Try`, and a
 ## user nominal with a type argument). Boxy aligns the structural worker row
 ## with the call nominal's backing, whose declaration formals it binds to the
@@ -43,3 +43,23 @@ expect {
     t = nf({})
     t == Err(NotFound)
 }
+
+P(a) := { x : a, s : Str }
+
+Nested(a) := [Good(Try(a, Str)), Gone]
+
+mk_p = |v| { x: v, s: "t" }
+mk_p_const = |_| { x: "c", s: "t" }
+nested_good = |v| Good(Ok(v))
+nested_bad = |_| Good(Err("bad"))
+
+shown_p : P(Str) -> Str
+shown_p = |p| Str.concat(p.x, p.s)
+
+shown_nested_res : Nested(U64) -> Str
+shown_nested_res = |v| match v { Good(Ok(n)) => n.to_str(), Good(Err(e)) => e, Gone => "Gone" }
+
+expect shown_p(mk_p("a")) == "at"
+expect shown_p(mk_p_const({})) == "ct"
+expect shown_nested_res(nested_good(3)) == "3"
+expect shown_nested_res(nested_bad({})) == "bad"
