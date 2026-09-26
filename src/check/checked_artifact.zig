@@ -6167,7 +6167,7 @@ fn appendCheckedNominalDeclarationFromStatement(
         .representation = if (statement_nominal.builtin) |builtin_id|
             .{ .builtin = builtin_id }
         else
-            .{ .local_declaration = active.local_nominal_declarations.get(statement_idx) },
+            .{ .local_declaration = active.scratch.?.local_nominal_declarations.get(statement_idx) },
         .args = formal_args,
         .padding_field_types = padding_field_types,
         .declared_fields = declared_fields,
@@ -8363,10 +8363,10 @@ const SourceTypeGraphAnalysis = struct {
 
 const CheckedSourceTypeRoots = struct {
     roots: collections.DenseMap(Var, CheckedTypeId),
-    local_nominal_declarations: LocalNominalDeclarationIds,
     scratch: ?struct {
         graph_analysis: SourceTypeGraphAnalysis,
         key_writer: canonical_type_keys.TypeWriter,
+        local_nominal_declarations: LocalNominalDeclarationIds,
     },
 
     fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!CheckedSourceTypeRoots {
@@ -8376,16 +8376,17 @@ const CheckedSourceTypeRoots = struct {
         errdefer graph_analysis.deinit();
         return .{
             .roots = collections.DenseMap(Var, CheckedTypeId).init(allocator),
-            .local_nominal_declarations = local_nominal_declarations,
             .scratch = .{
                 .graph_analysis = graph_analysis,
                 .key_writer = canonical_type_keys.TypeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst()),
+                .local_nominal_declarations = local_nominal_declarations,
             },
         };
     }
 
     fn releaseScratch(self: *CheckedSourceTypeRoots) void {
         if (self.scratch) |*scratch| {
+            scratch.local_nominal_declarations.deinit();
             scratch.key_writer.deinit();
             scratch.graph_analysis.deinit();
         }
@@ -8394,7 +8395,6 @@ const CheckedSourceTypeRoots = struct {
 
     fn deinit(self: *CheckedSourceTypeRoots) void {
         self.releaseScratch();
-        self.local_nominal_declarations.deinit();
         self.roots.deinit();
     }
 
@@ -8735,7 +8735,7 @@ fn copyCheckedFlatType(
                     .source_decl = nominal.sourceDeclOptional(),
                     .builtin = builtin_nominal,
                     .is_opaque = nominal.isOpaque(),
-                    .representation = try checkedNominalRepresentationForSourceNominal(module, names, imports, &active.local_nominal_declarations, nominal, builtin_nominal),
+                    .representation = try checkedNominalRepresentationForSourceNominal(module, names, imports, &active.scratch.?.local_nominal_declarations, nominal, builtin_nominal),
                     .args = try copyCheckedTypeRange(allocator, module, names, imports, store, active, module.typeStoreConst().sliceNominalArgs(nominal)),
                     // Padding lives on the nominal declaration (built from its source
                     // annotation), not on usage payloads copied from the internal
