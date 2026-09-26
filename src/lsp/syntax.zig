@@ -1065,36 +1065,6 @@ pub const SyntaxChecker = struct {
         }
     };
 
-    /// Returns true when a byte can be part of a Roc identifier token used for
-    /// hover symbol fallback resolution.
-    fn isSymbolByte(b: u8) bool {
-        return std.ascii.isAlphanumeric(b) or b == '_' or b == '.';
-    }
-
-    /// Extract the symbol token under (or immediately before) an offset.
-    ///
-    /// This is a resilient fallback for hover when CIR lookup queries miss the
-    /// exact identifier region (for example, when the cursor lands on a nearby
-    /// delimiter).
-    fn symbolAtOffset(source: []const u8, offset: u32) ?[]const u8 {
-        if (source.len == 0) return null;
-
-        var i: usize = @intCast(@min(offset, @as(u32, @intCast(source.len))));
-        if (i >= source.len or !isSymbolByte(source[i])) {
-            if (i == 0 or !isSymbolByte(source[i - 1])) return null;
-            i -= 1;
-        }
-
-        var start = i;
-        while (start > 0 and isSymbolByte(source[start - 1])) : (start -= 1) {}
-
-        var end = i + 1;
-        while (end < source.len and isSymbolByte(source[end])) : (end += 1) {}
-
-        if (end <= start) return null;
-        return source[start..end];
-    }
-
     /// Get type information at a specific position in a document.
     /// Returns the type as a formatted string, or null if no type info is available.
     pub fn getTypeAtPosition(
@@ -1142,10 +1112,6 @@ pub const SyntaxChecker = struct {
         else
             result.type_var;
 
-        // Optional textual override for hover type rendering. When we can
-        // resolve an explicit annotation for a symbol, prefer that exact text.
-        var hover_type_text_opt: ?[]const u8 = null;
-
         if (lookup_result_opt) |lookup_result| {
             switch (lookup_result) {
                 .expr => |lookup_expr_idx| {
@@ -1186,95 +1152,18 @@ pub const SyntaxChecker = struct {
         // Extract documentation for the definition/pattern at this location.
         // When we already have a lookup expression, resolve directly to avoid
         // region/offset ambiguity around delimiters.
-        var documentation = if (lookup_result_opt) |lookup_result|
+        const documentation = if (lookup_result_opt) |lookup_result|
             try self.resolveDocForLookup(env, module_env, build.absolute_path, lookup_result)
         else
             try self.findDocumentationForRegion(env, module_env, build.absolute_path, result.region, target_offset);
 
-        // Final fallback: reuse definition-resolution to recover the symbol at
-        // call sites where direct lookup queries can miss the identifier region.
-        // This keeps hover aligned with go-to-definition behavior.
-        if (documentation == null) {
-            var def_oom: ?Allocator.Error = null;
-            const def_loc_opt = self.findDefinitionAtOffset(build.env, module_env, build.absolute_path, target_offset, uri, &def_oom);
-            if (def_oom) |e| return e;
-            if (def_loc_opt) |def_loc| {
-                defer def_loc.deinit(self.allocator);
-                if (std.mem.eql(u8, def_loc.uri, uri)) {
-                    if (pos.positionToOffset(module_env, def_loc.range.start_line, def_loc.range.start_col)) |def_offset| {
-                        if (cir_queries.findPatternAtOffset(module_env, def_offset)) |pattern_idx| {
-                            hover_type_var = ModuleEnv.varFrom(pattern_idx);
-                            documentation = try doc_comments.extractDocCommentBefore(
-                                self.allocator,
-                                module_env.common.source,
-                                module_env.store.getPatternRegion(pattern_idx).start.offset,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        // Text-token fallback: resolve symbol directly by source token under
-        // the cursor. This recovers hover on call identifiers even when CIR
-        // lookup matching is ambiguous for that exact offset.
-        if (symbolAtOffset(module_env.common.source, target_offset)) |symbol| {
-            if (module_lookup.findDefinitionByUnqualifiedName(module_env, symbol)) |def_info| {
-                hover_type_var = if (def_info.expr_idx) |expr_idx|
-                    ModuleEnv.varFrom(expr_idx)
-                else
-                    ModuleEnv.varFrom(def_info.pattern_idx);
-
-                if (module_lookup.findDefOwningPattern(module_env, def_info.pattern_idx)) |def| {
-                    if (def.annotation) |anno_idx| {
-                        const anno = module_env.store.getAnnotation(anno_idx);
-                        const anno_region = module_env.store.getTypeAnnoRegion(anno.anno);
-                        hover_type_text_opt = module_env.getSource(anno_region);
-                    }
-
-                    const extracted = try doc_comments.extractDocForDef(
-                        self.allocator,
-                        module_env.common.source,
-                        &module_env.store,
-                        def,
-                    );
-                    if (extracted != null) {
-                        if (documentation) |doc| self.allocator.free(doc);
-                        documentation = extracted;
-                    }
-                } else if (module_lookup.findStatementOwningPattern(module_env, def_info.pattern_idx)) |stmt_owner| {
-                    const extracted = try doc_comments.extractDocForStatement(
-                        self.allocator,
-                        module_env.common.source,
-                        &module_env.store,
-                        stmt_owner.stmt,
-                        stmt_owner.idx,
-                    );
-                    if (extracted != null) {
-                        if (documentation) |doc| self.allocator.free(doc);
-                        documentation = extracted;
-                    }
-                } else {
-                    const extracted = try doc_comments.extractDocCommentBefore(
-                        self.allocator,
-                        module_env.common.source,
-                        module_env.store.getPatternRegion(def_info.pattern_idx).start.offset,
-                    );
-                    if (extracted != null) {
-                        if (documentation) |doc| self.allocator.free(doc);
-                        documentation = extracted;
-                    }
-                }
-            }
-        }
         defer if (documentation) |doc| self.allocator.free(doc);
 
         // Create markdown-formatted output with type and optional documentation
-        const type_text = hover_type_text_opt orelse type_str;
         const markdown = if (documentation) |doc|
-            try std.fmt.allocPrint(self.allocator, "{s}\n\n```roc\n{s}\n```", .{ doc, type_text })
+            try std.fmt.allocPrint(self.allocator, "{s}\n\n```roc\n{s}\n```", .{ doc, type_str })
         else
-            try std.fmt.allocPrint(self.allocator, "```roc\n{s}\n```", .{type_text});
+            try std.fmt.allocPrint(self.allocator, "```roc\n{s}\n```", .{type_str});
 
         // Convert the region back to LSP positions
         const range = cir_queries.regionToRange(module_env, result.region);

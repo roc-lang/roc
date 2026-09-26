@@ -2226,6 +2226,11 @@ the diagnostic itself, and marks only the consuming expression erroneous. The
 producer keeps the type it was solved to, so a rejected relation neither
 cascades into unrelated uses of that producer nor leaves an `.err` on a binding
 whose value post-check lowering must still instantiate.
+An expression statement is such a consumer of its expression's value: the
+`{}` demand is owned by the statement, and a call's result class is its
+callee's return slot, which a monomorphic callee shares with every other use.
+A rejected statement value retires the expression and marks the statement
+erroneous; the call and its callee keep their solved types.
 
 Because `.err` no longer merges, it also no longer relates the operands unified
 against it. A checker site that only needs diagnostic recovery may accept both
@@ -3162,8 +3167,11 @@ Rejected code is replaced in place with a runtime error node: an expression,
 statement, or literal pattern checking rejects, and a read of a `var` before it
 is initialized, which canonicalization rejects. Every later stage reads the
 crash and nothing of the rejected code. The node store keeps each node it
-replaces this way, and the runtime error names the node it replaced, so
-source-level tools read through the replacement to the code as written:
+replaces this way in `NodeStore.replaced_source_nodes`, and the runtime error
+names the node it replaced, so source-level tools read through the replacement
+to the code as written with `getSourceExpr`, `getSourceStatement`, and
+`getSourcePattern`. The kept node's children, regions, and type variables are
+the ones canonicalization and checking produced, so hover, completion,
 renaming a binding, listing its references, highlighting it, and going to its
 definition all see the occurrences inside rejected code. Compilation never
 reads the kept nodes, and a module without errors keeps none. A deferred

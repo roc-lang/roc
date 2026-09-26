@@ -25019,16 +25019,19 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 statement_blocks_later_hoists = self.checkedExprBlocksLaterHoists(expr.expr, expr_does_fx);
                 const expr_var: Var = ModuleEnv.varFrom(expr.expr);
 
-                // Statements must evaluate to {}. Add a constraint to unify with empty record.
-                // If unification fails, we get a nice type mismatch error explaining that
-                // statement expressions must return {}.
+                // Statements must evaluate to {}. The statement only consults its
+                // expression's value, whose solved class is shared with the
+                // producer (a call's result is its callee's return slot), so a
+                // rejection owns the diagnostic and retires the expression and
+                // the statement without poisoning that class.
                 const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, stmt_region);
-                const statement_result = try self.unifyInContext(empty_rec, expr_var, env, .statement_value);
+                const statement_result = try self.unifyOwnedRelation(empty_rec, expr_var, env, .statement_value, .construction);
                 if (statement_result.isProblem()) {
                     try self.erroneous_value_exprs.put(self.gpa, expr.expr, {});
+                    try self.markErroneous(stmt_var);
+                } else {
+                    _ = try self.unify(stmt_var, expr_var, env);
                 }
-
-                _ = try self.unify(stmt_var, expr_var, env);
                 if (self.exprIsAllCrashConditional(expr.expr)) {
                     diverges = true;
                     warn_unreachable = true;
