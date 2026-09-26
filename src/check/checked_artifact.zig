@@ -6167,7 +6167,7 @@ fn appendCheckedNominalDeclarationFromStatement(
         .representation = if (statement_nominal.builtin) |builtin_id|
             .{ .builtin = builtin_id }
         else
-            .{ .local_declaration = localNominalDeclarationIdForStatement(module, statement_idx) },
+            .{ .local_declaration = active.scratch.?.local_nominal_declarations.get(statement_idx) },
         .args = formal_args,
         .padding_field_types = padding_field_types,
         .declared_fields = declared_fields,
@@ -8366,20 +8366,27 @@ const CheckedSourceTypeRoots = struct {
     scratch: ?struct {
         graph_analysis: SourceTypeGraphAnalysis,
         key_writer: canonical_type_keys.TypeWriter,
+        local_nominal_declarations: LocalNominalDeclarationIds,
     },
 
     fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!CheckedSourceTypeRoots {
+        var local_nominal_declarations = try LocalNominalDeclarationIds.init(allocator, module);
+        errdefer local_nominal_declarations.deinit();
+        var graph_analysis = try SourceTypeGraphAnalysis.init(allocator, @intCast(module.typeStoreConst().len()));
+        errdefer graph_analysis.deinit();
         return .{
             .roots = collections.DenseMap(Var, CheckedTypeId).init(allocator),
             .scratch = .{
-                .graph_analysis = try SourceTypeGraphAnalysis.init(allocator, @intCast(module.typeStoreConst().len())),
+                .graph_analysis = graph_analysis,
                 .key_writer = canonical_type_keys.TypeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst()),
+                .local_nominal_declarations = local_nominal_declarations,
             },
         };
     }
 
     fn releaseScratch(self: *CheckedSourceTypeRoots) void {
         if (self.scratch) |*scratch| {
+            scratch.local_nominal_declarations.deinit();
             scratch.key_writer.deinit();
             scratch.graph_analysis.deinit();
         }
@@ -8728,7 +8735,7 @@ fn copyCheckedFlatType(
                     .source_decl = nominal.sourceDeclOptional(),
                     .builtin = builtin_nominal,
                     .is_opaque = nominal.isOpaque(),
-                    .representation = try checkedNominalRepresentationForSourceNominal(module, names, imports, nominal, builtin_nominal),
+                    .representation = try checkedNominalRepresentationForSourceNominal(module, names, imports, &active.scratch.?.local_nominal_declarations, nominal, builtin_nominal),
                     .args = try copyCheckedTypeRange(allocator, module, names, imports, store, active, module.typeStoreConst().sliceNominalArgs(nominal)),
                     // Padding lives on the nominal declaration (built from its source
                     // annotation), not on usage payloads copied from the internal
@@ -9961,6 +9968,7 @@ fn checkedNominalRepresentationForSourceNominal(
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
     imports: CheckedImportViews,
+    local_nominal_declarations: *const LocalNominalDeclarationIds,
     nominal: types.NominalType,
     builtin_nominal: ?CheckedBuiltinNominal,
 ) Allocator.Error!CheckedNominalRepresentationRef {
@@ -9971,7 +9979,7 @@ fn checkedNominalRepresentationForSourceNominal(
     if (nominal.origin_module == module_env.selfModuleIdentity()) {
         const statement = source_decl orelse
             checkedArtifactInvariant("checked local nominal representation had no source declaration", .{});
-        return .{ .local_declaration = localNominalDeclarationIdForStatement(module, @enumFromInt(statement)) };
+        return .{ .local_declaration = local_nominal_declarations.get(@enumFromInt(statement)) };
     }
 
     const origin_hash = module_env.moduleIdentityHash(nominal.origin_module);
@@ -10041,24 +10049,37 @@ fn importedNominalDeclarationRefForSourceNominal(
     );
 }
 
-fn localNominalDeclarationIdForStatement(
-    module: TypedCIR.Module,
-    statement_idx: CIR.Statement.Idx,
-) CheckedNominalDeclarationId {
-    var next_id: u32 = 0;
-    const module_env = module.moduleEnvConst();
-    for (module_env.store.sliceStatements(module_env.all_statements)) |candidate| {
-        const statement = module.getStatement(candidate);
-        if (statement != .s_nominal_decl) continue;
-        const nominal = statement.s_nominal_decl;
-        if (nominal.anno == .placeholder) continue;
-        if (!localNominalDeclarationIsValid(module, candidate)) continue;
-        const id: CheckedNominalDeclarationId = @enumFromInt(next_id);
-        next_id += 1;
-        if (candidate == statement_idx) return id;
+/// The checked declaration id of every published local nominal declaration,
+/// keyed by its statement. Ids are dense in statement order over exactly the
+/// declarations `appendCheckedNominalDeclarationFromStatement` publishes.
+const LocalNominalDeclarationIds = struct {
+    ids: std.AutoHashMap(CIR.Statement.Idx, CheckedNominalDeclarationId),
+
+    fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!LocalNominalDeclarationIds {
+        var ids = std.AutoHashMap(CIR.Statement.Idx, CheckedNominalDeclarationId).init(allocator);
+        errdefer ids.deinit();
+        var next_id: u32 = 0;
+        const module_env = module.moduleEnvConst();
+        for (module_env.store.sliceStatements(module_env.all_statements)) |candidate| {
+            const statement = module.getStatement(candidate);
+            if (statement != .s_nominal_decl) continue;
+            if (statement.s_nominal_decl.anno == .placeholder) continue;
+            if (!localNominalDeclarationIsValid(module, candidate)) continue;
+            try ids.put(candidate, @enumFromInt(next_id));
+            next_id += 1;
+        }
+        return .{ .ids = ids };
     }
-    checkedArtifactInvariant("checked nominal declaration statement had no declaration id", .{});
-}
+
+    fn deinit(self: *LocalNominalDeclarationIds) void {
+        self.ids.deinit();
+    }
+
+    fn get(self: *const LocalNominalDeclarationIds, statement_idx: CIR.Statement.Idx) CheckedNominalDeclarationId {
+        return self.ids.get(statement_idx) orelse
+            checkedArtifactInvariant("checked nominal declaration statement had no declaration id", .{});
+    }
+};
 
 fn localNominalDeclarationIsValid(
     module: TypedCIR.Module,
