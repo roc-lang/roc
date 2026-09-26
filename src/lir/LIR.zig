@@ -64,7 +64,7 @@ pub const ProcIdentity = struct {
     }
 
     /// Bytes that every procedure symbol name begins with.
-    pub const symbol_name_prefix = "roc__proc_";
+    pub const symbol_name_prefix = "roc__p";
 
     /// Length of a procedure symbol name. The identity encoding fixes it: the
     /// prefix plus the hex of the leading 128 bits.
