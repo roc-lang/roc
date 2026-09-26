@@ -1365,12 +1365,14 @@ pub const Store = struct {
                 }
             }
             if (interned == null) {
-                for (group.value_ptr.items) |earlier| {
-                    const earlier_ty: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + earlier)));
-                    if (try self.typeEql(name_store, earlier_ty, candidate)) {
-                        interned = interned_original[earlier];
-                        break;
+                // Digest-equal candidates are one type; see `bucketHit`.
+                if (group.value_ptr.items.len != 0) {
+                    const earlier = group.value_ptr.items[0];
+                    if (std.debug.runtime_safety) {
+                        const earlier_ty: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + earlier)));
+                        std.debug.assert(try self.typeEql(name_store, earlier_ty, candidate));
                     }
+                    interned = interned_original[earlier];
                 }
             }
             if (interned) |found| {
@@ -2615,14 +2617,12 @@ pub const Store = struct {
         existing: TypeId,
         candidate: TypeId,
     ) std.mem.Allocator.Error!bool {
-        if (!try self.typeEql(name_store, existing, candidate)) return false;
+        // The full digest is a cryptographic encoding of everything `typeEql`
+        // compares (design.md, "Type digests"), so a bucket entry is the type.
         if (std.debug.runtime_safety) {
-            // Allocation failure inside these checks propagates like any
-            // other digest or equality allocation failure; the entry's digest
-            // is already cached from interning, so this does not allocate in
-            // practice.
             const existing_digest = try self.computeDigest(name_store, existing, .full, null);
             std.debug.assert(std.mem.eql(u8, &existing_digest.bytes, &key.bytes));
+            std.debug.assert(try self.typeEql(name_store, existing, candidate));
             std.debug.assert(try self.typeEql(name_store, candidate, existing));
         }
         return true;
