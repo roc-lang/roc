@@ -155,6 +155,9 @@ const Solver = struct {
     /// Path stops seen by the Monotype uninhabitedness walk currently
     /// running; a result is recorded only when its subtree added none.
     mono_uninhabited_path_stops: u32 = 0,
+    /// Types on the current uninhabitedness walk's path, indexed by id.
+    uninhabited_path: std.DynamicBitSetUnmanaged = .{},
+    mono_uninhabited_path: std.DynamicBitSetUnmanaged = .{},
     clone_map_pool: collections.DenseMapPool(MonoType.TypeId, Type.TypeVarId),
 
     const FunctionShape = struct {
@@ -286,6 +289,8 @@ const Solver = struct {
         self.clone_map_pool.deinit();
         self.mono_set_pool.deinit();
         self.mono_uninhabited.deinit();
+        self.uninhabited_path.deinit(self.allocator);
+        self.mono_uninhabited_path.deinit(self.allocator);
         self.solved_position_pool.deinit();
         self.solved_set_pool.deinit();
         for (self.leaf_contexts.items) |*ctx| ctx.deinit();
@@ -2282,33 +2287,34 @@ const Solver = struct {
     }
 
     fn typeIsProvenUninhabited(self: *Solver, ty: Type.TypeVarId) Allocator.Error!bool {
-        var visiting = self.solved_set_pool.acquire();
-        defer self.solved_set_pool.release(&visiting);
-        return self.typeIsProvenUninhabitedInner(ty, &visiting);
+        const var_count = self.program.types.vars.items.len;
+        if (self.uninhabited_path.bit_length < var_count) {
+            try self.uninhabited_path.resize(self.allocator, var_count, false);
+        }
+        return self.typeIsProvenUninhabitedInner(ty);
     }
 
-    fn typeIsProvenUninhabitedInner(
-        self: *Solver,
-        ty: Type.TypeVarId,
-        visiting: *collections.DenseMap(Type.TypeVarId, void),
-    ) Allocator.Error!bool {
+    fn typeIsProvenUninhabitedInner(self: *Solver, ty: Type.TypeVarId) Allocator.Error!bool {
         const root = self.program.types.rootCompressed(ty);
-        const entry = try visiting.getOrPut(root);
-        if (entry.found_existing) return false;
-        defer _ = visiting.remove(root);
+        const path_index: usize = @intFromEnum(root);
+        if (self.uninhabited_path.isSet(path_index)) return false;
+        self.uninhabited_path.set(path_index);
+        defer self.uninhabited_path.unset(path_index);
 
         return switch (self.program.types.get(root)) {
             // Probe leaves against the lifted store instead of materializing:
             // uninhabitedness is a pure function of the Monotype.
             .mono => |leaf| blk: {
                 if (self.mono_uninhabited.get(leaf.id)) |result| break :blk result;
-                var mono_visiting = self.mono_set_pool.acquire();
-                defer self.mono_set_pool.release(&mono_visiting);
-                break :blk try self.monoProvenUninhabited(leaf.id, &mono_visiting);
+                const type_count = self.lifted.types.types.len;
+                if (self.mono_uninhabited_path.bit_length < type_count) {
+                    try self.mono_uninhabited_path.resize(self.allocator, type_count, false);
+                }
+                break :blk try self.monoProvenUninhabited(leaf.id);
             },
             .named => |named| if (named.backing) |backing|
                 if (backing.use == .inspectable)
-                    self.typeIsProvenUninhabitedInner(backing.ty, visiting)
+                    self.typeIsProvenUninhabitedInner(backing.ty)
                 else
                     false
             else
@@ -2319,7 +2325,7 @@ const Solver = struct {
                     const tag = self.program.types.tagItem(tags, tag_index);
                     var tag_inhabited = true;
                     for (0..tag.payloads.count()) |payload_index| {
-                        if (try self.typeIsProvenUninhabitedInner(self.program.types.spanItem(tag.payloads, payload_index), visiting)) {
+                        if (try self.typeIsProvenUninhabitedInner(self.program.types.spanItem(tag.payloads, payload_index))) {
                             tag_inhabited = false;
                             break;
                         }
@@ -2330,50 +2336,43 @@ const Solver = struct {
             },
             .tuple => |items| blk: {
                 for (0..items.count()) |index| {
-                    if (try self.typeIsProvenUninhabitedInner(self.program.types.spanItem(items, index), visiting)) break :blk true;
+                    if (try self.typeIsProvenUninhabitedInner(self.program.types.spanItem(items, index))) break :blk true;
                 }
                 break :blk false;
             },
             .record => |fields| blk: {
                 for (0..fields.count()) |index| {
-                    if (try self.typeIsProvenUninhabitedInner(self.program.types.fieldItem(fields, index).ty, visiting)) break :blk true;
+                    if (try self.typeIsProvenUninhabitedInner(self.program.types.fieldItem(fields, index).ty)) break :blk true;
                 }
                 break :blk false;
             },
-            .box => |payload| self.typeIsProvenUninhabitedInner(payload, visiting),
+            .box => |payload| self.typeIsProvenUninhabitedInner(payload),
             .list, .func, .primitive, .lambda_set, .erased, .zst, .link, .unbound, .forall => false,
         };
     }
 
     /// `typeIsProvenUninhabitedInner` over the lifted Monotype store, for
     /// lazy leaves that have not materialized.
-    fn monoProvenUninhabited(
-        self: *Solver,
-        id: MonoType.TypeId,
-        visiting: *collections.DenseMap(MonoType.TypeId, void),
-    ) Allocator.Error!bool {
+    fn monoProvenUninhabited(self: *Solver, id: MonoType.TypeId) Allocator.Error!bool {
         if (self.mono_uninhabited.get(id)) |result| return result;
-        const entry = try visiting.getOrPut(id);
-        if (entry.found_existing) {
+        const path_index: usize = @intFromEnum(id);
+        if (self.mono_uninhabited_path.isSet(path_index)) {
             self.mono_uninhabited_path_stops += 1;
             return false;
         }
-        defer _ = visiting.remove(id);
+        self.mono_uninhabited_path.set(path_index);
+        defer self.mono_uninhabited_path.unset(path_index);
         const stops = self.mono_uninhabited_path_stops;
-        const result = try self.monoProvenUninhabitedContent(id, visiting);
+        const result = try self.monoProvenUninhabitedContent(id);
         if (stops == self.mono_uninhabited_path_stops) try self.mono_uninhabited.put(id, result);
         return result;
     }
 
-    fn monoProvenUninhabitedContent(
-        self: *Solver,
-        id: MonoType.TypeId,
-        visiting: *collections.DenseMap(MonoType.TypeId, void),
-    ) Allocator.Error!bool {
+    fn monoProvenUninhabitedContent(self: *Solver, id: MonoType.TypeId) Allocator.Error!bool {
         return switch (self.lifted.types.get(id)) {
             .named => |named| if (named.backing) |backing|
                 if (backing.use == .inspectable)
-                    self.monoProvenUninhabited(backing.ty, visiting)
+                    self.monoProvenUninhabited(backing.ty)
                 else
                     false
             else
@@ -2384,7 +2383,7 @@ const Solver = struct {
                 for (tag_span) |tag| {
                     var tag_inhabited = true;
                     for (self.lifted.types.span(tag.payloads)) |payload| {
-                        if (try self.monoProvenUninhabited(payload, visiting)) {
+                        if (try self.monoProvenUninhabited(payload)) {
                             tag_inhabited = false;
                             break;
                         }
@@ -2395,17 +2394,17 @@ const Solver = struct {
             },
             .tuple => |items| blk: {
                 for (self.lifted.types.span(items)) |item| {
-                    if (try self.monoProvenUninhabited(item, visiting)) break :blk true;
+                    if (try self.monoProvenUninhabited(item)) break :blk true;
                 }
                 break :blk false;
             },
             .record => |fields| blk: {
                 for (self.lifted.types.fieldSpan(fields)) |field| {
-                    if (try self.monoProvenUninhabited(field.ty, visiting)) break :blk true;
+                    if (try self.monoProvenUninhabited(field.ty)) break :blk true;
                 }
                 break :blk false;
             },
-            .box => |payload| self.monoProvenUninhabited(payload, visiting),
+            .box => |payload| self.monoProvenUninhabited(payload),
             .list, .func, .primitive, .erased, .zst => false,
         };
     }
@@ -3427,6 +3426,13 @@ fn solvedTypeDigestTestSolver(
 ) Solver {
     var solver: Solver = undefined;
     solver.allocator = allocator;
+    solver.mono_uninhabited = collections.DenseMap(MonoType.TypeId, bool).init(allocator);
+    defer solver.mono_uninhabited.deinit();
+    solver.mono_uninhabited_path_stops = 0;
+    solver.uninhabited_path = .{};
+    defer solver.uninhabited_path.deinit(allocator);
+    solver.mono_uninhabited_path = .{};
+    defer solver.mono_uninhabited_path.deinit(allocator);
     solver.program = program;
     solver.lifted = undefined;
     solver.lifted.names = name_store;
@@ -3535,6 +3541,13 @@ test "lambda solved erased callable digest includes record field default identit
     lifted.names = &name_store;
     var solver: Solver = undefined;
     solver.allocator = gpa;
+    solver.mono_uninhabited = collections.DenseMap(MonoType.TypeId, bool).init(gpa);
+    defer solver.mono_uninhabited.deinit();
+    solver.mono_uninhabited_path_stops = 0;
+    solver.uninhabited_path = .{};
+    defer solver.uninhabited_path.deinit(gpa);
+    solver.mono_uninhabited_path = .{};
+    defer solver.mono_uninhabited_path.deinit(gpa);
     solver.program = &program;
     solver.lifted = lifted;
     solver.solved_position_pool = collections.DenseMapPool(Type.TypeVarId, u32).init(gpa);
@@ -3570,6 +3583,13 @@ test "inspectable backing unification isolates the structural type variable once
 
     var solver: Solver = undefined;
     solver.allocator = allocator;
+    solver.mono_uninhabited = collections.DenseMap(MonoType.TypeId, bool).init(allocator);
+    defer solver.mono_uninhabited.deinit();
+    solver.mono_uninhabited_path_stops = 0;
+    solver.uninhabited_path = .{};
+    defer solver.uninhabited_path.deinit(allocator);
+    solver.mono_uninhabited_path = .{};
+    defer solver.mono_uninhabited_path.deinit(allocator);
     solver.program = &program;
     solver.active_unifications = std.AutoHashMap(UnifyPair, void).init(allocator);
     defer solver.active_unifications.deinit();
@@ -3606,6 +3626,13 @@ test "inspectable backing unification never redirects an owned backing to its no
 
     var solver: Solver = undefined;
     solver.allocator = allocator;
+    solver.mono_uninhabited = collections.DenseMap(MonoType.TypeId, bool).init(allocator);
+    defer solver.mono_uninhabited.deinit();
+    solver.mono_uninhabited_path_stops = 0;
+    solver.uninhabited_path = .{};
+    defer solver.uninhabited_path.deinit(allocator);
+    solver.mono_uninhabited_path = .{};
+    defer solver.mono_uninhabited_path.deinit(allocator);
     solver.program = &program;
     solver.lifted = undefined;
     solver.active_unifications = std.AutoHashMap(UnifyPair, void).init(allocator);
