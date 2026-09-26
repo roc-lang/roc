@@ -570,6 +570,38 @@ test "hoist roots are still selected for inspecting a local nominal without an o
     try std.testing.expectEqual(@as(usize, 1), binding_roots);
 }
 
+test "hoist roots are not selected for a call whose evidence is an imported module's block-local method" {
+    const source_a =
+        \\module [mk]
+        \\
+        \\mk = |_| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "a"
+        \\    }
+        \\    Loc.L
+        \\}
+    ;
+    var test_env_a = try TestEnv.init("Maker", source_a);
+    defer test_env_a.deinit();
+
+    const source_b =
+        \\import Maker
+        \\
+        \\getit : a -> Str where [a.get : a -> Str]
+        \\getit = |x| x.get()
+        \\
+        \\main = |arg| {
+        \\    x = getit(Maker.mk({}))
+        \\    Str.concat(x, arg)
+        \\}
+    ;
+    var test_env_b = try TestEnv.initWithImport("Main", source_b, "Maker", &test_env_a);
+    defer test_env_b.deinit();
+    try test_env_b.assertNoErrors();
+    try expectNoSelectedCallRoot(&test_env_b);
+}
+
 fn expectNoSelectedComparisonRoot(test_env: *const TestEnv) error{TestUnexpectedResult}!void {
     for (test_env.checker.selectedHoistedRoots()) |root| {
         if (root.pattern != null) return error.TestUnexpectedResult;

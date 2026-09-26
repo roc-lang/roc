@@ -303,7 +303,9 @@ pub const Constants = struct {
     /// 129: Hoist selection rejects roots whose instantiated types reach a
     ///      block-local `to_inspect` override.
     /// 130: A block-local alias generalizes only when it names a function.
-    pub const CACHE_VERSION = 130;
+    /// 131: Hoist selection recognizes an imported module's block-local
+    ///      methods.
+    pub const CACHE_VERSION = 131;
 };
 
 /// Configuration for the Roc cache system.

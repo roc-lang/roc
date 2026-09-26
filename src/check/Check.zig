@@ -10914,9 +10914,11 @@ fn typeReachesBlockLocalInspectOverride(
     }
 }
 
-fn methodBindingIsBlockLocal(self: *const Self, env: *const ModuleEnv, binding: ModuleEnv.MethodBinding) bool {
-    if (env != self.cir) return false;
-    return self.cir.store.nodes.get(binding.type_node_idx).tag == .statement_decl;
+/// Whether a method binding belongs to a nominal declared in a function body,
+/// in whichever module declared it: such a binding's type node is the local
+/// statement canonicalization introduced for it, never a top-level def.
+fn methodBindingIsBlockLocal(_: *const Self, env: *const ModuleEnv, binding: ModuleEnv.MethodBinding) bool {
+    return env.store.nodes.get(binding.type_node_idx).tag == .statement_decl;
 }
 
 fn appendSchemeUseSeeds(self: *Self, record_index: u32, seeds: *std.ArrayListUnmanaged(Var)) Allocator.Error!void {
