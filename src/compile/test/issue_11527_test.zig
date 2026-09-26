@@ -10,6 +10,7 @@ const roc_target = @import("roc_target");
 const CoreCtx = @import("ctx").CoreCtx;
 const Coordinator = @import("../coordinator.zig").Coordinator;
 const is_freestanding = @import("../threading.zig").is_freestanding;
+const harness = @import("lower_to_lir_harness.zig");
 
 fn countLowLevelOps(result: *const lir.Program.Result, op: lir.LIR.LowLevel) usize {
     var count: usize = 0;
@@ -19,7 +20,7 @@ fn countLowLevelOps(result: *const lir.Program.Result, op: lir.LIR.LowLevel) usi
     return count;
 }
 
-fn expectConstantListNotRebuilt(target: lir.CheckedPipeline.TargetConfig) !void {
+fn expectConstantListNotRebuilt(target: lir.CheckedPipeline.TargetConfig) (harness.LowerToLirHarnessError || error{SkipZigTest})!void {
     if (is_freestanding) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;

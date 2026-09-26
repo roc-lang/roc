@@ -47,7 +47,6 @@ pub const EventCallback = struct {
 };
 
 /// Where the compile-time evaluator splices object-cache entries from.
-
 /// Runtime options for compile-time finalization.
 pub const Options = struct {
     pub const StderrWriter = struct {

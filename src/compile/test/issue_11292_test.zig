@@ -57,12 +57,10 @@ fn expectAppRunsSuccessfully(lowered: *const lir.CheckedPipeline.LoweredProgram)
 
 /// Checks the app the way `roc check` does, with no runtime lowering
 /// configured, and requires exactly one report of each expected title.
-fn expectCheckReports(fixture: []const u8, expected_titles: []const []const u8) !void {
+fn expectCheckReports(fixture: []const u8, expected_titles: []const []const u8) (harness.LowerToLirHarnessError || error{SkipZigTest})!void {
     if (is_freestanding) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
-    const path = try std.Io.Dir.cwd().realPathFileAlloc(io, fixture, allocator);
-    defer allocator.free(path);
 
     var builtin_modules = try eval.BuiltinModules.init(allocator);
     defer builtin_modules.deinit();
@@ -81,7 +79,7 @@ fn expectCheckReports(fixture: []const u8, expected_titles: []const []const u8) 
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     try coord.start();
-    try coord.discoverAppFromPath(arena.allocator(), .{ .entry_path = path });
+    try coord.discoverAppFromPath(arena.allocator(), .{ .entry_path = fixture });
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
     try coord.finishCheckedProgram(.executable_artifacts);
