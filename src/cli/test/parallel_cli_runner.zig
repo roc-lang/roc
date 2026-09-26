@@ -407,6 +407,7 @@ const CustomCase = enum {
     literal_root_rejected_every_build,
     issue_11673_callable_cache,
     issue_11678_recursive_callback_cache,
+    issue_11710_shared_object_cache,
     issue_11627_static_data_names_cache,
     issue_10733_wasm_boxy_dev_sealed_object,
     issue_10827_private_compiler_support,
@@ -1734,6 +1735,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev pack programs are deterministic and round-trip through artifacts", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_objects } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11673: imported callable identity survives cold warm and sibling builds", .timeout_ms = 600_000, .body = .{ .custom = .issue_11673_callable_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: cached recursive callbacks retain method result rows", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_recursive_callback_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11710: shared object cache serves a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_11710_shared_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11627: cached procedure keeps its own constant after the app is edited", .timeout_ms = 600_000, .body = .{ .custom = .issue_11627_static_data_names_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev serves closed specializations from a previous build's packs", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_hits } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build reports a specialization's rejected literal on every build, cached or not", .timeout_ms = 600_000, .body = .{ .custom = .literal_root_rejected_every_build } },
@@ -3381,6 +3383,7 @@ fn runCustomCase(
         .native_build_pack_objects => customNativeBuildPackObjects(io, allocator, &env, &timer, timeout_ms),
         .issue_11673_callable_cache => customIssue11673CallableCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11678_recursive_callback_cache => customIssue11678RecursiveCallbackCache(io, allocator, &env, &timer, timeout_ms),
+        .issue_11710_shared_object_cache => customIssue11710SharedObjectCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11627_static_data_names_cache => customIssue11627StaticDataNamesCache(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_hits => customNativeBuildPackHits(io, allocator, &env, &timer, timeout_ms),
         .literal_root_rejected_every_build => customLiteralRootRejectedEveryBuild(io, allocator, &env, &timer, timeout_ms),
@@ -6347,6 +6350,65 @@ fn customIssue11673CallableCache(
     };
     for (apps) |app| {
         if (storeBuildsBehaveIdentically(io, allocator, &trace_env, timer, timeout_ms, app.path, env.dirs.work_dir, app.prefix, app.expect)) |failure| return failure;
+    }
+    return null;
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/11710: Primer and Repro
+// import Lib and build under one object cache. Primer never calls Lib, so its
+// build packs Lib's procedures as Primer's program shapes Lib's function
+// values; Repro's program joins those values into different callable sets.
+// Each cached procedure's identity must not depend on the callable sets its
+// value joins, or Repro's build finds one specialization key naming two
+// procedure identities.
+fn customIssue11710SharedObjectCache(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const hits_marker = "pack hits: ";
+    var stats_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone pack statistics environment: {}", .{err}),
+    };
+    defer stats_env.env_map.deinit();
+    stats_env.env_map.put("ROC_PACK_STATS", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable pack statistics: {}", .{err});
+    const primer = "test/cli/issue_11710_shared_object_cache/Primer.roc";
+    const repro = "test/cli/issue_11710_shared_object_cache/Repro.roc";
+    const builds = [_]struct { roc_file: []const u8, exe_name: []const u8, cache: bool, stdout_exact: []const u8 }{
+        .{ .roc_file = repro, .exe_name = "repro_uncached", .cache = false, .stdout_exact = "no url\n" },
+        .{ .roc_file = primer, .exe_name = "primer", .cache = true, .stdout_exact = "primer\n" },
+        .{ .roc_file = repro, .exe_name = "repro_cached", .cache = true, .stdout_exact = "no url\n" },
+    };
+    for (builds, 0..) |build, index| {
+        const exe = std.fmt.allocPrint(allocator, "{s}/issue_11710_{s}", .{ env.dirs.work_dir, build.exe_name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, exe) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+        const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+        const build_args: []const []const u8 = if (build.cache) &.{ "build", "--opt=dev", out_arg } else &.{ "build", "--no-cache", "--opt=dev", out_arg };
+        const built = runRocInEnv(io, allocator, &stats_env, build_args, build.roc_file, .relative, &.{}, null, build_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+        if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
+            return failureFromRun(allocator, timer, built, "dev build did not succeed on the shared object cache");
+        }
+        // Repro's cached build must consume the pack Primer's build wrote.
+        if (index == builds.len - 1) {
+            const hits_at = std.mem.find(u8, built.stderr, hits_marker) orelse
+                return failureFromRun(allocator, timer, built, "Repro's cached build did not report pack hits");
+            if (countAfterMarker(built.stderr[hits_at + hits_marker.len ..]) == 0) {
+                return failureFromRun(allocator, timer, built, "Repro's cached build did not consume Primer's object pack");
+            }
+        }
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
+            .args = &.{},
+            .stdout_exact = build.stdout_exact,
+        })) |failure| return failure;
     }
     return null;
 }
