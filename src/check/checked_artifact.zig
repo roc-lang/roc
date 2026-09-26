@@ -7775,6 +7775,14 @@ const CheckedSourceTypeRoots = struct {
         graph_analysis: SourceTypeGraphAnalysis,
         key_writer: canonical_type_keys.TypeWriter,
         local_nominal_declarations: LocalNominalDeclarationIds,
+        /// A row's entries gathered down its structural extension links,
+        /// used as a stack: each row being stored owns the entries
+        /// above the base it recorded (`flatCheckedRow`).
+        row_tags: std.ArrayList(types.Tag) = .empty,
+        row_fields: std.ArrayList(types.RecordField) = .empty,
+        row_tag_sort: std.ArrayList(types.Tag) = .empty,
+        row_field_sort: std.ArrayList(types.RecordField) = .empty,
+        row_text_ranks: base.TextRankCache,
     },
 
     fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!CheckedSourceTypeRoots {
@@ -7788,6 +7796,7 @@ const CheckedSourceTypeRoots = struct {
                 .graph_analysis = graph_analysis,
                 .key_writer = canonical_type_keys.TypeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst()),
                 .local_nominal_declarations = local_nominal_declarations,
+                .row_text_ranks = base.TextRankCache.init(allocator),
             },
         };
     }
@@ -7797,6 +7806,12 @@ const CheckedSourceTypeRoots = struct {
             scratch.local_nominal_declarations.deinit();
             scratch.key_writer.deinit();
             scratch.graph_analysis.deinit();
+            const allocator = scratch.key_writer.builder.allocator;
+            scratch.row_tags.deinit(allocator);
+            scratch.row_fields.deinit(allocator);
+            scratch.row_tag_sort.deinit(allocator);
+            scratch.row_field_sort.deinit(allocator);
+            scratch.row_text_ranks.deinit();
         }
         self.scratch = null;
     }
@@ -8123,12 +8138,16 @@ fn copyCheckedFlatType(
         .empty_record => .empty_record,
         .empty_tag_union => .empty_tag_union,
         .record => |record| blk: {
-            if (record.fields.len() == 0 and checkedRecordExtIsEmpty(module, record.ext)) {
+            const scratch = &active.scratch.?;
+            const base_len = scratch.row_fields.items.len;
+            defer scratch.row_fields.shrinkRetainingCapacity(base_len);
+            const tail = try gatherFlatRecordRow(allocator, module, scratch, record);
+            if (scratch.row_fields.items.len == base_len and checkedRecordExtIsEmpty(module, tail)) {
                 break :blk .empty_record;
             }
-            const fields = try copyCheckedRecordFields(allocator, module, names, imports, store, active, record.fields);
+            const fields = try copyCheckedRecordFields(allocator, module, names, imports, store, active, base_len);
             errdefer allocator.free(fields);
-            const ext = try appendCheckedTypeRootWithRowDefault(allocator, module, names, imports, store, active, record.ext, .empty_record);
+            const ext = try appendCheckedTypeRootWithRowDefault(allocator, module, names, imports, store, active, tail, .empty_record);
             break :blk .{ .record = .{ .fields = fields, .ext = ext } };
         },
         .tuple => |tuple| .{
@@ -8158,15 +8177,106 @@ fn copyCheckedFlatType(
         .fn_effectful => |func| .{ .function = try copyCheckedFunctionType(allocator, module, names, imports, store, active, .effectful, func) },
         .fn_unbound => |func| .{ .function = try copyCheckedFunctionType(allocator, module, names, imports, store, active, .pure, func) },
         .tag_union => |tag_union| blk: {
-            if (tag_union.tags.len() == 0 and checkedTagUnionExtIsEmpty(module, tag_union.ext)) {
+            const scratch = &active.scratch.?;
+            const base_len = scratch.row_tags.items.len;
+            defer scratch.row_tags.shrinkRetainingCapacity(base_len);
+            const tail = try gatherFlatTagUnionRow(allocator, module, scratch, tag_union);
+            if (scratch.row_tags.items.len == base_len and checkedTagUnionExtIsEmpty(module, tail)) {
                 break :blk .empty_tag_union;
             }
-            const tags = try copyCheckedTags(allocator, module, names, imports, store, active, tag_union.tags);
+            const tags = try copyCheckedTags(allocator, module, names, imports, store, active, base_len);
             errdefer deinitCheckedTagsBuild(allocator, tags);
-            const ext = try appendCheckedTypeRootWithRowDefault(allocator, module, names, imports, store, active, tag_union.ext, .empty_tag_union);
+            const ext = try appendCheckedTypeRootWithRowDefault(allocator, module, names, imports, store, active, tail, .empty_tag_union);
             break :blk .{ .tag_union = .{ .tags = tags, .ext = ext } };
         },
     };
+}
+
+/// A checked root's row payload is flat through structural row links
+/// (design.md "Checked Row Payloads"): the row's own entries and those of
+/// every `record` its extension reaches directly are one payload, ordered as
+/// the type key orders them, and its extension is the first link that is not
+/// a record (an empty record, a variable, an alias link, or an error).
+/// Checked roots are shared by key, and the key reads a row the same way
+/// whatever links the solver stored it in, so the stored payload is then
+/// determined by the key rather than by whichever variable first reached it.
+/// Pushes the fields onto `scratch.row_fields` and returns the tail.
+fn gatherFlatRecordRow(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    scratch: anytype,
+    head: types.Record,
+) Allocator.Error!Var {
+    const type_store = module.typeStoreConst();
+    const base_len = scratch.row_fields.items.len;
+    var link = head;
+    var tail = head.ext;
+    var steps: u64 = type_store.len();
+    while (true) : (steps -= 1) {
+        if (steps == 0) checkedArtifactInvariant("checked record row extension chain did not end", .{});
+        const fields = type_store.getRecordFieldsSlice(link.fields);
+        for (fields.items(.name), fields.items(.presence)) |name, presence| {
+            try scratch.row_fields.append(allocator, .{ .name = name, .presence = presence });
+        }
+        tail = link.ext;
+        link = switch (type_store.resolveVar(link.ext).desc.content) {
+            .structure => |flat| switch (flat) {
+                .record => |record| record,
+                .empty_record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => break,
+            },
+            .flex, .rigid, .alias, .field_presence, .err => break,
+        };
+    }
+    const gathered = scratch.row_fields.items[base_len..];
+    if (gathered.len > 1) {
+        const ranks = try module.identStoreConst().textRanks(&scratch.row_text_ranks);
+        try base.TextRankCache.sortByRank(types.RecordField, gathered, &scratch.row_field_sort, allocator, ranks, recordFieldTextRank);
+    }
+    return tail;
+}
+
+/// `gatherFlatRecordRow` for a tag union: pushes the tags onto
+/// `scratch.row_tags` and returns the tail.
+fn gatherFlatTagUnionRow(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    scratch: anytype,
+    head: types.TagUnion,
+) Allocator.Error!Var {
+    const type_store = module.typeStoreConst();
+    const base_len = scratch.row_tags.items.len;
+    var link = head;
+    var tail = head.ext;
+    var steps: u64 = type_store.len();
+    while (true) : (steps -= 1) {
+        if (steps == 0) checkedArtifactInvariant("checked tag union row extension chain did not end", .{});
+        const tags = type_store.getTagsSlice(link.tags);
+        for (tags.items(.name), tags.items(.args)) |name, args| {
+            try scratch.row_tags.append(allocator, .{ .name = name, .args = args });
+        }
+        tail = link.ext;
+        link = switch (type_store.resolveVar(link.ext).desc.content) {
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| tag_union,
+                .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .record, .empty_record => break,
+            },
+            .flex, .rigid, .alias, .field_presence, .err => break,
+        };
+    }
+    const gathered = scratch.row_tags.items[base_len..];
+    if (gathered.len > 1) {
+        const ranks = try module.identStoreConst().textRanks(&scratch.row_text_ranks);
+        try base.TextRankCache.sortByRank(types.Tag, gathered, &scratch.row_tag_sort, allocator, ranks, tagTextRank);
+    }
+    return tail;
+}
+
+fn recordFieldTextRank(ranks: []const u32, field: types.RecordField) u32 {
+    return ranks[field.name.idx];
+}
+
+fn tagTextRank(ranks: []const u32, tag: types.Tag) u32 {
+    return ranks[tag.name.idx];
 }
 
 fn checkedRecordExtIsEmpty(module: TypedCIR.Module, ext: Var) bool {
@@ -8270,16 +8380,20 @@ fn copyCheckedRecordFields(
     imports: CheckedImportViews,
     store: *CheckedTypeStore,
     active: *CheckedSourceTypeRoots,
-    range: types.RecordField.SafeMultiList.Range,
+    /// The row's fields are `active.scratch.row_fields.items[base_len..]`
+    /// (`gatherFlatRecordRow`); storing a field's types can push and pop
+    /// entries above them, so they are read by index.
+    base_len: usize,
 ) Allocator.Error![]const CheckedRecordField {
-    const fields = module.typeStoreConst().getRecordFieldsSlice(range);
-    const field_names = fields.items(.name);
-    const field_presences = fields.items(.presence);
-    if (field_names.len == 0) return &.{};
+    const count = active.scratch.?.row_fields.items.len - base_len;
+    if (count == 0) return &.{};
 
-    const out = try allocator.alloc(CheckedRecordField, field_names.len);
+    const out = try allocator.alloc(CheckedRecordField, count);
     errdefer allocator.free(out);
-    for (field_names, field_presences, 0..) |field_name, field_presence, i| {
+    for (0..count) |i| {
+        const row_field = active.scratch.?.row_fields.items[base_len + i];
+        const field_name = row_field.name;
+        const field_presence = row_field.presence;
         // Publish the independent value and kind axes; see design.md "Field Kinds".
         var kind: CheckedFieldKind = .required;
         const ty: CheckedTypeId = switch (field_presence.decode()) {
@@ -8344,23 +8458,25 @@ fn copyCheckedTags(
     imports: CheckedImportViews,
     store: *CheckedTypeStore,
     active: *CheckedSourceTypeRoots,
-    range: types.Tag.SafeMultiList.Range,
+    /// The row's tags are `active.scratch.row_tags.items[base_len..]`
+    /// (`gatherFlatTagUnionRow`); storing a payload can push and pop
+    /// entries above them, so they are read by index.
+    base_len: usize,
 ) Allocator.Error![]const CheckedTagBuild {
-    const tags = module.typeStoreConst().getTagsSlice(range);
-    const tag_names = tags.items(.name);
-    const tag_args = tags.items(.args);
-    if (tag_names.len == 0) return &.{};
+    const count = active.scratch.?.row_tags.items.len - base_len;
+    if (count == 0) return &.{};
 
-    const out = try allocator.alloc(CheckedTagBuild, tag_names.len);
+    const out = try allocator.alloc(CheckedTagBuild, count);
     for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
     errdefer {
-        for (out[0..tag_names.len]) |tag| allocator.free(tag.args);
+        for (out) |tag| allocator.free(tag.args);
         allocator.free(out);
     }
-    for (tag_names, tag_args, 0..) |tag_name, arg_range, i| {
+    for (0..count) |i| {
+        const row_tag = active.scratch.?.row_tags.items[base_len + i];
         out[i] = .{
-            .name = try names.internTagIdent(module.identStoreConst(), tag_name),
-            .args = try copyCheckedTypeRange(allocator, module, names, imports, store, active, module.typeStoreConst().sliceVars(arg_range)),
+            .name = try names.internTagIdent(module.identStoreConst(), row_tag.name),
+            .args = try copyCheckedTypeRange(allocator, module, names, imports, store, active, module.typeStoreConst().sliceVars(row_tag.args)),
         };
     }
     return out;
@@ -9117,6 +9233,94 @@ const NominalTemplateForTest = struct {
         return error.TestUnexpectedResult;
     }
 };
+
+test "a checked row payload is flat through structural links and stops at alias links" {
+    // Checked roots are shared by key, and the key reads a row the same way
+    // however its links are stored, so the payload must too: `[B] ext [A]`
+    // and `[A, B]` are one root with one flat payload, as are
+    // `{ b } ext { a }` and `{ a, b }`. An alias link in the extension stays
+    // the extension, as the key leaves it.
+    const testing = std.testing;
+    const TestEnv = @import("test/TestEnv.zig");
+    const allocator = testing.allocator;
+
+    var test_env = try TestEnv.init("Main",
+        \\Base : [Z]
+        \\
+        \\value = 1
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    const module_env = test_env.module_env;
+    const types_store = &module_env.types;
+    const a_name = try module_env.insertIdent(base.Ident.for_text("A"));
+    const b_name = try module_env.insertIdent(base.Ident.for_text("B"));
+    const empty_tags = try types_store.freshFromContent(.{ .structure = .empty_tag_union });
+    const empty_record = try types_store.freshFromContent(.{ .structure = .empty_record });
+    const unit = try types_store.freshFromContent(.{ .structure = .empty_record });
+
+    const tag_a = try types_store.mkTag(a_name, &.{});
+    const tag_b = try types_store.mkTag(b_name, &.{unit});
+    const inner_tags = try types_store.freshFromContent(try types_store.mkTagUnion(&.{tag_a}, empty_tags));
+    const chained_tags = try types_store.freshFromContent(try types_store.mkTagUnion(&.{tag_b}, inner_tags));
+    const flat_tags = try types_store.freshFromContent(try types_store.mkTagUnion(&.{ tag_a, tag_b }, empty_tags));
+
+    const field_a = types.RecordField{ .name = a_name, .presence = .required(unit) };
+    const field_b = types.RecordField{ .name = b_name, .presence = .required(unit) };
+    const inner_record = try types_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try types_store.appendRecordFields(&.{field_a}),
+        .ext = empty_record,
+    } } });
+    const chained_record = try types_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try types_store.appendRecordFields(&.{field_b}),
+        .ext = inner_record,
+    } } });
+    const flat_record = try types_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try types_store.appendRecordFields(&.{ field_a, field_b }),
+        .ext = empty_record,
+    } } });
+
+    // `[A] ext Base`: the alias link stays the extension.
+    const base_decl: CIR.Statement.Idx = for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+        if (module_env.store.getStatement(statement_idx) == .s_alias_decl) break statement_idx;
+    } else return error.TestUnexpectedResult;
+    const base_alias = types_store.resolveVar(ModuleEnv.varFrom(base_decl)).desc.content.alias;
+    const base_instance = try types_store.freshFromContent(.{ .alias = base_alias });
+    const through_alias = try types_store.freshFromContent(try types_store.mkTagUnion(&.{tag_a}, base_instance));
+
+    const source_modules = [_]TypedCIR.Modules.SourceModule{.{ .precompiled = module_env }};
+    var modules = try TypedCIR.Modules.init(allocator, &source_modules);
+    defer modules.deinit();
+    const module = modules.module(0);
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+    var active = try CheckedSourceTypeRoots.init(allocator, module);
+    defer active.deinit();
+    const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1), .direct = &.{} };
+
+    // The chained spelling is reached first, so before flattening it would
+    // have chosen the stored payload.
+    const chained_tags_root = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, chained_tags);
+    const flat_tags_root = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, flat_tags);
+    try testing.expectEqual(chained_tags_root, flat_tags_root);
+    const tag_union = store.payload(chained_tags_root).tag_union;
+    try testing.expectEqual(@as(usize, 2), tag_union.tags.len);
+    try testing.expect(store.payload(tag_union.ext) == .empty_tag_union);
+
+    const chained_record_root = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, chained_record);
+    const flat_record_root = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, flat_record);
+    try testing.expectEqual(chained_record_root, flat_record_root);
+    const record = store.payload(chained_record_root).record;
+    try testing.expectEqual(@as(usize, 2), record.fields.len);
+    try testing.expect(store.payload(record.ext) == .empty_record);
+
+    const through_alias_root = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, through_alias);
+    const aliased = store.payload(through_alias_root).tag_union;
+    try testing.expectEqual(@as(usize, 1), aliased.tags.len);
+    try testing.expect(store.payload(aliased.ext) == .alias);
+}
 
 test "a nominal declaration template is the checker's backing, with every alias argument closed" {
     // The template's backing is the checker's declaration backing, whose

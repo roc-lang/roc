@@ -305,7 +305,7 @@ pub const Constants = struct {
     /// 130: A block-local alias generalizes only when it names a function.
     /// 131: Hoist selection recognizes an imported module's block-local
     ///      methods.
-    pub const CACHE_VERSION = 131;
+    pub const CACHE_VERSION = 132;
 };
 
 /// Configuration for the Roc cache system.

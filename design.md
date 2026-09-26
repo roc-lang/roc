@@ -11352,6 +11352,24 @@ variable itself, which is the root `formal_args` names. Only the declared
 record-field order, labels and unnamed padding positions are read from the
 declaration, and a padding field's type is the checker's variable for it.
 
+#### Checked Row Payloads
+
+A checked root is shared by its type key, and the key reads a row through
+every structural extension link it is stored in: `[B] ext [A]` and `[A, B]`
+are one key. The root's stored payload is therefore flat through those links
+too (`gatherFlatRecordRow`, `gatherFlatTagUnionRow`): a record's or tag
+union's own entries and those of every record (or tag union) its extension
+reaches directly form one payload, ordered by label text as the key orders
+them, and its extension is the first link that is not one: an empty row, a
+variable, an alias link (whose spelling is kept), or an error. The stored
+shape is then determined by the key alone, never by which variable first
+reached it, so a reader of a closed row (a nominal's template backing, a
+ConstStore restoration) may read its entries from the one payload. Before
+this, the template built from syntax was flat by construction, while a
+template read from the checker took whatever shape an earlier expression type
+of the same key had been stored in, and a reader looking for a tag in the
+first link missed it.
+
 Monotype must use the declaration backing template for ordinary local nominal
 declarations. For local declarations, the `backing` root on a nominal-use
 payload is not the authority for declaration-template instantiation; the
