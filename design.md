@@ -14182,7 +14182,12 @@ a template is an invariant failure. A template slot also carries, after the
 worker's hidden descriptors, the requirement-side descriptors and the frame's
 own type variables that its method adapter needs; the adapter binds them
 (requirement descriptors only where the requirement side is lowered) and
-describes representations naming them through those bindings.
+describes representations naming them through those bindings. The slot's
+recorded argument descriptors follow the same rule: an argument whose
+representation names a type variable the frame describes (`count(l)` with
+`l : List(x)` in a worker generic over `x`) is described by the frame's
+descriptor, captured by the template, never by a static descriptor, which
+could not describe `x`. Pinned by `test/cli/GenericWorkerDictionary.roc`.
 
 Boxy box/unbox/adapt operations are explicit LIR statements or explicit helper
 calls selected by the lowerer:

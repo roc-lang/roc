@@ -1776,6 +1776,7 @@ const ProcedureBuilder = struct {
                 if (exact_method) |method| method.requirement_desc_sources else null,
                 if (exact_method) |method| method.hidden_desc_sources else null,
                 frame_requirement_descs.items,
+                slot_template,
             );
             slots.items[slot_index] = .{
                 .method = requirement.fn_name,
@@ -2146,6 +2147,7 @@ const ProcedureBuilder = struct {
         requirement_desc_sources: ?Plan.Span,
         hidden_desc_sources: ?Plan.Span,
         frame_requirement_descs: []const FrameRequirementDescriptor,
+        slot_template: ?*DictTemplateFrame,
     ) Allocator.Error!LirProgram.BoxyMethodAdapter {
         const worker_layout = self.layout_plan.workerLayoutFor(worker_id);
         const worker_args = self.layout_plan.workerLayoutSlice(worker_layout.args);
@@ -2199,18 +2201,35 @@ const ProcedureBuilder = struct {
             );
         }
 
-        const arg_descs_start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
+        // A template dictionary's requirement argument whose descriptor the
+        // building frame supplies (`List(x)` in a worker generic over `x`) is
+        // described by that frame; the template captures it.
+        // Materializing a descriptor can append nested references to the
+        // program's table, so the span is appended contiguously afterwards.
+        var arg_descs = std.ArrayList(LIR.BoxyDescRef).empty;
+        defer arg_descs.deinit(self.allocator);
+        try arg_descs.ensureTotalCapacityPrecise(self.allocator, requirement_args.len);
         for (requirement_args) |arg| {
-            try self.result.boxy_desc_refs.append(
-                self.allocator,
-                try self.staticDescRefForWorkerRepWithSourceMap(
+            const desc = frame_desc: {
+                if (slot_template) |frame_template| {
+                    if (try frame_template.frame.repDescriptorNeedsFrame(arg.rep)) {
+                        const materialization = try frame_template.frame.descriptorMaterializationForSourceRep(arg.rep);
+                        if (materialization.desc.localOrNull()) |local| try frame_template.capture(self.allocator, local);
+                        try frame_template.captureSpan(self.allocator, materialization.captures);
+                        break :frame_desc materialization.desc;
+                    }
+                }
+                break :frame_desc try self.staticDescRefForWorkerRepWithSourceMap(
                     arg.rep,
                     null,
                     &requirement_sources,
                     desc_context,
-                ),
-            );
+                );
+            };
+            arg_descs.appendAssumeCapacity(desc);
         }
+        const arg_descs_start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
+        try self.result.boxy_desc_refs.appendSlice(self.allocator, arg_descs.items);
 
         const call_desc_plan = if (requirement_desc_sources) |sources|
             try self.staticMethodCallDescRefsForEvidence(
