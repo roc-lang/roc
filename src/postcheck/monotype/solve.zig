@@ -1081,14 +1081,6 @@ const NodePair = struct {
     row_width: RowWidthRelation = .exact,
 };
 
-const RelationStamp = struct {
-    left: NodeId,
-    left_version: u32,
-    right: NodeId,
-    right_version: u32,
-    row_width: RowWidthRelation,
-};
-
 const NominalBackingDeclaration = struct {
     module_bytes: [32]u8,
     declaration_id: u32,
@@ -1412,7 +1404,6 @@ pub const InstGraph = struct {
     class_member_next: std.ArrayList(?NodeId),
     class_member_head: std.ArrayList(NodeId),
     class_member_tail: std.ArrayList(NodeId),
-    processed_relations: std.AutoHashMap(RelationStamp, void),
     /// Explicit equivalence classes for matching nominal applications whose
     /// backing nodes must remain independently owned. This is deliberately
     /// separate from the main type union-find: consumers can use the proven
@@ -1493,6 +1484,14 @@ pub const InstGraph = struct {
     /// Transitive unification scratch, one entry per call in flight; a union
     /// can unify again while an outer call is still draining.
     unify_scratch_pool: std.ArrayList(UnifyScratch) = .empty,
+    /// Record-row pairing by label id. An entry is current only when its
+    /// generation equals `row_label_generation`, so a row relation claims
+    /// fresh slots without clearing them. Row pairing completes before any
+    /// queued relation runs, so one set serves every relation.
+    row_label_right_generation: std.ArrayList(u32) = .empty,
+    row_label_right_index: std.ArrayList(u32) = .empty,
+    row_label_left_generation: std.ArrayList(u32) = .empty,
+    row_label_generation: u32 = 0,
     /// Maps and lists borrowed by every `InterfaceConstraints.capture`.
     capture_scratch: InterfaceConstraints.CaptureScratch,
     /// Roots whose every reachable node was found resolved, stamped with the
@@ -1544,7 +1543,6 @@ pub const InstGraph = struct {
             .class_member_next = .empty,
             .class_member_head = .empty,
             .class_member_tail = .empty,
-            .processed_relations = std.AutoHashMap(RelationStamp, void).init(allocator),
             .related_named_instances = collections.DenseMap(NodeId, RelatedNamedInstance).init(allocator),
             .related_named_backings = collections.DenseMap(NodeId, NodeId).init(allocator),
             .node_snapshots = collections.DenseMap(NodeId, std.ArrayList(Type.TypeId)).init(allocator),
@@ -1603,7 +1601,6 @@ pub const InstGraph = struct {
         self.class_member_next.clearRetainingCapacity();
         self.class_member_head.clearRetainingCapacity();
         self.class_member_tail.clearRetainingCapacity();
-        self.processed_relations.clearRetainingCapacity();
         self.related_named_instances.clearRetainingCapacity();
         self.related_named_backings.clearRetainingCapacity();
         var views = self.node_snapshots.valueIterator();
@@ -1703,6 +1700,9 @@ pub const InstGraph = struct {
         self.node_set_pool.deinit();
         for (self.unify_scratch_pool.items) |*scratch| scratch.deinit(self.allocator);
         self.unify_scratch_pool.deinit(self.allocator);
+        self.row_label_right_generation.deinit(self.allocator);
+        self.row_label_right_index.deinit(self.allocator);
+        self.row_label_left_generation.deinit(self.allocator);
         self.capture_scratch.deinit(allocator);
         self.type_set_pool.deinit();
         var containment_entries = self.containment_cache.valueIterator();
@@ -1716,7 +1716,6 @@ pub const InstGraph = struct {
         self.imported_type_nodes.deinit();
         self.related_named_backings.deinit();
         self.related_named_instances.deinit();
-        self.processed_relations.deinit();
         self.class_member_tail.deinit(allocator);
         self.class_member_head.deinit(allocator);
         self.class_member_next.deinit(allocator);
@@ -5261,9 +5260,6 @@ pub const InstGraph = struct {
         const pair = NodePair{ .left = left, .right = right, .row_width = row_width };
         if (related.contains(pair)) return;
         try related.put(pair, {});
-        const relation = self.relationStamp(left, right, row_width);
-        if (self.processed_relations.contains(relation)) return;
-        try self.processed_relations.put(relation, {});
 
         const left_content = self.nodes.items[@intFromEnum(left)];
         const right_content = self.nodes.items[@intFromEnum(right)];
@@ -5297,27 +5293,6 @@ pub const InstGraph = struct {
         } else {
             try self.unifyConcrete(left, left_content, right, right_content, row_width, pending);
         }
-    }
-
-    fn relationStamp(self: *InstGraph, left: NodeId, right: NodeId, row_width: RowWidthRelation) RelationStamp {
-        const left_raw = @intFromEnum(left);
-        const right_raw = @intFromEnum(right);
-        if (left_raw <= right_raw) {
-            return .{
-                .left = left,
-                .left_version = self.versions.items[left_raw],
-                .right = right,
-                .right_version = self.versions.items[right_raw],
-                .row_width = row_width,
-            };
-        }
-        return .{
-            .left = right,
-            .left_version = self.versions.items[right_raw],
-            .right = left,
-            .right_version = self.versions.items[left_raw],
-            .row_width = row_width,
-        };
     }
 
     fn mergeVariables(a: InstVariable, b: InstVariable) InstVariable {
@@ -6063,6 +6038,28 @@ pub const InstGraph = struct {
         return self.name_store.recordFieldLabelText(name);
     }
 
+    /// Start a record-row pairing whose label slots cover both rows.
+    fn claimRowLabelGeneration(self: *InstGraph, left: []const InstField, right: []const InstField) Allocator.Error!u32 {
+        var needed: usize = self.row_label_right_generation.items.len;
+        for (left) |field| needed = @max(needed, @as(usize, @intFromEnum(field.name)) + 1);
+        for (right) |field| needed = @max(needed, @as(usize, @intFromEnum(field.name)) + 1);
+        if (needed > self.row_label_right_generation.items.len) {
+            const old_len = self.row_label_right_generation.items.len;
+            try self.row_label_right_generation.resize(self.allocator, needed);
+            try self.row_label_right_index.resize(self.allocator, needed);
+            try self.row_label_left_generation.resize(self.allocator, needed);
+            @memset(self.row_label_right_generation.items[old_len..], 0);
+            @memset(self.row_label_left_generation.items[old_len..], 0);
+        }
+        if (self.row_label_generation == std.math.maxInt(u32)) {
+            @memset(self.row_label_right_generation.items, 0);
+            @memset(self.row_label_left_generation.items, 0);
+            self.row_label_generation = 0;
+        }
+        self.row_label_generation += 1;
+        return self.row_label_generation;
+    }
+
     fn unifyTagRows(
         self: *InstGraph,
         left: NodeId,
@@ -6205,26 +6202,24 @@ pub const InstGraph = struct {
         var only_right = std.ArrayList(InstField).empty;
         defer only_right.deinit(self.allocator);
 
-        // Both rows indexed by label text so each side pairs with the other
-        // in one pass; the first row position wins for a repeated label.
-        var right_by_text: std.StringHashMapUnmanaged(usize) = .empty;
-        defer right_by_text.deinit(self.allocator);
-        try right_by_text.ensureTotalCapacity(self.allocator, @intCast(flat_right.fields.len));
+        // Both rows indexed by label id so each side pairs with the other in
+        // one pass; the first row position wins for a repeated label.
+        const generation = try self.claimRowLabelGeneration(flat_left.fields, flat_right.fields);
         for (flat_right.fields, 0..) |right_field, index| {
-            const gop = right_by_text.getOrPutAssumeCapacity(self.fieldLabelText(right_field.name));
-            if (!gop.found_existing) gop.value_ptr.* = index;
+            const slot = @intFromEnum(right_field.name);
+            if (self.row_label_right_generation.items[slot] == generation) continue;
+            self.row_label_right_generation.items[slot] = generation;
+            self.row_label_right_index.items[slot] = @intCast(index);
         }
-        var left_texts: std.StringHashMapUnmanaged(void) = .empty;
-        defer left_texts.deinit(self.allocator);
-        try left_texts.ensureTotalCapacity(self.allocator, @intCast(flat_left.fields.len));
         for (flat_left.fields) |left_field| {
-            left_texts.putAssumeCapacity(self.fieldLabelText(left_field.name), {});
+            self.row_label_left_generation.items[@intFromEnum(left_field.name)] = generation;
         }
 
         for (flat_left.fields) |left_field| {
             var shared = false;
-            if (right_by_text.get(self.fieldLabelText(left_field.name))) |right_index| {
-                const right_field = flat_right.fields[right_index];
+            const left_slot = @intFromEnum(left_field.name);
+            if (self.row_label_right_generation.items[left_slot] == generation) {
+                const right_field = flat_right.fields[self.row_label_right_index.items[left_slot]];
                 const merged_kind = self.unifyFieldKinds(
                     left_field.kind,
                     left_field.default,
@@ -6256,7 +6251,7 @@ pub const InstGraph = struct {
             }
         }
         for (flat_right.fields) |right_field| {
-            if (left_texts.contains(self.fieldLabelText(right_field.name))) continue;
+            if (self.row_label_left_generation.items[@intFromEnum(right_field.name)] == generation) continue;
             try merged.append(self.allocator, right_field);
             try only_right.append(self.allocator, right_field);
         }

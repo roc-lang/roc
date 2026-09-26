@@ -383,7 +383,7 @@ test "Monotype generated-private selection cannot become ordinary or reopen fini
     const ordinary_unify = sourceSliceBetween(
         solve_source,
         "pub fn unify(self: *InstGraph",
-        "fn relationStamp(",
+        "fn mergeVariables(",
     );
     try expectContains(ordinary_unify, "unifyRootsTransitively(a, b, false, .exact)");
     try expectContains(ordinary_unify, "unifyRootsTransitively(a, b, false, .construction)");
