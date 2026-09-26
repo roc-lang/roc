@@ -26256,7 +26256,8 @@ fn exprDefinesMethod(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
 ///     annotated value (numeric literals use the separate defaulting path), never
 ///     a bare number or tag union. Restricted to binding-RHS position so bare
 ///     lookups in arbitrary subexpressions aren't generalized out from under their
-///     surrounding context.
+///     surrounding context. A BLOCK-LOCAL alias of a value (not a function) is
+///     not generalized: a local value is one runtime cell lowered at one type.
 ///   - **An annotated value binding** whose annotation introduces a free type var
 ///     (see `isGeneralizableValueBinding`). The rank push lets the generalizer
 ///     quantify exactly the generalizable vars—with none (e.g. a concrete
@@ -26270,8 +26271,52 @@ fn shouldGeneralize(
     is_top_level_binding_rhs: bool,
 ) bool {
     if (isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg) return true;
-    if (is_binding_rhs and (expr == .e_lookup_local or expr == .e_lookup_external)) return true;
+    if (is_binding_rhs and (expr == .e_lookup_local or expr == .e_lookup_external)) {
+        // A block-local alias of a VALUE is monomorphic, like every other
+        // local value: a local value is one runtime cell lowered at one type,
+        // so it cannot stand for the several instantiations a scheme allows.
+        // The rows a value's scheme or a coerced value's re-open leaves open
+        // (`made : [B(Str), D]` at top level) are therefore not quantified
+        // again by a local alias (design.md "Row Subsumption").
+        if (!is_top_level_binding_rhs and self.lookupNamesValue(expr)) return false;
+        return true;
+    }
     return self.isGeneralizableValueBinding(annotation, is_binding_rhs, is_top_level_binding_rhs);
+}
+
+/// Whether a lookup names a definition whose type is known to be a value
+/// (a non-function structure). A definition whose type is still a variable is
+/// not known to be one.
+fn lookupNamesValue(self: *const Self, expr: CIR.Expr) bool {
+    if (expr == .e_lookup_local) {
+        return storeVarIsValueStructure(self.types, ModuleEnv.varFrom(expr.e_lookup_local.pattern_idx));
+    }
+    if (expr == .e_lookup_external) {
+        const ext = expr.e_lookup_external;
+        const module_idx = self.cir.imports.getResolvedModule(ext.module_idx) orelse return false;
+        if (module_idx >= self.imported_modules.len) return false;
+        const other = self.imported_modules[module_idx];
+        return storeVarIsValueStructure(&other.types, @enumFromInt(ext.target_node_idx));
+    }
+    return false;
+}
+
+fn storeVarIsValueStructure(store: *const types_mod.Store, var_: Var) bool {
+    var current = var_;
+    while (true) {
+        const resolved = store.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                current = store.getAliasBackingVar(alias);
+                continue;
+            },
+            .structure => |flat| return switch (flat) {
+                .fn_pure, .fn_effectful, .fn_unbound => false,
+                .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => true,
+            },
+            .err, .flex, .rigid, .field_presence => return false,
+        }
+    }
 }
 
 /// True when a value binding generalizes to its annotated scheme: it sits in
@@ -26294,15 +26339,16 @@ fn shouldGeneralize(
 /// later use at the annotated width was then reported as the error. Quantifying
 /// the row gives every use its own copy, so uses cannot see each other.
 ///
-/// The second is restricted to top-level bindings, and that restriction is a
-/// LOWERING bound rather than a typing one: a generalized row on a block-local
-/// binding reaches Monotype without the binding-scheme metadata a top-level one
-/// publishes, and `unifyTagRows` panics "instantiation widened a closed tag
-/// union" when a use instantiates it wider. That is reachable on main today by
-/// writing `x : [A, ..]` on a local, so it is a pre-existing lowering gap this
-/// rule declines to widen the reach of. A local annotated value therefore keeps
-/// the inferred behaviour of an unannotated one, which is also what design.md
-/// already said about local rows.
+/// The second is restricted to top-level bindings, as is every generalized
+/// VALUE row: a block-local value is one runtime cell lowered at one type, so
+/// it cannot stand for several instantiations of a row. A local annotated
+/// value therefore keeps the inferred behaviour of an unannotated one, and a
+/// local alias of a value is monomorphic (`shouldGeneralize`). The one way
+/// left to write a generalized local row is an explicit type variable on a
+/// local value annotation (`x : [A, ..]`), which still reaches Monotype
+/// without binding-scheme metadata and panics "instantiation widened a closed
+/// tag union" when a use instantiates it wider; that pre-existing lowering gap
+/// is not widened here.
 ///
 /// The annotation is the opt-in either way, honored regardless of whether the
 /// RHS does work (an expansive definition pays per-specialization—the cost the

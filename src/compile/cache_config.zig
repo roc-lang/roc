@@ -295,7 +295,8 @@ pub const Constants = struct {
     ///      presentation only.
     /// 124: An expression inside a block that refers to a nominal type the
     ///      block declares is not selected as a hoisted root.
-    pub const CACHE_VERSION = 124;
+    /// 125: A block-local alias of a value is not generalized.
+    pub const CACHE_VERSION = 125;
 };
 
 /// Configuration for the Roc cache system.

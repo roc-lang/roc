@@ -12026,6 +12026,64 @@ test "check type - polarity - a value alias of a coerced value is quantified, no
     try std.testing.expectEqual(@as(u64, 1), test_env.module_env.result_row_reopens.len());
 }
 
+test "check type - polarity - a block-local value alias is monomorphic: one wider width is accepted" {
+    // `made`'s top-level row is quantified; a LOCAL alias of it is one runtime
+    // value, so it does not quantify that row again. Used at one wider width,
+    // its row widens to that width.
+    const source =
+        \\show_direct : [A, B(Str), C, D] -> Str
+        \\show_direct = |v| match v { A => "A", B(s) => "B(${s})", C => "C", D => "D" }
+        \\
+        \\made : [B(Str), D]
+        \\made = B("x")
+        \\
+        \\main = {
+        \\    local = made
+        \\    show_direct(local)
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - polarity - a block-local value alias is monomorphic: two different widths are rejected" {
+    const source =
+        \\show_direct : [A, B(Str), C, D] -> Str
+        \\show_direct = |v| match v { A => "A", B(s) => "B(${s})", C => "C", D => "D" }
+        \\
+        \\show_other : [B(Str), D, E] -> Str
+        \\show_other = |v| match v { B(s) => "B(${s})", D => "D", E => "E" }
+        \\
+        \\made : [B(Str), D]
+        \\made = B("x")
+        \\
+        \\main = {
+        \\    local = made
+        \\    Str.concat(show_direct(local), show_other(local))
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - polarity - a block-local callable alias still generalizes" {
+    // The rule is for values: a local alias of a function is a scheme alias.
+    const source =
+        \\id : a -> a
+        \\id = |x| x
+        \\
+        \\main = {
+        \\    f = id
+        \\    { a: f("s"), b: f(1.I64) }
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
 test "check type - polarity - a value's coerced error row and quantified ok row compose" {
     // `Err(e)` forwards a closed error row, so the root `Try`'s error row is
     // coerced; `Ok(X)` constructs, so the ok row is quantified. Each widens
