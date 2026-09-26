@@ -13498,13 +13498,19 @@ const Builder = struct {
     fn schemeAliasForwardsTargetScheme(view: ModuleView, alias: checked.LocalProcedureBinding) bool {
         const scope = dispatchScope(view, schemeAliasScope(view, alias));
         const scheme_vars = view.checked_procedure_templates.scopeSchemeVars(scope);
-        const site_types = view.static_dispatch_plans.siteSubstitution(alias.expr) orelse &.{};
+        const site_types = view.static_dispatch_plans.siteSubstitution(alias.expr) orelse blk: {
+            if (scheme_vars.len != 0) boxyPlanInvariant("generalized callable alias right-hand side had no checked substitution for its scope's variables");
+            break :blk &.{};
+        };
         if (site_types.len != scheme_vars.len) return false;
         for (site_types, scheme_vars) |site_type, scheme_var| {
             if (site_type != scheme_var) return false;
         }
         const params = scopeEvidenceParams(view, scope).params;
-        const refs = view.static_dispatch_plans.siteEvidence(alias.expr) orelse &.{};
+        const refs = view.static_dispatch_plans.siteEvidence(alias.expr) orelse blk: {
+            if (params.len != 0) boxyPlanInvariant("generalized callable alias right-hand side had no checked evidence for its scope's requirements");
+            break :blk &.{};
+        };
         if (refs.len != params.len) return false;
         for (refs, 0..) |ref, index| switch (ref.resolution) {
             .constraint => |constraint| {

@@ -8013,9 +8013,11 @@ another alias (`again = run`) resolves as any use of that alias does. The
 alias declaration binds no runtime value, so Boxy plans nothing for its
 right-hand side outside those uses. An adapter is its own worker with no
 frame holding a local callable's captures, so an alias whose scheme differs
-from a capturing local target's is not lowered by Boxy (an explicit plan
-invariant). Pinned by `test/cli/LocalCallableAliasWhere.roc` and the Boxy
-capturing-alias case of `src/compile/test/issue_11217_test.zig`.
+from a capturing local target's is not lowered by Boxy yet (an explicit plan
+invariant). Pinned by `test/cli/LocalCallableAliasWhere.roc` (aliases that
+forward exactly and aliases that need the adapter) and by the Boxy
+capturing-alias case of `src/compile/test/issue_11217_test.zig`, whose alias
+forwards exactly and so reaches its capturing target directly.
 
 ### Row Union Normalization
 
