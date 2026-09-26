@@ -4848,8 +4848,13 @@ const Lowerer = struct {
         var hasher = base.TypeDigestHasher.init();
         hasher.update("roc.proc.comptime-root-accessor.v2");
         hasher.update(&root.module.bytes);
-        const root_index: u32 = @intFromEnum(root.root);
-        hasher.update(&[_]u8{ @truncate(root_index), @truncate(root_index >> 8), @truncate(root_index >> 16), @truncate(root_index >> 24) });
+        // A literal root's id is program-local; the literal's checked
+        // expression names it within its module.
+        const tag: u8, const index: u32 = switch (root.root) {
+            .checked => |checked_root| .{ 0, @intFromEnum(checked_root) },
+            .literal => |literal| .{ 1, self.literal_roots.items[@intFromEnum(literal)].site.checked_expr },
+        };
+        hasher.update(&[_]u8{ tag, @truncate(index), @truncate(index >> 8), @truncate(index >> 16), @truncate(index >> 24) });
         hasher.update(&representation.bytes);
         hasher.update(&try digests.get(layout_idx));
         return .{ .bytes = hasher.finalResult() };
