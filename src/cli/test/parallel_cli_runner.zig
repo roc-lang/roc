@@ -6355,12 +6355,13 @@ fn customIssue11673CallableCache(
 }
 
 // Repro for https://github.com/roc-lang/roc/issues/11710: Primer and Repro
-// import Lib and build under one object cache. Primer never calls Lib, so its
-// build packs Lib's procedures as Primer's program shapes Lib's function
-// values; Repro's program joins those values into different callable sets.
-// Each cached procedure's identity must not depend on the callable sets its
-// value joins, or Repro's build finds one specialization key naming two
-// procedure identities.
+// import Lib and build under one object cache. Primer never calls Lib, so the
+// pack its build writes for Lib comes from Lib's own pack program, which lowers
+// Lib's closed exports alone; Repro's program joins Lib's function values into
+// different callable sets. Each cached procedure's identity must not depend on
+// the callable sets its value joins, or Repro's build finds one specialization
+// key naming two procedure identities. Repro gets no pack hits without Primer,
+// so its hits here come from Primer's pack.
 fn customIssue11710SharedObjectCache(
     io: std.Io,
     allocator: Allocator,

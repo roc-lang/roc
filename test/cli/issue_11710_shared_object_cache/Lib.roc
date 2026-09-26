@@ -1,5 +1,5 @@
 # Reduced from basic-cli's Url module. Its helpers are stubs, but its function
-# values must keep this shape: Lib's module pack and Repro.roc's program join
+# values must keep this shape: Lib's pack program and Repro.roc's program join
 # them into different callable sets.
 Lib :: {
 	scheme : [Http, Https],
