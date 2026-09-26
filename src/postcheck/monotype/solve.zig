@@ -244,8 +244,8 @@ pub const FunctionNodes = struct {
 
 /// Immutable alpha-normalized bytes for one open function interface, scoped to
 /// the producing instantiation graph. The digest selects lookup candidates;
-/// exact bytes remain the collision authority after body relations mutate the
-/// live request nodes.
+/// the bytes, which carry the digests of context-free subtrees, remain the
+/// comparison authority after body relations mutate the live request nodes.
 pub const OpenFunctionInterfaceShape = struct {
     digest: names.TypeDigest,
     bytes: []const u8,
@@ -3353,30 +3353,22 @@ pub const InstGraph = struct {
     /// graph-local lookup key for unresolved draft requests: concrete
     /// structure is written directly, while unresolved union-find classes are
     /// numbered by first occurrence so interface aliasing is preserved without
-    /// depending on fresh node ids. Producer-owned source-interface and
+    /// depending on fresh node ids. A node whose encoding numbers no
+    /// unresolved class and no cycle is written as the digest of that
+    /// encoding, so repeated structure is encoded once. Producer-owned source-interface and
     /// recursive-representation evidence participate because they can change
     /// how an otherwise identical open shape finalizes.
     /// Capture the exact open-interface shape before a callee body can refine
     /// its live graph nodes. The bytes are graph-arena owned and must not escape
     /// draft specialization lookup.
     pub fn openFunctionInterfaceShape(self: *InstGraph, node: NodeId) Allocator.Error!OpenFunctionInterfaceShape {
-        var sizing = OpenFunctionInterfaceShapeWriter.init(self);
-        defer sizing.deinit();
-        try sizing.writeFunctionInterface(node);
-        const digest: names.TypeDigest = .{ .bytes = sizing.hasher.finalResult() };
-
-        const bytes = try self.arena().alloc(u8, sizing.output_len);
-        var writer = OpenFunctionInterfaceShapeWriter.initWithOutput(self, bytes);
+        var writer = OpenFunctionInterfaceShapeWriter.init(self);
         defer writer.deinit();
         try writer.writeFunctionInterface(node);
-        if (writer.output_len != bytes.len) {
-            Common.invariant("open function-interface shape changed while being captured");
-        }
-        const written_digest: names.TypeDigest = .{ .bytes = writer.hasher.finalResult() };
-        if (!std.mem.eql(u8, &digest.bytes, &written_digest.bytes)) {
-            Common.invariant("open function-interface shape digest differed from its exact bytes");
-        }
-        return .{ .digest = digest, .bytes = bytes };
+        return .{
+            .digest = .{ .bytes = TypeDigestHasher.hash(writer.buf.items) },
+            .bytes = try self.arena().dupe(u8, writer.buf.items),
+        };
     }
 
     /// Whether a live graph type is already closed and can be snapshotted
@@ -7260,75 +7252,94 @@ fn optionalInstDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool
 
 const OpenFunctionInterfaceShapeWriter = struct {
     graph: *InstGraph,
-    hasher: TypeDigestHasher,
+    buf: std.ArrayList(u8) = .empty,
     unresolved_ids: collections.DenseMap(NodeId, u32),
     visiting: std.ArrayList(NodeId),
     next_unresolved: u32 = 0,
-    output: ?[]u8 = null,
-    output_len: usize = 0,
+    /// Unresolved-variable and cycle tokens written so far. They are the only
+    /// bytes whose value depends on where a node is written, so a node whose
+    /// range contains neither is written as a reference to its own digest.
+    context_tokens: u32 = 0,
+    /// Digests of the context-free nodes written in this interface.
+    composed: collections.DenseMap(NodeId, names.TypeDigest),
 
     fn init(graph: *InstGraph) OpenFunctionInterfaceShapeWriter {
         return .{
             .graph = graph,
-            .hasher = TypeDigestHasher.init(),
             .unresolved_ids = collections.DenseMap(NodeId, u32).init(graph.allocator),
             .visiting = .empty,
+            .composed = collections.DenseMap(NodeId, names.TypeDigest).init(graph.allocator),
         };
     }
 
-    fn initWithOutput(graph: *InstGraph, output: []u8) OpenFunctionInterfaceShapeWriter {
-        var writer = init(graph);
-        writer.output = output;
-        return writer;
-    }
-
     fn deinit(self: *OpenFunctionInterfaceShapeWriter) void {
+        self.composed.deinit();
+        self.buf.deinit(self.graph.allocator);
         self.visiting.deinit(self.graph.allocator);
         self.unresolved_ids.deinit();
     }
 
+    fn writeComposedReference(self: *OpenFunctionInterfaceShapeWriter, digest: names.TypeDigest) Allocator.Error!void {
+        try self.writeU8(0xff);
+        try self.writeRawBytes(&digest.bytes);
+    }
+
     fn writeFunctionInterface(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) Allocator.Error!void {
-        self.writeBytes("roc.monotype.open_function_interface_shape.v3");
+        try self.writeBytes("roc.monotype.open_function_interface_shape.v3");
         try self.writeFunctionNodes(try self.graph.functionNodes(node));
         if (self.graph.requestSourceInterface(node)) |source| {
-            self.writeBytes("source-interface");
+            try self.writeBytes("source-interface");
             try self.writeFunctionNodes(try self.graph.functionNodes(source));
         } else {
-            self.writeBytes("no-source-interface");
+            try self.writeBytes("no-source-interface");
         }
     }
 
     fn writeFunctionNodes(self: *OpenFunctionInterfaceShapeWriter, function: FunctionNodes) Allocator.Error!void {
-        self.writeU32(@intCast(function.args.len));
+        try self.writeU32(@intCast(function.args.len));
         for (function.args) |arg| try self.writeNode(arg);
         try self.writeNode(function.ret);
     }
 
     fn writeNode(self: *OpenFunctionInterfaceShapeWriter, raw_node: NodeId) Allocator.Error!void {
         const node = self.graph.find(raw_node);
+        if (self.composed.get(node)) |digest| return try self.writeComposedReference(digest);
+        const start = self.buf.items.len;
+        const context_tokens = self.context_tokens;
+        try self.writeNodeContent(node);
+        if (self.context_tokens != context_tokens) return;
+        const digest: names.TypeDigest = .{ .bytes = TypeDigestHasher.hash(self.buf.items[start..]) };
+        try self.composed.put(node, digest);
+        self.buf.items.len = start;
+        try self.writeComposedReference(digest);
+    }
+
+    fn writeNodeContent(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) Allocator.Error!void {
         const content = self.graph.nodes.items[@intFromEnum(node)];
-        self.writeU8(if (self.hasRecursiveValueSlot(node)) 1 else 0);
-        self.writeU8(if (self.hasForcedDynamicIteratorRoot(node)) 1 else 0);
+        try self.writeU8(if (self.hasRecursiveValueSlot(node)) 1 else 0);
+        try self.writeU8(if (self.hasForcedDynamicIteratorRoot(node)) 1 else 0);
         if (content == .redirect) unreachable;
         if (content == .unresolved) {
+            self.context_tokens += 1;
             const entry = try self.unresolved_ids.getOrPut(node);
             if (!entry.found_existing) {
                 entry.value_ptr.* = self.next_unresolved;
                 self.next_unresolved += 1;
-                self.writeBytes("unresolved-new");
-                self.writeU32(entry.value_ptr.*);
-                self.writeVariable(content.unresolved);
+                try self.writeBytes("unresolved-new");
+                try self.writeU32(entry.value_ptr.*);
+                try self.writeVariable(content.unresolved);
             } else {
-                self.writeBytes("unresolved-ref");
-                self.writeU32(entry.value_ptr.*);
+                try self.writeBytes("unresolved-ref");
+                try self.writeU32(entry.value_ptr.*);
             }
             return;
         }
 
         for (self.visiting.items, 0..) |open_node, position| {
             if (open_node == node) {
-                self.writeBytes("cycle");
-                self.writeU32(@intCast(position));
+                self.context_tokens += 1;
+                try self.writeBytes("cycle");
+                try self.writeU32(@intCast(position));
                 return;
             }
         }
@@ -7338,72 +7349,72 @@ const OpenFunctionInterfaceShapeWriter = struct {
         switch (content) {
             .redirect, .unresolved => unreachable,
             .primitive => |primitive| {
-                self.writeBytes("primitive");
-                self.writeBytes(@tagName(primitive));
+                try self.writeBytes("primitive");
+                try self.writeBytes(@tagName(primitive));
             },
             .list => |elem| {
-                self.writeBytes("list");
+                try self.writeBytes("list");
                 try self.writeNode(elem);
             },
             .box => |elem| {
-                self.writeBytes("box");
+                try self.writeBytes("box");
                 try self.writeNode(elem);
             },
             .tuple => |items| {
-                self.writeBytes("tuple");
+                try self.writeBytes("tuple");
                 try self.writeNodeSpan(items);
             },
             .func => |function| {
-                self.writeBytes("func");
+                try self.writeBytes("func");
                 try self.writeNodeSpan(function.args);
                 try self.writeNode(function.ret);
             },
             .tag_union => |row| {
-                self.writeBytes("tag_union");
-                self.writeU32(@intCast(row.tags.len));
+                try self.writeBytes("tag_union");
+                try self.writeU32(@intCast(row.tags.len));
                 for (row.tags) |tag| {
-                    self.writeBytes(self.graph.name_store.tagLabelText(tag.name));
-                    self.writeBytes(self.graph.name_store.tagLabelText(tag.checked_name));
+                    try self.writeBytes(self.graph.name_store.tagLabelText(tag.name));
+                    try self.writeBytes(self.graph.name_store.tagLabelText(tag.checked_name));
                     try self.writeNodeSpan(tag.payloads);
                 }
                 try self.writeNode(row.ext);
             },
             .record => |row| {
-                self.writeBytes("record");
-                self.writeU32(@intCast(row.fields.len));
+                try self.writeBytes("record");
+                try self.writeU32(@intCast(row.fields.len));
                 for (row.fields) |field| {
-                    self.writeBytes(self.graph.name_store.recordFieldLabelText(field.name));
+                    try self.writeBytes(self.graph.name_store.recordFieldLabelText(field.name));
                     try self.writeNode(field.ty);
                 }
                 try self.writeNode(row.ext);
             },
-            .empty_tag_union => self.writeBytes("empty_tag_union"),
-            .empty_record => self.writeBytes("empty_record"),
+            .empty_tag_union => try self.writeBytes("empty_tag_union"),
+            .empty_record => try self.writeBytes("empty_record"),
             .named => |named| {
                 if (named.kind == .alias) {
                     const backing = named.backing orelse {
-                        self.writeBytes("alias-without-backing");
+                        try self.writeBytes("alias-without-backing");
                         return;
                     };
                     try self.writeNode(backing.node);
                     return;
                 }
 
-                self.writeBytes("named");
-                self.writeBytes(&named.named_type.module.bytes);
-                self.writeTypeDef(named.def);
-                self.writeBytes(@tagName(named.kind));
-                self.writeOptionalBuiltinOwner(named.builtin_owner);
+                try self.writeBytes("named");
+                try self.writeBytes(&named.named_type.module.bytes);
+                try self.writeTypeDef(named.def);
+                try self.writeBytes(@tagName(named.kind));
+                try self.writeOptionalBuiltinOwner(named.builtin_owner);
                 try self.writeNodeSpan(named.args);
                 try self.writeOptionalBacking(named.backing);
                 try self.writeDeclaredFieldSpan(named.declared_order);
                 try self.writeOptionalGeneratedIterator(named.generated_iterator);
             },
             .erased => |digest| {
-                self.writeBytes("erased");
-                self.writeBytes(&digest.bytes);
+                try self.writeBytes("erased");
+                try self.writeBytes(&digest.bytes);
             },
-            .zst => self.writeBytes("zst"),
+            .zst => try self.writeBytes("zst"),
         }
     }
 
@@ -7416,41 +7427,41 @@ const OpenFunctionInterfaceShapeWriter = struct {
     }
 
     fn writeNodeSpan(self: *OpenFunctionInterfaceShapeWriter, nodes: []const NodeId) Allocator.Error!void {
-        self.writeU32(@intCast(nodes.len));
+        try self.writeU32(@intCast(nodes.len));
         for (nodes) |node| try self.writeNode(node);
     }
 
-    fn writeVariable(self: *OpenFunctionInterfaceShapeWriter, variable: InstVariable) void {
-        self.writeBytes(@tagName(variable.origin));
-        self.writeOptionalNumericDefaultPhase(variable.numeric_default_phase);
-        self.writeOptionalRowDefault(variable.row_default);
+    fn writeVariable(self: *OpenFunctionInterfaceShapeWriter, variable: InstVariable) Allocator.Error!void {
+        try self.writeBytes(@tagName(variable.origin));
+        try self.writeOptionalNumericDefaultPhase(variable.numeric_default_phase);
+        try self.writeOptionalRowDefault(variable.row_default);
     }
 
-    fn writeTypeDef(self: *OpenFunctionInterfaceShapeWriter, def: Type.TypeDef) void {
-        self.writeBytes(self.graph.name_store.moduleIdentityBytes(def.module));
-        self.writeOptionalU32(def.source_decl);
+    fn writeTypeDef(self: *OpenFunctionInterfaceShapeWriter, def: Type.TypeDef) Allocator.Error!void {
+        try self.writeBytes(self.graph.name_store.moduleIdentityBytes(def.module));
+        try self.writeOptionalU32(def.source_decl);
         if (def.source_decl == null) {
-            self.writeBytes(self.graph.name_store.typeNameText(def.type_name));
+            try self.writeBytes(self.graph.name_store.typeNameText(def.type_name));
         }
-        self.writeOptionalDigest(def.generated);
-        self.writeBytes(@tagName(def.iterator_representation));
-        self.writeBytes(@tagName(def.iterator_kind));
-        self.writeU8(def.iterator_depth);
-        self.writeOptionalIteratorTopology(def.iterator_topology);
+        try self.writeOptionalDigest(def.generated);
+        try self.writeBytes(@tagName(def.iterator_representation));
+        try self.writeBytes(@tagName(def.iterator_kind));
+        try self.writeU8(def.iterator_depth);
+        try self.writeOptionalIteratorTopology(def.iterator_topology);
     }
 
     fn writeOptionalBacking(self: *OpenFunctionInterfaceShapeWriter, backing: ?InstBacking) Allocator.Error!void {
         if (backing) |actual| {
-            self.writeU8(1);
+            try self.writeU8(1);
             try self.writeBacking(actual);
         } else {
-            self.writeU8(0);
+            try self.writeU8(0);
         }
     }
 
     fn writeBacking(self: *OpenFunctionInterfaceShapeWriter, backing: InstBacking) Allocator.Error!void {
-        self.writeBytes(@tagName(backing.use));
-        self.writeBytes(@tagName(backing.authority));
+        try self.writeBytes(@tagName(backing.use));
+        try self.writeBytes(@tagName(backing.authority));
         try self.writeNode(backing.node);
     }
 
@@ -7458,15 +7469,15 @@ const OpenFunctionInterfaceShapeWriter = struct {
         self: *OpenFunctionInterfaceShapeWriter,
         declared_order: []const InstDeclaredField,
     ) Allocator.Error!void {
-        self.writeU32(@intCast(declared_order.len));
+        try self.writeU32(@intCast(declared_order.len));
         for (declared_order) |entry| {
             switch (entry) {
                 .named => |field_name| {
-                    self.writeBytes("named");
-                    self.writeBytes(self.graph.name_store.recordFieldLabelText(field_name));
+                    try self.writeBytes("named");
+                    try self.writeBytes(self.graph.name_store.recordFieldLabelText(field_name));
                 },
                 .padding => |padding| {
-                    self.writeBytes("padding");
+                    try self.writeBytes("padding");
                     try self.writeNode(padding);
                 },
             }
@@ -7478,15 +7489,15 @@ const OpenFunctionInterfaceShapeWriter = struct {
         generated_iterator: ?*const InstGeneratedIterator,
     ) Allocator.Error!void {
         const generated = generated_iterator orelse {
-            self.writeU8(0);
+            try self.writeU8(0);
             return;
         };
-        self.writeU8(1);
-        self.writeOptionalDigest(generated.callable_evidence);
-        self.writeBytes(&generated.public_source.named_type.module.bytes);
-        self.writeTypeDef(generated.public_source.def);
-        self.writeBytes(@tagName(generated.public_source.kind));
-        self.writeBytes(@tagName(generated.public_source.builtin_owner));
+        try self.writeU8(1);
+        try self.writeOptionalDigest(generated.callable_evidence);
+        try self.writeBytes(&generated.public_source.named_type.module.bytes);
+        try self.writeTypeDef(generated.public_source.def);
+        try self.writeBytes(@tagName(generated.public_source.kind));
+        try self.writeBytes(@tagName(generated.public_source.builtin_owner));
         try self.writeBacking(generated.public_source.backing);
         try self.writeDeclaredFieldSpan(generated.public_source.declared_order);
     }
@@ -7494,100 +7505,93 @@ const OpenFunctionInterfaceShapeWriter = struct {
     fn writeOptionalIteratorTopology(
         self: *OpenFunctionInterfaceShapeWriter,
         topology: ?Type.IteratorTopology,
-    ) void {
+    ) Allocator.Error!void {
         const value = topology orelse {
-            self.writeU8(0);
+            try self.writeU8(0);
             return;
         };
-        self.writeU8(1);
-        self.writeBytes(self.graph.name_store.recordFieldLabelText(value.len_field));
-        self.writeBytes(self.graph.name_store.recordFieldLabelText(value.step_field));
-        self.writeBytes(self.graph.name_store.tagLabelText(value.known_tag));
-        self.writeBytes(self.graph.name_store.tagLabelText(value.unknown_tag));
-        self.writeBytes(self.graph.name_store.tagLabelText(value.done_tag));
-        self.writeBytes(self.graph.name_store.tagLabelText(value.one_tag));
-        self.writeBytes(self.graph.name_store.tagLabelText(value.skip_tag));
-        self.writeBytes(self.graph.name_store.recordFieldLabelText(value.item_field));
-        self.writeBytes(self.graph.name_store.recordFieldLabelText(value.rest_field));
+        try self.writeU8(1);
+        try self.writeBytes(self.graph.name_store.recordFieldLabelText(value.len_field));
+        try self.writeBytes(self.graph.name_store.recordFieldLabelText(value.step_field));
+        try self.writeBytes(self.graph.name_store.tagLabelText(value.known_tag));
+        try self.writeBytes(self.graph.name_store.tagLabelText(value.unknown_tag));
+        try self.writeBytes(self.graph.name_store.tagLabelText(value.done_tag));
+        try self.writeBytes(self.graph.name_store.tagLabelText(value.one_tag));
+        try self.writeBytes(self.graph.name_store.tagLabelText(value.skip_tag));
+        try self.writeBytes(self.graph.name_store.recordFieldLabelText(value.item_field));
+        try self.writeBytes(self.graph.name_store.recordFieldLabelText(value.rest_field));
     }
 
     fn writeOptionalBuiltinOwner(
         self: *OpenFunctionInterfaceShapeWriter,
         owner: ?static_dispatch.BuiltinOwner,
-    ) void {
+    ) Allocator.Error!void {
         if (owner) |actual| {
-            self.writeU8(1);
-            self.writeBytes(@tagName(actual));
+            try self.writeU8(1);
+            try self.writeBytes(@tagName(actual));
         } else {
-            self.writeU8(0);
+            try self.writeU8(0);
         }
     }
 
     fn writeOptionalNumericDefaultPhase(
         self: *OpenFunctionInterfaceShapeWriter,
         phase: ?checked.NumericDefaultPhase,
-    ) void {
+    ) Allocator.Error!void {
         if (phase) |actual| {
-            self.writeU8(1);
-            self.writeBytes(@tagName(actual));
+            try self.writeU8(1);
+            try self.writeBytes(@tagName(actual));
         } else {
-            self.writeU8(0);
+            try self.writeU8(0);
         }
     }
 
     fn writeOptionalRowDefault(
         self: *OpenFunctionInterfaceShapeWriter,
         row_default: ?checked.RowDefault,
-    ) void {
+    ) Allocator.Error!void {
         if (row_default) |actual| {
-            self.writeU8(1);
-            self.writeBytes(@tagName(actual));
+            try self.writeU8(1);
+            try self.writeBytes(@tagName(actual));
         } else {
-            self.writeU8(0);
+            try self.writeU8(0);
         }
     }
 
-    fn writeOptionalDigest(self: *OpenFunctionInterfaceShapeWriter, digest: ?names.TypeDigest) void {
+    fn writeOptionalDigest(self: *OpenFunctionInterfaceShapeWriter, digest: ?names.TypeDigest) Allocator.Error!void {
         if (digest) |actual| {
-            self.writeU8(1);
-            self.writeBytes(&actual.bytes);
+            try self.writeU8(1);
+            try self.writeBytes(&actual.bytes);
         } else {
-            self.writeU8(0);
+            try self.writeU8(0);
         }
     }
 
-    fn writeOptionalU32(self: *OpenFunctionInterfaceShapeWriter, value: ?u32) void {
+    fn writeOptionalU32(self: *OpenFunctionInterfaceShapeWriter, value: ?u32) Allocator.Error!void {
         if (value) |actual| {
-            self.writeU8(1);
-            self.writeU32(actual);
+            try self.writeU8(1);
+            try self.writeU32(actual);
         } else {
-            self.writeU8(0);
+            try self.writeU8(0);
         }
     }
 
-    fn writeBytes(self: *OpenFunctionInterfaceShapeWriter, bytes: []const u8) void {
-        self.writeU32(@intCast(bytes.len));
-        self.writeRawBytes(bytes);
+    fn writeBytes(self: *OpenFunctionInterfaceShapeWriter, bytes: []const u8) Allocator.Error!void {
+        try self.writeU32(@intCast(bytes.len));
+        try self.writeRawBytes(bytes);
     }
 
-    fn writeU8(self: *OpenFunctionInterfaceShapeWriter, value: u8) void {
-        self.writeRawBytes(&.{value});
+    fn writeU8(self: *OpenFunctionInterfaceShapeWriter, value: u8) Allocator.Error!void {
+        try self.writeRawBytes(&.{value});
     }
 
-    fn writeU32(self: *OpenFunctionInterfaceShapeWriter, value: u32) void {
+    fn writeU32(self: *OpenFunctionInterfaceShapeWriter, value: u32) Allocator.Error!void {
         var little = std.mem.nativeToLittle(u32, value);
-        self.writeRawBytes(std.mem.asBytes(&little));
+        try self.writeRawBytes(std.mem.asBytes(&little));
     }
 
-    fn writeRawBytes(self: *OpenFunctionInterfaceShapeWriter, bytes: []const u8) void {
-        self.hasher.update(bytes);
-        if (self.output) |output| {
-            if (self.output_len > output.len or bytes.len > output.len - self.output_len) {
-                Common.invariant("open function-interface shape exceeded its measured byte count");
-            }
-            @memcpy(output[self.output_len..][0..bytes.len], bytes);
-        }
-        self.output_len += bytes.len;
+    fn writeRawBytes(self: *OpenFunctionInterfaceShapeWriter, bytes: []const u8) Allocator.Error!void {
+        try self.buf.appendSlice(self.graph.allocator, bytes);
     }
 };
 
