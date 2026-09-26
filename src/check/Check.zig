@@ -14534,7 +14534,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         try self.auditImplicitOpenExts(
             annotation_idx,
             generalizes_regardless,
-            self.cir.store.getExprRegion(def.expr),
+            def.expr,
             env,
         );
 
@@ -16937,6 +16937,8 @@ const LateImplicitOpenExtAudit = struct {
     /// minted `ext`. `Region.zero()` when the audit's caller could not name
     /// one: no codec relation is then inside it.
     owner_rhs: Region,
+    /// The right-hand side itself, which a report retires.
+    owner_expr: CIR.Expr.Idx,
 };
 
 /// Error tags one generated-codec relation requires in one error row. `row`
@@ -16975,9 +16977,10 @@ fn auditImplicitOpenExts(
     self: *Self,
     annotation_idx: CIR.Annotation.Idx,
     redundant_open_warns: bool,
-    owner_rhs: Region,
+    owner_expr: CIR.Expr.Idx,
     env: *Env,
 ) std.mem.Allocator.Error!void {
+    const owner_rhs = self.cir.store.getExprRegion(owner_expr);
     const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return;
     for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
         if (redundant_open_warns) {
@@ -16991,11 +16994,12 @@ fn auditImplicitOpenExts(
             try self.late_implicit_open_ext_audits.append(self.gpa, .{
                 .ext = entry,
                 .owner_rhs = owner_rhs,
+                .owner_expr = owner_expr,
             });
             continue;
         }
         const first_tag = self.types.tags.get(self.types.resolveVar(entry.var_).desc.content.structure.tag_union.tags.start);
-        try self.reportImplicitOpenExtExtension(entry, first_tag.name, env);
+        try self.reportImplicitOpenExtExtension(entry, first_tag.name, owner_expr, env);
     }
 }
 
@@ -17050,7 +17054,7 @@ fn runLateImplicitOpenExtAudit(self: *Self, env: *Env) std.mem.Allocator.Error!v
             for (tags) |tag_name| {
                 if (!self.tagRowHasTag(entry.ext.var_, tag_name)) continue;
                 reported.set(candidate.entry);
-                try self.reportImplicitOpenExtExtension(entry.ext, tag_name, env);
+                try self.reportImplicitOpenExtExtension(entry.ext, tag_name, entry.owner_expr, env);
                 break;
             }
         }
@@ -17223,6 +17227,7 @@ fn reportImplicitOpenExtExtension(
     self: *Self,
     entry: ImplicitOpenExt,
     tag_name: Ident.Idx,
+    owner_expr: CIR.Expr.Idx,
     env: *Env,
 ) std.mem.Allocator.Error!void {
     // Report this as an ordinary Type Mismatch carrying two rows, so the
@@ -17250,8 +17255,7 @@ fn reportImplicitOpenExtExtension(
         .tags = listed_tags,
         .ext = expected_ext_var,
     } } }, env, entry.region);
-    // Both snapshots must be taken before the `markErroneous` below overwrites
-    // the extension's content with `.err`.
+    // Both snapshots describe the rows as solving left them.
     const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual_var);
     const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected_var);
     _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
@@ -17266,7 +17270,25 @@ fn reportImplicitOpenExtExtension(
             .tag_name = tag_name,
         } },
     } });
-    try self.markErroneous(entry.var_);
+    try self.retireRowExtendingDefinition(owner_expr);
+}
+
+/// Recovery after a definition was reported for producing a tag its
+/// annotation does not list: the definition's body becomes a runtime error,
+/// as for any other annotation mismatch. The row keeps what solving gave it,
+/// which every use has already related to or will relate to consistently, so
+/// the definition's type stays usable by the code that calls it.
+fn retireRowExtendingDefinition(self: *Self, owner_expr: CIR.Expr.Idx) std.mem.Allocator.Error!void {
+    try self.erroneous_value_exprs.put(self.gpa, self.definitionBodyExpr(owner_expr), {});
+}
+
+/// The expression a definition's value is computed by: a function's body,
+/// or the right-hand side itself.
+fn definitionBodyExpr(self: *const Self, rhs: CIR.Expr.Idx) CIR.Expr.Idx {
+    const expr = self.cir.store.getExpr(rhs);
+    if (expr == .e_closure) return self.definitionBodyExpr(expr.e_closure.lambda_idx);
+    if (expr == .e_lambda) return expr.e_lambda.body;
+    return rhs;
 }
 
 /// After the module solves, ground every still-open implicitly opened
@@ -24685,7 +24707,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     try self.auditImplicitOpenExts(
                         annotation_idx,
                         decl_is_fn,
-                        self.cir.store.getExprRegion(decl_stmt.expr),
+                        decl_stmt.expr,
                         env,
                     );
                 }

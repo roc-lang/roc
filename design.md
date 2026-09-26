@@ -6548,8 +6548,13 @@ extension the annotation's generation minted (`Check.implicit_open_exts`,
 sliced per annotation by `annotation_implicit_open_exts`), and reports a Type
 Mismatch in the annotation context for any that resolved to a row carrying
 tags—showing the row the body produced against the union the annotation
-wrote—marking that extension erroneous (diagnostic recovery, like every
-other reported problem).
+wrote. The recovery is the one every annotation mismatch gets: the
+definition's body (a function's body, or the right-hand side) becomes a
+runtime error, and the row keeps exactly what solving gave it. The row is
+not poisoned: other definitions call this one and its uses have already
+related to the row, or will, so an erroneous type there would leave code
+nothing lowers, such as an `expect` calling the definition, which then fails
+at the retired body like any test reaching a checked error.
 
 That pass is a single READ of a mutable variable, and a definition can still
 widen its own row afterwards through a generated codec its body introduced: a
@@ -6558,7 +6563,8 @@ derived parser or encoder is often validated only once
 in the module has run, and its validation adds error tags to the codec's error
 row (Derived Parser Required-Field Error Composition). Every extension the
 post-body pass cleared is therefore kept, stamped with the source region of its
-binding's right-hand side (`Check.LateImplicitOpenExtAudit.owner_rhs`). Each
+binding's right-hand side (`Check.LateImplicitOpenExtAudit.owner_rhs`) and
+that right-hand side itself (`owner_expr`), which a report retires. Each
 codec validation records, with the region of the expression that introduced
 the codec relation, exactly which tags it requires in which error row
 (`Check.codec_row_demands`): `MissingRequiredField(Str)`, a nested custom
