@@ -300,7 +300,9 @@ pub const Constants = struct {
     ///      naming a block-local nominal's method, not by syntax.
     /// 128: Hoist selection follows structural comparisons' component
     ///      derivation edges.
-    pub const CACHE_VERSION = 128;
+    /// 129: Hoist selection rejects roots whose instantiated types reach a
+    ///      block-local `to_inspect` override.
+    pub const CACHE_VERSION = 129;
 };
 
 /// Configuration for the Roc cache system.

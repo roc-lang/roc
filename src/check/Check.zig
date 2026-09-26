@@ -10328,7 +10328,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
 
     var dispatch_join: ?DispatchJoinIndex = null;
     defer if (dispatch_join) |*join| join.deinit(self.gpa);
-    if (self.selectedAnyBlockLocalMethod()) {
+    if (root_count != 0) {
         dispatch_join = .{};
         try self.buildDispatchJoinIndex(&dispatch_join.?);
     }
@@ -10432,15 +10432,6 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     self.selected_hoisted_roots.shrinkRetainingCapacity(kept);
     self.debugAssertHoistSelectionConsistent();
     try self.debugVerifyKeptHoistedRootDependencies(dispatch_join_ref);
-}
-
-/// Whether checking selected a method of a nominal declared in a function
-/// body as any dispatch target of this module.
-fn selectedAnyBlockLocalMethod(self: *const Self) bool {
-    for (self.dispatch_target_instantiations.items) |instantiation| {
-        if (self.methodBindingIsBlockLocal(instantiation.target_env, instantiation.target_binding)) return true;
-    }
-    return false;
 }
 
 fn hoistedRootIsIntrinsicallyKept(
@@ -10770,9 +10761,8 @@ fn hoistSelectionInvariant(comptime message: []const u8) noreturn {
 }
 
 const HoistedRootKeepOracle = struct {
-    /// The dispatch-target join when this module selected any method of a
-    /// block-local nominal; null when it selected none, so no root can reach
-    /// one.
+    /// The dispatch-target join, built once for every pruning pass that has
+    /// roots to judge; null only when there are none.
     dispatch_join: ?*const DispatchJoinIndex = null,
     pattern_roots: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
     expr_roots: std.AutoHashMapUnmanaged(CIR.Expr.Idx, u32) = .{},
@@ -10849,9 +10839,15 @@ fn hoistedRootReachesBlockLocalMethod(
 ) Allocator.Error!bool {
     var visited = std.AutoHashMapUnmanaged(Var, void){};
     defer visited.deinit(self.gpa);
+    var type_visited = std.AutoHashMapUnmanaged(Var, void){};
+    defer type_visited.deinit(self.gpa);
     while (context.dispatch_seeds.pop()) |seed| {
         const resolved = self.types.resolveVar(seed).var_;
         if ((try visited.getOrPut(self.gpa, resolved)).found_existing) continue;
+        // Inspection selects a type's `to_inspect` override by the type
+        // itself, with no dispatch constraint: any type the root instantiates
+        // is one inspection inside the root may reach.
+        if (try self.typeReachesBlockLocalInspectOverride(resolved, &type_visited)) return true;
         if (join.children_by_parent.get(resolved)) |children| {
             try context.dispatch_seeds.appendSlice(self.gpa, children.items);
         }
@@ -10864,6 +10860,58 @@ fn hoistedRootReachesBlockLocalMethod(
         }
     }
     return false;
+}
+
+/// Whether inspecting a value of `var_`'s type can reach a nominal whose
+/// `to_inspect` override is declared in a function body. Inspecting a function
+/// never inspects its argument or result types.
+fn typeReachesBlockLocalInspectOverride(
+    self: *Self,
+    var_: Var,
+    visited: *std.AutoHashMapUnmanaged(Var, void),
+) Allocator.Error!bool {
+    const resolved = self.types.resolveVar(var_);
+    if ((try visited.getOrPut(self.gpa, resolved.var_)).found_existing) return false;
+    switch (resolved.desc.content) {
+        .structure => |flat| switch (flat) {
+            .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return false,
+            .record => |record| {
+                const fields = self.types.getRecordFieldsSlice(record.fields);
+                for (fields.items(.presence)) |presence| {
+                    if (try self.typeReachesBlockLocalInspectOverride(presence.typeVar(), visited)) return true;
+                }
+                return try self.typeReachesBlockLocalInspectOverride(record.ext, visited);
+            },
+            .tuple => |tuple| {
+                for (self.types.sliceVars(tuple.elems)) |elem| {
+                    if (try self.typeReachesBlockLocalInspectOverride(elem, visited)) return true;
+                }
+                return false;
+            },
+            .tag_union => |tag_union| {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                for (tags.items(.args)) |tag_args| {
+                    for (self.types.sliceVars(tag_args)) |arg| {
+                        if (try self.typeReachesBlockLocalInspectOverride(arg, visited)) return true;
+                    }
+                }
+                return try self.typeReachesBlockLocalInspectOverride(tag_union.ext, visited);
+            },
+            .nominal_type => |nominal| {
+                const original_env = self.getNominalOriginEnv(nominal);
+                if (self.lookupStaticDispatchMethodBinding(original_env, nominal.sourceDeclOptional(), self.cir, self.cir.idents.to_inspect)) |found| {
+                    if (self.methodBindingIsBlockLocal(found.env, found.binding)) return true;
+                }
+                for (self.types.sliceNominalArgs(nominal)) |arg| {
+                    if (try self.typeReachesBlockLocalInspectOverride(arg, visited)) return true;
+                }
+                const template = self.nominalDeclBackingTemplate(nominal) orelse return false;
+                return try self.typeReachesBlockLocalInspectOverride(template, visited);
+            },
+        },
+        .alias => |alias| return try self.typeReachesBlockLocalInspectOverride(self.types.getAliasBackingVar(alias), visited),
+        .flex, .rigid, .field_presence, .err => return false,
+    }
 }
 
 fn methodBindingIsBlockLocal(self: *const Self, env: *const ModuleEnv, binding: ModuleEnv.MethodBinding) bool {

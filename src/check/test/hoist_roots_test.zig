@@ -515,6 +515,61 @@ test "hoist roots are not selected for tag payload hashing whose component is a 
     try expectNoSelectedComparisonRoot(&test_env);
 }
 
+test "hoist roots are not selected for inspecting a local nominal with a block-local override" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    Loc := [L].{
+        \\        to_inspect : Loc -> Str
+        \\        to_inspect = |_| "custom"
+        \\    }
+        \\    x = Str.inspect(Loc.L)
+        \\    Str.concat(x, arg)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try expectNoSelectedCallRoot(&test_env);
+}
+
+test "hoist roots are not selected for a generic callee inspecting a local nominal with a block-local override" {
+    var test_env = try TestEnv.init("Test",
+        \\show : a -> Str
+        \\show = |x| Str.inspect(x)
+        \\
+        \\main = |arg| {
+        \\    Loc := [L].{
+        \\        to_inspect : Loc -> Str
+        \\        to_inspect = |_| "custom"
+        \\    }
+        \\    x = show({ k: Loc.L })
+        \\    Str.concat(x, arg)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try expectNoSelectedCallRoot(&test_env);
+}
+
+test "hoist roots are still selected for inspecting a local nominal without an override" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    Loc := [L]
+        \\    x = Str.inspect(Loc.L)
+        \\    Str.concat(x, arg)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    var binding_roots: usize = 0;
+    for (test_env.checker.selectedHoistedRoots()) |root| {
+        if (root.pattern != null) binding_roots += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), binding_roots);
+}
+
 fn expectNoSelectedComparisonRoot(test_env: *const TestEnv) error{TestUnexpectedResult}!void {
     for (test_env.checker.selectedHoistedRoots()) |root| {
         if (root.pattern != null) return error.TestUnexpectedResult;

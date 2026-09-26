@@ -3841,7 +3841,15 @@ walk joins them), or one selected for a component of a structural
 comparison or hash (`{ k: Loc.L } == ...`). A structural discharge rewrites
 its node and keeps no constraint of its own, so checking records the
 constraint each rewrite discharged and a derivation edge from it to every
-component obligation it creates; the walk follows both. A kept root never contains the method's declaration, which
+component requirement it creates; the walk follows both. Inspection selects
+a type's `to_inspect` override by the type alone, with no dispatch
+constraint, so a root is also not selected when any type it instantiates
+(a scheme-use pair's instance, which includes `Str.inspect`'s own) can,
+when inspected, reach a nominal whose `to_inspect` is declared in a
+function body; inspecting a function never inspects its argument or result
+types. (Lowering such an inspection outside hoisting is a separate,
+pre-existing gap: the `Str.inspect` specialization at that type carries no
+local declaration context.) A kept root never contains the method's declaration, which
 is a lambda. The evidence decides, not the syntax: `getit(l)` with
 `l : Loc` bound earlier is kept out of a root exactly as `getit(Loc.L)` is,
 while constant data built from a local nominal (`[Loc.L, Loc.M]`) is still a
