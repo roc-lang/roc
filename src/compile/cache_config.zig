@@ -282,7 +282,10 @@ pub const Constants = struct {
     ///      result spine ends (`Alias.spine`), replacing `Alias.backing` and
     ///      `Alias.body_formals`; checked aliases record their declared
     ///      arity.
-    pub const CACHE_VERSION = 119;
+    /// 120: A widened alias instance never wins a merge: after its backing is
+    ///      related to a structure it joins the structure's class, so a
+    ///      definition's type keeps its annotation's rows as written.
+    pub const CACHE_VERSION = 120;
 };
 
 /// Configuration for the Roc cache system.

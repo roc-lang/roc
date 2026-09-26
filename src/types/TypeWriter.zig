@@ -27,7 +27,6 @@ const Func = types_mod.Func;
 
 // const SExpr = base.SExpr;
 const Ident = base.Ident;
-const IterationGuard = @import("debug.zig").IterationGuard;
 
 const TypeContext = enum {
     General,
@@ -822,116 +821,9 @@ fn stepWidenedAlias(self: *TypeWriter, writer: *ByteWrite, frame: *WidenedAliasF
     }
 }
 
-/// Whether an alias instance is widened: its hidden arguments carry what its
-/// declared arguments do not show (design.md "Hidden Alias Arguments"). A
-/// hidden marker slot is widened when it resolves, through alias layers, to a
-/// tag union listing a tag: the row the declaration closes gained one. The
-/// hidden `e⁺` slot is widened when its row's tags, read down its extension
-/// chain, differ from those of the argument of the formal it stands for.
-/// This reads the instance's explicit arguments and decides presentation
-/// only.
+/// Whether an alias instance is widened (`Store.aliasIsWidened`).
 pub fn aliasIsWidened(self: *const TypeWriter, alias: Alias) bool {
-    var markers = self.types.aliasHiddenArgs(alias);
-    switch (alias.spine.kind) {
-        .formal => {
-            const formal_arg = self.types.sliceAliasDeclaredArgs(alias)[alias.spine.base];
-            if (!self.sameRowTags(markers[0], formal_arg)) return true;
-            markers = markers[1..];
-        },
-        // A declared slot is written with the declared arguments.
-        .none, .marker, .declared => {},
-    }
-    for (markers) |marker| {
-        var current = marker;
-        while (true) {
-            const resolved = self.types.resolveVar(current);
-            switch (resolved.desc.content) {
-                .alias => |inner| current = self.types.getAliasBackingVar(inner),
-                .structure => |flat| {
-                    switch (flat) {
-                        .tag_union => |tag_union| if (tag_union.tags.count > 0) return true,
-                        .empty_tag_union, .empty_record, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => {},
-                    }
-                    break;
-                },
-                .flex, .rigid, .field_presence, .err => break,
-            }
-        }
-    }
-    return false;
-}
-
-/// Whether the rows `a` and `b`, each read down its extension chain through
-/// alias layers, list the same tag names.
-fn sameRowTags(self: *const TypeWriter, a: Var, b: Var) bool {
-    if (self.types.resolveVar(a).var_ == self.types.resolveVar(b).var_) return true;
-    return self.rowTagCount(a) == self.rowTagCount(b) and self.rowTagsWithin(a, b);
-}
-
-fn rowTagCount(self: *const TypeWriter, row: Var) usize {
-    var count: usize = 0;
-    var current = row;
-    var guard = IterationGuard.init("TypeWriter.rowTagCount");
-    while (true) {
-        guard.tick();
-        const resolved = self.types.resolveVar(current);
-        switch (resolved.desc.content) {
-            .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            .structure => |flat| switch (flat) {
-                .tag_union => |tag_union| {
-                    count += tag_union.tags.count;
-                    current = tag_union.ext;
-                },
-                .empty_tag_union, .empty_record, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => return count,
-            },
-            .flex, .rigid, .field_presence, .err => return count,
-        }
-    }
-}
-
-/// Whether every tag `row` lists is listed by `other`.
-fn rowTagsWithin(self: *const TypeWriter, row: Var, other: Var) bool {
-    var current = row;
-    var guard = IterationGuard.init("TypeWriter.rowTagsWithin");
-    while (true) {
-        guard.tick();
-        const resolved = self.types.resolveVar(current);
-        switch (resolved.desc.content) {
-            .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            .structure => |flat| switch (flat) {
-                .tag_union => |tag_union| {
-                    for (self.types.getTagsSlice(tag_union.tags).items(.name)) |name| {
-                        if (!self.rowListsTag(other, name)) return false;
-                    }
-                    current = tag_union.ext;
-                },
-                .empty_tag_union, .empty_record, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => return true,
-            },
-            .flex, .rigid, .field_presence, .err => return true,
-        }
-    }
-}
-
-fn rowListsTag(self: *const TypeWriter, row: Var, name: Ident.Idx) bool {
-    var current = row;
-    var guard = IterationGuard.init("TypeWriter.rowListsTag");
-    while (true) {
-        guard.tick();
-        const resolved = self.types.resolveVar(current);
-        switch (resolved.desc.content) {
-            .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            .structure => |flat| switch (flat) {
-                .tag_union => |tag_union| {
-                    for (self.types.getTagsSlice(tag_union.tags).items(.name)) |listed| {
-                        if (listed.eql(name)) return true;
-                    }
-                    current = tag_union.ext;
-                },
-                .empty_tag_union, .empty_record, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => return false,
-            },
-            .flex, .rigid, .field_presence, .err => return false,
-        }
-    }
+    return self.types.aliasIsWidened(alias);
 }
 
 /// Write a flat type's leading bytes, returning true when a frame was pushed.

@@ -670,6 +670,67 @@ test "unify - an open hidden slot meets a closed one through the arguments" {
     }
 }
 
+/// `Base : [Other]` as an instance whose hidden marker slot is `slot`.
+fn mkBaseWithSlot(env: *TestEnv, slot: Var) std.mem.Allocator.Error!Var {
+    const other = try env.mkTag("Other", &[_]Var{});
+    const backing = try env.module_env.types.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try env.module_env.types.appendTags(&[_]Tag{other}),
+        .ext = slot,
+    } } });
+    return try env.module_env.types.freshFromContent(try env.mkAliasWithHidden("Base", backing, &[_]Var{}, &[_]Var{slot}, .marker));
+}
+
+test "unify - a widened alias instance never wins a merge against a structure" {
+    // design.md "Hidden Alias Arguments": a use's `Base` whose marker slot
+    // is open meets the annotation's `[Aborted, Other]`; relating the
+    // backing widens the slot, and the alias then joins the structure's
+    // class, which keeps its content.
+    for ([_]bool{ false, true }) |reverse| {
+        const gpa = std.testing.allocator;
+        var env = try TestEnv.init(gpa);
+        defer env.deinit();
+
+        const widened = try mkBaseWithSlot(&env, try env.module_env.types.fresh());
+        const structure = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{ try env.mkTag("Aborted", &[_]Var{}), try env.mkTag("Other", &[_]Var{}) })).content);
+
+        const result = if (reverse) try env.unify(structure, widened) else try env.unify(widened, structure);
+        try std.testing.expectEqual(.unified, result);
+        try std.testing.expectEqual(env.module_env.types.resolveVar(structure).var_, env.module_env.types.resolveVar(widened).var_);
+        try std.testing.expect(env.module_env.types.resolveVar(widened).desc.content == .structure);
+    }
+}
+
+test "unify - an alias instance that is not widened keeps its view against a structure" {
+    // The same meeting with a structure that adds no tag: the slot closes,
+    // nothing is widened, and the alias stays the transparent view it is.
+    for ([_]bool{ false, true }) |reverse| {
+        const gpa = std.testing.allocator;
+        var env = try TestEnv.init(gpa);
+        defer env.deinit();
+
+        const view = try mkBaseWithSlot(&env, try env.module_env.types.fresh());
+        const structure = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{try env.mkTag("Other", &[_]Var{})})).content);
+
+        const result = if (reverse) try env.unify(structure, view) else try env.unify(view, structure);
+        try std.testing.expectEqual(.unified, result);
+        try std.testing.expect(env.module_env.types.resolveVar(view).desc.content == .alias);
+        try std.testing.expect(env.module_env.types.resolveVar(view).var_ != env.module_env.types.resolveVar(structure).var_);
+    }
+}
+
+test "unify - a widened alias whose backing disagrees with a structure is not merged" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const widened_slot = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{try env.mkTag("Aborted", &[_]Var{})})).content);
+    const widened = try mkBaseWithSlot(&env, widened_slot);
+    const structure = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{try env.mkTag("Other", &[_]Var{})})).content);
+
+    // The backing relation fails, and the merge it would precede never runs.
+    try std.testing.expectEqual(false, (try env.unify(widened, structure)).isAccepted());
+}
+
 test "unify - a declared argument the body does not use is related exactly" {
     // `P(a) : Base` is `P(a; m) : [Other | m]`: `a` has no body position, so
     // only the argument list carries it, and `P([A])` still differs from

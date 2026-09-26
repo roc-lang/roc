@@ -2399,10 +2399,32 @@ Where the spine slot takes something other than the argument:
 
 Unification relates two applications of one alias by all their arguments,
 pairwise; their backings, being the body under those arguments, are then
-related without a separate report (`unifyTwoAliases`). Merges keep one side's
-content with no preference between a use's instance and an annotation's, so a
-body's type can present the use's alias spelling where the annotation wrote a
-structure; the type is the same. A merge never makes an alias its own backing
+related without a separate report (`unifyTwoAliases`). Two applications of one
+alias agree in every argument once related, so neither is more widened than
+the other, and the merge keeps b's view.
+
+A WIDENED instance never wins a merge. An alias meeting a structure is related
+through its backing; when the alias is then widened (`Store.aliasIsWidened`,
+the one predicate presentation reads too, decided on the instance's own
+arguments after the backing relation, since that relation is what can widen
+them), its class joins the structure's, which keeps its own content
+(`Unifier.scheduleSettleWidenedAlias`). An alias that is not widened stays the
+transparent view it always was. So an annotation's row is kept as written
+where a use's re-opened alias meets it: `wider : Try(U64, Errs) -> Try(U64,
+[HostErr(U64), Other, Widened])` with `wider = |t| fwd(t)` keeps that type, and
+a use left unwidened keeps its alias spelling (`Try(U64, Errs) -> Try(U64,
+Errs)`). A declared spine slot has no hidden counterpart to compare with: it is
+widened only when it holds a widened instance (`Wrap(Base)` re-opened), so a
+plain row there (`Wrap([Other])`) presents the row it now is,
+`Wrap([Other, Widened])`. A flex takes whatever it meets. This is ordinary
+unification: merges, no store write. Pinned by "a widened instance never wins a
+merge" and "an annotated def whose body widens a coerced call keeps its
+annotation" (src/check/test/type_checking_integration.zig) and `unify_test.zig`'s
+"a widened alias instance never wins a merge against a structure", "an alias
+instance that is not widened keeps its view against a structure" and "a widened
+alias whose backing disagrees with a structure is not merged".
+
+A merge never makes an alias its own backing
 (`contentForMerge`): when the backing of the alias view being merged is one of
 the two classes, the merged class keeps the backing's own content, which also
 covers a flex meeting `Id(a)` whose backing `a` is that flex.
