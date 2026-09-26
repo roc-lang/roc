@@ -751,9 +751,13 @@ pub const WorkerSource = union(enum) {
     coerced_use_adapter: CoercedUseAdapterSource,
 };
 
-/// A compiler-generated adapter worker for one lookup that re-opened a
-/// coerced function's result row (design.md "Row Subsumption", "Result-Row
-/// Widening Adapter"), used as a VALUE rather than called directly: the
+/// A compiler-generated adapter worker keyed by one lookup. It serves two
+/// cases. The right-hand-side lookup of a generalized local callable alias
+/// has one, at the alias's scope, so every use of the alias instantiates the
+/// alias's own scheme rather than its target's (`Builder.schemeAliasUseAdapter`).
+/// And a lookup that re-opened a coerced function's result row (design.md
+/// "Row Subsumption", "Result-Row Widening Adapter"), used as a VALUE rather
+/// than called directly, has one: the
 /// lookup's own type lists more tags at the coerced row than the function's
 /// worker returns. The adapter is `|args| target(args)` at the lookup's type:
 /// its body is a direct call of the target at the lookup's instantiation,
@@ -13009,6 +13013,13 @@ const Builder = struct {
         };
     }
 
+    fn patternIsSchemeAlias(view: ModuleView, pattern_id: checked.CheckedPatternId) bool {
+        return switch (view.checked_bodies.pattern(pattern_id).data) {
+            .assign => |binder| view.checked_bodies.patternBinder(binder).is_scheme_alias,
+            .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => false,
+        };
+    }
+
     fn analyzeStatementTypes(self: *Builder, view: ModuleView, statement_id: checked.CheckedStatementId) Allocator.Error!void {
         const worker = self.active_worker orelse
             boxyPlanInvariant("checked statement was analyzed outside a worker body");
@@ -13025,6 +13036,12 @@ const Builder = struct {
             .promoted_proc => {},
             .decl => |decl| {
                 if (view.checked_bodies.expr(decl.expr).data == .runtime_error) return;
+                // A generalized callable alias binds no runtime value: every
+                // use instantiates its explicit alias target with that use's
+                // own checked evidence, so the declaration's right-hand side,
+                // whose evidence refers to the alias's uninstantiated scheme,
+                // is never lowered.
+                if (patternIsSchemeAlias(view, decl.pattern)) return;
                 try self.analyzePatternTypes(view, decl.pattern);
                 try self.analyzeExprTypes(view, decl.expr);
             },
@@ -13418,16 +13435,103 @@ const Builder = struct {
         return null;
     }
 
-    /// The coerced-use adapter a callable reference resolves to, when the
-    /// lookup it finally names (through callable aliases) re-opened a coerced
-    /// function's result row. The checker records that per lookup
-    /// (its resolved value reference's `coerced_result_row`), so no type is
-    /// compared.
-    ///
+    /// The adapter a callable reference resolves to, if any:
+    /// - a use of a generalized local callable alias (`run = fwd`) whose
+    ///   scheme is not exactly its target's resolves to the adapter keyed by
+    ///   the alias's right-hand-side lookup, generalized at the alias's own
+    ///   checked scope (`schemeAliasUseAdapter`). An alias whose scheme IS
+    ///   its target's (`schemeAliasForwardsTargetScheme`) passes the use
+    ///   straight through to its right-hand side.
+    /// - a lookup that re-opened a coerced function's result row resolves to
+    ///   the adapter keyed by itself. The checker records that per lookup
+    ///   (its resolved value reference's `coerced_result_row`), so no type is
+    ///   compared.
+    /// The generalized local callable alias `record` names, if any.
+    fn schemeAliasOf(record: checked.ResolvedValueRefRecord) ?checked.LocalProcedureBinding {
+        return switch (record.ref) {
+            .local_proc => |local| if (local.is_alias) local else null,
+            .top_level_proc,
+            .promoted_top_level_proc,
+            .platform_required_proc,
+            .imported_proc,
+            .hosted_proc,
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .selected_hoisted_const,
+            .top_level_const,
+            .imported_const,
+            .platform_required_declaration,
+            .platform_required_checked_error,
+            .platform_required_const,
+            => null,
+        };
+    }
+
+    /// The resolved reference of an alias's right-hand-side lookup.
+    fn schemeAliasRightHandRef(view: ModuleView, alias: checked.LocalProcedureBinding) checked.ResolvedValueRefId {
+        return view.resolved_value_refs.lookupIdByCheckedExpr(alias.expr) orelse
+            boxyPlanInvariant("generalized callable alias right-hand side had no resolved lookup");
+    }
+
+    fn schemeAliasScope(view: ModuleView, alias: checked.LocalProcedureBinding) checked.DispatchScopeId {
+        const scope = alias.dispatch_scope orelse
+            boxyPlanInvariant("generalized callable alias has no checked scheme scope");
+        switch (coercedUseAdapterScheme(view, alias.expr)) {
+            .alias_scope => |rhs_scope| if (rhs_scope != scope) {
+                boxyPlanInvariant("generalized callable alias scope disagreed with its right-hand side's scope");
+            },
+            .none, .binding_root => boxyPlanInvariant("generalized callable alias right-hand side owned no checked scope"),
+        }
+        return scope;
+    }
+
+    /// Whether a use of `alias` instantiates exactly its right-hand side's
+    /// target: the right-hand side's checked substitution names the alias
+    /// scope's own variables in scheme order, and its checked evidence
+    /// forwards the alias scope's requirements in order. Composing the use's
+    /// substitution and evidence with the right-hand side's is then the
+    /// identity, so the use's own data instantiate the target. Both are the
+    /// checker's recorded instantiation of the right-hand side; no type is
+    /// compared structurally.
+    fn schemeAliasForwardsTargetScheme(view: ModuleView, alias: checked.LocalProcedureBinding) bool {
+        const scope = dispatchScope(view, schemeAliasScope(view, alias));
+        const scheme_vars = view.checked_procedure_templates.scopeSchemeVars(scope);
+        const site_types = view.static_dispatch_plans.siteSubstitution(alias.expr) orelse &.{};
+        if (site_types.len != scheme_vars.len) return false;
+        for (site_types, scheme_vars) |site_type, scheme_var| {
+            if (site_type != scheme_var) return false;
+        }
+        const params = scopeEvidenceParams(view, scope).params;
+        const refs = view.static_dispatch_plans.siteEvidence(alias.expr) orelse &.{};
+        if (refs.len != params.len) return false;
+        for (refs, 0..) |ref, index| switch (ref.resolution) {
+            .constraint => |constraint| {
+                if (constraint.index.depth != 0 or constraint.index.index != index or constraint.independent_callable) return false;
+            },
+            .direct, .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => return false,
+        };
+        return true;
+    }
+
+    /// The adapter a use of `alias` instantiates: the one keyed by the
+    /// alias's right-hand-side lookup, at the alias's checked scope.
+    fn schemeAliasUseAdapter(view: ModuleView, alias: checked.LocalProcedureBinding) WorkerSource {
+        return .{ .coerced_use_adapter = .{
+            .use = .{ .module = view.key, .expr = alias.expr },
+            .scheme = .{ .alias_scope = schemeAliasScope(view, alias) },
+        } };
+    }
+
     /// Only a PROCEDURE's lookup gets an adapter: a coerced constant's use is
     /// re-tagged where the constant is restored (`lower.restoreCoercedConstUseInto`).
     fn coercedUseAdapterForRef(view: ModuleView, ref_id: checked.ResolvedValueRefId) ?WorkerSource {
-        const record = view.resolved_value_refs.callableTarget(ref_id);
+        const record = view.resolved_value_refs.records[@intFromEnum(ref_id)];
+        if (schemeAliasOf(record)) |alias| {
+            if (!schemeAliasForwardsTargetScheme(view, alias)) return schemeAliasUseAdapter(view, alias);
+            return coercedUseAdapterForRef(view, schemeAliasRightHandRef(view, alias));
+        }
         if (record.coerced_result_row == .none) return null;
         switch (record.ref) {
             .local_proc,
@@ -13477,8 +13581,12 @@ const Builder = struct {
         const ref_id = view.resolved_value_refs.lookupIdByCheckedExpr(adapter.use.expr) orelse
             boxyPlanInvariant("coerced-use adapter lookup had no resolved value reference");
         const record = view.resolved_value_refs.records[@intFromEnum(ref_id)];
-        if (record.coerced_result_row == .none) {
-            boxyPlanInvariant("coerced-use adapter was keyed by a lookup that re-opened no row");
+        switch (adapter.scheme) {
+            // The right-hand side of a generalized local callable alias.
+            .alias_scope => {},
+            .none, .binding_root => if (record.coerced_result_row == .none) {
+                boxyPlanInvariant("coerced-use adapter was keyed by a lookup that re-opened no row");
+            },
         }
         return record;
     }
@@ -13510,8 +13618,29 @@ const Builder = struct {
             boxyPlanInvariant("coerced-use adapter body was analyzed outside its worker");
         const view = self.moduleForId(adapter.use.module);
         const record = self.coercedUseAdapterRecord(adapter);
-        const target_source = self.workerSourceForProcedureRecord(view, record) orelse
+        // The right-hand side may itself use another generalized alias
+        // (`again = run`), which resolves as any use of that alias does.
+        const target_source = (if (schemeAliasOf(record) != null)
+            self.workerSourceForProcedureValueRef(view, view.resolved_value_refs.lookupIdByCheckedExpr(adapter.use.expr) orelse
+                boxyPlanInvariant("coerced-use adapter lookup had no resolved value reference"))
+        else
+            self.workerSourceForProcedureRecord(view, record)) orelse
             boxyPlanInvariant("coerced-use adapter lookup did not name a procedure");
+        // The adapter is its own worker: it has no frame holding a local
+        // callable's captures, so it cannot call one that captures.
+        switch (target_source) {
+            .nested_expr => |nested| if (!self.nestedCallableHasNoCaptures(nested)) {
+                boxyPlanInvariant("coerced-use adapter targets a capturing local callable, which Boxy does not lower");
+            },
+            .procedure_template,
+            .procedure_binding,
+            .procedure_use,
+            .generated_codec,
+            .generated_field_iterator,
+            .generated_interpolation_step,
+            .coerced_use_adapter,
+            => {},
+        }
         const use_expr = view.checked_bodies.expr(adapter.use.expr);
         const use_type = typeRef(view, use_expr.ty);
         const use_rep = try self.analyzeType(view, use_expr.ty);

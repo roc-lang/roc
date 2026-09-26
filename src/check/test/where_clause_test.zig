@@ -401,6 +401,32 @@ test "where clause - method signature mismatch" {
     try test_env_b.assertFirstTypeError("Type Mismatch");
 }
 
+test "where clause - a local callable alias used at a type without the method reports missing method" {
+    const source =
+        \\Loc := [Loc].{
+        \\  get : Loc -> Str
+        \\  get = |_| "loc"
+        \\}
+        \\
+        \\Plain := [Plain]
+        \\
+        \\fwd : a -> Str where [a.get : a -> Str]
+        \\fwd = |x| x.get()
+        \\
+        \\main : Str
+        \\main = {
+        \\  run = fwd
+        \\  plain : Plain
+        \\  plain = Plain
+        \\  run(plain)
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Missing Method");
+}
+
 test "where clause - discarded unpinned return type reports missing method" {
     const source =
         \\Thing := [Thing]

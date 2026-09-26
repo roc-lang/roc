@@ -7963,10 +7963,28 @@ stored in a top-level constant's record field and box, and top-level callable
 aliases imported from and defined over another module),
 `test/cli/RowSubsumptionWhereForwarder.roc` (a top-level callable alias of a
 `where`-clause forwarder), and the `--specialize=no` runs of
-`test/fx-open/hosted_widening_channels.roc`. A LOCAL callable alias of a
-`where`-clause function is not yet lowered by Boxy, coerced or not: static
-dictionary planning cannot resolve the method a use of the alias supplies. A
-top-level one is.
+`test/fx-open/hosted_widening_channels.roc`.
+
+A use of a generalized LOCAL callable alias instantiates the alias's own
+scheme, which need not be its target's: `run : x, x -> Str` over a
+two-variable target merges variables, and `run : List(x) -> U64` over
+`count : a -> U64` instantiates one at a compound type. Each use carries its
+checked substitution and evidence for the alias's scope; the right-hand-side
+lookup carries its own for the target, stated over that scope. When the
+right-hand side's record forwards the scope exactly (its substitution names
+the scope's variables in scheme order and its evidence forwards the scope's
+requirements in order), the composition of the two is the identity, and the
+use instantiates the right-hand side directly with its own data. Otherwise
+the use resolves to the adapter keyed by the right-hand-side lookup,
+generalized at the alias's scope, whose one call of the target carries the
+right-hand side's substitution and evidence. A right-hand side that uses
+another alias (`again = run`) resolves as any use of that alias does. The
+alias declaration binds no runtime value, so Boxy plans nothing for its
+right-hand side outside those uses. An adapter is its own worker with no
+frame holding a local callable's captures, so an alias whose scheme differs
+from a capturing local target's is not lowered by Boxy (an explicit plan
+invariant). Pinned by `test/cli/LocalCallableAliasWhere.roc` and the Boxy
+capturing-alias case of `src/compile/test/issue_11217_test.zig`.
 
 ### Row Union Normalization
 
@@ -10773,8 +10791,11 @@ captures. It does not clone runtime binder tables or create an alias closure,
 wrapper procedure, or specialization family. Monomorphic variables present in
 the substitution retain their existing cells. CheckedModule construction
 compresses alias identity edges to their final callable lookup in linear work without composing
-type graphs. Boxy consumes that target when planning each typed callable use;
-it never materializes an alias at an uninstantiated descriptor.
+type graphs. Boxy instantiates the right-hand side with a use's own data only
+when the right-hand side's record forwards the alias's scope exactly, and
+otherwise through one adapter worker generalized at that scope (Row
+Subsumption, "coerced-use adapter"); it never materializes an alias at an
+uninstantiated descriptor.
 
 Monotype lowering is a specialization-time instantiation of checked type graphs.
 This is the same core model as Cor/LSS: each reachable monomorphic
