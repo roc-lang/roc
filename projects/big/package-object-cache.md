@@ -538,7 +538,7 @@ them.
    same identity (duplicate Monotype templates, a lambda lifted once per
    occurrence, empty capture spans from two sources), and those share one
    proc rather than emitting one procedure under two names. Objects name
-   procedures `roc__proc_{hex}` from that identity, so two programs that reach
+   procedures `roc__p{hex}` from that identity, so two programs that reach
    the same specialization emit the same symbol. Still program-local, to be
    made content-derived before any entry is written: ARC call variants hash
    the raw return-layout index; Boxy procedures use their symbol ordinal; the
@@ -636,21 +636,23 @@ them.
       (so every call to them is an ordinary direct call and the program's own
       compile skips them) and spliced refcount helpers by name (so a later
       request reuses them). Literal backings are named by content
-      (`roc__static_str_{digest}`) and travel with the artifacts that name
+      (`roc__h{digest}`) and travel with the artifacts that name
       them. Constants travel the same way: every backend and the compile-time
       evaluator find a constant, and every node of its frozen graph, by its
-      per-program name (`roc__static_const_value_N`, `roc__ctfe_{slot}_{n}`),
-      and lifted artifacts carry the constant graph an entry reaches under
-      those names, marked as program-local by the producer's `is_exported`
-      flag. The pack encoder alone names every program-local datum by
-      content (`roc__static_data_{digest}`, the digest of its bytes,
+      per-program name (`roc__d{N}`, `roc__d{N}_{k}`; design.md, "Object
+      Symbol Names"), and lifted artifacts carry the constant graph an entry
+      reaches under those names, marked as program-local by the producer's
+      `is_exported` flag. The pack encoder alone names every program-local
+      datum by content (`roc__h{digest}`, the digest of its bytes,
       alignment, symbol offset, and relocations, with program-local targets
       by digest through cycles and every other target by name) and writes
       each relocation to it under that name, so the hashing happens only
       when a pack is written and only over what it carries; splicing defines
       what the program did not. An
-      entry reaching a constant that holds a code pointer, or the boxy
-      runtime, is still withheld. A pack program keeps every keyed
+      entry is withheld when its splice closure refers to a program-scope
+      symbol it does not carry (the Boxy runtime, whose calls index the
+      program's descriptor sidecar) or carries a constant that holds a code
+      pointer; code generation declares each symbol's scope. A pack program keeps every keyed
       specialization as a procedure through inlining and compaction, since
       an export wrapper that inlined its only call would otherwise leave the
       module's own exports out of its pack. `ROC_DEV_PACK_HITS=<dir>` serves a

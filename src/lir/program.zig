@@ -504,9 +504,24 @@ pub const ComptimeValueGuard = struct {
     value_slot: LIR.StaticDataId,
 };
 
-/// Deterministic symbol name for an internal static-data value.
+/// Prefix of a datum named by content, the same in every program:
+/// `roc__h{hash}`, for a string literal's backing or a constant an
+/// object-cache pack carries.
+pub const content_data_symbol_prefix = "roc__h";
+
+/// Symbol of the value in static-data slot `id`: `roc__d{id}`. The naming
+/// scheme is in design.md, "Object Symbol Names".
 pub fn staticDataSymbolName(allocator: Allocator, id: LIR.StaticDataId) Allocator.Error![]u8 {
-    return try std.fmt.allocPrint(allocator, "roc__static_const_value_{d}", .{@intFromEnum(id)});
+    return try std.fmt.allocPrint(allocator, "roc__d{d}", .{@intFromEnum(id)});
+}
+
+/// Symbol of the `index`th further node (from 1) of the value owner `owner`
+/// holds: `roc__d{owner}_{index}`. An owner below the program's static-data
+/// slot count is that slot; see design.md, "Object Symbol Names", for the
+/// owners past it.
+pub fn staticDataNodeSymbolName(allocator: Allocator, owner: u32, index: u32) Allocator.Error![]u8 {
+    std.debug.assert(index != 0);
+    return try std.fmt.allocPrint(allocator, "roc__d{d}_{d}", .{ owner, index });
 }
 
 /// Complete LIR program and side data consumed by ARC, backends, and eval.

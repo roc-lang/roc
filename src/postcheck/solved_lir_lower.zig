@@ -4846,16 +4846,15 @@ const Lowerer = struct {
         defer digests.deinit();
         const representation = try self.types.contentDigest(&self.solved.lifted.names, ty, .{ .context = self, .identity = callableTargetIdentity });
         var hasher = base.TypeDigestHasher.init();
-        hasher.update("roc.proc.comptime-root-accessor.v3");
+        hasher.update("roc.proc.comptime-root-accessor.v2");
         hasher.update(&root.module.bytes);
-        // A checked root is numbered within its module; a literal root is
-        // numbered within the program, so it is named by its literal's checked
-        // expression within the module instead.
-        const tag: u8, const root_index: u32 = switch (root.root) {
+        // A literal root's id is program-local; the literal's checked
+        // expression names it within its module.
+        const tag: u8, const index: u32 = switch (root.root) {
             .checked => |checked_root| .{ 0, @intFromEnum(checked_root) },
-            .literal => |literal_root| .{ 1, self.solved.lifted.literalRootsView()[@intFromEnum(literal_root)].site.checked_expr },
+            .literal => |literal| .{ 1, self.literal_roots.items[@intFromEnum(literal)].site.checked_expr },
         };
-        hasher.update(&[_]u8{ tag, @truncate(root_index), @truncate(root_index >> 8), @truncate(root_index >> 16), @truncate(root_index >> 24) });
+        hasher.update(&[_]u8{ tag, @truncate(index), @truncate(index >> 8), @truncate(index >> 16), @truncate(index >> 24) });
         hasher.update(&representation.bytes);
         hasher.update(&try digests.get(layout_idx));
         return .{ .bytes = hasher.finalResult() };
