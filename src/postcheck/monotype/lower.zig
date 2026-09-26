@@ -18220,8 +18220,16 @@ const InterfaceReplayAddress = struct {
     kind: enum { procedure, method_contract, local_method_contract } = .procedure,
     family: DraftTemplateFamilyAddress,
     evidence_digest: [32]u8,
+    /// Bucket selector over the request's exact identity bytes, which remain
+    /// the collision authority.
     input_digest: [32]u8,
 };
+
+fn interfaceRequestBucket(bytes: []const u8) [32]u8 {
+    var bucket = [_]u8{0} ** 32;
+    std.mem.writeInt(u64, bucket[0..8], std.hash.Wyhash.hash(0, bytes), .little);
+    return bucket;
+}
 
 /// Immutable input identity and parameterized output constraints. Only settled
 /// leaves refer to the owner's type store; all open cells use local indices.
@@ -23266,7 +23274,7 @@ const BodyContext = struct {
         const address = InterfaceReplayAddress{
             .family = DraftTemplateFamilyAddress.init(template_ref, self.method_scope.key, self.view.types.rootKey(source_fn_ty)),
             .evidence_digest = evidence_digest.bytes,
-            .input_digest = TypeDigestHasher.hash(request.bytes),
+            .input_digest = interfaceRequestBucket(request.bytes),
         };
 
         var cached: ?InterfaceSummary = null;
@@ -44190,7 +44198,7 @@ const BodyContext = struct {
             },
             .family = DraftTemplateFamilyAddress.init(owner, self.method_scope.key, root_view.types.rootKey(root_fn_ty)),
             .evidence_digest = @splat(0),
-            .input_digest = TypeDigestHasher.hash(request.bytes),
+            .input_digest = interfaceRequestBucket(request.bytes),
         };
         const use_summaries = self.draft.interface_replay.use_finished_summaries;
         if (use_summaries) {

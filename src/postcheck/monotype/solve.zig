@@ -506,7 +506,10 @@ pub const InterfaceConstraints = struct {
         leaves: std.ArrayList(Type.TypeId) = .empty,
 
         fn raw(self: *IdentityWriter, bytes: []const u8) Allocator.Error!void {
-            try self.bytes.appendSlice(self.graph.allocator, bytes);
+            if (self.bytes.unusedCapacitySlice().len < bytes.len) {
+                try self.bytes.ensureUnusedCapacity(self.graph.allocator, @max(bytes.len, self.bytes.capacity));
+            }
+            self.bytes.appendSliceAssumeCapacity(bytes);
         }
         fn text(self: *IdentityWriter, bytes: []const u8) Allocator.Error!void {
             try self.write(u64, @intCast(bytes.len));
@@ -561,9 +564,15 @@ pub const InterfaceConstraints = struct {
                 .int => {
                     // Local indices, lengths, and enum tags are predominantly
                     // small. A minimal varint keeps exact topology compact.
+                    var encoded: [10]u8 = undefined;
+                    var len: usize = 0;
                     var bits: u64 = @intCast(value);
-                    while (bits >= 0x80) : (bits >>= 7) try self.raw(&.{@as(u8, @truncate(bits)) | 0x80});
-                    try self.raw(&.{@intCast(bits)});
+                    while (bits >= 0x80) : (bits >>= 7) {
+                        encoded[len] = @as(u8, @truncate(bits)) | 0x80;
+                        len += 1;
+                    }
+                    encoded[len] = @intCast(bits);
+                    try self.raw(encoded[0 .. len + 1]);
                 },
                 .bool => try self.raw(&.{if (value) 1 else 0}),
                 .void => {},
