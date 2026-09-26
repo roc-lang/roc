@@ -56,7 +56,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v34: procedure specs carry producer-local native code revisions.
 /// v35: statements carry an explicit origin kind (`LIR.OriginKind`).
 /// v36: removing `num_round` changes the numeric IDs of later LowLevel ops.
-pub const FORMAT_VERSION: u32 = 36;
+/// v37: numeric `*_from_str_prefix`/`*_from_utf8_prefix` ops renumber later LowLevel ops.
+pub const FORMAT_VERSION: u32 = 37;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -403,6 +404,7 @@ pub const LayoutStoreImage = extern struct {
             .interned_layouts = std.StringHashMap(layout_mod.Idx).init(allocator),
             .scratch_intern_key = .empty,
             .interned_recursive_graphs = layout_mod.Store.RecursiveGraphMap.init(allocator),
+            .recursive_unfoldings = .empty,
             .target_usize = target_usize,
         };
     }
@@ -816,6 +818,7 @@ fn serializeSidecarInto(
         .interned_layouts = std.StringHashMap(layout_mod.Idx).init(gpa),
         .scratch_intern_key = .empty,
         .interned_recursive_graphs = layout_mod.Store.RecursiveGraphMap.init(gpa),
+        .recursive_unfoldings = .empty,
         .target_usize = lowered.layouts.target_usize,
     };
     const names = try BoxyNamesImage.copyFromStore(gpa, buffer.ptr, buffer.len, &lowered.store.boxy_names);
@@ -903,7 +906,7 @@ comptime {
     // `facts` are transient worker state, not serialized, and default to
     // null or empty in views.
     std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 36);
-    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".fields.len == 12);
+    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".fields.len == 13);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".fields.len == 1);
 }
 
@@ -1667,6 +1670,7 @@ test "LIR image copies and round-trips every populated store field" {
         .interned_layouts = undefined,
         .scratch_intern_key = undefined,
         .interned_recursive_graphs = undefined,
+        .recursive_unfoldings = undefined,
         .target_usize = target_usize,
     };
 

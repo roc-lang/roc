@@ -863,6 +863,17 @@ pub const BuildEnv = struct {
         var header_info = try self.parseHeaderDeps(root_abs);
         defer header_info.deinit(self.gpa);
 
+        // Absolute platform specs are rejected for every command, matching the
+        // run path, so a project cannot pass `roc check` and then fail on its
+        // first `roc run`.
+        for (header_info.resolver_root.deps) |dep| {
+            if (dep.is_platform and std.fs.path.isAbsolute(dep.spec)) {
+                try self.emitAbsolutePlatformPathReport(dep.spec);
+                try self.makeWorkspaceReportsDrainable();
+                return error.InvalidDependency;
+            }
+        }
+
         // Every header kind names a module this build can root at: apps and
         // default apps produce programs, and the rest are compiled for their own
         // definitions and `expect`s. A file whose header parsed into none of them
@@ -1893,6 +1904,27 @@ pub const BuildEnv = struct {
     fn makeWorkspaceReportsDrainable(self: *BuildEnv) Allocator.Error!void {
         try self.sink.buildOrder(&[_][]const u8{"workspace"}, &[_][]const u8{"root"}, &[_]u32{0});
         self.sink.tryEmit();
+    }
+
+    /// Emit the same "Absolute Platform Path" report the CLI run path produces
+    /// (see `validatePlatformSpec` in `src/cli/main.zig`), so `check` and `build`
+    /// reject absolute platform specs with an identical diagnostic.
+    fn emitAbsolutePlatformPathReport(self: *BuildEnv, platform_spec: []const u8) Allocator.Error!void {
+        var report = try Report.init(
+            self.gpa,
+            "Absolute Platform Path",
+            "Absolute paths are not allowed for platform specifications.",
+            .runtime_error,
+        );
+        errdefer report.deinit();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(platform_spec, .path);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addText("Tip: Use a relative path like ");
+        try report.document.addAnnotated("../path/to/platform", .emphasized);
+        try report.document.addText(" or a URL.");
+        try self.sink.emitReport("workspace", "root", report);
     }
 
     fn validateDiscoveredPlatformTargetFiles(
@@ -4236,6 +4268,67 @@ test "issue 9737: logicalModuleToPath frees its scratch path exactly once on the
     // it must free its `with_ext` scratch allocation exactly once; freeing it a
     // second time is a double free that the testing allocator detects.
     try std.testing.expectError(error.PathOutsideWorkspace, env.logicalModuleToPath("/tmp/roc-issue-9737", "Mod"));
+}
+
+// Regression test for https://github.com/roc-lang/roc/issues/11714
+// `roc check` and `roc build` must reject an absolute platform path with the
+// same report `roc run` produces.
+test "discoverDependencies rejects absolute platform spec with Absolute Platform Path report" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(tmp_root);
+
+    // The platform file never needs to exist: discovery aborts before
+    // resolution reads it.
+    const platform_spec = try std.fs.path.join(allocator, &.{ tmp_root, "pf", "main.roc" });
+    defer allocator.free(platform_spec);
+
+    // Windows paths contain backslashes, which must be escaped inside a Roc
+    // string literal.
+    const platform_spec_literal = try std.mem.replaceOwned(u8, allocator, platform_spec, "\\", "\\\\");
+    defer allocator.free(platform_spec_literal);
+
+    const app_source = try std.fmt.allocPrint(
+        allocator,
+        "app [main!] {{ pf: platform \"{s}\" }}\n\nmain! = || {{}}\n",
+        .{platform_spec_literal},
+    );
+    defer allocator.free(app_source);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "app.roc", .data = app_source });
+
+    const app_path = try std.fs.path.join(allocator, &.{ tmp_root, "app.roc" });
+    defer allocator.free(app_path);
+
+    var env = try BuildEnv.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        tmp_root,
+        testing.io,
+    );
+    defer env.deinit();
+
+    try testing.expectError(error.InvalidDependency, env.discoverDependencies(app_path));
+
+    const drained = try env.drainReports();
+    defer env.freeDrainedReports(drained);
+
+    var found = false;
+    for (drained) |mod| {
+        for (mod.reports) |report| {
+            if (std.mem.eql(u8, report.title, "Absolute Platform Path")) {
+                try testing.expectEqual(reporting.Severity.runtime_error, report.severity);
+                found = true;
+            }
+        }
+    }
+    try testing.expect(found);
 }
 
 test "findPackageForModulePath deterministically selects nested package over outer package root_dir" {

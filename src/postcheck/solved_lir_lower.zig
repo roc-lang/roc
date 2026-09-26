@@ -757,6 +757,10 @@ const Lowerer = struct {
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
     type_layouts: collections.DenseMap(Type.TypeId, layout.Idx),
+    /// Recursive-graph digest the layout commit settled for each type whose
+    /// node was local to its graph. A layout graph reuses a cached child only
+    /// through this digest, so the child stays visible to recursion analysis.
+    type_layout_digests: collections.DenseMap(Type.TypeId, layout.GraphDigest),
     named_layout_index: std.HashMap(NamedRepresentationKey, std.ArrayList(Type.TypeId), NamedRepresentationKeyContext, std.hash_map.default_max_load_percentage),
     layout_owner_types: collections.DenseMap(Type.TypeId, Type.TypeId),
     const_plan_map: collections.DenseMap(Type.TypeId, LirProgram.ConstPlanId),
@@ -1004,6 +1008,7 @@ const Lowerer = struct {
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
             .type_layouts = collections.DenseMap(Type.TypeId, layout.Idx).init(allocator),
+            .type_layout_digests = collections.DenseMap(Type.TypeId, layout.GraphDigest).init(allocator),
             .named_layout_index = std.HashMap(NamedRepresentationKey, std.ArrayList(Type.TypeId), NamedRepresentationKeyContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
             .layout_owner_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(allocator),
             .const_plan_map = collections.DenseMap(Type.TypeId, LirProgram.ConstPlanId).init(allocator),
@@ -1132,6 +1137,7 @@ const Lowerer = struct {
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
         self.type_layouts.deinit();
+        self.type_layout_digests.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
@@ -1193,6 +1199,7 @@ const Lowerer = struct {
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
         self.type_layouts.deinit();
+        self.type_layout_digests.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
@@ -11800,6 +11807,7 @@ const Lowerer = struct {
         }
         if (try self.knownLayoutForEquivalentNamedType(ty)) |existing| {
             try self.rememberLayoutForType(ty, existing.layout_idx);
+            if (self.type_layout_digests.get(existing.ty)) |digest| try self.type_layout_digests.put(ty, digest);
             try self.layout_owner_types.put(ty, existing.ty);
             return existing.layout_idx;
         }
@@ -11842,6 +11850,13 @@ const Lowerer = struct {
             const mapped_node = local_nodes.get(local_ty) orelse
                 Common.invariant("local layout node key had no mapped node");
             try self.rememberLayoutForType(local_ty, commit.value_layouts[@intFromEnum(mapped_node)]);
+            if (commit.digests[@intFromEnum(mapped_node)]) |digest| {
+                if (self.type_layout_digests.get(local_ty)) |existing| {
+                    if (!std.mem.eql(u8, &existing, &digest)) Common.invariant("type layout digest changed across layout commits");
+                } else {
+                    try self.type_layout_digests.put(local_ty, digest);
+                }
+            }
         }
         return self.knownLayoutForType(ty) orelse commit.value_layouts[@intFromEnum(node)];
     }
@@ -11852,12 +11867,6 @@ const Lowerer = struct {
         local_nodes: *collections.DenseMap(Type.TypeId, layout.GraphNodeId),
 
         fn inputForType(self: *LayoutGraphBuilder, ty: Type.TypeId) Common.LowerError!layout.GraphInput {
-            if (self.lowerer.knownLayoutForType(ty)) |layout_idx| return layout.committedGraphInput(layout_idx);
-            if (try self.lowerer.knownLayoutForEquivalentNamedType(ty)) |layout_idx| {
-                try self.lowerer.rememberLayoutForType(ty, layout_idx.layout_idx);
-                try self.lowerer.layout_owner_types.put(ty, layout_idx.ty);
-                return layout.committedGraphInput(layout_idx.layout_idx);
-            }
             if (self.local_nodes.get(ty)) |node| return layout.localGraphInput(node);
 
             switch (self.lowerer.types.get(ty)) {
@@ -11868,6 +11877,21 @@ const Lowerer = struct {
                     if (builtinOwnerLayout(owner)) |layout_idx| return layout.committedGraphInput(layout_idx);
                 },
                 .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_fn => {},
+            }
+
+            // Reuse an already committed child only together with the digest
+            // its node settled to. A store-interned layout ref would be an opaque
+            // leaf to commitGraph's analysis, hiding recursive paths and
+            // changing boxing for an unrolled copy of a committed recursive
+            // node; the committed leaf digests exactly like a re-expansion.
+            // A type committed without a digest resolved to a store-interned
+            // layout ref, which expanding again reproduces directly.
+            if (self.lowerer.knownLayoutForType(ty)) |layout_idx| {
+                if (self.lowerer.type_layout_digests.get(ty)) |digest| {
+                    const node = try self.graph.addCommitted(self.lowerer.allocator, layout_idx, digest);
+                    try self.local_nodes.put(ty, node);
+                    return layout.localGraphInput(node);
+                }
             }
 
             switch (self.lowerer.types.get(ty)) {
@@ -13692,5 +13716,41 @@ test "typed boundaries from empty rows are terminal even with matching layouts" 
         const next = try lowerer.result.store.addCFStmt(.{ .ret = .{ .value = target } }, test_site.scaffold());
         const boundary = try lowerer.assignTypedBoundary(test_site, target, target_ty, source, empty, next);
         try std.testing.expect(lowerer.result.store.getCFStmt(boundary) == .runtime_error);
+    }
+}
+
+test "layout lowering preserves recursive slots across cached children (issue 11693)" {
+    const allocator = std.testing.allocator;
+    for ([_]bool{ false, true }) |unrolled_first| {
+        var solved = emptySolvedProgramForTest(allocator);
+        defer solved.deinit();
+        const first = try solved.lifted.names.internRecordFieldLabel("first");
+        const second = try solved.lifted.names.internRecordFieldLabel("second");
+        const end = try solved.lifted.names.internTagLabel("End");
+        const more = try solved.lifted.names.internTagLabel("More");
+        var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+        defer lowerer.deinit();
+
+        const record = try lowerer.types.add(.zst);
+        const tags = try lowerer.types.addTags(&.{
+            .{ .name = end, .checked_name = end, .payloads = .empty() },
+            .{ .name = more, .checked_name = more, .payloads = try lowerer.types.addSpan(&.{record}) },
+        });
+        const union_ty = try lowerer.types.add(.{ .tag_union = tags });
+        const fields = try lowerer.types.addFields(&.{
+            .{ .name = first, .ty = union_ty, .default = null },
+            .{ .name = second, .ty = union_ty, .default = null },
+        });
+        lowerer.types.set(record, .{ .record = fields });
+        const unrolled = try lowerer.types.add(.{ .record = fields });
+
+        const first_layout = try lowerer.layoutOfType(if (unrolled_first) unrolled else record);
+        const second_layout = try lowerer.layoutOfType(if (unrolled_first) record else unrolled);
+        try std.testing.expectEqual(first_layout, second_layout);
+        const info = lowerer.result.layouts.getStructInfo(lowerer.result.layouts.getLayout(first_layout));
+        try std.testing.expectEqual(@as(usize, 2), info.fields.len);
+        for (0..info.fields.len) |i| {
+            try std.testing.expectEqual(layout.LayoutTag.box, lowerer.result.layouts.getLayout(info.fields.get(i).layout).tag);
+        }
     }
 }

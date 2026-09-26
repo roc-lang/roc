@@ -12347,6 +12347,20 @@ builder owns:
 
 These are builder responsibilities, not a separate meaning-carrying IR.
 
+The LSS layout graph builder never substitutes a store-interned layout index for a
+previously committed composite child: such an opaque leaf would hide recursive
+paths from the store's recursive-graph analysis and give an unrolled copy of a
+committed recursive node different slot boxing. Instead, every layout commit
+returns the recursive-graph digest each node settled to, the builder records it
+per type, and a cached child re-enters a later graph as a `committed` leaf that
+carries its layout and that digest. The analysis digests the leaf exactly as it
+would digest a re-expansion of the same subgraph, and the store persists the
+one-step unfolding of every committed recursive member, so an unrolled copy
+committed later resolves to the recursive layout it unrolls. A type committed
+without a digest resolved to a store-interned layout ref (a primitive or builtin
+layout through nominals) and is expanded again directly. The shared layout store
+owns recursive graph reduction and interning.
+
 The `.lss` builder may maintain temporary maps such as `TypeId -> layout.Idx`,
 `LambdaMonoFnId -> LirProcSpecId`, `LiftedLocalId -> LirLocalId`, and
 `LiftedExprId -> lowered logical expression` while lowering one function
@@ -12767,6 +12781,29 @@ for the template's contents. The descriptor source still names the original
 call operand root plus the exact instantiated descendant; it never changes to
 a sibling value merely because the substitution was learned from the
 wrapper's explicit argument metadata.
+
+Checking also relates a wrapper to its backing's structure without a wrapper
+on the other side: an alias always, a nominal whenever its declaration is
+transparent (`:=`) or, when opaque, inside its origin module. An unannotated
+callee that matches on `Ok` therefore has a structural parameter row, while
+its call passes `Try(U64, U8)`. At such a boundary the worker position is a
+structure and the call position is a wrapper of it; the wrapper's own value
+supplies the position's descriptor, and the structure's children align with
+the wrapper's backing, seen through every alias and nominal layer. Each
+nominal layer binds its use's formals for that descent, so a backing child
+resolves to the use's exact actual, never to the shared template. Evidence
+paths are written against the callee's type in the same way: a structural
+step that reaches a call-side wrapper applies to its backing under that use's
+formal bindings. Hidden descriptor and dictionary parameters, dictionary-call
+descriptors, erased captures, static dictionary descriptor sources, and
+callable adapters all use this one relation; an adapter relates its two
+callables in both directions, so it applies the relation with the wrapper on
+either side. Lowering follows the same relation where a value crosses it: a
+tag expression or pattern whose checked type is the structure while its
+representation is the wrapper descends the wrapper's backing with the checked
+type unchanged, and the descriptor of an alias or backed nominal without
+declared padding names its backing record's fields, so a structural record
+receives the wrapper's value by field name.
 
 A callable parameter's descriptor source survives traversal from the arguments
 into the result. A result nominal's declaration formal resolves through its

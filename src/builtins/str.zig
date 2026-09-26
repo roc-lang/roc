@@ -1101,6 +1101,18 @@ fn retainedSlice(source: RocStr, start: usize, length: usize, roc_ops: *RocOps) 
     return substringUnsafe(source, start, length, roc_ops);
 }
 
+/// The `rest` of a numeric prefix parse (`T.from_str_prefix`): the part of
+/// `source` after its first `consumed` bytes.
+///
+/// ## Ownership
+/// - `source`: **borrows** - caller retains ownership
+/// - Returns: **owned** - a retained seamless slice of `source`, or empty
+pub fn strFromStrPrefixRest(source: RocStr, consumed: usize, roc_ops: *RocOps) RocStr {
+    const source_len = source.len();
+    std.debug.assert(consumed <= source_len);
+    return retainedSlice(source, consumed, source_len - consumed, roc_ops);
+}
+
 fn smallStringFromPtr(bytes: [*]const u8, length: usize) RocStr {
     std.debug.assert(length < SMALL_STRING_SIZE);
 

@@ -12,6 +12,9 @@ const U256 = @import("num.zig").U256;
 const TestEnv = @import("utils.zig").TestEnv;
 const WithOverflow = @import("utils.zig").WithOverflow;
 const NumParseResult = @import("num.zig").NumParseResult;
+const NumPrefixParseResult = @import("num.zig").NumPrefixParseResult;
+const prefix_parse_not_a_number = @import("num.zig").prefix_parse_not_a_number;
+const prefix_parse_out_of_range = @import("num.zig").prefix_parse_out_of_range;
 const RocOps = @import("host_abi.zig").RocOps;
 const RocStr = @import("str.zig").RocStr;
 const mul_u128 = @import("num.zig").mul_u128;
@@ -1387,6 +1390,23 @@ const expectEqual = testing.expectEqual;
 const expectEqualSlices = std.testing.expectEqualSlices;
 
 // exports
+
+/// Parse a Dec from the longest Dec token at the start of `bytes`.
+///
+/// A Dec token is `sign? (D+ | D+ . D* | . D+) (e sign? D (_? D)*)?` with `_`
+/// only between digits. A matched token that is not exactly representable as a
+/// Dec (out of range, or more fractional precision than Dec has) reports
+/// `prefix_parse_out_of_range`, exactly as `from_str` of that token fails.
+pub fn parsePrefix(bytes: []const u8) NumPrefixParseResult(i128) {
+    const consumed = decimal_parse.prefixLen(bytes, .dec);
+    if (consumed == 0) {
+        return .{ .value = 0, .consumed = 0, .errorcode = prefix_parse_not_a_number };
+    }
+    if (RocDec.fromNonemptySlice(bytes[0..consumed])) |dec| {
+        return .{ .value = dec.num, .consumed = consumed, .errorcode = 0 };
+    }
+    return .{ .value = 0, .consumed = consumed, .errorcode = prefix_parse_out_of_range };
+}
 
 /// C ABI parse wrapper. Returns errorcode 0 with the scaled i128 on success, or
 /// errorcode 1 with value 0 for any invalid or out-of-range decimal string.
@@ -2943,4 +2963,74 @@ test "Dec atan2 f128 oracle within 64 attos across full coordinate range" {
     for (cases) |case| try expectDecWithin(case.expected, RocDec.atan2(.{ .num = case.y }, .{ .num = case.x }, env.getOps()), 64);
     try std.testing.expectEqual(@as(i128, 0), RocDec.atan2(.{ .num = 0 }, .{ .num = 0 }, env.getOps()).num);
     try std.testing.expectEqual(RocDec.pi.num, RocDec.atan2(.{ .num = 0 }, .{ .num = -1 }, env.getOps()).num);
+}
+
+fn expectDecPrefixOk(text: []const u8, expected_text: []const u8, consumed: usize) (@import("num.zig").PrefixTestError || error{InvalidExpectedDecimal})!void {
+    const result = parsePrefix(text);
+    try std.testing.expectEqual(@as(u8, 0), result.errorcode);
+    try std.testing.expectEqual(@as(u64, consumed), result.consumed);
+    try std.testing.expectEqual(try decFromText(expected_text), RocDec{ .num = result.value });
+}
+
+fn expectDecPrefixErr(text: []const u8, errorcode: u8, consumed: usize) @import("num.zig").PrefixTestError!void {
+    const result = parsePrefix(text);
+    try std.testing.expectEqual(errorcode, result.errorcode);
+    try std.testing.expectEqual(@as(u64, consumed), result.consumed);
+}
+
+test "parsePrefix Dec mantissa and exponent forms" {
+    try expectDecPrefixOk("1.", "1", 2);
+    try expectDecPrefixOk("1.x", "1", 2);
+    try expectDecPrefixOk("-.5,", "-0.5", 3);
+    try expectDecPrefixOk("1.5e3]", "1500", 5);
+    try expectDecPrefixOk("2e-1 ", "0.2", 4);
+    try expectDecPrefixOk("2e", "2", 1);
+    try expectDecPrefixOk("2e+", "2", 1);
+    try expectDecPrefixOk("2e-", "2", 1);
+    try expectDecPrefixOk("1_000.5_0,", "1000.5", 9);
+    try expectDecPrefixOk("1_", "1", 1);
+    try expectDecPrefixOk("1._5", "1", 2);
+    try expectDecPrefixOk("1.2.3", "1.2", 3);
+    try expectDecPrefixOk("1e-18,", "0.000000000000000001", 5);
+    try expectDecPrefixOk("0x1", "0", 1);
+    try expectDecPrefixOk("170141183460469231731.687303715884105727,", "170141183460469231731.687303715884105727", 40);
+
+    try expectDecPrefixErr("", prefix_parse_not_a_number, 0);
+    try expectDecPrefixErr("-", prefix_parse_not_a_number, 0);
+    try expectDecPrefixErr(".", prefix_parse_not_a_number, 0);
+    try expectDecPrefixErr("inf", prefix_parse_not_a_number, 0);
+    try expectDecPrefixErr("nan", prefix_parse_not_a_number, 0);
+    try expectDecPrefixErr(" 1", prefix_parse_not_a_number, 0);
+}
+
+test "parsePrefix Dec reports inexact and out-of-range tokens as out of range" {
+    // A Dec token that is not exactly representable (more than 18 fractional
+    // digits of precision) fails `from_str` for a non-range reason. It is still
+    // a complete token, so the prefix result is `prefix_parse_out_of_range`.
+    try expectDecPrefixErr("0.1234567890123456789,", prefix_parse_out_of_range, 21);
+    try expectDecPrefixErr("1e-19,", prefix_parse_out_of_range, 5);
+    try expectDecPrefixErr("170141183460469231731.687303715884105728,", prefix_parse_out_of_range, 40);
+    try expectDecPrefixErr("1e40", prefix_parse_out_of_range, 4);
+}
+
+fn decPrefixLen(bytes: []const u8) usize {
+    return decimal_parse.prefixLen(bytes, .dec);
+}
+
+fn decWhole(bytes: []const u8) ?i128 {
+    if (bytes.len == 0) return null;
+    const parsed = RocDec.fromNonemptySlice(bytes) orelse return null;
+    return parsed.num;
+}
+
+test "parsePrefix Dec properties over generated token compositions" {
+    var prng = std.Random.DefaultPrng.init(0x7010_dec0_0001);
+    const random = prng.random();
+    var buf: [48]u8 = undefined;
+
+    var iteration: usize = 0;
+    while (iteration < 20_000) : (iteration += 1) {
+        const text = @import("num.zig").prefix_parse_testing.randomText(random, &buf);
+        try @import("num.zig").prefix_parse_testing.expectProperties(i128, text, decPrefixLen, parsePrefix, decWhole);
+    }
 }

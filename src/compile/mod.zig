@@ -233,4 +233,5 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/url_package_test.zig"));
     std.testing.refAllDecls(@import("test/dbg_runtime_error_test.zig"));
     std.testing.refAllDecls(@import("test/numeral_literal_pattern_derived_is_eq_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11560_test.zig"));
 }
