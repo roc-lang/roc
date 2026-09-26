@@ -85,7 +85,8 @@ const name_occurrences = [_]LspRange{
 const platform_path = "../../../test/fx/platform/main.roc";
 
 /// A checked document built on the `test/fx` platform, whose checking is
-/// confirmed to report the rejection the spec depends on.
+/// confirmed to report the rejection the spec depends on. The body follows a
+/// four-line app header, so its first line is line 4 of the document.
 const Document = struct {
     tmp: test_env.TmpDir,
     uri: []u8,
