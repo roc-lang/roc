@@ -12347,6 +12347,20 @@ builder owns:
 
 These are builder responsibilities, not a separate meaning-carrying IR.
 
+The LSS layout graph builder never substitutes a store-interned layout index for a
+previously committed composite child: such an opaque leaf would hide recursive
+paths from the store's recursive-graph analysis and give an unrolled copy of a
+committed recursive node different slot boxing. Instead, every layout commit
+returns the recursive-graph digest each node settled to, the builder records it
+per type, and a cached child re-enters a later graph as a `committed` leaf that
+carries its layout and that digest. The analysis digests the leaf exactly as it
+would digest a re-expansion of the same subgraph, and the store persists the
+one-step unfolding of every committed recursive member, so an unrolled copy
+committed later resolves to the recursive layout it unrolls. A type committed
+without a digest resolved to a store-interned layout ref (a primitive or builtin
+layout through nominals) and is expanded again directly. The shared layout store
+owns recursive graph reduction and interning.
+
 The `.lss` builder may maintain temporary maps such as `TypeId -> layout.Idx`,
 `LambdaMonoFnId -> LirProcSpecId`, `LiftedLocalId -> LirLocalId`, and
 `LiftedExprId -> lowered logical expression` while lowering one function
