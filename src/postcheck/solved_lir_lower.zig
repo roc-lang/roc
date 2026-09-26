@@ -4846,10 +4846,9 @@ const Lowerer = struct {
         defer digests.deinit();
         const representation = try self.types.contentDigest(&self.solved.lifted.names, ty, .{ .context = self, .identity = callableTargetIdentity });
         var hasher = base.TypeDigestHasher.init();
-        hasher.update("roc.proc.comptime-root-accessor.v2");
+        hasher.update("roc.proc.comptime-root-accessor.v3");
         hasher.update(&root.module.bytes);
-        const root_index: u32 = @intFromEnum(root.root);
-        hasher.update(&[_]u8{ @truncate(root_index), @truncate(root_index >> 8), @truncate(root_index >> 16), @truncate(root_index >> 24) });
+        root.root.hash(&hasher);
         hasher.update(&representation.bytes);
         hasher.update(&try digests.get(layout_idx));
         return .{ .bytes = hasher.finalResult() };
