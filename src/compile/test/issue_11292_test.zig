@@ -1,15 +1,21 @@
 //! Regression tests for generalized literal conversion and equality guards.
 const std = @import("std");
+const base = @import("base");
+const build_options = @import("build_options");
 const eval = @import("eval");
 const lir = @import("lir");
+const roc_target = @import("roc_target");
+const CoreCtx = @import("ctx").CoreCtx;
+const Coordinator = @import("../coordinator.zig").Coordinator;
+const is_freestanding = @import("../threading.zig").is_freestanding;
 const harness = @import("lower_to_lir_harness.zig");
 
 const GuardedList = lir.LirStore.GuardedList;
 const RunError = std.mem.Allocator.Error || eval.LirInterpreter.Error ||
-    eval.RuntimeHostEnv.LeakError || error{ TestUnexpectedResult, TestExpectedEqual, TestExpectedError, TestUnexpectedError };
+    eval.RuntimeHostEnv.LeakError || error{ TestUnexpectedResult, TestExpectedEqual, TestUnexpectedError };
 const app_path = "test/postcheck/issue_11292_generalized_string_pattern/app.roc";
 
-fn runApp(lowered: *const lir.CheckedPipeline.LoweredProgram, expected_crash: bool) RunError!void {
+fn runApp(lowered: *const lir.CheckedPipeline.LoweredProgram) RunError!void {
     var host = eval.RuntimeHostEnv.init(std.testing.allocator);
     defer host.deinit();
     const program = &lowered.lir_result;
@@ -37,27 +43,57 @@ fn runApp(lowered: *const lir.CheckedPipeline.LoweredProgram, expected_crash: bo
         .arg_ptr = @ptrCast(&empty_args),
         .ret_ptr = @ptrCast(&exit_code),
     });
-    if (expected_crash) {
-        try std.testing.expectError(error.Crash, result);
-        return;
-    }
     _ = try result;
     try std.testing.expectEqual(@as(i8, 0), exit_code);
     try host.checkForLeaks();
 }
 
 fn expectAppRunsSuccessfully(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToLirHarnessError!void {
-    runApp(lowered, false) catch |err| {
+    runApp(lowered) catch |err| {
         std.log.err("generalized string pattern run failed: {s}", .{@errorName(err)});
         return error.TestUnexpectedResult;
     };
 }
 
-fn expectInvalidLiteral(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToLirHarnessError!void {
-    runApp(lowered, true) catch |err| {
-        std.log.err("invalid quote conversion failed: {s}", .{@errorName(err)});
-        return error.TestUnexpectedResult;
-    };
+/// Checks the app the way `roc check` does, with no runtime lowering
+/// configured, and requires exactly one report of each expected title.
+fn expectCheckReports(fixture: []const u8, expected_titles: []const []const u8) !void {
+    if (is_freestanding) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const path = try std.Io.Dir.cwd().realPathFileAlloc(io, fixture, allocator);
+    defer allocator.free(path);
+
+    var builtin_modules = try eval.BuiltinModules.init(allocator);
+    defer builtin_modules.deinit();
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.os(allocator, allocator, io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+    var arena = base.SingleThreadArena.init(allocator);
+    defer arena.deinit();
+    try coord.start();
+    try coord.discoverAppFromPath(arena.allocator(), .{ .entry_path = path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+    try coord.finishCheckedProgram(.executable_artifacts);
+
+    for (expected_titles) |title| {
+        var count: usize = 0;
+        var reports = coord.iterReports();
+        while (reports.next()) |entry| {
+            if (std.mem.eql(u8, entry.report.title, title)) count += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 1), count);
+    }
 }
 
 test "issue 11292: Boxy lowers and runs a generalized string literal pattern" {
@@ -78,12 +114,19 @@ test "issue 11292: custom conversion and equality with generic forwarding and gu
     }
 }
 
-test "issue 11292: a rejected runtime quote conversion crashes instead of missing the pattern" {
-    inline for (.{ .boxy, .lss }) |strategy| {
-        try harness.runAppPathLoweredInspection(
-            "test/postcheck/issue_11292_generalized_string_pattern/rejected.roc",
-            .{ .specialization_strategy = strategy },
-            expectInvalidLiteral,
-        );
-    }
+// Every pattern literal's conversion is hoisted, and hoisting is eager: a
+// conversion that fails is a compile-time error even when matching would
+// never reach its branch at runtime.
+test "issue 11292: checking reports a rejected pattern literal conversion" {
+    try expectCheckReports(
+        "test/postcheck/issue_11292_generalized_string_pattern/rejected.roc",
+        &.{"Invalid String"},
+    );
+}
+
+test "issue 11292: checking reports a crashing pattern literal conversion that matching never reaches" {
+    try expectCheckReports(
+        "test/postcheck/issue_11292_generalized_string_pattern/unreached.roc",
+        &.{"Compile Time Crash"},
+    );
 }
