@@ -25,7 +25,6 @@ DOES NOT EXIST - multi_qualified_import.md:4:16:4:45
 MOD NOT IMPORTED - multi_qualified_import.md:7:11:7:33
 UNUSED VARIABLE - multi_qualified_import.md:8:12:8:19
 MOD NOT IMPORTED - multi_qualified_import.md:11:8:11:34
-UNRECOGNIZED SYNTAX - multi_qualified_import.md:12:8:12:38
 MOD NOT FOUND - multi_qualified_import.md:3:16:3:23
 # PROBLEMS
 ~~~clojure
@@ -157,16 +156,6 @@ MOD NOT FOUND - multi_qualified_import.md:3:16:3:23
 			(source-region (file "multi_qualified_import.md") (start 11 8) (end 11 34) (annotation error) (line-text "data : json.Core.Utf8.EncodedData"))))
 	(report
 		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 12 8) (end 12 38))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "multi_qualified_import.md") (start 12 8) (end 12 38) (annotation error) (line-text "data = json.Core.Utf8.encode(\"hello\")"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
 		(title "Mod Not Found")
 		(region (start 3 16) (end 3 23))
 		(headline
@@ -256,7 +245,7 @@ data = .encode("hello")
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "data"))
-		(e-runtime-error (tag "expr_not_canonicalized"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(s-import (mod "json.Core")

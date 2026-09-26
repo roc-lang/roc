@@ -9,7 +9,6 @@ x = 0.()
 ~~~
 # EXPECTED
 EXPECTED RECORD ACCESSOR - fuzz_crash_081.md:1:6:1:7
-UNRECOGNIZED SYNTAX - fuzz_crash_081.md:1:5:1:9
 # PROBLEMS
 ~~~clojure
 (reports
@@ -48,17 +47,7 @@ UNRECOGNIZED SYNTAX - fuzz_crash_081.md:1:5:1:9
 			(text " here.")
 			(line-break)
 			(line-break)
-			(source-region (file "fuzz_crash_081.md") (start 1 6) (end 1 7) (annotation error) (line-text "x = 0.()"))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 1 5) (end 1 9))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "fuzz_crash_081.md") (start 1 5) (end 1 9) (annotation error) (line-text "x = 0.()"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo."))))
+			(source-region (file "fuzz_crash_081.md") (start 1 6) (end 1 7) (annotation error) (line-text "x = 0.()")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -84,7 +73,7 @@ x = ()
 (can-ir
 	(d-let
 		(p-assign (ident "x"))
-		(e-runtime-error (tag "expr_not_canonicalized"))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

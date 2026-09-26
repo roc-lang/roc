@@ -251,7 +251,6 @@ fn expectCanonicalizationTypePathLookupIsNonRecursive(can_source: []const u8) So
 
 fn expectCanonicalizationKernelsDoNotCallRecursiveWrappers(can_source: []const u8) SourceAuditError!void {
     try expectSourceSliceBetweenDoesNotContain(can_source, "fn runExprKernel(", "fn addBoolTagExpr", "canonicalizeExpr(");
-    try expectSourceSliceBetweenDoesNotContain(can_source, "fn runExprKernel(", "fn addBoolTagExpr", "canonicalizeExprOrMalformed(");
     try expectSourceSliceBetweenDoesNotContain(can_source, "fn runExprKernel(", "fn addBoolTagExpr", "canonicalizeStatement");
     try expectSourceSliceBetweenDoesNotContain(can_source, "fn runExprKernel(", "fn addBoolTagExpr", "processAssociatedBlock(");
     try expectSourceSliceBetweenDoesNotContain(can_source, "pub fn canonicalizePattern(", "fn isVarPattern", "self.canonicalizePattern(");

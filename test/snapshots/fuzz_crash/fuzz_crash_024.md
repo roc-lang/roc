@@ -15,7 +15,6 @@ var t= 0
 VAR OUTSIDE BODY - fuzz_crash_024.md:2:1:2:4
 UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_024.md:2:8:2:9
 VAR OUTSIDE BODY - fuzz_crash_024.md:5:1:5:4
-UNRECOGNIZED SYNTAX - fuzz_crash_024.md:2:8:2:9
 DUPLICATE DEFINITION - fuzz_crash_024.md:5:5:5:6
 # PROBLEMS
 ~~~clojure
@@ -121,16 +120,6 @@ DUPLICATE DEFINITION - fuzz_crash_024.md:5:5:5:6
 			(line-break)
 			(source-region (file "fuzz_crash_024.md") (start 5 1) (end 5 4) (annotation error) (line-text "var t= 0"))))
 	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 2 8) (end 2 9))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "fuzz_crash_024.md") (start 2 8) (end 2 9) (annotation error) (line-text "var t= ]"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
 		(severity warning)
 		(title "Duplicate Definition")
 		(region (start 5 5) (end 5 6))
@@ -185,7 +174,7 @@ t = 0
 (can-ir
 	(d-let
 		(p-assign (ident "t"))
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(d-let
 		(p-assign (ident "t"))
 		(e-num (value "0"))))

@@ -206,16 +206,16 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-let
 		(p-assign (ident "x"))
 		(e-anno-only))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-let
 		(p-assign (ident "y"))
 		(e-anno-only))
-	(e-runtime-error (tag "expr_not_canonicalized")))
+	(e-runtime-error (tag "expr_syntax_error")))
 ~~~
 # TYPES
 ~~~clojure

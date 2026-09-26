@@ -798,7 +798,7 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
-        .invalid_string_interpolation = .{
+        .expr_syntax_error = .{
             .region = rand_region(),
         },
     });
@@ -817,36 +817,6 @@ test "NodeStore round trip - Diagnostics" {
 
     try diagnostics.append(gpa, CIR.Diagnostic{
         .pattern_not_canonicalized = .{
-            .region = rand_region(),
-        },
-    });
-
-    try diagnostics.append(gpa, CIR.Diagnostic{
-        .can_lambda_not_implemented = .{
-            .region = rand_region(),
-        },
-    });
-
-    try diagnostics.append(gpa, CIR.Diagnostic{
-        .lambda_body_not_canonicalized = .{
-            .region = rand_region(),
-        },
-    });
-
-    try diagnostics.append(gpa, CIR.Diagnostic{
-        .if_condition_not_canonicalized = .{
-            .region = rand_region(),
-        },
-    });
-
-    try diagnostics.append(gpa, CIR.Diagnostic{
-        .if_then_not_canonicalized = .{
-            .region = rand_region(),
-        },
-    });
-
-    try diagnostics.append(gpa, CIR.Diagnostic{
-        .if_else_not_canonicalized = .{
             .region = rand_region(),
         },
     });
@@ -1117,22 +1087,6 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
-        .unused_type_var_name = .{
-            .name = rand_ident_idx(),
-            .suggested_name = rand_ident_idx(),
-            .region = rand_region(),
-        },
-    });
-
-    try diagnostics.append(gpa, CIR.Diagnostic{
-        .type_var_marked_unused = .{
-            .name = rand_ident_idx(),
-            .suggested_name = rand_ident_idx(),
-            .region = rand_region(),
-        },
-    });
-
-    try diagnostics.append(gpa, CIR.Diagnostic{
         .type_var_starting_with_dollar = .{
             .name = rand_ident_idx(),
             .suggested_name = rand_ident_idx(),
@@ -1150,12 +1104,6 @@ test "NodeStore round trip - Diagnostics" {
     try diagnostics.append(gpa, CIR.Diagnostic{
         .underscore_in_type_declaration = .{
             .declared = rand.random().enumValue(CIR.DeclaredTypeKind),
-            .region = rand_region(),
-        },
-    });
-
-    try diagnostics.append(gpa, CIR.Diagnostic{
-        .tuple_elem_not_canonicalized = .{
             .region = rand_region(),
         },
     });

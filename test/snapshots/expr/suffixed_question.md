@@ -54,11 +54,28 @@ Stdout.line ??
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(e-match
+	(match
+		(cond
+			(e-runtime-error (tag "qualified_ident_does_not_exist")))
+		(branches
+			(branch
+				(patterns
+					(pattern (degenerate false)
+						(p-nominal-external (builtin)
+							(p-applied-tag))))
+				(value
+					(e-lookup-local
+						(p-assign (ident "#ok")))))
+			(branch
+				(patterns
+					(pattern (degenerate false)
+						(p-nominal-external (builtin)
+							(p-applied-tag))))
+				(value
+					(e-runtime-error (tag "expr_syntax_error")))))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+(expr (type "Error"))
 ~~~

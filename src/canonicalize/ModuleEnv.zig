@@ -2096,6 +2096,24 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .expr_syntax_error => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Syntax Error", "This expression was replaced by a crash because it could not be parsed.", .runtime_error);
+            try report.document.addReflowingText("Fix the syntax error reported for this expression instead of trying to execute it.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .erroneous_value_expr => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -2650,41 +2668,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        .if_condition_not_canonicalized => blk: {
-            var report = try Report.init(allocator, "Invalid If Condition", "", .runtime_error);
-            try report.headline.addReflowingText("The condition in this ");
-            try report.headline.addKeyword("if");
-            try report.headline.addReflowingText(" expression could not be processed.");
-            try report.document.addReflowingText("The condition must be a valid expression that evaluates to a ");
-            try report.document.addKeyword("Bool");
-            try report.document.addReflowingText(" value (");
-            try report.document.addKeyword("Bool.true");
-            try report.document.addReflowingText(" or ");
-            try report.document.addKeyword("Bool.false");
-            try report.document.addReflowingText(").");
-            break :blk report;
-        },
-        .if_then_not_canonicalized => blk: {
-            var report = try Report.init(allocator, "Invalid If Branch", "", .runtime_error);
-            try report.headline.addReflowingText("The branch in this ");
-            try report.headline.addKeyword("if");
-            try report.headline.addReflowingText(" expression could not be processed.");
-            try report.document.addReflowingText("The branch must contain a valid expression. Check for syntax errors or missing values.");
-            break :blk report;
-        },
-        .if_else_not_canonicalized => blk: {
-            var report = try Report.init(allocator, "Invalid If Branch", "", .runtime_error);
-            try report.headline.addReflowingText("The ");
-            try report.headline.addKeyword("else");
-            try report.headline.addReflowingText(" branch of this ");
-            try report.headline.addKeyword("if");
-            try report.headline.addReflowingText(" expression could not be processed.");
-            try report.document.addReflowingText("The ");
-            try report.document.addKeyword("else");
-            try report.document.addReflowingText(" branch must contain a valid expression. Check for syntax errors or missing values.");
-            try report.document.addLineBreak();
-            break :blk report;
-        },
         .if_expr_without_else => blk: {
             var report = try Report.init(allocator, "If Expression Without Else", "", .runtime_error);
             try report.headline.addReflowingText("This ");
@@ -2854,11 +2837,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        .lambda_body_not_canonicalized => blk: {
-            const report = try Report.init(allocator, "Invalid Lambda", "The body of this lambda expression is not valid.", .runtime_error);
-
-            break :blk report;
-        },
         .malformed_where_clause => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -2884,11 +2862,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Variables declared with ");
             try report.document.addKeyword("var");
             try report.document.addReflowingText(" can only be reassigned within the same function scope.");
-
-            break :blk report;
-        },
-        .tuple_elem_not_canonicalized => blk: {
-            const report = try Report.init(allocator, "Invalid Tuple Element", "This tuple element is malformed or contains invalid syntax.", .runtime_error);
 
             break :blk report;
         },
@@ -4276,11 +4249,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getLineStartsAll(),
             );
         },
-        .invalid_string_interpolation,
-        .can_lambda_not_implemented,
-        .unused_type_var_name,
-        .type_var_marked_unused,
-        => std.debug.panic("Unhandled canonicalize diagnostic in diagnosticToReport: {s}", .{@tagName(diagnostic)}),
     };
 }
 

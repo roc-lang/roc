@@ -68,8 +68,9 @@ pub fn canonicalizeModule(
 
 /// Canonicalize a single expression (for REPL).
 ///
-/// Returns the canonical expression result, or null if canonicalization failed.
-/// Check module_env.getDiagnostics() for any errors.
+/// Returns the canonical expression result. An expression that failed to
+/// parse or canonicalize is a runtime error node; check
+/// module_env.getDiagnostics() for any errors.
 ///
 /// Memory ownership:
 /// - roc_ctx: Caller provides and manages
@@ -81,7 +82,7 @@ pub fn canonicalizeExpr(
     module_env: *ModuleEnv,
     parse_ast: *AST,
     context: Can.ModuleInitContext,
-) std.mem.Allocator.Error!?Can.CanonicalizedExpr {
+) std.mem.Allocator.Error!Can.CanonicalizedExpr {
     var czer = try Can.initModule(roc_ctx, module_env, parse_ast, context);
     defer czer.deinit();
     const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
