@@ -4288,10 +4288,15 @@ test "discoverDependencies rejects absolute platform spec with Absolute Platform
     const platform_spec = try std.fs.path.join(allocator, &.{ tmp_root, "pf", "main.roc" });
     defer allocator.free(platform_spec);
 
+    // Windows paths contain backslashes, which must be escaped inside a Roc
+    // string literal.
+    const platform_spec_literal = try std.mem.replaceOwned(u8, allocator, platform_spec, "\\", "\\\\");
+    defer allocator.free(platform_spec_literal);
+
     const app_source = try std.fmt.allocPrint(
         allocator,
         "app [main!] {{ pf: platform \"{s}\" }}\n\nmain! = || {{}}\n",
-        .{platform_spec},
+        .{platform_spec_literal},
     );
     defer allocator.free(app_source);
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "app.roc", .data = app_source });
