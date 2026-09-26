@@ -97,7 +97,7 @@ test "issue 11527: a small uniform compile-time list constant is not rebuilt at 
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
-    try std.testing.expect(session.compile_time_root_count > 0);
+    try std.testing.expect(session.host != null);
 
     var runtime = try session.takeRuntime(allocator, session.runtime_roots, target);
     defer runtime.deinit();

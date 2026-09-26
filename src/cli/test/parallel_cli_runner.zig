@@ -6191,10 +6191,10 @@ fn customNativeBuildPackHits(
     // rebuild goes through the entries that forward to cached procedures.
     // The third reaches module functions whose results are constants, so
     // its cached entries carry the constants they point at. The fourth
-    // reaches module functions from compile-time roots, so the evaluator
-    // splices their entries into its own image; the app is edited between
-    // its builds, since only an app checked again evaluates its roots
-    // again.
+    // reaches module functions from compile-time roots, which the evaluator
+    // runs as code it generates itself, never as cached entries; the app is
+    // edited between its builds, since only an app checked again evaluates
+    // its roots again.
     var comptime_app: []const u8 = undefined;
     if (stageEditableApp(io, allocator, env, timer, .{
         .dir_name = "pack_comptime",
@@ -6208,7 +6208,7 @@ fn customNativeBuildPackHits(
         .{ .roc_file = "test/cli/pack_values/PackValues.roc", .prefix = "values" },
         .{ .roc_file = "test/cli/pack_constants/PackConstants.roc", .prefix = "constants" },
         .{ .roc_file = "test/cli/pack_literal_roots/PackLiteralRoots.roc", .prefix = "literal_roots" },
-        .{ .roc_file = comptime_app, .prefix = "comptime", .expect = .{ .edit_between_builds = true, .evaluator_artifacts = true } },
+        .{ .roc_file = comptime_app, .prefix = "comptime", .expect = .{ .edit_between_builds = true } },
     };
     for (store_apps) |app| {
         if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app.roc_file, warm_dir, app.prefix, app.expect)) |failure| return failure;
@@ -6429,8 +6429,6 @@ const StoreExpectations = struct {
     /// Append a comment to the app between the builds, so the second build
     /// checks it again instead of reusing its cached checked artifact.
     edit_between_builds: bool = false,
-    /// The compile-time evaluator spliced at least one entry.
-    evaluator_artifacts: bool = false,
     /// Run an uncached build before populating the store.
     uncached_baseline: bool = false,
     /// Which cached build must consume an object pack. Later checked-cache
@@ -6458,7 +6456,6 @@ fn storeBuildsBehaveIdentically(
     expect: StoreExpectations,
 ) ?TestResult {
     const hits_marker = "pack hits: ";
-    const evaluator_marker = "evaluator artifacts: ";
     var stats_env = CaseEnv{
         .dirs = env.dirs,
         .env_map = env.env_map.clone(allocator) catch |err|
@@ -6501,11 +6498,6 @@ fn storeBuildsBehaveIdentically(
             if (countAfterMarker(built.stderr[at + hits_marker.len ..]) == 0) return failureFromRun(allocator, timer, built, "expected object-cache consumer reported no pack hits");
             if (expect.pack_hit_proc) |procedure| {
                 if (!hasNamedPackHit(built.stderr, procedure)) return failureFromRun(allocator, timer, built, "expected procedure's specialization key had no object-cache hit");
-            }
-            if (expect.evaluator_artifacts) {
-                const evaluator_at = std.mem.find(u8, built.stderr, evaluator_marker) orelse
-                    return failureFromRun(allocator, timer, built, "build with the object cache did not report evaluator artifacts");
-                if (countAfterMarker(built.stderr[evaluator_at + evaluator_marker.len ..]) == 0) return failureFromRun(allocator, timer, built, "the compile-time evaluator spliced no object-cache entry");
             }
         }
         const exe_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse

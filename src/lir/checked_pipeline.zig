@@ -895,6 +895,61 @@ pub const Observers = struct {
     }
 };
 
+/// The settings a program's Solved stage is prepared under: the inlining
+/// and SpecConstr decisions made before any consumer lowers LIR. Consumers
+/// share one Solved program only when they share these.
+pub const SolvedPolicy = struct {
+    inline_mode: InlineMode,
+    spec_constr_clone_inlining: SpecConstrCloneInlining,
+    keep_specialization_procs: bool,
+
+    pub fn fromTarget(target: TargetConfig) SolvedPolicy {
+        var policy: SolvedPolicy = undefined;
+        inline for (@typeInfo(SolvedPolicy).@"struct".fields) |field| {
+            @field(policy, field.name) = @field(target, field.name);
+        }
+        return policy;
+    }
+
+    pub fn applyTo(self: SolvedPolicy, target: *TargetConfig) void {
+        inline for (@typeInfo(SolvedPolicy).@"struct".fields) |field| {
+            @field(target, field.name) = @field(self, field.name);
+        }
+    }
+};
+
+/// The settings one consumer's LIR generation, procedure passes and ARC run
+/// under. A consumer continuing a shared Solved program brings its own.
+pub const LirPolicy = struct {
+    consume_dead_boxes: bool,
+    list_in_place_map: bool,
+    proc_debug_names: bool,
+    spec_cache: ?postcheck.Common.SpecCacheLookup,
+    comptime_closure_hits: bool,
+    keep_specialization_procs: bool,
+    promote_loop_appends: bool,
+    fuse_tag_cases: bool,
+    scalarize_joins: bool,
+    reuse_boxes: bool,
+    layout_request_const_plans: bool,
+    tag_reachability: bool,
+    prove_ranges: bool,
+
+    pub fn fromTarget(target: TargetConfig) LirPolicy {
+        var policy: LirPolicy = undefined;
+        inline for (@typeInfo(LirPolicy).@"struct".fields) |field| {
+            @field(policy, field.name) = @field(target, field.name);
+        }
+        return policy;
+    }
+
+    fn applyTo(self: LirPolicy, target: *TargetConfig) void {
+        inline for (@typeInfo(LirPolicy).@"struct".fields) |field| {
+            @field(target, field.name) = @field(self, field.name);
+        }
+    }
+};
+
 /// One consumer continuation of a prepared solved program. Everything not
 /// named here is the producer's captured decision and cannot be changed by a
 /// consumer: preparation already lowered specializations under it.
@@ -912,6 +967,9 @@ pub const Consumer = struct {
     /// identities can resolve against its complete representation tables.
     frozen_materializer: ?FrozenMaterializer = null,
     observers: Observers = .{},
+    /// This consumer's own LIR-stage settings, when they differ from the
+    /// ones the shared program was prepared under.
+    lir_policy: ?LirPolicy = null,
 };
 
 /// Materializes completed values into a program's frozen static data and
@@ -1489,6 +1547,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
     target.inline_expects = consumer.inline_expects;
     target.completed_scalar_values = consumer.completed_scalar_values;
     consumer.observers.applyTo(&target);
+    if (consumer.lir_policy) |policy| policy.applyTo(&target);
     if (!prepared.target.comptime_value_reads and consumer.inline_expects != prepared.target.inline_expects) {
         checkedPipelineInvariant("changing expect mode requires shared Monotype lowering");
     }
@@ -1784,7 +1843,8 @@ fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Alloca
 /// A platform module publishes its bindings when its checked artifact is
 /// published, so a module still being checked has none to bind against and
 /// this reads nothing into their absence.
-fn requireHostedProceduresBound(
+/// A complete program binds every hosted procedure its modules declare.
+pub fn requireHostedProceduresBound(
     modules: CheckedModuleSet,
     target: TargetConfig,
 ) HostedBindingError!void {

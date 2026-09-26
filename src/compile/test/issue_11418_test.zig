@@ -113,8 +113,8 @@ test "issue 11418: shared LIR generation leaves runtime-only procedures to the r
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
-    try std.testing.expect(session.compile_time_root_count > 0);
-    try std.testing.expect(session.runtime_prepared != null);
+    try std.testing.expect(session.host != null);
+    try std.testing.expect(session.runtime_monotype != null);
     try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
     try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
 
@@ -125,8 +125,10 @@ test "issue 11418: shared LIR generation leaves runtime-only procedures to the r
     for ([_][]const u8{ "runtime_only_a", "runtime_only_b" }) |name| {
         try std.testing.expectEqual(@as(usize, 1), countNamedProcs(&runtime.lir_result.store, name));
     }
+    // One specialization; the runtime consumer prepares its own Solved
+    // program from a copy of it.
     try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
-    try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
+    try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
     const host_store = &session.host.?.lir_result.store;
     const runtime_only_count = countNamedProcs(host_store, "runtime_only_a") + countNamedProcs(host_store, "runtime_only_b");
     try std.testing.expectEqual(@as(usize, 0), runtime_only_count);

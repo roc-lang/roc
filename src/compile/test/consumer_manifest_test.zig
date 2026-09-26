@@ -246,7 +246,7 @@ test "compile-time consumer materializes only the evaluated values the program r
     // rejects a read whose value the host did not materialize, so the runtime
     // continuation below also fails if the wrong root were the retained one.
     try std.testing.expectEqual(@as(usize, 1), materializedAmong(host, helper.key, helper_roots));
-    try std.testing.expect(materializedRootCount(host) < session.compile_time_root_count);
+    try std.testing.expect(materializedRootCount(host) < host.lir_result.const_roots.items.len);
 
     var runtime = try session.takeRuntime(allocator, session.runtime_roots, target);
     defer runtime.deinit();
@@ -434,18 +434,22 @@ test "a separate compile-time consumer lowers no runtime-only procedure" {
 
     // Asserted while the compile-time program is still whole, before any
     // consumer has taken the runtime continuation or released this code.
-    try std.testing.expect(session.compile_time_root_count > 0);
-    try std.testing.expect(session.runtime_prepared != null);
+    try std.testing.expect(session.host != null);
+    try std.testing.expect(session.runtime_monotype != null);
     try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
     try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
     try std.testing.expectEqual(@as(u32, 1), metrics.lir_continuations);
-    // The procedure the evaluation runs is here, so a missing debug name
-    // cannot be what makes the two runtime-only procedures absent.
-    try std.testing.expectEqual(@as(usize, 1), countNamedProcs(host, "Helper.comptime_only"));
     try std.testing.expectEqual(@as(usize, 0), countNamedProcs(host, "runtime_only_a"));
     try std.testing.expectEqual(@as(usize, 0), countNamedProcs(host, "runtime_only_b"));
     // However the app module qualifies its names, neither is here.
     try std.testing.expectEqual(@as(usize, 0), countProcsNaming(host, "runtime_only"));
+
+    // The runtime consumer names both procedures, so missing debug names
+    // cannot be what makes them absent from the evaluation's program.
+    var runtime = try session.takeRuntime(allocator, session.runtime_roots, target);
+    defer runtime.deinit();
+    try std.testing.expectEqual(@as(usize, 1), countNamedProcs(&runtime.lir_result.store, "runtime_only_a"));
+    try std.testing.expectEqual(@as(usize, 1), countNamedProcs(&runtime.lir_result.store, "runtime_only_b"));
 }
 
 test "a separate runtime consumer keeps the producer's root order and test-plan metadata" {
@@ -531,13 +535,15 @@ test "a separate runtime consumer keeps the producer's root order and test-plan 
     try coord.finishCheckedProgram(.none);
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
-    try std.testing.expect(session.compile_time_root_count > 0);
-    try std.testing.expect(session.runtime_prepared != null);
+    try std.testing.expect(session.host != null);
+    try std.testing.expect(session.runtime_monotype != null);
 
     var runtime = try session.takeRuntime(allocator, requests, target);
     defer runtime.deinit();
+    // One specialization; the runtime consumer prepares its own Solved
+    // program from a copy of it.
     try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
-    try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
+    try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
     try std.testing.expectEqual(@as(usize, 2), runtime.lir_result.root_metadata.items.len);
     for (expects.items, plan_metadata.items, runtime.lir_result.root_metadata.items) |request, declared, metadata| {
         try std.testing.expectEqual(request.order, metadata.order);

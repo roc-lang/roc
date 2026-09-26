@@ -10781,7 +10781,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     );
     if (loaded_packs) |*packs| {
         runtime_lowering.target.spec_cache = packs.specCacheLookup();
-        runtime_lowering.splice_source = packs.spliceSource();
     }
     build_env.setRuntimeLowering(runtime_lowering);
     build_env.setValidateTargetFilesForSelectedTarget(true);
@@ -10908,10 +10907,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     var backend_timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
     object_compiler.timing = &backend_timing;
     object_compiler.post_check_executor = build_env.postCheckExecutor();
-    object_compiler.reuse_same_program = if (build_env.runtimeProgramSession()) |session|
-        session.runtimeNativeArtifacts()
-    else
-        null;
     if (loaded_packs) |*packs| object_compiler.splice_source = packs.spliceSource();
     object_compiler.capture_artifacts = object_cache_enabled;
     defer if (object_compiler.captured_artifacts) |*set| set.deinit();
