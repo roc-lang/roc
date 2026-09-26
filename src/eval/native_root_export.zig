@@ -195,7 +195,7 @@ const Builder = struct {
         if (self.allocations.get(key)) |existing| return .{ .dest = existing, .fresh = false };
         const header_size: usize = if (contains_refcounted) 2 * word_size else word_size;
         const payload_offset = std.mem.alignForward(usize, header_size, alignment_);
-        const name = try std.fmt.allocPrint(self.allocator, "roc__ctfe_{d}_{d}", .{ @intFromEnum(self.slot), self.nodes.items.len });
+        const name = try Program.staticDataNodeSymbolName(self.allocator, @intFromEnum(self.slot), @intCast(self.nodes.items.len));
         const symbol = try self.addNode(name, payload_offset + byte_count, @max(alignment_, word_size));
         const dest = Destination{ .symbol = symbol, .offset = payload_offset };
         // A zero RC header is the runtime's immutable/static allocation marker.

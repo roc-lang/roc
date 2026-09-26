@@ -8765,10 +8765,12 @@ fn packFileBytes(
     return try backend.dev.PackFile.write(allocator, set, specs.items);
 }
 
-/// Whether any artifact reachable from `root` relocates against static data
-/// that only its own program defines: data it does not carry, or boxy
-/// descriptor tables. Reachability is the closure a splice places: set-local
-/// references and stable references to definitions in the same set.
+/// Whether any artifact reachable from `root` refers to something only its
+/// own program defines: a program-scope symbol it does not carry, such as
+/// the Boxy runtime, whose calls index this program's descriptor sidecar, or
+/// a constant holding a code pointer. Reachability is the closure a splice
+/// places: set-local references and stable references to definitions in the
+/// same set.
 fn artifactClosureNamesProgramLocalSymbols(allocator: Allocator, set: *const backend.dev.ProcArtifact.Set, root: u32) Allocator.Error!bool {
     var procs = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
     defer procs.deinit();
@@ -8794,8 +8796,7 @@ fn artifactClosureNamesProgramLocalSymbols(allocator: Allocator, set: *const bac
         if (gop.found_existing) continue;
         const artifact = set.artifacts[index];
         for (artifact.relocations) |relocation| {
-            if (std.mem.startsWith(u8, relocation.name, "roc__static_") and !carriesData(artifact, relocation.name)) return true;
-            if (std.mem.startsWith(u8, relocation.name, "roc_boxy_")) return true;
+            if (relocation.scope == .program and !carriesData(artifact, relocation.name)) return true;
         }
         for (artifact.data) |item| {
             for (item.relocations) |relocation| if (relocation.function) return true;
@@ -8833,19 +8834,55 @@ test "pack withholds an entry whose stable references reach a constant holding a
             .entry = 0,
             .frame = null,
             .refs = &.{},
-            .relocations = &.{.{ .offset = 0, .name = "roc__static_const_value_0", .kind = .{ .data = .rel32 } }},
+            .relocations = &.{.{ .offset = 0, .name = "roc__d0", .scope = .program, .kind = .{ .data = .rel32 } }},
             .data = &.{.{
-                .name = "roc__static_const_value_0",
+                .name = "roc__d0",
                 .bytes = "\x00" ** 8,
                 .alignment = 8,
                 .symbol_offset = 0,
-                .relocations = &.{.{ .offset = 0, .name = "roc__proc_callback", .addend = 0, .function = true }},
+                .relocations = &.{.{ .offset = 0, .name = "roc__pcallback", .addend = 0, .function = true }},
                 .program_local_name = true,
             }},
         },
     };
     const set = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(std.testing.allocator), .artifacts = &artifacts };
     try std.testing.expect(try artifactClosureNamesProgramLocalSymbols(std.testing.allocator, &set, 0));
+    try std.testing.expect(try artifactClosureNamesProgramLocalSymbols(std.testing.allocator, &set, 1));
+}
+
+test "pack offers an entry that carries its program data and withholds one that calls the Boxy runtime" {
+    const ProcArtifact = backend.dev.ProcArtifact;
+    const artifacts = [_]ProcArtifact.Artifact{
+        .{
+            .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
+            .code = "read",
+            .entry = 0,
+            .frame = null,
+            .refs = &.{},
+            .relocations = &.{
+                .{ .offset = 0, .name = "roc__d0", .scope = .program, .kind = .{ .data = .rel32 } },
+                .{ .offset = 4, .name = "roc_builtins_str_concat", .scope = .shared, .kind = .function },
+            },
+            .data = &.{.{
+                .name = "roc__d0",
+                .bytes = "\x00" ** 8,
+                .alignment = 8,
+                .symbol_offset = 0,
+                .program_local_name = true,
+            }},
+        },
+        .{
+            .kind = .{ .proc = lir.ProcIdentity.forTest(2) },
+            .code = "call",
+            .entry = 0,
+            .frame = null,
+            .refs = &.{},
+            .relocations = &.{.{ .offset = 0, .name = "roc_boxy_eq", .scope = .program, .kind = .function }},
+            .data = &.{},
+        },
+    };
+    const set = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(std.testing.allocator), .artifacts = &artifacts };
+    try std.testing.expect(!try artifactClosureNamesProgramLocalSymbols(std.testing.allocator, &set, 0));
     try std.testing.expect(try artifactClosureNamesProgramLocalSymbols(std.testing.allocator, &set, 1));
 }
 

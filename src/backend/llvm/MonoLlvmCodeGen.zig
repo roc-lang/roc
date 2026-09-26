@@ -1023,7 +1023,7 @@ pub const MonoLlvmCodeGen = struct {
             var allocated_name: ?[]u8 = null;
             defer if (allocated_name) |name| self.allocator.free(name);
             const name = self.store.procDebugName(proc_id) orelse blk: {
-                const symbol_name = try std.fmt.allocPrint(self.allocator, "roc__proc_{s}", .{&proc.identity.symbolHex()});
+                const symbol_name = try proc.identity.symbolName(self.allocator);
                 allocated_name = symbol_name;
                 break :blk symbol_name;
             };
@@ -1111,7 +1111,7 @@ pub const MonoLlvmCodeGen = struct {
     ) Error!LlvmBuilder.Metadata.String {
         return switch (self.proc_symbol_mode) {
             .local_index => builder.metadataStringFmt("roc_proc_{d}", .{@intFromEnum(proc_id)}) catch return error.OutOfMemory,
-            .lir_symbol => builder.metadataStringFmt("roc__proc_{s}", .{&proc.identity.symbolHex()}) catch return error.OutOfMemory,
+            .lir_symbol => builder.metadataStringFmt("{s}{s}", .{ lir.ProcIdentity.symbol_name_prefix, &proc.identity.symbolHex() }) catch return error.OutOfMemory,
         };
     }
 
@@ -1776,7 +1776,7 @@ pub const MonoLlvmCodeGen = struct {
         return switch (self.proc_symbol_mode) {
             .local_index => builder.strtabStringFmt("roc_proc_{d}", .{@intFromEnum(proc_id)}) catch return error.OutOfMemory,
             .lir_symbol => blk: {
-                const name = std.fmt.allocPrint(self.allocator, "{s}roc__proc_{s}", .{ self.static_symbol_prefix, &proc.identity.symbolHex() }) catch return error.OutOfMemory;
+                const name = std.fmt.allocPrint(self.allocator, "{s}{s}{s}", .{ self.static_symbol_prefix, lir.ProcIdentity.symbol_name_prefix, &proc.identity.symbolHex() }) catch return error.OutOfMemory;
                 defer self.allocator.free(name);
                 break :blk try self.exportedFunctionName(builder, name);
             },
@@ -3017,7 +3017,7 @@ pub const MonoLlvmCodeGen = struct {
 
         const builder = self.builder orelse return error.CompilationFailed;
         const scope = self.store.inlineScope(id);
-        const linkage_name = builder.metadataStringFmt("roc__proc_{x}", .{scope.source_symbol.raw()}) catch return error.OutOfMemory;
+        const linkage_name = builder.metadataStringFmt("{s}{x}", .{ lir.ProcIdentity.symbol_name_prefix, scope.source_symbol.raw() }) catch return error.OutOfMemory;
         const name = if (scope.source_name.isNone())
             linkage_name
         else
@@ -8099,7 +8099,7 @@ pub const MonoLlvmCodeGen = struct {
         var allocated_name: ?[]u8 = null;
         defer if (allocated_name) |name| self.allocator.free(name);
         const name = if (scope.source_name.isNone()) blk: {
-            const generated = try std.fmt.allocPrint(self.allocator, "roc__proc_{x}", .{scope.source_symbol.raw()});
+            const generated = try std.fmt.allocPrint(self.allocator, "{s}{x}", .{ lir.ProcIdentity.symbol_name_prefix, scope.source_symbol.raw() });
             allocated_name = generated;
             break :blk generated;
         } else self.store.getString(scope.source_name);
@@ -13423,12 +13423,12 @@ test "static-data slots with constant images are internal constants and function
     var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, target);
     defer codegen.deinit();
     codegen.layout_store = &layouts;
-    const address = [_]lir.Program.StaticDataRelocation{.{ .offset = 8, .target_symbol_name = "roc__ctfe_1_1", .addend = 16 }};
-    const function = [_]lir.Program.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "roc__proc_1", .kind = .function_pointer }};
+    const address = [_]lir.Program.StaticDataRelocation{.{ .offset = 8, .target_symbol_name = "roc__d1_1", .addend = 16 }};
+    const function = [_]lir.Program.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "roc__p1", .kind = .function_pointer }};
     var exports = [_]lir.Program.StaticDataExport{
-        .{ .symbol_name = "roc__static_const_value_0", .bytes = &.{ 1, 0, 0, 0, 0, 0, 0, 0 }, .alignment = 8 },
-        .{ .symbol_name = "roc__static_const_value_1", .bytes = &([_]u8{0} ** 24), .alignment = 8, .relocations = &address },
-        .{ .symbol_name = "roc__static_const_value_2", .bytes = &([_]u8{0} ** 8), .alignment = 8, .relocations = &function },
+        .{ .symbol_name = "roc__d0", .bytes = &.{ 1, 0, 0, 0, 0, 0, 0, 0 }, .alignment = 8 },
+        .{ .symbol_name = "roc__d1", .bytes = &([_]u8{0} ** 24), .alignment = 8, .relocations = &address },
+        .{ .symbol_name = "roc__d2", .bytes = &([_]u8{0} ** 8), .alignment = 8, .relocations = &function },
     };
     // This program's static roots are exported densely in root order, so each
     // export carries the id of its own position.
@@ -13455,7 +13455,7 @@ test "static-data slots with constant images are internal constants and function
     // external symbol.
     const declared = builder.variables.items[builder.variables.items.len - 2];
     try std.testing.expectEqual(.external, declared.global.ptrConst(&builder).linkage);
-    try std.testing.expect(codegen.static_data_symbols.contains("roc__ctfe_1_1"));
+    try std.testing.expect(codegen.static_data_symbols.contains("roc__d1_1"));
 
     _ = try codegen.staticDataGlobal(exports[2].value_id.?, 8);
     const callable = builder.variables.items[builder.variables.items.len - 1];

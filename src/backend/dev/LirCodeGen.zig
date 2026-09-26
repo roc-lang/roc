@@ -17624,7 +17624,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.boxy_runtime_used = true;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addImmArg(0);
-            try builder.callRelocatable(try self.codegen.symbols.intern(self.allocator, "roc_boxy_init_embedded"), &self.codegen);
+            try builder.callRelocatable(try self.codegen.symbols.intern(self.allocator, "roc_boxy_init_embedded", .program), &self.codegen);
         }
 
         /// Resolve a boxy descriptor reference to an 8-byte stack slot holding
@@ -18604,11 +18604,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
             if (self.fragment_mode and self.fragment_source_mode != .object_file) {
                 if (entry.symbol == null) {
-                    const name = try std.fmt.allocPrint(self.allocator, "roc__binding_{s}", .{entry.name});
+                    const name = try std.fmt.allocPrint(self.allocator, "roc__b{d}", .{@intFromEnum(id)});
                     defer self.allocator.free(name);
-                    const owned_cell_symbol = try self.internSymbolName(name);
-                    const cell_symbol = try self.codegen.symbols.internInternal(self.allocator, self.symbolName(owned_cell_symbol));
-                    const target_symbol = try self.internSymbolName(entry.name);
+                    const owned_cell_symbol = try self.internSymbolName(name, .program);
+                    const cell_symbol = try self.codegen.symbols.internInternal(self.allocator, self.symbolName(owned_cell_symbol), .program);
+                    const target_symbol = try self.internSymbolName(entry.name, .program);
                     try self.binding_data_cells.append(self.allocator, .{
                         .name = self.symbolName(cell_symbol),
                         .target_name = self.symbolName(target_symbol),
@@ -18619,7 +18619,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitLoad(.w64, dst_reg, dst_reg, 0);
                 return;
             }
-            if (entry.symbol == null) entry.symbol = try self.codegen.symbols.internInternal(self.allocator, entry.name);
+            if (entry.symbol == null) entry.symbol = try self.codegen.symbols.internInternal(self.allocator, entry.name, .program);
             try self.codegen.emitLoadDataAddress(dst_reg, entry.symbol.?);
         }
 
@@ -18629,21 +18629,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn builtinSymbol(self: *Self, function: BuiltinFn) Allocator.Error!SymbolTable.Id {
             if (self.builtin_symbols.get(function)) |symbol| return symbol;
-            const symbol = try self.codegen.symbols.intern(self.allocator, function.symbolName());
+            const symbol = try self.codegen.symbols.intern(self.allocator, function.symbolName(), .shared);
             try self.builtin_symbols.put(function, symbol);
             return symbol;
         }
 
         fn boxySymbol(self: *Self, function: BoxyBuiltinFn) Allocator.Error!SymbolTable.Id {
             if (self.boxy_symbols.get(function)) |symbol| return symbol;
-            const symbol = try self.codegen.symbols.intern(self.allocator, function.symbolName());
+            const symbol = try self.codegen.symbols.intern(self.allocator, function.symbolName(), .program);
             try self.boxy_symbols.put(function, symbol);
             return symbol;
         }
 
         fn hostedSymbol(self: *Self, name: base.StringLiteral.Idx) Allocator.Error!SymbolTable.Id {
             if (self.hosted_symbols.get(name)) |symbol| return symbol;
-            const symbol = try self.codegen.symbols.intern(self.allocator, self.store.getString(name));
+            const symbol = try self.codegen.symbols.intern(self.allocator, self.store.getString(name), .shared);
             try self.hosted_symbols.put(name, symbol);
             return symbol;
         }
@@ -23801,7 +23801,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn staticStringSymbol(self: *Self, str_idx: base.StringLiteral.Idx) Allocator.Error!SymbolTable.Id {
             const ordinal = self.static_strings.ordinal(str_idx).?;
             if (self.literal_symbols.get(ordinal)) |symbol| return symbol;
-            const symbol = try self.codegen.symbols.internInternal(self.allocator, self.static_strings.entries[ordinal].symbol_name);
+            const symbol = try self.codegen.symbols.internInternal(self.allocator, self.static_strings.entries[ordinal].symbol_name, .shared);
             try self.literal_symbols.put(ordinal, symbol);
             return symbol;
         }
@@ -23841,7 +23841,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn callRuntimeSymbol(self: *Self, builder: *Builder, symbol: builtins.in_process_host.Symbol) Allocator.Error!void {
             switch (self.generation_mode) {
                 .native_execution => try builder.call(symbol.address()),
-                .shim_execution, .object_file => try builder.callRelocatable(try self.codegen.symbols.intern(self.allocator, symbol.name()), &self.codegen),
+                .shim_execution, .object_file => try builder.callRelocatable(try self.codegen.symbols.intern(self.allocator, symbol.name(), .shared), &self.codegen),
             }
         }
 
@@ -23954,7 +23954,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 };
                 try builder.call(address);
             } else {
-                try builder.callRelocatable(try self.internSymbolName(hook.symbolName()), &self.codegen);
+                try builder.callRelocatable(try self.internSymbolName(hook.symbolName(), .shared), &self.codegen);
             }
         }
 
@@ -25271,13 +25271,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.codegen.symbols.names.items[@intFromEnum(id)];
         }
 
-        /// Intern a symbol name for an assembled relocation.
-        pub fn internSymbolName(self: *Self, name: []const u8) Allocator.Error!SymbolTable.Id {
-            if (self.codegen.symbols.indices.get(name)) |id| return id;
+        /// The scope generated code declared for symbol `id`.
+        pub fn symbolScope(self: *const Self, id: SymbolTable.Id) SymbolTable.Scope {
+            return self.codegen.symbols.scope(id);
+        }
+
+        /// Intern a symbol name for an assembled relocation, with its scope.
+        pub fn internSymbolName(self: *Self, name: []const u8, scope: SymbolTable.Scope) Allocator.Error!SymbolTable.Id {
+            if (self.codegen.symbols.indices.get(name)) |id| return try self.codegen.symbols.intern(self.allocator, self.symbolName(id), scope);
             const owned = try self.allocator.dupe(u8, name);
             errdefer self.allocator.free(owned);
             try self.owned_symbol_names.ensureUnusedCapacity(self.allocator, 1);
-            const id = try self.codegen.symbols.intern(self.allocator, owned);
+            const id = try self.codegen.symbols.intern(self.allocator, owned, scope);
             self.owned_symbol_names.appendAssumeCapacity(owned);
             return id;
         }
@@ -25377,7 +25382,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .veneer = reference.veneer,
             };
             if (reference.target == .rc_helper) {
-                const symbol = try self.internSymbolName(reference.target.rc_helper);
+                const symbol = try self.internSymbolName(reference.target.rc_helper, .shared);
                 owned.target = .{ .rc_helper = self.symbolName(symbol) };
             }
             if (comptime target.toCpuArch() == .aarch64) {
@@ -28436,7 +28441,7 @@ test "AArch64 finalized artifacts preserve external calls across changed placeme
         var original = try CG.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
         defer original.deinit();
         original.codegen.branch_reach_limit = 4096;
-        const symbol = try original.internSymbolName("artifact_external_target");
+        const symbol = try original.internSymbolName("artifact_external_target", .shared);
         while (original.codegen.currentOffset() < 4096) try original.codegen.emit.buf.appendSlice(allocator, &.{ 0x1f, 0x20, 0x03, 0xd5 });
         const call_offset = original.codegen.currentOffset();
         try original.codegen.emitExternCall(symbol);
@@ -28574,7 +28579,7 @@ test "independent fragment symbolic hooks record actual context use" {
     try std.testing.expect(cg.getFragmentContextDependencies().static_data);
     try std.testing.expectEqual(@as(usize, 0), source.getSymbolNames().len);
     try std.testing.expectEqual(@as(usize, 1), cg.bindingDataCells().len);
-    try std.testing.expectEqualStrings("roc__binding_fragment_static_value", cg.bindingDataCells()[0].name);
+    try std.testing.expectEqualStrings("roc__b8", cg.bindingDataCells()[0].name);
     try std.testing.expectEqualStrings("fragment_static_value", cg.bindingDataCells()[0].target_name);
     var found_hook = false;
     for (cg.getRelocations()) |reloc| {

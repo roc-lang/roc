@@ -2401,7 +2401,7 @@ const StaticSlotEnvironment = struct {
             count = 1;
             bytes[metadata.failed_offset] = @intFromBool(message != null);
             if (large) {
-                const backing_name = try std.fmt.allocPrint(allocator, "{s}_message", .{name});
+                const backing_name = try LirProgram.staticDataNodeSymbolName(allocator, @intFromEnum(slot), 1);
                 const backing = allocator.alloc(u8, @sizeOf(usize) + text.len) catch |err| {
                     allocator.free(backing_name);
                     return err;

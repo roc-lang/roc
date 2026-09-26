@@ -22,6 +22,10 @@ const lir = @import("lir");
 const layout = @import("layout");
 const RelocationMod = @import("Relocation.zig");
 const LirCodeGenMod = @import("LirCodeGen.zig");
+const SymbolTable = @import("SymbolTable.zig");
+
+/// Whether a symbol's name means the same thing in every program.
+pub const SymbolScope = SymbolTable.Scope;
 
 const Allocator = std.mem.Allocator;
 const IndexedRelocation = RelocationMod.IndexedRelocation;
@@ -62,6 +66,9 @@ pub const Reference = struct {
 pub const NamedRelocation = struct {
     offset: u32,
     name: []const u8,
+    /// Whether `name` means the same thing in another program; declared by
+    /// the code that made the reference.
+    scope: SymbolScope,
     kind: union(enum) {
         function,
         data: RelocationMod.DataRelocationKind,
@@ -106,7 +113,7 @@ pub const DataItem = struct {
     /// backings, procedures, or refcount helpers.
     relocations: []const DataRelocation = &.{},
     /// `name` is the producing program's own name for an internal constant
-    /// (`roc__static_const_value_N`, `roc__ctfe_*`), which another program
+    /// (`roc__d{N}`, `roc__d{N}_{k}`), which another program
     /// can give to a different constant. A pack names such a datum by
     /// content instead; see `ContentNames`.
     program_local_name: bool = false,
@@ -123,8 +130,8 @@ pub const DataRelocation = struct {
     external: bool = false,
 };
 
-/// Prefix of the symbol that names a constant by content wherever it lands.
-pub const content_data_prefix = "roc__static_data_";
+/// Prefix of a datum named by content, the same wherever it lands.
+pub const content_data_prefix = lir.Program.content_data_symbol_prefix;
 
 /// One lifted region of machine code.
 pub const Artifact = struct {
@@ -386,6 +393,11 @@ pub const ContentNames = struct {
     /// The name a pack gives the symbol its program called `name`.
     pub fn of(self: *const ContentNames, name: []const u8) []const u8 {
         return self.names.get(name) orelse name;
+    }
+
+    /// Whether the pack names `name` by content instead.
+    pub fn renames(self: *const ContentNames, name: []const u8) bool {
+        return self.names.contains(name);
     }
 
     /// Writes the digest of `item`'s rendering and returns the shallowest
@@ -703,11 +715,13 @@ pub fn extractPrepared(
                 .linked_function => |function| .{
                     .offset = @intCast(offset - region.start),
                     .name = try arena_allocator.dupe(u8, codegen.symbolName(function.symbol)),
+                    .scope = codegen.symbolScope(function.symbol),
                     .kind = .function,
                 },
                 .linked_data => |data| .{
                     .offset = @intCast(offset - region.start),
                     .name = try arena_allocator.dupe(u8, codegen.symbolName(data.symbol)),
+                    .scope = codegen.symbolScope(data.symbol),
                     .kind = .{ .data = data.kind },
                 },
                 .retired, .local_data, .jmp_to_return => unreachable,
@@ -892,7 +906,7 @@ pub fn appendPrepared(
         starts[index] = try codegen.appendAssembledRegion(artifact.code, kind, artifact.entry, artifact.frame);
         try appendMetadata(CG, codegen, artifact, starts[index], true);
         for (artifact.relocations) |relocation| {
-            const symbol = try codegen.internSymbolName(relocation.name);
+            const symbol = try codegen.internSymbolName(relocation.name, relocation.scope);
             const offset: u64 = starts[index] + relocation.offset;
             try codegen.appendAssembledRelocation(switch (relocation.kind) {
                 .function => .{ .linked_function = .{ .offset = offset, .symbol = symbol } },
@@ -1177,7 +1191,7 @@ pub fn splice(
         try placed.putNoClobber(index, start);
         for (artifact.data) |item| try data_out.append(allocator, item);
         for (artifact.relocations) |relocation| {
-            const symbol = try codegen.internSymbolName(relocation.name);
+            const symbol = try codegen.internSymbolName(relocation.name, relocation.scope);
             const offset: u64 = start + relocation.offset;
             try codegen.appendAssembledRelocation(switch (relocation.kind) {
                 .function => .{ .linked_function = .{ .offset = offset, .symbol = symbol } },
@@ -1309,7 +1323,7 @@ fn testPreparedData(allocator: Allocator) (ExtractError || error{ TestExpectedEq
         testExport("literal", "owned string", &.{}, false),
         testExport("unreferenced", "must not be carried", &.{}, false),
     }, &.{
-        testExport("roc__static_mutable_slot", "placeholder", &.{}, false),
+        testExport("roc__d0", "placeholder", &.{}, false),
     }, &.{});
     var prepared_live = true;
     defer if (prepared_live) prepared.deinit();
@@ -1323,11 +1337,11 @@ fn testPreparedData(allocator: Allocator) (ExtractError || error{ TestExpectedEq
         .bytes = &([_]u8{0} ** 8),
         .alignment = 8,
         .symbol_offset = 0,
-        .relocations = &.{.{ .offset = 0, .name = "roc__static_mutable_slot", .addend = 0, .function = false, .external = true }},
+        .relocations = &.{.{ .offset = 0, .name = "roc__d0", .addend = 0, .function = false, .external = true }},
     });
     var refs = [_]NamedRelocation{
-        .{ .offset = 0, .name = "literal", .kind = .{ .data = .rel32 } },
-        .{ .offset = 4, .name = "cell", .kind = .{ .data = .rel32 } },
+        .{ .offset = 0, .name = "literal", .scope = .shared, .kind = .{ .data = .rel32 } },
+        .{ .offset = 4, .name = "cell", .scope = .program, .kind = .{ .data = .rel32 } },
     };
     const items = try captureData(allocator, a, &refs, &local, &prepared);
     prepared.deinit();
@@ -1336,7 +1350,7 @@ fn testPreparedData(allocator: Allocator) (ExtractError || error{ TestExpectedEq
     try std.testing.expectEqualStrings("cell", items[0].name);
     try std.testing.expectEqualSlices(u8, &([_]u8{0} ** 8), items[0].bytes);
     try std.testing.expect(items[0].relocations[0].external);
-    try std.testing.expectEqualStrings("roc__static_mutable_slot", items[0].relocations[0].name);
+    try std.testing.expectEqualStrings("roc__d0", items[0].relocations[0].name);
     try std.testing.expectEqualStrings("literal", items[1].name);
     try std.testing.expectEqualStrings("owned string", items[1].bytes);
     try std.testing.expectEqualStrings("literal", refs[0].name);
@@ -1424,7 +1438,7 @@ fn testCombineOwnership(allocator: Allocator) (Allocator.Error || error{TestExpe
                 .{ .offset = 0, .loc = .{ .file = 7, .line = 3, .column = 2 } },
                 .{ .offset = 0, .loc = .{ .file = 7, .line = 4, .column = 5 } },
             },
-            .relocations = &.{.{ .offset = 0, .name = "external", .kind = .function }},
+            .relocations = &.{.{ .offset = 0, .name = "external", .scope = .shared, .kind = .function }},
             .data = &.{.{
                 .name = "data",
                 .bytes = "contents",
@@ -1479,25 +1493,25 @@ test "constants are named by content across programs, through cycles, and never 
     // Program one: a cycle between the first two constants, a leaf, and a
     // host-visible export that points at the leaf.
     const one = [_]DataItem{
-        testItem("roc__static_const_value_0", "\x00" ** 16, &.{testReloc(8, "roc__ctfe_0_1", 0)}, true),
-        testItem("roc__ctfe_0_1", "\x00" ** 16, &.{ testReloc(0, "roc__static_const_value_0", 0), testReloc(8, "roc__ctfe_0_2", 4) }, true),
-        testItem("roc__ctfe_0_2", "leaf", &.{}, true),
-        testItem("roc__answer", "\x00" ** 8, &.{testReloc(0, "roc__ctfe_0_2", 0)}, false),
+        testItem("roc__d0", "\x00" ** 16, &.{testReloc(8, "roc__d0_1", 0)}, true),
+        testItem("roc__d0_1", "\x00" ** 16, &.{ testReloc(0, "roc__d0", 0), testReloc(8, "roc__d0_2", 4) }, true),
+        testItem("roc__d0_2", "leaf", &.{}, true),
+        testItem("roc__answer", "\x00" ** 8, &.{testReloc(0, "roc__d0_2", 0)}, false),
     };
     // Program two: the same graph under other names and another order.
     const two = [_]DataItem{
-        testItem("roc__ctfe_7_2", "leaf", &.{}, true),
-        testItem("roc__static_const_value_7", "\x00" ** 16, &.{testReloc(8, "roc__ctfe_7_1", 0)}, true),
-        testItem("roc__ctfe_7_1", "\x00" ** 16, &.{ testReloc(0, "roc__static_const_value_7", 0), testReloc(8, "roc__ctfe_7_2", 4) }, true),
+        testItem("roc__d7_2", "leaf", &.{}, true),
+        testItem("roc__d7", "\x00" ** 16, &.{testReloc(8, "roc__d7_1", 0)}, true),
+        testItem("roc__d7_1", "\x00" ** 16, &.{ testReloc(0, "roc__d7", 0), testReloc(8, "roc__d7_2", 4) }, true),
     };
 
     var storage_one: [1]Artifact = undefined;
     const set_one = testDataSet(&storage_one, &one);
     var names_one = try ContentNames.init(testing.allocator, &set_one);
     defer names_one.deinit();
-    const one_root = names_one.of("roc__static_const_value_0");
-    const one_node = names_one.of("roc__ctfe_0_1");
-    const one_leaf = names_one.of("roc__ctfe_0_2");
+    const one_root = names_one.of("roc__d0");
+    const one_node = names_one.of("roc__d0_1");
+    const one_leaf = names_one.of("roc__d0_2");
     var storage_two: [1]Artifact = undefined;
     const set_two = testDataSet(&storage_two, &two);
     var names_two = try ContentNames.init(testing.allocator, &set_two);
@@ -1505,25 +1519,25 @@ test "constants are named by content across programs, through cycles, and never 
 
     try testing.expectEqualStrings("roc__answer", names_one.of("roc__answer"));
     try testing.expect(std.mem.startsWith(u8, one_root, content_data_prefix));
-    try testing.expectEqualStrings(one_root, names_two.of("roc__static_const_value_7"));
-    try testing.expectEqualStrings(one_node, names_two.of("roc__ctfe_7_1"));
-    try testing.expectEqualStrings(one_leaf, names_two.of("roc__ctfe_7_2"));
+    try testing.expectEqualStrings(one_root, names_two.of("roc__d7"));
+    try testing.expectEqualStrings(one_node, names_two.of("roc__d7_1"));
+    try testing.expectEqualStrings(one_leaf, names_two.of("roc__d7_2"));
     try testing.expect(!std.mem.eql(u8, one_root, one_node));
     // Names outside the carried data keep their own spelling.
-    try testing.expectEqualStrings("roc__proc_elsewhere", names_one.of("roc__proc_elsewhere"));
+    try testing.expectEqualStrings("roc__pelsewhere", names_one.of("roc__pelsewhere"));
 
     // A different leaf changes every name that reaches it.
     const three = [_]DataItem{
-        testItem("roc__static_const_value_0", "\x00" ** 16, &.{testReloc(8, "roc__ctfe_0_1", 0)}, true),
-        testItem("roc__ctfe_0_1", "\x00" ** 16, &.{ testReloc(0, "roc__static_const_value_0", 0), testReloc(8, "roc__ctfe_0_2", 4) }, true),
-        testItem("roc__ctfe_0_2", "LEAF", &.{}, true),
+        testItem("roc__d0", "\x00" ** 16, &.{testReloc(8, "roc__d0_1", 0)}, true),
+        testItem("roc__d0_1", "\x00" ** 16, &.{ testReloc(0, "roc__d0", 0), testReloc(8, "roc__d0_2", 4) }, true),
+        testItem("roc__d0_2", "LEAF", &.{}, true),
     };
     var storage_three: [1]Artifact = undefined;
     const set_three = testDataSet(&storage_three, &three);
     var names_three = try ContentNames.init(testing.allocator, &set_three);
     defer names_three.deinit();
-    try testing.expect(!std.mem.eql(u8, one_root, names_three.of("roc__static_const_value_0")));
+    try testing.expect(!std.mem.eql(u8, one_root, names_three.of("roc__d0")));
     // The leaf's program-local name is the same in both programs, and its
     // content name is not.
-    try testing.expect(!std.mem.eql(u8, one_leaf, names_three.of("roc__ctfe_0_2")));
+    try testing.expect(!std.mem.eql(u8, one_leaf, names_three.of("roc__d0_2")));
 }
