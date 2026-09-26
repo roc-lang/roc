@@ -726,6 +726,14 @@ hoist_known_value_scope_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx),
 hoist_contextual_bindings: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, usize),
 /// Lexical scope stack for `hoist_contextual_bindings`.
 hoist_contextual_binding_scope_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx),
+/// Nominal types declared by a block inside a function body, keyed by their
+/// declaration statement; the value is the index of the declaring block's
+/// hoist frame. Such a type, and every method it declares, belongs to that
+/// block, so any expression inside the block that refers to it is not
+/// top-level-equivalent. Temporary checker facts, scoped lexically.
+hoist_contextual_type_decls: std.AutoHashMapUnmanaged(CIR.Statement.Idx, usize),
+/// Lexical scope stack for `hoist_contextual_type_decls`.
+hoist_contextual_type_decl_scope: std.ArrayListUnmanaged(CIR.Statement.Idx),
 /// Selected local binding roots, keyed by their binding pattern. The value is
 /// the index into `selected_hoisted_roots`.
 hoist_selected_bindings: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32),
@@ -3010,6 +3018,8 @@ fn initAssumePrepared(
         .hoist_known_value_scope_patterns = .empty,
         .hoist_contextual_bindings = .{},
         .hoist_contextual_binding_scope_patterns = .empty,
+        .hoist_contextual_type_decls = .{},
+        .hoist_contextual_type_decl_scope = .empty,
         .hoist_selected_bindings = .{},
         .hoist_selected_exprs = .{},
         .hoist_selected_pattern_validations = .{},
@@ -3167,6 +3177,8 @@ pub fn deinit(self: *Self) void {
     self.hoist_known_value_scope_patterns.deinit(self.gpa);
     self.hoist_contextual_bindings.deinit(self.gpa);
     self.hoist_contextual_binding_scope_patterns.deinit(self.gpa);
+    self.hoist_contextual_type_decls.deinit(self.gpa);
+    self.hoist_contextual_type_decl_scope.deinit(self.gpa);
     self.hoist_selected_bindings.deinit(self.gpa);
     self.hoist_selected_exprs.deinit(self.gpa);
     self.hoist_selected_pattern_validations.deinit(self.gpa);
@@ -3358,9 +3370,11 @@ fn noteRigidVarLookupForLocalProcedures(self: *Self, rigid_var: CIR.TypeAnno.Idx
 }
 
 /// A reference to a type declared inside a function body makes every
-/// candidate being checked contextual: such a type, and any method it
-/// declares, belongs to the function body that declares it.
-fn noteTypeDeclReferenceForLocalProcedures(self: *Self, decl_idx: CIR.Statement.Idx) Allocator.Error!void {
+/// local-function candidate being checked contextual, and every hoist frame
+/// between the declaring block and the reference contextual: such a type,
+/// and any method it declares, belongs to the function body that declares it.
+fn noteTypeDeclReference(self: *Self, decl_idx: CIR.Statement.Idx) Allocator.Error!void {
+    self.markHoistContextualDependencyForTypeDecl(decl_idx);
     if (self.local_procedure_candidate_stack.items.len == 0) return;
     if (self.module_type_decls.count() == 0) {
         for (self.cir.store.sliceStatements(self.cir.type_decls)) |module_decl| {
@@ -4116,6 +4130,35 @@ fn markHoistContextualDependencyForLookup(self: *Self, pattern: CIR.Pattern.Idx)
     return true;
 }
 
+/// Record the nominal types a block declares, owned by the block's frame.
+fn recordHoistContextualTypeDecls(self: *Self, stmts: CIR.Statement.Span, block_expr: CIR.Expr.Idx) Allocator.Error!void {
+    var owner_frame_index: ?usize = null;
+    for (self.cir.store.sliceStatements(stmts)) |stmt_idx| {
+        if (std.meta.activeTag(self.cir.store.getStatement(stmt_idx)) != .s_nominal_decl) continue;
+        const owner = owner_frame_index orelse self.currentHoistFrameIndexForExpr(block_expr);
+        owner_frame_index = owner;
+        try self.hoist_contextual_type_decl_scope.ensureUnusedCapacity(self.gpa, 1);
+        const entry = try self.hoist_contextual_type_decls.getOrPut(self.gpa, stmt_idx);
+        if (!entry.found_existing) self.hoist_contextual_type_decl_scope.appendAssumeCapacity(stmt_idx);
+        entry.value_ptr.* = owner;
+    }
+}
+
+/// A reference to a nominal type a block declares makes every expression
+/// between that block and the reference contextual: the type and its methods
+/// exist only in the block, so a root evaluated on its own could not reach
+/// them.
+fn markHoistContextualDependencyForTypeDecl(self: *Self, decl_idx: CIR.Statement.Idx) void {
+    const owner_frame_index = self.hoist_contextual_type_decls.get(decl_idx) orelse return;
+    if (owner_frame_index >= self.hoist_frames.items.len) {
+        std.debug.panic("check invariant violated: contextual hoist type declaration outlived its owner frame", .{});
+    }
+    var frame_index = owner_frame_index + 1;
+    while (frame_index < self.hoist_frames.items.len) : (frame_index += 1) {
+        self.hoist_frames.items[frame_index].has_contextual_dependency = true;
+    }
+}
+
 fn currentHoistFrameIndexForExpr(self: *const Self, expr: CIR.Expr.Idx) usize {
     if (self.hoist_frames.items.len == 0) {
         std.debug.panic("check invariant violated: missing contextual hoist owner frame", .{});
@@ -4131,6 +4174,7 @@ const HoistLexicalScope = struct {
     binding_candidate_start: usize,
     known_value_start: usize,
     contextual_binding_start: usize,
+    contextual_type_decl_start: usize,
 };
 
 fn beginHoistLexicalScope(self: *const Self) HoistLexicalScope {
@@ -4138,10 +4182,15 @@ fn beginHoistLexicalScope(self: *const Self) HoistLexicalScope {
         .binding_candidate_start = self.hoist_binding_scope_patterns.items.len,
         .known_value_start = self.hoist_known_value_scope_patterns.items.len,
         .contextual_binding_start = self.hoist_contextual_binding_scope_patterns.items.len,
+        .contextual_type_decl_start = self.hoist_contextual_type_decl_scope.items.len,
     };
 }
 
 fn endHoistLexicalScope(self: *Self, scope: HoistLexicalScope) void {
+    for (self.hoist_contextual_type_decl_scope.items[scope.contextual_type_decl_start..]) |decl| {
+        _ = self.hoist_contextual_type_decls.remove(decl);
+    }
+    self.hoist_contextual_type_decl_scope.shrinkRetainingCapacity(scope.contextual_type_decl_start);
     self.popHoistContextualBindingScope(scope.contextual_binding_start);
     self.popHoistKnownValueScope(scope.known_value_start);
     self.popHoistBindingCandidateScope(scope.binding_candidate_start);
@@ -4634,6 +4683,8 @@ const HoistSelectionTestState = struct {
         checker.hoist_known_value_scope_patterns = .empty;
         checker.hoist_contextual_bindings = .{};
         checker.hoist_contextual_binding_scope_patterns = .empty;
+        checker.hoist_contextual_type_decls = .{};
+        checker.hoist_contextual_type_decl_scope = .empty;
         checker.hoist_selected_bindings = .{};
         checker.hoist_selected_exprs = .{};
         checker.hoist_selected_pattern_validations = .{};
@@ -4660,6 +4711,8 @@ const HoistSelectionTestState = struct {
         self.checker.hoist_known_value_scope_patterns.deinit(self.allocator);
         self.checker.hoist_contextual_bindings.deinit(self.allocator);
         self.checker.hoist_contextual_binding_scope_patterns.deinit(self.allocator);
+        self.checker.hoist_contextual_type_decls.deinit(self.allocator);
+        self.checker.hoist_contextual_type_decl_scope.deinit(self.allocator);
         self.checker.hoist_selected_bindings.deinit(self.allocator);
         self.checker.hoist_selected_exprs.deinit(self.allocator);
         self.checker.hoist_selected_pattern_validations.deinit(self.allocator);
@@ -16642,7 +16695,7 @@ fn ensureTypeDeclGenerated(
     decl_idx: CIR.Statement.Idx,
     env: *Env,
 ) std.mem.Allocator.Error!bool {
-    try self.noteTypeDeclReferenceForLocalProcedures(decl_idx);
+    try self.noteTypeDeclReference(decl_idx);
     switch (self.typeDeclGenerationState(decl_idx)) {
         .generated => return true,
         .generating => return switch (self.cir.store.getStatement(decl_idx)) {
@@ -22281,7 +22334,7 @@ fn checkPatternHelp(
         },
         // nominal //
         .nominal => |nominal| {
-            try self.noteTypeDeclReferenceForLocalProcedures(nominal.nominal_type_decl);
+            try self.noteTypeDeclReference(nominal.nominal_type_decl);
             // Check the backing pattern first
             const actual_backing_var = try self.checkPatternHelp(nominal.backing_pattern, ctx, env, out_var, valid);
 
@@ -24060,7 +24113,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
         },
         // nominal //
         .e_nominal => |nominal| {
-            try self.noteTypeDeclReferenceForLocalProcedures(nominal.nominal_type_decl);
+            try self.noteTypeDeclReference(nominal.nominal_type_decl);
             const prepared = try self.prepareNominalTypeUsage(
                 expr_var,
                 ModuleEnv.varFrom(nominal.nominal_type_decl),
@@ -24523,6 +24576,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
         .e_block => |block| {
             const hoist_scope = self.beginHoistLexicalScope();
             defer self.endHoistLexicalScope(hoist_scope);
+            try self.recordHoistContextualTypeDecls(block.stmts, expr_idx);
 
             // Check all statements in the block
             const stmt_result = try self.checkBlockStatements(block.stmts, env, expr_region, nested_expected.forStatement());
@@ -25469,7 +25523,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             }
             const did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, arg_expr_idxs);
 
-            try self.noteTypeDeclReferenceForLocalProcedures(method_call.type_dispatch_stmt);
+            try self.noteTypeDeclReference(method_call.type_dispatch_stmt);
             if (!did_err) {
                 const dispatcher_var = self.typeDispatchOwnerVar(method_call.type_dispatch_stmt);
                 const constraint_fn_var = try self.mkTypeMethodCallConstraint(
@@ -25496,7 +25550,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             }
         },
         .e_type_dispatch_call => |method_call| {
-            try self.noteTypeDeclReferenceForLocalProcedures(method_call.type_dispatch_stmt);
+            try self.noteTypeDeclReference(method_call.type_dispatch_stmt);
             const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
             for (arg_expr_idxs) |arg_expr_idx| {
                 self.checking_call_arg = true;
@@ -29678,7 +29732,7 @@ fn checkLocalAssociatedLookup(
     region: Region,
     env: *Env,
 ) Allocator.Error!void {
-    try self.noteTypeDeclReferenceForLocalProcedures(@enumFromInt(lookup.type_node_idx));
+    try self.noteTypeDeclReference(@enumFromInt(lookup.type_node_idx));
     try self.checkAssociatedLookupFromOwnerVar(
         expr_idx,
         expr_var,

@@ -311,6 +311,61 @@ test "hoist roots are not selected for static dispatch requiring where evidence"
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
+test "hoist roots are not selected for a closed call whose evidence is a local nominal's method" {
+    // `getit(Loc.L)` is closed, but its evidence is `Loc.get`, which exists
+    // only in the block that declares `Loc`; before, the call was hoisted
+    // out of that block. `Loc.L`'s backing tag alone is plain data.
+    var test_env = try TestEnv.init("Test",
+        \\getit : a -> Str where [a.get : a -> Str]
+        \\getit = |x| x.get()
+        \\
+        \\main = |arg| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "p"
+        \\    }
+        \\    x = getit(Loc.L)
+        \\    Str.concat(x, arg)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    for (test_env.checker.selectedHoistedRoots()) |root| {
+        try std.testing.expect(root.pattern == null);
+        try expectExprTag(&test_env, root.expr, .e_tag);
+    }
+}
+
+test "hoist roots are still selected beside a local nominal for expressions not referring to it" {
+    var test_env = try TestEnv.init("Test",
+        \\add_one = |n| n + 1.I64
+        \\
+        \\getit : a -> Str where [a.get : a -> Str]
+        \\getit = |x| x.get()
+        \\
+        \\main = |arg| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "p"
+        \\    }
+        \\    y = add_one(41.I64)
+        \\    x = getit(Loc.L)
+        \\    Str.concat(Str.concat(x, arg), y.to_str())
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    var binding_roots: usize = 0;
+    for (test_env.checker.selectedHoistedRoots()) |root| {
+        if (root.pattern == null) continue;
+        binding_roots += 1;
+        try expectExprTag(&test_env, root.expr, .e_call);
+    }
+    try std.testing.expectEqual(@as(usize, 1), binding_roots);
+}
+
 test "hoist roots are not selected for a boxed callable" {
     var test_env = try TestEnv.init("Test",
         \\make_probe = || Box.box(|value| value + 1.I64)

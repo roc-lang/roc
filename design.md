@@ -3813,7 +3813,15 @@ captures are themselves compile-time-known. Rejected dependencies include
 function arguments, runtime pattern binders, mutable locals, runtime control
 decisions, effectful calls, host calls, platform requirements whose values are
 not available during checking finalization, and any static dispatch whose
-checked plan does not identify a pure compile-time-evaluable operation.
+checked plan does not identify a pure compile-time-evaluable operation. A
+nominal type declared by a block inside a function body, and every method it
+declares, belongs to that block, exactly as it does for local-function
+promotion: an expression inside the block that refers to the type (a
+construction, a pattern, an annotation, an associated lookup) is not
+top-level-equivalent, so no root is selected between the declaring block and
+the reference. The block itself carries the declaration and may still be a
+root. This keeps a closed call such as `getit(Loc.L)`, whose evidence is the
+block's `Loc.get`, from leaving the block that declares that method.
 Low-level operations may participate only through explicit checked purity and
 totality metadata; they must never be allowed by whitelist, name, or backend
 knowledge.

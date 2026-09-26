@@ -293,7 +293,9 @@ pub const Constants = struct {
     /// 122: A widened alias instance meeting a structure no longer joins the
     ///      structure's class; which spelling a merged class keeps is
     ///      presentation only.
-    pub const CACHE_VERSION = 123;
+    /// 124: An expression inside a block that refers to a nominal type the
+    ///      block declares is not selected as a hoisted root.
+    pub const CACHE_VERSION = 124;
 };
 
 /// Configuration for the Roc cache system.
