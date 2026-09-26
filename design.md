@@ -2411,8 +2411,12 @@ a misclassified spine (a shared formal taken for `.declared`) would break
 exactly that, which is why `Check.aliasInstanceIsFaithful` compares an
 instance's backing with the body under its arguments STRUCTURALLY, with
 identical leaves, rather than by unification, which accepts a backing more
-specific than the body. The comparison covers the whole type: tag unions and
-records down their full extension chains (a merge can flatten either), each
+specific than the body. The harness answers for every instance of an alias
+the checked module declares; an instance of an imported alias answers null,
+since that declaration's variables live in the declaring module's store,
+whose own run covers the alias there. The comparison covers the whole type:
+tag unions and records down their full extension chains (a merge can flatten
+either), matching each row entry at most once, each
 record field's presence (two solved kinds must be equal, a field with no
 presence variable being required; unsolved presence variables are leaves),
 and each function's effect dependencies. The checker asserts none of this at
@@ -2429,8 +2433,15 @@ structure is related through its backing, and the two stay separate views of
 one type; a merge of two classes keeps one side's content. So a type, a
 definition's included, may display in either spelling of the same type: an
 alias (`Try(U64, Wrap([Other, Widened]))`) or its spelled-out backing
-(`Try(U64, [HostErr(U64), Other, Widened])`). No verdict depends on the choice,
-since every instance is faithful, and no later stage reads alias spelling.
+(`Try(U64, [HostErr(U64), Other, Widened])`). No verdict depends on the choice:
+every instance is faithful, and no walk that decides a verdict counts alias
+layers or stops at a depth ("Three Syntactic Walks"; the result-row twin walk
+under Row Subsumption), so an argument spelled through any number of alias
+layers is decided as its inline spelling is ("spelling independence" tests in
+`type_checking_integration.zig`). Checked module data does keep the spelling:
+checked type equality in its `.named` mode compares an alias by its name and
+arguments, so the two spellings are distinct checked roots, while every
+post-check stage reads the backing.
 
 A merge never makes an alias its own backing
 (`contentForMerge`): when the backing of the alias view being merged is one of
@@ -2500,7 +2511,9 @@ instance is its declaration's body under all its arguments" (the faithfulness
 harness `Check.aliasInstanceIsFaithful`, whose accept-side programs are
 also checked to have no errors), "the faithfulness harness compares records
 down their chains and by field presence", "the faithfulness harness compares
-a function's effect dependencies", `unify_test.zig` ("a hidden argument
+a function's effect dependencies", "the faithfulness harness matches each row
+entry once", "alias instances are faithful on both sides of an import",
+`unify_test.zig` ("a hidden argument
 carries a widened row into the relation", "an open hidden slot meets a closed
 one through the arguments", "a declared argument the body does not use is
 related exactly", "a flex never takes an alias view whose backing is that
@@ -2518,7 +2531,12 @@ its alias" and "... a re-opened alias application ...", and the CLI fixtures
 widening its error row on every backend while its input keeps the declared
 row), `test/echo/boxy_alias_open_row_retag.roc`,
 `test/echo/boxy_alias_layers_retag.roc` (two alias layers over an opened row,
-and aliases over a transparent nominal and a box), the dispatch evidence test
+and aliases over a transparent nominal and a box, whose own layouts equal
+their payloads' there, so it cannot tell the two readings apart), the boxy
+unit test "a descriptor template describes an alias by the first
+representation under its alias layers" (a transparent nominal and a box
+whose descriptor payload layouts differ from their payloads'), the dispatch
+evidence test
 "an evidence path reaches a declared alias argument at its declared index,
 before the hidden ones", `test/bump/alias_hidden_args_*`
 and the checked-module cache round trip.

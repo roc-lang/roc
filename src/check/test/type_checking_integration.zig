@@ -11006,6 +11006,98 @@ test "check type - hidden alias arguments - the faithfulness harness compares a 
     }
 }
 
+test "check type - hidden alias arguments - the faithfulness harness matches each row entry once" {
+    // `T(e) : [X, ..e]` under `e = [X]` is the chain `[X]` then `[X]`. A
+    // backing listing `X` and `Y` over the same tail has as many tags, and
+    // every tag of the body finds an `X` in it, but it is not the same row:
+    // each entry matches once.
+    const source =
+        \\T(e) : [X, ..e]
+        \\
+        \\t : T([Z])
+        \\t = X
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    const types_store = &test_env.module_env.types;
+    const decl_stmt = try onlyAliasDeclStatement(&test_env);
+    const decl_alias = types_store.resolveVar(@enumFromInt(decl_stmt)).desc.content.alias;
+    try std.testing.expectEqual(@as(usize, 1), types_store.sliceAliasArgs(decl_alias).len);
+    const body = types_store.resolveVar(types_store.getAliasBackingVar(decl_alias)).desc.content.structure.tag_union;
+    const x_name = types_store.getTagsSlice(body.tags).items(.name)[0];
+    const y_name = try test_env.module_env.insertIdent(base.Ident.for_text("Y"));
+    const no_args = try types_store.appendVars(&.{});
+
+    const tail = try types_store.freshFromContent(.{ .structure = .empty_tag_union });
+    const arg = try types_store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try types_store.appendTags(&.{.{ .name = x_name, .args = no_args }}),
+        .ext = tail,
+    } } });
+    const faithful = try types_store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try types_store.appendTags(&.{.{ .name = x_name, .args = no_args }}),
+        .ext = arg,
+    } } });
+    const doubled = try types_store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try types_store.appendTags(&.{ .{ .name = x_name, .args = no_args }, .{ .name = y_name, .args = no_args } }),
+        .ext = tail,
+    } } });
+    const backings = [_]struct { backing: types.Var, faithful: bool }{
+        .{ .backing = faithful, .faithful = true },
+        .{ .backing = doubled, .faithful = false },
+    };
+    for (backings) |case| {
+        const instance = try aliasInstanceWithBacking(&test_env, &.{arg}, case.backing);
+        try std.testing.expectEqual(@as(?bool, case.faithful), try test_env.checker.aliasInstanceIsFaithful(instance));
+    }
+}
+
+test "check type - hidden alias arguments - alias instances are faithful on both sides of an import" {
+    // The harness answers for aliases the checked module declares, so each
+    // module is checked in its own store: `Lib`'s instances in `Lib`, and
+    // `Main`'s own aliases, whose backings hold `Lib`'s instances, in `Main`.
+    const lib_source =
+        \\module [Base, Fwd, fwd]
+        \\
+        \\Base : [Other]
+        \\
+        \\Fwd(e) : e -> e
+        \\
+        \\fwd : Fwd(Base)
+        \\fwd = |x| x
+    ;
+    var lib_env = try TestEnv.init("Lib", lib_source);
+    defer lib_env.deinit();
+    // The `module` header draws only a canonicalization deprecation
+    // warning; checking reports nothing.
+    try std.testing.expectEqual(@as(usize, 0), lib_env.checker.problems.problems.items.len);
+    try expectEveryAliasInstanceFaithful(&lib_env);
+
+    const main_source =
+        \\import Lib
+        \\
+        \\Wrap(e) : Lib.Fwd([A, ..e])
+        \\
+        \\Both : { base : Lib.Base, wrap : Wrap([B]) }
+        \\
+        \\mk : Wrap([B])
+        \\mk = |x| x
+        \\
+        \\both : Both
+        \\both = { base: Other, wrap: mk }
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| mk(x)
+        \\
+        \\other : [Other] -> [Aborted, Other]
+        \\other = |x| Lib.fwd(x)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", main_source, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertNoErrors();
+    try expectEveryAliasInstanceFaithful(&main_env);
+}
+
 /// Every alias instance reachable from any expression's type in the module
 /// passes `Check.aliasInstanceIsFaithful`.
 fn expectEveryAliasInstanceFaithful(test_env: *TestEnv) (std.mem.Allocator.Error || error{TestUnexpectedResult})!void {

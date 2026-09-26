@@ -4,7 +4,10 @@
 # from either layer's own erased storage would list none of the row's tags,
 # and the re-tag into `[Aborted, Other]` would read `Aborted`, which sorts
 # first. `Shade : Color` and `Held : Box(Shade)` are aliases over a
-# transparent nominal and over a box, which keep their own descriptors.
+# transparent nominal and over a box, which keep their own descriptors. Here
+# those wrappers' descriptor payloads equal their payloads', so this half pins
+# the output only; the boxy unit test "a descriptor template describes an
+# alias by the first representation under its alias layers" pins the choice.
 Inner : [Other]
 Outer : Inner
 

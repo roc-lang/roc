@@ -47901,3 +47901,54 @@ fn dummyRootRequest() checked.RootRequest {
         .exposure = .private,
     };
 }
+
+test "a descriptor template describes an alias by the first representation under its alias layers" {
+    // An alias over a transparent nominal, and an alias over a box, each
+    // stored the same way as what it wraps. The transparent nominal (no
+    // declared fields, no backing substitutions) and the box (payload stored
+    // the same way) are what `descriptorIdentityRep` would walk through; the
+    // alias is described by the nominal's and the box's own descriptor
+    // payload layout instead, which here differ from their payloads'.
+    const gpa = std.testing.allocator;
+    const wrappers = [_]struct { kind: Plan.RepresentationKind, role: Plan.ChildRole }{
+        .{ .kind = .{ .nominal = .transparent }, .role = .nominal_backing },
+        .{ .kind = .box, .role = .box_payload },
+    };
+    for (wrappers) |wrapper| {
+        var plan = Plan.ProgramPlan.init(gpa);
+        defer plan.deinit();
+        // 0: the alias; 1: the wrapper; 2: the wrapper's payload.
+        try plan.children.appendSlice(gpa, &.{
+            .{ .role = .alias_backing, .source_type = undefined, .rep = @enumFromInt(fixtureTableIndex(1)) },
+            .{ .role = wrapper.role, .source_type = undefined, .rep = @enumFromInt(fixtureTableIndex(2)) },
+        });
+        try plan.representations.appendSlice(gpa, &.{
+            .{ .source_type = undefined, .kind = .alias, .children = .{ .start = 0, .len = 1 } },
+            .{ .source_type = undefined, .kind = wrapper.kind, .children = .{ .start = 1, .len = 1 } },
+            .{ .source_type = undefined, .kind = .tag_union },
+        });
+        var rep_layouts = [_]Layouts.RepLayouts{
+            .{ .worker = .{ .concrete = .u64 } },
+            .{ .worker = .{ .concrete = .u64 }, .descriptor_payload_layout = .str },
+            .{ .worker = .{ .concrete = .u64 }, .descriptor_payload_layout = .opaque_ptr },
+        };
+        const layout_plan = Layouts.LayoutPlan{
+            .allocator = gpa,
+            .rep_layouts = &rep_layouts,
+            .worker_layouts = &.{},
+            .worker_layout_values = .empty,
+            .roots = .empty,
+            .root_layout_values = .empty,
+            .dynamic_storage_layout = .opaque_ptr,
+            .generated_evidence = undefined,
+        };
+        var result = try LirProgram.Result.init(gpa, .native);
+        defer result.deinit();
+        var builder = ProcedureBuilder.init(gpa, undefined, &plan, &layout_plan, undefined, &result, .{});
+        defer builder.deinit();
+
+        // Stepping through the wrapper would describe the alias by `.opaque_ptr`.
+        try std.testing.expectEqual(@as(Plan.TypeRepId, @enumFromInt(fixtureTableIndex(2))), builder.descriptorIdentityRep(@enumFromInt(fixtureTableIndex(0))));
+        try std.testing.expectEqual(layout.Idx.str, builder.descriptorTemplatePayloadLayoutForRep(@enumFromInt(fixtureTableIndex(0))));
+    }
+}

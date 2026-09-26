@@ -30949,7 +30949,8 @@ fn beginCommitProbe(self: *Self, env: *Env) std.mem.Allocator.Error!CommitProbe 
 /// structural with identical leaves (`typesStructurallyIdentical`), not a
 /// unification, which would accept a backing more specific than its body
 /// under its arguments. Returns null for an alias this module did not
-/// declare.
+/// declare: that declaration's variables live in the declaring module's
+/// store, whose own run of this harness covers its instances there.
 pub fn aliasInstanceIsFaithful(self: *Self, instance_var: Var) Allocator.Error!?bool {
     const instance = switch (self.types.resolveVar(instance_var).desc.content) {
         .alias => |alias| alias,
@@ -31011,6 +31012,11 @@ fn typesStructurallyIdentical(self: *Self, a: Var, b: Var) Allocator.Error!bool 
     defer a_fields.deinit(self.gpa);
     var b_fields: std.ArrayListUnmanaged(types_mod.RecordField) = .empty;
     defer b_fields.deinit(self.gpa);
+    // Which right-hand row entries a left-hand one already matched: each
+    // matches once, so a row listing a label twice is not the row listing
+    // two labels.
+    var b_consumed: std.ArrayListUnmanaged(bool) = .empty;
+    defer b_consumed.deinit(self.gpa);
     try pairs.append(self.gpa, .{ a, b });
     while (pairs.pop()) |pair| {
         const left = self.types.resolveVar(self.aliasBackingThrough(pair[0]));
@@ -31038,10 +31044,14 @@ fn typesStructurallyIdentical(self: *Self, a: Var, b: Var) Allocator.Error!bool 
                 const left_tail = try self.collectRowTags(left.var_, &a_tags);
                 const right_tail = try self.collectRowTags(right.var_, &b_tags);
                 if (a_tags.items.len != b_tags.items.len) return false;
+                b_consumed.clearRetainingCapacity();
+                try b_consumed.appendNTimes(self.gpa, false, b_tags.items.len);
                 for (a_tags.items) |left_tag| {
-                    const right_tag = for (b_tags.items) |candidate| {
-                        if (candidate.name.eql(left_tag.name)) break candidate;
+                    const right_index = for (b_tags.items, b_consumed.items, 0..) |candidate, consumed, index| {
+                        if (!consumed and candidate.name.eql(left_tag.name)) break index;
                     } else return false;
+                    b_consumed.items[right_index] = true;
+                    const right_tag = b_tags.items[right_index];
                     const left_args = self.types.sliceVars(left_tag.args);
                     const right_args = self.types.sliceVars(right_tag.args);
                     if (left_args.len != right_args.len) return false;
@@ -31096,10 +31106,14 @@ fn typesStructurallyIdentical(self: *Self, a: Var, b: Var) Allocator.Error!bool 
                 const left_tail = try self.collectRecordFields(left.var_, &a_fields);
                 const right_tail = try self.collectRecordFields(right.var_, &b_fields);
                 if (a_fields.items.len != b_fields.items.len) return false;
+                b_consumed.clearRetainingCapacity();
+                try b_consumed.appendNTimes(self.gpa, false, b_fields.items.len);
                 for (a_fields.items) |left_field| {
-                    const right_field = for (b_fields.items) |candidate| {
-                        if (candidate.name.eql(left_field.name)) break candidate;
+                    const right_index = for (b_fields.items, b_consumed.items, 0..) |candidate, consumed, index| {
+                        if (!consumed and candidate.name.eql(left_field.name)) break index;
                     } else return false;
+                    b_consumed.items[right_index] = true;
+                    const right_field = b_fields.items[right_index];
                     try pairs.append(self.gpa, .{ left_field.presence.typeVar(), right_field.presence.typeVar() });
                     switch (self.solvedFieldPresence(left_field.presence)) {
                         .kind => |left_kind| switch (self.solvedFieldPresence(right_field.presence)) {
