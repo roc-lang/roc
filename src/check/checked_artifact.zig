@@ -4659,6 +4659,7 @@ pub const CheckedTypeStore = struct {
         errdefer source_schemes.deinit();
         var scheme_writer = canonical_type_keys.SchemeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst());
         defer scheme_writer.deinit();
+        scheme_writer.retainComposedKeys();
         var active = try CheckedSourceTypeRoots.init(allocator, module);
         errdefer active.deinit();
         var local_type_declarations = try LocalTypeDeclarationIndex.init(allocator, module, source_nodes);
@@ -7193,7 +7194,7 @@ fn checkedTypePayloadKeyBuild(
     defer builder.deinit();
     try builder.writePayloadBuild(payload);
     return .{
-        .key = .{ .bytes = builder.hasher.finalResult() },
+        .key = builder.digestKey(),
         .contains_identity_variables = builder.identity_variables.count() != 0,
     };
 }
@@ -7676,7 +7677,7 @@ fn substitutedCheckedTypeKeyInfo(
     defer builder.deinit();
     try builder.writeType(source);
     return .{
-        .key = .{ .bytes = builder.hasher.finalResult() },
+        .key = builder.digestKey(),
         .contains_identity_variables = builder.identity_variables.count() != 0,
     };
 }
@@ -7687,7 +7688,15 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
     store: *const CheckedTypeStore,
     formals: []const CheckedTypeId,
     actuals: []const CheckedTypeId,
-    hasher: TypeDigestHasher,
+    /// The encoding in progress; see `canonical_type_keys.Walk.buf`.
+    buf: std.ArrayList(u8) = .empty,
+    /// Content nodes entered by `writeType` and not yet finished. The node a
+    /// key was requested for is at depth zero and is never replaced by a
+    /// child-key reference.
+    depth: u32 = 0,
+    identity_tokens: u32 = 0,
+    cycle_tokens: u32 = 0,
+    composed_keys: collections.DenseMap(CheckedTypeId, canonical.CanonicalTypeKey),
     field_rank_scratch: base.TextRankCache,
     tag_rank_scratch: base.TextRankCache,
     field_ranks: []const u32 = &.{},
@@ -7721,7 +7730,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             .store = store,
             .formals = formals,
             .actuals = actuals,
-            .hasher = TypeDigestHasher.init(),
+            .composed_keys = collections.DenseMap(CheckedTypeId, canonical.CanonicalTypeKey).init(allocator),
             .field_rank_scratch = base.TextRankCache.init(allocator),
             .tag_rank_scratch = base.TextRankCache.init(allocator),
             .active = collections.DenseMap(CheckedTypeId, u32).init(allocator),
@@ -7736,6 +7745,12 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         self.tag_rank_scratch.deinit();
         self.identity_variables.deinit();
         self.active.deinit();
+        self.composed_keys.deinit();
+        self.buf.deinit(self.allocator);
+    }
+
+    fn digestKey(self: *const SubstitutedCheckedTypeKeyBuilder) canonical.CanonicalTypeKey {
+        return .{ .bytes = TypeDigestHasher.hash(self.buf.items) };
     }
 
     fn substitutedRoot(self: *const SubstitutedCheckedTypeKeyBuilder, source: CheckedTypeId) CheckedTypeId {
@@ -7768,16 +7783,39 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             => {},
         }
 
+        const nested = self.depth != 0;
+        if (nested) {
+            if (self.composed_keys.get(id)) |key| {
+                try canonical_type_keys.writeChildKeyReference(&self.buf, self.allocator, key);
+                return;
+            }
+        }
+
         if (self.active.get(id)) |slot| {
-            self.writeTag("cycle");
-            self.writeU32(slot);
+            self.cycle_tokens += 1;
+            try self.writeTag("cycle");
+            try self.writeU32(slot);
             return;
         }
 
         const slot: u32 = @intCast(self.active.count());
         try self.active.put(id, slot);
+        const start = self.buf.items.len;
+        const identity_tokens = self.identity_tokens;
+        const cycle_tokens = self.cycle_tokens;
+        self.depth += 1;
         try self.writePayload(self.store.payload(@enumFromInt(raw)));
+        self.depth -= 1;
         _ = self.active.remove(id);
+
+        // Mirrors `canonical_type_keys.Walk.finishNode`: a range without
+        // identity or cycle tokens is context-free and composes.
+        if (identity_tokens != self.identity_tokens or cycle_tokens != self.cycle_tokens) return;
+        const key: canonical.CanonicalTypeKey = .{ .bytes = TypeDigestHasher.hash(self.buf.items[start..]) };
+        try self.composed_keys.put(id, key);
+        if (!nested) return;
+        self.buf.items.len = start;
+        try canonical_type_keys.writeChildKeyReference(&self.buf, self.allocator, key);
     }
 
     fn writeIdentityVariable(
@@ -7787,75 +7825,78 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         name: ?[]const u8,
         constraints: []const CheckedStaticDispatchConstraint,
     ) Allocator.Error!void {
+        self.identity_tokens += 1;
         if (self.identity_variables.get(root)) |slot| {
-            self.writeTag("identity_var_ref");
-            self.writeU32(slot);
+            try self.writeTag("identity_var_ref");
+            try self.writeU32(slot);
             return;
         }
 
         const slot: u32 = @intCast(self.identity_variables.count());
         try self.identity_variables.put(root, slot);
-        self.writeTag(tag);
-        self.writeU32(@intFromEnum(root));
-        self.writeU32(slot);
-        self.writeBool(name != null);
-        if (name) |text| self.writeBytes(text);
+        try self.writeTag(tag);
+        try self.writeU32(@intFromEnum(root));
+        try self.writeU32(slot);
+        try self.writeBool(name != null);
+        if (name) |text| try self.writeBytes(text);
         try self.writeConstraints(constraints);
     }
 
     fn writePayload(self: *SubstitutedCheckedTypeKeyBuilder, payload: CheckedTypePayload) Allocator.Error!void {
         switch (payload) {
             .pending => checkedArtifactInvariant("checked type substitution key reached pending payload", .{}),
-            .err => self.writeTag("err"),
+            .err => try self.writeTag("err"),
             .flex,
             .rigid,
             => checkedArtifactInvariant("checked type substitution key reached identity payload without root identity", .{}),
             .alias => |alias| {
-                self.writeTag("alias");
-                self.writeNamedSourceIdentity(alias.origin_module, alias.name, alias.source_decl);
-                self.writeCheckedModuleOwner(alias.owner_module);
+                try self.writeTag("alias");
+                try self.writeNamedSourceIdentity(alias.origin_module, alias.name, alias.source_decl);
+                try self.writeCheckedModuleOwner(alias.owner_module);
                 try self.writeType(alias.backing);
-                self.writeU32(@intCast(alias.args.len));
+                try self.writeU32(@intCast(alias.args.len));
                 for (alias.args) |arg| try self.writeType(arg);
             },
             .record => |record| try self.writeNormalizedRecordPayload(record.fields, record.ext),
             .tuple => |tuple| {
-                self.writeTag("tuple");
-                self.writeU32(@intCast(tuple.len));
+                try self.writeTag("tuple");
+                try self.writeU32(@intCast(tuple.len));
                 for (tuple) |elem| try self.writeType(elem);
             },
             .nominal => |nominal| {
-                self.writeTag("nominal");
-                self.writeNamedSourceIdentity(nominal.origin_module, nominal.name, nominal.source_decl);
-                self.writeCheckedModuleOwner(nominal.owner_module);
-                self.writeBool(nominal.is_opaque);
-                self.writeU32(@intCast(nominal.args.len));
+                try self.writeTag("nominal");
+                try self.writeNamedSourceIdentity(nominal.origin_module, nominal.name, nominal.source_decl);
+                try self.writeCheckedModuleOwner(nominal.owner_module);
+                try self.writeBool(nominal.is_opaque);
+                try self.writeU32(@intCast(nominal.args.len));
                 for (nominal.args) |arg| try self.writeType(arg);
-                self.writeU32(@intCast(nominal.padding_field_types.len));
+                try self.writeU32(@intCast(nominal.padding_field_types.len));
                 for (nominal.padding_field_types) |padding_type| try self.writeType(padding_type);
-                self.writeDeclaredFields(nominal.declared_fields);
+                try self.writeDeclaredFields(nominal.declared_fields);
             },
             .function => |func| {
                 switch (finalizedFunctionKind(func.kind)) {
-                    .pure => self.writeTag("fn_pure"),
-                    .effectful => self.writeTag("fn_effectful"),
+                    .pure => try self.writeTag("fn_pure"),
+                    .effectful => try self.writeTag("fn_effectful"),
                     .unbound => unreachable,
                 }
-                self.writeBool(try self.typeSliceContainsIdentityVariables(func.args) or
+                try self.writeBool(try self.typeSliceContainsIdentityVariables(func.args) or
                     try self.typeContainsIdentityVariables(func.ret));
-                self.writeU32(@intCast(func.args.len));
+                try self.writeU32(@intCast(func.args.len));
                 for (func.args) |arg| try self.writeType(arg);
                 try self.writeType(func.ret);
             },
-            .empty_record => self.writeTag("empty_record"),
+            .empty_record => try self.writeTag("empty_record"),
             .tag_union => |tag_union| try self.writeNormalizedTagUnionPayload(tag_union.tags, tag_union.ext),
-            .empty_tag_union => self.writeTag("[]"),
+            .empty_tag_union => try self.writeTag("[]"),
         }
     }
 
     /// Like `writePayload`, but for a build-form payload (uncommitted, with
     /// build-form tags). Produces identical key bytes; only `tag_union` differs.
     fn writePayloadBuild(self: *SubstitutedCheckedTypeKeyBuilder, payload: CheckedTypePayloadBuild) Allocator.Error!void {
+        self.depth += 1;
+        defer self.depth -= 1;
         switch (payload) {
             .tag_union => |tag_union| {
                 var tags = std.ArrayList(TagForKey).empty;
@@ -7945,24 +7986,24 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             try base.TextRankCache.sortByRank(RecordFieldForKey, fields.items, &self.field_sort_scratch, self.allocator, self, recordFieldForKeyRank);
         }
         if (tail == null and fields.items.len == 0) {
-            self.writeTag("empty_record");
+            try self.writeTag("empty_record");
             return;
         }
 
-        self.writeTag("record");
-        self.writeU32(@intCast(fields.items.len));
+        try self.writeTag("record");
+        try self.writeU32(@intCast(fields.items.len));
         for (fields.items, 0..) |field, index| {
             if (index > 0 and self.names.recordFieldLabelTextEql(fields.items[index - 1].name, field.name)) {
                 checkedArtifactInvariant("checked type substitution key row normalization found duplicate record fields", .{});
             }
-            self.writeBytes(self.names.recordFieldLabelText(field.name));
+            try self.writeBytes(self.names.recordFieldLabelText(field.name));
             try self.writeCheckedFieldKind(field.kind);
             try self.writeType(field.ty);
         }
         if (tail) |tail_id| {
             try self.writeType(tail_id);
         } else {
-            self.writeTag("empty_record");
+            try self.writeTag("empty_record");
         }
     }
 
@@ -8038,24 +8079,24 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             try base.TextRankCache.sortByRank(TagForKey, tags.items, &self.tag_sort_scratch, self.allocator, self, tagForKeyRank);
         }
         if (tail == null and tags.items.len == 0) {
-            self.writeTag("[]");
+            try self.writeTag("[]");
             return;
         }
 
-        self.writeTag("tag_union");
-        self.writeU32(@intCast(tags.items.len));
+        try self.writeTag("tag_union");
+        try self.writeU32(@intCast(tags.items.len));
         for (tags.items, 0..) |tag, index| {
             if (index > 0 and self.names.tagLabelTextEql(tags.items[index - 1].name, tag.name)) {
                 checkedArtifactInvariant("checked type substitution key row normalization found duplicate tags", .{});
             }
-            self.writeBytes(self.names.tagLabelText(tag.name));
-            self.writeU32(@intCast(tag.args.len));
+            try self.writeBytes(self.names.tagLabelText(tag.name));
+            try self.writeU32(@intCast(tag.args.len));
             for (tag.args) |arg| try self.writeType(arg);
         }
         if (tail) |tail_id| {
             try self.writeType(tail_id);
         } else {
-            self.writeTag("[]");
+            try self.writeTag("[]");
         }
     }
 
@@ -8099,16 +8140,16 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         self: *SubstitutedCheckedTypeKeyBuilder,
         constraints: []const CheckedStaticDispatchConstraint,
     ) Allocator.Error!void {
-        self.writeU32(@intCast(constraints.len));
+        try self.writeU32(@intCast(constraints.len));
         for (constraints) |constraint| {
-            self.writeBytes(self.names.methodNameText(constraint.fn_name));
+            try self.writeBytes(self.names.methodNameText(constraint.fn_name));
             try self.writeType(constraint.fn_ty);
-            self.writeBytes(@tagName(constraint.origin));
-            self.writeBool(constraint.binopNegated());
+            try self.writeBytes(@tagName(constraint.origin));
+            try self.writeBool(constraint.binopNegated());
             const maybe_num_literal = constraint.numeralInfo();
-            self.writeBool(maybe_num_literal != null);
+            try self.writeBool(maybe_num_literal != null);
             if (maybe_num_literal) |num_literal| {
-                self.hasher.update(&num_literal.keyBytes());
+                try self.buf.appendSlice(self.allocator, &num_literal.keyBytes());
             }
         }
     }
@@ -8116,34 +8157,39 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
     fn writeDeclaredFields(
         self: *SubstitutedCheckedTypeKeyBuilder,
         fields: []const CheckedDeclaredField,
-    ) void {
-        self.writeU32(@intCast(fields.len));
+    ) Allocator.Error!void {
+        try self.writeU32(@intCast(fields.len));
         for (fields) |field| {
             switch (field) {
                 .named => |name| {
-                    self.writeTag("named");
-                    self.writeBytes(self.names.recordFieldLabelText(name));
+                    try self.writeTag("named");
+                    try self.writeBytes(self.names.recordFieldLabelText(name));
                 },
                 .padding => |index| {
-                    self.writeTag("padding");
-                    self.writeU32(index);
+                    try self.writeTag("padding");
+                    try self.writeU32(index);
                 },
             }
         }
     }
 
-    fn writeTag(self: *SubstitutedCheckedTypeKeyBuilder, comptime tag: []const u8) void {
-        self.hasher.updateTag(tag);
+    fn writeTag(self: *SubstitutedCheckedTypeKeyBuilder, comptime tag: []const u8) Allocator.Error!void {
+        const encoded = comptime blk: {
+            var bytes: [4 + tag.len]u8 = undefined;
+            std.mem.writeInt(u32, bytes[0..4], tag.len, .little);
+            @memcpy(bytes[4..], tag);
+            break :blk bytes;
+        };
+        try self.buf.appendSlice(self.allocator, &encoded);
     }
 
-    fn writeBytes(self: *SubstitutedCheckedTypeKeyBuilder, bytes: []const u8) void {
-        self.writeU32(@intCast(bytes.len));
-        self.hasher.update(bytes);
+    fn writeBytes(self: *SubstitutedCheckedTypeKeyBuilder, bytes: []const u8) Allocator.Error!void {
+        try self.writeU32(@intCast(bytes.len));
+        try self.buf.appendSlice(self.allocator, bytes);
     }
 
-    fn writeBool(self: *SubstitutedCheckedTypeKeyBuilder, value: bool) void {
-        const byte: u8 = if (value) 1 else 0;
-        self.hasher.update(std.mem.asBytes(&byte));
+    fn writeBool(self: *SubstitutedCheckedTypeKeyBuilder, value: bool) Allocator.Error!void {
+        try self.buf.append(self.allocator, if (value) 1 else 0);
     }
 
     fn writeCheckedFieldKind(
@@ -8153,49 +8199,46 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         // Keep this byte-for-byte aligned with canonical_type_keys.zig's
         // `writeFieldPresenceForKey`.
         switch (kind.tag) {
-            .required => self.writeBool(false),
-            .optional => self.writeTag("presence_optional_field"),
+            .required => try self.writeBool(false),
+            .optional => try self.writeTag("presence_optional_field"),
             .defaulted => {
                 const origin_module = kind.default.origin() orelse
                     checkedArtifactInvariant("checked defaulted field kind carried no default identity", .{});
-                self.writeTag("field_default");
-                self.writeBytes(self.names.moduleIdentityBytes(origin_module));
-                self.writeU32(kind.default.expr_node);
+                try self.writeTag("field_default");
+                try self.writeBytes(self.names.moduleIdentityBytes(origin_module));
+                try self.writeU32(kind.default.expr_node);
             },
             .undetermined => {
                 const variable = kind.undeterminedVariable() orelse
                     checkedArtifactInvariant("checked undetermined field kind carried no variable identity", .{});
-                self.writeTag("presence_variable");
+                try self.writeTag("presence_variable");
                 try self.writeType(variable);
             },
-            .err => self.writeTag("err"),
+            .err => try self.writeTag("err"),
         }
     }
 
-    fn writeOptionalU32(self: *SubstitutedCheckedTypeKeyBuilder, value: ?u32) void {
-        self.writeBool(value != null);
-        if (value) |v| self.writeU32(v);
+    fn writeOptionalU32(self: *SubstitutedCheckedTypeKeyBuilder, value: ?u32) Allocator.Error!void {
+        try self.writeBool(value != null);
+        if (value) |v| try self.writeU32(v);
     }
 
-    fn writeNamedSourceIdentity(self: *SubstitutedCheckedTypeKeyBuilder, origin_module: canonical.ModuleIdentityId, name: canonical.TypeNameId, source_decl: ?u32) void {
-        self.writeBytes(self.names.moduleIdentityBytes(origin_module));
-        self.writeOptionalU32(source_decl);
+    fn writeNamedSourceIdentity(self: *SubstitutedCheckedTypeKeyBuilder, origin_module: canonical.ModuleIdentityId, name: canonical.TypeNameId, source_decl: ?u32) Allocator.Error!void {
+        try self.writeBytes(self.names.moduleIdentityBytes(origin_module));
+        try self.writeOptionalU32(source_decl);
         if (source_decl == null) {
-            self.writeBytes(self.names.typeNameText(name));
+            try self.writeBytes(self.names.typeNameText(name));
         }
     }
 
-    fn writeCheckedModuleOwner(self: *SubstitutedCheckedTypeKeyBuilder, owner_module: ModuleId) void {
-        self.writeBytes(owner_module.bytes[0..]);
+    fn writeCheckedModuleOwner(self: *SubstitutedCheckedTypeKeyBuilder, owner_module: ModuleId) Allocator.Error!void {
+        try self.writeBytes(owner_module.bytes[0..]);
     }
 
-    fn writeU32(self: *SubstitutedCheckedTypeKeyBuilder, value: u32) void {
-        self.hasher.update(&.{
-            @as(u8, @truncate(value)),
-            @as(u8, @truncate(value >> 8)),
-            @as(u8, @truncate(value >> 16)),
-            @as(u8, @truncate(value >> 24)),
-        });
+    fn writeU32(self: *SubstitutedCheckedTypeKeyBuilder, value: u32) Allocator.Error!void {
+        var bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &bytes, value, .little);
+        try self.buf.appendSlice(self.allocator, &bytes);
     }
 };
 
@@ -8570,11 +8613,13 @@ const CheckedSourceTypeRoots = struct {
     },
 
     fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!CheckedSourceTypeRoots {
+        var key_writer = canonical_type_keys.TypeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst());
+        key_writer.retainComposedKeys();
         return .{
             .roots = collections.DenseMap(Var, CheckedTypeId).init(allocator),
             .scratch = .{
                 .graph_analysis = try SourceTypeGraphAnalysis.init(allocator, @intCast(module.typeStoreConst().len())),
-                .key_writer = canonical_type_keys.TypeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst()),
+                .key_writer = key_writer,
             },
         };
     }
@@ -9464,6 +9509,50 @@ test "required record canonical keys agree across solver and checked representat
     const checked_record_key = checked_store.roots.items[@intFromEnum(checked_record)].key;
 
     try std.testing.expectEqualSlices(u8, &source_record_key.bytes, &checked_record_key.bytes);
+}
+
+test "nested closed record canonical keys agree across solver and checked representations" {
+    const allocator = std.testing.allocator;
+
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
+    const outer_name = try env.insertIdent(Ident.for_text("outer"));
+    const inner_name = try env.insertIdent(Ident.for_text("inner"));
+
+    var source_store = try types.Store.initCapacity(allocator, 32, 16);
+    defer source_store.deinit();
+    const source_empty = try source_store.freshFromContent(.{ .structure = .empty_record });
+    const source_inner = try source_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try source_store.appendRecordFields(&.{.{ .name = inner_name, .presence = .required(source_empty) }}),
+        .ext = try source_store.freshFromContent(.{ .structure = .empty_record }),
+    } } });
+    const source_outer = try source_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try source_store.appendRecordFields(&.{.{ .name = outer_name, .presence = .required(source_inner) }}),
+        .ext = try source_store.freshFromContent(.{ .structure = .empty_record }),
+    } } });
+    const source_key = try canonical_type_keys.fromVar(allocator, &source_store, &env, source_outer);
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    var checked_store = CheckedTypeStore{};
+    defer checked_store.deinit(allocator);
+    const checked_empty = try appendExplicitCheckedTypePayload(allocator, &names, &checked_store, .empty_record);
+    const checked_inner_fields = try allocator.alloc(CheckedRecordField, 1);
+    checked_inner_fields[0] = .{ .name = try names.internRecordFieldLabel("inner"), .ty = checked_empty };
+    const checked_inner = try appendExplicitCheckedTypePayload(allocator, &names, &checked_store, .{ .record = .{
+        .fields = checked_inner_fields,
+        .ext = checked_empty,
+    } });
+    const checked_outer_fields = try allocator.alloc(CheckedRecordField, 1);
+    checked_outer_fields[0] = .{ .name = try names.internRecordFieldLabel("outer"), .ty = checked_inner };
+    const checked_outer = try appendExplicitCheckedTypePayload(allocator, &names, &checked_store, .{ .record = .{
+        .fields = checked_outer_fields,
+        .ext = checked_empty,
+    } });
+
+    try std.testing.expectEqualSlices(u8, &source_key.bytes, &checked_store.roots.items[@intFromEnum(checked_outer)].key.bytes);
+    const substituted = try substitutedCheckedTypeKeyInfo(allocator, &names, &checked_store, checked_outer, &.{}, &.{});
+    try std.testing.expectEqualSlices(u8, &source_key.bytes, &substituted.key.bytes);
 }
 
 test "defaulted record canonical keys agree across solver and checked representations" {
@@ -33117,7 +33206,8 @@ pub const CheckedModuleArtifact = struct {
     // adapted (design.md "Result-Row Widening Adapter").
     // Version 102 preserves solver-independent deferred evaluation diagnostics.
     // Version 103 persists the checked root index for immutable composition.
-    const serialized_layout_version: u32 = 103;
+    // Version 104 keys each context-free checked type subtree by its own key.
+    const serialized_layout_version: u32 = 104;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -39892,8 +39982,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x2E, 0x29, 0xDE, 0x56, 0x0C, 0xF5, 0x50, 0xD2, 0xFF, 0xAE, 0x17, 0x5B, 0x43, 0xF5, 0x4A, 0xFF,
-        0xF7, 0x2D, 0xC3, 0x65, 0xA7, 0xF7, 0xCE, 0x20, 0x03, 0x92, 0x43, 0x65, 0xB5, 0xCE, 0x4E, 0x38,
+        0x1E, 0xC6, 0x52, 0x42, 0x97, 0xC0, 0x2A, 0xD9, 0xE2, 0xAA, 0x84, 0x5D, 0x70, 0x68, 0x25, 0xDB,
+        0x20, 0xA7, 0x55, 0xBA, 0x60, 0xBE, 0xFF, 0x6A, 0x5F, 0x99, 0xCB, 0xDE, 0xE0, 0x30, 0x24, 0xCE,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
