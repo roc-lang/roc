@@ -44793,6 +44793,7 @@ const BodyContext = struct {
                     .target => {
                         out[k] = try self.materializeCheckedEvidenceRef(site_view, ref, param, purpose);
                         derived[k] = true;
+                        try self.debugAssertDirectTargetMatchesReceiver(schema.view, param, subst[param.slot.?], out[k]);
                     },
                 },
                 // The checker selected this edge's exact target. Its identity
@@ -44916,7 +44917,8 @@ const BodyContext = struct {
         return out;
     }
 
-    /// Debug cross-check of a consumed `.direct` target: when the receiver's
+    /// Debug cross-check of a consumed `.direct` target, or of an enclosing
+    /// chain's target a `.constraint` entry forwards to: when the receiver's
     /// owner and its method are visible from this context's scope, the
     /// method selected there must be the checked target.
     fn debugAssertDirectTargetMatchesReceiver(
