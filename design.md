@@ -3158,6 +3158,19 @@ Checked CIR may contain source-level forms such as static-dispatch calls,
 method equality, type-dispatch calls, and source `for` loops because those are
 part of the checked source module.
 
+Rejected code is replaced in place with a runtime error node: an expression,
+statement, or literal pattern checking rejects, and a read of a `var` before it
+is initialized, which canonicalization rejects. Every later stage reads the
+crash and nothing of the rejected code. The node store keeps each node it
+replaces this way, and the runtime error names the node it replaced, so
+source-level tools read through the replacement to the code as written:
+renaming a binding, listing its references, highlighting it, and going to its
+definition all see the occurrences inside rejected code. Compilation never
+reads the kept nodes, and a module without errors keeps none. A deferred
+import reference that resolves to nothing is settled as a runtime error without
+keeping anything, because the deferred node is a placeholder for the resolved
+form rather than source.
+
 Equality against a payload-free tag carries an explicit checked discriminant
 decision: the checked operation records the value operand and exact tag
 identity. Runtime lowering consumes that plan directly. It does not rediscover

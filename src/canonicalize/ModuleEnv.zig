@@ -1791,7 +1791,15 @@ pub fn pushRuntimeErrorExpr(self: *Self, comptime RetIdx: type, reason: CIR.Diag
 /// Replaces an existing expression with a runtime error and records the diagnostic.
 pub fn replaceExprWithRuntimeError(self: *Self, expr_idx: CIR.Expr.Idx, reason: CIR.Diagnostic) std.mem.Allocator.Error!void {
     const diag_idx = try self.addDiagnostic(reason);
-    self.store.setExprRuntimeError(expr_idx, diag_idx);
+    try self.store.replaceExprWithRuntimeError(expr_idx, diag_idx);
+    self.debugAssertArraysInSync();
+}
+
+/// Settles a deferred import reference expression that resolves to nothing
+/// as a runtime error and records the diagnostic.
+pub fn settleDeferredExprAsRuntimeError(self: *Self, expr_idx: CIR.Expr.Idx, reason: CIR.Diagnostic) std.mem.Allocator.Error!void {
+    const diag_idx = try self.addDiagnostic(reason);
+    self.store.settleDeferredExprAsRuntimeError(expr_idx, diag_idx);
     self.debugAssertArraysInSync();
 }
 
