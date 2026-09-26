@@ -1242,7 +1242,7 @@ fn getMethodNameRegion(store: *const NodeStore, data_idx: u32) Region {
 /// Retrieves a statement node from the store.
 pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.Statement {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(statement));
-    return store.statementFromNode(store.nodes.get(node_idx));
+    return @call(.always_inline, statementFromNode, .{ store, store.nodes.get(node_idx) });
 }
 
 /// Retrieves a statement as written in source, reading through a runtime
@@ -1453,7 +1453,7 @@ fn statementFromNode(store: *const NodeStore, node: Node) CIR.Statement {
 /// Retrieves an expression node from the store.
 pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr));
-    return store.exprFromNode(node_idx, store.nodes.get(node_idx));
+    return @call(.always_inline, exprFromNode, .{ store, node_idx, store.nodes.get(node_idx) });
 }
 
 /// Retrieves an expression as written in source, reading through a runtime
@@ -2705,7 +2705,7 @@ fn isPatternTag(tag: Node.Tag) bool {
 /// Retrieves a pattern from the store.
 pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pattern {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
-    return store.patternFromNode(store.nodes.get(node_idx));
+    return @call(.always_inline, patternFromNode, .{ store, store.nodes.get(node_idx) });
 }
 
 /// Retrieves a pattern as written in source, reading through a runtime error

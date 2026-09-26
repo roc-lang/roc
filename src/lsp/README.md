@@ -122,11 +122,13 @@ to the nearest boundary, an edit refuses it.
 
 Rename edits only the document it was asked about. It rewrites the binding, the name on
 its type annotation, and every reference, taking the occurrences from the CIR so shadowing
-is respected.
+is respected. Type errors do not stop it: checking replaces rejected code with runtime errors,
+and every query here reads through those replacements to the code as written, so occurrences
+inside rejected code are renamed, listed, and highlighted like any other.
 
 It refuses rather than producing a partial rewrite, because editing every occurrence but one
 silently breaks the program. It refuses when:
-- the document does not compile, so there is no CIR to read occurrences from
+- the document could not be built, so there is no CIR to read occurrences from
 - the position names something other than a plain local binding—a type, a tag, a record
   field, or a destructuring pattern
 - the new name is not a single Roc identifier

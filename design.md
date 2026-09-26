@@ -3166,10 +3166,10 @@ replaces this way, and the runtime error names the node it replaced, so
 source-level tools read through the replacement to the code as written:
 renaming a binding, listing its references, highlighting it, and going to its
 definition all see the occurrences inside rejected code. Compilation never
-reads the kept nodes. Keeping them costs nothing in a module without errors. A
-deferred import reference that resolves to nothing is settled as a runtime
-error without keeping anything, because the deferred node is a placeholder for
-the resolved form rather than source.
+reads the kept nodes, and a module without errors keeps none. A deferred
+import reference that resolves to nothing is settled as a runtime error without
+keeping anything, because the deferred node is a placeholder for the resolved
+form rather than source.
 
 Equality against a payload-free tag carries an explicit checked discriminant
 decision: the checked operation records the value operand and exact tag
