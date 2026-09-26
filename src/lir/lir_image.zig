@@ -1298,6 +1298,7 @@ test "LIR image views empty and populated boxy tables" {
     try lowered.boxy_type_descs.append(allocator, .{
         .payload_layout = .zst,
         .contains_refcounted = true,
+        .shape = .tag_union,
         .nested_descs = .{ .start = 0, .len = 1 },
         .tag_variants = .{ .start = 0, .len = 1 },
         .copy_plan = .{ .start = 0, .len = 1 },

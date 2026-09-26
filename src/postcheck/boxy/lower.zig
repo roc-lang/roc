@@ -37,6 +37,15 @@ const static_dispatch = check.StaticDispatchRegistry;
 const exact_numeral = types.numeral;
 const GuardedList = collections.GuardedList;
 
+/// Reserves a descriptor id before its contents are built, so recursive
+/// descriptors can refer to it; every reservation is overwritten with the
+/// completed descriptor before lowering finishes.
+const reserved_boxy_type_desc = LirProgram.BoxyTypeDesc{
+    .payload_layout = .zst,
+    .contains_refcounted = false,
+    .shape = .internal,
+};
+
 /// Runtime schema metadata produced alongside lowered LIR.
 pub const RuntimeSchemaStore = solved_lir_lower.RuntimeSchemaStore;
 
@@ -94,6 +103,7 @@ pub fn run(
     try appendRequestedLayouts(allocator, modules, roots, plan, &layout_plan, &procedure_builder, &result);
     procedure_builder.verifyDirectCallAbis();
     try procedure_builder.finalizeDescriptorMaterializationCaptures();
+    try result.classifyBoxyDescClosures(allocator);
     result.finishExpectSites();
 
     return .{
@@ -1265,6 +1275,7 @@ const ProcedureBuilder = struct {
     hosted_external_procs: []?LIR.LirProcSpecId,
     type_desc_ids: []?LIR.BoxyTypeDescId,
     generated_evidence_desc_ids: [4]?LIR.BoxyTypeDescId,
+    internal_leaf_desc_ids: std.AutoHashMapUnmanaged(layout.Idx, LIR.BoxyTypeDescId),
     static_dict_cache: std.ArrayList(StaticDictCacheEntry),
     inspect_method_slot_cache: std.ArrayList(InspectMethodSlotCacheEntry),
     callable_adapter_cache: std.ArrayList(CallableAdapterCacheEntry),
@@ -1370,6 +1381,7 @@ const ProcedureBuilder = struct {
             .hosted_external_procs = &.{},
             .type_desc_ids = &.{},
             .generated_evidence_desc_ids = .{ null, null, null, null },
+            .internal_leaf_desc_ids = .empty,
             .static_dict_cache = .empty,
             .inspect_method_slot_cache = .empty,
             .callable_adapter_cache = .empty,
@@ -1392,6 +1404,7 @@ const ProcedureBuilder = struct {
         for (self.callable_adapter_cache.items) |entry| self.allocator.free(entry.materialize_reps);
         self.callable_adapter_cache.deinit(self.allocator);
         self.inspect_method_slot_cache.deinit(self.allocator);
+        self.internal_leaf_desc_ids.deinit(self.allocator);
         self.static_dict_cache.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
         self.allocator.free(self.type_desc_ids);
@@ -3405,10 +3418,7 @@ const ProcedureBuilder = struct {
 
         const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.result.boxy_type_descs.items.len)));
         try context.put(self.allocator, identity_worker, identity_source, desc_id);
-        try self.result.boxy_type_descs.append(self.allocator, .{
-            .payload_layout = .zst,
-            .contains_refcounted = false,
-        });
+        try self.result.boxy_type_descs.append(self.allocator, reserved_boxy_type_desc);
 
         const rep_layout = self.layout_plan.rep_layouts[@intFromEnum(identity_worker)];
         const payload_layout = rep_layout.descriptor_payload_layout orelse rep_layout.worker.layoutIdx();
@@ -3441,6 +3451,7 @@ const ProcedureBuilder = struct {
         const completed_desc = LirProgram.BoxyTypeDesc{
             .payload_layout = payload_layout,
             .contains_refcounted = self.result.layouts.layoutContainsRefcounted(layout_value) or worker_rep.contains_dynamic,
+            .shape = self.descriptorShapeForRep(identity_worker),
             .nested_descs = nested_descs,
             .tag_variants = tag_variants,
             .tag_ext_desc = tag_ext_desc,
@@ -3533,62 +3544,36 @@ const ProcedureBuilder = struct {
         if (try self.staticGeneratedEvidenceNestedDescRefs(worker_rep.kind)) |nested_descs| {
             return nested_descs;
         }
-        if (worker_rep.children.len == 0) return .{};
-        const worker_payload_layout = (self.layout_plan.rep_layouts[@intFromEnum(worker_rep_id)].descriptor_payload_layout orelse
-            self.layout_plan.rep_layouts[@intFromEnum(worker_rep_id)].worker.layoutIdx());
+        const worker_payload_layout = self.descriptorPayloadLayoutForRep(worker_rep_id);
 
         const source_children = if (source_rep_id) |source|
             self.plan.childSlice(self.plan.representations.items[@intFromEnum(source)].children)
         else
             &[_]Plan.RepChild{};
 
-        var refs = std.ArrayList(LIR.BoxyDescRef).empty;
-        defer refs.deinit(self.allocator);
-        if (worker_rep.declared_fields.len != 0) {
-            const ordered = try self.declaredFieldsInLayoutOrder(self.plan.declaredFieldSlice(worker_rep.declared_fields));
-            defer self.allocator.free(ordered);
-            for (ordered) |field| {
-                const field_layout = self.recordPayloadFieldLayout(worker_payload_layout, field.index);
-                const force_field = self.layoutIsBoxStorage(field_layout);
-                if (!force_field and !self.layoutNeedsNestedBoxyDesc(field_layout)) continue;
-                const desc_rep = self.tagPayloadStorageDescRepForLayout(field.rep, field_layout, force_field) orelse continue;
-                const field_source = try self.matchingDeclaredFieldInstantiationSource(source_rep_id, field);
-                try refs.append(
-                    self.allocator,
-                    try self.staticDescRefForWorkerRepWithSourceMap(desc_rep, field_source, descriptor_sources, context),
-                );
-            }
-        } else {
-            var record_field_index: usize = 0;
-            for (self.plan.childSlice(worker_rep.children)) |child| {
-                if (child.role == .tag_ext) continue;
-                const field_layout = if (child.role == .record_field) blk: {
-                    const field_layout = self.recordPayloadFieldLayout(worker_payload_layout, record_field_index);
-                    record_field_index += 1;
-                    break :blk field_layout;
-                } else if (child.role == .tuple_elem)
-                    self.recordPayloadFieldLayout(worker_payload_layout, child.role.tuple_elem)
-                else if (child.role == .box_payload)
-                    self.descriptorPayloadLayoutForRep(child.rep)
-                else if (child.role == .list_elem)
-                    self.listElementLayout(worker_payload_layout)
-                else
-                    continue;
-                const force_desc = child.role == .box_payload or self.layoutIsBoxStorage(field_layout);
-                if (!force_desc and !self.layoutNeedsNestedBoxyDesc(field_layout)) continue;
-                const desc_rep = self.tagPayloadStorageDescRepForLayout(child.rep, field_layout, force_desc) orelse continue;
-                const child_source = try self.matchingInstantiationSource(source_children, child);
-                try refs.append(
-                    self.allocator,
-                    try self.staticDescRefForWorkerRepWithSourceMap(desc_rep, child_source, descriptor_sources, context),
-                );
-            }
+        var slots = std.ArrayList(NestedDescriptorSlot).empty;
+        defer slots.deinit(self.allocator);
+        try self.appendNestedDescriptorSlots(worker_rep_id, worker_payload_layout, &slots);
+        if (slots.items.len == 0) return .{};
+
+        const refs = try self.allocator.alloc(LIR.BoxyDescRef, slots.items.len);
+        defer self.allocator.free(refs);
+        for (slots.items, refs) |slot, *ref| {
+            const slot_source = if (slot.declared_field) |field|
+                try self.matchingDeclaredFieldInstantiationSource(source_rep_id, field)
+            else
+                try self.matchingInstantiationSource(source_children, slot.child.?);
+            ref.* = try self.staticDescRefForWorkerRepWithSourceMap(
+                self.nestedDescriptorSlotDescRep(slot),
+                slot_source,
+                descriptor_sources,
+                context,
+            );
         }
-        if (refs.items.len == 0) return .{};
 
         const start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
-        try self.result.boxy_desc_refs.appendSlice(self.allocator, refs.items);
-        return .{ .start = start, .len = @intCast(refs.items.len) };
+        try self.result.boxy_desc_refs.appendSlice(self.allocator, refs);
+        return .{ .start = start, .len = @intCast(refs.len) };
     }
 
     fn staticTagVariantsForWorkerRepWithSourceMap(
@@ -4305,10 +4290,7 @@ const ProcedureBuilder = struct {
 
         const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.result.boxy_type_descs.items.len)));
         self.type_desc_ids[rep_index] = desc_id;
-        try self.result.boxy_type_descs.append(self.allocator, .{
-            .payload_layout = .zst,
-            .contains_refcounted = false,
-        });
+        try self.result.boxy_type_descs.append(self.allocator, reserved_boxy_type_desc);
 
         const rep_layout = self.layout_plan.rep_layouts[rep_index];
         const payload_layout = rep_layout.descriptor_payload_layout orelse rep_layout.worker.layoutIdx();
@@ -4327,6 +4309,7 @@ const ProcedureBuilder = struct {
         const completed_desc = LirProgram.BoxyTypeDesc{
             .payload_layout = payload_layout,
             .contains_refcounted = self.result.layouts.layoutContainsRefcounted(layout_value) or rep.contains_dynamic,
+            .shape = self.descriptorShapeForRep(rep_id),
             .nested_descs = nested_descs,
             .tag_variants = tag_variants,
             .tag_ext_desc = tag_ext_desc,
@@ -4351,78 +4334,201 @@ const ProcedureBuilder = struct {
         if (try self.staticGeneratedEvidenceNestedDescRefs(rep.kind)) |nested_descs| {
             return nested_descs;
         }
-        const payload_layout = (self.layout_plan.rep_layouts[@intFromEnum(rep_id)].descriptor_payload_layout orelse
-            self.layout_plan.rep_layouts[@intFromEnum(rep_id)].worker.layoutIdx());
+        const payload_layout = self.descriptorPayloadLayoutForRep(rep_id);
 
-        var refs = std.ArrayList(LIR.BoxyDescRef).empty;
-        defer refs.deinit(self.allocator);
+        var slots = std.ArrayList(NestedDescriptorSlot).empty;
+        defer slots.deinit(self.allocator);
+        try self.appendNestedDescriptorSlots(rep_id, payload_layout, &slots);
+        if (slots.items.len == 0) return .{};
+
+        const refs = try self.allocator.alloc(LIR.BoxyDescRef, slots.items.len);
+        defer self.allocator.free(refs);
+        for (slots.items, refs) |slot, *ref| {
+            ref.* = try self.staticDescRefForRep(self.nestedDescriptorSlotDescRep(slot));
+        }
+
+        const start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
+        try self.result.boxy_desc_refs.appendSlice(self.allocator, refs);
+        return .{ .start = start, .len = @intCast(refs.len) };
+    }
+
+    /// Where one `nested_descs` position's value is stored.
+    const NestedDescriptorSlotKind = union(enum) {
+        /// A struct field or tuple element stored in the parent payload.
+        field: layout.Idx,
+        /// A list item stored in the list's allocation.
+        list_elem: layout.Idx,
+        /// A box payload stored in the box's own allocation.
+        box_payload,
+    };
+
+    /// One position of a descriptor's `nested_descs`.
+    const NestedDescriptorSlot = struct {
+        rep: Plan.TypeRepId,
+        kind: NestedDescriptorSlotKind,
+        /// The structural child this position describes, for a representation
+        /// shaped by its children.
+        child: ?Plan.RepChild = null,
+        /// The declared field this position describes, for a declared-field
+        /// nominal.
+        declared_field: ?Plan.DeclaredField = null,
+    };
+
+    /// Append the `nested_descs` positions of `rep_id`'s descriptor, in
+    /// position order: struct field `i` (by original field index) is position
+    /// `i`, and a list's item or a box's payload is position 0. Every child
+    /// has a position, including zero-sized and scalar ones, because the
+    /// child's descriptor is the only runtime record of its source-language
+    /// identity.
+    fn appendNestedDescriptorSlots(
+        self: *ProcedureBuilder,
+        rep_id: Plan.TypeRepId,
+        payload_layout: layout.Idx,
+        slots: *std.ArrayList(NestedDescriptorSlot),
+    ) Allocator.Error!void {
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        const first = slots.items.len;
         if (rep.declared_fields.len != 0) {
             const ordered = try self.declaredFieldsInLayoutOrder(self.plan.declaredFieldSlice(rep.declared_fields));
             defer self.allocator.free(ordered);
             for (ordered) |field| {
-                const field_layout = self.recordPayloadFieldLayout(payload_layout, field.index);
-                // A box-storage field is refcounted by its own allocation, so the
-                // drop always resolves a nested descriptor for it. Force the
-                // descriptor even when the field's representation would not
-                // otherwise carry a payload descriptor (a dynamic-rep field),
-                // keeping the emitted nested descriptors aligned with the fields
-                // the drop expects.
-                const force_field = self.layoutIsBoxStorage(field_layout);
-                if (!force_field and !self.layoutNeedsNestedBoxyDesc(field_layout)) continue;
-                const desc_rep = self.tagPayloadStorageDescRepForLayout(field.rep, field_layout, force_field) orelse continue;
-                try refs.append(self.allocator, try self.staticDescRefForRep(desc_rep));
+                if (field.index != slots.items.len - first) {
+                    boxyLowerInvariant("declared nominal fields did not cover every payload field position");
+                }
+                try slots.append(self.allocator, .{
+                    .rep = field.rep,
+                    .kind = .{ .field = self.recordPayloadFieldLayout(payload_layout, field.index) },
+                    .declared_field = field,
+                });
             }
-        } else {
-            if (rep.children.len == 0) return .{};
-            var record_field_index: usize = 0;
-            for (self.plan.childSlice(rep.children)) |child| {
-                if (child.role == .tag_ext) continue;
-                const field_layout = if (child.role == .record_field) blk: {
+            return;
+        }
+
+        var record_field_index: usize = 0;
+        for (self.plan.childSlice(rep.children)) |child| {
+            const kind: NestedDescriptorSlotKind = switch (child.role) {
+                .record_field => blk: {
                     const field_layout = self.recordPayloadFieldLayout(payload_layout, record_field_index);
                     record_field_index += 1;
-                    break :blk field_layout;
-                } else if (child.role == .tuple_elem)
-                    self.recordPayloadFieldLayout(payload_layout, child.role.tuple_elem)
-                else if (child.role == .box_payload)
-                    self.descriptorPayloadLayoutForRep(child.rep)
-                else if (child.role == .list_elem)
-                    self.listElementLayout(payload_layout)
-                else
-                    continue;
-                // A box-storage field or element is refcounted by its own
-                // allocation, so the drop always resolves a nested descriptor for
-                // it. Force the descriptor even when the child's representation
-                // would not otherwise carry a payload descriptor, keeping the
-                // emitted nested descriptors aligned with the fields the drop
-                // expects.
-                const force_desc = child.role == .box_payload or self.layoutIsBoxStorage(field_layout);
-                if (!force_desc and !self.layoutNeedsNestedBoxyDesc(field_layout)) continue;
-                const desc_rep = self.tagPayloadStorageDescRepForLayout(child.rep, field_layout, force_desc) orelse continue;
-                try refs.append(self.allocator, try self.staticDescRefForRep(desc_rep));
+                    break :blk .{ .field = field_layout };
+                },
+                .tuple_elem => |index| blk: {
+                    if (index != slots.items.len - first) {
+                        boxyLowerInvariant("tuple representation elements were not in position order");
+                    }
+                    break :blk .{ .field = self.recordPayloadFieldLayout(payload_layout, index) };
+                },
+                .list_elem => .{ .list_elem = self.listElementLayout(payload_layout) },
+                .box_payload => .box_payload,
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
+            };
+            try slots.append(self.allocator, .{ .rep = child.rep, .kind = kind, .child = child });
+        }
+    }
+
+    /// The representation whose descriptor describes `slot`'s stored value.
+    fn nestedDescriptorSlotDescRep(self: *const ProcedureBuilder, slot: NestedDescriptorSlot) Plan.TypeRepId {
+        return switch (slot.kind) {
+            .field, .list_elem => |storage_layout| self.tagPayloadStorageDescRepForLayout(slot.rep, storage_layout, true) orelse
+                boxyLowerInvariant("forced nested descriptor representation was not selected"),
+            .box_payload => self.tagPayloadStorageDescRep(slot.rep),
+        };
+    }
+
+    /// Whether `slot`'s stored value carries a runtime descriptor for its
+    /// memory operations, rather than having only a static identity.
+    fn nestedDescriptorSlotCarriesRuntimeDesc(self: *const ProcedureBuilder, slot: NestedDescriptorSlot) bool {
+        return switch (slot.kind) {
+            .field, .list_elem => |storage_layout| self.layoutIsBoxStorage(storage_layout) or self.layoutNeedsNestedBoxyDesc(storage_layout),
+            .box_payload => true,
+        };
+    }
+
+    /// Source-language shape of the value `rep_id`'s descriptor describes.
+    fn descriptorShapeForRep(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) LirProgram.BoxyDescShape {
+        var current = rep_id;
+        for (0..self.plan.representations.items.len + 1) |_| {
+            const rep = self.plan.representations.items[@intFromEnum(current)];
+            if (rep.sealed_default) |sealed_default| {
+                current = sealed_default;
+                continue;
+            }
+            if (rep.declared_fields.len != 0) return .record;
+            switch (rep.kind) {
+                .in_progress => boxyLowerInvariant("in-progress boxy representation reached descriptor shape selection"),
+                .dynamic => return if (rep.tag_variants.len != 0) .tag_union else .erased,
+                .primitive => return .primitive,
+                .bool_tag_union, .tag_union, .empty_tag_union => return .tag_union,
+                .erased_callable => return .function,
+                .record, .empty_record => return .record,
+                .tuple => return .tuple,
+                .list => return .list,
+                .box => return .box,
+                .generated_field, .generated_field_names, .generated_tag_union_spec => return .internal,
+                .alias => current = self.singleChildRepForDesc(current, .alias_backing) orelse
+                    boxyLowerInvariant("alias descriptor shape had no backing child"),
+                .nominal => current = self.singleChildRepForDesc(current, .nominal_backing) orelse
+                    boxyLowerInvariant("nominal descriptor shape had no backing child"),
             }
         }
-        if (refs.items.len == 0) return .{};
-
-        const start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
-        try self.result.boxy_desc_refs.appendSlice(self.allocator, refs.items);
-        return .{ .start = start, .len = @intCast(refs.items.len) };
+        boxyLowerInvariant("cyclic boxy descriptor shape wrapper chain");
     }
 
     fn staticGeneratedEvidenceNestedDescRefs(
         self: *ProcedureBuilder,
         kind: Plan.RepresentationKind,
     ) Allocator.Error!?LIR.BoxySpan {
-        const nested_kind: ?GeneratedEvidenceDescKind = if (kind == .generated_field)
-            return .{}
-        else if (kind == .generated_field_names)
-            .field_list
-        else if (kind == .generated_tag_union_spec)
-            .field_names_list
-        else
-            return null;
-        const nested_desc = try self.generatedEvidenceTypeDesc(nested_kind.?);
+        const evidence = self.layout_plan.generated_evidence;
+        return switch (kind) {
+            .generated_field => try self.generatedEvidenceStructNestedDescRefs(
+                evidence.field,
+                .{ .static = try self.internalLeafTypeDesc(.str) },
+            ),
+            .generated_field_names => try self.generatedEvidenceStructNestedDescRefs(
+                evidence.field_names,
+                .{ .static = try self.generatedEvidenceTypeDesc(.field_list) },
+            ),
+            .generated_tag_union_spec => try self.generatedEvidenceStructNestedDescRefs(
+                evidence.tag_union_spec,
+                .{ .static = try self.generatedEvidenceTypeDesc(.field_names_list) },
+            ),
+            .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .empty_record, .tag_union, .empty_tag_union => null,
+        };
+    }
+
+    /// Nested descriptors of a generated evidence struct stored in
+    /// `struct_layout`: `first` describes its first field, and every later
+    /// field is a compiler-internal scalar.
+    fn generatedEvidenceStructNestedDescRefs(
+        self: *ProcedureBuilder,
+        struct_layout: layout.Idx,
+        first: LIR.BoxyDescRef,
+    ) Allocator.Error!LIR.BoxySpan {
+        const layout_value = self.result.layouts.getLayout(struct_layout);
+        if (layout_value.tag != .struct_) {
+            boxyLowerInvariant("generated evidence descriptor had a non-struct layout");
+        }
+        const struct_idx = layout_value.getStruct().idx;
+        const field_count = self.result.layouts.getStructData(struct_idx).fields.count;
+        const refs = try self.allocator.alloc(LIR.BoxyDescRef, field_count);
+        defer self.allocator.free(refs);
+        refs[0] = first;
+        for (refs[1..], 1..) |*ref, field_index| {
+            const field_layout = self.result.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(field_index));
+            ref.* = .{ .static = try self.internalLeafTypeDesc(field_layout) };
+        }
         const start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
-        try self.result.boxy_desc_refs.append(self.allocator, .{ .static = nested_desc });
+        try self.result.boxy_desc_refs.appendSlice(self.allocator, refs);
+        return .{ .start = start, .len = @intCast(refs.len) };
+    }
+
+    /// Nested descriptors of a generated evidence list: its element.
+    fn generatedEvidenceListNestedDescRefs(
+        self: *ProcedureBuilder,
+        elem: LIR.BoxyTypeDescId,
+    ) Allocator.Error!LIR.BoxySpan {
+        const start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
+        try self.result.boxy_desc_refs.append(self.allocator, .{ .static = elem });
         return .{ .start = start, .len = 1 };
     }
 
@@ -4435,10 +4541,7 @@ const ProcedureBuilder = struct {
 
         const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.result.boxy_type_descs.items.len)));
         self.generated_evidence_desc_ids[cache_index] = desc_id;
-        try self.result.boxy_type_descs.append(self.allocator, .{
-            .payload_layout = .zst,
-            .contains_refcounted = false,
-        });
+        try self.result.boxy_type_descs.append(self.allocator, reserved_boxy_type_desc);
 
         const payload_layout = switch (kind) {
             .field => self.layout_plan.generated_evidence.field,
@@ -4447,34 +4550,43 @@ const ProcedureBuilder = struct {
             .field_names_list => self.layout_plan.generated_evidence.field_names_list,
         };
         const nested_descs: LIR.BoxySpan = switch (kind) {
-            .field => .{},
-            .field_list => blk: {
-                const nested_desc = try self.generatedEvidenceTypeDesc(.field);
-                const start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
-                try self.result.boxy_desc_refs.append(self.allocator, .{ .static = nested_desc });
-                break :blk .{ .start = start, .len = 1 };
-            },
-            .field_names => blk: {
-                const nested_desc = try self.generatedEvidenceTypeDesc(.field_list);
-                const start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
-                try self.result.boxy_desc_refs.append(self.allocator, .{ .static = nested_desc });
-                break :blk .{ .start = start, .len = 1 };
-            },
-            .field_names_list => blk: {
-                const nested_desc = try self.generatedEvidenceTypeDesc(.field_names);
-                const start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
-                try self.result.boxy_desc_refs.append(self.allocator, .{ .static = nested_desc });
-                break :blk .{ .start = start, .len = 1 };
-            },
+            .field => try self.generatedEvidenceStructNestedDescRefs(payload_layout, .{ .static = try self.internalLeafTypeDesc(.str) }),
+            .field_list => try self.generatedEvidenceListNestedDescRefs(try self.generatedEvidenceTypeDesc(.field)),
+            .field_names => try self.generatedEvidenceStructNestedDescRefs(payload_layout, .{ .static = try self.generatedEvidenceTypeDesc(.field_list) }),
+            .field_names_list => try self.generatedEvidenceListNestedDescRefs(try self.generatedEvidenceTypeDesc(.field_names)),
         };
         const layout_value = self.result.layouts.getLayout(payload_layout);
         self.result.boxy_type_descs.items[@intFromEnum(desc_id)] = .{
             .payload_layout = payload_layout,
             .contains_refcounted = self.result.layouts.layoutContainsRefcounted(layout_value),
+            .shape = .internal,
             .nested_descs = nested_descs,
             .inspect_opaque = true,
         };
         return desc_id;
+    }
+
+    /// Descriptor for a compiler-internal leaf value stored in `layout_idx`,
+    /// such as a field of generated evidence or a pointer in a capture struct.
+    fn internalLeafTypeDesc(self: *ProcedureBuilder, layout_idx: layout.Idx) Allocator.Error!LIR.BoxyTypeDescId {
+        if (self.internal_leaf_desc_ids.get(layout_idx)) |existing| return existing;
+        const layout_value = self.result.layouts.getLayout(layout_idx);
+        if (layout_value.tag != .scalar) {
+            boxyLowerInvariant("boxy internal leaf descriptor requested for a non-scalar layout");
+        }
+        const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.result.boxy_type_descs.items.len)));
+        try self.result.boxy_type_descs.append(self.allocator, .{
+            .payload_layout = layout_idx,
+            .contains_refcounted = self.result.layouts.layoutContainsRefcounted(layout_value),
+            .shape = .internal,
+        });
+        try self.internal_leaf_desc_ids.put(self.allocator, layout_idx, desc_id);
+        return desc_id;
+    }
+
+    /// Descriptor for a compiler-internal pointer field.
+    fn internalPointerTypeDesc(self: *ProcedureBuilder) Allocator.Error!LIR.BoxyTypeDescId {
+        return try self.internalLeafTypeDesc(.opaque_ptr);
     }
 
     fn staticTagVariantsForRep(self: *ProcedureBuilder, rep_id: Plan.TypeRepId, payload_layout: layout.Idx) Allocator.Error!LIR.BoxySpan {
@@ -4655,6 +4767,10 @@ const ProcedureBuilder = struct {
         return tag == .box or tag == .box_of_zst or tag == .erased_box;
     }
 
+    /// Whether a value stored in `layout_idx` carries a runtime descriptor that
+    /// its memory operations follow. A value in any other layout has a
+    /// statically known identity; its descriptor still occupies its position
+    /// in a parent's `nested_descs`.
     fn layoutNeedsNestedBoxyDesc(self: *const ProcedureBuilder, layout_idx: layout.Idx) bool {
         const value_layout = self.result.layouts.getLayout(layout_idx);
         return switch (value_layout.tag) {
@@ -4807,6 +4923,8 @@ const ProcedureBuilder = struct {
             if (self.plan.inspectMethodForRep(current) != null) return current;
 
             const rep = self.plan.representations.items[@intFromEnum(current)];
+            // An opaque type's descriptor must keep its opacity.
+            if (rep.inspect_opaque) return current;
             if (rep.kind == .alias) {
                 current = self.singleChildRepForDesc(current, .alias_backing) orelse
                     boxyLowerInvariant("alias descriptor identity had no backing child");
@@ -4914,12 +5032,12 @@ const ProcedureBuilder = struct {
         return self.plan.representations.items[@intFromEnum(rep_id)].inspect_opaque;
     }
 
-    /// Record field names for a record-shaped representation, in payload field
-    /// order. Returns an empty span for non-record shapes (tuples and other
-    /// payloads print positionally). An alias or backed nominal without
-    /// declared padding stores exactly its backing's fields in the backing's
-    /// order, so it names them; a structural record can then receive it by
-    /// field name.
+    /// Record field names for a record-shaped representation, one per payload
+    /// field in payload field order. Returns an empty span for non-record
+    /// shapes (tuples and other payloads print positionally). An alias or
+    /// backed nominal stores exactly its backing's fields, so it names them; a
+    /// structural record can then receive it by field name. A declared
+    /// nominal's unnamed padding field is named `padding_field`.
     fn staticFieldNamesForRep(self: *ProcedureBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.BoxySpan {
         // Field names describe the same payload the nested descriptors do.
         if (self.descriptorBackingShapeRep(rep_id)) |backing_rep| return try self.staticFieldNamesForRep(backing_rep);
@@ -4940,8 +5058,14 @@ const ProcedureBuilder = struct {
             const declared = self.plan.declaredFieldSlice(rep.declared_fields);
             try field_name_ids.resize(self.allocator, declared.len);
             for (declared) |field| {
-                if (field.is_padding) return .{};
-                if (field.index >= declared.len or field.index >= backing_fields.items.len) {
+                if (field.index >= declared.len) {
+                    boxyLowerInvariant("declared nominal field index exceeded its declared fields");
+                }
+                if (field.is_padding) {
+                    field_name_ids.items[field.index] = .padding_field;
+                    continue;
+                }
+                if (field.index >= backing_fields.items.len) {
                     boxyLowerInvariant("declared nominal field index exceeded its backing record fields");
                 }
                 const child = backing_fields.items[field.index];
@@ -13676,8 +13800,7 @@ const ProcBodyBuilder = struct {
         self.erased_capture_contents_desc = contents_desc;
         try self.markReadOnlyDescriptorInput(contents_desc);
 
-        var nested_index: u32 = 0;
-        for (captures, self.erased_capture_locals.items) |capture, captured_local| {
+        for (captures, self.erased_capture_locals.items, 0..) |capture, captured_local, capture_index| {
             if (capture.kind != .captured_value) continue;
             const field_layout = self.parent.result.store.getLocal(captured_local).layout_idx;
             if (!self.parent.layoutNeedsNestedBoxyDesc(field_layout)) continue;
@@ -13690,7 +13813,7 @@ const ProcBodyBuilder = struct {
             try self.erased_capture_value_desc_initializers.append(self.parent.allocator, .{
                 .local = field_desc_local,
                 .materialize = .{ .local = contents_desc },
-                .nested_index = nested_index,
+                .nested_index = @intCast(capture_index),
             });
 
             var bindings = std.ArrayList(LocalDescriptorEnvironmentBinding).empty;
@@ -13719,7 +13842,6 @@ const ProcBodyBuilder = struct {
             }
             try self.erased_capture_value_desc_initializers.appendSlice(self.parent.allocator, initializers.items);
             try self.recordLocalDescriptorEnvironment(captured_local, capture.rep, bindings.items);
-            nested_index += 1;
         }
     }
 
@@ -14048,7 +14170,7 @@ const ProcBodyBuilder = struct {
         var source: ?ErasedArgumentDescriptorParamSource = null;
         for (params[0..param_index], 0..) |candidate, candidate_index| {
             const parent_rep = self.descriptorStorageRep(candidate.rep);
-            const projected: ErasedArgumentDescriptorParamSource = if (self.immediateNestedDescriptorIndexForRep(parent_rep, target_rep)) |nested_index| nested: {
+            const projected: ErasedArgumentDescriptorParamSource = if (try self.immediateNestedDescriptorIndexForRep(parent_rep, target_rep)) |nested_index| nested: {
                 if (nested_index > std.math.maxInt(u16)) {
                     boxyLowerInvariant("boxy erased argument nested descriptor index exceeded its ABI range");
                 }
@@ -17870,27 +17992,44 @@ const ProcBodyBuilder = struct {
         var desc_captures = std.ArrayList(LIR.LocalId).empty;
         defer desc_captures.deinit(self.parent.allocator);
 
-        for (captures, field_locals, descriptor_overrides) |capture, field_local, override| {
-            if (capture.kind != .captured_value) continue;
-            const field_layout = self.parent.result.store.getLocal(field_local).layout_idx;
-            if (!self.parent.layoutNeedsNestedBoxyDesc(field_layout)) continue;
+        if (!self.erasedCaptureNeedsContentsDescriptor(captures, field_locals)) return null;
 
-            const field_desc = override orelse try self.descriptorRefForSourceStorageLocalRep(field_local, capture.rep);
+        // The capture struct stores one field per capture followed by this
+        // descriptor's own pointer, and its descriptor describes every field.
+        for (captures, field_locals, descriptor_overrides) |capture, field_local, override| {
+            const field_layout = self.parent.result.store.getLocal(field_local).layout_idx;
+            const field_desc = switch (capture.kind) {
+                .captured_value => override orelse if (self.parent.layoutNeedsNestedBoxyDesc(field_layout))
+                    try self.descriptorRefForSourceStorageLocalRep(field_local, capture.rep)
+                else
+                    // A value whose layout carries no runtime descriptor has a
+                    // statically known identity.
+                    try self.descriptorRefForKnownRep(self.parent.tagPayloadStorageDescRepForLayout(capture.rep, field_layout, true) orelse
+                        boxyLowerInvariant("forced capture descriptor representation was not selected")),
+                .hidden_desc, .hidden_dict => LIR.BoxyDescRef{ .static = try self.parent.internalPointerTypeDesc() },
+            };
             if (field_desc.localOrNull()) |local| {
                 try appendUniqueLocal(self.parent.allocator, &desc_captures, local);
             }
             try refs.append(self.parent.allocator, field_desc);
         }
-        if (refs.items.len == 0) return null;
+        try refs.append(self.parent.allocator, .{ .static = try self.parent.internalPointerTypeDesc() });
+
+        const layout_value = self.parent.result.layouts.getLayout(capture_layout);
+        if (layout_value.tag != .struct_ or
+            self.parent.result.layouts.getStructData(layout_value.getStruct().idx).fields.count != refs.items.len)
+        {
+            boxyLowerInvariant("boxy erased capture descriptor fields disagreed with the capture struct layout");
+        }
 
         const nested_start: u32 = @intCast(self.parent.result.boxy_desc_refs.items.len);
         try self.parent.result.boxy_desc_refs.appendSlice(self.parent.allocator, refs.items);
 
         const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
-        const layout_value = self.parent.result.layouts.getLayout(capture_layout);
         try self.parent.result.boxy_type_descs.append(self.parent.allocator, .{
             .payload_layout = capture_layout,
             .contains_refcounted = self.parent.result.layouts.layoutContainsRefcounted(layout_value),
+            .shape = .internal,
             .nested_descs = .{ .start = nested_start, .len = @intCast(refs.items.len) },
         });
 
@@ -20356,10 +20495,7 @@ const ProcBodyBuilder = struct {
         for (self.parent.plan.childSlice(target_record.children)) |target_child| {
             switch (target_child.role) {
                 .record_field => |target_label| {
-                    const target_nested_index = self.recordFieldNestedDescriptorIndex(target_record_rep, target_field_index) orelse {
-                        target_field_index += 1;
-                        continue;
-                    };
+                    const target_nested_index = self.recordFieldNestedDescriptorIndex(target_record_rep, target_field_index);
                     if (target_nested_index >= specialized_nested.items.len) {
                         boxyLowerInvariant("boxy record adapter target nested descriptor index exceeded template");
                     }
@@ -20376,20 +20512,20 @@ const ProcBodyBuilder = struct {
                             .required, .defaulted, .err => boxyLowerInvariant("boxy record adapter source was missing target field"),
                         }
                     };
+                    if (self.boundaryFieldKeepsStaticDescriptor(target_child.rep, source_field.rep)) {
+                        target_field_index += 1;
+                        continue;
+                    }
 
-                    const source_field_desc_info: ResultDescriptorSource = if (self.recordFieldNestedDescriptorIndex(
-                        source_record_rep,
-                        source_field.index,
-                    )) |source_nested_index| source_nested: {
-                        if (source_template) |template| {
-                            if (source_nested_index >= template.nested_descs.len) {
-                                boxyLowerInvariant("boxy record adapter source nested descriptor index exceeded template");
-                            }
-                            break :source_nested .{
-                                .desc = self.parent.result.boxy_desc_refs.items[template.nested_descs.start + source_nested_index],
-                            };
+                    const source_nested_index = self.recordFieldNestedDescriptorIndex(source_record_rep, source_field.index);
+                    const source_field_desc_info: ResultDescriptorSource = if (source_template) |template| source_nested: {
+                        if (source_nested_index >= template.nested_descs.len) {
+                            boxyLowerInvariant("boxy record adapter source nested descriptor index exceeded template");
                         }
-
+                        break :source_nested .{
+                            .desc = self.parent.result.boxy_desc_refs.items[template.nested_descs.start + source_nested_index],
+                        };
+                    } else if (self.payloadFieldCarriesRuntimeDesc(source_record_rep, source_nested_index)) source_nested: {
                         const nested_local = try self.addFrameLocal(.opaque_ptr);
                         try prerequisites.append(self.parent.allocator, .{
                             .local = nested_local,
@@ -20521,8 +20657,7 @@ const ProcBodyBuilder = struct {
             if (!self.parent.layoutIsBoxStorage(storage_layout)) continue;
             if (self.boxedTargetHasBoundActual(target_child.rep)) continue;
 
-            const target_nested_index = self.tupleElemNestedDescriptorIndex(target_tuple_rep, target_index) orelse
-                boxyLowerInvariant("erased boxy tuple adapter element had no target nested descriptor");
+            const target_nested_index = self.tupleElemNestedDescriptorIndex(target_tuple_rep, target_index);
             if (target_nested_index >= specialized_nested.items.len) {
                 boxyLowerInvariant("boxy tuple adapter target nested descriptor index exceeded template");
             }
@@ -20542,17 +20677,13 @@ const ProcBodyBuilder = struct {
             const matched_source_child = source_child orelse
                 boxyLowerInvariant("boxy tuple adapter source was missing target element");
 
-            const exact_source_desc: LIR.BoxyDescRef = if (self.tupleElemNestedDescriptorIndex(
-                source_tuple_rep,
-                target_index,
-            )) |source_nested_index| source_nested: {
-                if (source_template) |template| {
-                    if (source_nested_index >= template.nested_descs.len) {
-                        boxyLowerInvariant("boxy tuple adapter source nested descriptor index exceeded template");
-                    }
-                    break :source_nested self.parent.result.boxy_desc_refs.items[template.nested_descs.start + source_nested_index];
+            const source_nested_index = self.tupleElemNestedDescriptorIndex(source_tuple_rep, target_index);
+            const exact_source_desc: LIR.BoxyDescRef = if (source_template) |template| source_nested: {
+                if (source_nested_index >= template.nested_descs.len) {
+                    boxyLowerInvariant("boxy tuple adapter source nested descriptor index exceeded template");
                 }
-
+                break :source_nested self.parent.result.boxy_desc_refs.items[template.nested_descs.start + source_nested_index];
+            } else if (self.payloadFieldCarriesRuntimeDesc(source_tuple_rep, source_nested_index)) source_nested: {
                 const nested_local = try self.addFrameLocal(.opaque_ptr);
                 try prerequisites.append(self.parent.allocator, .{
                     .local = nested_local,
@@ -20677,7 +20808,7 @@ const ProcBodyBuilder = struct {
             const target_nested_index = self.recordFieldNestedDescriptorIndex(
                 target_aggregate_rep,
                 target_field.index,
-            ) orelse continue;
+            );
             if (target_nested_index >= specialized_nested.items.len) {
                 boxyLowerInvariant("boxy declared aggregate target nested descriptor index exceeded template");
             }
@@ -20689,20 +20820,19 @@ const ProcBodyBuilder = struct {
                 source_aggregate_rep,
                 target_field,
             ) orelse boxyLowerInvariant("boxy declared aggregate source was missing target field"));
-            const source_nested_index = self.recordFieldNestedDescriptorIndex(
+            if (self.boundaryFieldKeepsStaticDescriptor(target_field_rep, source_field_rep)) continue;
+            const nested_index = self.recordFieldNestedDescriptorIndex(
                 source_aggregate_rep,
                 target_field.index,
             );
-            const source_field_desc_info: ResultDescriptorSource = if (source_nested_index) |nested_index| source_nested: {
-                if (source_template) |template| {
-                    if (nested_index >= template.nested_descs.len) {
-                        boxyLowerInvariant("boxy declared aggregate source nested descriptor index exceeded template");
-                    }
-                    break :source_nested .{
-                        .desc = self.parent.result.boxy_desc_refs.items[template.nested_descs.start + nested_index],
-                    };
+            const source_field_desc_info: ResultDescriptorSource = if (source_template) |template| source_nested: {
+                if (nested_index >= template.nested_descs.len) {
+                    boxyLowerInvariant("boxy declared aggregate source nested descriptor index exceeded template");
                 }
-
+                break :source_nested .{
+                    .desc = self.parent.result.boxy_desc_refs.items[template.nested_descs.start + nested_index],
+                };
+            } else if (self.payloadFieldCarriesRuntimeDesc(source_aggregate_rep, nested_index)) source_nested: {
                 const nested_local = try self.addFrameLocal(.opaque_ptr);
                 const initializer = DescriptorArgLocal{
                     .local = nested_local,
@@ -20790,10 +20920,7 @@ const ProcBodyBuilder = struct {
             if (!std.meta.eql(entry.key, key)) continue;
             const recursive_desc = entry.recursive_desc orelse reserve: {
                 const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
-                try self.parent.result.boxy_type_descs.append(self.parent.allocator, .{
-                    .payload_layout = .zst,
-                    .contains_refcounted = false,
-                });
+                try self.parent.result.boxy_type_descs.append(self.parent.allocator, reserved_boxy_type_desc);
                 self.adapter_descriptor_entries.items[index].recursive_desc = desc_id;
                 break :reserve desc_id;
             };
@@ -20924,11 +21051,10 @@ const ProcBodyBuilder = struct {
             break :blk self.repQuery().requiredSingleChild(source_list_rep, .list_elem).rep;
         } else null;
 
-        // The incoming descriptor describes the exact boxed allocation, but a
-        // concrete payload descriptor can omit nested descriptors that its
-        // payload layout does not need. The callable's target-list template
-        // carries the explicit element identity required by its generic
-        // representation, so materialize against that template directly.
+        // The incoming descriptor describes the boxed allocation rather than a
+        // list. The callable's target-list template carries the explicit
+        // element identity required by its generic representation, so
+        // materialize against that template directly.
         if (source_is_exact_dynamic_box) {
             return known;
         }
@@ -20941,11 +21067,6 @@ const ProcBodyBuilder = struct {
                 .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("planned list adapter source descriptor template was not static"),
             };
             const source_type_desc = self.parent.result.boxy_type_descs.items[@intFromEnum(source_desc_id)];
-            if (source_type_desc.nested_descs.len == 0) {
-                const known_source_elem_rep = source_elem_rep orelse
-                    boxyLowerInvariant("exact dynamic list descriptor template had no element descriptor");
-                break :template_elem try self.adapterDescriptorForKnownRep(known_source_elem_rep);
-            }
             if (source_type_desc.nested_descs.len != 1) {
                 boxyLowerInvariant("planned list adapter source descriptor did not have exactly one element descriptor");
             }
@@ -20956,12 +21077,11 @@ const ProcBodyBuilder = struct {
             const known_source_elem_rep = source_elem_rep orelse
                 boxyLowerInvariant("planned list adapter source representation had no element representation");
             const source_elem_layout = self.parent.listElementLayout(source_layout);
-            const source_nested_desc_rep = self.nestedDescriptorRepForStorage(
-                known_source_elem_rep,
-                source_elem_layout,
-                self.parent.layoutIsBoxStorage(source_elem_layout),
-            );
-            if (source_nested_desc_rep == null) {
+            // An element whose layout carries no runtime descriptor has a
+            // statically known identity.
+            if (!self.parent.layoutIsBoxStorage(source_elem_layout) and
+                !self.parent.layoutNeedsNestedBoxyDesc(source_elem_layout))
+            {
                 break :runtime_elem try self.adapterDescriptorForKnownRep(known_source_elem_rep);
             }
             const nested_local = try self.addFrameLocal(.opaque_ptr);
@@ -22512,7 +22632,10 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const access = self.recordFieldAccessInfo(receiver_rep, field_view, field_name);
         const receiver_layout = self.workerRuntimeLayoutForRep(receiver_rep);
-        const nested_desc_index = self.recordFieldNestedDescriptorIndex(access.record_rep, access.field_idx);
+        const nested_desc_index: ?u32 = if (self.payloadFieldCarriesRuntimeDesc(access.record_rep, access.field_idx))
+            self.recordFieldNestedDescriptorIndex(access.record_rep, access.field_idx)
+        else
+            null;
         // The receiver's own descriptor describes the record it stores. A
         // nominal receiver's record is its declaration's shared backing
         // template, whose formals only the receiver's descriptor resolves.
@@ -22611,7 +22734,8 @@ const ProcBodyBuilder = struct {
         field_idx: u16,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const nested_desc_index = self.recordFieldNestedDescriptorIndex(record_rep, field_idx) orelse return next;
+        if (!self.payloadFieldCarriesRuntimeDesc(record_rep, field_idx)) return next;
+        const nested_desc_index = self.recordFieldNestedDescriptorIndex(record_rep, field_idx);
         const record_desc = try self.descriptorRefForLocalOrKnownRep(source, record_rep);
         if (self.parent.result.store.getLocal(target).boxy_desc) |desc| {
             if (desc.localOrNull() == null) return next;
@@ -22669,7 +22793,8 @@ const ProcBodyBuilder = struct {
         } }, self.origin);
         const tuple_rep = self.tupleRepForBoundary(source_rep) orelse
             boxyLowerInvariant("tuple field read source did not have a tuple representation");
-        const nested_index = self.tupleElemNestedDescriptorIndex(tuple_rep, elem_index) orelse return read;
+        if (!self.payloadFieldCarriesRuntimeDesc(tuple_rep, elem_index)) return read;
+        const nested_index = self.tupleElemNestedDescriptorIndex(tuple_rep, elem_index);
         const desc_local = try self.mutableDescriptorLocalForValue(target);
         if (self.localIsReadOnlyDescriptorInput(desc_local)) {
             boxyLowerInvariant("tuple field read target reused a read-only descriptor input");
@@ -23945,7 +24070,10 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         if (self.isZstLocal(target)) return try self.assignZst(target, next);
 
-        const nested_desc_index = self.recordFieldNestedDescriptorIndex(access.record_rep, access.field_idx);
+        const nested_desc_index: ?u32 = if (self.payloadFieldCarriesRuntimeDesc(access.record_rep, access.field_idx))
+            self.recordFieldNestedDescriptorIndex(access.record_rep, access.field_idx)
+        else
+            null;
         const record_desc = if (nested_desc_index != null)
             field_read.record_desc orelse try self.descriptorRefForLocalOrKnownRep(field_read.local, access.record_rep)
         else
@@ -27184,25 +27312,7 @@ const ProcBodyBuilder = struct {
         }
 
         const current_rep = self.parent.plan.representations.items[@intFromEnum(current_rep_identity)];
-        const payload_layout = self.parent.descriptorPayloadLayoutForRep(current_rep_identity);
-        var nested_index: u32 = 0;
-        if (current_rep.declared_fields.len != 0) {
-            for (self.parent.plan.declaredFieldSlice(current_rep.declared_fields)) |field| {
-                const field_layout = self.parent.recordPayloadFieldLayout(payload_layout, field.index);
-                const nested = self.nestedDescriptorRepForStorage(
-                    field.rep,
-                    field_layout,
-                    self.parent.layoutIsBoxStorage(field_layout),
-                ) orelse continue;
-                try read_path.append(self.parent.allocator, .{ .nested = nested_index });
-                if (try self.findDescriptorReadPath(nested, target_rep_id, read_path, active)) return true;
-                read_path.items.len -= 1;
-                nested_index += 1;
-            }
-            return false;
-        }
-
-        if (current_rep.kind == .box) {
+        if (current_rep.kind == .box and current_rep.declared_fields.len == 0) {
             // A Box payload read is its own descriptor operation: Box
             // descriptors are box-self or payload-direct.
             const payload = self.parent.repQuery().requiredSingleChild(current_rep_identity, .box_payload);
@@ -27212,28 +27322,17 @@ const ProcBodyBuilder = struct {
             return false;
         }
 
-        var record_field_index: u32 = 0;
-        for (self.parent.plan.childSlice(current_rep.children)) |child| {
-            if (child.role == .tag_ext) continue;
-            const field_layout = switch (child.role) {
-                .record_field => blk: {
-                    const layout_idx = self.parent.recordPayloadFieldLayout(payload_layout, record_field_index);
-                    record_field_index += 1;
-                    break :blk layout_idx;
-                },
-                .tuple_elem => |index| self.parent.recordPayloadFieldLayout(payload_layout, index),
-                .list_elem => self.parent.listElementLayout(payload_layout),
-                .box_payload, .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
-            };
-            const nested = self.nestedDescriptorRepForStorage(
-                child.rep,
-                field_layout,
-                self.parent.layoutIsBoxStorage(field_layout),
-            ) orelse continue;
-            try read_path.append(self.parent.allocator, .{ .nested = nested_index });
-            if (try self.findDescriptorReadPath(nested, target_rep_id, read_path, active)) return true;
+        var slots = std.ArrayList(ProcedureBuilder.NestedDescriptorSlot).empty;
+        defer slots.deinit(self.parent.allocator);
+        try self.parent.appendNestedDescriptorSlots(
+            current_rep_identity,
+            self.parent.descriptorPayloadLayoutForRep(current_rep_identity),
+            &slots,
+        );
+        for (slots.items, 0..) |slot, position| {
+            try read_path.append(self.parent.allocator, .{ .nested = @intCast(position) });
+            if (try self.findDescriptorReadPath(self.parent.nestedDescriptorSlotDescRep(slot), target_rep_id, read_path, active)) return true;
             read_path.items.len -= 1;
-            nested_index += 1;
         }
         return false;
     }
@@ -27272,54 +27371,19 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         parent_rep_id: Plan.TypeRepId,
         nested_rep_id: Plan.TypeRepId,
-    ) ?u32 {
-        const parent_rep = self.parent.plan.representations.items[@intFromEnum(parent_rep_id)];
-        const payload_layout = self.parent.descriptorPayloadLayoutForRep(parent_rep_id);
+    ) Allocator.Error!?u32 {
         const target_rep = self.descriptorStorageRep(nested_rep_id);
-        var desc_index: u32 = 0;
-
-        if (parent_rep.declared_fields.len != 0) {
-            for (self.parent.plan.declaredFieldSlice(parent_rep.declared_fields)) |field| {
-                const field_layout = self.parent.recordPayloadFieldLayout(payload_layout, field.index);
-                const force_field = self.parent.layoutIsBoxStorage(field_layout);
-                const desc_rep = self.nestedDescriptorRepForStorage(field.rep, field_layout, force_field) orelse continue;
-                if (self.descriptorStorageRep(desc_rep) == target_rep) return desc_index;
-                desc_index += 1;
-            }
-            return null;
+        var slots = std.ArrayList(ProcedureBuilder.NestedDescriptorSlot).empty;
+        defer slots.deinit(self.parent.allocator);
+        try self.parent.appendNestedDescriptorSlots(
+            parent_rep_id,
+            self.parent.descriptorPayloadLayoutForRep(parent_rep_id),
+            &slots,
+        );
+        for (slots.items, 0..) |slot, position| {
+            if (self.descriptorStorageRep(self.parent.nestedDescriptorSlotDescRep(slot)) == target_rep) return @intCast(position);
         }
-
-        var record_field_index: u32 = 0;
-        for (self.parent.plan.childSlice(parent_rep.children)) |child| {
-            if (child.role == .tag_ext) continue;
-            const field_layout = switch (child.role) {
-                .record_field => blk: {
-                    const field_layout = self.parent.recordPayloadFieldLayout(payload_layout, record_field_index);
-                    record_field_index += 1;
-                    break :blk field_layout;
-                },
-                .tuple_elem => |index| self.parent.recordPayloadFieldLayout(payload_layout, index),
-                .box_payload => self.parent.descriptorPayloadLayoutForRep(child.rep),
-                .list_elem => self.parent.listElementLayout(payload_layout),
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
-            };
-            const force_desc = child.role == .box_payload or self.parent.layoutIsBoxStorage(field_layout);
-            const desc_rep = self.nestedDescriptorRepForStorage(child.rep, field_layout, force_desc) orelse continue;
-            if (self.descriptorStorageRep(desc_rep) == target_rep) return desc_index;
-            desc_index += 1;
-        }
-
         return null;
-    }
-
-    fn nestedDescriptorRepForStorage(
-        self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
-        storage_layout: layout.Idx,
-        force: bool,
-    ) ?Plan.TypeRepId {
-        if (!force and !self.parent.layoutNeedsNestedBoxyDesc(storage_layout)) return null;
-        return self.parent.tagPayloadStorageDescRepForLayout(rep_id, storage_layout, force);
     }
 
     fn directCallResultDescriptorRef(
@@ -27627,6 +27691,7 @@ const ProcBodyBuilder = struct {
         try self.parent.result.boxy_type_descs.append(self.parent.allocator, .{
             .payload_layout = payload_layout,
             .contains_refcounted = self.parent.result.layouts.layoutContainsRefcounted(layout_value) or rep.contains_dynamic,
+            .shape = self.parent.descriptorShapeForRep(identity_rep),
             .nested_descs = .{ .start = nested_start, .len = 1 },
             .tag_variants = try self.parent.staticTagVariantsForRep(identity_rep, payload_layout),
             .tag_ext_desc = try self.parent.staticTagExtDescForRep(identity_rep),
@@ -28117,16 +28182,25 @@ const ProcBodyBuilder = struct {
 
         for (fields) |field| {
             const field_layout = self.parent.result.store.getLocal(field.local).layout_idx;
-            const force_field = self.parent.layoutIsBoxStorage(field_layout);
-            if (!force_field and !self.parent.layoutNeedsNestedBoxyDesc(field_layout)) continue;
             const storage_rep = self.constructedFieldStorageRep(field);
-            const desc_rep = self.parent.tagPayloadStorageDescRepForLayout(storage_rep, field_layout, force_field) orelse continue;
+            const desc_rep = self.parent.tagPayloadStorageDescRepForLayout(storage_rep, field_layout, true) orelse
+                boxyLowerInvariant("forced constructed field descriptor representation was not selected");
+            if (!self.parent.layoutNeedsNestedBoxyDesc(field_layout) and
+                self.parent.result.store.getLocal(field.local).boxy_desc == null)
+            {
+                // A field whose layout carries no runtime descriptor has a
+                // known identity.
+                const known = try self.descriptorRefForKnownRep(desc_rep);
+                if (known.localOrNull()) |local| try appendUniqueLocal(self.parent.allocator, &captures, local);
+                try refs.append(self.parent.allocator, known);
+                continue;
+            }
             const desc_local = try self.prepareConstructedFieldDescriptorLocal(field.local, desc_rep, &field_initializers);
             try refs.append(self.parent.allocator, .{ .local = desc_local });
             try appendUniqueLocal(self.parent.allocator, &captures, desc_local);
         }
 
-        if (refs.items.len == 0) {
+        if (captures.items.len == 0) {
             const initializers = try field_initializers.toOwnedSlice(self.parent.allocator);
             errdefer self.parent.allocator.free(initializers);
             const target_desc_info = try self.descriptorForConstructedTargetMaterialization(
@@ -28143,18 +28217,15 @@ const ProcBodyBuilder = struct {
         const nested_start: u32 = @intCast(self.parent.result.boxy_desc_refs.items.len);
         try self.parent.result.boxy_desc_refs.appendSlice(self.parent.allocator, refs.items);
 
+        // The constructed value is described by its representation's static
+        // descriptor, with each field's descriptor taken from the field value.
+        var completed = self.parent.result.boxy_type_descs.items[@intFromEnum(try self.parent.typeDescForRep(rep_id))];
+        if (completed.nested_descs.len != refs.items.len) {
+            boxyLowerInvariant("constructed aggregate fields disagreed with its descriptor's nested positions");
+        }
+        completed.nested_descs = .{ .start = nested_start, .len = @intCast(refs.items.len) };
         const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
-        const payload_layout = self.parent.descriptorPayloadLayoutForRep(rep_id);
-        const layout_value = self.parent.result.layouts.getLayout(payload_layout);
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        try self.parent.result.boxy_type_descs.append(self.parent.allocator, .{
-            .payload_layout = payload_layout,
-            .contains_refcounted = self.parent.result.layouts.layoutContainsRefcounted(layout_value) or rep.contains_dynamic,
-            .nested_descs = .{ .start = nested_start, .len = @intCast(refs.items.len) },
-            .field_names = try self.parent.staticFieldNamesForRep(rep_id),
-            .inspect_opaque = self.parent.repInspectsOpaque(rep_id),
-            .debug_checked_type = rep.source_type.ty,
-        });
+        try self.parent.result.boxy_type_descs.append(self.parent.allocator, completed);
         const capture_span = if (captures.items.len == 0)
             LIR.LocalSpan.empty()
         else
@@ -28686,10 +28757,7 @@ const ProcBodyBuilder = struct {
 
         const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
         try context.ids.put(desc_key, desc_id);
-        try self.parent.result.boxy_type_descs.append(self.parent.allocator, .{
-            .payload_layout = .zst,
-            .contains_refcounted = false,
-        });
+        try self.parent.result.boxy_type_descs.append(self.parent.allocator, reserved_boxy_type_desc);
 
         const payload_layout = self.parent.descriptorTemplatePayloadLayoutForRep(rep_id);
         const layout_value = self.parent.result.layouts.getLayout(payload_layout);
@@ -28705,6 +28773,7 @@ const ProcBodyBuilder = struct {
         const completed_desc = LirProgram.BoxyTypeDesc{
             .payload_layout = payload_layout,
             .contains_refcounted = self.parent.result.layouts.layoutContainsRefcounted(layout_value) or rep.contains_dynamic,
+            .shape = self.parent.descriptorShapeForRep(rep_id),
             .nested_descs = nested_descs,
             .tag_variants = tag_variants,
             .tag_ext_desc = tag_ext_desc,
@@ -28820,51 +28889,20 @@ const ProcBodyBuilder = struct {
         }
         const payload_layout = self.parent.descriptorTemplatePayloadLayoutForRep(rep_id);
 
-        var refs = std.ArrayList(LIR.BoxyDescRef).empty;
-        defer refs.deinit(self.parent.allocator);
-        if (rep.declared_fields.len != 0) {
-            const ordered = try self.parent.declaredFieldsInLayoutOrder(
-                self.parent.plan.declaredFieldSlice(rep.declared_fields),
-            );
-            defer self.parent.allocator.free(ordered);
-            for (ordered) |field| {
-                const field_layout = self.parent.recordPayloadFieldLayout(payload_layout, field.index);
-                const force_field = self.parent.layoutIsBoxStorage(field_layout);
-                if (!force_field and !self.parent.layoutNeedsNestedBoxyDesc(field_layout)) continue;
-                const desc_rep = self.parent.tagPayloadStorageDescRepForLayout(field.rep, field_layout, force_field) orelse continue;
-                try refs.append(self.parent.allocator, try self.descriptorTemplateRefForRep(desc_rep, current_desc, captures, context));
-            }
-        } else {
-            if (rep.children.len == 0) return .{};
-            var record_field_index: usize = 0;
-            for (self.parent.plan.childSlice(rep.children)) |child| {
-                if (child.role == .tag_ext) continue;
-                const field_layout = switch (child.role) {
-                    .record_field => blk: {
-                        const field_layout = self.parent.recordPayloadFieldLayout(payload_layout, record_field_index);
-                        record_field_index += 1;
-                        break :blk field_layout;
-                    },
-                    .tuple_elem => |index| self.parent.recordPayloadFieldLayout(payload_layout, index),
-                    .box_payload => self.parent.descriptorTemplatePayloadLayoutForRep(child.rep),
-                    .list_elem => self.parent.listElementLayout(payload_layout),
-                    .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
-                };
-                const force_desc = child.role == .box_payload or self.parent.layoutIsBoxStorage(field_layout);
-                if (!force_desc and !self.parent.layoutNeedsNestedBoxyDesc(field_layout)) continue;
-                const desc_rep = if (child.role == .box_payload)
-                    self.parent.tagPayloadStorageDescRep(child.rep)
-                else
-                    self.parent.tagPayloadStorageDescRepForLayout(child.rep, field_layout, force_desc) orelse continue;
-                const desc_ref = try self.descriptorTemplateRefForRep(desc_rep, current_desc, captures, context);
-                try refs.append(self.parent.allocator, desc_ref);
-            }
+        var slots = std.ArrayList(ProcedureBuilder.NestedDescriptorSlot).empty;
+        defer slots.deinit(self.parent.allocator);
+        try self.parent.appendNestedDescriptorSlots(rep_id, payload_layout, &slots);
+        if (slots.items.len == 0) return .{};
+
+        const refs = try self.parent.allocator.alloc(LIR.BoxyDescRef, slots.items.len);
+        defer self.parent.allocator.free(refs);
+        for (slots.items, refs) |slot, *ref| {
+            ref.* = try self.descriptorTemplateRefForRep(self.parent.nestedDescriptorSlotDescRep(slot), current_desc, captures, context);
         }
-        if (refs.items.len == 0) return .{};
 
         const start: u32 = @intCast(self.parent.result.boxy_desc_refs.items.len);
-        try self.parent.result.boxy_desc_refs.appendSlice(self.parent.allocator, refs.items);
-        return .{ .start = start, .len = @intCast(refs.items.len) };
+        try self.parent.result.boxy_desc_refs.appendSlice(self.parent.allocator, refs);
+        return .{ .start = start, .len = @intCast(refs.len) };
     }
 
     fn templateTagVariantsForRep(
@@ -31321,6 +31359,7 @@ const ProcBodyBuilder = struct {
         try self.parent.result.boxy_type_descs.append(self.parent.allocator, .{
             .payload_layout = payload_layout,
             .contains_refcounted = self.parent.result.layouts.layoutContainsRefcounted(layout_value),
+            .shape = .primitive,
             .debug_checked_type = checked_ty,
         });
         return .{ .static = desc_id };
@@ -31901,6 +31940,7 @@ const ProcBodyBuilder = struct {
             try self.parent.result.boxy_type_descs.append(self.parent.allocator, .{
                 .payload_layout = source_layout,
                 .contains_refcounted = self.parent.result.layouts.layoutContainsRefcounted(source_layout_value),
+                .shape = LirProgram.BoxyDescShape.forStorage(source_layout_value),
             });
             const payload_desc = LIR.BoxyDescRef{ .static = desc_id };
             self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
@@ -32139,6 +32179,20 @@ const ProcBodyBuilder = struct {
             .box, .box_of_zst, .erased_box => true,
             .scalar, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => false,
         };
+    }
+
+    /// Whether a field crossing a representation boundary keeps its target
+    /// template's static descriptor: neither side's representation carries
+    /// runtime-determined identity, and the field crosses unchanged.
+    fn boundaryFieldKeepsStaticDescriptor(
+        self: *ProcBodyBuilder,
+        target_rep: Plan.TypeRepId,
+        source_rep: Plan.TypeRepId,
+    ) bool {
+        const reps = self.parent.plan.representations.items;
+        return !reps[@intFromEnum(target_rep)].contains_dynamic and
+            !reps[@intFromEnum(source_rep)].contains_dynamic and
+            self.representationBoundaryIsDirect(target_rep, source_rep);
     }
 
     fn representationBoundaryIsDirect(
@@ -32900,43 +32954,25 @@ const ProcBodyBuilder = struct {
             );
         }
 
-        const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
-        const payload_layout = self.parent.descriptorPayloadLayoutForRep(identity_rep);
-        var nested_index: u32 = 0;
-
-        if (rep.declared_fields.len != 0) {
-            const ordered = try self.parent.declaredFieldsInLayoutOrder(
-                self.parent.plan.declaredFieldSlice(rep.declared_fields),
+        var slots = std.ArrayList(ProcedureBuilder.NestedDescriptorSlot).empty;
+        defer slots.deinit(self.parent.allocator);
+        try self.parent.appendNestedDescriptorSlots(
+            identity_rep,
+            self.parent.descriptorPayloadLayoutForRep(identity_rep),
+            &slots,
+        );
+        for (slots.items, 0..) |slot, position| {
+            // Only a child whose stored value carries a runtime descriptor can
+            // bind descriptor requirements.
+            if (!self.parent.nestedDescriptorSlotCarriesRuntimeDesc(slot)) continue;
+            try self.collectNestedDescriptorEnvironmentForRep(
+                self.parent.nestedDescriptorSlotDescRep(slot),
+                desc_ref,
+                @intCast(position),
+                bindings,
+                initializers,
+                seen,
             );
-            defer self.parent.allocator.free(ordered);
-            for (ordered) |field| {
-                const field_layout = self.parent.recordPayloadFieldLayout(payload_layout, field.index);
-                const force_field = self.parent.layoutIsBoxStorage(field_layout);
-                const nested_rep = self.nestedDescriptorRepForStorage(field.rep, field_layout, force_field) orelse continue;
-                try self.collectNestedDescriptorEnvironmentForRep(nested_rep, desc_ref, nested_index, bindings, initializers, seen);
-                nested_index += 1;
-            }
-            return;
-        }
-
-        var record_field_index: u32 = 0;
-        for (self.parent.plan.childSlice(rep.children)) |child| {
-            if (child.role == .tag_ext) continue;
-            const field_layout = switch (child.role) {
-                .record_field => blk: {
-                    const field_layout = self.parent.recordPayloadFieldLayout(payload_layout, record_field_index);
-                    record_field_index += 1;
-                    break :blk field_layout;
-                },
-                .tuple_elem => |index| self.parent.recordPayloadFieldLayout(payload_layout, index),
-                .box_payload => self.parent.descriptorPayloadLayoutForRep(child.rep),
-                .list_elem => self.parent.listElementLayout(payload_layout),
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
-            };
-            const force_desc = child.role == .box_payload or self.parent.layoutIsBoxStorage(field_layout);
-            const nested_rep = self.nestedDescriptorRepForStorage(child.rep, field_layout, force_desc) orelse continue;
-            try self.collectNestedDescriptorEnvironmentForRep(nested_rep, desc_ref, nested_index, bindings, initializers, seen);
-            nested_index += 1;
         }
     }
 
@@ -34028,8 +34064,8 @@ const ProcBodyBuilder = struct {
         var elem_desc_initializers = std.ArrayList(DescriptorArgLocal).empty;
         defer elem_desc_initializers.deinit(self.parent.allocator);
         try self.appendResultDescriptorInitializers(&elem_desc_initializers, source_elem_desc_info);
-        // Storage conversion needs a target-shaped descriptor even when the
-        // source descriptor omitted zero-sized or statically known fields.
+        // Storage conversion needs a target-shaped item descriptor, which
+        // differs from the source's when the item storage layouts differ.
         // Materialize once outside the loop, including for an empty list.
         const target_elem_desc_info = if (target_elem_desc_local != null and self.parent.listElementLayout(source_layout) != self.parent.listElementLayout(target_layout))
             try self.adapterDescriptorForCallBoundary(target_elem.rep, source_elem.rep, source_elem_desc_info, &elem_desc_initializers)
@@ -37504,37 +37540,26 @@ const ProcBodyBuilder = struct {
         boxyLowerInvariant("record field access referenced a field outside its checked type representation");
     }
 
+    /// Position of record field `field_idx` in its record descriptor's
+    /// nested descriptors: its payload field index.
     fn recordFieldNestedDescriptorIndex(
         self: *const ProcBodyBuilder,
         record_rep_id: Plan.TypeRepId,
         field_idx: u16,
-    ) ?u32 {
+    ) u32 {
         const rep = self.parent.plan.representations.items[@intFromEnum(record_rep_id)];
-        const payload_layout = self.parent.descriptorPayloadLayoutForRep(record_rep_id);
-        var desc_index: u32 = 0;
         if (rep.declared_fields.len != 0) {
-            var matched_has_desc: ?bool = null;
             for (self.parent.plan.declaredFieldSlice(rep.declared_fields)) |field| {
-                const field_layout = self.parent.recordPayloadFieldLayout(payload_layout, field.index);
-                const force_field = self.parent.layoutIsBoxStorage(field_layout);
-                const has_desc = self.parent.layoutNeedsNestedBoxyDesc(field_layout) and
-                    self.parent.tagPayloadStorageDescRepForLayout(field.rep, field_layout, force_field) != null;
-                if (field.index == field_idx) matched_has_desc = has_desc;
-                if (has_desc and field.index < field_idx) desc_index += 1;
+                if (field.index == field_idx) return field_idx;
             }
-            return if (matched_has_desc) |has_desc| if (has_desc) desc_index else null else boxyLowerInvariant("record field descriptor lookup referenced a field outside declared field order");
+            boxyLowerInvariant("record field descriptor lookup referenced a field outside declared field order");
         }
 
         var index: u16 = 0;
         for (self.parent.plan.childSlice(rep.children)) |child| {
             switch (child.role) {
                 .record_field => {
-                    const field_layout = self.parent.recordPayloadFieldLayout(payload_layout, index);
-                    const force_field = self.parent.layoutIsBoxStorage(field_layout);
-                    const has_desc = self.parent.layoutNeedsNestedBoxyDesc(field_layout) and
-                        self.parent.tagPayloadStorageDescRepForLayout(child.rep, field_layout, force_field) != null;
-                    if (index == field_idx) return if (has_desc) desc_index else null;
-                    if (has_desc) desc_index += 1;
+                    if (index == field_idx) return field_idx;
                     index += 1;
                 },
                 .record_ext => self.requireEmptyRecordExtension(child.rep),
@@ -37544,25 +37569,31 @@ const ProcBodyBuilder = struct {
         boxyLowerInvariant("record field descriptor lookup referenced a field outside its representation");
     }
 
+    /// Whether the value stored in field `field_idx` of `rep_id`'s payload
+    /// carries a runtime descriptor, rather than having only a static identity.
+    fn payloadFieldCarriesRuntimeDesc(
+        self: *const ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        field_idx: u32,
+    ) bool {
+        const field_layout = self.parent.recordPayloadFieldLayout(self.parent.descriptorPayloadLayoutForRep(rep_id), field_idx);
+        return self.parent.layoutIsBoxStorage(field_layout) or self.parent.layoutNeedsNestedBoxyDesc(field_layout);
+    }
+
+    /// Position of tuple element `elem_index` in its tuple descriptor's nested
+    /// descriptors: its element index.
     fn tupleElemNestedDescriptorIndex(
         self: *const ProcBodyBuilder,
         tuple_rep_id: Plan.TypeRepId,
         elem_index: u32,
-    ) ?u32 {
+    ) u32 {
         const rep = self.parent.plan.representations.items[@intFromEnum(tuple_rep_id)];
-        const payload_layout = self.parent.descriptorPayloadLayoutForRep(tuple_rep_id);
-        var desc_index: u32 = 0;
         for (self.parent.plan.childSlice(rep.children)) |child| {
             const index = switch (child.role) {
                 .tuple_elem => |index| index,
                 .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tuple descriptor lookup representation had a non-tuple child role"),
             };
-            const field_layout = self.parent.recordPayloadFieldLayout(payload_layout, index);
-            const force_field = self.parent.layoutIsBoxStorage(field_layout);
-            const has_desc = self.parent.layoutNeedsNestedBoxyDesc(field_layout) and
-                self.parent.tagPayloadStorageDescRepForLayout(child.rep, field_layout, force_field) != null;
-            if (index == elem_index) return if (has_desc) desc_index else null;
-            if (has_desc) desc_index += 1;
+            if (index == elem_index) return elem_index;
         }
         boxyLowerInvariant("tuple descriptor lookup referenced an element outside its representation");
     }
@@ -38605,11 +38636,13 @@ test "descriptor materialization captures close over recursive template graphs" 
         .{
             .payload_layout = .opaque_ptr,
             .contains_refcounted = false,
+            .shape = .internal,
             .nested_descs = .{ .start = 0, .len = 1 },
         },
         .{
             .payload_layout = .opaque_ptr,
             .contains_refcounted = false,
+            .shape = .internal,
             .nested_descs = .{ .start = 1, .len = 2 },
         },
     });
