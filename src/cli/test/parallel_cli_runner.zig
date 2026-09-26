@@ -404,6 +404,7 @@ const CustomCase = enum {
     native_build_artifact_round_trip,
     native_build_pack_objects,
     native_build_pack_hits,
+    literal_root_rejected_every_build,
     issue_11673_callable_cache,
     issue_11678_recursive_callback_cache,
     issue_11627_static_data_names_cache,
@@ -990,6 +991,8 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: boxy List.map result boxing preserves transform payloads (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--specialize=no"}, .roc_file = "test/echo/boxy_map_trim.roc", .stdout_exact = "Alice, Bob, Charlie\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: deferred iterator request reuses an eagerly lowered wrapper callee (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/iterator_wrapper_reuse.roc", .stdout_exact = "3\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: deferred iterator request reuses an eagerly lowered wrapper callee (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/iterator_wrapper_reuse.roc", .stdout_exact = "3\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: parametric interface summaries serve every unification-only instantiation (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/parametric_interface_summaries.roc", .stdout_exact = "[2, 3, 1]\nfirst 7\n21C <empty>\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: parametric interface summaries serve every unification-only instantiation (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/parametric_interface_summaries.roc", .stdout_exact = "[2, 3, 1]\nfirst 7\n21C <empty>\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: generated iterator identity is independent of checked provenance and value uses (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/generated_iterator_identity.roc", .stdout_exact = "[98, 100]\n[0, 2]\n4\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: generated iterator identity is independent of checked provenance and value uses (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/generated_iterator_identity.roc", .stdout_exact = "[98, 100]\n[0, 2]\n4\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11353 Boxy callable adapter reads Try backing descriptor (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11353.roc", .stdout_exact = "[Err(Unset), Err(Unset)]\n[Ok(7), Ok(7)]\n" } } },
@@ -1733,6 +1736,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: cached recursive callbacks retain method result rows", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_recursive_callback_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11627: cached procedure keeps its own constant after the app is edited", .timeout_ms = 600_000, .body = .{ .custom = .issue_11627_static_data_names_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev serves closed specializations from a previous build's packs", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_hits } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build reports a specialization's rejected literal on every build, cached or not", .timeout_ms = 600_000, .body = .{ .custom = .literal_root_rejected_every_build } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build reports a rejected literal whose type holds a callable", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/cli/literal_root_rejected/CallableLiteral.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "invalid string" }}, .occurrences = &.{.{ .stream = .stderr, .text = "invalid string", .count = 1 }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build macOS output basename does not affect bytes", .body = .{ .custom = .macos_output_basename_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on x64musl", .body = .{ .custom = .default_platform_crash_x64musl } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on arm64musl", .body = .{ .custom = .default_platform_crash_arm64musl } },
@@ -2356,6 +2361,12 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "composed try return includes the callback row (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/issue_11469_higher_order_try_error_row.roc", .exit = .success, .contains = &.{ .{ .stream = .stdout, .text = "save begin fails: BeginFailed(DbErr(BEGIN))" }, .{ .stream = .stdout, .text = "save insert fails: DbErr(INSERT)" }, .{ .stream = .stdout, .text = "save ok: ok" }, .{ .stream = .stdout, .text = "forward begin fails: BeginFailed(DbErr(BEGIN))" }, .{ .stream = .stdout, .text = "forward insert fails: DbErr(INSERT)" }, .{ .stream = .stdout, .text = "forward ok: ok" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "composed try return includes the callback row (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/fx-open/issue_11469_higher_order_try_error_row.roc", .exit = .success, .contains = &.{ .{ .stream = .stdout, .text = "save begin fails: BeginFailed(DbErr(BEGIN))" }, .{ .stream = .stdout, .text = "save insert fails: DbErr(INSERT)" }, .{ .stream = .stdout, .text = "save ok: ok" }, .{ .stream = .stdout, .text = "forward begin fails: BeginFailed(DbErr(BEGIN))" }, .{ .stream = .stdout, .text = "forward insert fails: DbErr(INSERT)" }, .{ .stream = .stdout, .text = "forward ok: ok" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "composed try return includes the callback row (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/fx-open/issue_11469_higher_order_try_error_row.roc", .exit = .success, .contains = &.{ .{ .stream = .stdout, .text = "save begin fails: BeginFailed(DbErr(BEGIN))" }, .{ .stream = .stdout, .text = "save insert fails: DbErr(INSERT)" }, .{ .stream = .stdout, .text = "save ok: ok" }, .{ .stream = .stdout, .text = "forward begin fails: BeginFailed(DbErr(BEGIN))" }, .{ .stream = .stdout, .text = "forward insert fails: DbErr(INSERT)" }, .{ .stream = .stdout, .text = "forward ok: ok" } } } } },
+    // A tag row names each tag once however many links repeat it (issue
+    // 11621): recursive functions using `?`, directly, mutually, and through a
+    // generalized helper, and a callback failing with the helper's own tag.
+    .{ .id = 0, .suite = .subcommands, .name = "recursive functions using ? compose their error rows (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/issue_11621_recursive_try.roc", .exit = .success, .contains = &.{ .{ .stream = .stdout, .text = "collect: Ok([0, 1, 2])" }, .{ .stream = .stdout, .text = "collect fails: Err(StepFailed)" }, .{ .stream = .stdout, .text = "ping: Ok([0, 1, 2])" }, .{ .stream = .stdout, .text = "ping fails: Err(StopFailed)" }, .{ .stream = .stdout, .text = "apply step: Ok(More)" }, .{ .stream = .stdout, .text = "apply step fails: Err(StepFailed)" }, .{ .stream = .stdout, .text = "apply step fails in callback: Err(StepFailed)" }, .{ .stream = .stdout, .text = "countdown: Ok(Done)" }, .{ .stream = .stdout, .text = "countdown fails: Err(StepFailed)" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "recursive functions using ? compose their error rows (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/fx-open/issue_11621_recursive_try.roc", .exit = .success, .contains = &.{ .{ .stream = .stdout, .text = "collect: Ok([0, 1, 2])" }, .{ .stream = .stdout, .text = "collect fails: Err(StepFailed)" }, .{ .stream = .stdout, .text = "ping: Ok([0, 1, 2])" }, .{ .stream = .stdout, .text = "ping fails: Err(StopFailed)" }, .{ .stream = .stdout, .text = "apply step: Ok(More)" }, .{ .stream = .stdout, .text = "apply step fails: Err(StepFailed)" }, .{ .stream = .stdout, .text = "apply step fails in callback: Err(StepFailed)" }, .{ .stream = .stdout, .text = "countdown: Ok(Done)" }, .{ .stream = .stdout, .text = "countdown fails: Err(StepFailed)" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "recursive functions using ? compose their error rows (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/fx-open/issue_11621_recursive_try.roc", .exit = .success, .contains = &.{ .{ .stream = .stdout, .text = "collect: Ok([0, 1, 2])" }, .{ .stream = .stdout, .text = "collect fails: Err(StepFailed)" }, .{ .stream = .stdout, .text = "ping: Ok([0, 1, 2])" }, .{ .stream = .stdout, .text = "ping fails: Err(StopFailed)" }, .{ .stream = .stdout, .text = "apply step: Ok(More)" }, .{ .stream = .stdout, .text = "apply step fails: Err(StepFailed)" }, .{ .stream = .stdout, .text = "apply step fails in callback: Err(StepFailed)" }, .{ .stream = .stdout, .text = "countdown: Ok(Done)" }, .{ .stream = .stdout, .text = "countdown fails: Err(StepFailed)" } } } } },
     // The non-`?` channels that do typecheck keep the extern declared-typed, so
     // each channel delivers the host's Ok rather than a misread Err.
     .{ .id = 0, .suite = .subcommands, .name = "hosted Ok survives every accepted non-? channel (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/hosted_channels_declared.roc", .exit = .success, .contains = &.{ .{ .stream = .stdout, .text = "annotation: ok" }, .{ .stream = .stdout, .text = "argument: ok" }, .{ .stream = .stdout, .text = "record field: ok" }, .{ .stream = .stdout, .text = "closed wider: ok" }, .{ .stream = .stdout, .text = "retag: ok" } }, .not_contains = &.{.{ .stream = .stdout, .text = "misread" }} } } },
@@ -3372,6 +3383,7 @@ fn runCustomCase(
         .issue_11678_recursive_callback_cache => customIssue11678RecursiveCallbackCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11627_static_data_names_cache => customIssue11627StaticDataNamesCache(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_hits => customNativeBuildPackHits(io, allocator, &env, &timer, timeout_ms),
+        .literal_root_rejected_every_build => customLiteralRootRejectedEveryBuild(io, allocator, &env, &timer, timeout_ms),
         .issue_10733_wasm_boxy_dev_sealed_object => customIssue10733WasmBoxyDevSealedObject(io, allocator, &env, &timer, timeout_ms),
         .issue_10827_private_compiler_support => customIssue10827PrivateCompilerSupport(io, allocator, &env, &timer, timeout_ms),
         .issue_11134_wasm_post_llvm_pipeline => customWasmPostLlvmPipeline(io, allocator, &env, &timer, timeout_ms),
@@ -6195,10 +6207,65 @@ fn customNativeBuildPackHits(
         .{ .roc_file = roc_file, .prefix = "store" },
         .{ .roc_file = "test/cli/pack_values/PackValues.roc", .prefix = "values" },
         .{ .roc_file = "test/cli/pack_constants/PackConstants.roc", .prefix = "constants" },
+        .{ .roc_file = "test/cli/pack_literal_roots/PackLiteralRoots.roc", .prefix = "literal_roots" },
         .{ .roc_file = comptime_app, .prefix = "comptime", .expect = .{ .edit_between_builds = true, .evaluator_artifacts = true } },
     };
     for (store_apps) |app| {
         if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app.roc_file, warm_dir, app.prefix, app.expect)) |failure| return failure;
+    }
+    return null;
+}
+
+/// A literal that only a specialization made by the app converts, inside a
+/// module an earlier build cached clean, is converted at compile time and
+/// reported on every build: with the object cache on and off, from a
+/// compile-time constant that reads it (reported where the constant is,
+/// naming the literal), and from code that only runs at runtime (reported at
+/// the literal).
+fn customLiteralRootRejectedEveryBuild(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const exe = std.fmt.allocPrint(allocator, "{s}/literal_root_rejected", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const out_arg = outputArg(allocator, exe) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+    const Build = struct { roc_file: []const u8, no_cache: bool = false, reported_at: ?[]const u8 };
+    const builds = [_]Build{
+        // Caches Query clean: nothing in this app specializes its literal.
+        .{ .roc_file = "test/cli/literal_root_rejected/Clean.roc", .reported_at = null },
+        .{ .roc_file = "test/cli/literal_root_rejected/Rejecting.roc", .reported_at = "Rejecting.roc" },
+        .{ .roc_file = "test/cli/literal_root_rejected/Rejecting.roc", .reported_at = "Rejecting.roc" },
+        .{ .roc_file = "test/cli/literal_root_rejected/Rejecting.roc", .no_cache = true, .reported_at = "Rejecting.roc" },
+        .{ .roc_file = "test/cli/literal_root_rejected/RejectingAtRuntime.roc", .reported_at = "Query.roc" },
+        .{ .roc_file = "test/cli/literal_root_rejected/RejectingAtRuntime.roc", .reported_at = "Query.roc" },
+        .{ .roc_file = "test/cli/literal_root_rejected/RejectingAtRuntime.roc", .no_cache = true, .reported_at = "Query.roc" },
+    };
+    for (builds) |build| {
+        const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+        const args: []const []const u8 = if (build.no_cache)
+            &.{ "build", "--no-cache", "--opt=dev", out_arg }
+        else
+            &.{ "build", "--opt=dev", out_arg };
+        const built = runRocInEnv(io, allocator, env, args, build.roc_file, .relative, &.{}, null, build_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+        if (std.mem.find(u8, built.stderr, "panic") != null or std.mem.find(u8, built.stderr, "invariant violated") != null) {
+            return failureFromRun(allocator, timer, built, "build crashed the compiler");
+        }
+        const reports = std.mem.count(u8, built.stderr, "invalid string");
+        const expected_reports: usize = if (build.reported_at == null) 0 else 1;
+        if (reports != expected_reports) {
+            return failureFromRun(allocator, timer, built, "build did not report the rejected literal exactly as often as expected");
+        }
+        if (build.reported_at) |file| {
+            if (std.mem.find(u8, built.stderr, file) == null) {
+                return failureFromRun(allocator, timer, built, "build reported the rejected literal in the wrong module");
+            }
+        }
     }
     return null;
 }

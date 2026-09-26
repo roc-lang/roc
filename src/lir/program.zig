@@ -431,6 +431,36 @@ pub const ConstRootPlan = struct {
     /// when a consumer asked for the value to be materialized. Null when no
     /// consumer of this program reads the value.
     value_slot: ?LIR.StaticDataId = null,
+
+    pub fn shape(self: ConstRootPlan) RootShape {
+        return .{ .ret_layout = self.ret_layout, .plan = self.plan };
+    }
+};
+
+/// The representation an evaluated root's value is frozen from.
+pub const RootShape = struct {
+    ret_layout: layout.Idx,
+    plan: ConstPlanId,
+};
+
+/// One literal root: a custom literal's conversion, at the concrete type one
+/// specialization gives it, evaluated at compile time. Its procedure returns
+/// the converted value and crashes at the literal's rejection when the
+/// conversion returns `Err`.
+pub const LiteralRootPlan = struct {
+    /// Checked module that owns the literal.
+    module: checked.ModuleId,
+    id: LIR.LiteralRootId,
+    site: LIR.LiteralRejectionSite,
+    proc: LIR.LirProcSpecId,
+    ret_layout: layout.Idx,
+    plan: ConstPlanId,
+    /// Every consumer that reads a literal root reads it from this slot.
+    value_slot: LIR.StaticDataId,
+
+    pub fn shape(self: LiteralRootPlan) RootShape {
+        return .{ .ret_layout = self.ret_layout, .plan = self.plan };
+    }
 };
 
 /// One exact LIR value construction that is frozen as readonly target data.
@@ -449,7 +479,7 @@ pub const StaticDataValue = struct {
     /// evidence; materialization must consume the completed root value.
     compile_time_root: ?struct {
         module: checked.ModuleId,
-        root: checked.ComptimeRootId,
+        root: LIR.ComptimeProducer,
         const_locator: ?checked.ConstLocator,
         role: union(enum) {
             value: struct { failure_slot: LIR.StaticDataId, plan: ConstPlanId },
@@ -541,6 +571,7 @@ pub const Result = struct {
     boxy_erased_arg_desc_params: std.ArrayList(LIR.ErasedArgDescParam),
     const_plans: std.ArrayList(ConstPlan),
     const_roots: std.ArrayList(ConstRootPlan),
+    literal_roots: std.ArrayList(LiteralRootPlan),
     static_data_values: std.ArrayList(StaticDataValue),
     comptime_value_guards: std.ArrayList(ComptimeValueGuard),
     comptime_sites: std.ArrayList(LIR.ComptimeSite),
@@ -584,6 +615,7 @@ pub const Result = struct {
             .boxy_erased_arg_desc_params = .empty,
             .const_plans = .empty,
             .const_roots = .empty,
+            .literal_roots = .empty,
             .static_data_values = .empty,
             .comptime_value_guards = .empty,
             .comptime_sites = .empty,
@@ -606,6 +638,7 @@ pub const Result = struct {
         self.comptime_value_guards.deinit(allocator);
         deinitConstPlans(allocator, self.const_plans.items);
         self.const_roots.deinit(allocator);
+        self.literal_roots.deinit(allocator);
         self.const_plans.deinit(allocator);
         deinitFnSets(allocator, self.fn_sets.items);
         deinitErasedFns(allocator, self.erased_fns.items);

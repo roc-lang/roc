@@ -405,6 +405,8 @@ pub const Interpreter = struct {
     failed_stmt_region: base.Region = base.Region.zero(),
     /// Virtual source frame captured with the failed statement location.
     failed_stmt_inline_scope: InlineScopeId = InlineScopeId.none,
+    /// The crash statement that ended the current evaluation, if one did.
+    failed_crash_stmt: ?LIR.CFStmtId = null,
     comptime_branch_hits: std.ArrayList(ComptimeBranchHit),
     comptime_failed_site: ?LIR.ComptimeSiteId = null,
     /// Heap-pinned owner used by host-facing integrations whose erased
@@ -957,6 +959,11 @@ pub const Interpreter = struct {
         return self.failed_call_stack.items;
     }
 
+    /// The crash statement that ended the last evaluation, if one did.
+    pub fn getFailedCrashStmt(self: *const LirInterpreter) ?LIR.CFStmtId {
+        return self.failed_crash_stmt;
+    }
+
     pub fn getFailedSourceLoc(self: *const LirInterpreter) ?base.SourceLoc {
         if (self.failed_stmt_loc.hasLocation()) return self.failed_stmt_loc;
         return null;
@@ -1119,6 +1126,7 @@ pub const Interpreter = struct {
         self.failed_stmt_loc = base.SourceLoc.none;
         self.failed_stmt_region = base.Region.zero();
         self.failed_stmt_inline_scope = InlineScopeId.none;
+        self.failed_crash_stmt = null;
         self.comptime_failed_site = null;
         if (builtin.mode == .Debug) self.inflight_zeroed_box_payloads.clearRetainingCapacity();
     }
@@ -1430,6 +1438,7 @@ pub const Interpreter = struct {
         self.failed_stmt_loc = base.SourceLoc.none;
         self.failed_stmt_region = base.Region.zero();
         self.failed_stmt_inline_scope = InlineScopeId.none;
+        self.failed_crash_stmt = null;
         self.comptime_branch_hits.clearRetainingCapacity();
         self.comptime_failed_site = null;
         if (builtin.mode == .Debug) self.inflight_zeroed_box_payloads.clearRetainingCapacity();
@@ -3436,6 +3445,7 @@ pub const Interpreter = struct {
                 },
                 .ret => |ret_stmt| return .{ .returned = ret_stmt.value },
                 .crash => |crash_stmt| {
+                    self.failed_crash_stmt = current;
                     if (@intFromEnum(current) < self.failure_origins.len) {
                         if (self.failure_origins[@intFromEnum(current)]) |origin| {
                             self.failed_stmt_loc = origin.loc orelse base.SourceLoc.none;
@@ -7181,7 +7191,6 @@ pub const Interpreter = struct {
             .num_acos => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .acos),
             .num_atan => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .atan),
             .num_log => self.evalNumLog(args[0], ll.ret_layout, arg_layout),
-            .num_round => self.evalNumRound(args[0], ll.ret_layout, arg_layout),
             .num_floor => self.evalNumFloor(args[0], ll.ret_layout, arg_layout),
             .num_ceiling => self.evalNumCeiling(args[0], ll.ret_layout, arg_layout),
 
@@ -8428,26 +8437,6 @@ pub const Interpreter = struct {
             .signed_int, .unsigned_int => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: integer num_{s} survived lowering for layout {d}",
                 .{ @tagName(op), @intFromEnum(arg_layout) },
-            ),
-        }
-        return val;
-    }
-
-    fn evalNumRound(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
-        const val = try self.alloc(ret_layout);
-        switch (try self.numericOperandKind(arg_layout)) {
-            .dec => {
-                const dec = RocDec{ .num = a.read(i128) };
-                val.write(i128, RocDec.round(dec, &self.roc_ops).num);
-            },
-            .float => |bits| switch (bits) {
-                32 => val.write(f32, @round(a.read(f32))),
-                64 => val.write(f64, @round(a.read(f64))),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float round width {d}", .{bits}),
-            },
-            .signed_int, .unsigned_int => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: integer num_round survived lowering for layout {d}",
-                .{@intFromEnum(arg_layout)},
             ),
         }
         return val;

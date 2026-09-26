@@ -3049,6 +3049,7 @@ Builtin :: [].{
 		# The general unfold. `advance` maps a seed to either the next item paired with the
 		# next seed, or `NoMore`. `custom` owns rebuilding the rest from the new seed, so the
 		# seed type stays hidden inside the step closure and never appears in `Iter(item)`.
+		# `Known(n)` is a promise: yielding more than n items crashes. Fewer is allowed.
 		custom : state, [Known(U64), Unknown], (state -> Try((item, state), [NoMore])) -> Iter(item)
 		custom = |seed, len_if_known, advance|
 			iter_from_step(
@@ -3060,6 +3061,11 @@ Builtin :: [].{
 								item,
 								rest: Iter.custom(
 									next_seed,
+									# A source that outlives its `Known` count crashes on this
+									# subtraction, before the extra item reaches the unchecked
+									# append in `List.from_iter`. No extra branch here: ranges
+									# are built on `custom`, and loops rely on this step
+									# optimizing away completely.
 									match len_if_known {
 										Known(l) => Known(l - 1)
 										Unknown => Unknown
@@ -3458,7 +3464,8 @@ Builtin :: [].{
 
 	## An effectful iterator: identical to [Iter] except that its `step!` thunk is
 	## effectful, so combinators like [Stream.map!] can run effects per item while
-	## staying lazy. Produced from an [Iter] via [Iter.map!] and driven by [Stream.collect!].
+	## staying lazy. Produced from an [Iter] via [Iter.map!], or from an effectful source
+	## via [Stream.custom], and driven by [Stream.collect!].
 	Stream(item) :: {
 		len_if_known : [Known(U64), Unknown],
 		step! : () => [One({ item : item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done],
@@ -3476,6 +3483,41 @@ Builtin :: [].{
 						Done => Done
 						Skip({ rest }) => Skip({ rest: Stream.from_iter(rest) })
 						One({ item, rest }) => One({ item, rest: Stream.from_iter(rest) })
+					},
+			}
+
+		## Build a lazy, effectful stream from a seed; the effectful counterpart of [Iter.custom].
+		## Each pull runs `advance!` exactly once: `Ok((item, next_state))` yields `item` and
+		## continues from `next_state`, while `Err(NoMore)` ends the stream. Building the
+		## stream runs no effects. `Known(n)` promises exactly n items; sources whose length
+		## is only discovered by reading (files, stdin, sockets) use `Unknown`. A source that
+		## yields more items than its `Known` count reports `Unknown` from then on.
+		##
+		## Source errors belong in `item` (e.g. `Try(List(U8), ReadErr)`). To stop after an
+		## error, yield it paired with a terminal state that holds no resource, so the
+		## resource is released rather than retained by the rest of the stream.
+		custom : state, [Known(U64), Unknown], (state => Try((item, state), [NoMore])) -> Stream(item)
+		custom = |seed, len_if_known, advance!|
+			{
+				len_if_known,
+				step!: ||
+					match advance!(seed) {
+						Ok((item, next_seed)) =>
+							One({
+								item,
+								rest: Stream.custom(
+									next_seed,
+									# A source that outlives its `Known` count degrades to
+									# `Unknown` instead of underflowing the countdown.
+									match len_if_known {
+										Known(0) => Unknown
+										Known(l) => Known(l - 1)
+										Unknown => Unknown
+									},
+									advance!,
+								),
+							})
+						Err(NoMore) => Done
 					},
 			}
 
@@ -3527,10 +3569,11 @@ Builtin :: [].{
 		## into a [List] (pre-sized from `len_if_known` when known).
 		collect! : Stream(item) => List(item)
 		collect! = |stream| {
-			# `Known(n)` guarantees exactly n items (count-changing combinators
-			# report `Unknown`), so reserve up front and use the unchecked append.
-			# When the length is unknown, start empty and grow with the reserving
-			# append—the unchecked append would corrupt a zero-capacity list.
+			# `Known(n)` promises n items (count-changing combinators report
+			# `Unknown`), so reserve up front and use the unchecked append while
+			# the reservation lasts. `Stream.custom` hints come from the caller and
+			# may undercount, so past `cap` use the reserving append instead: the
+			# unchecked append would write past the list's capacity.
 			length = Stream.size_hint(stream)
 			cap = match length {
 				Known(n) => n
@@ -3547,9 +3590,10 @@ Builtin :: [].{
 						$rest = rest
 					}
 					One({ item, rest }) => {
-						$list = match length {
-							Known(_) => list_append_unsafe($list, item)
-							Unknown => List.append($list, item)
+						$list = if List.len($list) < cap {
+							list_append_unsafe($list, item)
+						} else {
+							List.append($list, item)
 						}
 						$rest = rest
 					}
@@ -14794,6 +14838,51 @@ Builtin :: [].{
 				else
 					b
 
+			## Returns `True` if `a` and `b` are within the given tolerances of each
+			## other: `|a - b| <= max(abs, rel * max(|a|, |b|))`.
+			##
+			## - `rel`: allowed difference as a fraction of the larger magnitude.
+			## - `abs`: allowed difference regardless of magnitude.
+			##
+			## [Dec] addition and subtraction are exact, so `==` is usually what you
+			## want; this helps with rounded results such as division or `sqrt`. It never
+			## overflows: a difference too large for a [Dec] is never approximately equal.
+			## This is not transitive, so do not use it as equality for `Dict`/`Set` keys.
+			##
+			## Crashes unless `0 <= rel <= 1` and `abs >= 0`.
+			## ```roc
+			## expect Dec.is_approx_eq(1.0, 1.01, { rel: 0.01, abs: 0.0 })
+			##
+			## expect Dec.is_approx_eq(100.0, 109.0, { rel: 0.0, abs: 10.0 })
+			##
+			## expect !Dec.is_approx_eq(100.0, 111.0, { rel: 0.0, abs: 10.0 })
+			##
+			## expect !Dec.is_approx_eq(Dec.highest, Dec.lowest, { rel: 1.0, abs: 0.0 })
+			## ```
+			is_approx_eq : Dec, Dec, { rel : Dec, abs : Dec } -> Bool
+			is_approx_eq = |a, b, { rel, abs }| {
+				if !(rel >= 0.0 and rel <= 1.0 and abs >= 0.0) {
+					crash "Dec.is_approx_eq: rel must be in [0, 1] and abs non-negative"
+				}
+
+				if a == b {
+					True
+				} else {
+					diff_result = if a > b Dec.minus_try(a, b) else Dec.minus_try(b, a)
+					match diff_result {
+						Ok(diff) => {
+							magnitude = if a == Dec.lowest or b == Dec.lowest {
+								Dec.highest
+							} else {
+								Dec.max(Dec.abs(a), Dec.abs(b))
+							}
+							diff <= Dec.max(abs, rel * magnitude)
+						}
+						Err(Overflow) => False
+					}
+				}
+			}
+
 			## Negate a [Dec].
 			## ```roc
 			## expect Dec.negate(3.5) == -3.5
@@ -15046,6 +15135,149 @@ Builtin :: [].{
 			## expect Dec.abs_diff(-1.5, 5.0) == 6.5
 			## ```
 			abs_diff : Dec, Dec -> Dec
+
+			## Round a [Dec] to the nearest whole number, keeping it a [Dec]. Halfway
+			## values round away from zero, matching [Dec.round_to_i128].
+			##
+			## Crashes if the result does not fit in a [Dec], which only happens within
+			## half of one of [Dec.highest] or [Dec.lowest]. Use [Dec.round_try] to
+			## handle that case.
+			## ```roc
+			## expect Dec.round(2.5) == 3.0
+			##
+			## expect Dec.round(-2.5) == -3.0
+			##
+			## expect Dec.round(2.4999) == 2.0
+			## ```
+			round : Dec -> Dec
+			round = |self|
+				match Dec.round_try(self) {
+					Ok(rounded) => rounded
+					Err(Overflow) => {
+						crash "Dec.round overflowed"
+					}
+				}
+
+			## Like [Dec.round], but returns `Err(Overflow)` instead of crashing when
+			## the rounded value does not fit in a [Dec].
+			## ```roc
+			## expect Dec.round_try(2.5) == Ok(3.0)
+			##
+			## expect Dec.round_try(Dec.highest) == Err(Overflow)
+			## ```
+			round_try : Dec -> Try(Dec, [Overflow])
+			round_try = |self| dec_round_to_multiple_try(self, dec_attos_per_whole, AwayFromZero)
+
+			## Round a [Dec] down to the nearest whole number, toward negative infinity.
+			##
+			## Crashes if the result does not fit in a [Dec], which only happens for
+			## values below `Dec.lowest + 1`. Use [Dec.floor_try] to handle that case.
+			## ```roc
+			## expect Dec.floor(2.7) == 2.0
+			##
+			## expect Dec.floor(-2.1) == -3.0
+			## ```
+			floor : Dec -> Dec
+			floor = |self|
+				match Dec.floor_try(self) {
+					Ok(floored) => floored
+					Err(Overflow) => {
+						crash "Dec.floor overflowed"
+					}
+				}
+
+			## Like [Dec.floor], but returns `Err(Overflow)` instead of crashing when
+			## the result does not fit in a [Dec].
+			## ```roc
+			## expect Dec.floor_try(-2.1) == Ok(-3.0)
+			##
+			## expect Dec.floor_try(Dec.lowest) == Err(Overflow)
+			## ```
+			floor_try : Dec -> Try(Dec, [Overflow])
+			floor_try = |self| dec_attos_multiple_try(I128.div_floor_by(Dec.to_attos(self), dec_attos_per_whole), dec_attos_per_whole)
+
+			## Round a [Dec] up to the nearest whole number, toward positive infinity.
+			##
+			## Crashes if the result does not fit in a [Dec], which only happens for
+			## values above `Dec.highest - 1`. Use [Dec.ceiling_try] to handle that case.
+			## ```roc
+			## expect Dec.ceiling(2.1) == 3.0
+			##
+			## expect Dec.ceiling(-2.7) == -2.0
+			## ```
+			ceiling : Dec -> Dec
+			ceiling = |self|
+				match Dec.ceiling_try(self) {
+					Ok(ceiled) => ceiled
+					Err(Overflow) => {
+						crash "Dec.ceiling overflowed"
+					}
+				}
+
+			## Like [Dec.ceiling], but returns `Err(Overflow)` instead of crashing when
+			## the result does not fit in a [Dec].
+			## ```roc
+			## expect Dec.ceiling_try(2.1) == Ok(3.0)
+			##
+			## expect Dec.ceiling_try(Dec.highest) == Err(Overflow)
+			## ```
+			ceiling_try : Dec -> Try(Dec, [Overflow])
+			ceiling_try = |self| dec_attos_multiple_try(I128.div_ceil_by(Dec.to_attos(self), dec_attos_per_whole), dec_attos_per_whole)
+
+			## Drop the fractional part of a [Dec], rounding toward zero. This never
+			## overflows.
+			## ```roc
+			## expect Dec.trunc(2.7) == 2.0
+			##
+			## expect Dec.trunc(-2.7) == -2.0
+			## ```
+			trunc : Dec -> Dec
+			trunc = |self| Dec.from_attos(I128.div_trunc_by(Dec.to_attos(self), dec_attos_per_whole) * dec_attos_per_whole)
+
+			## Round a [Dec] to the nearest multiple of `step`: `0.01` for cents, `0.05`
+			## for cash rounding, `1000` for thousands.
+			##
+			## `ties` chooses what happens to values exactly halfway between two
+			## multiples: `AwayFromZero` rounds them away from zero, and `ToEven`
+			## (banker's rounding) picks the even multiple, which avoids systematic drift
+			## when many rounded values are summed.
+			##
+			## Crashes if `step` is not positive, or if the result does not fit in a
+			## [Dec]. Use [Dec.round_to_try] to handle overflow.
+			## ```roc
+			## expect Dec.round_to(19.995, { step: 0.01, ties: AwayFromZero }) == 20.0
+			##
+			## expect Dec.round_to(2.345, { step: 0.01, ties: ToEven }) == 2.34
+			##
+			## expect Dec.round_to(7.23, { step: 0.05, ties: AwayFromZero }) == 7.25
+			##
+			## expect Dec.round_to(1500, { step: 1000, ties: ToEven }) == 2000
+			## ```
+			round_to : Dec, { step : Dec, ties : [AwayFromZero, ToEven] } -> Dec
+			round_to = |self, options|
+				match Dec.round_to_try(self, options) {
+					Ok(rounded) => rounded
+					Err(Overflow) => {
+						crash "Dec.round_to overflowed"
+					}
+				}
+
+			## Like [Dec.round_to], but returns `Err(Overflow)` instead of crashing when
+			## the result does not fit in a [Dec]. Still crashes if `step` is not
+			## positive.
+			## ```roc
+			## expect Dec.round_to_try(2.345, { step: 0.01, ties: AwayFromZero }) == Ok(2.35)
+			##
+			## expect Dec.round_to_try(Dec.highest, { step: 1000, ties: ToEven }) == Err(Overflow)
+			## ```
+			round_to_try : Dec, { step : Dec, ties : [AwayFromZero, ToEven] } -> Try(Dec, [Overflow])
+			round_to_try = |self, { step, ties }| {
+				step_attos = Dec.to_attos(step)
+				if step_attos <= 0 {
+					crash "Dec.round_to: step must be positive"
+				}
+				dec_round_to_multiple_try(self, step_attos, ties)
+			}
 
 			## Round a [Dec] to the nearest [I8]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
@@ -15777,6 +16009,42 @@ Builtin :: [].{
 			## expect !F32.is_float_eq(F32.nan, F32.nan)
 			## ```
 			is_float_eq : F32, F32 -> Bool
+
+			## Returns `True` if `a` and `b` are equal within the given tolerances:
+			## exactly equal (including `+0.0`/`-0.0` and same-sign infinities), or both
+			## finite with `|a - b| <= max(abs, rel * max(|a|, |b|))`.
+			##
+			## - `rel`: allowed difference as a fraction of the larger magnitude.
+			## - `abs`: allowed difference regardless of magnitude; needed near zero.
+			##
+			## `NaN` is never approximately equal to anything, including itself. An
+			## infinity is only equal to the same infinity. This is not transitive, so do
+			## not use it as equality for `Dict`/`Set` keys.
+			##
+			## Crashes unless `0 <= rel <= 1` and `abs` is finite and `>= 0`.
+			## ```roc
+			## expect F32.is_approx_eq(0.1 + 0.2, 0.3, { rel: 1e-6, abs: 0.0 })
+			##
+			## expect F32.is_approx_eq(1e-20, 0.0, { rel: 1e-9, abs: 1e-12 })
+			##
+			## expect !F32.is_approx_eq(1e-20, 0.0, { rel: 1e-9, abs: 0.0 })
+			##
+			## expect !F32.is_approx_eq(F32.nan, F32.nan, { rel: 1.0, abs: 1.0 })
+			## ```
+			is_approx_eq : F32, F32, { rel : F32, abs : F32 } -> Bool
+			is_approx_eq = |a, b, { rel, abs }| {
+				if !(rel >= 0.0 and rel <= 1.0 and abs >= 0.0 and F32.is_finite(abs)) {
+					crash "F32.is_approx_eq: rel must be in [0, 1] and abs finite and non-negative"
+				}
+
+				if F32.is_float_eq(a, b) {
+					True
+				} else if F32.is_finite(a) and F32.is_finite(b) {
+					F32.abs(a - b) <= F32.max(abs, rel * F32.max(F32.abs(a), F32.abs(b)))
+				} else {
+					False
+				}
+			}
 
 			is_eq : _
 
@@ -16701,6 +16969,42 @@ Builtin :: [].{
 			## expect !F64.is_float_eq(F64.nan, F64.nan)
 			## ```
 			is_float_eq : F64, F64 -> Bool
+
+			## Returns `True` if `a` and `b` are equal within the given tolerances:
+			## exactly equal (including `+0.0`/`-0.0` and same-sign infinities), or both
+			## finite with `|a - b| <= max(abs, rel * max(|a|, |b|))`.
+			##
+			## - `rel`: allowed difference as a fraction of the larger magnitude.
+			## - `abs`: allowed difference regardless of magnitude; needed near zero.
+			##
+			## `NaN` is never approximately equal to anything, including itself. An
+			## infinity is only equal to the same infinity. This is not transitive, so do
+			## not use it as equality for `Dict`/`Set` keys.
+			##
+			## Crashes unless `0 <= rel <= 1` and `abs` is finite and `>= 0`.
+			## ```roc
+			## expect F64.is_approx_eq(0.1 + 0.2, 0.3, { rel: 1e-12, abs: 0.0 })
+			##
+			## expect F64.is_approx_eq(1e-20, 0.0, { rel: 1e-9, abs: 1e-12 })
+			##
+			## expect !F64.is_approx_eq(1e-20, 0.0, { rel: 1e-9, abs: 0.0 })
+			##
+			## expect !F64.is_approx_eq(F64.nan, F64.nan, { rel: 1.0, abs: 1.0 })
+			## ```
+			is_approx_eq : F64, F64, { rel : F64, abs : F64 } -> Bool
+			is_approx_eq = |a, b, { rel, abs }| {
+				if !(rel >= 0.0 and rel <= 1.0 and abs >= 0.0 and F64.is_finite(abs)) {
+					crash "F64.is_approx_eq: rel must be in [0, 1] and abs finite and non-negative"
+				}
+
+				if F64.is_float_eq(a, b) {
+					True
+				} else if F64.is_finite(a) and F64.is_finite(b) {
+					F64.abs(a - b) <= F64.max(abs, rel * F64.max(F64.abs(a), F64.abs(b)))
+				} else {
+					False
+				}
+			}
 
 			is_eq : _
 
@@ -22197,6 +22501,43 @@ dec_floor_to_i128 = |self| I128.div_floor_by(Dec.to_attos(self), dec_attos_per_w
 
 dec_ceiling_to_i128 : Dec -> I128
 dec_ceiling_to_i128 = |self| I128.div_ceil_by(Dec.to_attos(self), dec_attos_per_whole)
+
+## `quotient * step` as a [Dec], or `Err(Overflow)` if it does not fit.
+dec_attos_multiple_try : I128, I128 -> Try(Dec, [Overflow])
+dec_attos_multiple_try = |quotient, step_attos|
+	match I128.times_try(quotient, step_attos) {
+		Ok(attos) => Ok(Dec.from_attos(attos))
+		Err(Overflow) => Err(Overflow)
+	}
+
+## Round to the nearest multiple of a positive `step_attos`, entirely in
+## integer attos. The halfway test compares `|remainder|` with
+## `step - |remainder|` so that it cannot overflow.
+dec_round_to_multiple_try : Dec, I128, [AwayFromZero, ToEven] -> Try(Dec, [Overflow])
+dec_round_to_multiple_try = |self, step_attos, ties| {
+	attos = Dec.to_attos(self)
+	truncated = I128.div_trunc_by(attos, step_attos)
+	remainder_magnitude = I128.abs(I128.rem_by(attos, step_attos))
+	distance_to_next = step_attos - remainder_magnitude
+	away = if remainder_magnitude > distance_to_next {
+		True
+	} else if remainder_magnitude < distance_to_next {
+		False
+	} else {
+		match ties {
+			AwayFromZero => True
+			ToEven => I128.is_odd(truncated)
+		}
+	}
+	quotient = if !away {
+		truncated
+	} else if attos < 0 {
+		truncated - 1
+	} else {
+		truncated + 1
+	}
+	dec_attos_multiple_try(quotient, step_attos)
+}
 
 dec_floor_to_whole : Dec -> Dec
 dec_floor_to_whole = |self| {

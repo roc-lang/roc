@@ -1048,7 +1048,20 @@ its explicit function relocations retain exactly the callable procedures that
 the completed values contain, and those procedures join the ordinary runtime
 roots supplied to ARC. Successful evaluation evidence removes its value guards
 after guard construction; failed values keep their ordinary runtime failure
-paths. Attaching completed data after ARC and then repeating reachability is
+paths. A root that stops at a checked root's value guard is a propagated
+failure: it records the failure it read and is not reported again, because the
+failing root already reported it in the module that owns it. A literal root
+belongs to no checked module, so nothing retains its failure between
+compilations except the checked results that embed it: a checked root that
+stops at a literal root's value guard, or reaches a rejected literal inline,
+reports that failure in its own module, naming the literal as the failure's
+origin, which keeps that module from being cached clean while its result holds
+the failure. A failed literal root that no checked root embeds is reported at
+its literal once finalization is done. A module whose finalization completed in
+an earlier compilation receives such a report through the coordinator's report
+destination for it, without its cached result changing; a literal in the
+builtin module, which belongs to no package, is rendered against the builtin
+source and joins the program root module's reports. Attaching completed data after ARC and then repeating reachability is
 forbidden, because it would make ARC run over a different procedure graph from
 the one emitted to the backend.
 
@@ -3743,6 +3756,22 @@ expression is evaluated exactly once by the compile-time finalizer. Nested uses
 of other already-sorted compile-time constants may still restore their stored
 `ConstStore` values.
 
+A block-local function binding whose body refers to nothing bound inside its
+enclosing function—no outer local, no outer rigid type variable, no local type
+declaration—is a promoted local procedure. Checking decides promotion while it
+already walks the body: each `s_decl` of a lambda or closure is a candidate,
+every local lookup, rigid-variable use, and local type-declaration reference
+records the candidate depths it crosses, and the greatest fixpoint over
+references between candidates removes every candidate that reaches a
+contextual one. The capture list is not that proof: canonicalization omits
+local functions and globally resolvable patterns from captures. A promoted
+local procedure outputs a `promoted_proc` checked statement in place of its
+binding, its own procedure template (`ProcBaseKind.promoted_local`), and its
+pattern's scheme; references resolve to `promoted_top_level_proc`, so it
+specializes exactly like a top-level procedure. Hoisting treats a lookup of it
+as known, so a top-level-equivalent call through a local helper is selected
+as a hoisted root. Lexically context-dependent local procedures are unchanged.
+
 Hoisted roots use the same compile-time constant rules as ordinary top-level
 constants. A failure produced while evaluating a hoisted root is a checking-time
 failure reported at the hoisted expression's original source region. If Roc ever
@@ -4178,12 +4207,46 @@ Every live literal-origin record leaves checking with one explicit resolution:
   materializes the value directly.
 - `custom_dispatch` means checking selected and typechecked one concrete custom
   conversion callable. `CheckedModule` construction retains its
-  dispatcher and callable types, and compile-time evaluation evaluates that
-  conversion when a checked constant is required.
+  dispatcher and callable types and gives the literal exactly one
+  `numeral_conversion`/`quote_conversion` root, linked from the checked
+  literal data (`conversion_root`). That root is the single source of the
+  literal's value: its body lowers through ordinary dispatch-call lowering,
+  and every use restores the root's stored payload, or, while its module is
+  still finalizing, reads the root's declared compile-time value. A root no
+  evaluation requests (its type holds a callable, so the root is
+  specialization-owned) is hoisted per program instead, as a literal root
+  (see `specialization_dispatch` below). No use re-runs the conversion. A root whose conversion returns `Err` records the
+  literal-specific rejection as its failure.
 - `specialization_dispatch` means the target remains an identity variable in a
   generalized callable. The checked plan retains this erased requirement; each
-  Monotype specialization either materializes a builtin directly or consumes
-  the callable evidence supplied for that specialization.
+  Monotype specialization reads the literal's own type node and either
+  materializes a builtin directly or lowers the conversion call at that node
+  with the callable evidence supplied for that specialization. The `Err` arm
+  of that conversion lowers to `literal_rejected`, a non-returning terminal
+  carrying the rejection message and the literal's `LiteralRejectionSite`
+  (owner module, checked expression, numeral or quote). LIR carries the site on
+  the `crash` statement, so a compile-time evaluation that reaches it reports
+  the literal-specific diagnostic instead of a generic crash.
+  A conversion at a specialization's concrete type depends on nothing at
+  runtime, so it is hoisted like any top-level-equivalent expression: a
+  program whose compile-time work is evaluated with it (`literal_roots`) turns
+  the conversion into a literal root. The conversion becomes a zero-argument
+  definition the draft registers; the specialization reads the root's
+  `comptime_value` slot (producer `.literal`); LIR carries `LiteralRootPlan`s
+  beside the checked roots' plans; and finalization evaluates each literal root
+  on its first slot demand, and the rest after every checked root. Every native
+  build evaluates its literal roots: when no checked compile-time root shares
+  the runtime program, finalization prepares the runtime program itself, under
+  the runtime policy (object-cache hits at Monotype reservation included),
+  lowers a native consumer holding only the literal roots, evaluates them, and
+  the runtime consumer transcodes their completed values. Two object-cache
+  rules keep a specialization served from a pack equivalent to one lowered
+  again, whose literal roots would be evaluated again: an entry whose closure
+  still converts a specialized literal at runtime (a program lowered without
+  literal roots, such as a module's pack program) is withheld, and a build
+  that reported an error writes no packs, so no entry embeds a failed literal
+  root. A successful conversion is deterministic in the literal and the
+  concrete type, both part of the entry's identity.
 - `checked_error` means checking rejected the conversion while retaining the
   literal node for diagnostic recovery. `CheckedModule` stores no
   callable, runtime dispatch plan, or compile-time root for it; the containing
@@ -5493,7 +5556,9 @@ Range(num) :: {
 }
 ```
 
-Adapters, custom sources, and consumers remain ordinary Roc functions. There is
+Adapters, custom sources (`Iter.custom` for pure unfolds, `Stream.custom` for
+sources whose advance and end-of-input discovery are effectful), and consumers
+remain ordinary Roc functions. There is
 no public chain type, iterator trait, extra public step tag, or source-visible
 compiler representation. Internal representation data is attached only after
 checking, when Monotype creates concrete iterator call results.
@@ -7220,21 +7285,46 @@ Three consumers keep the rule exact:
   treats a repeated label as an invariant violation.
 
 Before `CheckedModule` is built, every tag and record row reachable from a
-settled value type is checked once; rows that repeat a label are normalized
-in ascending root order. Normalization needs no metadata on type variables and
-adds no work where no label repeats: detection rides on the unifier's gather,
+type in the checked module's output is checked once; rows that repeat a label
+are normalized in ascending root order. Those types are the expression,
+pattern, and definition types and the roots inference recorded elsewhere: call
+and dispatch constraint functions, scheme-use substitutions and instances, and
+codec requirements and derivations. A scheme-use substitution can hold a copy
+of an unnormalized row that no expression's type still reaches, such as a
+mutually recursive member's error row copied before its group settled.
+`CheckedModule` construction and this walk enumerate the recorded roots
+through the same `output_type_roots` functions, so a root added to the output
+is normalized without a second list to keep in step.
+
+Normalization needs no metadata on type variables and adds no work where no
+label repeats: detection rides on the unifier's gather,
 the key writer's row sort, and the settled row walk, which already compare
-labels. A conflict is reported as a type mismatch between the two
-occurrences, each shown as a closed single-label row at the row's source, and
-the row is poisoned once every diagnostic has snapshotted the settled graph.
+labels. A conflict is reported as a conflicting tag or field: each occurrence
+is shown as a closed single-label row at the source of the row part holding it,
+so the report names where each copy of the label came from. Its location is
+the value whose type holds the row when the settled walk reached the row from
+an output root, and otherwise the outer occurrence. The walk finishes each
+root before starting the next, in source-node order, so the value is the
+earliest source node whose type reaches the row; choosing it is a reporting
+decision and changes nothing about which programs check. The row is poisoned
+once every diagnostic has snapshotted the settled graph.
 
 The accepted side is pinned by `src/check/test/row_union_normalization_test.zig`
 (a callback raising the tag its wrapper adds, a repeated tag reaching a method
 dispatcher, a method call typing like the direct call it names, and a tag
-repeated two extensions down) and by the chain-duplicate unifier tests and the
-`normalizeRowUnion` test in `src/check/Check.zig`, which cover records. The
+repeated two extensions down), by `src/check/test/issue_11621_test.zig`
+(recursive functions using `?`, directly, mutually, through a generalized
+helper, and through dispatch), and by the chain-duplicate unifier tests and the
+`normalizeRowUnion` test in `src/check/Check.zig`, which cover records.
+`src/compile/test/issue_11621_test.zig` pins the output of a mutually
+recursive group's substitution rows, and
+`test/fx-open/issue_11621_recursive_try.roc` runs those programs on every
+backend. The
 rejected side is pinned by conflicting payloads and payload counts in the same
-file, `test/snapshots/issue/issue_11097_wrapped_try_overlap.md`, and the
+file, `test/snapshots/issue/issue_11097_wrapped_try_overlap.md` (a conflict
+located at the value holding it), `test/snapshots/issue/issue_11621_conflicting_tag_payloads.md`
+(a conflict found while inference keys a row, located at the outer
+occurrence), and the
 issue #11470 wrapper-overlap integration tests.
 
 ### Derived Parser Tag-Row Closure
@@ -7748,7 +7838,14 @@ can still change when a downstream use substitutes a nested generalized
 variable. A generated-codec receiver can also be structurally known while one
 of its components is still a scheme variable. When the receiver shares type
 variables with the owning binding's interface, capture records the same exact
-receiver and callable relation before generalization. Only after the binding is
+receiver and callable relation before generalization. What makes a shared
+component refinable is what a later use can do to it: a type variable can be
+substituted, and an anonymous record or tag union can be lifted into a
+nominal whose backing it matches. A shared component that is neither—a
+nominal such as `I32`, a tuple, or a function type, each of whose own
+variables are checked separately—is final at the requiring site, so its codec
+evidence resolves there and the owning scheme gains no evidence parameter for
+it. Only after the binding is
 classified as a scheme does the definition-side worklist entry retire; every
 instantiation copies the structural receiver and validates the resulting codec
 independently. An unresolved outer record or tag extension is not a component
@@ -8585,12 +8682,11 @@ materialized and contributes no edge. Foreign constructions
 module's defaults are that module's own compile-time roots.
 When the default literal uses a custom `from_numeral` or `from_quote`, the
 conversion gets an ORDINARY `numeral_conversion`/`quote_conversion` root
-in the declaring module: finalization still evaluates the raw conversion
-once and reports `Err` with the literal-specific diagnostic; sites restore
-the archived `Ok` payload when it is finalized and lower the real dispatch
-call inside their own comptime evaluation while the declaring module's
-roots are still mid-finalization (the same split every custom literal
-gets).
+in the declaring module: finalization evaluates the conversion once and
+reports `Err` with the literal-specific diagnostic; sites restore the
+archived `Ok` payload when it is finalized and read the root's declared
+compile-time value while the declaring module's roots are still
+mid-finalization (the same single-owner rule every custom literal gets).
 CROSS-MODULE materialization is COMPLETE through the same route: the
 default identity's declaring-module content hash resolves the declaring
 view (`moduleForIdentityHash`), and the foreign checked expression lowers
@@ -10167,6 +10263,33 @@ preceding explicit relations. Applying defaults is never part of cache identity.
 Digests select buckets; exact input constraints and evidence are the collision
 authorities.
 
+A Roc template without evidence parameters cannot dispatch on its quantified
+variables, so its interface relates a quantified variable only by unification
+when every occurrence of that variable in its checked function type is a value
+position: a function argument or result, a tuple item, a record field, a tag
+payload, or the item of `List` or `Box`. A row tail, or an argument of any
+other nominal type, is not a value position. A request captures such a
+variable's substitution cell as a parametric hole, an unconstrained variable,
+when the cell is resolved and nothing it reaches carries private backing,
+source-interface or constructor evidence, forced-dynamic iterator identity, or
+generated or iterator representation authority. Structure reaching a hole stays
+open instead of settling, so requests that differ only in their holes' contents
+share one input identity and one summary, and relating the summary back to a
+request fills its holes. A cell that is unresolved or carries representation
+authority is captured as itself: relating it back would not be plain
+unification. An unfinished expansion is joined only by the instantiation it
+expands: each hole slot of the joining request names the class the expanding
+request supplied, or the expansion's own hole cell, as a recursive call inside
+the expansion does. A single-request component takes a parametric
+summary from its expansion before relating back to the request, so the summary
+keeps its holes open. Members of a larger component relate back to each other's
+requests before their summaries are taken, so a parametric member stores no
+reusable summary. The pins are the monotype capture test
+"interface constraints capture representation-neutral holes as variables", the
+compile test "interface summaries share one expansion across parametric
+instantiations", and test/echo/parametric_interface_summaries.roc (a template
+that dispatches on its variable keeps a summary per instantiation).
+
 Selected method contracts are part of the dependency's output constraints.
 Summary inputs materialize their exact checked evidence without first applying
 those contracts to the caller graph. Expansion relates the contracts over its
@@ -10216,7 +10339,11 @@ or defaulted Monotype views. Expansion
 uses an independent instantiation of the inputs so incidental caller state
 cannot enter the summary. Replaying a summary instantiates its open cells once
 per request and relates all its input roots, preserving relationships through
-scheme variables that are not reachable from the function shape.
+scheme variables that are not reachable from the function shape. An expansion
+whose captured roots equal its captured input contributed no constraint; its
+summary records exactly that, and replaying it neither instantiates nor
+relates anything. The input identity is the same exact interface the cache key
+compares, so an unchanged summary is as complete as any other.
 
 Recursive dependency components store summaries only after every member has
 contributed its relations. An active exact request joins its active interface;
@@ -10694,7 +10821,16 @@ rediscover a backing, owner, or field order. If a named type is opaque at the
 current boundary, Monotype still preserves the named type node and therefore
 the dispatch owner derivable from it. A `runtime_layout_only` backing may be
 used by layout lowering to represent values, but it is not permission
-for Monotype or static dispatch to inspect through the opaque boundary. If no
+for Monotype or static dispatch to inspect through the opaque boundary. The
+exceptions are checked source operations whose authority the checker already
+established: record construction, destructuring, and field access. The
+unifier admits an opaque nominal into a structural record position only where
+its backing is visible (`canLiftInner`), and let-polymorphism can carry that
+lifted nominal into a record-polymorphic body checked elsewhere, so a field
+access's authority is a property of the checked access itself, never of its
+receiver's head in the generic body. Monotype reads such a field through any
+named backing its receiver specializes to. Reads Monotype synthesizes on its
+own (derived inspect, equality, codecs) carry no such authority. If no
 backing is present, any stage that needs the representation must consume a
 separate explicit checked representation authority; it must not rediscover the
 backing by scanning declarations.

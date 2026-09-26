@@ -241,6 +241,7 @@ pub const Store = struct {
                     .invalid_nominal_decl_recursion,
                     .infinite_recursion,
                     .anonymous_recursion,
+                    .row_label_conflict,
                     .polymorphic_value,
                     .polymorphic_var_annotation,
                     .effectful_top_level,

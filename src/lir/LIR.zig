@@ -449,6 +449,55 @@ pub const LoweringModuleId = enum(u32) {
     _,
 };
 
+/// The kind of literal whose checked conversion rejected it.
+pub const LiteralRejectionKind = enum(u8) {
+    numeral,
+    quote,
+};
+
+/// The source literal a literal-rejection crash reports: the checked
+/// expression, in its owning module, whose `from_numeral` or `from_quote`
+/// conversion returned `Err`.
+pub const LiteralRejectionSite = struct {
+    owner: LoweringModuleId,
+    /// The literal's `CheckedExprId` in `owner`.
+    checked_expr: u32,
+    kind: LiteralRejectionKind,
+};
+
+/// Program-local index of one literal root: a custom literal's conversion at
+/// one specialization's concrete type, which only post-check lowering can name.
+pub const LiteralRootId = enum(u32) { _ };
+
+/// The producer of one compile-time value: a checked compile-time root of its
+/// module, or a literal root of the lowered program.
+pub const ComptimeProducer = union(enum) {
+    checked: check.CheckedModule.ComptimeRootId,
+    literal: LiteralRootId,
+
+    pub fn eql(a: ComptimeProducer, b: ComptimeProducer) bool {
+        return switch (a) {
+            .checked => |root| switch (b) {
+                .checked => |other| root == other,
+                .literal => false,
+            },
+            .literal => |root| switch (b) {
+                .checked => false,
+                .literal => |other| root == other,
+            },
+        };
+    }
+
+    /// Feed this producer's tag and index to `hasher`.
+    pub fn hash(self: ComptimeProducer, hasher: anytype) void {
+        const tag: u8, const index: u32 = switch (self) {
+            .checked => |root| .{ 0, @intFromEnum(root) },
+            .literal => |root| .{ 1, @intFromEnum(root) },
+        };
+        hasher.update(&[_]u8{ tag, @truncate(index), @truncate(index >> 8), @truncate(index >> 16), @truncate(index >> 24) });
+    }
+};
+
 /// Source control-flow construct observed during compile-time finalization.
 pub const ComptimeSiteKind = enum {
     match,
@@ -1433,6 +1482,10 @@ pub const CFStmt = union(enum) {
     },
     crash: struct {
         msg: CrashMessage,
+        /// Set when this crash is a literal conversion rejecting its literal:
+        /// compile-time evaluation reports the literal's own diagnostic with
+        /// `msg`, the conversion's error message.
+        literal_rejection: ?LiteralRejectionSite = null,
     },
 };
 

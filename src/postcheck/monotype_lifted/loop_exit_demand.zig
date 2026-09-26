@@ -224,6 +224,7 @@ pub const Inventory = struct {
                 .return_ => |ret| try self.collect(ret.value),
                 .comptime_branch_taken => |taken| try self.collect(taken.body),
                 .expect_err => |err| try self.collect(err.msg),
+                .literal_rejected => |err| try self.collect(err.msg),
                 .uninitialized_payload => |payload| self.useLocal(payload.condition, null),
                 .if_initialized_payload => |payload| {
                     self.useLocal(payload.payload, null);

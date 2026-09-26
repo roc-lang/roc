@@ -3410,6 +3410,59 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "[1, 1]" },
     },
     .{
+        // repro for https://github.com/roc-lang/roc/issues/11622
+        // `run` is unannotated, so its body reads `stmt.host` on an open
+        // record parameter. The call from `query` lifts the opaque `Stmt` into
+        // that record inside `Stmt`'s own module, which the checker permits,
+        // so the specialization at `Stmt` must read the field through the
+        // opaque backing. `prepare` and `step` share the `DbErr` tag, so the
+        // two `?` error rows must merge into one union.
+        .name = "issue 11622: unannotated opaque method reading its backing field, dispatched after ?",
+        .source_kind = .module,
+        .source =
+        \\Stmt :: { host : U64 }.{
+        \\    run = |stmt|
+        \\        match step(stmt.host)? {
+        \\            Done => Ok(stmt.host)
+        \\            Row => Err(TooManyRows)
+        \\        }
+        \\}
+        \\
+        \\prepare : Str -> Try(Stmt, [DbErr(Str)])
+        \\prepare = |_sql| Ok(Stmt.{ host: 0 })
+        \\
+        \\query = |sql| {
+        \\    stmt = prepare(sql)?
+        \\    stmt.run()
+        \\}
+        \\
+        \\step : U64 -> Try([Row, Done], [DbErr(Str)])
+        \\step = |_host| Ok(Done)
+        \\
+        \\main = query("select 1")
+        ,
+        .expected = .{ .inspect_str = "Ok(0)" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11622
+        // `inner_host` is an unannotated record-polymorphic helper. Both opaque
+        // types are lifted into its record parameter inside their own module,
+        // so each segment of `r.inner.host` must read through an opaque
+        // backing in the specialization at `Outer`.
+        .name = "issue 11622: record-polymorphic helper reads a field chain through nested opaque types",
+        .source_kind = .module,
+        .source =
+        \\Inner :: { host : U64 }
+        \\
+        \\Outer :: { inner : Inner, port : U64 }
+        \\
+        \\inner_host = |r| r.inner.host + r.port
+        \\
+        \\main = inner_host(Outer.{ inner: Inner.{ host: 40 }, port: 2 })
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
         // https://github.com/roc-lang/roc/issues/11668
         // The literal's target `Sql(a)` gets `a` from the record argument, whose
         // field kind is still open when the literal is lowered, so the
@@ -3453,5 +3506,87 @@ pub const tests = [_]TestCase{
         \\main = run({})
         ,
         .expected = .{ .inspect_str = "7" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11668
+        // The literal's target `Sql({ n : Str })` is fixed by a later field
+        // access in the same monomorphic body.
+        .name = "issue 11668: from_quote literal whose target record is fixed by a later use",
+        .source_kind = .module,
+        .source =
+        \\Sql(a) := { text : Str }.{
+        \\    from_quote : Str -> Try(Sql(a), [BadQuotedBytes(Str)])
+        \\    from_quote = |raw| Ok(Sql.{ text: raw })
+        \\}
+        \\
+        \\query : Sql(a) -> Try(a, [X])
+        \\query = |_| Err(X)
+        \\
+        \\run : {} -> Try(Str, [X])
+        \\run = |_| {
+        \\    row = query("select 1")?
+        \\    Ok(row.n)
+        \\}
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "Err(X)" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11674
+        // `from_quote`'s `where` clause asks for a derived `I32.parser_for`;
+        // the literal inside `run` converts at `Sql(I32)`.
+        .name = "issue 11674: from_quote literal whose where clause needs a derived parser_for",
+        .source_kind = .module,
+        .source =
+        \\Sql(a) := { text : Str }.{
+        \\    from_quote : Str -> Try(Sql(a), [BadQuotedBytes(Str)])
+        \\        where [a.parser_for : Fmt -> (U8 -> Try({ value : a, rest : U8 }, [Bad]))]
+        \\    from_quote = |raw| Ok(Sql.{ text: raw })
+        \\}
+        \\
+        \\Fmt := [Default].{
+        \\    parse_i32 : Fmt, U8 -> Try({ value : I32, rest : U8 }, [Bad])
+        \\    parse_i32 = |_, state| Ok({ value: 0, rest: state })
+        \\}
+        \\
+        \\query : Sql(a) -> Try(List(a), [X])
+        \\query = |_| Ok([])
+        \\
+        \\run : {} -> Try(List(I32), [X])
+        \\run = |_| query("select 1")
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "Ok([])" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11669
+        // `from_quote` calls a derived `I32.parser_for` whose error row is the
+        // `where` clause's open `err`, which includes the parser's `Bad`.
+        .name = "issue 11669: from_quote calling a derived parser_for with an open error row",
+        .source_kind = .module,
+        .source =
+        \\Sql(a) := { text : Str }.{
+        \\    from_quote : Str -> Try(Sql(a), [BadQuotedBytes(Str)])
+        \\        where [a.parser_for : Fmt -> (U8 -> Try({ value : a, rest : U8 }, err))]
+        \\    from_quote = |raw| {
+        \\        A : a
+        \\        _ = A.parser_for(Fmt.Default)
+        \\        Ok(Sql.{ text: raw })
+        \\    }
+        \\}
+        \\
+        \\Fmt := [Default].{
+        \\    parse_i32 : Fmt, U8 -> Try({ value : I32, rest : U8 }, [Bad])
+        \\    parse_i32 = |_, state| Ok({ value: 0, rest: state })
+        \\}
+        \\
+        \\sql : Sql(I32)
+        \\sql = "select 1"
+        \\
+        \\main = sql.text
+        ,
+        .expected = .{ .inspect_str = "\"select 1\"" },
     },
 };

@@ -3222,7 +3222,6 @@ const Pass = struct {
             .num_acos,
             .num_atan,
             .num_log,
-            .num_round,
             .num_floor,
             .num_ceiling,
             .num_to_str,

@@ -19,7 +19,7 @@ test "body shards borrow compile-time descriptors through publication and rollba
     defer source.deinit();
     const root_a: Common.ComptimeValueRoot = .{
         .module = std.mem.zeroes(check.CheckedModule.ModuleId),
-        .root = @enumFromInt(9),
+        .root = .{ .checked = @enumFromInt(9) },
         .const_locator = null,
     };
     var root_b = root_a;

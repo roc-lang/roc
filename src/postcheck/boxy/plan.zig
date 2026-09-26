@@ -11892,8 +11892,8 @@ const Builder = struct {
             .direct_closed, .direct_parametric => {},
             .direct_pending, .structural => boxyPlanInvariant("quote conversion had an invalid checked dispatch resolution"),
         }
-        const root = view.compile_time_roots.lookupNumeralRootByExpr(expr_id) orelse
-            boxyPlanInvariant("checked from_quote expression had no compile-time conversion root");
+        const root = view.compile_time_roots.root(view.checked_bodies.literalConversionRoot(expr_id) orelse
+            boxyPlanInvariant("checked from_quote expression had no compile-time conversion root"));
         switch (root.payload) {
             .const_node => |node| {
                 const store = view.const_store orelse
@@ -11919,7 +11919,7 @@ const Builder = struct {
         expr_id: checked.CheckedExprId,
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
     ) Allocator.Error!void {
-        const root = view.compile_time_roots.lookupNumeralRootByExpr(expr_id) orelse return;
+        const root = view.compile_time_roots.root(view.checked_bodies.literalConversionRoot(expr_id) orelse return);
         switch (root.payload) {
             .const_node => |node| {
                 const store = view.const_store orelse
@@ -12834,6 +12834,8 @@ const Builder = struct {
         const statement = view.checked_bodies.statement(statement_id);
         switch (statement.data) {
             .pending => boxyPlanInvariant("pending checked statement reached boxy body type planning"),
+            // A promoted procedure is planned as its own template.
+            .promoted_proc => {},
             .decl => |decl| {
                 if (view.checked_bodies.expr(decl.expr).data == .runtime_error) return;
                 try self.analyzePatternTypes(view, decl.pattern);

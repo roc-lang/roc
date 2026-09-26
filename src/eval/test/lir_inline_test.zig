@@ -2911,18 +2911,20 @@ test "alias-heavy generic specialization count does not exceed backing types" {
 }
 
 test "nested function specializations keep equal types at different sites distinct" {
+    // Each lambda captures its enclosing function's `n`, so it stays a nested
+    // function of that function.
     const allocator = std.testing.allocator;
     const source =
         \\first : U64 -> U64
         \\first = |n| {
-        \\    id = |x| x
-        \\    id(n)
+        \\    add_n = |x| x + n
+        \\    add_n(n)
         \\}
         \\
         \\second : U64 -> U64
         \\second = |n| {
-        \\    id = |x| x
-        \\    id(n)
+        \\    add_n = |x| x + n
+        \\    add_n(n)
         \\}
         \\
         \\main : { first : U64, second : U64 }
@@ -2950,12 +2952,13 @@ test "nested function specializations keep equal types at different sites distin
 }
 
 test "one nested function site specializes at multiple closed function types" {
+    // The lambda captures `value`, so it stays a nested function of `choose`.
     const allocator = std.testing.allocator;
     const source =
         \\choose : a -> a
         \\choose = |value| {
-        \\    id = |x| x
-        \\    id(value)
+        \\    get = |{}| value
+        \\    get({})
         \\}
         \\
         \\main : { n : U64, s : Str }
@@ -7974,6 +7977,32 @@ test "iterdiff: stream per-element effects agree across inline modes" {
     );
 }
 
+test "iterdiff: Stream.custom advance effects agree across inline modes" {
+    // A custom effectful source runs its advance exactly once per pull, and
+    // `map` effects interleave per element; every lowering must reproduce the
+    // same ordered trace, including the final `NoMore` advance.
+    try expectSameObservationsAcrossInlineModes(
+        \\up_to_three! : I64 => Try((I64, I64), [NoMore])
+        \\up_to_three! = |n| {
+        \\    dbg n
+        \\    if n < 3 { Ok((n, n + 1)) } else { Err(NoMore) }
+        \\}
+        \\
+        \\main : () => List(I64)
+        \\main = || {
+        \\    stream =
+        \\        Stream.custom(0.I64, Unknown, up_to_three!)
+        \\            .map(|n| {
+        \\                dbg n * 2
+        \\                n * 2
+        \\            })
+        \\    result = Stream.collect!(stream)
+        \\    dbg result
+        \\    result
+        \\}
+    );
+}
+
 // Pre-existing divergence: a bounded prefix (`take_first`) of an infinite custom
 // iterator (`Iter.custom`, the Fibonacci unfold below) diverges between the two
 // lowerings, and the seed+step representation does NOT fix it: the divergence is
@@ -8404,8 +8433,8 @@ test "custom literal field default gets an ordinary conversion root" {
     var numeral_roots: usize = 0;
     var quote_roots: usize = 0;
     for (resources.checked_artifact.checked_bodies.default_exprs.items) |entry| {
-        const conversion = resources.checked_artifact.compile_time_roots.lookupNumeralRootByExpr(entry.checked_expr) orelse
-            return error.TestUnexpectedResult;
+        const conversion = resources.checked_artifact.compile_time_roots.root(resources.checked_artifact.checked_bodies.literalConversionRoot(entry.checked_expr) orelse
+            return error.TestUnexpectedResult);
         switch (conversion.kind) {
             .numeral_conversion => numeral_roots += 1,
             .quote_conversion => quote_roots += 1,

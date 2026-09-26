@@ -390,7 +390,7 @@ run = |sql| {
 	(defs
 		(patt (type "Client(_c), List(Str), a -> Try(Str, [Refused(Str), ..others]) where [a.to_str : a -> Str]"))
 		(patt (type "Client(_c), List(Str), b -> Try(Str, [Refused(Str), ..others]) where [b.to_str : b -> Str]"))
-		(patt (type "Str -> Try(Str, [Refused(Str), ..others])")))
+		(patt (type "Str -> Try(Str, [Refused(Str)])")))
 	(type_decls
 		(nominal (type "Client(effects)")
 			(ty-header (name "Client")
@@ -399,5 +399,5 @@ run = |sql| {
 	(expressions
 		(expr (type "Client(_c), List(Str), a -> Try(Str, [Refused(Str), ..others]) where [a.to_str : a -> Str]"))
 		(expr (type "Client(_c), List(Str), b -> Try(Str, [Refused(Str), ..others]) where [b.to_str : b -> Str]"))
-		(expr (type "Str -> Try(Str, [Refused(Str), ..others])"))))
+		(expr (type "Str -> Try(Str, [Refused(Str)])"))))
 ~~~

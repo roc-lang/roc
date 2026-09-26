@@ -245,6 +245,9 @@ pub const ProcBaseKind = enum {
     hosted_wrapper,
     intrinsic_wrapper,
     entry_wrapper,
+    /// A local function binding promoted to a procedure of its own; the
+    /// ordinal is its lambda's source expression.
+    promoted_local,
 };
 
 /// Public `NestedProcSiteKey` declaration.

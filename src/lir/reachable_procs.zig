@@ -207,6 +207,11 @@ const Pass = struct {
             // having no reader in this program.
             if (root.value_slot) |slot| try self.markStaticData(slot);
         }
+        for (self.result.literal_roots.items) |root| {
+            try self.markProc(root.proc);
+            try self.markConstPlan(root.plan);
+            try self.markStaticData(root.value_slot);
+        }
         for (self.result.requested_layouts.items) |request| {
             try self.markConstPlan(request.plan);
             if (request.initializer) |initializer| try self.markProc(initializer);
@@ -653,6 +658,10 @@ const Pass = struct {
             root.proc = self.remapProc(root.proc);
             if (root.value_slot) |slot| root.value_slot = self.remapStaticData(slot);
         }
+        for (self.result.literal_roots.items) |*root| {
+            root.proc = self.remapProc(root.proc);
+            root.value_slot = self.remapStaticData(root.value_slot);
+        }
     }
 
     fn remapStaticDataInitializers(self: *Pass) void {
@@ -907,6 +916,9 @@ const Pass = struct {
         }
         for (self.result.const_roots.items) |root| {
             if (@intFromEnum(root.proc) >= proc_count) reachableProcInvariant("const root proc exceeds compact proc_specs len");
+        }
+        for (self.result.literal_roots.items) |root| {
+            if (@intFromEnum(root.proc) >= proc_count) reachableProcInvariant("literal root proc exceeds compact proc_specs len");
         }
         for (self.result.requested_layouts.items) |request| {
             if (request.initializer) |initializer| {

@@ -44,6 +44,7 @@ pub const Problem = union(enum) {
     invalid_nominal_decl_recursion: InvalidNominalDeclRecursion,
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
+    row_label_conflict: RowLabelConflict,
     polymorphic_value: VarWithSnapshot,
     polymorphic_var_annotation: PolymorphicVarAnnotation,
     effectful_top_level: EffectfulTopLevel,
@@ -310,6 +311,23 @@ pub const VarWithSnapshot = struct {
 
     /// If this type was found in a top-level def, the name of that def
     def_name: ?Ident.Idx,
+};
+
+/// One label repeated along a row's extension chain, whose occurrences cannot
+/// be the same tag or field (design.md "Row Union Normalization").
+pub const RowLabelConflict = struct {
+    row_kind: enum { tag_union, record },
+    label: Ident.Idx,
+    /// The outer occurrence, as a closed single-label row, and the source of
+    /// the row part that holds it.
+    outer_snapshot: SnapshotContentIdx,
+    outer_region: base.Region,
+    /// The inner occurrence, likewise.
+    inner_snapshot: SnapshotContentIdx,
+    inner_region: base.Region,
+    /// The value whose type holds the row, when the settled row walk reached
+    /// it from one.
+    value_region: ?base.Region,
 };
 
 // number problems //
