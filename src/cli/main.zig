@@ -234,9 +234,61 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
             error.InvalidUrl => unreachable,
         };
     }
-    if (!opts.no_cache) try build_env.enableDefaultCacheManager(opts.verbose_cache);
+    if (!opts.no_cache) {
+        try build_env.enableDefaultCacheManager(opts.verbose_cache);
+        try attachCompileTimeObjectCache(ctx, &build_env, opts.verbose_cache);
+    }
 
     return build_env;
+}
+
+/// The object cache every command's compile-time evaluation reads: the host's
+/// dev-policy packs. Their Solved policy is evaluation's own and they run
+/// expects, so the evaluator can run their code in place of compiling it.
+const CompileTimeObjectCache = struct {
+    allocator: Allocator,
+    io: std.Io,
+    store: pack_store.Store,
+    packs: pack_store.LoadedPacks,
+
+    fn bind(context: *anyopaque, build_env: *BuildEnv) void {
+        const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
+        self.packs.pending = .{ .store = &self.store, .io = self.io, .build_env = build_env };
+    }
+
+    fn deinit(context: *anyopaque) void {
+        const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
+        self.packs.deinit();
+        self.store.deinit();
+        self.allocator.destroy(self);
+    }
+};
+
+/// The compile-time object cache, when a build's own runtime packs are the
+/// same store: a dev build for the host.
+fn sharedCompileTimeObjectCache(build_env: *BuildEnv, target: RocTarget, opt: cli_args.OptLevel) ?*CompileTimeObjectCache {
+    if (opt != .dev or target != RocTarget.detectNative()) return null;
+    const owner = build_env.compile_time_object_cache_owner orelse return null;
+    return @ptrCast(@alignCast(owner.context));
+}
+
+fn attachCompileTimeObjectCache(ctx: *CliCtx, build_env: *BuildEnv, verbose: bool) Allocator.Error!void {
+    const store_config = CacheConfig{ .enabled = true, .verbose = verbose, .roc_ctx = ctx.coreCtx() };
+    const store = pack_store.Store.init(ctx.gpa, store_config, RocTarget.detectNative(), @tagName(cli_args.OptLevel.dev)) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        // Without a cache root there is no cache to read.
+        error.NoHomeDirectory => return,
+    };
+    const cache = try ctx.gpa.create(CompileTimeObjectCache);
+    cache.* = .{ .allocator = ctx.gpa, .io = ctx.io.std_io, .store = store, .packs = pack_store.LoadedPacks.init(ctx.gpa) };
+    build_env.setCompileTimeObjectCache(.{
+        .spec_cache = cache.packs.specCacheLookup(),
+        .splice_source = cache.packs.spliceSource(),
+    }, .{
+        .context = cache,
+        .bind = CompileTimeObjectCache.bind,
+        .deinit = CompileTimeObjectCache.deinit,
+    });
 }
 
 const CacheManager = compile.CacheManager;
@@ -10844,29 +10896,40 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // specializations from; the object compiler splices their code in. The
     // lookup is part of the runtime lowering policy the compile-time session
     // is declared with, so it loads before checking starts.
-    var loaded_packs: ?pack_store.LoadedPacks = null;
-    defer if (loaded_packs) |*packs| packs.deinit();
+    var own_packs: ?pack_store.LoadedPacks = null;
+    defer if (own_packs) |*packs| packs.deinit();
+    var loaded_packs: ?*pack_store.LoadedPacks = null;
     if (std.c.getenv("ROC_DEV_PACK_HITS")) |dir_z| {
-        loaded_packs = pack_store.LoadedPacks.loadDir(ctx.gpa, ctx.io.std_io, std.mem.span(dir_z)) catch |err| {
+        own_packs = pack_store.LoadedPacks.loadDir(ctx.gpa, ctx.io.std_io, std.mem.span(dir_z)) catch |err| {
             std.log.err("failed to load packs from {s}: {}", .{ std.mem.span(dir_z), err });
             return error.NativeCompilationFailed;
         };
+        loaded_packs = &own_packs.?;
     }
     // The object cache lives under the cache root and follows `--no-cache`
     // like the rest of the cache: this build reads the packs of every module
     // in view and writes its own. A directory of packs given for a test
-    // (`ROC_DEV_PACK_HITS`) replaces the store.
+    // (`ROC_DEV_PACK_HITS`) replaces the store. A dev build for the host
+    // reads the very packs compile-time evaluation reads, so it shares them.
     const object_cache_enabled = !args.no_cache and loaded_packs == null;
-    var object_store: ?pack_store.Store = null;
-    defer if (object_store) |*store| store.deinit();
+    var own_store: ?pack_store.Store = null;
+    defer if (own_store) |*store| store.deinit();
+    var object_store: ?*pack_store.Store = null;
     if (object_cache_enabled) {
-        const store_config = CacheConfig{ .enabled = true, .verbose = args.verbose, .roc_ctx = ctx.coreCtx() };
-        object_store = pack_store.Store.init(ctx.gpa, store_config, target, @tagName(args.opt)) catch |err| {
-            std.log.warn("object cache unavailable: {}", .{err});
-            return error.NativeCompilationFailed;
-        };
-        loaded_packs = pack_store.LoadedPacks.init(ctx.gpa);
-        loaded_packs.?.pending = .{ .store = &object_store.?, .io = ctx.io.std_io, .build_env = &build_env };
+        if (sharedCompileTimeObjectCache(&build_env, target, args.opt)) |shared| {
+            object_store = &shared.store;
+            loaded_packs = &shared.packs;
+        } else {
+            const store_config = CacheConfig{ .enabled = true, .verbose = args.verbose, .roc_ctx = ctx.coreCtx() };
+            own_store = pack_store.Store.init(ctx.gpa, store_config, target, @tagName(args.opt)) catch |err| {
+                std.log.warn("object cache unavailable: {}", .{err});
+                return error.NativeCompilationFailed;
+            };
+            object_store = &own_store.?;
+            own_packs = pack_store.LoadedPacks.init(ctx.gpa);
+            own_packs.?.pending = .{ .store = object_store.?, .io = ctx.io.std_io, .build_env = &build_env };
+            loaded_packs = &own_packs.?;
+        }
     }
     var runtime_lowering = checkedRuntimeLoweringConfig(
         .linked_output,
@@ -10875,7 +10938,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
         args.synthetic_default_platform,
     );
-    if (loaded_packs) |*packs| {
+    if (loaded_packs) |packs| {
         runtime_lowering.target.spec_cache = packs.specCacheLookup();
     }
     build_env.setRuntimeLowering(runtime_lowering);
@@ -10924,14 +10987,14 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         build_env.postCheckExecutor(),
         &spec_timing,
         build_env.runtimeProgramSession(),
-        if (loaded_packs) |*packs| packs.specCacheLookup() else null,
+        if (loaded_packs) |packs| packs.specCacheLookup() else null,
     );
     defer lowered.deinit();
     finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
     // Cache statistics are diagnostic output. Ordinary successful builds must
     // leave stderr empty so build runners do not report false warnings.
     if (loaded_packs != null and std.c.getenv("ROC_PACK_STATS") != null) {
-        const packs = loaded_packs.?;
+        const packs = loaded_packs.?.*;
         var external_procs: usize = 0;
         for (lowered.lir_result.store.getProcSpecs()) |proc| {
             if (proc.external) external_procs += 1;
@@ -11003,7 +11066,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     var backend_timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
     object_compiler.timing = &backend_timing;
     object_compiler.post_check_executor = build_env.postCheckExecutor();
-    if (loaded_packs) |*packs| object_compiler.splice_source = packs.spliceSource();
+    if (loaded_packs) |packs| object_compiler.splice_source = packs.spliceSource();
     object_compiler.capture_artifacts = object_cache_enabled;
     defer if (object_compiler.captured_artifacts) |*set| set.deinit();
 
@@ -11041,7 +11104,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // must not be served to a later build, which would skip evaluating it
     // and so skip its diagnostic, so a build with errors writes no packs.
     if (object_store != null and diag.errors == 0) {
-        const store = &object_store.?;
+        const store = object_store.?;
         try writePacksToStore(ctx, &build_env, store, root_artifact, imported_artifacts, relation_artifacts, &lowered, if (object_compiler.captured_artifacts) |*set| set else null, args, target);
     }
 

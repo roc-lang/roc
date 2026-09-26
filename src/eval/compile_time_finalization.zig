@@ -47,6 +47,17 @@ pub const EventCallback = struct {
 };
 
 /// Where the compile-time evaluator splices object-cache entries from.
+pub const SpliceSource = backend.dev.SpliceSource;
+
+/// The object cache compile-time evaluation reads, the same way in every
+/// command: entries compiled for the host under the dev policy, whose Solved
+/// policy is evaluation's own and which run expects. The evaluator's program
+/// takes hits for the procedures it runs, under `comptime_closure_hits`, and
+/// splices their cached code.
+pub const CompileTimeObjectCache = struct {
+    spec_cache: lir.CheckedPipeline.SpecCacheLookup,
+    splice_source: SpliceSource,
+};
 /// Runtime options for compile-time finalization.
 pub const Options = struct {
     pub const StderrWriter = struct {
@@ -79,6 +90,7 @@ pub const Options = struct {
     slow_root_threshold_ns: u64 = 3 * std.time.ns_per_s,
     slow_root_period_ns: u64 = std.time.ns_per_s,
     timing: ?*Timing = null,
+    object_cache: ?CompileTimeObjectCache = null,
     /// Where a compile-time failure is reported when the source it names
     /// belongs to a checked module this finalization does not complete: a
     /// literal in a module whose checking finished in an earlier compilation,
@@ -558,6 +570,7 @@ fn compileTimeTarget(options: Options) lir.CheckedPipeline.TargetConfig {
         // Specialization records procedure names for every consumer of the
         // program; a runtime consumer's diagnostics read them.
         .proc_debug_names = true,
+        .spec_cache = if (options.object_cache) |cache| cache.spec_cache else null,
         .post_check_executor = options.post_check_executor,
         .timing = if (options.timing) |timing| &timing.lowering else null,
     };
@@ -3062,6 +3075,7 @@ const DevProgram = struct {
             error.MissingStaticDataSymbol => finalizationInvariant("CTFE slot image omitted a declared static data symbol"),
             error.DuplicateStaticDataSymbol => finalizationInvariant("CTFE slot image contains conflicting static data symbols"),
         };
+        if (options.object_cache) |cache| try splice.spliceExternal(&codegen, evaluation_demand, cache.splice_source);
         const static_rc_helpers = try static_data_exports.collectRequiredRcHelpers(allocator, slots.materialized);
         defer allocator.free(static_rc_helpers);
         var artifacts = try compileProcedures(allocator, &codegen, evaluation_demand, static_rc_helpers, options);

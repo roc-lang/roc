@@ -1013,10 +1013,17 @@ package and the packages it reaches through filesystem paths), under one fixed
 configuration (`compileTimeTarget`): the host's width, expects run, literal
 roots on, and the dev Solved policy (`.wrappers` inlining and
 iterator-fusion SpecConstr). Nothing a command asks of its runtime program
-reaches that evaluation, and the evaluator reads no object-cache entries.
-`roc check` and `roc build` therefore report the same compile-time errors
-and complete bit-identical values: a build cannot report an error that
-checking did not.
+reaches that evaluation. Every command also gives it the same object cache
+(`CompileTimeObjectCache`): the host's dev-policy packs, whose Solved policy
+is evaluation's own and whose procedures run expects, so the evaluator's
+program takes hits for the procedures it runs (under
+`comptime_closure_hits`) and splices their cached code in place of
+compiling it. A cache entry is the procedure its key names, so the cache
+changes only what evaluation compiles, never what it computes. `roc check`
+and `roc build` therefore report the same compile-time errors and complete
+bit-identical values: a build cannot report an error that checking did not.
+A dev build for the host reads the same packs for its runtime program and
+shares them with evaluation.
 
 Monotype lowering, lifting, SpecConstr, lambda solving, and inline analysis
 run once for that evaluation over the union of its roots, and the frozen

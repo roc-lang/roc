@@ -1265,6 +1265,7 @@ pub const Coordinator = struct {
     /// result. Post-check work shares those channels and cannot start earlier.
     frontend_complete: bool,
     runtime_lowering: ?compile_build.RuntimeLoweringConfig = null,
+    compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
     /// The checked modules whose `expect`s are the developer's own tests, in
     /// the order their test roots join compile-time evaluation. Every command
     /// that checks the program evaluates the same tests' compile-time work.
@@ -2998,6 +2999,7 @@ pub const Coordinator = struct {
         } else .{};
         var options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, &self.ctfe_timing);
         options.post_check_executor = self.postCheckExecutor();
+        options.object_cache = self.compile_time_object_cache;
         options.cached_debug_modules = cached_debug_modules.items;
         options.defer_debug_replay = !replay_cached_debug;
         var runtime_target: ?lir.CheckedPipeline.TargetConfig = if (self.runtime_lowering) |config| config.target else null;

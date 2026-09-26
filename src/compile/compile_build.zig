@@ -212,6 +212,9 @@ pub const BuildEnv = struct {
     // Actor model coordinator (owns all mutable compilation state)
     coordinator: ?*Coordinator = null,
     runtime_lowering: ?RuntimeLoweringConfig = null,
+    /// See `eval.CompileTimeFinalization.CompileTimeObjectCache`.
+    compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
+    compile_time_object_cache_owner: ?CompileTimeObjectCacheOwner = null,
     /// Let a caller declare a test plan from prepared artifacts before CTFE.
     defer_post_check: bool = false,
     // Cache manager for compiled modules
@@ -435,6 +438,8 @@ pub const BuildEnv = struct {
         self.workspace_roots.deinit();
 
         self.sink.deinit();
+        // Last: the coordinator's retained programs may borrow cached code.
+        if (self.compile_time_object_cache_owner) |owner| owner.deinit(owner.context);
     }
 
     /// Set the cache manager for this build environment
@@ -810,7 +815,31 @@ pub const BuildEnv = struct {
         coord.enable_hosted_transform = true;
         coord.setWatchInputTracking(self.track_watch_inputs);
         coord.runtime_lowering = self.runtime_lowering;
+        coord.compile_time_object_cache = self.compile_time_object_cache;
         self.coordinator = coord;
+    }
+
+    /// The storage behind a compile-time object cache, which this build
+    /// environment owns once attached.
+    pub const CompileTimeObjectCacheOwner = struct {
+        context: *anyopaque,
+        /// Gives the cache this build environment, whose module set decides
+        /// which packs it loads, before compile-time evaluation reads it.
+        bind: *const fn (*anyopaque, *BuildEnv) void,
+        deinit: *const fn (*anyopaque) void,
+    };
+
+    /// Every command that checks a program attaches this the same way, so
+    /// compile-time evaluation reads one object cache whatever the command.
+    pub fn setCompileTimeObjectCache(
+        self: *BuildEnv,
+        cache: eval.CompileTimeFinalization.CompileTimeObjectCache,
+        owner: CompileTimeObjectCacheOwner,
+    ) void {
+        std.debug.assert(self.compile_time_object_cache_owner == null);
+        if (self.coordinator) |coordinator| coordinator.compile_time_object_cache = cache;
+        self.compile_time_object_cache = cache;
+        self.compile_time_object_cache_owner = owner;
     }
 
     pub fn setRuntimeLowering(self: *BuildEnv, config: RuntimeLoweringConfig) void {
@@ -1129,6 +1158,7 @@ pub const BuildEnv = struct {
 
     pub fn finishCheckedProgram(self: *BuildEnv) CompileDiscoveredError!void {
         const coord = self.coordinator orelse unreachable;
+        if (self.compile_time_object_cache_owner) |owner| owner.bind(owner.context, self);
         const test_modules = try self.collectProgramTestModules(self.gpa);
         defer self.gpa.free(test_modules);
         coord.program_test_modules = test_modules;
