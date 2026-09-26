@@ -303,6 +303,10 @@ type_decl_statements: std.ArrayListUnmanaged(CIR.Statement.Idx) = .empty,
 type_decl_invalid: std.ArrayListUnmanaged(bool) = .empty,
 /// Directed references from one local type declaration to another.
 type_decl_dependencies: std.ArrayListUnmanaged(TypeDeclDependency) = .empty,
+/// Whether every local type declaration's validity is final: invalid
+/// declarations are poisoned, so an annotation generated from here on
+/// resolves each reference to one as the error type.
+type_decl_validity_final: bool = false,
 /// scratch vars used to build up intermediate lists, used for various things
 scratch_vars: base.Scratch(Var),
 /// scratch (parameter name, instantiated flex copy) pairs for the default
@@ -6448,6 +6452,7 @@ fn poisonInvalidTypeDeclarations(self: *Self, poisoned: []bool) std.mem.Allocato
 fn finalizeTypeDeclarationValidity(self: *Self) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
+    defer self.type_decl_validity_final = true;
 
     const decl_count = self.type_decl_statements.items.len;
     if (decl_count == 0) return;
@@ -9593,17 +9598,16 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         const stmt_var = ModuleEnv.varFrom(stmt_idx);
 
         switch (stmt) {
-            .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => {
+            .s_alias_decl, .s_nominal_decl => {
                 _ = try self.ensureTypeDeclGenerated(stmt_idx, &env);
             },
             .s_runtime_error => {
                 try self.setVarRank(stmt_var, &env);
                 try self.markErroneous(stmt_var);
             },
-            .s_type_anno => |type_anno| {
-                try self.setVarRank(stmt_var, &env);
-                try self.generateStandaloneTypeAnno(stmt_var, type_anno, &env);
-            },
+            // Annotation-context declarations; generated below, once
+            // declaration validity is final.
+            .s_where_alias_decl, .s_type_anno => {},
             .s_decl,
             .s_var,
             .s_var_uninitialized,
@@ -9629,6 +9633,45 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // With every declaration generated, validate nominal declaration
     // recursion before any value checking consumes the declarations.
     try self.finalizeTypeDeclarationValidity();
+
+    // Where aliases and standalone annotations are annotations, not type
+    // declarations: no type declaration can reference them, and every type
+    // they reference must already have its final validity, so a reference to
+    // an invalid declaration is the error type rather than an application of
+    // a declaration the checked module omits.
+    for (0..self.cir.all_statements.span.len) |stmt_offset| {
+        const stmt_idx = self.cir.store.statementAt(self.cir.all_statements, stmt_offset);
+        switch (self.cir.store.getStatement(stmt_idx)) {
+            .s_where_alias_decl => {
+                _ = try self.ensureTypeDeclGenerated(stmt_idx, &env);
+            },
+            .s_type_anno => |type_anno| {
+                const stmt_var = ModuleEnv.varFrom(stmt_idx);
+                try self.setVarRank(stmt_var, &env);
+                try self.generateStandaloneTypeAnno(stmt_var, type_anno, &env);
+            },
+            .s_alias_decl,
+            .s_nominal_decl,
+            .s_runtime_error,
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_type_var_alias,
+            => {},
+        }
+    }
 
     // Next, capture all top level defs
     // This is used to support out-of-order defs
@@ -16460,6 +16503,9 @@ fn generateWhereAliasDecl(
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // Its constraint signatures must see invalid declarations already poisoned.
+    std.debug.assert(self.type_decl_validity_final);
+
     // A never-filled forward placeholder (see `generateAliasDecl`): there is
     // no receiver to generate; poison the decl var so every reference
     // resolves to `.err` and is suppressed.
@@ -16596,6 +16642,9 @@ fn generateStandaloneTypeAnno(
 ) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    // The annotation must see invalid declarations already poisoned.
+    std.debug.assert(self.type_decl_validity_final);
 
     // Reset seen type annos
     self.seen_annos.unsetAll();

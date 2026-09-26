@@ -703,7 +703,13 @@ invalid declarations to the same worklist, which is then propagated incrementall
 before value checking without rebuilding the dependency graph. Every invalid
 type declaration has its declaration root and backing template poisoned to the
 error type, and invalid nominal declarations are also marked invalid in the
-declaration table.
+declaration table. Poisoning reaches only the declaration itself, not copies
+of it made earlier, so nothing but type declarations is generated before
+finalization: where aliases and standalone annotations are annotations, which
+no type declaration can reference, and they are generated once validity is
+final. A reference to an invalid declaration from any annotation therefore
+resolves to the error type, never to an application of a declaration that
+`CheckedModule` construction omits.
 
 Recursion shape is not the only declaration-level validity rule: a nominal
 declaration group must also admit a finite set of instantiations, because
