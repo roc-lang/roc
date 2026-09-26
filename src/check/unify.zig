@@ -690,7 +690,6 @@ const Unifier = struct {
             .merge => |merge_frame| try self.merge(&merge_frame.vars, merge_frame.content),
             .merge_to_nominal => |merge_frame| try self.mergeToNominal(&merge_frame.vars, merge_frame.direction),
             .same_alias_after_args => |post| try self.processSameAliasAfterArgs(post),
-            .settle_widened_alias => |settle| try self.processSettleWidenedAlias(settle),
             .shared_fields_after_children => |post| try self.processSharedFieldsAfterChildren(post),
             .shared_tags_after_children => |post| try self.processSharedTagsAfterChildren(post),
         }
@@ -985,7 +984,6 @@ const Unifier = struct {
                 // Structural aliases are transparent. The concrete structure
                 // constrains the alias backing; alias spelling is checked
                 // presentation data, not union-find representative shape.
-                try self.scheduleSettleWidenedAlias(vars.a.var_, vars.b.var_);
                 try self.unifyGuarded(vars.b.var_, backing_var);
             },
             // A presence fact is not a type: it can never unify with an alias
@@ -1073,7 +1071,6 @@ const Unifier = struct {
                 // Structural aliases are transparent. The concrete structure
                 // constrains the alias backing; alias spelling is checked
                 // presentation data, not union-find representative shape.
-                try self.scheduleSettleWidenedAlias(vars.b.var_, vars.a.var_);
                 try self.unifyGuarded(vars.a.var_, backing_var);
             },
             .structure => |b_flat_type| {
@@ -1619,44 +1616,8 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        // Both sides' arguments are related now, hidden ones included, so
-        // neither is more widened than the other; b's view is kept.
         try self.scheduleMerge(post.vars, post.vars.b.desc.content);
         try self.scheduleGuardedPair(post.a_backing_var, post.b_backing_var, .ignore);
-    }
-
-    /// Once `alias_var`, an alias meeting the structure `other_var`, has been
-    /// related to it through its backing: when the alias is WIDENED
-    /// (`Store.aliasIsWidened`, read then, since relating the backing is what
-    /// can widen its hidden arguments), merge it into the structure's class,
-    /// which keeps the structure's content. A widened instance never wins a
-    /// merge, so an annotation's row stays as written where a use's re-opened
-    /// alias meets it (design.md "Hidden Alias Arguments"). An unwidened alias
-    /// stays the transparent view it always was. Pushed before the backing
-    /// relation, so it runs after it and a mismatch there unwinds past it.
-    fn scheduleSettleWidenedAlias(self: *Self, alias_var: Var, other_var: Var) std.mem.Allocator.Error!void {
-        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .settle_widened_alias = .{
-            .alias = alias_var,
-            .other = other_var,
-        } });
-    }
-
-    fn processSettleWidenedAlias(self: *Self, settle: SettleWidenedAlias) Error!void {
-        switch (self.types_store.checkVarsEquiv(settle.alias, settle.other)) {
-            .equiv => return,
-            .not_equiv => |vars| {
-                const alias = switch (vars.a.desc.content) {
-                    .alias => |alias| alias,
-                    .flex, .rigid, .field_presence, .structure, .err => return,
-                };
-                if (!self.types_store.aliasIsWidened(alias)) return;
-                switch (vars.b.desc.content) {
-                    .structure => {},
-                    .flex, .rigid, .alias, .field_presence, .err => return,
-                }
-                try self.merge(&vars, vars.b.desc.content);
-            },
-        }
     }
 
     const RowMergeTargets = struct {
@@ -3980,12 +3941,6 @@ const MismatchHandling = union(enum) {
     record_then_propagate: RawTypePair,
 };
 
-/// See `Unifier.scheduleSettleWidenedAlias`.
-const SettleWidenedAlias = struct {
-    alias: Var,
-    other: Var,
-};
-
 const SameAliasAfterArgs = struct {
     vars: ResolvedVarDescs,
     a_backing_var: Var,
@@ -4039,7 +3994,6 @@ const WorkFrame = union(enum) {
         direction: NominalDirection,
     },
     same_alias_after_args: SameAliasAfterArgs,
-    settle_widened_alias: SettleWidenedAlias,
     shared_fields_after_children: SharedFieldsAfterChildren,
     shared_tags_after_children: SharedTagsAfterChildren,
 

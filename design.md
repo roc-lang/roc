@@ -2415,26 +2415,13 @@ specific than the body. Two applications of one alias agree in every argument
 once related, so neither is more widened than
 the other, and the merge keeps b's view.
 
-A WIDENED instance never wins a merge. An alias meeting a structure is related
-through its backing; when the alias is then widened (`Store.aliasIsWidened`,
-the one predicate presentation reads too, decided on the instance's own
-arguments after the backing relation, since that relation is what can widen
-them), its class joins the structure's, which keeps its own content
-(`Unifier.scheduleSettleWidenedAlias`). An alias that is not widened stays the
-transparent view it always was. So an annotation's row is kept as written
-where a use's re-opened alias meets it: `wider : Try(U64, Errs) -> Try(U64,
-[HostErr(U64), Other, Widened])` with `wider = |t| fwd(t)` keeps that type, and
-a use left unwidened keeps its alias spelling (`Try(U64, Errs) -> Try(U64,
-Errs)`). A declared spine slot has no hidden counterpart to compare with: it is
-widened only when it holds a widened instance (`Wrap(Base)` re-opened), so a
-plain row there (`Wrap([Other])`) presents the row it now is,
-`Wrap([Other, Widened])`. A flex takes whatever it meets. This is ordinary
-unification: merges, no store write. Pinned by "a widened instance never wins a
-merge" and "an annotated def whose body widens a coerced call keeps its
-annotation" (src/check/test/type_checking_integration.zig) and `unify_test.zig`'s
-"a widened alias instance never wins a merge against a structure", "an alias
-instance that is not widened keeps its view against a structure" and "a widened
-alias whose backing disagrees with a structure is not merged".
+Which content a merged class keeps is presentation only. An alias meeting a
+structure is related through its backing, and the two stay separate views of
+one type; a merge of two classes keeps one side's content. So a type, a
+definition's included, may display in either spelling of the same type: an
+alias (`Try(U64, Wrap([Other, Widened]))`) or its spelled-out backing
+(`Try(U64, [HostErr(U64), Other, Widened])`). No verdict depends on the choice,
+since every instance is faithful, and no later stage reads alias spelling.
 
 A merge never makes an alias its own backing
 (`contentForMerge`): when the backing of the alias view being merged is one of
@@ -2469,7 +2456,10 @@ formal's argument's. A widened instance prints its backing in place of its
 name and arguments, and in an error report its name, its declared arguments
 and its backing (`Base (opened: [Aborted, Other])`), so a mismatch between two
 instances of one alias never reads `Base` against `Base`. An unwidened split
-reads as its declared arguments (`Fwd([NotFound])`).
+reads as its declared arguments (`Fwd([NotFound])`). A declared spine slot
+(`AliasSpine.declared`) is written as the declared argument itself, so it
+shows the row it now holds (`Wrap([Other, Widened])`); that and the
+spelled-out backing are the same type, and either may display.
 
 One verdict changes, declared here and under Polarity: in `O : N([A])` with
 `N(x) : x -> x`, `O`'s output is `N`'s hidden `x⁺`, so `O`'s spine is copied

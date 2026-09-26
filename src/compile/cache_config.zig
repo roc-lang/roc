@@ -290,7 +290,10 @@ pub const Constants = struct {
     ///      taken as the spine slot itself, and an alias application checked
     ///      module data builds from a declaration's syntax carries the
     ///      declaration's hidden arguments.
-    pub const CACHE_VERSION = 121;
+    /// 122: A widened alias instance meeting a structure no longer joins the
+    ///      structure's class; which spelling a merged class keeps is
+    ///      presentation only.
+    pub const CACHE_VERSION = 122;
 };
 
 /// Configuration for the Roc cache system.
