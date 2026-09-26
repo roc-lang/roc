@@ -1065,36 +1065,6 @@ pub const SyntaxChecker = struct {
         }
     };
 
-    /// Returns true when a byte can be part of a Roc identifier token used for
-    /// hover symbol fallback resolution.
-    fn isSymbolByte(b: u8) bool {
-        return std.ascii.isAlphanumeric(b) or b == '_' or b == '.';
-    }
-
-    /// Extract the symbol token under (or immediately before) an offset.
-    ///
-    /// This is a resilient fallback for hover when CIR lookup queries miss the
-    /// exact identifier region (for example, when the cursor lands on a nearby
-    /// delimiter).
-    fn symbolAtOffset(source: []const u8, offset: u32) ?[]const u8 {
-        if (source.len == 0) return null;
-
-        var i: usize = @intCast(@min(offset, @as(u32, @intCast(source.len))));
-        if (i >= source.len or !isSymbolByte(source[i])) {
-            if (i == 0 or !isSymbolByte(source[i - 1])) return null;
-            i -= 1;
-        }
-
-        var start = i;
-        while (start > 0 and isSymbolByte(source[start - 1])) : (start -= 1) {}
-
-        var end = i + 1;
-        while (end < source.len and isSymbolByte(source[end])) : (end += 1) {}
-
-        if (end <= start) return null;
-        return source[start..end];
-    }
-
     /// Get type information at a specific position in a document.
     /// Returns the type as a formatted string, or null if no type info is available.
     pub fn getTypeAtPosition(
@@ -1142,14 +1112,10 @@ pub const SyntaxChecker = struct {
         else
             result.type_var;
 
-        // Optional textual override for hover type rendering. When we can
-        // resolve an explicit annotation for a symbol, prefer that exact text.
-        var hover_type_text_opt: ?[]const u8 = null;
-
         if (lookup_result_opt) |lookup_result| {
             switch (lookup_result) {
                 .expr => |lookup_expr_idx| {
-                    const lookup_expr = module_env.store.getExpr(lookup_expr_idx);
+                    const lookup_expr = module_env.store.getSourceExpr(lookup_expr_idx);
                     if (lookup_expr == .e_method_call) {
                         const method_call = lookup_expr.e_method_call;
                         const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
@@ -1186,95 +1152,18 @@ pub const SyntaxChecker = struct {
         // Extract documentation for the definition/pattern at this location.
         // When we already have a lookup expression, resolve directly to avoid
         // region/offset ambiguity around delimiters.
-        var documentation = if (lookup_result_opt) |lookup_result|
+        const documentation = if (lookup_result_opt) |lookup_result|
             try self.resolveDocForLookup(env, module_env, build.absolute_path, lookup_result)
         else
             try self.findDocumentationForRegion(env, module_env, build.absolute_path, result.region, target_offset);
 
-        // Final fallback: reuse definition-resolution to recover the symbol at
-        // call sites where direct lookup queries can miss the identifier region.
-        // This keeps hover aligned with go-to-definition behavior.
-        if (documentation == null) {
-            var def_oom: ?Allocator.Error = null;
-            const def_loc_opt = self.findDefinitionAtOffset(build.env, module_env, build.absolute_path, target_offset, uri, &def_oom);
-            if (def_oom) |e| return e;
-            if (def_loc_opt) |def_loc| {
-                defer def_loc.deinit(self.allocator);
-                if (std.mem.eql(u8, def_loc.uri, uri)) {
-                    if (pos.positionToOffset(module_env, def_loc.range.start_line, def_loc.range.start_col)) |def_offset| {
-                        if (cir_queries.findPatternAtOffset(module_env, def_offset)) |pattern_idx| {
-                            hover_type_var = ModuleEnv.varFrom(pattern_idx);
-                            documentation = try doc_comments.extractDocCommentBefore(
-                                self.allocator,
-                                module_env.common.source,
-                                module_env.store.getPatternRegion(pattern_idx).start.offset,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        // Text-token fallback: resolve symbol directly by source token under
-        // the cursor. This recovers hover on call identifiers even when CIR
-        // lookup matching is ambiguous for that exact offset.
-        if (symbolAtOffset(module_env.common.source, target_offset)) |symbol| {
-            if (module_lookup.findDefinitionByUnqualifiedName(module_env, symbol)) |def_info| {
-                hover_type_var = if (def_info.expr_idx) |expr_idx|
-                    ModuleEnv.varFrom(expr_idx)
-                else
-                    ModuleEnv.varFrom(def_info.pattern_idx);
-
-                if (module_lookup.findDefOwningPattern(module_env, def_info.pattern_idx)) |def| {
-                    if (def.annotation) |anno_idx| {
-                        const anno = module_env.store.getAnnotation(anno_idx);
-                        const anno_region = module_env.store.getTypeAnnoRegion(anno.anno);
-                        hover_type_text_opt = module_env.getSource(anno_region);
-                    }
-
-                    const extracted = try doc_comments.extractDocForDef(
-                        self.allocator,
-                        module_env.common.source,
-                        &module_env.store,
-                        def,
-                    );
-                    if (extracted != null) {
-                        if (documentation) |doc| self.allocator.free(doc);
-                        documentation = extracted;
-                    }
-                } else if (module_lookup.findStatementOwningPattern(module_env, def_info.pattern_idx)) |stmt_owner| {
-                    const extracted = try doc_comments.extractDocForStatement(
-                        self.allocator,
-                        module_env.common.source,
-                        &module_env.store,
-                        stmt_owner.stmt,
-                        stmt_owner.idx,
-                    );
-                    if (extracted != null) {
-                        if (documentation) |doc| self.allocator.free(doc);
-                        documentation = extracted;
-                    }
-                } else {
-                    const extracted = try doc_comments.extractDocCommentBefore(
-                        self.allocator,
-                        module_env.common.source,
-                        module_env.store.getPatternRegion(def_info.pattern_idx).start.offset,
-                    );
-                    if (extracted != null) {
-                        if (documentation) |doc| self.allocator.free(doc);
-                        documentation = extracted;
-                    }
-                }
-            }
-        }
         defer if (documentation) |doc| self.allocator.free(doc);
 
         // Create markdown-formatted output with type and optional documentation
-        const type_text = hover_type_text_opt orelse type_str;
         const markdown = if (documentation) |doc|
-            try std.fmt.allocPrint(self.allocator, "{s}\n\n```roc\n{s}\n```", .{ doc, type_text })
+            try std.fmt.allocPrint(self.allocator, "{s}\n\n```roc\n{s}\n```", .{ doc, type_str })
         else
-            try std.fmt.allocPrint(self.allocator, "```roc\n{s}\n```", .{type_text});
+            try std.fmt.allocPrint(self.allocator, "```roc\n{s}\n```", .{type_str});
 
         // Convert the region back to LSP positions
         const range = cir_queries.regionToRange(module_env, result.region);
@@ -1339,7 +1228,7 @@ pub const SyntaxChecker = struct {
         // Check statements
         const statements_slice = store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = store.getStatement(stmt_idx);
+            const stmt = store.getSourceStatement(stmt_idx);
             const stmt_region = store.getStatementRegion(stmt_idx);
 
             if (cir_queries.regionContainsOffset(stmt_region, region.start.offset)) {
@@ -1364,7 +1253,7 @@ pub const SyntaxChecker = struct {
             .expr => |idx| idx,
             .field_access => return null,
         };
-        const expr = store.getExpr(expr_idx);
+        const expr = store.getSourceExpr(expr_idx);
         const importing_pkg = env.findPackageForModulePath(doc_path);
 
         const expr_tag = std.meta.activeTag(expr);
@@ -1471,7 +1360,7 @@ pub const SyntaxChecker = struct {
 
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse continue;
 
             const ident_idx = module_lookup.extractIdentFromPattern(&module_env.store, pattern_idx) orelse continue;
@@ -1592,7 +1481,7 @@ pub const SyntaxChecker = struct {
         // Fall back to statements.
         const statements_slice = store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = store.getStatement(stmt_idx);
+            const stmt = store.getSourceStatement(stmt_idx);
             if (std.meta.activeTag(stmt) != .s_decl) continue;
             const pattern_idx = stmt.s_decl.pattern;
 
@@ -1734,7 +1623,7 @@ pub const SyntaxChecker = struct {
         // Iterate through all statements to check imports
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
 
             // Handle import statements specially - navigate to the imported module or exposed item
             if (stmt == .s_import) {
@@ -1825,7 +1714,7 @@ pub const SyntaxChecker = struct {
                 .expr => |idx| idx,
                 .field_access => return null,
             };
-            const expr = module_env.store.getExpr(expr_idx);
+            const expr = module_env.store.getSourceExpr(expr_idx);
             const expr_tag = std.meta.activeTag(expr);
             if (expr_tag == .e_lookup_local) {
                 const lookup = expr.e_lookup_local;
@@ -2039,7 +1928,7 @@ pub const SyntaxChecker = struct {
     fn findTagInModuleEnv(mod_env: *ModuleEnv, tag_name: []const u8) ?Region {
         const statements_slice = mod_env.store.sliceStatements(mod_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = mod_env.store.getStatement(stmt_idx);
+            const stmt = mod_env.store.getSourceStatement(stmt_idx);
             const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
                 .s_alias_decl => |a| a.anno,
                 .s_nominal_decl => |n| n.anno,
@@ -2103,7 +1992,7 @@ pub const SyntaxChecker = struct {
                         const target_node_idx: CIR.Node.Idx = @enumFromInt(nom_ext.target_node_idx);
                         const node_tag = target_mod_env.store.nodes.get(target_node_idx).tag;
                         if (node_tag == .statement_nominal_decl or node_tag == .statement_alias_decl) {
-                            const stmt = target_mod_env.store.getStatement(@enumFromInt(@intFromEnum(target_node_idx)));
+                            const stmt = target_mod_env.store.getSourceStatement(@enumFromInt(@intFromEnum(target_node_idx)));
                             const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
                                 .s_alias_decl => |a| a.anno,
                                 .s_nominal_decl => |n| n.anno,
@@ -2162,7 +2051,7 @@ pub const SyntaxChecker = struct {
         // 2. If the tag reference carries an explicit local nominal declaration identity,
         // navigate directly to that local statement.
         if (tag_ref.nominal_decl) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
                 .s_alias_decl => |a| a.anno,
                 .s_nominal_decl => |n| n.anno,
@@ -2209,7 +2098,7 @@ pub const SyntaxChecker = struct {
             if (origin_info.origin_module == module_env.selfModuleIdentity()) {
                 // Defined in current module
                 if (origin_info.source_decl.toOptional()) |stmt_num| {
-                    const stmt = module_env.store.getStatement(@enumFromInt(stmt_num));
+                    const stmt = module_env.store.getSourceStatement(@enumFromInt(stmt_num));
                     const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
                         .s_alias_decl => |a| a.anno,
                         .s_nominal_decl => |n| n.anno,
@@ -2265,7 +2154,7 @@ pub const SyntaxChecker = struct {
                 if (findModuleByContentIdentity(build_env, origin_hash)) |target_mod_state| {
                     if (target_mod_state.moduleEnv()) |target_mod_env| {
                         if (origin_info.source_decl.toOptional()) |stmt_num| {
-                            const stmt = target_mod_env.store.getStatement(@enumFromInt(stmt_num));
+                            const stmt = target_mod_env.store.getSourceStatement(@enumFromInt(stmt_num));
                             const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
                                 .s_alias_decl => |a| a.anno,
                                 .s_nominal_decl => |n| n.anno,
@@ -2483,7 +2372,7 @@ pub const SyntaxChecker = struct {
             return cir_queries.regionToRange(mod_env, decl_region);
         }
         for (mod_env.store.sliceStatements(mod_env.all_statements)) |stmt_idx| {
-            const stmt = mod_env.store.getStatement(stmt_idx);
+            const stmt = mod_env.store.getSourceStatement(stmt_idx);
             const header_idx: ?CIR.TypeHeader.Idx = switch (stmt) {
                 .s_alias_decl => |a| a.header,
                 .s_nominal_decl => |n| n.header,
@@ -2805,14 +2694,14 @@ pub const SyntaxChecker = struct {
         current_uri: []const u8,
         oom: *?Allocator.Error,
     ) ?DefinitionResult {
-        const expr = module_env.store.getExpr(expr_idx);
+        const expr = module_env.store.getSourceExpr(expr_idx);
 
         switch (expr) {
             .e_block => |block| {
                 // Check statements in the block for type annotations
                 const stmts = module_env.store.sliceStatements(block.stmts);
                 for (stmts) |stmt_idx| {
-                    const stmt = module_env.store.getStatement(stmt_idx);
+                    const stmt = module_env.store.getSourceStatement(stmt_idx);
 
                     // Extract type annotation from statement
                     const maybe_type_anno = statementTypeAnno(module_env, stmt);
@@ -3740,7 +3629,7 @@ pub const SyntaxChecker = struct {
         // Also check top-level statements (some module types use these)
         const local_statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (local_statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             const stmt_tag = std.meta.activeTag(stmt);
             if (stmt_tag == .s_alias_decl) {
                 if (extractSymbolFromTypeDecl(module_env, stmt.s_alias_decl.header, stmt_idx, uri, &line_offsets, .class)) |symbol| {
@@ -3794,7 +3683,7 @@ pub const SyntaxChecker = struct {
 
         const import_statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (import_statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             if (stmt != .s_import) continue;
 
             const import_stmt = stmt.s_import;
@@ -4374,7 +4263,7 @@ fn extractSymbolFromDecl(
     line_offsets: *const pos.LineOffsets,
 ) ?document_symbol_handler.SymbolInformation {
     // Check if RHS is a function
-    const expr = module_env.store.getExpr(expr_idx);
+    const expr = module_env.store.getSourceExpr(expr_idx);
     const expr_tag = std.meta.activeTag(expr);
     const is_function = expr_tag == .e_closure or expr_tag == .e_lambda or expr_tag == .e_hosted_lambda;
 
