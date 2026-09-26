@@ -30349,9 +30349,10 @@ fn appendPublicApiTypeDependencies(
     if (index >= checked_types.payloads.items.len) {
         checkedArtifactInvariant("public API dependency scan referenced a missing checked type payload", .{});
     }
+    // Dependencies only accumulate into key sets, so a type already scanned
+    // anywhere in this publication contributes nothing new.
     if (active.contains(root)) return;
     try active.put(root, {});
-    defer _ = active.remove(root);
 
     switch (checked_types.payload(@enumFromInt(index))) {
         .pending => checkedArtifactInvariant("public API dependency scan reached pending checked type payload", .{}),
