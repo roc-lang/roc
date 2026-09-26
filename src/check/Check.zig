@@ -26525,36 +26525,47 @@ fn shouldGeneralize(
 ) bool {
     if (isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg) return true;
     if (is_binding_rhs and (expr == .e_lookup_local or expr == .e_lookup_external)) {
-        // A block-local alias of a VALUE is monomorphic, like every other
-        // local value: a local value is one runtime cell lowered at one type,
-        // so it cannot stand for the several instantiations a scheme allows.
-        // The rows a value's scheme or a coerced value's re-open leaves open
-        // (`made : [B(Str), D]` at top level) are therefore not quantified
-        // again by a local alias (design.md "Row Subsumption").
-        if (!is_top_level_binding_rhs and self.lookupNamesValue(expr)) return false;
+        // A block-local alias generalizes only when it names a FUNCTION (a
+        // scheme alias whose uses instantiate the function). Any other local
+        // alias is a value, one runtime cell lowered at one type, so it cannot
+        // stand for the several instantiations a scheme allows, whether the
+        // referent's scheme quantifies a row (`made : [B(Str), D]`), an
+        // element (`empty : List(a)`), or anything else (design.md "Row
+        // Subsumption").
+        if (!is_top_level_binding_rhs and !self.lookupInstantiatesFunction(expr)) return false;
         return true;
     }
     return self.isGeneralizableValueBinding(annotation, is_binding_rhs, is_top_level_binding_rhs);
 }
 
-/// Whether a lookup names a definition whose type is known to be a value
-/// (a non-function structure). A definition whose type is still a variable is
-/// not known to be one.
-fn lookupNamesValue(self: *const Self, expr: CIR.Expr) bool {
+/// Whether the type a lookup instantiates is a function. The type is the
+/// referent's own scheme: a local or top-level definition's pattern type, the
+/// predeclared annotation scheme of a top-level definition not yet checked,
+/// or an imported definition's type in its own module. A type that is still
+/// a variable is not a function.
+fn lookupInstantiatesFunction(self: *const Self, expr: CIR.Expr) bool {
     if (expr == .e_lookup_local) {
-        return storeVarIsValueStructure(self.types, ModuleEnv.varFrom(expr.e_lookup_local.pattern_idx));
+        const pattern = expr.e_lookup_local.pattern_idx;
+        const var_ = if (self.topLevelPattern(pattern)) |processing_def| switch (processing_def.status) {
+            .not_processed => self.predeclaredSchemeVar(processing_def.def_idx) orelse ModuleEnv.varFrom(pattern),
+            .processing, .processed => ModuleEnv.varFrom(pattern),
+        } else ModuleEnv.varFrom(pattern);
+        return storeVarIsFunction(self.types, var_);
     }
     if (expr == .e_lookup_external) {
         const ext = expr.e_lookup_external;
+        // Canonicalization already reported an unresolved import.
         const module_idx = self.cir.imports.getResolvedModule(ext.module_idx) orelse return false;
-        if (module_idx >= self.imported_modules.len) return false;
+        if (module_idx >= self.imported_modules.len) {
+            std.debug.panic("check invariant violated: a resolved import named a module outside the imported modules", .{});
+        }
         const other = self.imported_modules[module_idx];
-        return storeVarIsValueStructure(&other.types, @enumFromInt(ext.target_node_idx));
+        return storeVarIsFunction(&other.types, @enumFromInt(ext.target_node_idx));
     }
     return false;
 }
 
-fn storeVarIsValueStructure(store: *const types_mod.Store, var_: Var) bool {
+fn storeVarIsFunction(store: *const types_mod.Store, var_: Var) bool {
     var current = var_;
     while (true) {
         const resolved = store.resolveVar(current);
@@ -26564,8 +26575,8 @@ fn storeVarIsValueStructure(store: *const types_mod.Store, var_: Var) bool {
                 continue;
             },
             .structure => |flat| return switch (flat) {
-                .fn_pure, .fn_effectful, .fn_unbound => false,
-                .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => true,
+                .fn_pure, .fn_effectful, .fn_unbound => true,
+                .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => false,
             },
             .err, .flex, .rigid, .field_presence => return false,
         }
