@@ -381,6 +381,7 @@ const CustomCase = enum {
     issue_11364_interpreter_static_big_string,
     cli_cache_roots_distinct,
     watch_inputs_reject_absolute_import,
+    absolute_platform_path_check_build_reject,
     watch_completed_run_refresh_reruns,
     hot_reload_dev_shim,
     hot_reload_model_boundary,
@@ -1175,6 +1176,11 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "boxy: one descriptor template binds a nominal backing formal per instantiation", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/app.roc", .stdin = "abc\n", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "Crypto hashes ok" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "CLI test cache roots are distinct", .body = .{ .custom = .cli_cache_roots_distinct } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check watch inputs reject absolute file imports", .body = .{ .custom = .watch_inputs_reject_absolute_import } },
+    // Repro for https://github.com/roc-lang/roc/issues/11714: absolute platform
+    // paths are intentionally rejected (see issue 8549), so `roc check` and
+    // `roc build` must report the same "absolute platform path" error that
+    // `roc run` reports, instead of accepting the app.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11714: check and build reject an absolute platform path", .body = .{ .custom = .absolute_platform_path_check_build_reject } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check --watch reruns when completed child snapshot is stale", .skip = .{ .windows = "watch refresh race test uses a POSIX wrapper script" }, .body = .{ .custom = .watch_completed_run_refresh_reruns } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch hot reloads dev shim code", .skip = .{ .windows = "generated hot-reload test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_dev_shim } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch hot reloads app-provided Model through Box", .skip = .{ .windows = "generated hot-reload model test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_model_boundary } },
@@ -3362,6 +3368,7 @@ fn runCustomCase(
         .issue_11364_interpreter_static_big_string => customIssue11364InterpreterStaticBigString(io, allocator, &env, &timer, timeout_ms),
         .cli_cache_roots_distinct => customCliCacheRootsDistinct(io, allocator, &timer),
         .watch_inputs_reject_absolute_import => customWatchInputsRejectAbsoluteImport(io, allocator, &env, &timer, timeout_ms),
+        .absolute_platform_path_check_build_reject => customAbsolutePlatformPathCheckBuildReject(io, allocator, &env, &timer, timeout_ms),
         .watch_completed_run_refresh_reruns => customWatchCompletedRunRefreshReruns(io, allocator, &env, &timer, timeout_ms),
         .hot_reload_dev_shim => customHotReloadDevShim(io, allocator, &env, &timer, timeout_ms),
         .hot_reload_model_boundary => customHotReloadModelBoundary(io, allocator, &env, &timer, timeout_ms),
@@ -3690,6 +3697,109 @@ fn customWatchInputsRejectAbsoluteImport(
     }
     if (std.mem.find(u8, watch_inputs, rejected_import_path) != null) {
         return customFailure(allocator, timer, "watch-input file contained rejected absolute import path", .{});
+    }
+
+    return null;
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/11714: an app whose app
+// header names its platform with an absolute path must be rejected by every
+// command that loads the app, not only `roc run`. The platform fixture is
+// otherwise valid, so a pass means the absolute path itself was reported.
+const absolute_platform_path_repro_platform_source =
+    \\platform ""
+    \\    requires {} { main! : () => {} }
+    \\    exposes []
+    \\    packages {}
+    \\    provides { "roc_main": main_for_host! }
+    \\    targets: {
+    \\        inputs_dir: "targets/",
+    \\        x64musl: { inputs: [app] },
+    \\    }
+    \\
+    \\main_for_host! : () => {}
+    \\main_for_host! = || main!()
+    \\
+;
+
+fn customAbsolutePlatformPathCheckBuildReject(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const platform_dir = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "pf" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform dir: {}", .{err});
+    defer allocator.free(platform_dir);
+
+    const platform_path = std.fs.path.join(allocator, &.{ platform_dir, "main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform path: {}", .{err});
+    defer allocator.free(platform_path);
+
+    const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "app.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate app path: {}", .{err});
+    defer allocator.free(app_path);
+
+    std.Io.Dir.cwd().createDirPath(io, platform_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create platform dir: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = platform_path, .data = absolute_platform_path_repro_platform_source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write platform source: {}", .{err});
+
+    // Windows accepts forward slashes, which need no escaping in Roc strings,
+    // and `C:/...` is still an absolute path.
+    const platform_spec = allocator.dupe(u8, platform_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform spec: {}", .{err});
+    defer allocator.free(platform_spec);
+    if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, platform_spec, '\\', '/');
+
+    const app_source = std.fmt.allocPrint(
+        allocator,
+        "app [main!] {{ pf: platform \"{s}\" }}\n\nmain! = || {{}}\n",
+        .{platform_spec},
+    ) catch |err| return customInfraFailure(allocator, timer, "failed to render app source: {}", .{err});
+    defer allocator.free(app_source);
+
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = app_source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write app: {}", .{err});
+
+    const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before command started");
+
+    // `roc check` must report the absolute platform path instead of succeeding.
+    const check_result = runRawInEnv(
+        io,
+        allocator,
+        env,
+        &.{ roc_binary_path, "check", "--no-color", "--no-cache", app_path },
+        project_root_path,
+        null,
+        child_timeout_ms,
+    ) catch |err| return customInfraFailure(allocator, timer, "roc check spawn error: {}", .{err});
+
+    if (checkExitExpectation(allocator, check_result, .failure)) |message| {
+        return failureFromRun(allocator, timer, check_result, message);
+    }
+    if (std.mem.find(u8, check_result.stderr, "absolute platform path") == null) {
+        return failureFromRun(allocator, timer, check_result, "roc check stderr did not contain absolute platform path");
+    }
+
+    // `roc build` must report the same error instead of proceeding to link.
+    const build_result = runRawInEnv(
+        io,
+        allocator,
+        env,
+        &.{ roc_binary_path, "build", "--no-color", "--no-cache", app_path },
+        project_root_path,
+        null,
+        child_timeout_ms,
+    ) catch |err| return customInfraFailure(allocator, timer, "roc build spawn error: {}", .{err});
+
+    if (checkExitExpectation(allocator, build_result, .failure)) |message| {
+        return failureFromRun(allocator, timer, build_result, message);
+    }
+    if (std.mem.find(u8, build_result.stderr, "absolute platform path") == null) {
+        return failureFromRun(allocator, timer, build_result, "roc build stderr did not contain absolute platform path");
     }
 
     return null;
