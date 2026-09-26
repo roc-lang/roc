@@ -1265,6 +1265,13 @@ pub const ProgramPlan = struct {
         return .{ .plan = self, .span = span };
     }
 
+    /// The declaration a nominal use binds, identified by its shared formal
+    /// vector. Two uses of one declaration share their backing template.
+    pub fn nominalBackingDeclaration(self: *const ProgramPlan, span: NominalBackingSubstitutions) ?u32 {
+        if (span.len == 0) return null;
+        return self.nominal_backing_uses.items[span.start];
+    }
+
     /// Actuals are total and ordered, including when the formal has no runtime
     /// representation. No child search or formal analysis is needed here.
     pub fn nominalBackingActual(
@@ -7166,12 +7173,31 @@ const Builder = struct {
         };
     }
 
-    /// The checked call-site substitution for a direct call's callee scheme,
-    /// when the call names its callee through an instantiated lookup.
+    /// The checked call-site substitution for a direct call's callee scheme.
+    /// A call through an instantiated lookup records it at the lookup; a
+    /// resolved dispatch call records it on the evidence node its plan
+    /// selected, which is authoritative for that edge.
     fn directCallSchemeSubstitution(self: *Builder, direct: DirectCallPlan) ?SchemeCallSubstitution {
         const site_view = self.moduleForId(direct.call.module);
         const call_expr = site_view.checked_bodies.expr(direct.call.expr);
-        if (call_expr.data != .call) return null;
+        if (call_expr.data != .call) {
+            const dispatch_plan = if (call_expr.data == .dispatch_call)
+                call_expr.data.dispatch_call
+            else if (call_expr.data == .type_dispatch_call)
+                call_expr.data.type_dispatch_call
+            else if (call_expr.data == .method_eq)
+                call_expr.data.method_eq
+            else if (call_expr.data == .str_from_quote)
+                call_expr.data.str_from_quote.plan
+            else if (call_expr.data == .interpolation)
+                call_expr.data.interpolation.plan
+            else if (call_expr.data == .numeral)
+                call_expr.data.numeral.plan
+            else
+                boxyPlanInvariant("boxy direct call plan referenced a checked expression that is not lowered as a worker call");
+            const node = directDispatchEvidenceNode(site_view, dispatch_plan);
+            return self.evidenceEdgeSchemeSubstitution(direct.worker, .{ .module = direct.call.module, .node = node });
+        }
         if (site_view.resolved_value_refs.lookupIdByCheckedExpr(call_expr.data.call.func)) |use_id| {
             // An annotated recursive use instantiates the in-flight annotation,
             // whose slots are not the finished worker scheme's slots. Its
@@ -8440,6 +8466,28 @@ const Builder = struct {
             );
             self.plan.direct_calls.items[direct_index].hidden_dict_args = hidden_dict_args;
         }
+    }
+
+    /// The evidence node a resolved direct dispatch plan selected.
+    fn directDispatchEvidenceNode(
+        view: ModuleView,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+    ) static_dispatch.EvidenceNodeId {
+        const plan_id = maybe_plan orelse
+            boxyPlanInvariant("direct dispatch call had no checked dispatch plan");
+        const raw = @intFromEnum(plan_id);
+        if (raw >= view.static_dispatch_plans.plans.len) {
+            boxyPlanInvariant("direct dispatch call referenced a missing checked dispatch plan");
+        }
+        return switch (view.static_dispatch_plans.plans[raw].resolution) {
+            .direct_closed, .direct_parametric => |direct| direct.evidence,
+            .direct_pending => boxyPlanInvariant("unfinalized direct call reached Boxy planning"),
+            .evidence_dependent,
+            .structural,
+            .checked_error,
+            .@"unreachable",
+            => boxyPlanInvariant("direct call plan referenced a dispatch plan that did not select a direct target"),
+        };
     }
 
     fn nestedEvidenceForDirectDispatch(
@@ -12678,6 +12726,7 @@ const Builder = struct {
             .source_fn_type = source_fn_type,
             .operands = try self.appendDispatchCallOperands(dispatch, view.static_dispatch_plans),
         });
+        try self.analyzeDirectCallSchemeSubstitution(self.plan.direct_calls.items[self.plan.direct_calls.items.len - 1]);
     }
 
     fn recordWorkerBodyType(self: *Builder, worker: WorkerPlanId, rep: TypeRepId) Allocator.Error!void {

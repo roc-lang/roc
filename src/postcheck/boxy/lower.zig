@@ -911,6 +911,17 @@ const FrameRequirementDescriptor = struct {
     };
 };
 
+fn frameDescriptorRefForRequirement(
+    descriptors: []const FrameSuppliedDescriptor,
+    maybe_desc: ?Plan.DescriptorRequirementId,
+) ?LIR.BoxyDescRef {
+    const desc = maybe_desc orelse return null;
+    for (descriptors) |entry| {
+        if (entry.desc == desc) return entry.ref;
+    }
+    return null;
+}
+
 fn frameRequirementDescriptorIndex(descs: []const FrameRequirementDescriptor, desc: Plan.DescriptorRequirementId) ?usize {
     for (descs, 0..) |entry, index| {
         if (entry.desc == desc) return index;
@@ -1111,10 +1122,21 @@ const StaticDescInstantiationEntry = struct {
     env: u32,
 };
 
+/// A descriptor a template dictionary's building frame supplies for one
+/// descriptor requirement.
+const FrameSuppliedDescriptor = struct {
+    desc: Plan.DescriptorRequirementId,
+    ref: LIR.BoxyDescRef,
+};
+
 const StaticDescInstantiationContext = struct {
     entries: std.ArrayList(StaticDescInstantiationEntry) = .empty,
     environments: std.ArrayList(Environment) = .empty,
     env: u32 = 0,
+    /// Requirements a template dictionary's building frame describes. A
+    /// position naming one reads the frame's descriptor, which the runtime
+    /// resolves when it materializes the template.
+    frame_descriptors: []const FrameSuppliedDescriptor = &.{},
 
     const Binding = struct {
         formal: Plan.TypeRepId,
@@ -1494,7 +1516,10 @@ const ProcedureBuilder = struct {
             for (self.plan.directCallHiddenDictionaryArgSlice(method.nested_dict_args)) |arg| {
                 switch (arg.source) {
                     .bound_dictionaries => return true,
-                    .static_rep => if (try self.dictEvidenceNeedsFrame(frame, arg.method_evidence, visited)) return true,
+                    .static_rep => |source_rep| {
+                        if (try frame.repDescriptorNeedsFrame(source_rep)) return true;
+                        if (try self.dictEvidenceNeedsFrame(frame, arg.method_evidence, visited)) return true;
+                    },
                 }
             }
         }
@@ -1513,7 +1538,11 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!LIR.BoxyDictId {
         var visited = std.ArrayList(Plan.Span).empty;
         defer visited.deinit(self.allocator);
-        if (!try self.dictEvidenceNeedsFrame(template.frame, method_evidence, &visited)) {
+        // Structural slots describe the dictionary's own representation, so
+        // it needs the frame whenever that representation does.
+        if (!try template.frame.repDescriptorNeedsFrame(rep_id) and
+            !try self.dictEvidenceNeedsFrame(template.frame, method_evidence, &visited))
+        {
             return try self.staticDictForRep(rep_id, worker_dictionaries, method_evidence, null);
         }
         for (template.frame.template_dict_cache.items) |entry| {
@@ -1604,7 +1633,7 @@ const ProcedureBuilder = struct {
             if (structural_kind == .equality or
                 (exact_method == null and self.staticDictionarySlotIsStructuralEq(rep_id, requirement)))
             {
-                const operand_desc = try self.staticDescRefForRep(rep_id);
+                const operand_desc = try self.structuralSlotOperandDesc(rep_id, slot_template);
                 const operand_layout = self.layout_plan.rep_layouts[@intFromEnum(rep_id)].worker.layoutIdx();
                 const arg_layouts_start: u32 = @intCast(self.result.boxy_method_arg_layouts.items.len);
                 try self.result.boxy_method_arg_layouts.appendSlice(
@@ -1735,11 +1764,23 @@ const ProcedureBuilder = struct {
                 if (exact_method) |method| method.requirement_substitution else .{},
                 frame_requirement_descs.items,
             );
+            // A template slot's adapter descriptors name the building frame's
+            // descriptors wherever they describe a requirement it supplies.
+            var frame_descriptors = std.ArrayList(FrameSuppliedDescriptor).empty;
+            defer frame_descriptors.deinit(self.allocator);
+            for (frame_requirement_descs.items) |frame_desc| {
+                try frame_descriptors.append(self.allocator, .{
+                    .desc = frame_desc.desc,
+                    .ref = method_hidden_desc_refs.items[frame_desc.slot],
+                });
+            }
+            var adapter_desc_context = StaticDescInstantiationContext{ .frame_descriptors = frame_descriptors.items };
+            defer adapter_desc_context.deinit(self.allocator);
             const method_adapter = try self.staticMethodAdapterForWorker(
                 resolved,
                 fn_type,
                 &descriptor_sources,
-                &desc_context,
+                if (frame_descriptors.items.len == 0) &desc_context else &adapter_desc_context,
                 if (exact_method) |method| method.requirement_type else null,
                 if (exact_method) |method| method.worker_desc_args else null,
                 if (exact_method) |method| method.requirement_desc_args else null,
@@ -3316,7 +3357,37 @@ const ProcedureBuilder = struct {
         descriptor_sources: *const StaticDescriptorSourceMap,
         context: *StaticDescInstantiationContext,
     ) Allocator.Error!LIR.BoxyDescRef {
+        if (context.frame_descriptors.len != 0) {
+            if (self.frameDescriptorRefForWorkerRep(worker_rep_id, source_rep_id, descriptor_sources, context)) |ref| return ref;
+        }
         return .{ .static = try self.typeDescForWorkerRepWithSourceMap(worker_rep_id, source_rep_id, descriptor_sources, context) };
+    }
+
+    /// The building frame's descriptor for this position, when the position
+    /// (through the context's nominal bindings) or the source it describes
+    /// is a requirement that frame supplies.
+    fn frameDescriptorRefForWorkerRep(
+        self: *ProcedureBuilder,
+        worker_rep_id: Plan.TypeRepId,
+        source_rep_id: ?Plan.TypeRepId,
+        descriptor_sources: *const StaticDescriptorSourceMap,
+        context: *StaticDescInstantiationContext,
+    ) ?LIR.BoxyDescRef {
+        const outer_env = context.env;
+        defer context.env = outer_env;
+        var worker = self.descriptorStorageRep(worker_rep_id);
+        var source = source_rep_id;
+        while (context.bound(worker)) |binding| {
+            worker = self.descriptorStorageRep(binding.actual);
+            source = binding.source;
+            context.env = binding.env;
+        }
+        if (frameDescriptorRefForRequirement(context.frame_descriptors, self.plan.representations.items[@intFromEnum(worker)].descriptor)) |ref| return ref;
+        const effective_source = self.effectiveStaticDescriptorSource(worker, source, descriptor_sources) orelse return null;
+        return frameDescriptorRefForRequirement(
+            context.frame_descriptors,
+            self.plan.representations.items[@intFromEnum(self.descriptorStorageRep(effective_source))].descriptor,
+        );
     }
 
     fn typeDescForWorkerRepWithSourceMap(
@@ -3964,6 +4035,22 @@ const ProcedureBuilder = struct {
         const source_module = procedureModuleById(self.modules, source_rep.source_type.module);
         const owner = methodOwnerForProcedureType(source_module, source_rep.source_type.ty) orelse return true;
         return self.lookupMethodTarget(source_module, owner, requirement_module, requirement.fn_name) == null;
+    }
+
+    /// The descriptor of a structural slot's operand. In a template built by
+    /// a frame whose descriptors the operand's representation names, it is
+    /// that frame's descriptor for the representation.
+    fn structuralSlotOperandDesc(
+        self: *ProcedureBuilder,
+        rep_id: Plan.TypeRepId,
+        template: ?*DictTemplateFrame,
+    ) Allocator.Error!LIR.BoxyDescRef {
+        const frame_template = template orelse return try self.staticDescRefForRep(rep_id);
+        if (!try frame_template.frame.repDescriptorNeedsFrame(rep_id)) return try self.staticDescRefForRep(rep_id);
+        const materialization = try frame_template.frame.descriptorMaterializationForSourceRep(rep_id);
+        if (materialization.desc.localOrNull()) |local| try frame_template.capture(self.allocator, local);
+        try frame_template.captureSpan(self.allocator, materialization.captures);
+        return materialization.desc;
     }
 
     fn structuralHashMethodSlot(
@@ -20024,6 +20111,40 @@ const ProcBodyBuilder = struct {
         return null;
     }
 
+    /// Whether two uses of one nominal declaration, along their backing
+    /// chains, bind some formal to actuals with different storage. A formal
+    /// holds its value in the worker representation of its use's actual; a
+    /// target actual that is a bare type parameter has no storage shape of
+    /// its own and keeps the source's.
+    fn nominalUsesStoreFormalsDifferently(
+        self: *ProcBodyBuilder,
+        target_rep: Plan.TypeRepId,
+        source_rep: Plan.TypeRepId,
+    ) bool {
+        const plan = self.parent.plan;
+        var target = target_rep;
+        var source = source_rep;
+        for (0..plan.representations.items.len) |_| {
+            const target_substitutions = plan.representations.items[@intFromEnum(target)].nominal_backing_arg_substitutions;
+            const source_substitutions = plan.representations.items[@intFromEnum(source)].nominal_backing_arg_substitutions;
+            if (target_substitutions.len != 0 and
+                plan.nominalBackingDeclaration(target_substitutions) == plan.nominalBackingDeclaration(source_substitutions))
+            {
+                var substitutions = plan.nominalBackingSubstitutions(target_substitutions);
+                while (substitutions.next()) |substitution| {
+                    if (substitution.formal_rep == null) continue;
+                    if (self.repIsBareDynamic(self.descriptorStorageRep(substitution.actual_rep))) continue;
+                    const source_actual = plan.nominalBackingActual(source_substitutions, substitution.arg_index) orelse
+                        boxyLowerInvariant("uses of one nominal declaration had different argument counts");
+                    if (!self.representationBoundaryIsDirect(substitution.actual_rep, source_actual)) return true;
+                }
+            }
+            target = self.parent.descriptorBackingShapeRep(target) orelse return false;
+            source = self.parent.descriptorBackingShapeRep(source) orelse return false;
+        }
+        boxyLowerInvariant("cyclic nominal backing chain at a call boundary");
+    }
+
     fn adapterTagDescriptorForCallBoundary(
         self: *ProcBodyBuilder,
         target_rep: Plan.TypeRepId,
@@ -20861,6 +20982,15 @@ const ProcBodyBuilder = struct {
             return result;
         }
 
+        // Both sides share one nominal backing template, so its positions do
+        // not name either side's storage. When the uses bind a formal to
+        // actuals that store differently, the target's storage is its own
+        // backing under its own actuals, and the conversion produces it.
+        if (self.nominalUsesStoreFormalsDifferently(target_rep, source_rep)) {
+            return try self.adapterDescriptorFromMaterialization(
+                try self.descriptorMaterializationForExactRep(target_rep),
+            );
+        }
         if (try self.adapterTagDescriptorForCallBoundary(
             target_rep,
             source_rep,

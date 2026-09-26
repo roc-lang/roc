@@ -12875,7 +12875,15 @@ A formal position holds its value in the worker representation of the owning
 nominal's actual argument. Tag-union and declared-aggregate boundary adapters
 therefore resolve a formal-typed payload or field to that actual before
 choosing its target descriptor, rather than preserving the source value's
-storage as they do for a bare type parameter. A worker argument's root
+storage as they do for a bare type parameter. Two uses of one declaration share
+its backing template, so a position inside it names neither side's storage:
+when the uses bind some formal to actuals that store differently (a target
+actual that is a bare type parameter excepted), a call-boundary adapter's
+target descriptor is the target's whole backing described under the target's
+own actuals, and the runtime conversion rewrites every position that formal
+reaches (`Dict(U64, List(Str))` passed as `Dict(U64, List(x))` rebuilds each
+value list with boxed items). Uses whose actuals agree keep the direct
+transfer. A worker argument's root
 descriptor may be rebuilt from the worker's own descriptors for the nominal's
 arguments. Reading a field through a nominal receiver takes the record's
 descriptor from the receiver's own descriptor.
@@ -13278,7 +13286,17 @@ a template is an invariant failure. A template slot also carries, after the
 worker's hidden descriptors, the requirement-side descriptors and the frame's
 own type variables that its method adapter needs; the adapter binds them
 (requirement descriptors only where the requirement side is lowered) and
-describes representations naming them through those bindings.
+describes representations naming them through those bindings. The slot's own
+adapter descriptors (the argument and invocation descriptors the runtime uses
+to call it) name the same frame descriptors at every position that describes a
+requirement the frame supplies, including positions nested inside a compound
+requirement argument; the runtime resolves them when it copies the template. A
+dictionary whose own representation names a frame descriptor is a template even
+when all of its methods are structural, and its structural equality slot
+describes its operand through the frame. The requirement descriptors come from
+the checked substitution of the call that passes the dictionary, which a method
+call reads from the evidence node its plan selected, exactly as an ordinary call
+reads it from its instantiated lookup.
 
 Boxy box/unbox/adapt operations are explicit LIR statements or explicit helper
 calls selected by the lowerer:

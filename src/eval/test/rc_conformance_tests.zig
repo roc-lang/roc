@@ -207,6 +207,149 @@ const cases = [_]Case{
         ,
     },
     .{
+        .name = "numeric prefix parsers slice their input, unique and shared inputs",
+        .source =
+        \\{
+        \\    tail = " and a tail long enough that the rest stays on the heap"
+        \\    unsigned = Str.concat("42", tail)
+        \\    signed = Str.concat("-42", tail)
+        \\    fractional = Str.concat("1.5", tail)
+        \\    holder = [unsigned, signed, fractional]
+        \\    str_0 = match U8.from_str_prefix(unsigned) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_0 = match U8.from_utf8_prefix(Str.to_utf8(Str.concat("42", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_1 = match I8.from_str_prefix(signed) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_1 = match I8.from_utf8_prefix(Str.to_utf8(Str.concat("-42", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_2 = match U16.from_str_prefix(unsigned) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_2 = match U16.from_utf8_prefix(Str.to_utf8(Str.concat("42", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_3 = match I16.from_str_prefix(signed) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_3 = match I16.from_utf8_prefix(Str.to_utf8(Str.concat("-42", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_4 = match U32.from_str_prefix(unsigned) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_4 = match U32.from_utf8_prefix(Str.to_utf8(Str.concat("42", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_5 = match I32.from_str_prefix(signed) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_5 = match I32.from_utf8_prefix(Str.to_utf8(Str.concat("-42", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_6 = match U64.from_str_prefix(unsigned) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_6 = match U64.from_utf8_prefix(Str.to_utf8(Str.concat("42", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_7 = match I64.from_str_prefix(signed) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_7 = match I64.from_utf8_prefix(Str.to_utf8(Str.concat("-42", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_8 = match U128.from_str_prefix(unsigned) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_8 = match U128.from_utf8_prefix(Str.to_utf8(Str.concat("42", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_9 = match I128.from_str_prefix(signed) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_9 = match I128.from_utf8_prefix(Str.to_utf8(Str.concat("-42", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_10 = match Dec.from_str_prefix(fractional) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_10 = match Dec.from_utf8_prefix(Str.to_utf8(Str.concat("1.5", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_11 = match F32.from_str_prefix(fractional) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_11 = match F32.from_utf8_prefix(Str.to_utf8(Str.concat("1.5", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_12 = match F64.from_str_prefix(fractional) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_12 = match F64.from_utf8_prefix(Str.to_utf8(Str.concat("1.5", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_0
+        \\        + bytes_0
+        \\        + str_1
+        \\        + bytes_1
+        \\        + str_2
+        \\        + bytes_2
+        \\        + str_3
+        \\        + bytes_3
+        \\        + str_4
+        \\        + bytes_4
+        \\        + str_5
+        \\        + bytes_5
+        \\        + str_6
+        \\        + bytes_6
+        \\        + str_7
+        \\        + bytes_7
+        \\        + str_8
+        \\        + bytes_8
+        \\        + str_9
+        \\        + bytes_9
+        \\        + str_10
+        \\        + bytes_10
+        \\        + str_11
+        \\        + bytes_11
+        \\        + str_12
+        \\        + bytes_12
+        \\        + List.len(holder)
+        \\}
+        ,
+    },
+    .{
         .name = "list copy-on-write and slice ops, unique and shared inputs",
         .source =
         \\{
