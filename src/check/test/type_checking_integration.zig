@@ -16157,3 +16157,283 @@ test "check type - a deeply nested record annotation reports its mismatch" {
     defer test_env.deinit();
     try test_env.assertOneTypeError("Type Mismatch");
 }
+
+// Alias depth and spelling never change a verdict (design.md "Three
+// Syntactic Walks", "Row Subsumption"): each walk below reads a declaration
+// it references from that declaration's own answer, never by following a
+// chain to a depth bound, so an argument spelled through nine alias layers is
+// decided exactly as its inline spelling is.
+
+test "check type - spelling independence - a result row spelled through nine alias layers opens like its inline spelling" {
+    const source =
+        \\L1 : [Other]
+        \\L2 : L1
+        \\L3 : L2
+        \\L4 : L3
+        \\L5 : L4
+        \\L6 : L5
+        \\L7 : L6
+        \\L8 : L7
+        \\L9 : L8
+        \\
+        \\F(e) : e -> e
+        \\
+        \\fwd : F(L9)
+        \\fwd = |x| x
+        \\
+        \\wider : [Other] -> [Aborted, Other]
+        \\wider = |x| fwd(x)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[Other] -> [Aborted, Other]");
+}
+
+test "check type - spelling independence - the same result row keeps its input closed through nine alias layers" {
+    const source =
+        \\L1 : [Other]
+        \\L2 : L1
+        \\L3 : L2
+        \\L4 : L3
+        \\L5 : L4
+        \\L6 : L5
+        \\L7 : L6
+        \\L8 : L7
+        \\L9 : L8
+        \\
+        \\F(e) : e -> e
+        \\
+        \\fwd : F(L9)
+        \\fwd = |x| x
+        \\
+        \\bad = fwd(Aborted)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - spelling independence - the verdict through nine alias layers does not depend on merge order" {
+    // Each branch order merges the alias view and the row the other way.
+    const programs = [_][]const u8{
+        \\L1 : [Other]
+        \\L2 : L1
+        \\L3 : L2
+        \\L4 : L3
+        \\L5 : L4
+        \\L6 : L5
+        \\L7 : L6
+        \\L8 : L7
+        \\L9 : L8
+        \\
+        \\F(e) : e -> e
+        \\
+        \\fwd : F(L9)
+        \\fwd = |x| x
+        \\
+        \\wider : [Other], Bool -> [Aborted, Other]
+        \\wider = |x, c| if c fwd(x) else Aborted
+        ,
+        \\L1 : [Other]
+        \\L2 : L1
+        \\L3 : L2
+        \\L4 : L3
+        \\L5 : L4
+        \\L6 : L5
+        \\L7 : L6
+        \\L8 : L7
+        \\L9 : L8
+        \\
+        \\F(e) : e -> e
+        \\
+        \\fwd : F(L9)
+        \\fwd = |x| x
+        \\
+        \\wider : [Other], Bool -> [Aborted, Other]
+        \\wider = |x, c| if c Aborted else fwd(x)
+        ,
+    };
+    for (programs) |source| {
+        var test_env = try TestEnv.init("Test", source);
+        defer test_env.deinit();
+        try test_env.assertLastDefType("[Other], Bool -> [Aborted, Other]");
+    }
+}
+
+test "check type - spelling independence - an argument's variance composes through nine alias layers" {
+    // `H1(a) : a -> Str` holds `a` contravariantly, and so does every layer
+    // above it, so `h`'s argument is generated closed, as `[A] -> Str` is,
+    // and `h` refuses `B`.
+    const source =
+        \\H1(a) : a -> Str
+        \\H2(a) : H1(a)
+        \\H3(a) : H2(a)
+        \\H4(a) : H3(a)
+        \\H5(a) : H4(a)
+        \\H6(a) : H5(a)
+        \\H7(a) : H6(a)
+        \\H8(a) : H7(a)
+        \\H9(a) : H8(a)
+        \\
+        \\h : H9([A])
+        \\h = |_| "h"
+        \\
+        \\r = h(B)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+    const inline_source =
+        \\h : [A] -> Str
+        \\h = |_| "h"
+        \\
+        \\r = h(B)
+    ;
+    try checkTypesModule(inline_source, .fail, "Type Mismatch");
+}
+
+test "check type - spelling independence - a formal passed to an invariant formal is invariant" {
+    // `Inner(x) : x -> x` holds `x` both ways, so `Outer(a) : Inner(a)` holds
+    // `a` both ways too, and `g`'s argument keeps `[A]` closed at both of its
+    // occurrences: `[A, B] -> [A, B]` is no `[A] -> [A]`, as it is not for
+    // the inline `([A] -> [A]) -> Str`.
+    const source =
+        \\Inner(x) : x -> x
+        \\Outer(a) : Inner(a)
+        \\
+        \\g : Outer([A]) -> Str
+        \\g = |_| "g"
+        \\
+        \\h : [A, B] -> [A, B]
+        \\h = |x| x
+        \\
+        \\r = g(h)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+    const inline_source =
+        \\g : ([A] -> [A]) -> Str
+        \\g = |_| "g"
+        \\
+        \\h : [A, B] -> [A, B]
+        \\h = |x| x
+        \\
+        \\r = g(h)
+    ;
+    try checkTypesModule(inline_source, .fail, "Type Mismatch");
+}
+
+test "check type - spelling independence - mutually recursive declarations take their fixpoint variance" {
+    // `P`'s `a` reaches `Q`'s `a` under an arrow's argument, and `Q`'s `a`
+    // stands both directly and inside `P(a)`, so both are invariant whichever
+    // declaration a walk starts from. `f` takes `P([A])` exactly.
+    const reject =
+        \\P(a) := [MkP(Q(a) -> Str)]
+        \\Q(a) := [MkQ(a), MkQ2(P(a))]
+        \\
+        \\f : P([A]) -> Str
+        \\f = |_| "f"
+        \\
+        \\x : P([A, B])
+        \\x = P.MkP(|_| "x")
+        \\
+        \\r = f(x)
+    ;
+    try checkTypesModule(reject, .fail, "Type Mismatch");
+    const accept =
+        \\P(a) := [MkP(Q(a) -> Str)]
+        \\Q(a) := [MkQ(a), MkQ2(P(a))]
+        \\
+        \\f : P([A, B]) -> Str
+        \\f = |_| "f"
+        \\
+        \\x : P([A, B])
+        \\x = P.MkP(|_| "x")
+        \\
+        \\r = f(x)
+    ;
+    try checkTypesModule(accept, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - spelling independence - a formal only a phantom formal receives adds no variance" {
+    // `Ph(x) : Str` never uses `x`, so `Use(b)`'s `b` is contravariant from
+    // its arrow alone. At `g`'s argument (a negative position) it is generated
+    // open, as the inline `{ p : Str, f : [A] -> Str } -> Str` generates it, so `g`
+    // accepts a function over a wider row.
+    const source =
+        \\Ph(x) : Str
+        \\Use(b) : { p : Ph(b), f : b -> Str }
+        \\
+        \\g : Use([A]) -> Str
+        \\g = |_| "g"
+        \\
+        \\k : [A, B] -> Str
+        \\k = |_| "k"
+        \\
+        \\r = g({ p: "s", f: k })
+    ;
+    const inline_source =
+        \\g : { p : Str, f : [A] -> Str } -> Str
+        \\g = |_| "g"
+        \\
+        \\k : [A, B] -> Str
+        \\k = |_| "k"
+        \\
+        \\r = g({ p: "s", f: k })
+    ;
+    try checkTypesModule(inline_source, .{ .pass = .last_def }, "Str");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - spelling independence - a value annotation through nine alias layers generalizes like its inline spelling" {
+    // The chain ends in a row, which the annotation opens, so `x`
+    // generalizes and each use takes its own row.
+    const opens =
+        \\L1 : [A]
+        \\L2 : L1
+        \\L3 : L2
+        \\L4 : L3
+        \\L5 : L4
+        \\L6 : L5
+        \\L7 : L6
+        \\L8 : L7
+        \\L9 : L8
+        \\
+        \\x : L9
+        \\x = A
+        \\
+        \\a : [A, B]
+        \\a = x
+        \\
+        \\b : [A, C]
+        \\b = x
+    ;
+    try checkTypesModule(opens, .{ .pass = .last_def }, "[A, C]");
+    // The chain ends in a number, which opens nothing, so `x` does not
+    // generalize: its hole is one type, as in `(U64, List(_))`.
+    const closed =
+        \\M1 : U64
+        \\M2 : M1
+        \\M3 : M2
+        \\M4 : M3
+        \\M5 : M4
+        \\M6 : M5
+        \\M7 : M6
+        \\M8 : M7
+        \\M9 : M8
+        \\
+        \\x : (M9, List(_))
+        \\x = (1, [])
+        \\
+        \\a : List(Str)
+        \\a = x.1
+        \\
+        \\b : List(U64)
+        \\b = x.1
+    ;
+    try checkTypesModule(closed, .fail, "Type Mismatch");
+    const closed_inline =
+        \\x : (U64, List(_))
+        \\x = (1, [])
+        \\
+        \\a : List(Str)
+        \\a = x.1
+        \\
+        \\b : List(U64)
+        \\b = x.1
+    ;
+    try checkTypesModule(closed_inline, .fail, "Type Mismatch");
+}

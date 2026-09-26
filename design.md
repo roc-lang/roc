@@ -7137,21 +7137,43 @@ declaration reached as `.external` or `.pending`, because that declaration's
 CIR and its formal names live in another module's stores. (The `Try` walk
 declines a `.builtin` reference too, and that one costs nothing: the
 applications the compiler constructs are `List`, `Box` and the numerics, which
-are never the builtin `Try`.) Both also stop on
-the bounds a walk needs in order to answer in bounded time: an arity above
-`max_tracked_alias_formals`, which both share; a declaration chain past
-`max_formal_variance_decl_depth` or a position count past
-`max_formal_variance_nodes` in the variance walk, and a chain longer than the
-CIR node count in the `Try` walk; a declaration cycle; and, for the `Try`
-walk, an argument the declaration computes (`Outer(e) : Inner(List(e))`)
-rather than passes straight through.
+are never the builtin `Try`.) Both also decline an arity above
+`max_tracked_alias_formals`, which both share. The `Try` walk also stops on
+a chain longer than the CIR node count, which only a declaration cycle (a
+reported `recursive_alias`) can reach, and on an argument the declaration
+computes (`Outer(e) : Inner(List(e))`) rather than passes straight through.
+
+The variance walk has no depth, size or cycle bound. Each local
+declaration's variances are computed once, by `recordTypeDeclVariances`
+before any annotation is generated, as the least fixpoint of the walk over
+every local declaration at once: a body's walk reads each declaration it
+names from that declaration's current record and never enters its body, so
+there is no declaration chain to follow and a spine of any depth walks on an
+explicit stack. Each occurrence joins the variance of its position relative
+to the declaration's root, composed exactly: an arrow's argument flips it,
+an argument of a reference whose formal is covariant keeps it, one whose
+formal is contravariant flips it, one whose formal is invariant makes it
+invariant, and one whose formal is unused contributes nothing (that argument
+stands nowhere in the body). The composition is monotone in the referenced
+formal's variance, each formal rises at most twice, and the worklist reruns
+only the declarations naming one that changed, so the fixpoint is reached in
+bounded work and does not depend on the order the worklist runs in or on
+which declaration a use names. Mutually recursive nominal declarations
+(`P(a) := [MkP(Q(a) -> Str)]`, `Q(a) := [MkQ(a), MkQ2(P(a))]`, both
+invariant) need no special case. A reference answers from that record, so an
+argument spelled through any number of alias layers is generated at the
+polarity its inline spelling is.
 
 Neither stop is free, and the DIRECTION each fails in is the rule. Both fail
 toward the closed row, which is the direction where the annotation keeps
 bounding and a rejected program is the worst outcome.
 
-The generalization walk stops at a declaration chain past
-`max_value_row_decl_depth`, where it answers by polarity alone. At the module
+The generalization walk reads a local alias from its record too: whether a
+reference at each polarity mints is the least fixpoint of the walk over the
+alias bodies, computed in the same pre-pass after the variances it reads. A
+reference whose alias reaches itself is generated as an error and mints
+nothing (`recursive_alias`), and the least fixpoint is exactly that, so the
+answer is the generator's own, at any depth. At the module
 boundary it reads the declaring module's recorded answer instead of choosing
 a blanket one, and both blanket answers have been tried: YES for every
 `.external` base made every `r : Str` generalize and moved dispatch verdicts
@@ -7427,9 +7449,15 @@ gets no twin, since a second opened row would make the signature decline. A
 host-boundary annotation's twin is the argument itself, still closed as
 written: taking it only reports the site its row stands on, so a hosted
 `Try(U64, Wrap(Base))` records the same coercion as `Try(U64, Errs)`. The walk
-reads at most `max_result_row_twin_alias_layers` (8) alias layers and links of
-one argument's row; beyond that the argument gets no twin and its result
-occurrence stays closed, the conservative answer.
+(`resultRowTwinRow`) reads the argument's row through every alias layer and
+link it is written through, with no depth bound: the argument was generated
+from the annotation just before, so its layers are those the annotation and
+the declarations it names write, and nothing solved has merged into it (so
+which spelling a later merge keeps cannot reach it). They are finite because
+a declaration is generated before any use instantiates it and an alias that
+reaches itself is reported as `recursive_alias` with its reference poisoned
+to an error, where the walk stops. An argument spelled through any number of
+alias layers therefore gets the twin its inline spelling gets.
 
 The alias layer is kept: its argument list holds the written argument at the
 declared formal and the twin at the slot, so its backing is still its

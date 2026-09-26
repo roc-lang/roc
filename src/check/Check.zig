@@ -900,6 +900,11 @@ scratch_embed_cut_count: usize = 0,
 /// Scratch buffer for the (scheme var → fresh var) pairs of one constrained
 /// scheme instantiation, flushed into `cir.scheme_uses`.
 scratch_evidence_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty,
+/// Positions still to visit in one declaration body's variance walk
+/// (`walkDeclFormalVariances`), reused across walks.
+formal_variance_pending: std.ArrayListUnmanaged(FormalVariancePending) = .empty,
+/// The declaration pre-pass's working state (`recordTypeDeclVariances`).
+type_decl_prepass: TypeDeclPrepass = .{},
 scratch_evidence_pair_set: std.AutoHashMapUnmanaged(ModuleEnv.SchemeUsePair, void) = .empty,
 /// Exact internal calls collected while validating one compiler-generated
 /// parser or encoder. Successful validation publishes this scratch range to
@@ -3262,6 +3267,8 @@ pub fn deinit(self: *Self) void {
     self.scratch_embed_active_pairs.deinit(self.gpa);
     self.scratch_embed_memo.deinit(self.gpa);
     self.scratch_evidence_pairs.deinit(self.gpa);
+    self.formal_variance_pending.deinit(self.gpa);
+    self.type_decl_prepass.deinit(self.gpa);
     self.scratch_evidence_pair_set.deinit(self.gpa);
     self.open_literal_vars.deinit(self.gpa);
     self.open_numeral_literals.deinit(self.gpa);
@@ -7681,10 +7688,17 @@ fn resultRowTwinSite(
 /// uninhabitedness; neither is reopened by position, so neither gets a twin.
 /// An alias layer or link whose declaration's spine ends at no slot
 /// (`types.AliasSpine.none`) fixes its row's end as written, so a row through
-/// one gets no twin either. Past `max_result_row_twin_alias_layers` alias
-/// layers and links the argument gets no twin, the conservative answer.
+/// one gets no twin either.
+///
+/// The walk needs no depth bound. `arg_var` was generated from the
+/// annotation a moment ago, so its alias layers are the ones the annotation
+/// and the declarations it names write, and nothing solved has merged into
+/// it. Those layers are finite: a declaration is generated before any use
+/// instantiates it, and an alias that reaches itself is reported
+/// (`recursive_alias`) and its reference poisoned to an error, where this
+/// walk stops. So an argument gets a twin however many alias layers it is
+/// spelled through, exactly as its inline spelling does.
 fn resultRowTwinRow(self: *Self, arg_var: Var) ?TwinRow {
-    var alias_layers: usize = 0;
     var has_tags = false;
     var innermost: ?struct { var_: Var, tags: types_mod.Tag.SafeMultiList.Range } = null;
     var current = arg_var;
@@ -7692,12 +7706,10 @@ fn resultRowTwinRow(self: *Self, arg_var: Var) ?TwinRow {
         const resolved = self.types.resolveVar(current);
         switch (resolved.desc.content) {
             .alias => |alias| {
-                if (alias_layers == max_result_row_twin_alias_layers) return null;
                 switch (alias.spine.kind) {
                     .marker, .formal, .declared => {},
                     .none => return null,
                 }
-                alias_layers += 1;
                 current = self.types.getAliasBackingVar(alias);
                 continue;
             },
@@ -7721,10 +7733,6 @@ fn resultRowTwinRow(self: *Self, arg_var: Var) ?TwinRow {
         return .{ .tail = resolved.var_, .innermost_union = link.var_, .innermost_tags = link.tags };
     }
 }
-
-/// How many alias layers and extension alias links `resultRowTwinRow` reads
-/// through. Deeper is declined (no twin), the conservative answer.
-const max_result_row_twin_alias_layers: usize = 8;
 
 /// What the instantiator calls to build the twin on its first take.
 const ResultRowTwinBuild = struct {
@@ -14821,6 +14829,10 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     // Copy builtin types into this module's type store
     try self.copyBuiltinTypes();
 
+    // Every local declaration's walk answers, before any annotation is
+    // generated, as `checkFileInternal` records them.
+    try self.recordTypeDeclVariances();
+
     // Create a solver env
     var env = try self.env_pool.acquire();
     defer self.env_pool.release(env);
@@ -19261,11 +19273,28 @@ const FormalVariance = enum {
         return .invariant;
     }
 
-    /// One occurrence standing at `polarity` within the declaration body.
-    fn ofOccurrence(polarity: Polarity) FormalVariance {
-        return switch (polarity) {
-            .pos => .covariant,
-            .neg => .contravariant,
+    /// The variance of a position under a function argument, relative to
+    /// the declaration's root.
+    fn flip(self: FormalVariance) FormalVariance {
+        return switch (self) {
+            .unused => .unused,
+            .covariant => .contravariant,
+            .contravariant => .covariant,
+            .invariant => .invariant,
+        };
+    }
+
+    /// The variance, relative to the enclosing declaration's root, of an
+    /// argument substituted for a formal of this variance at a position of
+    /// variance `position`. Null when the formal is unused: that argument
+    /// stands at no position of the body. Monotone in `self`, which the
+    /// pre-pass's fixpoint relies on.
+    fn composeVariance(self: FormalVariance, position: FormalVariance) ?FormalVariance {
+        return switch (self) {
+            .unused => null,
+            .covariant => position,
+            .contravariant => position.flip(),
+            .invariant => .invariant,
         };
     }
 
@@ -19280,35 +19309,76 @@ const FormalVariance = enum {
     }
 };
 
-/// How many nested declarations `applyFormalVariances` descends through. Only
-/// the DECLARATION chain is native-stack recursion; each declaration's body is
-/// walked iteratively, so an alias spine thousands of layers deep costs no
-/// native stack. A reference below this depth is walked as unmodeled, the same
-/// answer a cross-module or builtin reference gets.
-const max_formal_variance_decl_depth: usize = 8;
-
-/// How many positions of one declaration body may be pending at once. Sized
-/// for the nesting and fan-out of a real declaration, not for a generated
-/// spine.
-const max_formal_variance_pending: usize = 256;
-
-/// The total positions one `applyFormalVariances` may visit, across the
-/// declarations it descends through. Bounded for the same reason the alias
-/// walk in `applyTryErrorArgIndex` is: a guard whose only job is to answer
-/// must answer in bounded time, whatever declaration graph it is handed.
-const max_formal_variance_nodes: usize = 2048;
-
-/// One position of a declaration body still to be visited, and where that
-/// position sits relative to the declaration's own root.
+/// One position of a declaration body still to be visited
+/// (`walkDeclFormalVariances`), and its variance relative to the
+/// declaration's own root.
 const FormalVariancePending = struct {
     anno: CIR.TypeAnno.Idx,
-    polarity: Polarity,
-    /// Set for every position below a reference whose variance this walk
-    /// cannot read (`ApplyDeclKnowledge.unknown`). A formal found here is
-    /// joined as `.invariant` rather than by its polarity: the declaration on
-    /// the other side may place it in either position, and only invariant
-    /// covers both.
-    unknown: bool = false,
+    variance: FormalVariance,
+};
+
+/// The declaration pre-pass's working state (`recordTypeDeclVariances`),
+/// kept across runs so its buffers are reused.
+const TypeDeclPrepass = struct {
+    /// Every local alias and nominal declaration, once.
+    decls: std.ArrayListUnmanaged(CIR.Statement.Idx) = .empty,
+    position_of: std.AutoHashMapUnmanaged(CIR.Statement.Idx, u32) = .empty,
+    /// `(referenced, referencing)` positions: one body naming a declaration.
+    edges: std.ArrayListUnmanaged([2]u32) = .empty,
+    /// The referencing positions of `decls[i]` are
+    /// `dependents[dependent_starts[i]..dependent_starts[i + 1]]`.
+    dependent_starts: std.ArrayListUnmanaged(u32) = .empty,
+    dependents: std.ArrayListUnmanaged(u32) = .empty,
+    fill_cursor: std.ArrayListUnmanaged(u32) = .empty,
+    queue: std.ArrayListUnmanaged(u32) = .empty,
+    queued: std.ArrayListUnmanaged(bool) = .empty,
+    refs_stack: std.ArrayListUnmanaged(CIR.TypeAnno.Idx) = .empty,
+
+    fn clear(self: *TypeDeclPrepass) void {
+        self.decls.clearRetainingCapacity();
+        self.position_of.clearRetainingCapacity();
+        self.edges.clearRetainingCapacity();
+        self.dependent_starts.clearRetainingCapacity();
+        self.dependents.clearRetainingCapacity();
+        self.fill_cursor.clearRetainingCapacity();
+        self.queue.clearRetainingCapacity();
+        self.queued.clearRetainingCapacity();
+        self.refs_stack.clearRetainingCapacity();
+    }
+
+    fn deinit(self: *TypeDeclPrepass, gpa: std.mem.Allocator) void {
+        self.decls.deinit(gpa);
+        self.position_of.deinit(gpa);
+        self.edges.deinit(gpa);
+        self.dependent_starts.deinit(gpa);
+        self.dependents.deinit(gpa);
+        self.fill_cursor.deinit(gpa);
+        self.queue.deinit(gpa);
+        self.queued.deinit(gpa);
+        self.refs_stack.deinit(gpa);
+    }
+
+    fn resetQueue(self: *TypeDeclPrepass, gpa: std.mem.Allocator, decl_count: usize) std.mem.Allocator.Error!void {
+        self.queue.clearRetainingCapacity();
+        try self.queued.resize(gpa, decl_count);
+        @memset(self.queued.items, false);
+    }
+
+    fn enqueue(self: *TypeDeclPrepass, gpa: std.mem.Allocator, position: u32) std.mem.Allocator.Error!void {
+        if (self.queued.items[position]) return;
+        self.queued.items[position] = true;
+        try self.queue.append(gpa, position);
+    }
+
+    fn pop(self: *TypeDeclPrepass) ?u32 {
+        const position = self.queue.pop() orelse return null;
+        self.queued.items[position] = false;
+        return position;
+    }
+
+    fn dependentsOf(self: *const TypeDeclPrepass, position: u32) []const u32 {
+        return self.dependents.items[self.dependent_starts.items[position]..self.dependent_starts.items[position + 1]];
+    }
 };
 
 /// What this walk can know about the declaration a type application
@@ -19361,8 +19431,8 @@ const ApplyDeclKnowledge = union(enum) {
     /// unresolved import, a `.pending` base (which carries a type name, not a
     /// node index, so it can never key a record), a reference whose argument
     /// count differs from the declaration's arity, and a declaration whose
-    /// producer's own walk could not answer: an arity past
-    /// `max_tracked_alias_formals`, a declaration cycle, or an exhausted walk.
+    /// producer did not answer the variance axis: an arity past
+    /// `max_tracked_alias_formals`.
     unknown,
 };
 
@@ -19463,36 +19533,18 @@ fn importedFormalVariances(
     return len;
 }
 
-/// Allocation-free state of one `applyFormalVariances` walk.
-///
-/// Every bound below costs PRECISION only: when one is hit the walk reports
-/// itself exhausted, the whole answer is discarded, and every argument keeps
-/// the application's own polarity, which is what all of them did before this
-/// walk existed. A partial answer is never used, because a walk that stopped
-/// early can miss an occurrence and name a variance the declaration does not
-/// have.
-const FormalVarianceWalk = struct {
-    /// Declarations currently being walked, outermost first. A reference back
-    /// into one of them is a cycle (`Tree(a) := [Node(Tree(a)), Leaf(a)]`):
-    /// its arguments are walked as unmodeled rather than descended into again,
-    /// so the walk terminates without discarding the rest of the body.
-    open_decls: [max_formal_variance_decl_depth]CIR.Statement.Idx,
-    open_decls_len: usize,
-    /// Positions the walk may still visit.
-    fuel: usize,
-    /// Set when a bound was hit. See the type's doc comment.
-    exhausted: bool,
-};
-
 /// The variance of each formal of the declaration `apply` references, written
 /// into `out`, returning how many formals were written. Null only when a LOCAL
-/// declaration's walk could not answer—an arity past the tracked bound, a
-/// statement that is not a type declaration, a cycle, or an exhausted walk—in
-/// which case every argument keeps the application's own polarity, as it always
-/// did. A reference whose declaration is not local answers from
-/// `ApplyDeclKnowledge` instead: for every formal at once when the declaration
-/// is compiler-owned or unreadable, and per formal when it is imported and its
-/// producer recorded the answer.
+/// reference has no answer: its declaration is not an alias or nominal
+/// declaration, its arity is past the tracked bound, or the reference's
+/// argument count differs from the declaration's (an arity error reported
+/// where the reference is generated). Every argument then keeps the
+/// application's own polarity. A local declaration's answer is the one the
+/// pre-pass computed for it (`recordTypeDeclVariances`); a reference whose
+/// declaration is not local answers from `ApplyDeclKnowledge` instead: for
+/// every formal at once when the declaration is compiler-owned or
+/// unreadable, and per formal when it is imported and its producer recorded
+/// the answer.
 fn applyFormalVariances(
     self: *const Self,
     apply: CIR.TypeAnno.Apply,
@@ -19505,35 +19557,50 @@ fn applyFormalVariances(
         .imported => |record| return importedFormalVariances(out, args_len, record),
         .unknown => return uniformFormalVariances(out, args_len, .invariant),
     };
-    var walk = FormalVarianceWalk{
-        .open_decls = undefined,
-        .open_decls_len = 0,
-        .fuel = max_formal_variance_nodes,
-        .exhausted = false,
-    };
-    const formals_len = self.declFormalVariances(local_decl_idx, out, &walk) orelse return null;
-    if (walk.exhausted) return null;
-    // An arity mismatch is reported by the caller; until then the positional
-    // correspondence this walk assumes does not hold.
-    if (formals_len != args_len) return null;
-    return formals_len;
+    const record = self.localTypeDeclVariance(local_decl_idx) orelse return null;
+    if (!recordAnswersFormalVariances(record, args_len)) return null;
+    for (out[0..args_len], record.formal_variances[0..args_len]) |*slot, raw| {
+        slot.* = formalVarianceFromRecordByte(raw);
+    }
+    return args_len;
 }
 
-/// The variance of each of `decl_idx`'s own formals within its body, written
-/// into `out`, returning how many formals were written. Null when `decl_idx`
-/// is not an alias or nominal declaration this walk models.
-fn declFormalVariances(
-    self: *const Self,
-    decl_idx: CIR.Statement.Idx,
-    out: *[max_tracked_alias_formals]FormalVariance,
-    walk: *FormalVarianceWalk,
-) ?usize {
-    if (walk.exhausted) return null;
-    if (walk.open_decls_len == max_formal_variance_decl_depth) return null;
-    for (walk.open_decls[0..walk.open_decls_len]) |open_decl| {
-        if (open_decl == decl_idx) return null;
+/// The pre-pass's record for a LOCAL declaration, or null when the statement
+/// is not an alias or nominal declaration. Every local alias and nominal
+/// declaration has one once `recordTypeDeclVariances` has run, which it does
+/// before any annotation is generated, so a missing one is a broken
+/// invariant.
+fn localTypeDeclVariance(self: *const Self, decl_idx: CIR.Statement.Idx) ?ModuleEnv.TypeDeclVariance {
+    switch (self.cir.store.getStatement(decl_idx)) {
+        .s_alias_decl, .s_nominal_decl => {},
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => return null,
     }
+    return self.cir.typeDeclVarianceForNode(@intFromEnum(decl_idx)) orelse
+        std.debug.panic("type checker invariant violated: local type declaration {d} has no pre-pass variance record", .{@intFromEnum(decl_idx)});
+}
 
+/// The header formals and body of an alias or nominal declaration, or null
+/// for any other statement.
+fn typeDeclFormalsAndBody(self: *const Self, decl_idx: CIR.Statement.Idx) ?struct { []const CIR.TypeAnno.Idx, CIR.TypeAnno.Idx } {
     const header, const body = switch (self.cir.store.getStatement(decl_idx)) {
         .s_alias_decl => |decl| .{ decl.header, decl.anno },
         .s_nominal_decl => |decl| .{ decl.header, decl.anno },
@@ -19558,183 +19625,114 @@ fn declFormalVariances(
         .s_runtime_error,
         => return null,
     };
-
-    const formals = self.cir.store.sliceTypeAnnos(self.cir.store.getTypeHeader(header).args);
-    if (formals.len > max_tracked_alias_formals) return null;
-    for (out[0..formals.len]) |*variance| variance.* = .unused;
-
-    walk.open_decls[walk.open_decls_len] = decl_idx;
-    walk.open_decls_len += 1;
-    defer walk.open_decls_len -= 1;
-
-    // A declaration's body root is an output position relative to the
-    // declaration itself, the same convention `generateAnnotationType` starts
-    // an annotation walk with.
-    self.accumulateFormalVariances(body, formals, .pos, out, walk);
-    return formals.len;
+    return .{ self.cir.store.sliceTypeAnnos(self.cir.store.getTypeHeader(header).args), body };
 }
 
-/// Join into `out[i]` the variance of every occurrence of `formals[i]` within
-/// `root_anno_idx`, which itself stands at `root_polarity` relative to the
-/// declaration whose formals these are.
+/// One pass of the variance fixpoint over one declaration: the variance of
+/// each of `formals` within `body`, read against the answers the pre-pass
+/// holds for every OTHER local declaration the body references (and for this
+/// one, where it references itself). Written into `out[0..formals.len]`.
 ///
-/// The body is walked on an explicit stack, not the native one: a declaration
-/// body can be an alias spine thousands of layers deep
-/// (`A(a) : List(List(... List(B(a)) ...))`), which a recursive descent cannot
-/// survive. Only the DECLARATION chain recurses, bounded by
-/// `max_formal_variance_decl_depth`.
-fn accumulateFormalVariances(
-    self: *const Self,
-    root_anno_idx: CIR.TypeAnno.Idx,
+/// The body is walked on an explicit stack (`formal_variance_pending`), not
+/// the native one: a declaration body can be a spine thousands of layers
+/// deep (`A(a) : List(List(... List(B(a)) ...))`). A referenced declaration
+/// is never descended into; its recorded answer is read instead, so there is
+/// no declaration chain to bound.
+///
+/// Each occurrence joins the VARIANCE of the position it stands at relative
+/// to the declaration's root, which composes exactly: a function argument
+/// flips it, and an argument of a reference whose formal has variance `w`
+/// stands at `w` composed with it (`FormalVariance.composeVariance`). A
+/// formal the referenced declaration never uses contributes nothing, and one
+/// it uses both ways makes everything beneath it invariant. That composition
+/// is monotone in `w`, which is what lets the pre-pass iterate a group of
+/// mutually recursive declarations to its least fixpoint.
+fn walkDeclFormalVariances(
+    self: *Self,
     formals: []const CIR.TypeAnno.Idx,
-    root_polarity: Polarity,
-    out: *[max_tracked_alias_formals]FormalVariance,
-    walk: *FormalVarianceWalk,
-) void {
-    var pending: [max_formal_variance_pending]FormalVariancePending = undefined;
-    var pending_len: usize = 1;
-    pending[0] = .{ .anno = root_anno_idx, .polarity = root_polarity };
+    body: CIR.TypeAnno.Idx,
+    out: []FormalVariance,
+) std.mem.Allocator.Error!void {
+    for (out) |*variance| variance.* = .unused;
+    const pending = &self.formal_variance_pending;
+    pending.clearRetainingCapacity();
+    try pending.append(self.gpa, .{ .anno = body, .variance = .covariant });
 
-    while (pending_len > 0) {
-        if (walk.fuel == 0) {
-            walk.exhausted = true;
-            return;
-        }
-        walk.fuel -= 1;
-
-        pending_len -= 1;
-        const here = pending[pending_len];
-
-        // Room for the positions this node opens up, checked once before any
-        // is pushed.
-        const anno = self.cir.store.getTypeAnno(here.anno);
-        const child_count: usize = switch (anno) {
-            .rigid_var, .rigid_var_lookup, .lookup, .underscore, .malformed => 0,
-            .parens => 1,
-            .@"fn" => |func| self.cir.store.sliceTypeAnnos(func.args).len + 1,
-            .tag_union => |tag_union| self.cir.store.sliceTypeAnnos(tag_union.tags).len +
-                @intFromBool(tag_union.ext != null),
-            .tag => |tag| self.cir.store.sliceTypeAnnos(tag.args).len,
-            .tuple => |tuple| self.cir.store.sliceTypeAnnos(tuple.elems).len,
-            .record => |record| self.cir.store.sliceAnnoRecordFields(record.fields).len +
-                @intFromBool(record.ext != null),
-            .apply => |inner| self.cir.store.sliceTypeAnnos(inner.args).len,
-        };
-        if (pending_len + child_count > pending.len) {
-            walk.exhausted = true;
-            return;
-        }
-
-        switch (anno) {
+    while (pending.pop()) |here| {
+        switch (self.cir.store.getTypeAnno(here.anno)) {
             .rigid_var, .rigid_var_lookup => {
                 if (self.annoFormalIndex(here.anno, formals)) |formal_index| {
-                    const occurrence: FormalVariance = if (here.unknown)
-                        .invariant
-                    else
-                        FormalVariance.ofOccurrence(here.polarity);
-                    out[formal_index] = out[formal_index].join(occurrence);
+                    out[formal_index] = out[formal_index].join(here.variance);
                 }
             },
-            .parens => |parens| {
-                pending[pending_len] = .{ .anno = parens.anno, .polarity = here.polarity, .unknown = here.unknown };
-                pending_len += 1;
-            },
+            .parens => |parens| try pending.append(self.gpa, .{ .anno = parens.anno, .variance = here.variance }),
             .@"fn" => |func| {
-                // The same rule the annotation walk uses: argument positions
-                // negate the surrounding polarity, the return preserves it.
+                // Argument positions flip the surrounding variance, the
+                // return keeps it.
                 for (self.cir.store.sliceTypeAnnos(func.args)) |arg_anno_idx| {
-                    pending[pending_len] = .{ .anno = arg_anno_idx, .polarity = here.polarity.flip(), .unknown = here.unknown };
-                    pending_len += 1;
+                    try pending.append(self.gpa, .{ .anno = arg_anno_idx, .variance = here.variance.flip() });
                 }
-                pending[pending_len] = .{ .anno = func.ret, .polarity = here.polarity, .unknown = here.unknown };
-                pending_len += 1;
+                try pending.append(self.gpa, .{ .anno = func.ret, .variance = here.variance });
             },
             .tag_union => |tag_union| {
                 for (self.cir.store.sliceTypeAnnos(tag_union.tags)) |tag_anno_idx| {
-                    pending[pending_len] = .{ .anno = tag_anno_idx, .polarity = here.polarity, .unknown = here.unknown };
-                    pending_len += 1;
+                    try pending.append(self.gpa, .{ .anno = tag_anno_idx, .variance = here.variance });
                 }
-                if (tag_union.ext) |ext_anno_idx| {
-                    pending[pending_len] = .{ .anno = ext_anno_idx, .polarity = here.polarity, .unknown = here.unknown };
-                    pending_len += 1;
-                }
+                if (tag_union.ext) |ext_anno_idx| try pending.append(self.gpa, .{ .anno = ext_anno_idx, .variance = here.variance });
             },
-            .tag => |tag| {
-                for (self.cir.store.sliceTypeAnnos(tag.args)) |tag_arg_idx| {
-                    pending[pending_len] = .{ .anno = tag_arg_idx, .polarity = here.polarity, .unknown = here.unknown };
-                    pending_len += 1;
-                }
+            .tag => |tag| for (self.cir.store.sliceTypeAnnos(tag.args)) |tag_arg_idx| {
+                try pending.append(self.gpa, .{ .anno = tag_arg_idx, .variance = here.variance });
             },
-            .tuple => |tuple| {
-                for (self.cir.store.sliceTypeAnnos(tuple.elems)) |elem_anno_idx| {
-                    pending[pending_len] = .{ .anno = elem_anno_idx, .polarity = here.polarity, .unknown = here.unknown };
-                    pending_len += 1;
-                }
+            .tuple => |tuple| for (self.cir.store.sliceTypeAnnos(tuple.elems)) |elem_anno_idx| {
+                try pending.append(self.gpa, .{ .anno = elem_anno_idx, .variance = here.variance });
             },
             .record => |record| {
                 for (self.cir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
-                    pending[pending_len] = .{
-                        .anno = self.cir.store.getAnnoRecordField(field_idx).ty,
-                        .polarity = here.polarity,
-                        .unknown = here.unknown,
-                    };
-                    pending_len += 1;
+                    try pending.append(self.gpa, .{ .anno = self.cir.store.getAnnoRecordField(field_idx).ty, .variance = here.variance });
                 }
-                if (record.ext) |ext_anno_idx| {
-                    pending[pending_len] = .{ .anno = ext_anno_idx, .polarity = here.polarity, .unknown = here.unknown };
-                    pending_len += 1;
-                }
+                if (record.ext) |ext_anno_idx| try pending.append(self.gpa, .{ .anno = ext_anno_idx, .variance = here.variance });
             },
             .apply => |inner| {
-                // A nested reference composes the same way the top-level one
-                // does, and it splits the same four ways
-                // (`ApplyDeclKnowledge`): a local declaration is walked, a
-                // compiler-owned one is covariant and its arguments keep this
-                // position's own polarity, and one this walk has no answer for
-                // marks its arguments unknown, so any formal beneath it is
-                // joined invariant rather than by a polarity the declaration
-                // may not have.
+                // A nested reference splits the same four ways the top-level
+                // one does (`ApplyDeclKnowledge`). A local declaration's
+                // formals compose by their current answers. A compiler-owned
+                // one is covariant, so its arguments keep this position's
+                // variance. One this walk has no answer for makes everything
+                // beneath it invariant: the declaration on the other side may
+                // place it in either position.
                 //
                 // An IMPORTED declaration's record is deliberately NOT read
-                // here, and is treated exactly as unknown in both places
-                // below. Reading it at a nested reference is not monotone: it
-                // opens rows at even depths and CLOSES them at odd ones, so it
-                // rejects programs that check today and cannot ride inside the
-                // top-level relaxation. That is a separate, sweep-gated change.
+                // here, and is treated exactly as unknown. Reading it at a
+                // nested reference is not monotone: it opens rows at even
+                // depths and CLOSES them at odd ones, so it rejects programs
+                // that check today. That is a separate, sweep-gated change.
                 const inner_args = self.cir.store.sliceTypeAnnos(inner.args);
-                var inner_variances: [max_tracked_alias_formals]FormalVariance = undefined;
-                const inner_knowledge = self.applyDeclKnowledge(inner);
-                const inner_modeled = inner_blk: {
-                    const inner_decl_idx = switch (inner_knowledge) {
-                        .local => |decl_idx| decl_idx,
-                        .covariant, .imported, .unknown => break :inner_blk false,
-                    };
-                    const written = self.declFormalVariances(inner_decl_idx, &inner_variances, walk) orelse
-                        break :inner_blk false;
-                    break :inner_blk written == inner_args.len;
-                };
-                // Exhaustive rather than `inner_knowledge == .unknown`: a
-                // tagged-union `==` compares tags, so a new variant would leave
-                // this compiling and silently false, dropping the unknown bit
-                // under a nested reference and joining the formals below it by
-                // polarity instead of invariantly. That is half of the
-                // non-monotone behaviour above, with no compile error to catch
-                // it.
-                const inner_unmodeled = switch (inner_knowledge) {
-                    .imported, .unknown => true,
-                    .local, .covariant => false,
-                };
-                if (walk.exhausted) return;
-                for (inner_args, 0..) |inner_arg_idx, inner_index| {
-                    pending[pending_len] = .{
-                        .anno = inner_arg_idx,
-                        .polarity = if (inner_modeled)
-                            inner_variances[inner_index].compose(here.polarity)
-                        else
-                            here.polarity,
-                        .unknown = here.unknown or inner_unmodeled,
-                    };
-                    pending_len += 1;
+                switch (self.applyDeclKnowledge(inner)) {
+                    .local => |inner_decl_idx| {
+                        const record = self.localTypeDeclVariance(inner_decl_idx);
+                        if (record != null and recordAnswersFormalVariances(record.?, inner_args.len)) {
+                            for (inner_args, record.?.formal_variances[0..inner_args.len]) |inner_arg_idx, raw| {
+                                const inner_variance = formalVarianceFromRecordByte(raw);
+                                const variance = inner_variance.composeVariance(here.variance) orelse continue;
+                                try pending.append(self.gpa, .{ .anno = inner_arg_idx, .variance = variance });
+                            }
+                        } else {
+                            // No answer for this reference (not a type
+                            // declaration, past the tracked arity, or an
+                            // arity error reported where it is generated):
+                            // its arguments keep this position's variance,
+                            // as they keep its polarity at generation.
+                            for (inner_args) |inner_arg_idx| {
+                                try pending.append(self.gpa, .{ .anno = inner_arg_idx, .variance = here.variance });
+                            }
+                        }
+                    },
+                    .covariant => for (inner_args) |inner_arg_idx| {
+                        try pending.append(self.gpa, .{ .anno = inner_arg_idx, .variance = here.variance });
+                    },
+                    .imported, .unknown => for (inner_args) |inner_arg_idx| {
+                        try pending.append(self.gpa, .{ .anno = inner_arg_idx, .variance = .invariant });
+                    },
                 }
             },
             // No formal can be named by any of these.
@@ -19763,6 +19761,13 @@ fn accumulateFormalVariances(
 /// does not model. Written here the table is complete before the window opens,
 /// and both generations read the identical one.
 ///
+/// Each axis is the least fixpoint of its walk over every local declaration
+/// at once, iterated on a worklist: a walk reads each declaration its body
+/// names from that declaration's current record and never enters its body,
+/// so no declaration chain is followed, recursion among nominal declarations
+/// needs no special case, and the answer does not depend on where a walk
+/// starts or how deep a declaration is spelled.
+///
 /// Both walks read CIR only, so nothing needs to have been generated yet;
 /// `externalTypeRefTargetsBuiltin` needs resolved imports, which
 /// `preflightForTypeChecking` guarantees. Checking goes on to mutate CIR
@@ -19770,25 +19775,144 @@ fn accumulateFormalVariances(
 /// type ANNOTATIONS, which is all these walks read - so the answer recorded
 /// here stays true for the rest of the run.
 fn recordTypeDeclVariances(self: *Self) std.mem.Allocator.Error!void {
-    // The same union of spans `checkFileInternal` itself generates declarations
-    // from. The upsert deduplicates the overlap.
+    const prepass = &self.type_decl_prepass;
+    prepass.clear();
+
+    // The same union of spans `checkFileInternal` itself generates
+    // declarations from, each declaration once.
     for (0..self.cir.type_decls.span.len) |stmt_offset| {
-        try self.recordOneTypeDeclVariance(self.cir.store.statementAt(self.cir.type_decls, stmt_offset));
+        try self.addPrepassTypeDecl(self.cir.store.statementAt(self.cir.type_decls, stmt_offset));
     }
     for (0..self.cir.all_statements.span.len) |stmt_offset| {
-        try self.recordOneTypeDeclVariance(self.cir.store.statementAt(self.cir.all_statements, stmt_offset));
+        try self.addPrepassTypeDecl(self.cir.store.statementAt(self.cir.all_statements, stmt_offset));
+    }
+    // The REPL generates its declarations from `builtin_statements`, and a
+    // platform's for-clause aliases live outside both spans above; every one
+    // of them is a local declaration a reference can name.
+    for (0..self.cir.builtin_statements.span.len) |stmt_offset| {
+        try self.addPrepassTypeDecl(self.cir.store.statementAt(self.cir.builtin_statements, stmt_offset));
+    }
+    for (self.cir.for_clause_aliases.items.items) |for_clause| {
+        try self.addPrepassTypeDecl(for_clause.alias_stmt_idx);
+    }
+    const decl_count = prepass.decls.items.len;
+
+    // Reverse reference edges: which declarations' bodies name each one.
+    for (prepass.decls.items, 0..) |decl_idx, referencing| {
+        const formals_and_body = self.typeDeclFormalsAndBody(decl_idx).?;
+        try self.collectLocalTypeDeclRefs(formals_and_body[1], @intCast(referencing));
+    }
+    try prepass.dependent_starts.resize(self.gpa, decl_count + 1);
+    @memset(prepass.dependent_starts.items, 0);
+    for (prepass.edges.items) |edge| prepass.dependent_starts.items[edge[0] + 1] += 1;
+    for (1..decl_count + 1) |index| prepass.dependent_starts.items[index] += prepass.dependent_starts.items[index - 1];
+    try prepass.dependents.resize(self.gpa, prepass.edges.items.len);
+    try prepass.fill_cursor.resize(self.gpa, decl_count);
+    @memcpy(prepass.fill_cursor.items, prepass.dependent_starts.items[0..decl_count]);
+    for (prepass.edges.items) |edge| {
+        prepass.dependents.items[prepass.fill_cursor.items[edge[0]]] = edge[1];
+        prepass.fill_cursor.items[edge[0]] += 1;
+    }
+
+    // Every declaration's record, before any walk reads one: variances start
+    // at `.unused` (the fixpoint's bottom) and row-opening at NO.
+    for (prepass.decls.items) |decl_idx| {
+        const formals, _ = self.typeDeclFormalsAndBody(decl_idx).?;
+        const tracked_arity = formals.len <= max_tracked_alias_formals;
+        var entry = ModuleEnv.TypeDeclVariance{
+            .node_idx = @intFromEnum(decl_idx),
+            .formal_count = if (tracked_arity) @intCast(formals.len) else 0,
+            .flags = if (tracked_arity) ModuleEnv.TypeDeclVariance.variances_known_flag else 0,
+            .try_error_formal = ModuleEnv.TypeDeclVariance.no_try_error_formal,
+            .formal_variances = [_]u8{@intFromEnum(FormalVariance.unused)} ** max_tracked_alias_formals,
+        };
+        // A placeholder alias opens at a positive position, as `declOpensRow`
+        // answers for it.
+        if (self.aliasBodyIsPlaceholder(decl_idx)) entry.flags |= ModuleEnv.TypeDeclVariance.opens_row_pos_flag;
+        if (tracked_arity) {
+            if (self.declTryErrorFormalIndex(decl_idx, formals.len)) |formal_index| {
+                entry.try_error_formal = @intCast(formal_index);
+            }
+        }
+        try self.cir.recordTypeDeclVariance(entry);
+    }
+
+    // Formal variances: the least fixpoint over every declaration at once.
+    // A walk reads each referenced declaration's current answer and never
+    // descends into it, and the composition is monotone, so every answer
+    // only grows (each formal at most twice) and the result is the same
+    // whatever order the worklist runs in.
+    try prepass.resetQueue(self.gpa, decl_count);
+    for (prepass.decls.items, 0..) |decl_idx, position| {
+        const formals, _ = self.typeDeclFormalsAndBody(decl_idx).?;
+        if (formals.len <= max_tracked_alias_formals) try prepass.enqueue(self.gpa, @intCast(position));
+    }
+    while (prepass.pop()) |position| {
+        const decl_idx = prepass.decls.items[position];
+        const formals, const body = self.typeDeclFormalsAndBody(decl_idx).?;
+        var variances: [max_tracked_alias_formals]FormalVariance = undefined;
+        try self.walkDeclFormalVariances(formals, body, variances[0..formals.len]);
+        var entry = self.cir.typeDeclVarianceForNode(@intFromEnum(decl_idx)).?;
+        var changed = false;
+        for (variances[0..formals.len], entry.formal_variances[0..formals.len]) |variance, *raw| {
+            const previous = formalVarianceFromRecordByte(raw.*);
+            if (previous == variance) continue;
+            // An answer only rises. One that fell would mean a composition
+            // that is not monotone, under which the worklist need not stop.
+            std.debug.assert(previous.join(variance) == variance);
+            raw.* = @intFromEnum(variance);
+            changed = true;
+        }
+        if (!changed) continue;
+        try self.cir.recordTypeDeclVariance(entry);
+        for (prepass.dependentsOf(position)) |dependent| {
+            const dependent_formals, _ = self.typeDeclFormalsAndBody(prepass.decls.items[dependent]).?;
+            if (dependent_formals.len <= max_tracked_alias_formals) try prepass.enqueue(self.gpa, dependent);
+        }
+    }
+
+    // Row opening: the least fixpoint over the alias declarations, read
+    // against the final variances. A reference whose alias reaches itself
+    // is generated as an error and mints nothing (`recursive_alias`), and
+    // the least fixpoint is exactly that: a cycle contributes only what its
+    // declarations' bodies mint elsewhere.
+    try prepass.resetQueue(self.gpa, decl_count);
+    for (prepass.decls.items, 0..) |decl_idx, position| {
+        if (self.aliasBodyForRowOpening(decl_idx) != null) try prepass.enqueue(self.gpa, @intCast(position));
+    }
+    while (prepass.pop()) |position| {
+        const decl_idx = prepass.decls.items[position];
+        const body = self.aliasBodyForRowOpening(decl_idx).?;
+        var entry = self.cir.typeDeclVarianceForNode(@intFromEnum(decl_idx)).?;
+        const opens_flags = ModuleEnv.TypeDeclVariance.opens_row_pos_flag | ModuleEnv.TypeDeclVariance.opens_row_neg_flag;
+        var flags = entry.flags & ~opens_flags;
+        if (self.annoOpensRow(body, .pos)) flags |= ModuleEnv.TypeDeclVariance.opens_row_pos_flag;
+        if (self.annoOpensRow(body, .neg)) flags |= ModuleEnv.TypeDeclVariance.opens_row_neg_flag;
+        if (flags == entry.flags) continue;
+        entry.flags = flags;
+        try self.cir.recordTypeDeclVariance(entry);
+        for (prepass.dependentsOf(position)) |dependent| {
+            if (self.aliasBodyForRowOpening(prepass.decls.items[dependent]) != null) try prepass.enqueue(self.gpa, dependent);
+        }
     }
 }
 
-/// Record one declaration's answers. Every alias and nominal declaration gets an
-/// entry, because whether its body opens a row (`declOpensRow`) is always
-/// answered; the variance and `Try` axes are answered only within the tracked
-/// arity, and an unanswered axis reads as unknown, which is every consumer's
-/// existing conservative answer.
-fn recordOneTypeDeclVariance(self: *Self, decl_idx: CIR.Statement.Idx) std.mem.Allocator.Error!void {
-    const header = switch (self.cir.store.getStatement(decl_idx)) {
-        .s_alias_decl => |decl| decl.header,
-        .s_nominal_decl => |decl| decl.header,
+/// Add an alias or nominal declaration to the pre-pass, once.
+fn addPrepassTypeDecl(self: *Self, decl_idx: CIR.Statement.Idx) std.mem.Allocator.Error!void {
+    if (self.typeDeclFormalsAndBody(decl_idx) == null) return;
+    const prepass = &self.type_decl_prepass;
+    const entry = try prepass.position_of.getOrPut(self.gpa, decl_idx);
+    if (entry.found_existing) return;
+    entry.value_ptr.* = @intCast(prepass.decls.items.len);
+    try prepass.decls.append(self.gpa, decl_idx);
+}
+
+/// Whether `decl_idx` is an alias declaration still holding its placeholder
+/// annotation.
+fn aliasBodyIsPlaceholder(self: *const Self, decl_idx: CIR.Statement.Idx) bool {
+    return switch (self.cir.store.getStatement(decl_idx)) {
+        .s_alias_decl => |alias| alias.anno == .placeholder,
+        .s_nominal_decl,
         .s_decl,
         .s_var,
         .s_var_uninitialized,
@@ -19808,62 +19932,84 @@ fn recordOneTypeDeclVariance(self: *Self, decl_idx: CIR.Statement.Idx) std.mem.A
         .s_type_anno,
         .s_type_var_alias,
         .s_runtime_error,
-        => return,
+        => false,
     };
+}
 
-    const formal_count = self.cir.store.sliceTypeAnnos(self.cir.store.getTypeHeader(header).args).len;
-    const tracked_arity = formal_count <= max_tracked_alias_formals;
-
-    var entry = ModuleEnv.TypeDeclVariance{
-        .node_idx = @intFromEnum(decl_idx),
-        .formal_count = if (tracked_arity) @intCast(formal_count) else 0,
-        .flags = 0,
-        .try_error_formal = ModuleEnv.TypeDeclVariance.no_try_error_formal,
-        .formal_variances = [_]u8{@intFromEnum(FormalVariance.unused)} ** max_tracked_alias_formals,
+/// The body whose row opening an alias declaration's record answers, or
+/// null when the declaration is not an alias with a finished body. Only an
+/// alias body carries polarity markers; a nominal body closes as written.
+fn aliasBodyForRowOpening(self: *const Self, decl_idx: CIR.Statement.Idx) ?CIR.TypeAnno.Idx {
+    return switch (self.cir.store.getStatement(decl_idx)) {
+        .s_alias_decl => |alias| if (alias.anno == .placeholder) null else alias.anno,
+        .s_nominal_decl,
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => null,
     };
+}
 
-    // The declaration's own answer to `declOpensRow`, at both polarities, so an
-    // importer's syntactic pre-test predicts exactly the extensions generation
-    // mints from an imported declaration, as it does for a local one. This
-    // axis is independent of arity: a zero-arity alias's body is the common
-    // case (`Color : [Red, Green]`).
-    const local_base = CIR.TypeAnno.LocalOrExternal{ .local = .{ .decl_idx = decl_idx } };
-    if (self.declOpensRow(local_base, .pos, 0)) entry.flags |= ModuleEnv.TypeDeclVariance.opens_row_pos_flag;
-    if (self.declOpensRow(local_base, .neg, 0)) entry.flags |= ModuleEnv.TypeDeclVariance.opens_row_neg_flag;
-
-    if (!tracked_arity) {
-        try self.cir.recordTypeDeclVariance(entry);
-        return;
-    }
-
-    // A FRESH walk, deliberately: the per-reference walk carries the enclosing
-    // reference's `open_decls` and its remaining fuel, so it can legitimately
-    // answer null where this one answers. The record is the declaration's own
-    // answer, taken with the whole budget.
-    var variances: [max_tracked_alias_formals]FormalVariance = undefined;
-    var walk = FormalVarianceWalk{
-        .open_decls = undefined,
-        .open_decls_len = 0,
-        .fuel = max_formal_variance_nodes,
-        .exhausted = false,
-    };
-    if (self.declFormalVariances(decl_idx, &variances, &walk)) |written| {
-        if (!walk.exhausted and written == formal_count) {
-            for (variances[0..formal_count], 0..) |variance, index| {
-                entry.formal_variances[index] = @intFromEnum(variance);
-            }
-            entry.flags |= ModuleEnv.TypeDeclVariance.variances_known_flag;
+/// Record an edge from every local alias or nominal declaration `body`
+/// names to the pre-pass declaration at `referencing`.
+fn collectLocalTypeDeclRefs(self: *Self, body: CIR.TypeAnno.Idx, referencing: u32) std.mem.Allocator.Error!void {
+    const prepass = &self.type_decl_prepass;
+    const stack = &prepass.refs_stack;
+    stack.clearRetainingCapacity();
+    try stack.append(self.gpa, body);
+    while (stack.pop()) |anno_idx| {
+        switch (self.cir.store.getTypeAnno(anno_idx)) {
+            .rigid_var, .rigid_var_lookup, .underscore, .malformed => {},
+            .parens => |parens| try stack.append(self.gpa, parens.anno),
+            .@"fn" => |func| {
+                try stack.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(func.args));
+                try stack.append(self.gpa, func.ret);
+            },
+            .tag_union => |tag_union| {
+                try stack.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tag_union.tags));
+                if (tag_union.ext) |ext| try stack.append(self.gpa, ext);
+            },
+            .tag => |tag| try stack.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tag.args)),
+            .tuple => |tuple| try stack.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tuple.elems)),
+            .record => |record| {
+                for (self.cir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
+                    try stack.append(self.gpa, self.cir.store.getAnnoRecordField(field_idx).ty);
+                }
+                if (record.ext) |ext| try stack.append(self.gpa, ext);
+            },
+            .lookup => |lookup| try self.addPrepassEdge(lookup.base, referencing),
+            .apply => |apply| {
+                try self.addPrepassEdge(apply.base, referencing);
+                try stack.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(apply.args));
+            },
         }
     }
+}
 
-    // The two axes stop independently - the `Try` walk declines on a computed
-    // argument where the variance walk succeeds, and the variance walk exhausts
-    // on fuel where the `Try` walk succeeds - so an entry may be half-known.
-    if (self.declTryErrorFormalIndex(decl_idx, formal_count)) |formal_index| {
-        entry.try_error_formal = @intCast(formal_index);
-    }
-
-    try self.cir.recordTypeDeclVariance(entry);
+fn addPrepassEdge(self: *Self, decl_base: CIR.TypeAnno.LocalOrExternal, referencing: u32) std.mem.Allocator.Error!void {
+    const local = switch (decl_base) {
+        .local => |local| local,
+        .builtin, .external, .external_identity, .pending => return,
+    };
+    const prepass = &self.type_decl_prepass;
+    const referenced = prepass.position_of.get(local.decl_idx) orelse return;
+    try prepass.edges.append(self.gpa, .{ referenced, referencing });
 }
 
 /// Push every constraint one where clause places on `owner_var`. A method
@@ -20340,12 +20486,6 @@ fn resolvedRigid(self: *Self, var_: Var) ?Rigid {
     };
 }
 
-/// How many declaration bodies `annotationOpensValueRow` descends through
-/// before it answers conservatively. Same bound and same reason as
-/// `max_formal_variance_decl_depth`: a guard whose only job is to answer must
-/// answer in bounded time, whatever declaration graph it is handed.
-const max_value_row_decl_depth: usize = 8;
-
 /// Whether generating `annotation_idx` will mint at least one IMPLICITLY
 /// OPENED extension, the pre-test that makes an annotated value binding
 /// generalize (`isGeneralizableValueBinding`).
@@ -20374,34 +20514,34 @@ fn annotationOpensValueRow(self: *const Self, annotation_idx: CIR.Annotation.Idx
     // A host-boundary annotation keeps its rows as written and mints nothing
     // (see `generateAnnotationType`).
     if (self.host_boundary_annotations.contains(annotation_idx)) return false;
-    return self.annoOpensRow(self.cir.store.getAnnotation(annotation_idx).anno, .pos, 0);
+    return self.annoOpensRow(self.cir.store.getAnnotation(annotation_idx).anno, .pos);
 }
 
 /// One position of the walk above. `polarity` tracks
-/// `generateAnnoTypeInPlace`'s own polarity exactly; `decl_depth` counts the
-/// alias bodies already entered.
+/// `generateAnnoTypeInPlace`'s own polarity exactly. A referenced local
+/// alias is answered by its pre-pass record, never by entering its body, so
+/// the walk is bounded by this annotation's own size.
 fn annoOpensRow(
     self: *const Self,
     anno_idx: CIR.TypeAnno.Idx,
     polarity: Polarity,
-    decl_depth: usize,
 ) bool {
     return switch (self.cir.store.getTypeAnno(anno_idx)) {
         // A written type variable is answered by `mentions_type_var`, which is
         // consulted beside this walk; nothing here mints on its own.
         .rigid_var, .rigid_var_lookup, .underscore, .malformed => false,
-        .parens => |p| self.annoOpensRow(p.anno, polarity, decl_depth),
+        .parens => |p| self.annoOpensRow(p.anno, polarity),
         // Argument positions negate the surrounding polarity; the return
         // position preserves it (`generateAnnoTypeInPlace`'s `.@"fn"` arm).
-        .@"fn" => |f| self.anyAnnoOpensRow(f.args, polarity.flip(), decl_depth) or
-            self.annoOpensRow(f.ret, polarity, decl_depth),
-        .tuple => |t| self.anyAnnoOpensRow(t.elems, polarity, decl_depth),
-        .tag => |t| self.anyAnnoOpensRow(t.args, polarity, decl_depth),
+        .@"fn" => |f| self.anyAnnoOpensRow(f.args, polarity.flip()) or
+            self.annoOpensRow(f.ret, polarity),
+        .tuple => |t| self.anyAnnoOpensRow(t.elems, polarity),
+        .tag => |t| self.anyAnnoOpensRow(t.args, polarity),
         .record => |r| blk: {
             for (self.cir.store.sliceAnnoRecordFields(r.fields)) |field_idx| {
-                if (self.annoOpensRow(self.cir.store.getAnnoRecordField(field_idx).ty, polarity, decl_depth)) break :blk true;
+                if (self.annoOpensRow(self.cir.store.getAnnoRecordField(field_idx).ty, polarity)) break :blk true;
             }
-            break :blk if (r.ext) |ext_idx| self.annoOpensRow(ext_idx, polarity, decl_depth) else false;
+            break :blk if (r.ext) |ext_idx| self.annoOpensRow(ext_idx, polarity) else false;
         },
         .tag_union => |tu| blk: {
             const tags = self.cir.store.sliceTypeAnnos(tu.tags);
@@ -20416,12 +20556,12 @@ fn annoOpensRow(
                     break :blk true;
                 }
             }
-            if (self.anyAnnoOpensRow(tu.tags, polarity, decl_depth)) break :blk true;
-            break :blk if (tu.ext) |ext_idx| self.annoOpensRow(ext_idx, polarity, decl_depth) else false;
+            if (self.anyAnnoOpensRow(tu.tags, polarity)) break :blk true;
+            break :blk if (tu.ext) |ext_idx| self.annoOpensRow(ext_idx, polarity) else false;
         },
-        .lookup => |l| self.declOpensRow(l.base, polarity, decl_depth),
+        .lookup => |l| self.declOpensRow(l.base, polarity),
         .apply => |a| blk: {
-            if (self.declOpensRow(a.base, polarity, decl_depth)) break :blk true;
+            if (self.declOpensRow(a.base, polarity)) break :blk true;
             // A reference this walk has no variance answer for generates
             // everything beneath it `.as_written` at every depth, so no
             // argument of one can mint. An IMPORTED reference whose producer
@@ -20442,7 +20582,7 @@ fn annoOpensRow(
                     polarity
                 else
                     formal_variances[arg_index].compose(polarity);
-                if (self.annoOpensRow(arg_idx, arg_polarity, decl_depth)) break :blk true;
+                if (self.annoOpensRow(arg_idx, arg_polarity)) break :blk true;
             }
             break :blk false;
         },
@@ -20453,10 +20593,9 @@ fn anyAnnoOpensRow(
     self: *const Self,
     annos: CIR.TypeAnno.Span,
     polarity: Polarity,
-    decl_depth: usize,
 ) bool {
     for (self.cir.store.sliceTypeAnnos(annos)) |anno_idx| {
-        if (self.annoOpensRow(anno_idx, polarity, decl_depth)) return true;
+        if (self.annoOpensRow(anno_idx, polarity)) return true;
     }
     return false;
 }
@@ -20476,7 +20615,7 @@ fn anyAnnoOpensRow(
 /// `.external` and `.external_identity` name a declaration whose CIR lives in
 /// another module, so this walk reads the answer that module's own `Check`
 /// published instead (`TypeDeclVariance.opensRowAt`, written by
-/// `recordOneTypeDeclVariance` from this same walk over the local declaration).
+/// `recordTypeDeclVariances` from this same walk over the local declaration).
 /// A Builtin nominal such as `Str` answers NO from its record exactly as a
 /// local nominal does, so no blanket answer for imports is needed.
 /// `declOpensRow` for a declaration another module owns: its producer's
@@ -20491,7 +20630,6 @@ fn declOpensRow(
     self: *const Self,
     decl_base: CIR.TypeAnno.LocalOrExternal,
     polarity: Polarity,
-    decl_depth: usize,
 ) bool {
     return switch (decl_base) {
         .builtin, .pending => false,
@@ -20503,10 +20641,13 @@ fn declOpensRow(
         // a compile error here instead of a silent NO from a walk whose whole
         // job is to not answer NO wrongly.
         .local => |local| switch (self.cir.store.getStatement(local.decl_idx)) {
-            .s_alias_decl => |alias| if (decl_depth >= max_value_row_decl_depth or alias.anno == .placeholder)
+            // A finished alias is answered by its pre-pass record
+            // (`recordTypeDeclVariances`), the least fixpoint of this walk
+            // over its body.
+            .s_alias_decl => |alias| if (alias.anno == .placeholder)
                 polarity == .pos
             else
-                self.annoOpensRow(alias.anno, polarity, decl_depth + 1),
+                self.localTypeDeclVariance(local.decl_idx).?.opensRowAt(polarity == .pos),
             .s_nominal_decl,
             .s_decl,
             .s_var,
