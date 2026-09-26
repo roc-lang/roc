@@ -12160,6 +12160,81 @@ test "check type - polarity - a block-local value alias is monomorphic: two diff
     try test_env.assertOneTypeError("Type Mismatch");
 }
 
+test "check type - polarity - a block-local alias of a quantified list is monomorphic" {
+    // The rule is for any quantified value, not only rows.
+    const source =
+        \\empty : List(a)
+        \\empty = []
+        \\
+        \\main = {
+        \\    local = empty
+        \\    { a: List.append(local, 1.I64), b: List.append(local, "s") }
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - polarity - a block-local alias of a record holding a polymorphic function is monomorphic" {
+    const source =
+        \\ops : { f : a -> a }
+        \\ops = { f: |x| x }
+        \\
+        \\main = {
+        \\    local = ops
+        \\    { a: (local.f)(1.I64), b: (local.f)("s") }
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - polarity - a block-local alias of an imported value is monomorphic" {
+    const source_a =
+        \\module [made]
+        \\
+        \\made : [B(Str), D]
+        \\made = B("x")
+    ;
+    var test_env_a = try TestEnv.init("Values", source_a);
+    defer test_env_a.deinit();
+
+    const accepted =
+        \\import Values
+        \\
+        \\show_direct : [X, B(Str), C, D] -> Str
+        \\show_direct = |v| match v { X => "X", B(s) => s, C => "C", D => "D" }
+        \\
+        \\main = {
+        \\    local = Values.made
+        \\    show_direct(local)
+        \\}
+    ;
+    var test_env_accepted = try TestEnv.initWithImport("B", accepted, "Values", &test_env_a);
+    defer test_env_accepted.deinit();
+    try test_env_accepted.assertNoErrors();
+
+    const rejected =
+        \\import Values
+        \\
+        \\show_direct : [X, B(Str), C, D] -> Str
+        \\show_direct = |v| match v { X => "X", B(s) => s, C => "C", D => "D" }
+        \\
+        \\show_other : [B(Str), D, E] -> Str
+        \\show_other = |v| match v { B(s) => s, D => "D", E => "E" }
+        \\
+        \\main = {
+        \\    local = Values.made
+        \\    Str.concat(show_direct(local), show_other(local))
+        \\}
+    ;
+    var test_env_rejected = try TestEnv.initWithImport("C", rejected, "Values", &test_env_a);
+    defer test_env_rejected.deinit();
+    try test_env_rejected.assertOneTypeError("Type Mismatch");
+}
+
 test "check type - polarity - a block-local callable alias still generalizes" {
     // The rule is for values: a local alias of a function is a scheme alias.
     const source =

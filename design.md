@@ -7608,15 +7608,20 @@ strategies.
 A LOCAL binding is not coerced: a local value is lowered inline, with no
 stored constant to restore, and a local function's callee is a local
 procedure with no procedure template to adapt. For the same reason a
-block-local alias of a VALUE is monomorphic: it does not quantify the row
-its lookup leaves open, whether that is the quantified row of a value like
-`made : [B(Str), D]` or the row a coerced value's use re-opens. A local
-value is one runtime cell lowered at one type, so it cannot stand for
-several instantiations; used at one wider width its row widens to that
-width, and used at two different widths it is a type error, like any local
-value. A local alias of a FUNCTION still generalizes (a scheme alias,
-Monotype Instantiation). Pinned by the "block-local value alias" checker
-tests and `test/cli/LocalValueAlias.roc`.
+block-local alias generalizes only when the type its lookup instantiates is
+a FUNCTION (a scheme alias, Monotype Instantiation); an alias of any other
+quantified value is monomorphic, whatever its scheme quantifies: a row
+(`made : [B(Str), D]`, or the row a coerced value's use re-opens), a list
+item (`empty : List(a)`), or a function stored inside the value
+(`ops : { f : a -> a }`). A local value is one runtime cell lowered at one
+type, so it cannot stand for several instantiations; used at one wider
+width its row widens to that width, and used at two different types it is
+a type error, like any local value. The instantiated type is the
+referent's own: its pattern type, the predeclared annotation scheme of a
+top-level definition not yet checked, or an imported definition's type in
+its own module; a type still a variable is not a function. Pinned by the
+"block-local" alias checker tests (including an imported value) and
+`test/cli/LocalValueAlias.roc`.
 
 A value row the body PINNED to a weak row is not coerced either, and is its
 own rule: `x : [Boom]` with `x = if c e else Boom` and `e = Boom` unifies the
