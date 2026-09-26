@@ -1166,7 +1166,9 @@ fn materializedComptimeFloatBitsMatch(
     );
     defer static_data.deinitStaticData(allocator, exports);
 
-    const root_export = findStaticDataExport(exports, "roc__requested_const_value_0") orelse return false;
+    const requested_name = try static_data.requestedValueSymbolName(allocator, &lowered, 0);
+    defer allocator.free(requested_name);
+    const root_export = findStaticDataExport(exports, requested_name) orelse return false;
     return switch (expected) {
         .comptime_f32_bits => |bits| bytesEqualIntegerAt(u32, root_export.bytes, root_export.symbol_offset, bits),
         .comptime_f64_bits => |bits| bytesEqualIntegerAt(u64, root_export.bytes, root_export.symbol_offset, bits),

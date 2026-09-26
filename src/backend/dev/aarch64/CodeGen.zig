@@ -1620,7 +1620,7 @@ test "extern call sites get stubs once the image reaches the direct reach" {
     defer cg.deinit();
     cg.branch_reach_limit = 4096;
 
-    const symbol = try cg.symbols.intern(std.testing.allocator, "roc_far_target");
+    const symbol = try cg.symbols.intern(std.testing.allocator, "roc_far_target", .shared);
     const call = cg.currentOffset();
     try cg.emitExternCall(symbol);
     try testPad(&cg, 8192);
@@ -1640,7 +1640,7 @@ test "extern call sites stay direct in an image within reach" {
     defer cg.deinit();
     cg.branch_reach_limit = 4096;
 
-    const symbol = try cg.symbols.intern(std.testing.allocator, "roc_near_target");
+    const symbol = try cg.symbols.intern(std.testing.allocator, "roc_near_target", .shared);
     try testPad(&cg, 64);
     const call = cg.currentOffset();
     try cg.emitExternCall(symbol);
@@ -1659,7 +1659,7 @@ test "island gives an aging extern call site a stub" {
     defer cg.deinit();
     cg.branch_reach_limit = 65536;
 
-    const symbol = try cg.symbols.intern(std.testing.allocator, "roc_aging_target");
+    const symbol = try cg.symbols.intern(std.testing.allocator, "roc_aging_target", .shared);
     const call = cg.currentOffset();
     try cg.emitExternCall(symbol);
     try testPad(&cg, 60000);

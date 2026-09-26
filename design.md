@@ -355,6 +355,56 @@ produced only by the budgeted derivations and a nominal shape's backing is a
 fresh allocation, never a back-reference—so those walks terminate on the
 structure alone.
 
+### Object Symbol Names
+
+Every symbol the compiler invents for generated code or data lives in the
+`roc__` namespace (two underscores); `roc_` with one underscore is the
+interface platforms and hosts share with Roc (`roc_alloc`, `roc_crashed`,
+host effects) and the Boxy runtime's `roc_boxy_*` entry points. A name is
+either numbered by one program or named by content, and nothing downstream
+reads that distinction, or anything else, back out of the spelling:
+
+| Form | Names | Scope |
+| --- | --- | --- |
+| `roc__d{N}` | the value owner `N` holds | program |
+| `roc__d{N}_{k}` | the `k`th further node (from 1) of owner `N`'s value | program |
+| `roc__b{N}` | the compile-time evaluator's cell holding the address of slot `N`'s value | program |
+| `roc__h{hash}` | a datum named by content: a string literal's backing, or a constant an object-cache pack carries | shared |
+| `roc__p{hash}` | a procedure, by its `ProcIdentity` | shared |
+
+An owner is whoever freezes a value, and its number keeps names unique by
+construction without a counter shared between producers. Owners below the
+program's static-data slot count are the slots (`LIR.StaticDataId`); past them
+come the requested layouts in order, then the root module's provided exports in
+order (whose own values keep their host symbols; only their further nodes use
+this form). A value's further nodes are named by the producer that freezes it:
+the native root exporter and the frozen-root transcoder for compile-time
+values, and static-data materialization for values built by initializers, so
+each owner's nodes come from exactly one producer. Compacting a program's
+static data renumbers its slots, and a kept node's first owner may be gone while
+another kept value still points into its data, so compaction renames every kept
+node after the first kept value in export order whose data graph reaches it, in
+the order a walk from that value finds them. `lir.Program`
+(`staticDataSymbolName`, `staticDataNodeSymbolName`,
+`content_data_symbol_prefix`) and `ProcIdentity.symbol_name_prefix` are the
+only places these forms are spelled.
+
+A symbol's scope says whether its name means the same thing in every program,
+which decides whether code referring to it can be cached and linked into
+another program. Code generation declares the scope of every symbol it refers
+to when it interns it (`SymbolTable.Scope`): `shared` for procedures, refcount
+helpers, builtins, host and hosted functions, compile-time hooks, and
+content-named data; `program` for slot values and binding cells, and for the
+Boxy runtime, whose calls index this program's descriptor sidecar. Symbols
+only object emission names declare no scope, and reading the scope of a
+relocation target no reference declared is an invariant violation. Relocations
+lifted from generated code carry the scope, and an object-cache pack offers an entry
+only when nothing its splice would place refers to a `program` symbol the entry
+does not carry. The pack encoder renames every carried program-numbered datum
+(`DataItem.program_local_name`, from the producer's `is_exported`) to its
+`roc__h` content name and records the references to it as `shared`; capture
+keeps program names, so only a pack write pays for the hashing.
+
 ## Checking Effects And Const Roots
 
 Checking owns Roc effect validation, compile-time evaluation eligibility, and

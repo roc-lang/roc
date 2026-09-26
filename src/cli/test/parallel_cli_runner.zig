@@ -6100,7 +6100,7 @@ fn customNativeBuildPackObjects(
         if (!std.mem.eql(u8, contents[0], contents[1])) {
             return customFailure(allocator, timer, "{s}: pack bytes differ between two builds", .{pack_file});
         }
-        if (std.mem.endsWith(u8, pack_file, ".manifest") and std.mem.find(u8, contents[0], "root roc__proc_") == null) {
+        if (std.mem.endsWith(u8, pack_file, ".manifest") and std.mem.find(u8, contents[0], "root roc__p") == null) {
             return customFailure(allocator, timer, "{s}: pack manifest names no root procedure", .{pack_file});
         }
     }
