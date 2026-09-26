@@ -8,7 +8,6 @@
 
 const std = @import("std");
 const lsp = @import("lsp");
-const Diagnostics = lsp.diagnostics;
 const SyntaxChecker = lsp.syntax.SyntaxChecker;
 const uri_util = lsp.uri;
 const integration_spec = @import("integration_spec.zig");
