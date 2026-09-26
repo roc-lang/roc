@@ -281,6 +281,11 @@ gpa: Allocator,
 nodes: Node.List,
 regions: Region.List,
 write_occurrences: collections.SafeList(WriteOccurrence),
+/// Source nodes that checking overwrote with runtime errors, indexed through
+/// each replacement's `RetiredRuntimeError.retired_source`. Checked-program
+/// consumers never read this; source tooling reads through `getSourceExpr` and
+/// `getSourceStatement`. Empty for a module that checks without errors.
+retired_source_nodes: Node.List,
 int128_values: collections.SafeList(i128), // Typed storage for large numeric literals
 literal_dispatch_plans: collections.SafeList(LiteralDispatchPlan), // Checked literal dispatch metadata owned by literal nodes
 literal_pattern_contexts: collections.SafeList(LiteralPatternContext),
@@ -700,6 +705,7 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .nodes = nodes,
         .regions = regions,
         .write_occurrences = .{},
+        .retired_source_nodes = .{},
         .int128_values = int128_values,
         .literal_dispatch_plans = literal_dispatch_plans,
         .literal_pattern_contexts = literal_pattern_contexts,
@@ -731,6 +737,7 @@ pub fn clone(self: *const NodeStore, gpa: Allocator) Allocator.Error!NodeStore {
         .nodes = try self.nodes.clone(gpa),
         .regions = try self.regions.clone(gpa),
         .write_occurrences = try self.write_occurrences.clone(gpa),
+        .retired_source_nodes = try self.retired_source_nodes.clone(gpa),
         .int128_values = try self.int128_values.clone(gpa),
         .literal_dispatch_plans = try self.literal_dispatch_plans.clone(gpa),
         .literal_pattern_contexts = try self.literal_pattern_contexts.clone(gpa),
@@ -762,6 +769,7 @@ pub fn deinit(store: *NodeStore) void {
     store.nodes.deinit(store.gpa);
     store.regions.deinit(store.gpa);
     store.write_occurrences.deinit(store.gpa);
+    store.retired_source_nodes.deinit(store.gpa);
     store.int128_values.deinit(store.gpa);
     store.literal_dispatch_plans.deinit(store.gpa);
     store.literal_pattern_contexts.deinit(store.gpa);
@@ -793,6 +801,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
     store.nodes.relocate(offset);
     store.regions.relocate(offset);
     store.write_occurrences.relocate(offset);
+    store.retired_source_nodes.relocate(offset);
     store.int128_values.relocate(offset);
     store.literal_dispatch_plans.relocate(offset);
     store.literal_pattern_contexts.relocate(offset);
@@ -1234,7 +1243,17 @@ fn getMethodNameRegion(store: *const NodeStore, data_idx: u32) Region {
 /// Retrieves a statement node from the store.
 pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.Statement {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(statement));
-    const node = store.nodes.get(node_idx);
+    return store.statementFromNode(store.nodes.get(node_idx));
+}
+
+/// The statement as source tooling sees it: the source statement checking
+/// replaced with a runtime error when there is one, otherwise `getStatement`.
+pub fn getSourceStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.Statement {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(statement));
+    return store.statementFromNode(store.sourceNode(node_idx));
+}
+
+fn statementFromNode(store: *const NodeStore, node: Node) CIR.Statement {
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(StatementNodeTag, node.tag) orelse
@@ -1435,7 +1454,19 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
 /// Retrieves an expression node from the store.
 pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr));
-    const node = store.nodes.get(node_idx);
+    return store.exprFromNode(node_idx, store.nodes.get(node_idx));
+}
+
+/// The expression as source tooling sees it: the source expression checking
+/// replaced with a runtime error when there is one, otherwise `getExpr`. Its
+/// children, regions, and type variables are the ones checking solved; only
+/// the checked program stops reaching them.
+pub fn getSourceExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr));
+    return store.exprFromNode(node_idx, store.sourceNode(node_idx));
+}
+
+fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Expr {
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(ExprNodeTag, node.tag) orelse
@@ -2466,14 +2497,10 @@ pub fn replaceExprWithRuntimeError(
     store: *NodeStore,
     expr_idx: CIR.Expr.Idx,
     diagnostic_idx: CIR.Diagnostic.Idx,
-) void {
+) Allocator.Error!void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
     _ = store.retireLiteralDispatchPlan(node_idx);
-    var node = Node.init(.malformed);
-    node.setPayload(.{ .diag_single_value = .{
-        .value = @intFromEnum(diagnostic_idx),
-    } });
-    store.nodes.set(node_idx, node);
+    try store.replaceWithRetiredRuntimeError(node_idx, diagnostic_idx);
 }
 
 /// Replaces an existing statement with an in-place runtime error node after
@@ -2482,13 +2509,40 @@ pub fn replaceStatementWithRuntimeError(
     store: *NodeStore,
     stmt_idx: CIR.Statement.Idx,
     diagnostic_idx: CIR.Diagnostic.Idx,
-) void {
+) Allocator.Error!void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(stmt_idx));
+    try store.replaceWithRetiredRuntimeError(node_idx, diagnostic_idx);
+}
+
+/// Overwrite a node with a runtime error, retaining the source node it held.
+/// A node that is already a replacement keeps the source it retired first; a
+/// node canonicalization made malformed has no source node to retain.
+fn replaceWithRetiredRuntimeError(
+    store: *NodeStore,
+    node_idx: Node.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+) Allocator.Error!void {
+    const current = store.nodes.get(node_idx);
+    const retired_source: u32 = if (current.tag == .malformed)
+        current.getPayload().retired_runtime_error.retired_source
+    else
+        @intFromEnum(try store.retired_source_nodes.append(store.gpa, current)) + 1;
     var node = Node.init(.malformed);
-    node.setPayload(.{ .diag_single_value = .{
-        .value = @intFromEnum(diagnostic_idx),
+    node.setPayload(.{ .retired_runtime_error = .{
+        .diagnostic = @intFromEnum(diagnostic_idx),
+        .retired_source = retired_source,
     } });
     store.nodes.set(node_idx, node);
+}
+
+/// The node source tooling reads at this index: the source node checking
+/// retired, when it replaced this one, otherwise the node itself.
+fn sourceNode(store: *const NodeStore, node_idx: Node.Idx) Node {
+    const node = store.nodes.get(node_idx);
+    if (node.tag != .malformed) return node;
+    const retired_source = node.getPayload().retired_runtime_error.retired_source;
+    if (retired_source == 0) return node;
+    return store.retired_source_nodes.get(@enumFromInt(retired_source - 1));
 }
 
 /// Replace a rejected literal leaf while retaining the surrounding definition
@@ -3079,8 +3133,8 @@ pub fn setStatementNode(store: *NodeStore, stmt_idx: CIR.Statement.Idx, statemen
 }
 
 /// Replaces an existing expression node with a runtime error expression.
-pub fn setExprRuntimeError(store: *NodeStore, expr_idx: CIR.Expr.Idx, diagnostic_idx: CIR.Diagnostic.Idx) void {
-    store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+pub fn setExprRuntimeError(store: *NodeStore, expr_idx: CIR.Expr.Idx, diagnostic_idx: CIR.Diagnostic.Idx) Allocator.Error!void {
+    try store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
 }
 
 /// Creates a statement node, but does not append to the store.
@@ -6534,6 +6588,7 @@ pub const Serialized = extern struct {
     nodes: Node.List.Serialized,
     regions: Region.List.Serialized,
     write_occurrences: collections.SafeList(WriteOccurrence).Serialized,
+    retired_source_nodes: Node.List.Serialized,
     span2_data: collections.SafeList(Span2).Serialized,
     span_with_node_data: collections.SafeList(SpanWithNode).Serialized,
     method_call_data: collections.SafeList(MethodCallData).Serialized,
@@ -6569,6 +6624,7 @@ pub const Serialized = extern struct {
         // Serialize regions
         try self.regions.serialize(&store.regions, allocator, writer);
         try self.write_occurrences.serialize(&store.write_occurrences, allocator, writer);
+        try self.retired_source_nodes.serialize(&store.retired_source_nodes, allocator, writer);
         // Serialize span2_data
         try self.span2_data.serialize(&store.span2_data, allocator, writer);
         // Serialize span_with_node_data
@@ -6613,6 +6669,7 @@ pub const Serialized = extern struct {
             .nodes = self.nodes.deserializeInto(base_addr),
             .regions = self.regions.deserializeInto(base_addr),
             .write_occurrences = self.write_occurrences.deserializeInto(base_addr),
+            .retired_source_nodes = self.retired_source_nodes.deserializeInto(base_addr),
             .int128_values = self.int128_values.deserializeInto(base_addr),
             .literal_dispatch_plans = self.literal_dispatch_plans.deserializeInto(base_addr),
             .literal_pattern_contexts = self.literal_pattern_contexts.deserializeInto(base_addr),
@@ -6646,6 +6703,7 @@ pub const Serialized = extern struct {
             // Regions needs to be mutable (grown during type checking)
             .regions = try self.regions.deserializeWithCopy(base_addr, gpa),
             .write_occurrences = self.write_occurrences.deserializeInto(base_addr),
+            .retired_source_nodes = self.retired_source_nodes.deserializeInto(base_addr),
             .int128_values = self.int128_values.deserializeInto(base_addr),
             .literal_dispatch_plans = self.literal_dispatch_plans.deserializeInto(base_addr),
             .literal_pattern_contexts = self.literal_pattern_contexts.deserializeInto(base_addr),
@@ -6680,6 +6738,7 @@ pub const Serialized = extern struct {
             .nodes = try self.nodes.deserializeWithCopy(base_addr, gpa),
             .regions = try self.regions.deserializeWithCopy(base_addr, gpa),
             .write_occurrences = try self.write_occurrences.deserializeWithCopy(base_addr, gpa),
+            .retired_source_nodes = try self.retired_source_nodes.deserializeWithCopy(base_addr, gpa),
             .int128_values = try self.int128_values.deserializeWithCopy(base_addr, gpa),
             .literal_dispatch_plans = try self.literal_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .literal_pattern_contexts = try self.literal_pattern_contexts.deserializeWithCopy(base_addr, gpa),
@@ -6872,7 +6931,7 @@ test "literal dispatch plans are retired with their owning nodes" {
         .region = Region.zero(),
     } });
 
-    store.replaceExprWithRuntimeError(quote_expr, runtime_error_diagnostic);
+    try store.replaceExprWithRuntimeError(quote_expr, runtime_error_diagnostic);
     try testing.expect(store.literalDispatchPlanForNode(@enumFromInt(@intFromEnum(quote_expr))) == null);
     try testing.expectEqual(@as(usize, 1), store.literalDispatchPlans().len);
 
@@ -6882,7 +6941,7 @@ test "literal dispatch plans are retired with their owning nodes" {
     try testing.expectEqual(@as(u32, 3), numeral_plan.target_var);
     try testing.expectEqual(@as(u32, 4), numeral_plan.fn_var);
 
-    store.replaceExprWithRuntimeError(numeral_expr, runtime_error_diagnostic);
+    try store.replaceExprWithRuntimeError(numeral_expr, runtime_error_diagnostic);
     try testing.expectEqual(@as(usize, 0), store.literalDispatchPlans().len);
 }
 

@@ -1951,6 +1951,17 @@ Existing read and declaration nodes retain their own occurrence data. Any toolin
 indexes over these explicit occurrences belong to the tooling snapshot and are not
 built or serialized by ordinary compilation.
 
+Replacing an expression or statement with a runtime error overwrites its node
+in place, so the checked tree no longer reaches the source subtree beneath it.
+The replacement retains the node it overwrote in `NodeStore.retired_source_nodes`,
+referenced from the runtime-error node's own payload; the subtree's children,
+regions, and type variables are untouched. Every checked-program consumer reads
+the runtime error through `getExpr`/`getStatement`. Source tooling (hover, goto
+definition, references, rename, completion) reads through
+`getSourceExpr`/`getSourceStatement`, which return the retained source node, so
+names inside erroneous code resolve exactly as they were canonicalized and
+checked. The table is empty for a module that checks without errors.
+
 The `$` prefix is a naming convention enforced only as a declaration-site
 warning. Canonicalization reports a mutable binder whose name lacks `$`, or an
 immutable binder whose name starts with `$`, when it identifies the source
@@ -2226,6 +2237,11 @@ the diagnostic itself, and marks only the consuming expression erroneous. The
 producer keeps the type it was solved to, so a rejected relation neither
 cascades into unrelated uses of that producer nor leaves an `.err` on a binding
 whose value post-check lowering must still instantiate.
+An expression statement is such a consumer of its expression's value: the
+`{}` demand is owned by the statement, and a call's result class is its
+callee's return slot, which a monomorphic callee shares with every other use.
+A rejected statement value retires the expression and marks the statement
+erroneous; the call and its callee keep their solved types.
 
 Because `.err` no longer merges, it also no longer relates the operands unified
 against it. A checker site that only needs diagnostic recovery may accept both

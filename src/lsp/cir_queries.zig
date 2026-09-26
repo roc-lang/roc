@@ -670,7 +670,7 @@ const FindTagAtOffsetContext = struct {
         const region = ctx.store.getExprRegion(expr_idx);
         if (!regionContainsOffset(region, ctx.target_offset)) return;
 
-        const expr = ctx.store.getExpr(expr_idx);
+        const expr = ctx.store.getSourceExpr(expr_idx);
         switch (expr) {
             .e_tag => |tag| {
                 ctx.result = .{
@@ -989,7 +989,7 @@ const FindTagAtOffsetContext = struct {
         const region = ctx.store.getStatementRegion(stmt_idx);
         if (!regionContainsOffset(region, ctx.target_offset)) return;
 
-        const stmt = ctx.store.getStatement(stmt_idx);
+        const stmt = ctx.store.getSourceStatement(stmt_idx);
         switch (stmt) {
             .s_decl => |decl| {
                 ctx.walkPattern(decl.pattern, null, null, null);
@@ -1576,7 +1576,7 @@ pub fn resolveSymbolAtOffset(module_env: *ModuleEnv, offset: u32) ?CIR.Pattern.I
 
     const lookup = findLookupAtOffset(module_env, offset) orelse return null;
     return switch (lookup) {
-        .expr => |expr_idx| switch (module_env.store.getExpr(expr_idx)) {
+        .expr => |expr_idx| switch (module_env.store.getSourceExpr(expr_idx)) {
             .e_lookup_local => |local| local.pattern_idx,
             .e_num,
             .e_frac_f32,
@@ -1792,7 +1792,7 @@ test "field access query segments preserve ordered type, receiver, and lookup id
         .receiver = receiver_idx,
         .segments = segments,
     } }, .{ .start = .{ .offset = 0 }, .end = .{ .offset = 10 } });
-    const access_expr = store.getExpr(access_idx);
+    const access_expr = store.getSourceExpr(access_idx);
 
     for (segment_regions, 0..) |segment_region, segment_position_usize| {
         const segment_position: u32 = @intCast(segment_position_usize);
@@ -1858,7 +1858,7 @@ test "field access query segments preserve ordered type, receiver, and lookup id
         .receiver = receiver_idx,
         .segments = store.finishFieldAccessPath(required_builder),
     } }, .{ .start = .{ .offset = 0 }, .end = .{ .offset = 34 } });
-    const required_expr = store.getExpr(required_idx);
+    const required_expr = store.getSourceExpr(required_idx);
 
     var required_receiver_ctx = FindFieldAccessReceiverContext{
         .store = &store,
