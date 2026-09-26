@@ -172,6 +172,9 @@ const ResolvedWorkerBody = union(enum) {
     generated_codec: Plan.GeneratedCodecSource,
     generated_field_iterator: Plan.GeneratedFieldIteratorSource,
     generated_interpolation_step: Plan.GeneratedInterpolationStepSource,
+    /// A direct call of the coerced function a lookup names, at the lookup's
+    /// instantiation (`Plan.CoercedUseAdapterSource`).
+    coerced_use_adapter: Plan.CoercedUseAdapterSource,
 };
 
 fn resolvedWorkerIsListMapCanReuseWrapper(resolved: ResolvedWorker) bool {
@@ -183,6 +186,7 @@ fn resolvedWorkerIsListMapCanReuseWrapper(resolved: ResolvedWorker) bool {
         .generated_codec,
         .generated_field_iterator,
         .generated_interpolation_step,
+        .coerced_use_adapter,
         => return false,
     };
     return checkedExprIsListMapCanReuseWrapper(resolved.module, body);
@@ -286,9 +290,24 @@ fn resolveWorkerProcedure(modules: Common.CheckedModules, worker: Plan.WorkerPla
         .generated_codec => |source| resolveGeneratedCodecWorker(modules, worker.id, source),
         .generated_field_iterator => |source| resolveGeneratedFieldIteratorWorker(modules, worker.id, source),
         .generated_interpolation_step => |source| resolveGeneratedInterpolationStepWorker(modules, worker.id, source),
+        .coerced_use_adapter => |source| resolveCoercedUseAdapterWorker(modules, worker.id, source),
     };
     resolved.stored_fn = worker.stored_fn;
     return resolved;
+}
+
+fn resolveCoercedUseAdapterWorker(
+    modules: Common.CheckedModules,
+    worker: Plan.WorkerPlanId,
+    source: Plan.CoercedUseAdapterSource,
+) ResolvedWorker {
+    const module = procedureModuleById(modules, source.use.module);
+    return .{
+        .worker = worker,
+        .module_key = module.key,
+        .module = module,
+        .body = .{ .coerced_use_adapter = source },
+    };
 }
 
 fn resolveGeneratedInterpolationStepWorker(
@@ -1266,6 +1285,10 @@ const ProcedureBuilder = struct {
     type_desc_ids: []?LIR.BoxyTypeDescId,
     generated_evidence_desc_ids: [4]?LIR.BoxyTypeDescId,
     static_dict_cache: std.ArrayList(StaticDictCacheEntry),
+    /// Reused buffer for a static method adapter's argument descriptors,
+    /// used as a stack: an adapter built while another is being gathered
+    /// appends above it and truncates back.
+    method_adapter_arg_descs: std.ArrayList(LIR.BoxyDescRef),
     inspect_method_slot_cache: std.ArrayList(InspectMethodSlotCacheEntry),
     callable_adapter_cache: std.ArrayList(CallableAdapterCacheEntry),
     pending_direct_call_descriptor_abis: std.ArrayList(PendingDirectCallDescriptorAbi),
@@ -1311,6 +1334,17 @@ const ProcedureBuilder = struct {
         return switch (resolved.body) {
             .checked_expr => |body| blk: {
                 const region = resolved.module.checked_bodies.expr(body.root_expr).source_region;
+                break :blk .{
+                    .loc = try self.sourceLoc(resolved.module, region),
+                    .region = region,
+                    .inline_scope = LIR.InlineScopeId.none,
+                    .kind = .scaffold,
+                };
+            },
+            // An adapter for a coerced function used as a value is scaffolding
+            // around the lookup that demanded it, so it names that lookup.
+            .coerced_use_adapter => |source| blk: {
+                const region = resolved.module.checked_bodies.expr(source.use.expr).source_region;
                 break :blk .{
                     .loc = try self.sourceLoc(resolved.module, region),
                     .region = region,
@@ -1371,6 +1405,7 @@ const ProcedureBuilder = struct {
             .type_desc_ids = &.{},
             .generated_evidence_desc_ids = .{ null, null, null, null },
             .static_dict_cache = .empty,
+            .method_adapter_arg_descs = .empty,
             .inspect_method_slot_cache = .empty,
             .callable_adapter_cache = .empty,
             .pending_direct_call_descriptor_abis = .empty,
@@ -1393,6 +1428,7 @@ const ProcedureBuilder = struct {
         self.callable_adapter_cache.deinit(self.allocator);
         self.inspect_method_slot_cache.deinit(self.allocator);
         self.static_dict_cache.deinit(self.allocator);
+        self.method_adapter_arg_descs.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
         self.allocator.free(self.type_desc_ids);
         self.allocator.free(self.hosted_external_procs);
@@ -1746,6 +1782,7 @@ const ProcedureBuilder = struct {
                 if (exact_method) |method| method.requirement_desc_sources else null,
                 if (exact_method) |method| method.hidden_desc_sources else null,
                 frame_requirement_descs.items,
+                slot_template,
             );
             slots.items[slot_index] = .{
                 .method = requirement.fn_name,
@@ -2116,6 +2153,7 @@ const ProcedureBuilder = struct {
         requirement_desc_sources: ?Plan.Span,
         hidden_desc_sources: ?Plan.Span,
         frame_requirement_descs: []const FrameRequirementDescriptor,
+        slot_template: ?*DictTemplateFrame,
     ) Allocator.Error!LirProgram.BoxyMethodAdapter {
         const worker_layout = self.layout_plan.workerLayoutFor(worker_id);
         const worker_args = self.layout_plan.workerLayoutSlice(worker_layout.args);
@@ -2169,18 +2207,34 @@ const ProcedureBuilder = struct {
             );
         }
 
-        const arg_descs_start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
+        // A template dictionary's requirement argument whose descriptor the
+        // building frame supplies (`List(x)` in a worker generic over `x`) is
+        // described by that frame; the template captures it.
+        // Materializing a descriptor can append nested references to the
+        // program's table, so the span is appended contiguously afterwards.
+        const arg_descs_base = self.method_adapter_arg_descs.items.len;
+        defer self.method_adapter_arg_descs.shrinkRetainingCapacity(arg_descs_base);
         for (requirement_args) |arg| {
-            try self.result.boxy_desc_refs.append(
-                self.allocator,
-                try self.staticDescRefForWorkerRepWithSourceMap(
+            const desc = frame_desc: {
+                if (slot_template) |frame_template| {
+                    if (try frame_template.frame.repDescriptorNeedsFrame(arg.rep)) {
+                        const materialization = try frame_template.frame.descriptorMaterializationForSourceRep(arg.rep);
+                        if (materialization.desc.localOrNull()) |local| try frame_template.capture(self.allocator, local);
+                        try frame_template.captureSpan(self.allocator, materialization.captures);
+                        break :frame_desc materialization.desc;
+                    }
+                }
+                break :frame_desc try self.staticDescRefForWorkerRepWithSourceMap(
                     arg.rep,
                     null,
                     &requirement_sources,
                     desc_context,
-                ),
-            );
+                );
+            };
+            try self.method_adapter_arg_descs.append(self.allocator, desc);
         }
+        const arg_descs_start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
+        try self.result.boxy_desc_refs.appendSlice(self.allocator, self.method_adapter_arg_descs.items[arg_descs_base..]);
 
         const call_desc_plan = if (requirement_desc_sources) |sources|
             try self.staticMethodCallDescRefsForEvidence(
@@ -4644,10 +4698,33 @@ const ProcedureBuilder = struct {
         const identity_rep = self.descriptorIdentityRep(rep_id);
         const worker_layout = self.layout_plan.rep_layouts[@intFromEnum(rep_id)].worker.layoutIdx();
         const identity_worker_layout = self.layout_plan.rep_layouts[@intFromEnum(identity_rep)].worker.layoutIdx();
-        return if (worker_layout != identity_worker_layout)
-            worker_layout
-        else
-            self.descriptorPayloadLayoutForRep(rep_id);
+        if (worker_layout != identity_worker_layout) return worker_layout;
+        // An alias is its backing: it carries no descriptor requirement of
+        // its own, so its own descriptor payload layout would be its storage
+        // (for an alias over a dynamic row, the row's erased box, which lists
+        // none of the row's tags). It is described by the first
+        // representation under its alias layers. Only alias layers are
+        // stepped through: a transparent nominal or a box under them keeps
+        // its own descriptor payload layout.
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        return switch (rep.kind) {
+            .alias => self.descriptorPayloadLayoutForRep(self.aliasLayersBackingRep(rep_id)),
+            .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => self.descriptorPayloadLayoutForRep(rep_id),
+        };
+    }
+
+    /// The first representation under `rep_id`'s alias layers, reached by
+    /// `.alias_backing` edges alone.
+    fn aliasLayersBackingRep(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
+        var current = rep_id;
+        var depth: u16 = 0;
+        while (self.plan.representations.items[@intFromEnum(current)].kind == .alias) {
+            if (depth == 1024) boxyLowerInvariant("alias backing chain exceeded boxy procedure builder limit");
+            depth += 1;
+            current = self.singleChildRepForDesc(current, .alias_backing) orelse
+                boxyLowerInvariant("alias representation had no backing child");
+        }
+        return current;
     }
 
     fn layoutIsBoxStorage(self: *const ProcedureBuilder, layout_idx: layout.Idx) bool {
@@ -5437,6 +5514,7 @@ const ProcedureBuilder = struct {
             .generated_codec,
             .generated_field_iterator,
             .generated_interpolation_step,
+            .coerced_use_adapter,
             => {},
         }
 
@@ -5516,6 +5594,7 @@ const ProcedureBuilder = struct {
             .generated_codec,
             .generated_field_iterator,
             .generated_interpolation_step,
+            .coerced_use_adapter,
             => {},
         }
 
@@ -5664,6 +5743,7 @@ const ProcedureBuilder = struct {
         generated_codec: Plan.GeneratedCodecSource,
         generated_field_iterator: Plan.GeneratedFieldIteratorSource,
         generated_interpolation_step: Plan.GeneratedInterpolationStepSource,
+        coerced_use_adapter: Plan.CoercedUseAdapterSource,
         generated_evidence_intrinsic: checked.IntrinsicId,
         str_inspect: struct {
             arg: LIR.LocalId,
@@ -5696,7 +5776,33 @@ const ProcedureBuilder = struct {
             .generated_codec => |source| try self.bodySourceForGeneratedCodec(proc, source),
             .generated_field_iterator => |source| try self.bodySourceForGeneratedFieldIterator(proc, source),
             .generated_interpolation_step => |source| try self.bodySourceForGeneratedInterpolationStep(proc, source),
+            .coerced_use_adapter => |source| try self.bodySourceForCoercedUseAdapter(proc, source),
         };
+    }
+
+    /// A coerced-use adapter's arguments are its own; they are passed
+    /// straight to its call (`Plan.CallOperand.adapter_param`).
+    fn bodySourceForCoercedUseAdapter(
+        _: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        source: Plan.CoercedUseAdapterSource,
+    ) Allocator.Error!WorkerBodySource {
+        const worker = proc.parent.plan.workers.items[@intFromEnum(proc.worker_layout.worker)];
+        const function = proc.functionChildrenForRep(worker.rep) orelse
+            boxyLowerInvariant("coerced-use adapter worker was not callable");
+        const worker_args = proc.parent.layout_plan.workerLayoutSlice(proc.worker_layout.args);
+        if (function.arg_count != worker_args.len) {
+            boxyLowerInvariant("coerced-use adapter arity disagreed with its worker layout");
+        }
+        const children = proc.parent.plan.childSlice(proc.parent.plan.representations.items[@intFromEnum(function.rep)].children);
+        for (children[function.args_start..][0..function.arg_count], worker_args) |child, arg_layout| {
+            const local = try proc.addArgLocalForRep(child.rep);
+            if (proc.parent.result.store.getLocal(local).layout_idx != arg_layout.layoutIdx()) {
+                boxyLowerInvariant("coerced-use adapter argument layout disagreed with its representation");
+            }
+        }
+        proc.coerced_use_adapter_arity = function.arg_count;
+        return .{ .coerced_use_adapter = source };
     }
 
     fn bodySourceForGeneratedInterpolationStep(
@@ -5866,6 +5972,7 @@ const ProcedureBuilder = struct {
             .generated_codec => |source| try self.lowerGeneratedCodecWorkerInto(proc, source, ret_local, ret_stmt),
             .generated_field_iterator => |source| try self.lowerGeneratedFieldIteratorStepInto(proc, source, ret_local, ret_stmt),
             .generated_interpolation_step => |source| try self.lowerGeneratedInterpolationStepInto(proc, source, ret_local, ret_stmt),
+            .coerced_use_adapter => |source| try proc.lowerCoercedUseAdapterBodyInto(source, ret_local, ret_stmt),
             .generated_evidence_intrinsic => |intrinsic| try self.lowerGeneratedEvidenceIntrinsicInto(proc, intrinsic, ret_local, ret_stmt),
             .str_inspect => |inspect| blk: {
                 try proc.markLocalDescriptorForType(inspect.arg, inspect.arg_ty);
@@ -12634,6 +12741,9 @@ const ProcBodyBuilder = struct {
     worker_layout: Layouts.WorkerLayouts,
     synthetic_adapter: bool,
     erased_argument_descriptors: bool,
+    /// For a coerced-use adapter worker, how many leading `arg_locals` are
+    /// its own arguments (`Plan.CallOperand.adapter_param`); zero otherwise.
+    coerced_use_adapter_arity: u32 = 0,
     arg_locals: std.ArrayList(LIR.LocalId),
     lambda_arg_patterns: []const checked.CheckedPatternId,
     lambda_arg_binding_locals: []LIR.LocalId,
@@ -13607,7 +13717,7 @@ const ProcBodyBuilder = struct {
             },
             .generated_field_iterator => true,
             .generated_interpolation_step => true,
-            .procedure_template, .procedure_binding, .procedure_use, .nested_expr => false,
+            .procedure_template, .procedure_binding, .procedure_use, .nested_expr, .coerced_use_adapter => false,
         };
 
         try self.erased_capture_locals.ensureTotalCapacity(self.parent.allocator, captures.len);
@@ -14128,7 +14238,7 @@ const ProcBodyBuilder = struct {
             },
             .generated_field_iterator => true,
             .generated_interpolation_step => true,
-            .procedure_template, .procedure_binding, .procedure_use, .nested_expr => false,
+            .procedure_template, .procedure_binding, .procedure_use, .nested_expr, .coerced_use_adapter => false,
         };
 
         var continuation = next;
@@ -14256,6 +14366,7 @@ const ProcBodyBuilder = struct {
             .generated_codec,
             .generated_field_iterator,
             .generated_interpolation_step,
+            .coerced_use_adapter,
             => &.{},
         };
     }
@@ -15799,13 +15910,30 @@ const ProcBodyBuilder = struct {
 
         const store_module = procedureModuleByKey(self.parent.modules, checked.constModuleId(const_use.const_ref));
         const template = store_module.const_templates.get(const_use.const_ref);
+        if (const_use.coerced_result_row != .none) {
+            return try self.restoreCoercedConstUseInto(target, checked_ty, store_module, template, const_use, next);
+        }
+        const use_type = Plan.CheckedTypeIdentity{ .module = self.module.key, .ty = checked_ty };
+        const requested_type = Plan.CheckedTypeIdentity{ .module = self.module.key, .ty = requested_ty };
         switch (template.state) {
             .reserved => boxyLowerInvariant("reserved checked const template reached runtime boxy lowering"),
-            .eval_template => |eval| return try self.lowerConstEvalTemplateUseInto(target, checked_ty, requested_ty, eval, next),
+            .eval_template => |eval| return try self.lowerConstEvalTemplateUseInto(target, use_type, requested_type, eval, next),
             .unimplemented => return try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString(Common.unimplemented_declaration_crash) },
             } }, self.scaffoldOrigin()),
-            .stored_const => {},
+            // A sealed-row constant's stored value is its representation at
+            // one row only, and boxy has no instantiation graph to decide
+            // whether THIS use asks for that row. It therefore always takes the
+            // retained eval template. That re-runs the constant's body at every
+            // use, which since annotated values quantify their output rows
+            // covers every such annotated top-level value (design.md "Roots
+            // Whose Row Tail Is Unbound"); the stored value cannot serve a
+            // widened use, because the representation boundary does not re-tag
+            // a stored tag into a wider row. `plan.zig` makes the same choice
+            // so the planned worker and the emitted call agree.
+            .stored_const => |stored| if (stored.other_row_template) |eval| {
+                return try self.lowerConstEvalTemplateUseInto(target, use_type, requested_type, eval, next);
+            },
         }
         const stored = template.state.stored_const;
         const producer_rep = self.parent.plan.repForStoredType(.{
@@ -15867,8 +15995,8 @@ const ProcBodyBuilder = struct {
     fn lowerConstEvalTemplateUseInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        checked_ty: checked.CheckedTypeId,
-        requested_ty: checked.CheckedTypeId,
+        target_type: Plan.CheckedTypeIdentity,
+        call_type: Plan.CheckedTypeIdentity,
         eval: checked.ConstEvalTemplate,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
@@ -15877,14 +16005,14 @@ const ProcBodyBuilder = struct {
         const fn_ty_ref = Plan.CheckedTypeIdentity{ .module = entry_view.key, .ty = entry_template.checked_fn_root };
         const worker_id = self.parent.plan.workerForSourceType(.{ .procedure_template = eval.entry_template }, fn_ty_ref) orelse
             boxyLowerInvariant("const eval template use reached boxy lowering without a planned entry-wrapper worker");
-        const call_plan = self.parent.plan.constEvalCallFor(worker_id, .{ .module = self.module.key, .ty = requested_ty }) orelse
+        const call_plan = self.parent.plan.constEvalCallFor(worker_id, call_type) orelse
             boxyLowerInvariant("const eval template use reached boxy lowering without a planned call");
 
         const hidden_desc_args = self.parent.plan.directCallHiddenDescriptorArgSlice(call_plan.hidden_desc_args);
         const hidden_dict_args = self.parent.plan.directCallHiddenDictionaryArgSlice(call_plan.hidden_dict_args);
         return try self.lowerWorkerCallLocalsInto(
             target,
-            .{ .module = self.module.key, .ty = checked_ty },
+            target_type,
             &.{},
             &.{},
             &.{},
@@ -15896,6 +16024,80 @@ const ProcBodyBuilder = struct {
             hidden_dict_args,
             next,
         );
+    }
+
+    /// Restore a constant for a use that re-opened its coerced row (design.md
+    /// "Row Subsumption"; `ConstUseTemplate.coerced_result_row`). The use's
+    /// type may list more tags at that row than any representation the
+    /// constant has, so the value is produced at the constant's OWN type—its
+    /// stored value at the stored representation, or its body evaluated at the
+    /// type it was produced at—and re-tagged into the use's row
+    /// (`assignCoercedResultRow`). `plan.zig` plans the evaluation at that same
+    /// type.
+    fn restoreCoercedConstUseInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        checked_ty: checked.CheckedTypeId,
+        store_module: ProcedureModuleView,
+        template: checked.ConstTemplate,
+        const_use: checked.ConstUseTemplate,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (template.coerced_row == .none) {
+            boxyLowerInvariant("a const use re-opened a row its constant does not coerce");
+        }
+        const target_rep = self.repForType(checked_ty);
+        const eval = switch (template.state) {
+            .reserved => boxyLowerInvariant("reserved checked const template reached runtime boxy lowering"),
+            .unimplemented => boxyLowerInvariant("a declaration with no implementation recorded a row coercion"),
+            .eval_template => |eval| eval,
+            // A sealed-row constant takes its retained eval template, exactly
+            // as an uncoerced one does (`restoreConstUseInto`).
+            .stored_const => |stored| stored.other_row_template orelse {
+                const stored_rep = self.parent.plan.repForStoredType(.{
+                    .module = store_module.key,
+                    .ty = stored.root_type,
+                }) orelse boxyLowerInvariant("stored constant type was missing from the boxy representation plan");
+                const declared = try self.addFrameLocalForRep(stored_rep);
+                const retag = try self.assignCoercedResultRow(target, declared, target_rep, stored_rep, next);
+                return try self.restoreStoredConstNodeInto(
+                    declared,
+                    store_module,
+                    stored.node,
+                    stored.root_type,
+                    stored_rep,
+                    retag,
+                );
+            },
+        };
+        const producer_type = Plan.CheckedTypeIdentity{
+            .module = store_module.key,
+            .ty = Plan.constProducerCheckedType(store_module.compile_time_roots, const_use.const_ref),
+        };
+        const declared_rep = self.repForTypeRef(producer_type);
+        const declared = try self.addFrameLocalForRep(declared_rep);
+        const retag = try self.assignCoercedResultRow(target, declared, target_rep, declared_rep, next);
+        return try self.lowerConstEvalTemplateUseInto(declared, producer_type, producer_type, eval, retag);
+    }
+
+    /// Re-tag `source`, a value at a coerced definition's DECLARED row
+    /// (`declared_rep`), into `target` at the row its use asked for
+    /// (`target_rep`), which includes the declared one (design.md "Row
+    /// Subsumption"). This is the boundary a direct call's result crosses
+    /// (`lowerDirectCallReturnAdaptation`): a descriptor-driven runtime
+    /// adaptation that rebuilds each tag by name at the target's
+    /// representation, payloads converted, and passes a `Try`'s `Ok` through
+    /// while re-tagging its error row. Every coerced use a boxy program
+    /// serves—a direct call, a restored constant—goes through it.
+    fn assignCoercedResultRow(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+        declared_rep: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        return try self.assignPlannedCallBoundary(target, source, target_rep, declared_rep, next);
     }
 
     fn restoreConstNodeInto(
@@ -18170,6 +18372,7 @@ const ProcBodyBuilder = struct {
             .generated_codec,
             .generated_field_iterator,
             .generated_interpolation_step,
+            .coerced_use_adapter,
             => &.{},
         };
     }
@@ -18179,220 +18382,6 @@ const ProcBodyBuilder = struct {
         return switch (expr.data) {
             .lambda, .closure => .{ .nested_expr = .{ .module = self.module.key, .expr = expr_id } },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("non-callable checked expression reached callable worker source lookup"),
-        };
-    }
-
-    fn workerSourceForProcedureValueRefInModule(
-        self: *ProcBodyBuilder,
-        module: ProcedureModuleView,
-        ref_id: checked.ResolvedValueRefId,
-    ) ?Plan.WorkerSource {
-        const record = module.resolved_value_refs.callableTarget(ref_id);
-        return switch (record.ref) {
-            .local_proc => |local| if (topLevelProcedureBindingForExpr(module, local.expr)) |binding|
-                .{ .procedure_binding = binding }
-            else
-                .{ .nested_expr = .{ .module = module.key, .expr = nestedCallableSiteExprForExpr(module, local.expr) orelse local.expr } },
-            .top_level_proc,
-            .promoted_top_level_proc,
-            => |procedure| self.workerSourceForProcedureUse(procedure),
-            .platform_required_proc => |required| self.workerSourceForProcedureUse(required.procedure),
-            .imported_proc => |procedure| self.workerSourceForProcedureUse(procedure),
-            .hosted_proc => |procedure| self.workerSourceForProcedureUse(procedure),
-            .local_param,
-            .local_value,
-            .local_mutable_version,
-            .pattern_binder,
-            .selected_hoisted_const,
-            .top_level_const,
-            .imported_const,
-            .platform_required_declaration,
-            .platform_required_const,
-            => null,
-        };
-    }
-
-    fn workerSourceForProcedureUse(self: *ProcBodyBuilder, procedure: checked.ProcedureUseTemplate) Plan.WorkerSource {
-        return switch (procedure.binding) {
-            .top_level => |top_level| self.workerSourceForTopLevelProcedureBinding(top_level),
-            .platform_required => |required| self.workerSourceForTopLevelProcedureBinding(.{
-                .artifact = required.app_value.artifact,
-                .binding = required.procedure_binding,
-            }),
-            .imported => .{ .procedure_use = procedure },
-            .hosted => .{ .procedure_use = procedure },
-        };
-    }
-
-    fn workerSourceForTopLevelProcedureBinding(
-        self: *ProcBodyBuilder,
-        binding_ref: checked.ArtifactTopLevelProcedureBindingRef,
-    ) Plan.WorkerSource {
-        const module = procedureModuleByKey(self.parent.modules, binding_ref.artifact);
-        const binding = module.top_level_procedure_bindings.get(binding_ref.binding);
-        switch (binding.body) {
-            .checked_error => boxyLowerInvariant("rejected binding reached Boxy lowering callable consumption"),
-            .callable_eval_template => |template| if (self.workerSourceForCallableEvalTemplate(module, template)) |source| {
-                return source;
-            },
-            .direct_template => {},
-        }
-        return .{ .procedure_binding = binding_ref };
-    }
-
-    fn workerSourceForCallableEvalTemplate(
-        self: *ProcBodyBuilder,
-        module: ProcedureModuleView,
-        template_id: checked.CallableEvalTemplateId,
-    ) ?Plan.WorkerSource {
-        const raw = @intFromEnum(template_id);
-        if (raw >= module.callable_eval_templates.templates.len) {
-            boxyLowerInvariant("callable eval binding referenced a missing checked template");
-        }
-        const template = module.callable_eval_templates.templates[raw];
-        const root = module.compile_time_roots.root(template.root);
-        return switch (root.payload) {
-            .fn_value => |fn_id| blk: {
-                if (@intFromEnum(fn_id) >= module.const_store.fns.items.len) {
-                    boxyLowerInvariant("finalized callable eval root referenced a missing ConstStore function");
-                }
-                break :blk self.workerSourceForConstFnValue(module.const_store.getFn(fn_id));
-            },
-            .pending => self.workerSourceForCallableRootExpr(module, root.expr),
-            .const_node, .discarded, .expect => null,
-        };
-    }
-
-    fn workerSourceForConstFnValue(
-        self: *ProcBodyBuilder,
-        fn_value: check.ConstStore.ConstFn,
-    ) Plan.WorkerSource {
-        return switch (fn_value.fn_def) {
-            .local_template,
-            .imported_template,
-            .checked_generated,
-            .local_hosted,
-            .imported_hosted,
-            => |template| .{ .procedure_template = template },
-            .nested => |nested| blk: {
-                // A default-root-qualified stored function resolves its site
-                // in the declaring module (by content identity) against the
-                // `.default_root` owner (design.md "Defaulted Fields").
-                const module = if (nested.default_root) |identity|
-                    procedureModuleByIdentity(self.parent.modules, &identity.bytes)
-                else
-                    procedureModuleByKey(self.parent.modules, .{
-                        .bytes = names.procTemplateModuleDigest(nested.owner).bytes,
-                    });
-                var site_expr: ?checked.CheckedExprId = null;
-                for (module.nested_proc_sites.sites) |site| {
-                    if (site.site != nested.site) continue;
-                    switch (site.owner) {
-                        .template => |site_owner| {
-                            if (nested.default_root != null) continue;
-                            if (!names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
-                        },
-                        .default_root => if (nested.default_root == null) continue,
-                    }
-                    site_expr = site.checked_expr orelse
-                        boxyLowerInvariant("stored nested function had no checked expression site");
-                    break;
-                }
-                break :blk .{ .nested_expr = .{
-                    .module = module.key,
-                    .expr = site_expr orelse
-                        boxyLowerInvariant("stored nested function referenced a missing checked nested site"),
-                } };
-            },
-            .parser_runtime => |runtime| self.workerSourceForStoredGeneratedCodec(runtime.owner, runtime.expr, .parser_runtime),
-            .encoder_for_runtime => |runtime| self.workerSourceForStoredGeneratedCodec(runtime.owner, runtime.expr, .encoder_runtime),
-        };
-    }
-
-    fn workerSourceForStoredGeneratedCodec(
-        self: *ProcBodyBuilder,
-        owner: names.ProcedureTemplateRef,
-        expr_id: checked.CheckedExprId,
-        kind: Plan.GeneratedCodecKind,
-    ) Plan.WorkerSource {
-        const module = procedureModuleByKey(self.parent.modules, .{
-            .bytes = names.procTemplateModuleDigest(owner).bytes,
-        });
-        const dispatch = dispatchPlanForGeneratedRuntime(module, expr_id);
-        const constructor = checkedFunctionPayload(module, dispatch.callable_ty);
-        if (constructor.args.len != 1) {
-            boxyLowerInvariant("stored generated codec constructor did not have one encoding argument");
-        }
-        return .{ .generated_codec = .{
-            .kind = kind,
-            .shape = .{ .module = module.key, .ty = dispatch.dispatcher_ty },
-            .capture_type = .{ .module = module.key, .ty = constructor.args[0] },
-            .contract_expr = .{ .module = module.key, .expr = expr_id },
-        } };
-    }
-
-    fn workerSourceForCallableRootExpr(
-        self: *ProcBodyBuilder,
-        module: ProcedureModuleView,
-        expr_id: checked.CheckedExprId,
-    ) ?Plan.WorkerSource {
-        const expr = module.checked_bodies.expr(expr_id);
-        return switch (expr.data) {
-            .lookup_local => |lookup| if (lookup.resolved) |ref_id|
-                self.workerSourceForProcedureValueRefInModule(module, ref_id)
-            else
-                null,
-            .lookup_external,
-            .lookup_required,
-            => |maybe_ref| if (maybe_ref) |ref_id|
-                self.workerSourceForProcedureValueRefInModule(module, ref_id)
-            else
-                null,
-            .lambda,
-            .closure,
-            => .{ .nested_expr = .{ .module = module.key, .expr = expr_id } },
-            .pending,
-            .numeral,
-            .str_from_quote,
-            .str_segment,
-            .str,
-            .bytes_literal,
-            .list,
-            .empty_list,
-            .tuple,
-            .match_,
-            .if_,
-            .call,
-            .record,
-            .empty_record,
-            .block,
-            .tag,
-            .nominal,
-            .zero_argument_tag,
-            .binop,
-            .unary_minus,
-            .unary_not,
-            .field_access,
-            .dispatch_call,
-            .interpolation,
-            .structural_eq,
-            .structural_hash,
-            .method_eq,
-            .type_dispatch_call,
-            .tuple_access,
-            .runtime_error,
-            .crash,
-            .dbg,
-            .expect_err,
-            .expect,
-            .ellipsis,
-            .anno_only,
-            .break_,
-            .return_,
-            .for_,
-            .hosted_lambda,
-            .run_low_level,
-            => null,
         };
     }
 
@@ -19352,6 +19341,27 @@ const ProcBodyBuilder = struct {
         return std.mem.eql(u8, self.module.canonical_names.methodNameText(method), expected);
     }
 
+    /// A coerced-use adapter's body: the call its plan records
+    /// (`Plan.Builder.analyzeCoercedUseAdapterBody`), at the adapter's own
+    /// lookup type, whose result crosses the call's return boundary from the
+    /// callee's declared row into the adapter's wider one—the re-tag
+    /// `assignCoercedResultRow` names.
+    fn lowerCoercedUseAdapterBodyInto(
+        self: *ProcBodyBuilder,
+        source: Plan.CoercedUseAdapterSource,
+        target: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const direct_plan = self.parent.plan.directCallPlanForCall(source.use, self.worker_layout.worker) orelse
+            boxyLowerInvariant("coerced-use adapter reached boxy lowering without its planned call");
+        const worker = self.parent.plan.workers.items[@intFromEnum(self.worker_layout.worker)];
+        const function = self.functionChildrenForRep(worker.rep) orelse
+            boxyLowerInvariant("coerced-use adapter worker was not callable");
+        const use_type = self.module.checked_bodies.expr(source.use.expr).ty;
+        const ret_ty = checkedFunctionPayload(self.module, use_type).ret;
+        return try self.lowerPlannedWorkerCallInto(target, function.ret, ret_ty, direct_plan, next);
+    }
+
     fn lowerPlannedWorkerCallInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -19461,6 +19471,7 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!Plan.TypeRepId {
         const expr_id = switch (operand) {
             .checked_expr => |expr| expr,
+            .adapter_param,
             .generated_interpolation_iter,
             .generated_numeral,
             .generated_quote,
@@ -29373,6 +29384,12 @@ const ProcBodyBuilder = struct {
                     try self.lowerExprExpectedTypeRefInto(lowered[index], arg_types[index], arg, continuation)
                 else
                     try self.lowerExprStorageRepInto(lowered[index], storage_arg_reps[index], arg, continuation),
+                .adapter_param => |param| blk: {
+                    if (param >= self.coerced_use_adapter_arity) {
+                        boxyLowerInvariant("coerced-use adapter operand named an argument the adapter does not have");
+                    }
+                    break :blk try self.assignLocalFromRep(lowered[index], self.arg_locals.items[param], storage_arg_reps[index], continuation);
+                },
                 .generated_quote => |literal| try self.assignStringLiteral(lowered[index], literal, continuation),
                 .generated_numeral => |literal| try self.lowerGeneratedNumeralInto(
                     lowered[index],
@@ -37762,69 +37779,6 @@ fn checkedFunctionPayload(module: ProcedureModuleView, checked_ty: checked.Check
     };
 }
 
-fn dispatchPlanForGeneratedRuntime(
-    module: ProcedureModuleView,
-    expr_id: checked.CheckedExprId,
-) static_dispatch.StaticDispatchCallPlan {
-    const expr = module.checked_bodies.expr(expr_id);
-    const plan_id = switch (expr.data) {
-        .dispatch_call => |maybe| maybe orelse
-            boxyLowerInvariant("stored serialization dispatch expression had no dispatch plan"),
-        .type_dispatch_call => |maybe| maybe orelse
-            boxyLowerInvariant("stored serialization type dispatch expression had no dispatch plan"),
-        .pending,
-        .numeral,
-        .str_from_quote,
-        .str_segment,
-        .str,
-        .bytes_literal,
-        .lookup_local,
-        .lookup_external,
-        .lookup_required,
-        .list,
-        .empty_list,
-        .tuple,
-        .match_,
-        .if_,
-        .call,
-        .record,
-        .empty_record,
-        .block,
-        .tag,
-        .nominal,
-        .zero_argument_tag,
-        .closure,
-        .lambda,
-        .binop,
-        .unary_minus,
-        .unary_not,
-        .field_access,
-        .interpolation,
-        .structural_eq,
-        .structural_hash,
-        .method_eq,
-        .tuple_access,
-        .runtime_error,
-        .crash,
-        .dbg,
-        .expect_err,
-        .expect,
-        .ellipsis,
-        .anno_only,
-        .break_,
-        .return_,
-        .for_,
-        .hosted_lambda,
-        .run_low_level,
-        => boxyLowerInvariant("stored serialization runtime function did not reference a dispatch expression"),
-    };
-    const raw = @intFromEnum(plan_id);
-    if (raw >= module.static_dispatch_plans.plans.len) {
-        boxyLowerInvariant("stored serialization dispatch plan was outside its checked table");
-    }
-    return module.static_dispatch_plans.plans[raw];
-}
-
 fn constTupleItemTypes(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) []const checked.CheckedTypeId {
     return switch (resolvedTypePayload(module, checked_ty)) {
         .tuple => |items| items,
@@ -38696,7 +38650,7 @@ fn expectResolvedWorkerCheckedExpr(
 ) error{ TestExpectedEqual, TestUnexpectedResult }!void {
     const body = switch (worker.body) {
         .checked_expr => |checked_body| checked_body,
-        .intrinsic, .hosted, .unimplemented, .generated_codec, .generated_field_iterator, .generated_interpolation_step => return error.TestUnexpectedResult,
+        .intrinsic, .hosted, .unimplemented, .generated_codec, .generated_field_iterator, .generated_interpolation_step, .coerced_use_adapter => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(expected_body, body.body_id);
     try std.testing.expectEqual(expected_root, body.root_expr);
@@ -39042,6 +38996,7 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind) (Allocator.Error || 
         0,
         @enumFromInt(fixtureTableIndex(0)),
         typeSchemeKey(7),
+        .none,
     );
     const const_node = try checked_module.const_store.append(.{ .scalar = .{ .u64 = 5 } });
     const root_type = try checked_module.const_store.type_store.append(.{ .primitive = .u64 });
@@ -47950,4 +47905,55 @@ fn dummyRootRequest() checked.RootRequest {
         .abi = .roc,
         .exposure = .private,
     };
+}
+
+test "a descriptor template describes an alias by the first representation under its alias layers" {
+    // An alias over a transparent nominal, and an alias over a box, each
+    // stored the same way as what it wraps. The transparent nominal (no
+    // declared fields, no backing substitutions) and the box (payload stored
+    // the same way) are what `descriptorIdentityRep` would walk through; the
+    // alias is described by the nominal's and the box's own descriptor
+    // payload layout instead, which here differ from their payloads'.
+    const gpa = std.testing.allocator;
+    const wrappers = [_]struct { kind: Plan.RepresentationKind, role: Plan.ChildRole }{
+        .{ .kind = .{ .nominal = .transparent }, .role = .nominal_backing },
+        .{ .kind = .box, .role = .box_payload },
+    };
+    for (wrappers) |wrapper| {
+        var plan = Plan.ProgramPlan.init(gpa);
+        defer plan.deinit();
+        // 0: the alias; 1: the wrapper; 2: the wrapper's payload.
+        try plan.children.appendSlice(gpa, &.{
+            .{ .role = .alias_backing, .source_type = undefined, .rep = @enumFromInt(fixtureTableIndex(1)) },
+            .{ .role = wrapper.role, .source_type = undefined, .rep = @enumFromInt(fixtureTableIndex(2)) },
+        });
+        try plan.representations.appendSlice(gpa, &.{
+            .{ .source_type = undefined, .kind = .alias, .children = .{ .start = 0, .len = 1 } },
+            .{ .source_type = undefined, .kind = wrapper.kind, .children = .{ .start = 1, .len = 1 } },
+            .{ .source_type = undefined, .kind = .tag_union },
+        });
+        var rep_layouts = [_]Layouts.RepLayouts{
+            .{ .worker = .{ .concrete = .u64 } },
+            .{ .worker = .{ .concrete = .u64 }, .descriptor_payload_layout = .str },
+            .{ .worker = .{ .concrete = .u64 }, .descriptor_payload_layout = .opaque_ptr },
+        };
+        const layout_plan = Layouts.LayoutPlan{
+            .allocator = gpa,
+            .rep_layouts = &rep_layouts,
+            .worker_layouts = &.{},
+            .worker_layout_values = .empty,
+            .roots = .empty,
+            .root_layout_values = .empty,
+            .dynamic_storage_layout = .opaque_ptr,
+            .generated_evidence = undefined,
+        };
+        var result = try LirProgram.Result.init(gpa, .native);
+        defer result.deinit();
+        var builder = ProcedureBuilder.init(gpa, undefined, &plan, &layout_plan, undefined, &result, .{});
+        defer builder.deinit();
+
+        // Stepping through the wrapper would describe the alias by `.opaque_ptr`.
+        try std.testing.expectEqual(@as(Plan.TypeRepId, @enumFromInt(fixtureTableIndex(2))), builder.descriptorIdentityRep(@enumFromInt(fixtureTableIndex(0))));
+        try std.testing.expectEqual(layout.Idx.str, builder.descriptorTemplatePayloadLayoutForRep(@enumFromInt(fixtureTableIndex(0))));
+    }
 }

@@ -444,12 +444,13 @@ pub const Generalizer = struct {
                 return true;
             },
             .alias => |alias| {
-                // THEORY: we don't need to descend into the backing type. Everything
-                // in the alias RHS is either a reference to an arg (already visited
-                // via the args below) or a concrete type (which resolves to
-                // `outermost` on its own, so it can't raise the rank). Traversing the
-                // backing var would therefore be redundant—the rank is just the max
-                // over the args.
+                // We don't need to descend into the backing type. Every variable
+                // of an alias's backing is one of its arguments, declared or
+                // hidden (design.md "Hidden Alias Arguments"), and everything else
+                // in it is concrete (which resolves to `outermost` on its own, so
+                // it can't raise the rank). Traversing the backing var would
+                // therefore be redundant—the rank is just the max over ALL the
+                // args.
                 return try self.pushOverArgs(fill, self.store.sliceAliasArgs(alias));
             },
             .structure => |flat_type| switch (flat_type) {
@@ -876,6 +877,49 @@ test "generalize - effect cycles inherit the enclosing traversal rank" {
         try gen.generalize(gpa, &pool, outer);
         try std.testing.expectEqual(Rank.generalized, store.resolveVar(captured).desc.rank);
         try std.testing.expectEqual(Rank.generalized, store.resolveVar(result).desc.rank);
+    }
+}
+
+test "generalize - an alias is ranked by its hidden arguments too" {
+    // design.md "Hidden Alias Arguments": an alias body's variables are its
+    // formals and its hidden arguments, so the max over ALL its arguments is
+    // its rank. `Base : [Other]` has no declared argument; its hidden marker
+    // slot is the one variable, here the backing itself.
+    const gpa = std.testing.allocator;
+    const outer: Rank = @enumFromInt(2);
+    const inner: Rank = @enumFromInt(3);
+    const base = @import("base");
+
+    for ([_]Rank{ inner, outer }) |slot_rank| {
+        var store = try TypesStore.initCapacity(gpa, 16, 4);
+        defer store.deinit();
+        var pool = try VarPool.init(gpa);
+        defer pool.deinit();
+        try pool.pushRank();
+        try pool.pushRank();
+        try pool.pushRank();
+        var gen = try Generalizer.init(gpa, &store);
+        defer gen.deinit(gpa);
+
+        const slot = try store.freshWithRank(slot_rank);
+        const alias = try store.freshWithRank(inner);
+        try store.setVarContent(alias, try store.mkAliasWithSourceDeclAndBuiltinOrigin(
+            .{ .ident_idx = base.Ident.Idx.NONE },
+            slot,
+            &.{slot},
+            base.ModuleIdentity.Idx.NONE,
+            null,
+            false,
+            0,
+            .marker,
+        ));
+        try pool.addVarToRank(alias, inner);
+        if (slot_rank == inner) try pool.addVarToRank(slot, inner) else try pool.addVarToRank(slot, outer);
+
+        try gen.generalize(gpa, &pool, inner);
+        // A slot of the enclosing scope keeps the alias at that scope's
+        // rank; a slot of this scope lets the alias generalize with it.
+        try std.testing.expectEqual(if (slot_rank == inner) Rank.generalized else outer, store.resolveVar(alias).desc.rank);
     }
 }
 

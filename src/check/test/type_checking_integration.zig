@@ -8950,10 +8950,12 @@ test "check type - polarity - body may not widen through a callee either" {
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
-test "check type - polarity - closed value closes the output row" {
+test "check type - polarity - a forwarded closed value keeps the annotated type" {
     // A value from a closed source (here an input-position parameter) flows
-    // into the output row and closes it: the definition checks, and its
-    // published row is closed.
+    // into the output row. The definition checks and publishes exactly what it
+    // says: the output row's anonymous extension is unrendered either way, so
+    // the displayed type is the same whether the row was closed by the body or
+    // coerced (design.md "Row Subsumption").
     const source =
         \\id : [A, B] -> [A, B]
         \\id = |x| x
@@ -8961,7 +8963,13 @@ test "check type - polarity - closed value closes the output row" {
     try checkTypesModule(source, .{ .pass = .last_def }, "[A, B] -> [A, B]");
 }
 
-test "check type - polarity - closed output row cannot be widened by callers" {
+test "check type - polarity - a forwarded closed value still exposes an open row" {
+    // Row subsumption: the closed value COERCES into the annotated row instead
+    // of binding it, so what a caller may do with `id`'s result no longer
+    // depends on whether `id`'s body constructed its tags or forwarded them.
+    // `wider` is the same program as the `parse`/`a`/`b` widening above with a
+    // forwarding body instead of a constructing one, and it is accepted for
+    // the same reason.
     const source =
         \\id : [A, B] -> [A, B]
         \\id = |x| x
@@ -8969,7 +8977,2248 @@ test "check type - polarity - closed output row cannot be widened by callers" {
         \\wider : [A, B] -> [A, B, C]
         \\wider = |x| id(x)
     ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A, B] -> [A, B, C]");
+}
+
+test "check type - polarity - a forwarding body is still bounded by its annotation" {
+    // The coercion moves only what the definition PUBLISHES. The body is
+    // checked against the annotation's own row exactly as before, so a
+    // forwarded value carrying an unlisted tag is still the definition's error.
+    const source =
+        \\id : [A, B, C] -> [A, B]
+        \\id = |x| x
+    ;
     try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - coercion does not open an input row" {
+    // `id`'s parameter row and its result row are one unification class inside
+    // the body. Only the published result row's extension is fresh, so the
+    // input row stays closed as written and an unlisted argument is rejected.
+    const source =
+        \\id : [A, B] -> [A, B]
+        \\id = |x| x
+        \\
+        \\bad = id(C)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - coercion does not reach a nested result row" {
+    // Only the signature's direct result row is adapter-reachable, so only it
+    // coerces. A row inside a `List` keeps closing by body, and a caller
+    // widening it meets the ordinary rejection.
+    const source =
+        \\wrap : [A, B] -> List([A, B])
+        \\wrap = |x| [x]
+        \\
+        \\wider : [A, B] -> List([A, B, C])
+        \\wider = |x| wrap(x)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - coercion does not reach a local binding" {
+    // A local definition's callee has no procedure template, so lowering has
+    // no boundary at which to adapt a coerced row; the local keeps closing by
+    // body and the widening caller is rejected.
+    const source =
+        \\outer : [A, B] -> [A, B, C]
+        \\outer = |v| {
+        \\    id : [A, B] -> [A, B]
+        \\    id = |x| x
+        \\
+        \\    wider : [A, B] -> [A, B, C]
+        \\    wider = |y| id(y)
+        \\
+        \\    wider(v)
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - coercion reaches a signature with a where clause" {
+    // A use whose `where` evidence resolves to a LOCAL procedure (`Loc.get`
+    // here) is lowered as a caller-owned specialization, and lowering defines
+    // it as a widening adapter in the caller's draft, so the signature
+    // coerces exactly like one without a `where` clause.
+    const source =
+        \\fwd : a, [A, B] -> [A, B] where [a.get : a -> Str]
+        \\fwd = |x, t| {
+        \\    _s = x.get()
+        \\    t
+        \\}
+        \\
+        \\outer : {} -> [A, B, C]
+        \\outer = |_| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "loc"
+        \\    }
+        \\
+        \\    wider : Loc, [A, B] -> [A, B, C]
+        \\    wider = |l, t| fwd(l, t)
+        \\
+        \\    wider(Loc.L, B)
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> [A, B, C]");
+}
+
+test "check type - polarity - a generic forwarder coerces at every use after a literal use" {
+    // `fwd` is a partial scheme: its uses copy the root to reach `a` and share
+    // the ground row `[B, C]`, which is both its argument and its result row.
+    // The first use unifies the literal `B` into that shared row, restructuring
+    // it into an extension chain; every later use must still re-open it.
+    const source =
+        \\fwd : a, [B, C] -> [B, C]
+        \\fwd = |_, t| t
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\two : {} -> Bool
+        \\two = |_| show(fwd("x", B)) == "B" and show(fwd("x", C)) == "C"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Bool");
+}
+
+test "check type - polarity - a generic forwarder coerces at a let-bound use and a later use" {
+    const source =
+        \\fwd : a, [B, C] -> [B, C]
+        \\fwd = |_, t| t
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\two : {} -> Bool
+        \\two = |_| {
+        \\    x = fwd("x", C)
+        \\    show(x) == "C" and show(fwd("x", C)) == "C"
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Bool");
+}
+
+test "check type - polarity - a generic forwarder coerces at uses with different type arguments" {
+    const source =
+        \\fwd : a, [B, C] -> [B, C]
+        \\fwd = |_, t| t
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\two : {} -> Bool
+        \\two = |_| show(fwd("x", B)) == "B" and show(fwd(1, C)) == "C"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Bool");
+}
+
+test "check type - polarity - a generic forwarder's literal use does not close a use in another definition" {
+    // The row is shared by the scheme's uses across the whole module, so one
+    // definition's literal use restructures it for another's.
+    const source =
+        \\fwd : a, [B, C] -> [B, C]
+        \\fwd = |_, t| t
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\one : {} -> Str
+        \\one = |_| show(fwd("x", B))
+        \\
+        \\two : {} -> Str
+        \\two = |_| show(fwd("x", C))
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Str");
+}
+
+test "check type - polarity - a where-clause forwarder coerces at two uses in one body" {
+    const source =
+        \\fwd : a, [B, C] -> [B, C] where [a.get : a -> Str]
+        \\fwd = |x, t| {
+        \\    _s = x.get()
+        \\    t
+        \\}
+        \\
+        \\Top := [T].{
+        \\    get : Top -> Str
+        \\    get = |_| "top"
+        \\}
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\two : {} -> Bool
+        \\two = |_| show(fwd(Top.T, B)) == "B" and show(fwd(Top.T, C)) == "C"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Bool");
+}
+
+test "check type - polarity - a generic forwarder's Try error row coerces at every use after a literal use" {
+    // The `Try` error-row cell of the same scenario. (A literal reaches this
+    // row through the nominal, which does not leave it chained, so this pins
+    // acceptance rather than the chain walk itself.)
+    const source =
+        \\fwd : a, Try(Str, [Missing, NotFound]) -> Try(Str, [Missing, NotFound])
+        \\fwd = |_, t| t
+        \\
+        \\show : Try(Str, [Gone, Missing, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => s, Err(Gone) => "Gone", Err(Missing) => "Missing", Err(NotFound) => "NotFound" }
+        \\
+        \\two : {} -> Bool
+        \\two = |_| show(fwd("x", Err(NotFound))) == "NotFound" and show(fwd("x", Err(Missing))) == "Missing"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Bool");
+}
+
+test "check type - polarity - a generic forwarder's input row stays closed after a literal use" {
+    // The rejected side: re-opening each use's result row after the shared
+    // row was restructured must not open the INPUT row, so an unlisted
+    // argument is still a mismatch.
+    const source =
+        \\fwd : a, [B, C] -> [B, C]
+        \\fwd = |_, t| t
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\bad : {} -> Str
+        \\bad = |_| {
+        \\    _first = show(fwd("x", B))
+        \\    show(fwd("x", A))
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - a generic forwarder's Try error row coerces after a use chains it" {
+    // `nf`'s result is an open `[NotFound, ..]` error row, so unifying it into
+    // the forwarder's shared two-tag error row restructures that row into an
+    // extension chain for the second use.
+    const source =
+        \\fwd : a, Try(Str, [Missing, NotFound]) -> Try(Str, [Missing, NotFound])
+        \\fwd = |_, t| t
+        \\
+        \\nf = |_| Err(NotFound)
+        \\
+        \\show : Try(Str, [Gone, Missing, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => s, Err(Gone) => "Gone", Err(Missing) => "Missing", Err(NotFound) => "NotFound" }
+        \\
+        \\two : {} -> Bool
+        \\two = |_| show(fwd("x", nf({}))) == "NotFound" and show(fwd("y", nf({}))) == "NotFound"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Bool");
+}
+
+test "check type - polarity - a rejected argument does not hide a later use's mismatch" {
+    // A partial scheme's uses share its ground row, so a use's error must not
+    // poison that row: the argument relation is owned by its call, and a
+    // later use at a row the forwarder cannot reach is still reported.
+    const source =
+        \\fwd : a, [B, C] -> [B, C]
+        \\fwd = |_, t| t
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\only_d : [D] -> Str
+        \\only_d = |_| "d"
+        \\
+        \\bad : {} -> Str
+        \\bad = |_| show(fwd("x", Z))
+        \\
+        \\later_ok : {} -> Str
+        \\later_ok = |_| show(fwd("x", C))
+        \\
+        \\later_bad : {} -> Str
+        \\later_bad = |_| only_d(fwd("x", C))
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertTypeErrorTitles(&.{ "Type Mismatch", "Type Mismatch" });
+}
+
+test "check type - polarity - a where-free forwarder coerces" {
+    // The where-free counterpart of the test above: the same forwarder with
+    // no `where` clause presents a row its callers may widen.
+    const source =
+        \\fwd : Str, [A, B] -> [A, B]
+        \\fwd = |_, t| t
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |t| fwd("s", t)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A, B] -> [A, B, C]");
+}
+
+test "check type - polarity - a forwarded closed Try error row coerces" {
+    // The other adapter-reachable cell: the error row of a `Try` standing as
+    // the direct result. Forwarding a closed `Try` coerces that row exactly as
+    // forwarding a closed tag union coerces the direct result.
+    const source =
+        \\fwd : Try(Str, [NotFound]) -> Try(Str, [NotFound])
+        \\fwd = |t| t
+        \\
+        \\wider : Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])");
+}
+
+test "check type - polarity - a forwarded closed row spelled through an alias coerces" {
+    // The alias spelling of "a forwarded closed value still publishes an open
+    // row". Lowering crosses alias layers when it adapts a result row, so the
+    // checker must open the same set: `Status` names the very row the inline
+    // spelling writes, and `wider` is accepted for the same reason.
+    const source =
+        \\Status : [Ok(Str), Err(Str)]
+        \\
+        \\fwd : Status -> Status
+        \\fwd = |s| s
+        \\
+        \\wider : Status -> [Ok(Str), Err(Str), Extra]
+        \\wider = |s| fwd(s)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Status -> [Err(Str), Extra, Ok(Str)]");
+}
+
+test "check type - polarity - a forwarded Try error row spelled through an alias coerces" {
+    // The alias spelling of the `Try` error-row cell: `IoResult(Str)` is
+    // `Try(Str, [NotFound])`, and its error row is the adapter-reachable one.
+    const source =
+        \\IoResult(a) : Try(a, [NotFound])
+        \\
+        \\fwd : IoResult(Str) -> IoResult(Str)
+        \\fwd = |t| t
+        \\
+        \\wider : IoResult(Str) -> Try(Str, [Gone, NotFound])
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "IoResult(Str) -> Try(Str, [Gone, NotFound])");
+}
+
+test "check type - polarity - coercion through an alias does not reach a nested row" {
+    // The alias twin of "coercion does not reach a nested result row": the row
+    // `Statuses` holds sits inside a `List`, out of the adapter's reach, so it
+    // keeps closing by body even though the alias stands at the result.
+    const source =
+        \\Statuses : List([A, B])
+        \\
+        \\wrap : [A, B] -> Statuses
+        \\wrap = |x| [x]
+        \\
+        \\wider : [A, B] -> List([A, B, C])
+        \\wider = |x| wrap(x)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - a forwarder whose signature is a function alias coerces" {
+    // A signature that NAMES a whole function type must behave exactly like
+    // the same function written inline (`fwd : Status -> Status` coerces,
+    // above). The alias's result row is the signature's direct result, so the
+    // walk through the alias opens it at the same result-row site.
+    const source =
+        \\Status : [Ok(Str), Err(Str)]
+        \\
+        \\Fwd : Status -> Status
+        \\
+        \\fwd : Fwd
+        \\fwd = |s| s
+        \\
+        \\wider : Status -> [Ok(Str), Err(Str), Extra]
+        \\wider = |s| fwd(s)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Status -> [Err(Str), Extra, Ok(Str)]");
+}
+
+test "check type - polarity - a function alias signature's Try error row coerces" {
+    // The `Try` error-row cell through a function alias: `FwdTry`'s result is
+    // `Try(Str, [NotFound])`, whose error row is the adapter-reachable one.
+    const source =
+        \\FwdTry : Try(Str, [NotFound]) -> Try(Str, [NotFound])
+        \\
+        \\fwd : FwdTry
+        \\fwd = |t| t
+        \\
+        \\wider : Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])");
+}
+
+test "check type - polarity - a function alias signature does not reach a nested row" {
+    // The rejected side: through a function alias only the direct result (or
+    // a `Try` error row standing there) is adapter-reachable. A row inside a
+    // `List` in that result keeps closing by body, exactly as it does when the
+    // function is written inline.
+    const source =
+        \\Wrap : [A, B] -> List([A, B])
+        \\
+        \\wrap : Wrap
+        \\wrap = |x| [x]
+        \\
+        \\wider : [A, B] -> List([A, B, C])
+        \\wider = |x| wrap(x)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - a function alias signature does not open its input row" {
+    // Re-aiming the alias's return at the result row leaves its arguments
+    // nested: the input row stays closed as written.
+    const source =
+        \\Fwd : [A, B] -> [A, B]
+        \\
+        \\fwd : Fwd
+        \\fwd = |x| x
+        \\
+        \\bad = fwd(C)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - a where-method named through a function alias widens like its inline spelling" {
+    // `Classify(a)` names the whole where-method signature. Its return is the
+    // signature's direct result exactly as `a -> [Low, High]` written inline
+    // is, so the body's use may widen it per use.
+    const source =
+        \\Classify(a) : a -> [Low, High]
+        \\
+        \\describe : a -> [Low, High, Unknown] where [a.classify : Classify(a)]
+        \\describe = |x| x.classify()
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "a -> [High, Low, Unknown] where [a.classify : Classify(a)]");
+}
+
+test "check type - polarity - a where-method named through a function alias keeps a nested row closed" {
+    // The rejected side: a row inside a `List` in that alias's return is out
+    // of the adapter's reach, so a body use that widens it is a mismatch, as
+    // it is when the signature is written inline.
+    const source =
+        \\Classify(a) : a -> List([Low, High])
+        \\
+        \\describe : a -> List([Low, High, Unknown]) where [a.classify : Classify(a)]
+        \\describe = |x| x.classify()
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - a where-method named through a parameterised function alias widens" {
+    // The row reaches the result through the alias's FORMAL: `e` is the
+    // alias's whole return, so the argument `[Low, High]` stands on the
+    // signature's direct result and defers per use like the inline spelling.
+    const source =
+        \\Classify(a, e) : a -> e
+        \\
+        \\describe : a -> [Low, High, Unknown] where [a.classify : Classify(a, [Low, High])]
+        \\describe = |x| x.classify()
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "a -> [High, Low, Unknown] where [a.classify : Classify(a, [High, Low])]");
+}
+
+test "check type - polarity - a parameterised function alias's Try error row coerces" {
+    // `e` stands in BOTH the input and the result, so the one argument var
+    // cannot be open on the output side and closed on the input side. The
+    // result occurrence gets its own row, opened exactly where the inline
+    // spelling `Try(Str, [NotFound]) -> Try(Str, [NotFound])` opens it.
+    const source =
+        \\Fwd(e) : Try(Str, e) -> Try(Str, e)
+        \\
+        \\fwd : Fwd([NotFound])
+        \\fwd = |t| t
+        \\
+        \\wider : Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])");
+}
+
+test "check type - polarity - a parameterised function alias whose formal is only the result coerces" {
+    const source =
+        \\Fwd(e) : [A, B] -> e
+        \\
+        \\fwd : Fwd([A, B])
+        \\fwd = |x| x
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| fwd(x)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A, B] -> [A, B, C]");
+}
+
+test "check type - polarity - a parameterised function alias keeps its input occurrence closed" {
+    // The input occurrence of `e` keeps the argument as written.
+    const source =
+        \\Fwd(e) : Try(Str, e) -> Try(Str, e)
+        \\
+        \\fwd : Fwd([NotFound])
+        \\fwd = |t| t
+        \\
+        \\bad = fwd(Err(Gone))
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - a parameterised function alias does not reach a nested occurrence" {
+    // `e` inside a `List` in the return is out of the adapter's reach.
+    const source =
+        \\Fwd(e) : Try(Str, e) -> List(Try(Str, e))
+        \\
+        \\fwd : Fwd([NotFound])
+        \\fwd = |t| [t]
+        \\
+        \\wider : Try(Str, [NotFound]) -> List(Try(Str, [Gone, NotFound]))
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - an alias argument standing on the result row through a function alias coerces" {
+    // `Res([E])` inside `Fwd`'s return: the alias's argument var is shared
+    // with its backing, and the backing's `Try` error cell is the position
+    // that decides whether the row is reachable, exactly as the inline
+    // `Res([E]) -> Res([E])` decides it.
+    const source =
+        \\Res(e) : Try(Str, e)
+        \\
+        \\Fwd : Res([E]) -> Res([E])
+        \\
+        \\fwd : Fwd
+        \\fwd = |t| t
+        \\
+        \\wider : Try(Str, [E]) -> Try(Str, [E, F])
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(Str, [E]) -> Try(Str, [E, F])");
+}
+
+test "check type - polarity - an alias argument nested through a function alias stays closed" {
+    const source =
+        \\Many(e) : List(e)
+        \\
+        \\Fwd : Many([E]) -> Many([E])
+        \\
+        \\fwd : Fwd
+        \\fwd = |t| t
+        \\
+        \\wider : List([E]) -> List([E, F])
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - an effectful function alias signature coerces" {
+    const source =
+        \\Fwd : [A, B] => [A, B]
+        \\
+        \\fwd! : Fwd
+        \\fwd! = |x| {
+        \\    dbg x
+        \\    x
+        \\}
+        \\
+        \\wider! : [A, B] => [A, B, C]
+        \\wider! = |x| fwd!(x)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A, B] => [A, B, C]");
+}
+
+test "check type - polarity - an alias of a function alias signature coerces" {
+    const source =
+        \\F1 : [A, B] -> [A, B]
+        \\
+        \\F2 : F1
+        \\
+        \\fwd : F2
+        \\fwd = |x| x
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| fwd(x)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A, B] -> [A, B, C]");
+}
+
+test "check type - polarity - a curried function alias signature does not reach the inner return" {
+    // Only the signature's OWN function's return is reachable; the function
+    // it returns is a nested position.
+    const source =
+        \\Fwd : [A, B] -> ([A, B] -> [A, B])
+        \\
+        \\fwd : Fwd
+        \\fwd = |_| |y| y
+        \\
+        \\wider : [A, B] -> ([A, B] -> [A, B, C])
+        \\wider = |x| fwd(x)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - a method call to a coerced forwarder re-opens its result row" {
+    // A static-dispatch use reaches the same definition a lookup does, so it
+    // reads the same coercion record and re-opens its own copy of the row.
+    const source =
+        \\Holder := [Holder].{
+        \\    fwd : Holder, [A, B] -> [A, B]
+        \\    fwd = |_, x| x
+        \\}
+        \\
+        \\wider : Holder, [A, B] -> [A, B, C]
+        \\wider = |b, x| b.fwd(x)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Holder, [A, B] -> [A, B, C]");
+}
+
+test "check type - polarity - a qualified call to a coerced method re-opens its result row" {
+    const source =
+        \\Holder := [Holder].{
+        \\    fwd : Holder, [A, B] -> [A, B]
+        \\    fwd = |_, x| x
+        \\}
+        \\
+        \\wider : Holder, [A, B] -> [A, B, C]
+        \\wider = |b, x| Holder.fwd(b, x)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Holder, [A, B] -> [A, B, C]");
+}
+
+test "check type - polarity - a method call does not re-open a coerced method's input row" {
+    const source =
+        \\Holder := [Holder].{
+        \\    fwd : Holder, [A, B] -> [A, B]
+        \\    fwd = |_, x| x
+        \\}
+        \\
+        \\bad = |b| b.fwd(C)
+        \\
+        \\use : Holder -> [A, B]
+        \\use = |b| bad(b)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - a method call does not reach a nested row of a coerced method" {
+    const source =
+        \\Holder := [Holder].{
+        \\    wrap : Holder, [A, B] -> List([A, B])
+        \\    wrap = |_, x| [x]
+        \\}
+        \\
+        \\wider : Holder, [A, B] -> List([A, B, C])
+        \\wider = |b, x| b.wrap(x)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - a recursive-group use of a forwarder sees its annotated open row" {
+    // Top-level definitions are checked in dependency order, so a use outside
+    // a forwarder's own recursive group always finds its coercion record. A
+    // use INSIDE the group instantiates the predeclared annotation, whose
+    // result row is still the annotation's implicitly open row.
+    const source =
+        \\fwd : [A, B], U64 -> [A, B]
+        \\fwd = |x, n| if n == 0 x else {
+        \\    _ = wider(x, n - 1)
+        \\    x
+        \\}
+        \\
+        \\wider : [A, B], U64 -> [A, B, C]
+        \\wider = |x, n| fwd(x, n)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A, B], U64 -> [A, B, C]");
+}
+
+test "check type - polarity - an imported function alias forwarder coerces at the use" {
+    const source_lib =
+        \\module [Fwd, fwd]
+        \\
+        \\Fwd : [A, B] -> [A, B]
+        \\
+        \\fwd : Fwd
+        \\fwd = |x| x
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| Lib.fwd(x)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertLastDefType("[A, B] -> [A, B, C]");
+}
+
+test "check type - polarity - an imported function alias names a local forwarder's signature" {
+    const source_lib =
+        \\module [Fwd]
+        \\
+        \\Fwd : [A, B] -> [A, B]
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\fwd : Lib.Fwd
+        \\fwd = |x| x
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| fwd(x)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertLastDefType("[A, B] -> [A, B, C]");
+}
+
+test "check type - polarity - an imported parameterised function alias coerces its result occurrence" {
+    // No recorded axis is needed: the instantiator finds the result
+    // occurrence by walking the imported declaration's type.
+    const source_lib =
+        \\module [Fwd]
+        \\
+        \\Fwd(e) : Try(Str, e) -> Try(Str, e)
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\fwd : Lib.Fwd([NotFound])
+        \\fwd = |t| t
+        \\
+        \\wider : Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])
+        \\wider = |t| fwd(t)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertLastDefType("Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])");
+}
+
+test "check type - polarity - a method call to an imported coerced method re-opens its result row" {
+    const source_lib =
+        \\module [Holder]
+        \\
+        \\Holder := [Holder].{
+        \\    fwd : Holder, [A, B] -> [A, B]
+        \\    fwd = |_, x| x
+        \\}
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib exposing [Holder]
+        \\
+        \\wider : Holder, [A, B] -> [A, B, C]
+        \\wider = |b, x| b.fwd(x)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertLastDefType("Holder, [A, B] -> [A, B, C]");
+}
+
+test "check type - polarity - a coerced Try error row whose extension is an alias coerces" {
+    // `Errs`'s row continues through the alias `Base` (substituted for
+    // `Wrap`'s extension formal), so the coerced row's extension chain has an
+    // ALIAS link, and `Base`'s own marker is the tail the body closed. The
+    // re-open copies through that link.
+    const source =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\fwd : Try(U64, Errs) -> Try(U64, Errs)
+        \\fwd = |t| t
+        \\
+        \\wider : Try(U64, Errs) -> Try(U64, [HostErr(U64), Other, Widened])
+        \\wider = |t| fwd(t)
+    ;
+    // The body's `Try` may present the use's widened `Errs` through its
+    // backing's alias: either spelling is the same type (design.md "Hidden
+    // Alias Arguments").
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, Errs) -> Try(U64, Wrap([Other, Widened]))");
+}
+
+test "check type - polarity - a coerced direct row whose extension is an alias coerces" {
+    const source =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\fwd : Errs -> Errs
+        \\fwd = |t| t
+        \\
+        \\wider : Errs -> [HostErr(U64), Other, Widened]
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Errs -> [HostErr(U64), Other, Widened]");
+}
+
+test "check type - polarity - an alias extension of a coerced row keeps the input row closed" {
+    const source =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\fwd : Errs -> Errs
+        \\fwd = |t| t
+        \\
+        \\bad = fwd(Widened)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - an alias applied at the result row whose formal is the row's extension coerces" {
+    // `Wrap(Base)` written in the result's error cell means exactly what
+    // `Errs : Wrap(Base)` named there means: `Base` stands on the row's own
+    // extension, so its row is the adapter-reachable one either way.
+    const source =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\fwd : Try(U64, Wrap(Base)) -> Try(U64, Wrap(Base))
+        \\fwd = |t| t
+        \\
+        \\wider : Try(U64, [HostErr(U64), Other]) -> Try(U64, [HostErr(U64), Other, Widened])
+        \\wider = |t| fwd(t)
+    ;
+    // Either spelling of the same type may display (design.md "Hidden Alias
+    // Arguments").
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, [HostErr(U64), Other]) -> Try(U64, Wrap([Other, Widened]))");
+}
+
+test "check type - polarity - an identity alias applied at the result row coerces" {
+    const source =
+        \\Id(a) : a
+        \\
+        \\fwd : [A, B] -> Id([A, B])
+        \\fwd = |x| x
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| fwd(x)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A, B] -> [A, B, C]");
+}
+
+test "check type - polarity - a function alias argument whose row continues through an alias link coerces" {
+    // `Errs`'s row continues through the alias `Base`, so the argument's
+    // result-row twin is copied down that link: `fwd : Fwd(Errs)` coerces
+    // exactly as `fwd : Errs -> Errs` does.
+    const source =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\Fwd(e) : e -> e
+        \\
+        \\fwd : Fwd(Errs)
+        \\fwd = |t| t
+        \\
+        \\wider : Errs -> [Aborted, HostErr(U64), Other]
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Errs -> [Aborted, HostErr(U64), Other]");
+}
+
+test "check type - polarity - a function alias Try error argument whose row continues through an alias link coerces" {
+    const source =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\Fwd(e) : Try(U64, e) -> Try(U64, e)
+        \\
+        \\fwd : Fwd(Errs)
+        \\fwd = |t| t
+        \\
+        \\wider : Try(U64, Errs) -> Try(U64, [Aborted, HostErr(U64), Other])
+        \\wider = |t| fwd(t)
+    ;
+    // Either spelling of the same type may display (design.md "Hidden Alias
+    // Arguments").
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, Errs) -> Try(U64, Wrap([Aborted, Other]))");
+}
+
+test "check type - polarity - a function alias argument continuing through an alias link keeps its input closed" {
+    const source =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\Fwd(e) : e -> e
+        \\
+        \\fwd : Fwd(Errs)
+        \\fwd = |t| t
+        \\
+        \\bad = fwd(Aborted)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - an alias whose formal stands only on the result row takes its twin at its hidden argument" {
+    // `Id(a) : a` is `Id(a; a⁺) : a⁺`. `Id([A, B])` at the result keeps its
+    // layer: the written argument at `a`, and at the hidden `a⁺` the twin,
+    // which is its backing and which the forwarding body closed (design.md
+    // "Hidden Alias Arguments").
+    const source =
+        \\Id(a) : a
+        \\
+        \\fwd : [A, B] -> Id([A, B])
+        \\fwd = |x| x
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A, B] -> Id([A, B])");
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try expectResultAliasSpineSlotIsItsBacking(&test_env, "fwd");
+}
+
+/// Assert that `def_name`'s type is a function whose result is a
+/// one-argument alias application whose hidden spine slot IS its backing
+/// (one variable), as it is for an alias like `Id(a) : a`.
+fn expectResultAliasSpineSlotIsItsBacking(test_env: *TestEnv, def_name: []const u8) error{TestUnexpectedResult}!void {
+    const types_store = &test_env.module_env.types;
+    const idents = test_env.module_env.getIdentStoreConst();
+    for (test_env.module_env.store.sliceDefs(test_env.module_env.all_defs)) |def_idx| {
+        const def = test_env.module_env.store.getDef(def_idx);
+        const ptrn = test_env.module_env.store.getPattern(def.pattern);
+        if (ptrn != .assign) continue;
+        if (!std.mem.eql(u8, def_name, idents.getText(ptrn.assign.ident))) continue;
+        const content = types_store.resolveVar(ModuleEnv.varFrom(def_idx)).desc.content;
+        if (content != .structure) return error.TestUnexpectedResult;
+        const flat = content.structure;
+        const func = if (flat == .fn_pure)
+            flat.fn_pure
+        else if (flat == .fn_effectful)
+            flat.fn_effectful
+        else if (flat == .fn_unbound)
+            flat.fn_unbound
+        else
+            return error.TestUnexpectedResult;
+        const ret_content = types_store.resolveVar(func.ret).desc.content;
+        if (ret_content != .alias) return error.TestUnexpectedResult;
+        const alias = ret_content.alias;
+        if (types_store.sliceAliasDeclaredArgs(alias).len != 1) return error.TestUnexpectedResult;
+        const slot = types_store.aliasSpineSlot(alias) orelse return error.TestUnexpectedResult;
+        const arg_root = types_store.resolveVar(slot).var_;
+        const backing_root = types_store.resolveVar(types_store.getAliasBackingVar(alias)).var_;
+        if (arg_root != backing_root) return error.TestUnexpectedResult;
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "check type - polarity - an alias whose formal stands only on the result row still bounds its row" {
+    const source =
+        \\Id(a) : a
+        \\
+        \\mk : Str -> Id([A, B])
+        \\mk = |_| A
+        \\
+        \\h : Str -> Id([A])
+        \\h = mk
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - an alias using its formal at the input and the result keeps its alias layer" {
+    // The input occurrence of `e` keeps the shared closed argument and the
+    // result occurrence, the declaration's hidden `e⁺`, takes the opened
+    // twin. The alias layer is kept and reads as its declared arguments; its
+    // hidden argument is the twin, so its backing is still its
+    // declaration's body under all its arguments (design.md "Hidden Alias
+    // Arguments").
+    const source =
+        \\Fwd(e) : e -> e
+        \\
+        \\fwd : Fwd([NotFound])
+        \\fwd = |t| t
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Fwd([NotFound])");
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try expectDefAliasSpineSplit(&test_env, "fwd");
+}
+
+/// Assert that `def_name`'s type is an alias application whose spine ends at
+/// a hidden formal holding a different variable than the declared argument
+/// it stands for. The forwarding body may since have unified the two; the
+/// layer still lists them as two arguments.
+fn expectDefAliasSpineSplit(test_env: *TestEnv, def_name: []const u8) error{TestUnexpectedResult}!void {
+    const types_store = &test_env.module_env.types;
+    const idents = test_env.module_env.getIdentStoreConst();
+    for (test_env.module_env.store.sliceDefs(test_env.module_env.all_defs)) |def_idx| {
+        const def = test_env.module_env.store.getDef(def_idx);
+        const ptrn = test_env.module_env.store.getPattern(def.pattern);
+        if (ptrn != .assign) continue;
+        if (!std.mem.eql(u8, def_name, idents.getText(ptrn.assign.ident))) continue;
+        const content = types_store.resolveVar(ModuleEnv.varFrom(def_idx)).desc.content;
+        if (content != .alias) return error.TestUnexpectedResult;
+        const alias = content.alias;
+        if (alias.spine.kind != .formal) return error.TestUnexpectedResult;
+        const declared = types_store.sliceAliasDeclaredArgs(alias)[alias.spine.base];
+        const hidden = types_store.aliasSpineSlot(alias) orelse return error.TestUnexpectedResult;
+        if (declared == hidden) return error.TestUnexpectedResult;
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "check type - polarity - a zero-argument alias opened at the result is related by its backing" {
+    // `mk`'s result opens `Base`'s row at its hidden marker slot, so the
+    // widened `z` is related to `take`'s closed `Base` through that hidden
+    // argument, not by the (empty) declared argument list (design.md "Hidden
+    // Alias Arguments").
+    const source =
+        \\Base : [Other]
+        \\
+        \\mk : Str -> Base
+        \\mk = |_| Other
+        \\
+        \\take : Base -> Str
+        \\take = |b| match b { Other => "o" }
+        \\
+        \\z = if Bool.True mk("") else Aborted
+        \\
+        \\r = take(z)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - a zero-argument alias opened at the result still meets its closed spelling" {
+    const source =
+        \\Base : [Other]
+        \\
+        \\mk : Str -> Base
+        \\mk = |_| Other
+        \\
+        \\take : Base -> Str
+        \\take = |b| match b { Other => "o" }
+        \\
+        \\r = take(mk(""))
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - polarity - a twin copied through an alias link is related by its backing" {
+    const source =
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Mk(e) : Str -> e
+        \\
+        \\mk : Mk(Wrap([Other]))
+        \\mk = |_| Other
+        \\
+        \\take : Wrap([Other]) -> Str
+        \\take = |b| match b { Other => "o", HostErr(_) => "h" }
+        \\
+        \\z = if Bool.True mk("") else Aborted
+        \\
+        \\r = take(z)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - a twin copied through an alias link widens to a wider application" {
+    // The twin's `Wrap` layer is opened, so it is related by its backing, the
+    // inline spelling's relation: the widened row `[Aborted, HostErr(U64),
+    // Other]` is exactly `Wrap([Aborted, Other])`. The value reads as its
+    // annotation, exactly as `x = if Bool.True Other else Aborted` under the
+    // same annotation does (the sibling below).
+    const source =
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Mk(e) : Str -> e
+        \\
+        \\mk : Mk(Wrap([Other]))
+        \\mk = |_| Other
+        \\
+        \\x : Wrap([Other, Aborted])
+        \\x = if Bool.True mk("") else Aborted
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Wrap([Aborted, Other])");
+
+    const sibling =
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\x : Wrap([Other, Aborted])
+        \\x = if Bool.True Other else Aborted
+    ;
+    try checkTypesModule(sibling, .{ .pass = .last_def }, "Wrap([Aborted, Other])");
+}
+
+test "check type - polarity - a twin copied down an alias chain is related by its backing" {
+    const source =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\Mk(e) : Str -> e
+        \\
+        \\mk : Mk(Errs)
+        \\mk = |_| Other
+        \\
+        \\take : Errs -> Str
+        \\take = |b| match b { Other => "o", HostErr(_) => "h" }
+        \\
+        \\z = if Bool.True mk("") else Aborted
+        \\
+        \\r = take(z)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - a twin of an alias applied to an alias is related by its backing" {
+    const source =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Mk(e) : Str -> e
+        \\
+        \\mk : Mk(Wrap(Base))
+        \\mk = |_| Other
+        \\
+        \\take : Wrap(Base) -> Str
+        \\take = |b| match b { Other => "o", HostErr(_) => "h" }
+        \\
+        \\z = if Bool.True mk("") else Aborted
+        \\
+        \\r = take(z)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - an alias argument opened inline at the result is related by its backing" {
+    const source =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\mk : Str -> Wrap(Base)
+        \\mk = |_| Other
+        \\
+        \\take : Wrap(Base) -> Str
+        \\take = |b| match b { Other => "o", HostErr(_) => "h" }
+        \\
+        \\z = if Bool.True mk("") else Aborted
+        \\
+        \\r = take(z)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - an identity alias twin still bounds a widened use" {
+    const source =
+        \\Id(a) : a
+        \\
+        \\mk : Str -> Id([A, B])
+        \\mk = |_| A
+        \\
+        \\take : Id([A, B]) -> Str
+        \\take = |_| "t"
+        \\
+        \\r = take(if Bool.True mk("") else C)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - a Try error twin still bounds a widened use" {
+    const source =
+        \\Fwd(e) : Str -> Try(U64, e)
+        \\
+        \\mk : Fwd([A, B])
+        \\mk = |_| Err(A)
+        \\
+        \\take : Try(U64, [A, B]) -> Str
+        \\take = |_| "t"
+        \\
+        \\r = take(if Bool.True mk("") else Err(C))
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - a re-opened use keeps its alias layers" {
+    // The use `g = fwd` re-opens the coerced result row. The copy keeps the
+    // alias names along its spine (`Errs`), each with its spine slot
+    // re-pointed at the re-opened row.
+    const source =
+        \\Errs : [A, B]
+        \\
+        \\fwd : Errs -> Errs
+        \\fwd = |e| e
+        \\
+        \\g = fwd
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Errs -> Errs");
+}
+
+test "check type - polarity - a mismatch between two opened alias instances shows their backings" {
+    // Two widened instances of different aliases relate by backing, so the
+    // widened `Base` reaches `take`; the error report shows each one's
+    // backing next to its name.
+    const source =
+        \\Base : [Other]
+        \\
+        \\Extra : [Aborted]
+        \\
+        \\mk : Str -> Base
+        \\mk = |_| Other
+        \\
+        \\mk_extra : Str -> Extra
+        \\mk_extra = |_| Aborted
+        \\
+        \\take : Base -> Str
+        \\take = |b| match b { Other => "o" }
+        \\
+        \\z = if Bool.True mk("") else mk_extra("")
+        \\
+        \\r = take(z)
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\The first argument being passed to this function has the wrong type.
+        \\```roc
+        \\r = take(z)
+        \\```
+        \\         ^
+        \\
+        \\This argument has the type:
+        \\
+        \\    Base (opened: [Aborted, Other])
+        \\
+        \\But `take` needs the first argument to be:
+        \\
+        \\    Base
+        \\
+        \\
+    );
+}
+
+test "check type - polarity - an annotated def whose body widens a coerced call keeps its annotation" {
+    // Widening happens at the use: the annotation's rows are opened, and the
+    // re-opened call's widened instances relate to them through their hidden
+    // arguments (design.md "Hidden Alias Arguments").
+    const inline_row =
+        \\Errs : [A, B]
+        \\
+        \\fwd : Errs -> Errs
+        \\fwd = |e| e
+        \\
+        \\wider : Errs -> [A, B, C]
+        \\wider = |e| fwd(e)
+    ;
+    try checkTypesModule(inline_row, .{ .pass = .last_def }, "Errs -> [A, B, C]");
+
+    const try_row =
+        \\Errs : [A, B]
+        \\
+        \\fwd : Try(U64, Errs) -> Try(U64, Errs)
+        \\fwd = |t| t
+        \\
+        \\wider : Try(U64, Errs) -> Try(U64, [A, B, C])
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(try_row, .{ .pass = .last_def }, "Try(U64, Errs) -> Try(U64, [A, B, C])");
+
+    const other_alias =
+        \\Errs : [A, B]
+        \\
+        \\Wide : [A, B, C]
+        \\
+        \\fwd : Errs -> Errs
+        \\fwd = |e| e
+        \\
+        \\wider : Errs -> Wide
+        \\wider = |e| fwd(e)
+    ;
+    try checkTypesModule(other_alias, .{ .pass = .last_def }, "Errs -> Wide");
+
+    const same_alias =
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\fwd : Wrap(Base) -> Wrap(Base)
+        \\fwd = |t| t
+        \\
+        \\wider : Wrap(Base) -> Wrap([Aborted, Other])
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(same_alias, .{ .pass = .last_def }, "Wrap(Base) -> Wrap([Aborted, Other])");
+}
+
+test "check type - polarity - an absorbed opened alias never becomes its own backing" {
+    // `x`'s widened `Base` meets `Id(a)` whose backing `a` is already `x`'s
+    // class: a merge never makes an alias its own backing, so `[Other]` stays
+    // (`contentForMerge`, design.md "Hidden Alias Arguments"). Both argument
+    // orders.
+    const alias_second =
+        \\Base : [Other]
+        \\
+        \\Id(a) : a
+        \\
+        \\mk : Str -> Base
+        \\mk = |_| Other
+        \\
+        \\f : a, Id(a) -> Str
+        \\f = |_, _| "f"
+        \\
+        \\x = mk("")
+        \\
+        \\r = f(x, x)
+        \\
+        \\t = match x { Other => "o" }
+    ;
+    try checkTypesModule(alias_second, .{ .pass = .last_def }, "Str");
+
+    const alias_first =
+        \\Base : [Other]
+        \\
+        \\Id(a) : a
+        \\
+        \\mk : Str -> Base
+        \\mk = |_| Other
+        \\
+        \\f : Id(a), a -> Str
+        \\f = |_, _| "f"
+        \\
+        \\x = mk("")
+        \\
+        \\r = f(x, x)
+        \\
+        \\t = match x { Other => "o" }
+    ;
+    try checkTypesModule(alias_first, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - polarity - a flex never takes an alias view whose backing is that flex" {
+    // `f(y, y)` unifies `y` with `Id(a)` after `a` is already `y`: merging
+    // the alias view into `y` would make it its own backing.
+    const source =
+        \\Id(a) : a
+        \\
+        \\f : a, Id(a) -> Str
+        \\f = |_, _| "f"
+        \\
+        \\g = |y| f(y, y)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "a -> Str");
+}
+
+test "check type - polarity - a phantom parameter of an opened alias is related exactly" {
+    // `P(a) : Base` never uses `a`, so only its declared argument carries
+    // it and it is related exactly: a widened `P(Str)` still differs from
+    // `P(U64)`.
+    const opened_vs_declared =
+        \\Base : [Other]
+        \\
+        \\P(a) : Base
+        \\
+        \\g : {} -> P(Str)
+        \\g = |_| Other
+        \\
+        \\f : P(U64) -> Str
+        \\f = |_| "f"
+        \\
+        \\r = f(g({}))
+    ;
+    try checkTypesModule(opened_vs_declared, .fail, "Type Mismatch");
+
+    const opened_vs_opened =
+        \\Base : [Other]
+        \\
+        \\P(a) : Base
+        \\
+        \\g : {} -> P(Str)
+        \\g = |_| Other
+        \\
+        \\h : {} -> P(U64)
+        \\h = |_| Other
+        \\
+        \\r = if Bool.True g({}) else h({})
+    ;
+    try checkTypesModule(opened_vs_opened, .fail, "Type Mismatch");
+
+    const matching =
+        \\Base : [Other]
+        \\
+        \\P(a) : Base
+        \\
+        \\g : {} -> P(Str)
+        \\g = |_| Other
+        \\
+        \\f : P(Str) -> Str
+        \\f = |_| "f"
+        \\
+        \\r = f(g({}))
+    ;
+    try checkTypesModule(matching, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - hidden alias arguments - a re-open through merged marker slots keeps the layer" {
+    // `F : Base -> Base` lists both of `Base`'s markers as hidden
+    // arguments; `fwd = |x| x` merges them into one closed class. A use
+    // re-opens only the spine slot (the output's), so the output widens,
+    // the input stays closed, and the layer is kept (design.md "Hidden Alias
+    // Arguments").
+    const widened =
+        \\Base : [A, B]
+        \\
+        \\F : Base -> Base
+        \\
+        \\fwd : F
+        \\fwd = |x| x
+        \\
+        \\wider : Base -> [A, B, C]
+        \\wider = |x| fwd(x)
+    ;
+    try checkTypesModule(widened, .{ .pass = .last_def }, "Base -> [A, B, C]");
+
+    const input_stays_closed =
+        \\Base : [A, B]
+        \\
+        \\F : Base -> Base
+        \\
+        \\fwd : F
+        \\fwd = |x| x
+        \\
+        \\bad : [A, B, C] -> Base
+        \\bad = |x| fwd(x)
+    ;
+    try checkTypesModule(input_stays_closed, .fail, "Type Mismatch");
+
+    const layer_kept =
+        \\Base : [A, B]
+        \\
+        \\F : Base -> Base
+        \\
+        \\fwd : F
+        \\fwd = |x| x
+        \\
+        \\r = fwd
+    ;
+    try checkTypesModule(layer_kept, .{ .pass = .last_def }, "F");
+}
+
+test "check type - hidden alias arguments - an alias past sixteen formals relates its twin" {
+    // No bound on formals: the twin of the extension formal at index 16 is
+    // the hidden argument that relates the widened row.
+    const accepted =
+        \\Wrap(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15, p16, ext) : [HostErr(U64), ..ext]
+        \\
+        \\Mk(e) : Str -> e
+        \\
+        \\mk : Mk(Wrap(U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, [Other]))
+        \\mk = |_| Other
+        \\
+        \\x : Wrap(U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, [Other, Aborted])
+        \\x = if Bool.True mk("") else Aborted
+    ;
+    try checkTypesModule(accepted, .{ .pass = .last_def }, "Wrap(U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, [Aborted, Other])");
+
+    // A phantom formal at index 16 is carried only by the argument list and
+    // is related exactly.
+    const phantom_differs =
+        \\Wrap(ext, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15, p16) : [HostErr(U64), ..ext]
+        \\
+        \\Mk(e) : Str -> e
+        \\
+        \\mk : Mk(Wrap([Other], U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8))
+        \\mk = |_| Other
+        \\
+        \\x : Wrap([Other, Aborted], U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, Str)
+        \\x = if Bool.True mk("") else Aborted
+    ;
+    try checkTypesModule(phantom_differs, .fail, "Type Mismatch");
+}
+
+test "check type - hidden alias arguments - a spine through a nested alias's composite argument opens like the inline spelling" {
+    // `O(e) : N([A, ..e])` with `N(x) : Str -> x`: the spine runs through
+    // `N`'s slot into the argument `[A, ..e]` and ends at `e`.
+    const composite =
+        \\N(x) : Str -> x
+        \\
+        \\O(e) : N([A, ..e])
+        \\
+        \\mk : O([B])
+        \\mk = |_| A
+        \\
+        \\wider : Str -> [A, B, C]
+        \\wider = |s| mk(s)
+    ;
+    try checkTypesModule(composite, .{ .pass = .last_def }, "Str -> [A, B, C]");
+
+    const inline_spelling =
+        \\mk : Str -> [A, B]
+        \\mk = |_| A
+        \\
+        \\wider : Str -> [A, B, C]
+        \\wider = |s| mk(s)
+    ;
+    try checkTypesModule(inline_spelling, .{ .pass = .last_def }, "Str -> [A, B, C]");
+}
+
+test "check type - hidden alias arguments - an output reached through a nested alias's split formal opens apart from its input" {
+    // Declared verdict change (design.md "Hidden Alias Arguments"): in
+    // `O : N([A])` with `N(x) : x -> x`, the one argument `[A]` stands at
+    // `N`'s input and output. The output is `N`'s hidden `x⁺`, so `O`'s
+    // spine is copied down to a marker of its own: the output opens as the
+    // inline `[A] -> [A]` does, and the input stays closed.
+    const output_widens =
+        \\N(x) : x -> x
+        \\
+        \\O : N([A])
+        \\
+        \\idf : O
+        \\idf = |x| x
+        \\
+        \\wider : [A] -> [A, B]
+        \\wider = |x| idf(x)
+    ;
+    try checkTypesModule(output_widens, .{ .pass = .last_def }, "[A] -> [A, B]");
+
+    const input_stays_closed =
+        \\N(x) : x -> x
+        \\
+        \\O : N([A])
+        \\
+        \\idf : O
+        \\idf = |x| x
+        \\
+        \\bad : [A, B] -> [A, B]
+        \\bad = |x| idf(x)
+    ;
+    try checkTypesModule(input_stays_closed, .fail, "Type Mismatch");
+
+    const inline_spelling =
+        \\idf : [A] -> [A]
+        \\idf = |x| x
+        \\
+        \\wider : [A] -> [A, B]
+        \\wider = |x| idf(x)
+    ;
+    try checkTypesModule(inline_spelling, .{ .pass = .last_def }, "[A] -> [A, B]");
+}
+
+test "check type - hidden alias arguments - a function-typed body keeps its input closed and opens its output" {
+    // `H : [A] -> [B]` has two marker slots: the input's closes, the
+    // output's is the spine slot.
+    const output_widens =
+        \\H : [A] -> [B]
+        \\
+        \\h : H
+        \\h = |_| B
+        \\
+        \\wider : [A] -> [B, C]
+        \\wider = |x| h(x)
+    ;
+    try checkTypesModule(output_widens, .{ .pass = .last_def }, "[A] -> [B, C]");
+
+    const input_stays_closed =
+        \\H : [A] -> [B]
+        \\
+        \\h : H
+        \\h = |_| B
+        \\
+        \\bad : [A, C] -> [B]
+        \\bad = |x| h(x)
+    ;
+    try checkTypesModule(input_stays_closed, .fail, "Type Mismatch");
+
+    // Double negation: the inner function's argument is an output position,
+    // exactly as in the inline spelling.
+    const double_negation =
+        \\K : ([A] -> Str) -> Str
+        \\
+        \\k : K
+        \\k = |f| f(A)
+        \\
+        \\r = k(|t| match t { A => "a", B => "b" })
+    ;
+    const double_negation_inline =
+        \\k : ([A] -> Str) -> Str
+        \\k = |f| f(A)
+        \\
+        \\r = k(|t| match t { A => "a", B => "b" })
+    ;
+    try checkTypesModule(double_negation, .{ .pass = .last_def }, "Str");
+    try checkTypesModule(double_negation_inline, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - hidden alias arguments - a nested alias under a List behaves like the inline spelling" {
+    const aliased =
+        \\Inner : [A, B]
+        \\
+        \\Outer : List(Inner)
+        \\
+        \\xs : Outer
+        \\xs = [A]
+    ;
+    try checkTypesModule(aliased, .{ .pass = .last_def }, "Outer");
+
+    const widened_inner =
+        \\Inner : [A, B]
+        \\
+        \\Outer : List(Inner)
+        \\
+        \\xs : Outer
+        \\xs = [C]
+    ;
+    try checkTypesModule(widened_inner, .fail, "Type Mismatch");
+}
+
+test "check type - hidden alias arguments - a derived map reads only an alias's declared arguments" {
+    // `W(a) : [Found(a), Missing]` carries its marker as a hidden argument,
+    // which at this use is an open row tail; read as an argument it would be
+    // a second payload candidate and defeat the derivation.
+    const source =
+        \\W(a) : [Found(a), Missing]
+        \\
+        \\wrap : Str -> W(Str)
+        \\wrap = |_| Missing
+        \\
+        \\out = wrap("x").map(|s| Str.count_utf8_bytes(s))
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[Found(U64), Missing]");
+}
+
+test "check type - hidden alias arguments - a local's alias result whose only free variable is hidden stays polymorphic" {
+    // `g`'s result is a `Base` instance whose only free variable is its
+    // hidden marker slot, an open row tail, and each use widens it
+    // independently. The rank rule itself is pinned by the generalizer's
+    // "an alias is ranked by its hidden arguments too".
+    const source =
+        \\Base : [A]
+        \\
+        \\mk : Str -> Base
+        \\mk = |_| A
+        \\
+        \\take_b : [A, B] -> Str
+        \\take_b = |t| match t { A => "a", B => "b" }
+        \\
+        \\take_c : [A, C] -> Str
+        \\take_c = |t| match t { A => "a", C => "c" }
+        \\
+        \\r = {
+        \\    g = |s| mk(s)
+        \\    Str.concat(take_b(g("x")), take_c(g("y")))
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - hidden alias arguments - a formal reached through a nested alias's shared argument is split, not declared" {
+    // `N(x) : x -> x` substitutes `x` and `x⁺` with one row `[A, ..e]`, so
+    // `e` stands at `N`'s input too: it gets a hidden `e⁺` (`.formal`), and
+    // `O([B])` behaves like the inline `[A, B] -> [A, B]`.
+    const widened =
+        \\N(x) : x -> x
+        \\
+        \\O(e) : N([A, ..e])
+        \\
+        \\mk : O([B])
+        \\mk = |x| x
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| mk(x)
+    ;
+    try checkTypesModule(widened, .{ .pass = .last_def }, "[A, B] -> [A, B, C]");
+
+    const input_stays_closed =
+        \\N(x) : x -> x
+        \\
+        \\O(e) : N([A, ..e])
+        \\
+        \\mk : O([B])
+        \\mk = |x| x
+        \\
+        \\bad : [A, B, C] -> [A, B, C]
+        \\bad = |x| mk(x)
+    ;
+    try checkTypesModule(input_stays_closed, .fail, "Type Mismatch");
+}
+
+test "check type - hidden alias arguments - a nested alias layer never relates a drifted backing by its arguments" {
+    // `f`'s input is `[A, C]`; `g` passes it `D`. `N`'s `e` is shared with
+    // `M`'s input, so it is split, and `N`'s layers stay faithful: the
+    // mismatch is found rather than hidden behind `N`'s arguments.
+    const source =
+        \\M(x) : x -> x
+        \\
+        \\N(e) : M([A, ..e])
+        \\
+        \\O2 : N([C])
+        \\
+        \\P : N([C, D])
+        \\
+        \\f : O2
+        \\f = |x| match x { A => A, C => C }
+        \\
+        \\g : P -> [A, C, D]
+        \\g = |h| h(D)
+        \\
+        \\r = g(f)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - hidden alias arguments - an arity error counts only the declared arguments" {
+    // `Base : [Other]` has one hidden argument, its marker; its arity is 0.
+    const source =
+        \\Base : [Other]
+        \\
+        \\x : Base(Str)
+        \\x = Other
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    const problems = test_env.checker.problems.problems.items;
+    for (problems) |problem| {
+        if (problem != .type_apply_mismatch_arities) continue;
+        const arities = problem.type_apply_mismatch_arities;
+        try std.testing.expectEqual(@as(u32, 0), arities.num_expected_args);
+        try std.testing.expectEqual(@as(u32, 1), arities.num_actual_args);
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "check type - hidden alias arguments - every alias instance is its declaration's body under all its arguments" {
+    // The R3 harness (design.md "Hidden Alias Arguments"): after checking,
+    // every alias instance reachable from any expression is re-instantiated
+    // from its declaration with all its arguments and related to its own
+    // backing. Twins, re-opens through merged slots and alias links, rows a
+    // merge flattened (`fwd(1, B)` restructures the shared `[B, C]` into a
+    // chain), and a spine copied through a nested alias's split formal.
+    const programs = [_][]const u8{
+        \\Base : [A, B]
+        \\
+        \\F : Base -> Base
+        \\
+        \\fwd : F
+        \\fwd = |x| x
+        \\
+        \\wider : Base -> [A, B, C]
+        \\wider = |x| fwd(x)
+        \\
+        \\r = fwd
+        ,
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\fwd : Try(U64, Errs) -> Try(U64, Errs)
+        \\fwd = |t| t
+        \\
+        \\wider : Try(U64, Errs) -> Try(U64, [HostErr(U64), Other, Widened])
+        \\wider = |t| fwd(t)
+        ,
+        \\Fwd(e) : e -> e
+        \\
+        \\fwd : Fwd([NotFound])
+        \\fwd = |t| t
+        \\
+        \\wider : [NotFound] -> [Gone, NotFound]
+        \\wider = |t| fwd(t)
+        ,
+        \\Errs : [B, C]
+        \\
+        \\fwd : a, Errs -> Errs
+        \\fwd = |_, t| t
+        \\
+        \\r1 = fwd(1, B)
+        \\
+        \\r2 : [B, C, D]
+        \\r2 = fwd(1, B)
+        ,
+        \\N(x) : x -> x
+        \\
+        \\O : N([A])
+        \\
+        \\idf : O
+        \\idf = |x| x
+        \\
+        \\wider : [A] -> [A, B]
+        \\wider = |x| idf(x)
+        ,
+        \\Id(a) : a
+        \\
+        \\mk : Str -> Id([A, B])
+        \\mk = |_| A
+        \\
+        \\use : Str -> [A, B, C]
+        \\use = |s| mk(s)
+        ,
+        \\N(x) : x -> x
+        \\
+        \\O(e) : N([A, ..e])
+        \\
+        \\mk : O([B])
+        \\mk = |x| x
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| mk(x)
+        ,
+        \\M(x) : x -> x
+        \\
+        \\N(e) : M([A, ..e])
+        \\
+        \\O2 : N([C])
+        \\
+        \\f : O2
+        \\f = |x| match x { A => A, C => C }
+        \\
+        \\use : [A, C] -> [A, C, D]
+        \\use = |x| f(x)
+        ,
+        \\R(e) : { name : Str, err : Try(U64, [Bad, ..e]) }
+        \\
+        \\Holder : { inner : R([X]) }
+        \\
+        \\mk : Str -> Holder
+        \\mk = |s| { inner: { name: s, err: Err(X) } }
+        \\
+        \\name_of : Holder -> Str
+        \\name_of = |h| h.inner.name
+        ,
+    };
+    for (programs) |source| {
+        var test_env = try TestEnv.init("Test", source);
+        defer test_env.deinit();
+        // Every program here is accepted: a rejected one could leave
+        // instances the harness never meets on an accepted path.
+        try test_env.assertNoErrors();
+        try expectEveryAliasInstanceFaithful(&test_env);
+    }
+}
+
+test "check type - hidden alias arguments - the faithfulness harness rejects a backing more specific than its body" {
+    // `Pair(a) : (a, a)` applied to a flex with a `({}, {})` backing:
+    // unification would relate `(a, a)` with it, but that backing is not the
+    // body under the argument. The same argument with an `(a, a)` backing is.
+    const source =
+        \\Pair(a) : (a, a)
+        \\
+        \\p : Pair(Str)
+        \\p = ("x", "y")
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    const module_env = test_env.module_env;
+    const types_store = &module_env.types;
+    const decl_stmt: u32 = for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+        if (module_env.store.getStatement(statement_idx) == .s_alias_decl) break @intFromEnum(statement_idx);
+    } else return error.TestUnexpectedResult;
+    const decl_alias = types_store.resolveVar(@enumFromInt(decl_stmt)).desc.content.alias;
+
+    const arg = try types_store.fresh();
+    const unit = try types_store.freshFromContent(.{ .structure = .empty_record });
+    const backings = [_]struct { elems: [2]types.Var, faithful: bool }{
+        .{ .elems = .{ arg, arg }, .faithful = true },
+        .{ .elems = .{ unit, unit }, .faithful = false },
+    };
+    for (backings) |case| {
+        const backing = try types_store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try types_store.appendVars(&case.elems) } } });
+        const instance = try types_store.freshFromContent(try types_store.mkAliasWithSourceDeclAndBuiltinOrigin(
+            decl_alias.ident,
+            backing,
+            &.{arg},
+            decl_alias.origin_module,
+            decl_stmt,
+            false,
+            1,
+            decl_alias.spine,
+        ));
+        try std.testing.expectEqual(@as(?bool, case.faithful), try test_env.checker.aliasInstanceIsFaithful(instance));
+    }
+}
+
+/// The statement index of the module's only type alias declaration.
+fn onlyAliasDeclStatement(test_env: *TestEnv) error{TestUnexpectedResult}!u32 {
+    const module_env = test_env.module_env;
+    return for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+        if (module_env.store.getStatement(statement_idx) == .s_alias_decl) break @intFromEnum(statement_idx);
+    } else error.TestUnexpectedResult;
+}
+
+/// An instance of the module's only alias declaration, applied to `args`
+/// (its declared arguments and then its hidden ones), whose backing is
+/// `backing`.
+fn aliasInstanceWithBacking(test_env: *TestEnv, args: []const types.Var, backing: types.Var) (std.mem.Allocator.Error || error{TestUnexpectedResult})!types.Var {
+    const types_store = &test_env.module_env.types;
+    const decl_stmt = try onlyAliasDeclStatement(test_env);
+    const decl_alias = types_store.resolveVar(@enumFromInt(decl_stmt)).desc.content.alias;
+    return try types_store.freshFromContent(try types_store.mkAliasWithSourceDeclAndBuiltinOrigin(
+        decl_alias.ident,
+        backing,
+        args,
+        decl_alias.origin_module,
+        decl_stmt,
+        false,
+        decl_alias.declared_arity,
+        decl_alias.spine,
+    ));
+}
+
+test "check type - hidden alias arguments - the faithfulness harness compares records down their chains and by field presence" {
+    const source =
+        \\Rec(a, b) : { x : a, y : b }
+        \\
+        \\p : Rec(U64, Str)
+        \\p = { x: 1, y: "s" }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    const types_store = &test_env.module_env.types;
+    const decl_stmt = try onlyAliasDeclStatement(&test_env);
+    const decl_alias = types_store.resolveVar(@enumFromInt(decl_stmt)).desc.content.alias;
+    const body_record = types_store.resolveVar(types_store.getAliasBackingVar(decl_alias)).desc.content.structure.record;
+    const body_presence = types_store.getRecordFieldsSlice(body_record.fields).items(.presence)[0];
+    try std.testing.expect(body_presence.presenceVar() == null);
+
+    const a = try types_store.fresh();
+    const b = try types_store.fresh();
+    const x_name = types_store.getRecordFieldsSlice(body_record.fields).items(.name)[0];
+    const y_name = types_store.getRecordFieldsSlice(body_record.fields).items(.name)[1];
+    const optional = try types_store.freshFromContent(.{ .field_presence = .optional });
+    const closed = try types_store.freshFromContent(.{ .structure = .empty_record });
+    const flat = try types_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try types_store.appendRecordFields(&.{ .{ .name = x_name, .presence = .required(a) }, .{ .name = y_name, .presence = .required(b) } }),
+        .ext = closed,
+    } } });
+    // `{ x : a }` extended by `{ y : b }`: the body's record split down a
+    // chain, as a merge can leave it.
+    const y_link = try types_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try types_store.appendRecordFields(&.{.{ .name = y_name, .presence = .required(b) }}),
+        .ext = closed,
+    } } });
+    const chained = try types_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try types_store.appendRecordFields(&.{.{ .name = x_name, .presence = .required(a) }}),
+        .ext = y_link,
+    } } });
+    // The same chain, with a field the body lacks further down it.
+    const extra_link = try types_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try types_store.appendRecordFields(&.{ .{ .name = y_name, .presence = .required(b) }, .{ .name = decl_alias.ident.ident_idx, .presence = .required(a) } }),
+        .ext = closed,
+    } } });
+    const extra = try types_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try types_store.appendRecordFields(&.{.{ .name = x_name, .presence = .required(a) }}),
+        .ext = extra_link,
+    } } });
+    // `x` carried on a presence variable: solved required, as a merge with
+    // a record literal leaves it, it is the body's required `x`; solved
+    // optional, or unsolved, it is not.
+    const required = try types_store.freshFromContent(.{ .field_presence = .required });
+    const unsolved = try types_store.fresh();
+    var carried: [3]types.Var = undefined;
+    for (&carried, [_]types.Var{ required, optional, unsolved }) |*backing, presence| {
+        backing.* = try types_store.freshFromContent(.{ .structure = .{ .record = .{
+            .fields = try types_store.appendRecordFields(&.{ .{ .name = x_name, .presence = .unknown(presence, a) }, .{ .name = y_name, .presence = .required(b) } }),
+            .ext = closed,
+        } } });
+    }
+    const backings = [_]struct { backing: types.Var, faithful: bool }{
+        .{ .backing = flat, .faithful = true },
+        .{ .backing = chained, .faithful = true },
+        .{ .backing = extra, .faithful = false },
+        .{ .backing = carried[0], .faithful = true },
+        .{ .backing = carried[1], .faithful = false },
+        .{ .backing = carried[2], .faithful = false },
+    };
+    for (backings) |case| {
+        const instance = try aliasInstanceWithBacking(&test_env, &.{ a, b }, case.backing);
+        try std.testing.expectEqual(@as(?bool, case.faithful), try test_env.checker.aliasInstanceIsFaithful(instance));
+    }
+}
+
+test "check type - hidden alias arguments - the faithfulness harness compares a function's effect dependencies" {
+    const source =
+        \\Fn(a, b) : a -> (a, b)
+        \\
+        \\f : Fn(U64, Str)
+        \\f = |x| (x, "s")
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    const types_store = &test_env.module_env.types;
+    const decl_stmt = try onlyAliasDeclStatement(&test_env);
+    const decl_alias = types_store.resolveVar(@enumFromInt(decl_stmt)).desc.content.alias;
+    const body = types_store.resolveVar(types_store.getAliasBackingVar(decl_alias)).desc.content.structure;
+    const body_func = switch (body) {
+        .fn_pure, .fn_effectful, .fn_unbound => |func| func,
+        .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(usize, 0), types_store.sliceVars(body_func.effect_deps).len);
+
+    // The body's result is a tuple, so its spine ends at no slot and the
+    // alias has no hidden argument.
+    try std.testing.expectEqual(@as(usize, 2), types_store.sliceAliasArgs(decl_alias).len);
+    const a = try types_store.fresh();
+    const b = try types_store.fresh();
+    const pair = try types_store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try types_store.appendVars(&.{ a, b }) } } });
+    const dependency = try types_store.fresh();
+    const dependency_sets = [_]struct { deps: []const types.Var, faithful: bool }{
+        .{ .deps = &.{}, .faithful = true },
+        .{ .deps = &.{dependency}, .faithful = false },
+    };
+    for (dependency_sets) |case| {
+        const func = types.Func{
+            .args = try types_store.appendVars(&.{a}),
+            .ret = pair,
+            .effect_deps = try types_store.appendVars(case.deps),
+        };
+        const flat: types.FlatType = switch (body) {
+            .fn_pure => .{ .fn_pure = func },
+            .fn_effectful => .{ .fn_effectful = func },
+            .fn_unbound => .{ .fn_unbound = func },
+            .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
+        };
+        const backing = try types_store.freshFromContent(.{ .structure = flat });
+        const instance = try aliasInstanceWithBacking(&test_env, &.{ a, b }, backing);
+        try std.testing.expectEqual(@as(?bool, case.faithful), try test_env.checker.aliasInstanceIsFaithful(instance));
+    }
+}
+
+test "check type - hidden alias arguments - the faithfulness harness matches each row entry once" {
+    // `T(e) : [X, ..e]` under `e = [X]` is the chain `[X]` then `[X]`. A
+    // backing listing `X` and `Y` over the same tail has as many tags, and
+    // every tag of the body finds an `X` in it, but it is not the same row:
+    // each entry matches once.
+    const source =
+        \\T(e) : [X, ..e]
+        \\
+        \\t : T([Z])
+        \\t = X
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    const types_store = &test_env.module_env.types;
+    const decl_stmt = try onlyAliasDeclStatement(&test_env);
+    const decl_alias = types_store.resolveVar(@enumFromInt(decl_stmt)).desc.content.alias;
+    try std.testing.expectEqual(@as(usize, 1), types_store.sliceAliasArgs(decl_alias).len);
+    const body = types_store.resolveVar(types_store.getAliasBackingVar(decl_alias)).desc.content.structure.tag_union;
+    const x_name = types_store.getTagsSlice(body.tags).items(.name)[0];
+    const y_name = try test_env.module_env.insertIdent(base.Ident.for_text("Y"));
+    const no_args = try types_store.appendVars(&.{});
+
+    const tail = try types_store.freshFromContent(.{ .structure = .empty_tag_union });
+    const arg = try types_store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try types_store.appendTags(&.{.{ .name = x_name, .args = no_args }}),
+        .ext = tail,
+    } } });
+    const faithful = try types_store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try types_store.appendTags(&.{.{ .name = x_name, .args = no_args }}),
+        .ext = arg,
+    } } });
+    const doubled = try types_store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try types_store.appendTags(&.{ .{ .name = x_name, .args = no_args }, .{ .name = y_name, .args = no_args } }),
+        .ext = tail,
+    } } });
+    const backings = [_]struct { backing: types.Var, faithful: bool }{
+        .{ .backing = faithful, .faithful = true },
+        .{ .backing = doubled, .faithful = false },
+    };
+    for (backings) |case| {
+        const instance = try aliasInstanceWithBacking(&test_env, &.{arg}, case.backing);
+        try std.testing.expectEqual(@as(?bool, case.faithful), try test_env.checker.aliasInstanceIsFaithful(instance));
+    }
+}
+
+test "check type - hidden alias arguments - alias instances are faithful on both sides of an import" {
+    // The harness answers for aliases the checked module declares, so each
+    // module is checked in its own store: `Lib`'s instances in `Lib`, and
+    // `Main`'s own aliases, whose backings hold `Lib`'s instances, in `Main`.
+    const lib_source =
+        \\module [Base, Fwd, fwd]
+        \\
+        \\Base : [Other]
+        \\
+        \\Fwd(e) : e -> e
+        \\
+        \\fwd : Fwd(Base)
+        \\fwd = |x| x
+    ;
+    var lib_env = try TestEnv.init("Lib", lib_source);
+    defer lib_env.deinit();
+    // The `module` header draws only a canonicalization deprecation
+    // warning; checking reports nothing.
+    try std.testing.expectEqual(@as(usize, 0), lib_env.checker.problems.problems.items.len);
+    try expectEveryAliasInstanceFaithful(&lib_env);
+
+    const main_source =
+        \\import Lib
+        \\
+        \\Wrap(e) : Lib.Fwd([A, ..e])
+        \\
+        \\Both : { base : Lib.Base, wrap : Wrap([B]) }
+        \\
+        \\mk : Wrap([B])
+        \\mk = |x| x
+        \\
+        \\both : Both
+        \\both = { base: Other, wrap: mk }
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| mk(x)
+        \\
+        \\other : [Other] -> [Aborted, Other]
+        \\other = |x| Lib.fwd(x)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", main_source, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertNoErrors();
+    try expectEveryAliasInstanceFaithful(&main_env);
+}
+
+/// Every alias instance reachable from any expression's type in the module
+/// passes `Check.aliasInstanceIsFaithful`.
+fn expectEveryAliasInstanceFaithful(test_env: *TestEnv) (std.mem.Allocator.Error || error{TestUnexpectedResult})!void {
+    const gpa = std.testing.allocator;
+    const types_store = &test_env.module_env.types;
+    var seen = std.AutoHashMap(types.Var, void).init(gpa);
+    defer seen.deinit();
+    var stack = std.ArrayList(types.Var).empty;
+    defer stack.deinit(gpa);
+    var checked: usize = 0;
+    const node_count = test_env.module_env.store.nodes.len();
+    var node: u32 = 0;
+    while (node < node_count) : (node += 1) {
+        if (node >= types_store.len()) break;
+        try stack.append(gpa, @enumFromInt(node));
+        while (stack.pop()) |current| {
+            const resolved = types_store.resolveVar(current);
+            const entry = try seen.getOrPut(resolved.var_);
+            if (entry.found_existing) continue;
+            switch (resolved.desc.content) {
+                .alias => |alias| {
+                    if (try test_env.checker.aliasInstanceIsFaithful(resolved.var_)) |faithful| {
+                        if (!faithful) return error.TestUnexpectedResult;
+                        checked += 1;
+                    }
+                    try stack.appendSlice(gpa, types_store.sliceAliasArgs(alias));
+                    try stack.append(gpa, types_store.getAliasBackingVar(alias));
+                },
+                .structure => |flat| switch (flat) {
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                        try stack.appendSlice(gpa, types_store.sliceVars(func.args));
+                        try stack.append(gpa, func.ret);
+                        try stack.appendSlice(gpa, types_store.sliceVars(func.effect_deps));
+                    },
+                    .tag_union => |tag_union| {
+                        for (types_store.getTagsSlice(tag_union.tags).items(.args)) |args| {
+                            try stack.appendSlice(gpa, types_store.sliceVars(args));
+                        }
+                        try stack.append(gpa, tag_union.ext);
+                    },
+                    .nominal_type => |nominal| try stack.appendSlice(gpa, types_store.sliceNominalArgs(nominal)),
+                    .tuple => |tuple| try stack.appendSlice(gpa, types_store.sliceVars(tuple.elems)),
+                    .record => |record| {
+                        for (types_store.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                            try stack.append(gpa, presence.typeVar());
+                            if (presence.presenceVar()) |presence_var| try stack.append(gpa, presence_var);
+                        }
+                        try stack.append(gpa, record.ext);
+                    },
+                    .empty_record, .empty_tag_union => {},
+                },
+                .flex, .rigid, .field_presence, .err => {},
+            }
+        }
+    }
+    if (checked == 0) return error.TestUnexpectedResult;
+}
+
+test "check type - polarity - a method used before its body is checked relates its opened result by backing" {
+    // `fwd` and `bwd` call each other through method syntax, so each is used
+    // through its predeclared annotation before its body is checked. The
+    // widened use of `fwd`'s opened `Base` result is still related by its
+    // backing.
+    const source =
+        \\Base : [Other]
+        \\
+        \\Flip := [Val(U64)].{
+        \\  fwd : Flip, U64 -> Base
+        \\  fwd = |Flip.Val(x), n| if n == 0.U64 Other else Flip.Val(x).bwd(n - 1.U64)
+        \\  bwd : Flip, U64 -> Base
+        \\  bwd = |Flip.Val(x), n| if n == 0.U64 Other else Flip.Val(x).fwd(n - 1.U64)
+        \\}
+        \\
+        \\take : Base -> Str
+        \\take = |b| match b { Other => "o" }
+        \\
+        \\r = take(if Bool.True Flip.Val(1.U64).fwd(2.U64) else Aborted)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - an imported opened alias instance is related by its backing" {
+    const source_lib =
+        \\module [Base, mk]
+        \\
+        \\Base : [Other]
+        \\
+        \\mk : Str -> Base
+        \\mk = |_| Other
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\take : Lib.Base -> Str
+        \\take = |b| match b { Other => "o" }
+        \\
+        \\r = take(if Bool.True Lib.mk("") else Aborted)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - polarity - a result-row twin standing as a row's extension coerces" {
+    // `e` is the EXTENSION of the result's error row, so its result-row twin
+    // is an alias link (`Base`) in that row's chain.
+    const source =
+        \\Base : [Other]
+        \\
+        \\Fwd(e) : Try(U64, [HostErr(U64), ..e]) -> Try(U64, [HostErr(U64), ..e])
+        \\
+        \\fwd : Fwd(Base)
+        \\fwd = |t| t
+        \\
+        \\wider : Try(U64, [HostErr(U64), Other]) -> Try(U64, [HostErr(U64), Other, Widened])
+        \\wider = |t| fwd(t)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(U64, [HostErr(U64), Other]) -> Try(U64, [HostErr(U64), Other, Widened])");
 }
 
 test "check type - polarity - annotated input union stays closed" {
@@ -9143,13 +11392,72 @@ test "check type - polarity - a formal in both positions is closed" {
 //
 // The walk reads variance out of the referenced declaration's own annotation,
 // and an imported declaration's annotation lives in another module's CIR with
-// its formal names interned in another ident store. Its variance is therefore
-// UNKNOWN, and unknown is treated as INVARIANT: the argument is generated
-// closed whatever the reference's own polarity is. Guessing covariance (which
-// is what inheriting the reference's polarity amounts to) un-enforced the
-// annotation across the boundary: an imported contravariant or invariant
-// alias opened a row the local spelling closes. The four tests below pin both
-// sides of that boundary, which previously had assertions on neither.
+// its formal names interned in another ident store. So the declaring module
+// publishes the answer instead of the importer guessing at it: its own `Check`
+// records each parameterized declaration's formal variances and its `Try`
+// error-cell formal (`ModuleEnv.TypeDeclVariance`), and the importer reads that
+// record at an external annotation base. An imported reference therefore
+// composes exactly as the byte-identical local spelling composes, which is the
+// whole point: which module a declaration was written in is not supposed to
+// change what its uses mean.
+//
+// A declaration with NO record still reads as UNKNOWN, and unknown is still
+// treated as INVARIANT: the argument is generated closed whatever the
+// reference's own polarity is, and closed at every depth. Guessing covariance
+// there (which is what inheriting the reference's polarity amounts to) would
+// un-enforce the annotation across the boundary.
+//
+// The tests below pin both sides of that boundary. The ones that still reject
+// now reject for the reason the local spelling rejects, rather than for not
+// knowing.
+
+test "check type - polarity - an imported forwarder's result row coerces at the use" {
+    // Row subsumption travels: `Lib.id` closed its result row by FORWARDING its
+    // parameter, and the producing module records that, so an importing use
+    // re-opens its own copy of the row exactly as a use in `Lib` would. Without
+    // the record the importer would see only a closed row and reject `wider`.
+    const source_lib =
+        \\module [id]
+        \\
+        \\id : [A, B] -> [A, B]
+        \\id = |x| x
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| Lib.id(x)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertLastDefType("[A, B] -> [A, B, C]");
+}
+
+test "check type - polarity - an imported forwarder's input row stays closed" {
+    // The other half: only the one adapter-reachable RESULT row coerces. The
+    // importer's copy keeps the input row as written, so an unlisted argument
+    // is the mismatch it always was.
+    const source_lib =
+        \\module [id]
+        \\
+        \\id : [A, B] -> [A, B]
+        \\id = |x| x
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\bad = Lib.id(C)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertOneTypeError("Type Mismatch");
+}
 
 test "check type - polarity - imported contravariant alias closes the applied row" {
     // The cross-module half of "alias reference closes a row the declaration
@@ -9206,21 +11514,19 @@ test "check type - polarity - imported invariant alias closes the applied row" {
     try main_env.assertOneTypeError("Type Mismatch");
 }
 
-test "check type - polarity - imported covariant alias closes the applied row too" {
-    // The COST of the rule, pinned deliberately. `Producer(e) : Str -> e` is
-    // covariant, so the local spelling keeps `[A, B]` open for callers ("alias
-    // reference still opens a row the declaration puts in an output
-    // position"). Imported, the walk cannot see that it is covariant, and
-    // unknown variance is invariant, so `consume(produce("s"))` at the wider
-    // union is a Type Mismatch.
+test "check type - polarity - imported covariant alias opens the applied row" {
+    // The cross-module twin of "alias reference still opens a row the
+    // declaration puts in an output position", and the whole reason the record
+    // exists. `Producer(e) : Str -> e` is covariant, so the local spelling
+    // keeps `[A, B]` open for callers. `Lib`'s own `Check` records that
+    // covariance, `Main` reads it at the external base, and the import reaches
+    // the identical answer.
     //
-    // This is the conservative choice, taken because the alternative,
-    // guessing covariance, is the one that accepts programs the annotation
-    // was written to reject. Recording each declaration's formal variances in
-    // the checked module data an importer already reads (design.md
-    // "Polarity") replaces the guess with the real answer and would make this
-    // pass again; that is a pure relaxation, since it can only ever accept
-    // more programs than this rule does.
+    // This was pinned AS REJECTED while the answer was unknown, with the cost
+    // stated in its own comment. Reading the record can only drop an
+    // `.as_written` floor and replace `.invariant` with a real variance,
+    // neither of which closes a position that was open, so this is the one
+    // verdict the change flips.
     const source_lib =
         \\module [Producer]
         \\
@@ -9242,21 +11548,65 @@ test "check type - polarity - imported covariant alias closes the applied row to
     ;
     var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
     defer main_env.deinit();
-    try main_env.assertOneTypeError("Type Mismatch");
+    try main_env.assertDefType("out", "Str");
 }
 
-test "check type - polarity - an unknown formal's row stays closed under a function argument" {
-    // Unknown variance is refused opening at EVERY depth, not just at the
-    // argument's own root, and this pins why that distinction is load-bearing.
+test "check type - polarity - a covariant alias reached through a re-exported alias opens the applied row" {
+    // The same verdict as "imported covariant alias opens the applied row",
+    // reached through an `external_identity` base: `Gui.Files.Producer` is
+    // resolved by following `Gui`'s `Files : Resource.Files` out to the module
+    // that declares `Producer`, which `App` does not import. That module's own
+    // record answers, exactly as it does for a direct import.
+    const resource_src =
+        \\Resource := [].{
+        \\    Files := [].{
+        \\        Producer(e) : Str -> e
+        \\    }
+        \\}
+    ;
+    var resource_env = try TestEnv.init("Resource", resource_src);
+    defer resource_env.deinit();
+
+    const gui_src =
+        \\import Resource
+        \\
+        \\Gui := [].{
+        \\    Files : Resource.Files
+        \\}
+    ;
+    var gui_env = try TestEnv.initWithImport("Gui", gui_src, "Resource", &resource_env);
+    defer gui_env.deinit();
+
+    const app_src =
+        \\import Gui
+        \\
+        \\produce : Gui.Files.Producer([A, B])
+        \\produce = |_| A
+        \\
+        \\consume : [A, B, C] -> Str
+        \\consume = |_| "x"
+        \\
+        \\out = consume(produce("s"))
+    ;
+    var app_env = try TestEnv.initWithImport("App", app_src, "Gui", &gui_env);
+    defer app_env.deinit();
+    try app_env.assertDefType("out", "Str");
+}
+
+test "check type - polarity - an imported formal's row stays closed under a function argument" {
+    // The guard that the relaxation did not become "open at every depth".
     //
-    // Polarity flips on the way down: a function's parameters negate. So an
-    // unknown formal answered as a closing POLARITY closes only the top row:
-    // one level into a function argument the polarity flips back to positive
-    // and the row opens again. Here `[A]` is the parameter of the function
-    // substituted for `Producer`'s formal, so a polarity-only answer would
-    // open it and accept `mk("s")(C)`, which both the direct spelling and the
-    // pre-rule behaviour reject. Answering with "generate rows as written"
-    // instead is stable under descent.
+    // `Producer` is recorded covariant, so the argument is generated at the
+    // reference's own positive polarity - and polarity flips on the way down.
+    // `[A]` is the PARAMETER of the function substituted for the formal, so
+    // ordinary descent negates it and it is generated as written; `mk("s")(C)`
+    // stays a mismatch, exactly as the direct spelling `mk : Str -> ([A] -> Str)`
+    // and the fully local spelling both reject it. If this starts passing, an
+    // argument is being opened at a depth the declaration does not hold open.
+    //
+    // A declaration with no record reaches the same verdict by a different
+    // route: unknown variance refuses opening at every depth rather than by
+    // polarity, because a closing polarity alone would reopen one level in.
     const source_lib =
         \\module [Producer]
         \\
@@ -9276,6 +11626,187 @@ test "check type - polarity - an unknown formal's row stays closed under a funct
     var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
     defer main_env.deinit();
     try main_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - polarity - imported contravariant alias in an input position opens the applied row" {
+    // The cross-module twin of "alias reference in an input position composes
+    // back to open". `Handler(e) : e -> Str` is recorded contravariant, and
+    // the reference itself stands in an input position, so the two negations
+    // cancel and `[A, B]` is an output row again: a wider handler is accepted,
+    // exactly as the local spelling and the direct `(([A, B] -> Str) -> Str)`
+    // spelling accept one.
+    //
+    // This is the one place the relaxation opens something that used to be
+    // closed at DEPTH rather than at the argument's root, so it is asserted
+    // deliberately here instead of being discovered in a snapshot diff.
+    const source_lib =
+        \\module [Handler]
+        \\
+        \\Handler(e) : e -> Str
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\run : Lib.Handler([A, B]) -> Str
+        \\run = |_h| "ran"
+        \\
+        \\wide : [A, B, C] -> Str
+        \\wide = |_tag| "w"
+        \\
+        \\out = run(wide)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertDefType("out", "Str");
+}
+
+test "check type - polarity - an imported alias over Try opens its error row per use" {
+    // The defect this closes, stated as a test: an imported `Res(e) : Try(Str, e)`
+    // rejected a `?` that the byte-identical LOCAL spelling accepts
+    // (`test/cli/WidenAliasErrorFormalImpl.roc`).
+    //
+    // Lowering does not know module boundaries. `closedResultRowOrNull` reads
+    // the return through `resolvedPayload`, which crosses alias backings
+    // unconditionally, so the result-row widening adapter re-tags an imported
+    // transparent alias over `Try` exactly as it re-tags a local one. While
+    // the walk declined at the module boundary the OPENED set was strictly
+    // smaller than the ADAPTABLE set, which is the one rule this whole axis
+    // exists to hold. `Lib` now records which of `Res`'s formals lands in the
+    // `Try` error cell, and `Main` reads it.
+    const source_lib =
+        \\module [Res]
+        \\
+        \\Res(e) : Try(Str, e)
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\load : a -> Lib.Res([IoErr, Other]) where [a.fetch : a -> Lib.Res([IoErr])]
+        \\load = |x| {
+        \\    s = x.fetch()?
+        \\    Ok(s)
+        \\}
+        \\
+        \\Closed := { v : Lib.Res([IoErr]) }
+        \\
+        \\closed_try = Closed.{ v: Ok("hit") }.v
+        \\
+        \\Src := [S].{
+        \\    fetch : Src -> Lib.Res([IoErr])
+        \\    fetch = |_| closed_try
+        \\}
+        \\
+        \\out = load(Src.S)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertNoErrors();
+}
+
+test "check type - polarity - an imported alias's Try ok row still rejects a widening use" {
+    // The negative control for the test above, and the reason it cannot decay
+    // into "open every argument of every alias over `Try`". `OkRes(a)` puts its
+    // formal in the `Try`'s OK cell, which the result-row widening adapter
+    // never re-tags, so the row must be contributed as written and the widened
+    // body use stays an ordinary mismatch at the use.
+    //
+    // The refusal is producer-side and needs no cross-module rule of its own:
+    // `Lib`'s own walk looks for a formal in the ERROR argument, finds the
+    // written `[IoErr]` there rather than a formal, and records "no such
+    // cell". This is `test/cli/WidenAliasOkFormalRow.roc` across the boundary.
+    const source_lib =
+        \\module [OkRes]
+        \\
+        \\OkRes(a) : Try(a, [IoErr])
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\describe : a -> Lib.OkRes([Red, Green, Blue]) where [a.status : a -> Lib.OkRes([Red, Green])]
+        \\describe = |x| x.status()
+        \\
+        \\Closed := { v : Lib.OkRes([Red, Green]) }
+        \\
+        \\closed_value = Closed.{ v: Ok(Red) }.v
+        \\
+        \\Job := [Pending].{
+        \\    status : Job -> Lib.OkRes([Red, Green])
+        \\    status = |_| closed_value
+        \\}
+        \\
+        \\out = describe(Job.Pending)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertHasTypeError("Type Mismatch");
+}
+
+test "check type - polarity - an imported nominal wrapper over Try still closes its row" {
+    // The other half of the ok-cell control: the adapter refuses a NOMINAL
+    // wrapper outright (`resultRowWideningOrNull` rejects a non-alias pair), so
+    // the checker must not open one either. The refusal is again producer-side
+    // and unchanged: `Lib`'s own walk requires a transparent alias at every
+    // layer, so `NRes` records "no such cell" and the importer reads that.
+    const source_lib =
+        \\module [NRes]
+        \\
+        \\NRes(e) := Try(Str, e)
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\describe : a -> Lib.NRes([IoErr, Other]) where [a.fetch : a -> Lib.NRes([IoErr])]
+        \\describe = |x| x.fetch()
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertHasTypeError("Type Mismatch");
+}
+
+test "check type - polarity - an imported declaration past the tracked arity stays unknown" {
+    // The one test that pins the absent-record path. The walks track a bounded
+    // declaration arity so they need no allocation, and a declaration past it
+    // publishes nothing; the importer must then keep answering conservatively
+    // rather than inheriting the reference's polarity.
+    //
+    // `Wide` holds its first formal covariantly, so the local spelling would
+    // keep `[A, B]` open for callers. With no record the reference is unknown,
+    // unknown generates as written at every depth, and the widening use is a
+    // mismatch - today's answer, unchanged.
+    const source_lib =
+        \\module [Wide]
+        \\
+        \\Wide(r, a, b, c, d, e, f, g, h) : { first : r, second : a, third : b, fourth : c, fifth : d, sixth : e, seventh : f, eighth : g, ninth : h }
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\produce : Lib.Wide([A, B], Str, Str, Str, Str, Str, Str, Str, Str)
+        \\produce = { first: A, second: "2", third: "3", fourth: "4", fifth: "5", sixth: "6", seventh: "7", eighth: "8", ninth: "9" }
+        \\
+        \\consume : [A, B, C] -> Str
+        \\consume = |_| "x"
+        \\
+        \\out = consume(produce.first)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertHasTypeError("Type Mismatch");
 }
 
 test "check type - polarity - a builtin application's row still opens for callers" {
@@ -9364,13 +11895,15 @@ test "check type - polarity - annotated value body is bounded" {
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
-test "check type - polarity - annotated value shares one weak row across uses" {
-    // A value binding's implicitly opened row is one weak variable shared by
-    // every use. The first use widens it to `[A, Boom]`; the second use then
-    // sees a value whose row carries `A`, which its own annotation does not
-    // list. (Exactly how an inferred `e = Boom` already behaves; on main the
-    // closed `[Boom]` rejected both uses.) Write `..` on the value to
-    // generalize it instead—see the next test.
+test "check type - polarity - an annotated value's opened row is quantified" {
+    // A value binding's implicitly opened row is QUANTIFIED, exactly as a
+    // written `..` is (see the `..` control below, which is now the same
+    // program): each use instantiates its own copy, so `use_a` widening the
+    // row to `[A, Boom]` is invisible to `use_b`.
+    //
+    // The row used to be one weak variable shared by every use in the module,
+    // which made this program a Type Mismatch reported at `use_b`—the use that
+    // widened nothing.
     const source =
         \\e : [Boom]
         \\e = Boom
@@ -9381,15 +11914,563 @@ test "check type - polarity - annotated value shares one weak row across uses" {
         \\use_b : Str -> [B, Boom]
         \\use_b = |_| e
     ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "use_a", .expected = "Str -> [A, Boom]" },
+        .{ .def = "use_b", .expected = "Str -> [B, Boom]" },
+    });
+}
+
+test "check type - polarity - an annotated value's verdict does not depend on use order" {
+    // The reason the weak row went. These two modules are the SAME three
+    // definitions—a value, a use that widens its row, and a use at the
+    // annotated width—differing only in the source order of the two uses,
+    // which do not reference each other. Under the shared weak row the second
+    // one typechecked and the first did not, so an edit that only moved a
+    // definition changed the verdict. A quantified row cannot: neither use can
+    // observe the other's copy.
+    const widener_first =
+        \\x : [A]
+        \\x = A
+        \\
+        \\widen : Bool -> [A, B]
+        \\widen = |c| if c x else B
+        \\
+        \\narrow : {} -> [A]
+        \\narrow = |_| x
+    ;
+    const widener_second =
+        \\x : [A]
+        \\x = A
+        \\
+        \\narrow : {} -> [A]
+        \\narrow = |_| x
+        \\
+        \\widen : Bool -> [A, B]
+        \\widen = |c| if c x else B
+    ;
+    inline for (.{ widener_first, widener_second }) |source| {
+        var test_env = try TestEnv.init("Test", source);
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+    }
+}
+
+test "check type - polarity - an imported alias on a value opens a quantified row" {
+    // The imported twin of "an annotated value's opened row is quantified".
+    // `Color` has no formals, and its body is a bare row, so the only way the
+    // importer's pre-test can know that `c : Lib.Color` mints an opened row is
+    // the declaration's own published answer. Without it the row was one weak
+    // variable shared by both uses, and `use_b` failed on `use_a`'s widening.
+    const source_lib =
+        \\module [Color]
+        \\
+        \\Color : [Red, Green]
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\c : Lib.Color
+        \\c = Red
+        \\
+        \\use_a : Str -> [A, Red, Green]
+        \\use_a = |_| c
+        \\
+        \\use_b : Str -> [B, Red, Green]
+        \\use_b = |_| c
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertNoErrors();
+}
+
+test "check type - polarity - an imported nominal on a value stays closed" {
+    // The negative control: a nominal body closes as written, and its
+    // published answer says so, so the value's row is not opened and a use
+    // widening it is an ordinary mismatch.
+    const source_lib =
+        \\module [Color]
+        \\
+        \\Color := [Red, Green]
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\c : Lib.Color
+        \\c = Lib.Color.Red
+        \\
+        \\use_a : Str -> [A, Red, Green]
+        \\use_a = |_| c
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - polarity - a forwarded closed value binding coerces at its uses" {
+    // Row subsumption for a top-level VALUE: `v` forwards a closed row out of
+    // a nominal field, so its annotated row is coerced rather than closed, and
+    // a use may widen its own copy exactly as it may widen a constructing
+    // value's quantified row (design.md "Row Subsumption").
+    const source =
+        \\Closed := { v : [A, B] }
+        \\
+        \\v : [A, B]
+        \\v = Closed.{ v: A }.v
+        \\
+        \\wide : [A, B, C]
+        \\wide = v
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A, B, C]");
+}
+
+test "check type - polarity - a forwarded closed value binding's Try error row coerces" {
+    const source =
+        \\Closed := { r : Try(Str, [NotFound]) }
+        \\
+        \\v : Try(Str, [NotFound])
+        \\v = Closed.{ r: Err(NotFound) }.r
+        \\
+        \\wide : Try(Str, [Gone, NotFound])
+        \\wide = v
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(Str, [Gone, NotFound])");
+}
+
+test "check type - polarity - a constructed and a forwarded value with one annotation are used identically" {
+    // Interchangeability: `made` constructs its tags, so its row is
+    // quantified; `forwarded` forwards a closed field, so its row is coerced.
+    // The two annotations are identical, and so is every use.
+    const source =
+        \\Closed := { v : [A, B] }
+        \\
+        \\made : [A, B]
+        \\made = A
+        \\
+        \\forwarded : [A, B]
+        \\forwarded = Closed.{ v: A }.v
+        \\
+        \\wide_made : [A, B, C]
+        \\wide_made = made
+        \\
+        \\wide_forwarded : [A, B, C]
+        \\wide_forwarded = forwarded
+        \\
+        \\narrow_forwarded : [A, B]
+        \\narrow_forwarded = forwarded
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "wide_made", .expected = "[A, B, C]" },
+        .{ .def = "wide_forwarded", .expected = "[A, B, C]" },
+        .{ .def = "narrow_forwarded", .expected = "[A, B]" },
+    });
+}
+
+test "check type - polarity - a value alias of a closed value coerces" {
+    // `v = u` is a value alias, which generalizes regardless of its
+    // annotation; its row is still closed by forwarding `u`'s closed row, and
+    // still coerced.
+    const source =
+        \\Closed := { v : [A, B] }
+        \\
+        \\u = Closed.{ v: A }.v
+        \\
+        \\v : [A, B]
+        \\v = u
+        \\
+        \\wide : [A, B, C]
+        \\wide = v
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A, B, C]");
+}
+
+test "check type - polarity - a value alias of a coerced value is quantified, not coerced" {
+    // `vd`'s use in `alias = vd` re-opens `vd`'s row, so `alias`'s annotated
+    // row meets an open row and is never closed: `alias` generalizes it and
+    // records no coercion, and its own uses instantiate that scheme rather
+    // than re-opening anything. Only `vd` is coerced, and only the lookup of
+    // `vd` re-opens.
+    const source =
+        \\Closed := { v : [A, B] }
+        \\
+        \\c : Closed
+        \\c = { v: A }
+        \\
+        \\vd : [A, B]
+        \\vd = c.v
+        \\
+        \\alias : [A, B]
+        \\alias = vd
+        \\
+        \\wide : [A, B, C]
+        \\wide = alias
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertLastDefType("[A, B, C]");
+    try std.testing.expectEqual(@as(u64, 1), test_env.module_env.result_row_coercions.len());
+    try std.testing.expectEqual(@as(u64, 1), test_env.module_env.result_row_reopens.len());
+}
+
+test "check type - polarity - a block-local value alias is monomorphic: one wider width is accepted" {
+    // `made`'s top-level row is quantified; a LOCAL alias of it is one runtime
+    // value, so it does not quantify that row again. Used at one wider width,
+    // its row widens to that width.
+    const source =
+        \\show_direct : [A, B(Str), C, D] -> Str
+        \\show_direct = |v| match v { A => "A", B(s) => "B(${s})", C => "C", D => "D" }
+        \\
+        \\made : [B(Str), D]
+        \\made = B("x")
+        \\
+        \\main = {
+        \\    local = made
+        \\    show_direct(local)
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - polarity - a block-local value alias is monomorphic: two different widths are rejected" {
+    const source =
+        \\show_direct : [A, B(Str), C, D] -> Str
+        \\show_direct = |v| match v { A => "A", B(s) => "B(${s})", C => "C", D => "D" }
+        \\
+        \\show_other : [B(Str), D, E] -> Str
+        \\show_other = |v| match v { B(s) => "B(${s})", D => "D", E => "E" }
+        \\
+        \\made : [B(Str), D]
+        \\made = B("x")
+        \\
+        \\main = {
+        \\    local = made
+        \\    Str.concat(show_direct(local), show_other(local))
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - polarity - a block-local alias of a quantified list is monomorphic" {
+    // The rule is for any quantified value, not only rows.
+    const source =
+        \\empty : List(a)
+        \\empty = []
+        \\
+        \\main = {
+        \\    local = empty
+        \\    { a: List.append(local, 1.I64), b: List.append(local, "s") }
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - polarity - a block-local alias of a record holding a polymorphic function is monomorphic" {
+    const source =
+        \\ops : { f : a -> a }
+        \\ops = { f: |x| x }
+        \\
+        \\main = {
+        \\    local = ops
+        \\    { a: (local.f)(1.I64), b: (local.f)("s") }
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - polarity - a block-local alias of an imported value is monomorphic" {
+    const source_a =
+        \\module [made]
+        \\
+        \\made : [B(Str), D]
+        \\made = B("x")
+    ;
+    var test_env_a = try TestEnv.init("Values", source_a);
+    defer test_env_a.deinit();
+
+    const accepted =
+        \\import Values
+        \\
+        \\show_direct : [X, B(Str), C, D] -> Str
+        \\show_direct = |v| match v { X => "X", B(s) => s, C => "C", D => "D" }
+        \\
+        \\main = {
+        \\    local = Values.made
+        \\    show_direct(local)
+        \\}
+    ;
+    var test_env_accepted = try TestEnv.initWithImport("B", accepted, "Values", &test_env_a);
+    defer test_env_accepted.deinit();
+    try test_env_accepted.assertNoErrors();
+
+    const rejected =
+        \\import Values
+        \\
+        \\show_direct : [X, B(Str), C, D] -> Str
+        \\show_direct = |v| match v { X => "X", B(s) => s, C => "C", D => "D" }
+        \\
+        \\show_other : [B(Str), D, E] -> Str
+        \\show_other = |v| match v { B(s) => s, D => "D", E => "E" }
+        \\
+        \\main = {
+        \\    local = Values.made
+        \\    Str.concat(show_direct(local), show_other(local))
+        \\}
+    ;
+    var test_env_rejected = try TestEnv.initWithImport("C", rejected, "Values", &test_env_a);
+    defer test_env_rejected.deinit();
+    try test_env_rejected.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - polarity - a block-local callable alias still generalizes" {
+    // The rule is for values: a local alias of a function is a scheme alias.
+    const source =
+        \\id : a -> a
+        \\id = |x| x
+        \\
+        \\main = {
+        \\    f = id
+        \\    { a: f("s"), b: f(1.I64) }
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - polarity - a value's coerced error row and quantified ok row compose" {
+    // `Err(e)` forwards a closed error row, so the root `Try`'s error row is
+    // coerced; `Ok(X)` constructs, so the ok row is quantified. Each widens
+    // by its own rule.
+    const source =
+        \\Closed := { r : Try(Str, [E]) }
+        \\
+        \\v : Try([X], [E])
+        \\v = match Closed.{ r: Ok("s") }.r {
+        \\    Ok(_) => Ok(X)
+        \\    Err(e) => Err(e)
+        \\}
+        \\
+        \\wide_err : Try([X], [E, F])
+        \\wide_err = v
+        \\
+        \\wide_ok : Try([X, Y], [E])
+        \\wide_ok = v
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "wide_err", .expected = "Try([X], [E, F])" },
+        .{ .def = "wide_ok", .expected = "Try([X, Y], [E])" },
+    });
+}
+
+test "check type - polarity - a forwarding value is still bounded by its annotation" {
+    const source =
+        \\Closed := { v : [A, B] }
+        \\
+        \\v : [A]
+        \\v = Closed.{ v: A }.v
+    ;
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
-test "check type - polarity - a defaulted field use may widen a weak value row" {
+test "check type - polarity - value coercion does not reach a nested row" {
+    // Only the value's root row (or its root `Try`'s error row) coerces; a
+    // row inside a `List` keeps closing by body.
+    const source =
+        \\Closed := { l : List([A, B]) }
+        \\
+        \\v : List([A, B])
+        \\v = Closed.{ l: [A] }.l
+        \\
+        \\wide : List([A, B, C])
+        \\wide = v
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - value coercion does not reach a Try ok row" {
+    const source =
+        \\Closed := { r : Try([A], [E]) }
+        \\
+        \\v : Try([A], [E])
+        \\v = Closed.{ r: Ok(A) }.r
+        \\
+        \\wide : Try([A, B], [E])
+        \\wide = v
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - value coercion does not reach a local value" {
+    // A local value is lowered inline, with no stored constant to restore
+    // and re-tag, so its row keeps closing by body.
+    const source =
+        \\Closed := { v : [A, B] }
+        \\
+        \\outer : {} -> [A, B, C]
+        \\outer = |_| {
+        \\    v : [A, B]
+        \\    v = Closed.{ v: A }.v
+        \\
+        \\    w : [A, B, C]
+        \\    w = v
+        \\
+        \\    w
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - a function-typed value binding does not coerce" {
+    // `f`'s annotation is a function, but `f` is a value binding with no
+    // procedure template of its own for an adapter to complete, so its
+    // result row keeps closing by body.
+    const source =
+        \\Closed := { f : Str -> [A, B] }
+        \\
+        \\f : Str -> [A, B]
+        \\f = Closed.{ f: |_| A }.f
+        \\
+        \\wider : Str -> [A, B, C]
+        \\wider = |s| f(s)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - an imported forwarded value's row coerces at the use" {
+    const source_lib =
+        \\module [v]
+        \\
+        \\Closed := { v : [A, B] }
+        \\
+        \\v : [A, B]
+        \\v = Closed.{ v: A }.v
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\wide : [A, B, C]
+        \\wide = Lib.v
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertLastDefType("[A, B, C]");
+}
+
+test "check type - polarity - every lookup that re-opens a coerced row is recorded with its subject" {
+    // Post-check stages read WHICH uses re-opened a coerced row from the
+    // checker's per-use record (`ModuleEnv.ResultRowReopen`), never from the
+    // definition's record: one record per re-opening lookup, naming the cell
+    // and whether the row is a value's or a function result's.
+    const source =
+        \\Closed := { v : [A, B], r : Try(Str, [E]) }
+        \\
+        \\c : Closed
+        \\c = { v: A, r: Err(E) }
+        \\
+        \\v : [A, B]
+        \\v = c.v
+        \\
+        \\r : Try(Str, [E])
+        \\r = c.r
+        \\
+        \\f : [A, B] -> [A, B]
+        \\f = |x| x
+        \\
+        \\wide_v : [A, B, C]
+        \\wide_v = v
+        \\
+        \\wide_r : Try(Str, [D, E])
+        \\wide_r = r
+        \\
+        \\wide_f : [A, B] -> [A, B, C]
+        \\wide_f = |x| f(x)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    var value_direct: usize = 0;
+    var value_try: usize = 0;
+    var function_direct: usize = 0;
+    for (test_env.module_env.result_row_reopens.items.items) |reopen| {
+        if (reopen.is_value != 0 and reopen.behind_try == 0) value_direct += 1;
+        if (reopen.is_value != 0 and reopen.behind_try != 0) value_try += 1;
+        if (reopen.is_value == 0 and reopen.behind_try == 0) function_direct += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), value_direct);
+    try std.testing.expectEqual(@as(usize, 1), value_try);
+    try std.testing.expectEqual(@as(usize, 1), function_direct);
+    try std.testing.expectEqual(@as(u64, 3), test_env.module_env.result_row_reopens.len());
+}
+
+test "check type - polarity - a lookup of an uncoerced definition records no re-open" {
+    // `made` constructs its row, so it is quantified, not coerced: its uses
+    // instantiate a scheme and no use re-opens anything.
+    const source =
+        \\made : [A, B]
+        \\made = A
+        \\
+        \\wide : [A, B, C]
+        \\wide = made
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(u64, 0), test_env.module_env.result_row_reopens.len());
+}
+
+test "check type - polarity - a value row the body tied to a weak row is grounded, not left open" {
+    // The syntactic pre-test approves `x`'s annotation for generalization, but
+    // the body unifies `x`'s implicitly opened row with `e`'s top-level weak
+    // row, so the extension never quantifies. It must still be grounded:
+    // left bare, `copy_import` would stamp it generalized and `Main` would
+    // quantify per use a row `Lib` never decided to quantify, accepting a
+    // widening `Lib` itself shares with every other use of `e`.
+    const source_lib =
+        \\module [x]
+        \\
+        \\e = Boom
+        \\
+        \\x : [Boom]
+        \\x = if Bool.true e else Boom
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\y : [Boom, Other]
+        \\y = Lib.x
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - polarity - a defaulted field use may widen a value row" {
     // A defaulted record field's default expression is an ordinary USE SITE,
-    // so it may widen the weak row of the value it names—exactly like the
-    // accepted first use in the test above. It is checked later than every
-    // other use (`checkPendingDefaults` is the first pass of `finalizeTypes`,
-    // after the whole def pass), and the late implicit-open-ext replay
+    // so it may widen its own copy of the row of the value it names—exactly
+    // like the uses in the test above. It is checked later than every other
+    // use (`checkPendingDefaults` is the first pass of `finalizeTypes`, after
+    // the whole def pass), and the late implicit-open-ext replay
     // (`Check.runLateImplicitOpenExtAudit`) used to read the row after that
     // widening and blame `e` for producing `A`, which `e = Boom` cannot.
     const source =
@@ -9419,8 +12500,10 @@ test "check type - polarity - a defaulted field use at the annotated width is cl
 }
 
 test "check type - polarity - value with explicit open ext generalizes" {
-    // `..` on a value annotation is the opt-in to a quantified row (as on
-    // main): each use instantiates it fresh.
+    // `..` on a value annotation is the opt-in to a quantified row: each use
+    // instantiates it fresh. Now that an IMPLICITLY opened row is quantified
+    // too, this is the same program as the first test above with the opening
+    // written out, and it is kept as the pin that the two spellings agree.
     const source =
         \\e : [Boom, ..]
         \\e = Boom
@@ -13240,4 +16323,284 @@ test "check type - a deeply nested record annotation reports its mismatch" {
     var test_env = try TestEnv.init("Test", source.items);
     defer test_env.deinit();
     try test_env.assertOneTypeError("Type Mismatch");
+}
+
+// Alias depth and spelling never change a verdict (design.md "Three
+// Syntactic Walks", "Row Subsumption"): each walk below reads a declaration
+// it references from that declaration's own answer, never by following a
+// chain to a depth bound, so an argument spelled through nine alias layers is
+// decided exactly as its inline spelling is.
+
+test "check type - spelling independence - a result row spelled through nine alias layers opens like its inline spelling" {
+    const source =
+        \\L1 : [Other]
+        \\L2 : L1
+        \\L3 : L2
+        \\L4 : L3
+        \\L5 : L4
+        \\L6 : L5
+        \\L7 : L6
+        \\L8 : L7
+        \\L9 : L8
+        \\
+        \\F(e) : e -> e
+        \\
+        \\fwd : F(L9)
+        \\fwd = |x| x
+        \\
+        \\wider : [Other] -> [Aborted, Other]
+        \\wider = |x| fwd(x)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[Other] -> [Aborted, Other]");
+}
+
+test "check type - spelling independence - the same result row keeps its input closed through nine alias layers" {
+    const source =
+        \\L1 : [Other]
+        \\L2 : L1
+        \\L3 : L2
+        \\L4 : L3
+        \\L5 : L4
+        \\L6 : L5
+        \\L7 : L6
+        \\L8 : L7
+        \\L9 : L8
+        \\
+        \\F(e) : e -> e
+        \\
+        \\fwd : F(L9)
+        \\fwd = |x| x
+        \\
+        \\bad = fwd(Aborted)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - spelling independence - the verdict through nine alias layers does not depend on merge order" {
+    // Each branch order merges the alias view and the row the other way.
+    const programs = [_][]const u8{
+        \\L1 : [Other]
+        \\L2 : L1
+        \\L3 : L2
+        \\L4 : L3
+        \\L5 : L4
+        \\L6 : L5
+        \\L7 : L6
+        \\L8 : L7
+        \\L9 : L8
+        \\
+        \\F(e) : e -> e
+        \\
+        \\fwd : F(L9)
+        \\fwd = |x| x
+        \\
+        \\wider : [Other], Bool -> [Aborted, Other]
+        \\wider = |x, c| if c fwd(x) else Aborted
+        ,
+        \\L1 : [Other]
+        \\L2 : L1
+        \\L3 : L2
+        \\L4 : L3
+        \\L5 : L4
+        \\L6 : L5
+        \\L7 : L6
+        \\L8 : L7
+        \\L9 : L8
+        \\
+        \\F(e) : e -> e
+        \\
+        \\fwd : F(L9)
+        \\fwd = |x| x
+        \\
+        \\wider : [Other], Bool -> [Aborted, Other]
+        \\wider = |x, c| if c Aborted else fwd(x)
+        ,
+    };
+    for (programs) |source| {
+        var test_env = try TestEnv.init("Test", source);
+        defer test_env.deinit();
+        try test_env.assertLastDefType("[Other], Bool -> [Aborted, Other]");
+    }
+}
+
+test "check type - spelling independence - an argument's variance composes through nine alias layers" {
+    // `H1(a) : a -> Str` holds `a` contravariantly, and so does every layer
+    // above it, so `h`'s argument is generated closed, as `[A] -> Str` is,
+    // and `h` refuses `B`.
+    const source =
+        \\H1(a) : a -> Str
+        \\H2(a) : H1(a)
+        \\H3(a) : H2(a)
+        \\H4(a) : H3(a)
+        \\H5(a) : H4(a)
+        \\H6(a) : H5(a)
+        \\H7(a) : H6(a)
+        \\H8(a) : H7(a)
+        \\H9(a) : H8(a)
+        \\
+        \\h : H9([A])
+        \\h = |_| "h"
+        \\
+        \\r = h(B)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+    const inline_source =
+        \\h : [A] -> Str
+        \\h = |_| "h"
+        \\
+        \\r = h(B)
+    ;
+    try checkTypesModule(inline_source, .fail, "Type Mismatch");
+}
+
+test "check type - spelling independence - a formal passed to an invariant formal is invariant" {
+    // `Inner(x) : x -> x` holds `x` both ways, so `Outer(a) : Inner(a)` holds
+    // `a` both ways too, and `g`'s argument keeps `[A]` closed at both of its
+    // occurrences: `[A, B] -> [A, B]` is no `[A] -> [A]`, as it is not for
+    // the inline `([A] -> [A]) -> Str`.
+    const source =
+        \\Inner(x) : x -> x
+        \\Outer(a) : Inner(a)
+        \\
+        \\g : Outer([A]) -> Str
+        \\g = |_| "g"
+        \\
+        \\h : [A, B] -> [A, B]
+        \\h = |x| x
+        \\
+        \\r = g(h)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+    const inline_source =
+        \\g : ([A] -> [A]) -> Str
+        \\g = |_| "g"
+        \\
+        \\h : [A, B] -> [A, B]
+        \\h = |x| x
+        \\
+        \\r = g(h)
+    ;
+    try checkTypesModule(inline_source, .fail, "Type Mismatch");
+}
+
+test "check type - spelling independence - mutually recursive declarations take their fixpoint variance" {
+    // `P`'s `a` reaches `Q`'s `a` under an arrow's argument, and `Q`'s `a`
+    // stands both directly and inside `P(a)`, so both are invariant whichever
+    // declaration a walk starts from. `f` takes `P([A])` exactly.
+    const reject =
+        \\P(a) := [MkP(Q(a) -> Str)]
+        \\Q(a) := [MkQ(a), MkQ2(P(a))]
+        \\
+        \\f : P([A]) -> Str
+        \\f = |_| "f"
+        \\
+        \\x : P([A, B])
+        \\x = P.MkP(|_| "x")
+        \\
+        \\r = f(x)
+    ;
+    try checkTypesModule(reject, .fail, "Type Mismatch");
+    const accept =
+        \\P(a) := [MkP(Q(a) -> Str)]
+        \\Q(a) := [MkQ(a), MkQ2(P(a))]
+        \\
+        \\f : P([A, B]) -> Str
+        \\f = |_| "f"
+        \\
+        \\x : P([A, B])
+        \\x = P.MkP(|_| "x")
+        \\
+        \\r = f(x)
+    ;
+    try checkTypesModule(accept, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - spelling independence - a formal only a phantom formal receives adds no variance" {
+    // `Ph(x) : Str` never uses `x`, so `Use(b)`'s `b` is contravariant from
+    // its arrow alone. At `g`'s argument (a negative position) it is generated
+    // open, as the inline `{ p : Str, f : [A] -> Str } -> Str` generates it, so `g`
+    // accepts a function over a wider row.
+    const source =
+        \\Ph(x) : Str
+        \\Use(b) : { p : Ph(b), f : b -> Str }
+        \\
+        \\g : Use([A]) -> Str
+        \\g = |_| "g"
+        \\
+        \\k : [A, B] -> Str
+        \\k = |_| "k"
+        \\
+        \\r = g({ p: "s", f: k })
+    ;
+    const inline_source =
+        \\g : { p : Str, f : [A] -> Str } -> Str
+        \\g = |_| "g"
+        \\
+        \\k : [A, B] -> Str
+        \\k = |_| "k"
+        \\
+        \\r = g({ p: "s", f: k })
+    ;
+    try checkTypesModule(inline_source, .{ .pass = .last_def }, "Str");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - spelling independence - a value annotation through nine alias layers generalizes like its inline spelling" {
+    // The chain ends in a row, which the annotation opens, so `x`
+    // generalizes and each use takes its own row.
+    const opens =
+        \\L1 : [A]
+        \\L2 : L1
+        \\L3 : L2
+        \\L4 : L3
+        \\L5 : L4
+        \\L6 : L5
+        \\L7 : L6
+        \\L8 : L7
+        \\L9 : L8
+        \\
+        \\x : L9
+        \\x = A
+        \\
+        \\a : [A, B]
+        \\a = x
+        \\
+        \\b : [A, C]
+        \\b = x
+    ;
+    try checkTypesModule(opens, .{ .pass = .last_def }, "[A, C]");
+    // The chain ends in a number, which opens nothing, so `x` does not
+    // generalize: its hole is one type, as in `(U64, List(_))`.
+    const closed =
+        \\M1 : U64
+        \\M2 : M1
+        \\M3 : M2
+        \\M4 : M3
+        \\M5 : M4
+        \\M6 : M5
+        \\M7 : M6
+        \\M8 : M7
+        \\M9 : M8
+        \\
+        \\x : (M9, List(_))
+        \\x = (1, [])
+        \\
+        \\a : List(Str)
+        \\a = x.1
+        \\
+        \\b : List(U64)
+        \\b = x.1
+    ;
+    try checkTypesModule(closed, .fail, "Type Mismatch");
+    const closed_inline =
+        \\x : (U64, List(_))
+        \\x = (1, [])
+        \\
+        \\a : List(Str)
+        \\a = x.1
+        \\
+        \\b : List(U64)
+        \\b = x.1
+    ;
+    try checkTypesModule(closed_inline, .fail, "Type Mismatch");
 }

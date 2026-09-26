@@ -235,7 +235,77 @@ pub const Constants = struct {
     /// 107: An expression that did not parse canonicalizes to a runtime error
     ///      carrying `expr_syntax_error`, and the canonicalize diagnostic tags
     ///      no stage produces are gone.
-    pub const CACHE_VERSION = 107;
+    /// 108: Each parameterized type declaration publishes its formals'
+    ///      variances and its `Try` error-cell formal, which importers consult
+    ///      at an external annotation base instead of answering unknown.
+    /// 109: Definitions that closed their annotated result row by FORWARDING a
+    ///      closed value publish that fact, which every use—importing modules
+    ///      included—reads to re-open its own copy of the row (design.md
+    ///      "Row Subsumption").
+    /// 110: Every alias and nominal declaration publishes whether its body
+    ///      opens a row at a positive or negative position; a result row named
+    ///      through an alias records its adapter-reachable site; a signature
+    ///      with a `where` clause publishes no row coercion; and a value
+    ///      binding's unquantified implicitly opened rows are grounded by rank.
+    /// 111: A hosted function records a row coercion for the `Try` error row
+    ///      its annotation closes as written, so every use re-opens its copy;
+    ///      a signature with a `where` clause records one like any other.
+    /// 112: A signature naming a parameterised function alias opens its
+    ///      formal's result occurrence as its own row, an alias's backing
+    ///      decides where its argument rows sit, and a static-dispatch use
+    ///      re-opens a coerced target's result row, so more definitions
+    ///      record a row coercion for the same source.
+    /// 113: A coerced row's re-open crosses alias links in its extension
+    ///      chain and keeps no alias layer on its spine; an alias whose formal
+    ///      is the result row's extension opens it however it is spelled.
+    /// 114: A result-row twin crosses alias links in its argument's row, and
+    ///      an alias whose formal took a twin presents the twin as that
+    ///      argument, or is presented as its backing when it also used the
+    ///      shared argument.
+    /// 115: An annotated top-level VALUE whose root row, or its root `Try`'s
+    ///      error row, was closed by forwarding records a row coercion marked
+    ///      as a value's, and every lookup that re-opens a coerced row records
+    ///      that it did (`ResultRowReopen`), which post-check stages read.
+    /// 116: Every type alias instance records whether its backing is still
+    ///      its declaration's body under its arguments or a copy opened
+    ///      something inside it (`Alias.backing`); an opened instance is
+    ///      related to another application of its alias by its backing, and
+    ///      alias layers survive re-opens and result-row twins.
+    /// 117: An opened alias instance records where it was opened (by the
+    ///      annotation walk, or at a use), and a use's instance never wins a
+    ///      merge, so an annotated definition keeps its annotation.
+    /// 118: Every alias instance records which of its declaration's formals
+    ///      the body uses (`Alias.body_formals`), and an opened instance's
+    ///      phantom arguments are related exactly.
+    /// 119: An alias instance carries its declaration's hidden arguments
+    ///      after its declared ones (`Alias.declared_arity`) and where its
+    ///      result spine ends (`Alias.spine`), replacing `Alias.backing` and
+    ///      `Alias.body_formals`; checked aliases record their declared
+    ///      arity.
+    /// 120: A widened alias instance never wins a merge: after its backing is
+    ///      related to a structure it joins the structure's class, so a
+    ///      definition's type keeps its annotation's rows as written.
+    /// 121: A formal reached off the spine through a spine link the body
+    ///      also reaches elsewhere is split with a hidden `e⁺` rather than
+    ///      taken as the spine slot itself, and an alias application checked
+    ///      module data builds from a declaration's syntax carries the
+    ///      declaration's hidden arguments.
+    /// 122: A widened alias instance meeting a structure no longer joins the
+    ///      structure's class; which spelling a merged class keeps is
+    ///      presentation only.
+    /// 124: An expression inside a block that refers to a nominal type the
+    ///      block declares is not selected as a hoisted root.
+    /// 125: A block-local alias of a value is not generalized.
+    /// 126: A hoisted root is rejected by its checked dispatch evidence
+    ///      naming a block-local nominal's method, not by syntax.
+    /// 128: Hoist selection follows structural comparisons' component
+    ///      derivation edges.
+    /// 129: Hoist selection rejects roots whose instantiated types reach a
+    ///      block-local `to_inspect` override.
+    /// 130: A block-local alias generalizes only when it names a function.
+    /// 131: Hoist selection recognizes an imported module's block-local
+    ///      methods.
+    pub const CACHE_VERSION = 132;
 };
 
 /// Configuration for the Roc cache system.

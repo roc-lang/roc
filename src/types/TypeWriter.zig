@@ -27,6 +27,7 @@ const Func = types_mod.Func;
 
 // const SExpr = base.SExpr;
 const Ident = base.Ident;
+const IterationGuard = @import("debug.zig").IterationGuard;
 
 const TypeContext = enum {
     General,
@@ -68,6 +69,8 @@ count_pending: std.array_list.Managed(Var),
 /// Row collection runs to completion without rendering anything, so one
 /// buffer serves every row node.
 ext_seen: std.AutoHashMap(Var, void),
+/// How a widened alias instance is rendered (see `WidenedAliasDisplay`).
+widened_aliases: WidenedAliasDisplay = .backing,
 next_name_index: u32,
 name_counters: std.EnumMap(TypeContext, u32),
 flex_var_names_map: std.AutoHashMap(Var, FlexVarNameRange),
@@ -178,10 +181,38 @@ const TagUnionExt = union(enum) {
 /// invalidated by growth of the store it points into.
 const Frame = union(enum) {
     args: ArgsFrame,
+    widened_alias: WidenedAliasFrame,
     func: FuncFrame,
     record: RecordFrame,
     tag_union: TagUnionFrame,
     tag: TagFrame,
+};
+
+/// How to render a WIDENED alias instance (`aliasIsWidened`): one whose
+/// hidden arguments carry tags its declared arguments do not show, because a
+/// result-row twin or a coerced re-open opened its spine and a use then
+/// widened it (design.md "Hidden Alias Arguments"). Its declared arguments
+/// alone would present the narrow declaration, so two such instances could
+/// render identically while their types differ.
+pub const WidenedAliasDisplay = enum {
+    /// Its backing alone: the type it now is.
+    backing,
+    /// The alias's name and declared arguments followed by its backing:
+    /// `Base (opened: [Aborted, Other])`. Error reports use this, so a
+    /// mismatch between two instances of one alias never reads `Base` vs
+    /// `Base`.
+    name_and_backing,
+};
+
+/// A widened alias rendered through its backing (`WidenedAliasDisplay`):
+/// under `.name_and_backing` its declared arguments first. The frame owns the
+/// `seen` entry its node pushed.
+const WidenedAliasFrame = struct {
+    args: Var.SafeList.Range,
+    backing: Var,
+    show_name: bool,
+    idx: u32 = 0,
+    stage: enum { args, done } = .args,
 };
 
 /// A parenthesised, comma-separated run of child vars: alias arguments,
@@ -613,6 +644,7 @@ fn driveFrames(self: *TypeWriter, writer: *ByteWrite, frames_base: usize, root_v
         const top = &self.frames.items[self.frames.items.len - 1];
         const finished = switch (top.*) {
             .args => |*frame| try self.stepArgs(writer, frame, root_var),
+            .widened_alias => |*frame| try self.stepWidenedAlias(writer, frame, root_var),
             .func => |*frame| try self.stepFunc(writer, frame, root_var),
             .record => |*frame| try self.stepRecord(writer, frame, root_var),
             .tag_union => |*frame| try self.stepTagUnion(writer, frame, root_var),
@@ -732,17 +764,174 @@ fn writeVar(self: *TypeWriter, writer: *ByteWrite, var_: Var, root_var: Var) err
 }
 
 /// Write an alias type's name, and push the frame for its arguments when it
-/// has any.
+/// has any. A widened instance is rendered as `widened_aliases` says.
 fn startAlias(self: *TypeWriter, writer: *ByteWrite, alias: Alias) error{ OutOfMemory, WriteFailed }!bool {
-    try writer.writeAll(self.getDisplayName(alias.ident.ident_idx));
     // An alias stores its backing var as the first element of its span, so
-    // its arguments are the span with that element dropped.
+    // its arguments are the span with that element dropped. Only the
+    // declared arguments are written (`Store.sliceAliasDeclaredArgs`).
     var args = alias.vars.nonempty;
     args.dropFirstElem();
+    args.count = alias.declared_arity;
+    if (self.aliasIsWidened(alias)) {
+        const show_name = switch (self.widened_aliases) {
+            .backing => false,
+            .name_and_backing => true,
+        };
+        if (show_name) {
+            try writer.writeAll(self.getDisplayName(alias.ident.ident_idx));
+            if (args.len() > 0) try writer.writeAll("(");
+        }
+        try self.frames.append(.{ .widened_alias = .{
+            .args = args,
+            .backing = self.types.getAliasBackingVar(alias),
+            .show_name = show_name,
+        } });
+        return true;
+    }
+    try writer.writeAll(self.getDisplayName(alias.ident.ident_idx));
     if (args.len() == 0) return false;
     try writer.writeAll("(");
     try self.frames.append(.{ .args = .{ .vars = args, .context = .General } });
     return true;
+}
+
+fn stepWidenedAlias(self: *TypeWriter, writer: *ByteWrite, frame: *WidenedAliasFrame, root_var: Var) error{ OutOfMemory, WriteFailed }!bool {
+    while (true) {
+        switch (frame.stage) {
+            .args => {
+                if (frame.show_name and frame.idx < frame.args.len()) {
+                    if (frame.idx > 0) try writer.writeAll(", ");
+                    const child = self.varAt(frame.args, frame.idx);
+                    frame.idx += 1;
+                    if (!try self.requestVar(writer, child, .General, root_var)) return false;
+                    continue;
+                }
+                if (frame.show_name) {
+                    if (frame.args.len() > 0) try writer.writeAll(")");
+                    try writer.writeAll(" (opened: ");
+                }
+                frame.stage = .done;
+                if (!try self.requestVar(writer, frame.backing, .General, root_var)) return false;
+            },
+            .done => {
+                if (frame.show_name) try writer.writeAll(")");
+                self.popSeen();
+                return true;
+            },
+        }
+    }
+}
+
+/// Whether an alias instance is widened: its hidden arguments carry what its
+/// declared arguments do not show (design.md "Hidden Alias Arguments"). A
+/// hidden marker slot is widened when it resolves, through alias layers, to a
+/// tag union listing a tag: the row the declaration closes gained one. The
+/// hidden `e⁺` slot is widened when its row's tags, read down its extension
+/// chain, differ from those of the argument of the formal it stands for.
+/// This reads the instance's explicit arguments and decides presentation
+/// only.
+pub fn aliasIsWidened(self: *const TypeWriter, alias: Alias) bool {
+    var markers = self.types.aliasHiddenArgs(alias);
+    switch (alias.spine.kind) {
+        .formal => {
+            const formal_arg = self.types.sliceAliasDeclaredArgs(alias)[alias.spine.base];
+            if (!self.sameRowTags(markers[0], formal_arg)) return true;
+            markers = markers[1..];
+        },
+        // A declared slot is written with the declared arguments.
+        .none, .marker, .declared => {},
+    }
+    for (markers) |marker| {
+        var current = marker;
+        while (true) {
+            const resolved = self.types.resolveVar(current);
+            switch (resolved.desc.content) {
+                .alias => |inner| current = self.types.getAliasBackingVar(inner),
+                .structure => |flat| {
+                    switch (flat) {
+                        .tag_union => |tag_union| if (tag_union.tags.count > 0) return true,
+                        .empty_tag_union, .empty_record, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => {},
+                    }
+                    break;
+                },
+                .flex, .rigid, .field_presence, .err => break,
+            }
+        }
+    }
+    return false;
+}
+
+/// Whether the rows `a` and `b`, each read down its extension chain through
+/// alias layers, list the same tag names.
+fn sameRowTags(self: *const TypeWriter, a: Var, b: Var) bool {
+    if (self.types.resolveVar(a).var_ == self.types.resolveVar(b).var_) return true;
+    return self.rowTagCount(a) == self.rowTagCount(b) and self.rowTagsWithin(a, b);
+}
+
+fn rowTagCount(self: *const TypeWriter, row: Var) usize {
+    var count: usize = 0;
+    var current = row;
+    var guard = IterationGuard.init("TypeWriter.rowTagCount");
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| {
+                    count += tag_union.tags.count;
+                    current = tag_union.ext;
+                },
+                .empty_tag_union, .empty_record, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => return count,
+            },
+            .flex, .rigid, .field_presence, .err => return count,
+        }
+    }
+}
+
+/// Whether every tag `row` lists is listed by `other`.
+fn rowTagsWithin(self: *const TypeWriter, row: Var, other: Var) bool {
+    var current = row;
+    var guard = IterationGuard.init("TypeWriter.rowTagsWithin");
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| {
+                    for (self.types.getTagsSlice(tag_union.tags).items(.name)) |name| {
+                        if (!self.rowListsTag(other, name)) return false;
+                    }
+                    current = tag_union.ext;
+                },
+                .empty_tag_union, .empty_record, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => return true,
+            },
+            .flex, .rigid, .field_presence, .err => return true,
+        }
+    }
+}
+
+fn rowListsTag(self: *const TypeWriter, row: Var, name: Ident.Idx) bool {
+    var current = row;
+    var guard = IterationGuard.init("TypeWriter.rowListsTag");
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| {
+                    for (self.types.getTagsSlice(tag_union.tags).items(.name)) |listed| {
+                        if (listed.eql(name)) return true;
+                    }
+                    current = tag_union.ext;
+                },
+                .empty_tag_union, .empty_record, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => return false,
+            },
+            .flex, .rigid, .field_presence, .err => return false,
+        }
+    }
 }
 
 /// Write a flat type's leading bytes, returning true when a frame was pushed.
@@ -1507,11 +1696,19 @@ fn collectCountChildren(self: *TypeWriter, content: Content) std.mem.Allocator.E
             }
         },
         .alias => |alias| {
-            // For aliases, we only count occurrences in the type arguments
-            var args_iter = self.types.iterAliasArgs(alias);
-            while (args_iter.next()) |arg_var| {
-                try self.count_pending.append(arg_var);
+            // For aliases, we only count occurrences in what is written: the
+            // declared type arguments (a hidden argument is never written,
+            // so counting it would name a variable written once), and the
+            // backing of a widened instance, which is rendered in their
+            // place or next to them (`WidenedAliasDisplay`).
+            const widened = self.aliasIsWidened(alias);
+            const writes_args = !widened or self.widened_aliases == .name_and_backing;
+            if (writes_args) {
+                for (self.types.sliceAliasDeclaredArgs(alias)) |arg_var| {
+                    try self.count_pending.append(arg_var);
+                }
             }
+            if (widened) try self.count_pending.append(self.types.getAliasBackingVar(alias));
         },
         .structure => |flat_type| {
             try self.collectCountChildrenInFlatType(flat_type);

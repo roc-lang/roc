@@ -183,6 +183,26 @@ const TestEnv = struct {
         return try self.module_env.types.mkAlias(try self.mkTypeIdent(name), backing_var, args, module_identity);
     }
 
+    /// An alias instance whose argument list is `declared` followed by the
+    /// hidden `hidden`, the first of which is its spine slot
+    /// (design.md "Hidden Alias Arguments").
+    fn mkAliasWithHidden(self: *Self, name: []const u8, backing_var: Var, declared: []const Var, hidden: []const Var, spine: types_mod.AliasSpine) std.mem.Allocator.Error!Content {
+        const module_identity = try self.module_env.internModuleIdentity(&([_]u8{0x22} ** 32), Ident.Idx.NONE);
+        var args: [8]Var = undefined;
+        @memcpy(args[0..declared.len], declared);
+        @memcpy(args[declared.len..][0..hidden.len], hidden);
+        return try self.module_env.types.mkAliasWithSourceDeclAndBuiltinOrigin(
+            try self.mkTypeIdent(name),
+            backing_var,
+            args[0 .. declared.len + hidden.len],
+            module_identity,
+            null,
+            false,
+            declared.len,
+            spine,
+        );
+    }
+
     // helpers - structure - tuple //
 
     fn mkTuple(self: *Self, slice: []const Var) std.mem.Allocator.Error!Content {
@@ -570,6 +590,123 @@ test "unify - aliases with different names but same backing" {
     try std.testing.expectEqual(.unified, result);
     try std.testing.expectEqual(a_alias, (try env.getDescForRootVar(a)).content);
     try std.testing.expectEqual(b_alias, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - two declared applications of one alias are related by their arguments" {
+    // Today's rule, kept for `.declared` instances: the backing is the
+    // declaration's body under the arguments, so the arguments decide and a
+    // backing disagreement is not reported.
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const other = try env.mkTag("Other", &[_]Var{});
+    const aborted = try env.mkTag("Aborted", &[_]Var{});
+    const narrow = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{other})).content);
+    const wide = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{ aborted, other })).content);
+    const a = try env.module_env.types.freshFromContent(try env.mkAlias("Base", wide, &[_]Var{}));
+    const b = try env.module_env.types.freshFromContent(try env.mkAlias("Base", narrow, &[_]Var{}));
+
+    try std.testing.expectEqual(.unified, try env.unify(a, b));
+}
+
+test "unify - a hidden argument carries a widened row into the relation" {
+    // design.md "Hidden Alias Arguments": `Base : [Other]` is `Base(; m) :
+    // [Other | m]`. An instance whose hidden marker slot now holds `[Aborted]`
+    // is `[Aborted, Other]`; its arguments say so, so relating the arguments
+    // relates the widened row against the closed one and fails.
+    for ([_]bool{ false, true }) |reverse| {
+        const gpa = std.testing.allocator;
+        var env = try TestEnv.init(gpa);
+        defer env.deinit();
+
+        const other = try env.mkTag("Other", &[_]Var{});
+        const aborted = try env.mkTag("Aborted", &[_]Var{});
+        const widened_slot = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{aborted})).content);
+        const widened_backing = try env.module_env.types.freshFromContent(.{ .structure = .{ .tag_union = .{
+            .tags = try env.module_env.types.appendTags(&[_]Tag{other}),
+            .ext = widened_slot,
+        } } });
+        const closed_slot = try env.module_env.types.freshFromContent(.{ .structure = .empty_tag_union });
+        const closed_backing = try env.module_env.types.freshFromContent(.{ .structure = .{ .tag_union = .{
+            .tags = try env.module_env.types.appendTags(&[_]Tag{other}),
+            .ext = closed_slot,
+        } } });
+        const widened = try env.module_env.types.freshFromContent(try env.mkAliasWithHidden("Base", widened_backing, &[_]Var{}, &[_]Var{widened_slot}, .marker));
+        const closed = try env.module_env.types.freshFromContent(try env.mkAliasWithHidden("Base", closed_backing, &[_]Var{}, &[_]Var{closed_slot}, .marker));
+
+        const result = if (reverse) try env.unify(closed, widened) else try env.unify(widened, closed);
+        try std.testing.expectEqual(false, result.isAccepted());
+    }
+}
+
+test "unify - an open hidden slot meets a closed one through the arguments" {
+    // The accepted side: a use's instance whose marker slot resolved open
+    // meets the declaration's closed row. Relating the arguments closes the
+    // slot, and with it the backing's row.
+    for ([_]bool{ false, true }) |reverse| {
+        const gpa = std.testing.allocator;
+        var env = try TestEnv.init(gpa);
+        defer env.deinit();
+
+        const other = try env.mkTag("Other", &[_]Var{});
+        const open_slot = try env.module_env.types.fresh();
+        const open_backing = try env.module_env.types.freshFromContent(.{ .structure = .{ .tag_union = .{
+            .tags = try env.module_env.types.appendTags(&[_]Tag{other}),
+            .ext = open_slot,
+        } } });
+        const closed_slot = try env.module_env.types.freshFromContent(.{ .structure = .empty_tag_union });
+        const closed_backing = try env.module_env.types.freshFromContent(.{ .structure = .{ .tag_union = .{
+            .tags = try env.module_env.types.appendTags(&[_]Tag{other}),
+            .ext = closed_slot,
+        } } });
+        const opened = try env.module_env.types.freshFromContent(try env.mkAliasWithHidden("Base", open_backing, &[_]Var{}, &[_]Var{open_slot}, .marker));
+        const closed = try env.module_env.types.freshFromContent(try env.mkAliasWithHidden("Base", closed_backing, &[_]Var{}, &[_]Var{closed_slot}, .marker));
+
+        const result = if (reverse) try env.unify(closed, opened) else try env.unify(opened, closed);
+        try std.testing.expectEqual(.unified, result);
+        try std.testing.expect(env.module_env.types.resolveVar(open_slot).desc.content.structure == .empty_tag_union);
+        try std.testing.expect(env.module_env.types.resolveVar(opened).desc.content == .alias);
+    }
+}
+
+test "unify - a declared argument the body does not use is related exactly" {
+    // `P(a) : Base` is `P(a; m) : [Other | m]`: `a` has no body position, so
+    // only the argument list carries it, and `P([A])` still differs from
+    // `P([B])` when every hidden argument agrees.
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const other = try env.mkTag("Other", &[_]Var{});
+    const slot = try env.module_env.types.freshFromContent(.{ .structure = .empty_tag_union });
+    const backing = try env.module_env.types.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try env.module_env.types.appendTags(&[_]Tag{other}),
+        .ext = slot,
+    } } });
+    const a_arg = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{try env.mkTag("A", &[_]Var{})})).content);
+    const b_arg = try env.module_env.types.freshFromContent((try env.mkTagUnionClosed(&[_]Tag{try env.mkTag("B", &[_]Var{})})).content);
+    const pa = try env.module_env.types.freshFromContent(try env.mkAliasWithHidden("P", backing, &[_]Var{a_arg}, &[_]Var{slot}, .marker));
+    const pb = try env.module_env.types.freshFromContent(try env.mkAliasWithHidden("P", backing, &[_]Var{b_arg}, &[_]Var{slot}, .marker));
+
+    try std.testing.expectEqual(false, (try env.unify(pa, pb)).isAccepted());
+}
+
+test "unify - a flex never takes an alias view whose backing is that flex" {
+    // design.md "Hidden Alias Arguments": an alias can never be its own
+    // backing, so the merged class keeps the backing's own content.
+    for ([_]bool{ false, true }) |reverse| {
+        const gpa = std.testing.allocator;
+        var env = try TestEnv.init(gpa);
+        defer env.deinit();
+
+        const flex = try env.module_env.types.fresh();
+        const alias = try env.module_env.types.freshFromContent(try env.mkAlias("Id", flex, &[_]Var{flex}));
+
+        const result = if (reverse) try env.unify(alias, flex) else try env.unify(flex, alias);
+        try std.testing.expectEqual(.unified, result);
+        try std.testing.expect(env.module_env.types.resolveVar(flex).desc.content == .flex);
+    }
 }
 
 test "unify - alias with concrete" {

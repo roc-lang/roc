@@ -34,7 +34,7 @@ test {
     // If it went up, please make sure your changes are absolutely required!
     try std.testing.expectEqual(32, @sizeOf(Descriptor));
     try std.testing.expectEqual(28, @sizeOf(Content));
-    try std.testing.expectEqual(20, @sizeOf(Alias));
+    try std.testing.expectEqual(24, @sizeOf(Alias));
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to source identity and opacity bits
@@ -359,6 +359,72 @@ pub const Alias = struct {
     /// this alias came from a concrete source declaration. A decl LOCATOR for
     /// resolving method tables in the owning env—never part of identity.
     source_decl: SourceDecl = .none,
+    /// How many of `vars`' arguments are the declaration's own formals, in
+    /// order: the arguments written at the application. Every argument after
+    /// them is HIDDEN: a variable of the declaration's body that no formal
+    /// names (design.md "Hidden Alias Arguments"). The body's only variables
+    /// are its formals and its hidden arguments, so an instance's backing is
+    /// always its declaration's body under ALL its arguments, and two
+    /// applications of one alias are related by their arguments alone.
+    declared_arity: u16,
+    /// Where the declaration's result spine ends, when that end is a slot:
+    /// the one argument a result-row twin or a coerced re-open replaces
+    /// (`Store.aliasSpineSlotIndex`).
+    spine: AliasSpine,
+
+    /// Check the two arity fields against an argument list, refusing
+    /// (rather than truncating) an arity past what they hold or a spine slot
+    /// the list does not have.
+    pub fn checkedArity(declared_arity: usize, arg_count: usize, spine: AliasSpine) std.mem.Allocator.Error!u16 {
+        if (declared_arity > arg_count) return error.OutOfMemory;
+        if (declared_arity > std.math.maxInt(u16)) return error.OutOfMemory;
+        switch (spine.kind) {
+            .none => {},
+            .marker => if (arg_count <= declared_arity) return error.OutOfMemory,
+            .formal => if (arg_count <= declared_arity or spine.base >= declared_arity) return error.OutOfMemory,
+            .declared => if (spine.base >= declared_arity) return error.OutOfMemory,
+        }
+        return @intCast(declared_arity);
+    }
+};
+
+/// See `Alias.spine`. A declaration's result spine is the one path from its
+/// body's root through alias backings, the root function's return, a builtin
+/// `Try`'s error argument, and tag-union extensions
+/// (`AdapterReachPosition.step`); it ends at one position.
+pub const AliasSpine = packed struct(u16) {
+    kind: Kind,
+    /// For `.formal`: the declared formal the end slot stands for (`e` of the
+    /// hidden `e⁺`). Zero otherwise.
+    base: u14,
+
+    pub const Kind = enum(u2) {
+        /// The spine ends at no slot: nothing a twin or re-open replaces.
+        none,
+        /// The spine ends at a polarity marker of the body. The slot is the
+        /// hidden argument at `declared_arity`.
+        marker,
+        /// The spine ends at one occurrence of formal `base`, which the body
+        /// also uses elsewhere. That occurrence is its own hidden formal
+        /// (`e⁺`, the hidden argument at `declared_arity`), so it can differ
+        /// from the others.
+        formal,
+        /// The spine ends at formal `base`, which the body uses nowhere else.
+        /// The slot is that declared argument itself: splitting it off would
+        /// leave the declared formal with no body position, an argument only
+        /// the argument list carries.
+        declared,
+    };
+
+    pub const none: AliasSpine = .{ .kind = .none, .base = 0 };
+    pub const marker: AliasSpine = .{ .kind = .marker, .base = 0 };
+
+    /// The spine ending at formal `base`, refusing an index past what the
+    /// field holds.
+    pub fn formalChecked(kind: Kind, formal_index: usize) std.mem.Allocator.Error!AliasSpine {
+        if (formal_index > std.math.maxInt(u14)) return error.OutOfMemory;
+        return .{ .kind = kind, .base = @intCast(formal_index) };
+    }
 };
 
 /// Represents an ident of a type

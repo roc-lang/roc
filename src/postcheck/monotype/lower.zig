@@ -1985,11 +1985,11 @@ fn requestRowIncludesClosedRow(
 /// silently passing a request no adapter will serve.
 fn resultRowWideningOrNull(
     graph: *InstGraph,
-    declared_row: ClosedResultRow,
+    behind_try: bool,
     public_ret: NodeId,
     request_ret: NodeId,
 ) Allocator.Error!?ResultRowWidening {
-    if (!declared_row.behind_try) {
+    if (!behind_try) {
         if (!try requestRowIncludesClosedRow(graph, public_ret, request_ret)) return null;
         return .{ .exact = &.{}, .widened = .{ .public = public_ret, .request = request_ret } };
     }
@@ -2076,7 +2076,7 @@ fn resultRowWideningRequestOrNull(
     if (public.args.len != request.args.len) {
         Common.compilerBug("result-row widening request changed arity from its checked interface");
     }
-    return try resultRowWideningOrNull(graph, declared_row, public.ret, request.ret);
+    return try resultRowWideningOrNull(graph, declared_row.behind_try, public.ret, request.ret);
 }
 
 /// Relate a recognized result-row widening. Arguments and every non-row
@@ -2107,17 +2107,20 @@ fn applyResultRowWidening(
 /// declines to unify the two rows, it must fail CLOSED. A request related this
 /// way that then does NOT reach an adapter leaves a callee producing one tag
 /// layout and a caller reading another—a wrong value rather than a crash. A
-/// site that cannot reach `completeTemplateReservation` therefore states
+/// site whose request no procedure template serves therefore states
 /// `.no_adapter` and relates exactly instead, so the widening meets the
 /// ordinary `unifyTagRows` rejection.
 const AdapterReachability = enum {
-    /// The request is served by a procedure template specialization, whose
-    /// completion mints the adapter for a recorded widening.
+    /// The request is served by a procedure template specialization, which
+    /// mints the adapter for a recorded widening: at template completion
+    /// (`completeTemplateReservation`) for a context-free specialization, or
+    /// in the caller's draft for a caller-owned one.
     adapter_reachable,
-    /// No `completeTemplateReservation` runs for this request: a `.local_proc`
-    /// dispatch target has no `checked_fn_root` and no template reservation, and
-    /// a caller-owned specialization lowers its body inline at the declared
-    /// interface.
+    /// No procedure template serves this request: a `.local_proc` dispatch
+    /// target has no `checked_fn_root` and no template reservation. (A
+    /// caller-owned template specialization does reach an adapter: it is
+    /// defined in the caller's draft as one, see
+    /// `completeCallerOwnedResultRowWideningAdapter`.)
     no_adapter,
 };
 
@@ -6174,8 +6177,9 @@ const Builder = struct {
         // Such a request is served by specializing the template at its
         // declared row and generating an adapter at the requested row that
         // calls it and re-tags the result. Hosted templates are the instance
-        // where the declared row is the host ABI: a use site widens the
-        // (closed) hosted error row through `?`, and the adapter keeps the
+        // where the declared row is the host ABI: every use of a hosted
+        // function may widen its (closed) `Try` error row, through any
+        // channel (design.md "Row Subsumption"), and the adapter keeps the
         // extern boundary at its declared type instead of emitting a hosted
         // spec whose layout would not match the host ABI.
         if (try self.resultRowWideningAdapterOrNull(
@@ -7237,6 +7241,43 @@ const Builder = struct {
             }
         }
 
+        return try self.lowerDraftTemplateSpecFromEvidence(
+            source_ctx,
+            view,
+            template_ref,
+            template,
+            source_fn_ty,
+            source_fn_key,
+            request_fn_node,
+            edge,
+            family,
+            request_edge,
+            signature_relation,
+            codec_contract,
+        );
+    }
+
+    /// The lookup-or-create half of `lowerDraftTemplateFromContext`, entered
+    /// once the request's evidence is resolved. A caller-owned result-row
+    /// widening adapter re-enters it at the template's declared interface to
+    /// obtain the specialization it calls, so that specialization is found,
+    /// joined, and deduplicated exactly as any other request at that row.
+    fn lowerDraftTemplateSpecFromEvidence(
+        self: *Builder,
+        source_ctx: *BodyContext,
+        view: ModuleView,
+        template_ref: names.ProcTemplate,
+        template: checked.CheckedProcedureTemplate,
+        source_fn_ty: checked.CheckedTypeId,
+        source_fn_key: names.TypeDigest,
+        request_fn_node: NodeId,
+        edge: EdgeEvidence,
+        family: DraftTemplateFamilyAddress,
+        request_edge: DraftRequestEdge,
+        signature_relation: Ast.SignatureRelation,
+        codec_contract: ?DraftCodecContractContext,
+    ) Allocator.Error!DraftFnSlot {
+        const evidence = edge.vector;
         const stored_evidence = try self.constFnEvidence(rootEvidence(template_ref, evidence));
         const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
         const structural_lexical_dependent = template.target != .hosted and
@@ -7505,6 +7546,11 @@ const Builder = struct {
         if (resolved_lookup_address) |address| {
             try registerTemplateSpecLookup(source_ctx.draft, address, @intCast(spec_index));
         }
+        // The owner this request was made under. A caller-owned widening
+        // adapter requests its declared-row specialization under this owner
+        // too, so that specialization is the adapter's sibling rather than
+        // its descendant.
+        const caller_owner = source_ctx.draft.current_owner;
         const owner_scope = try source_ctx.draft.enterOwner(.{ .draft_fn = fn_id });
         defer owner_scope.leave();
         try self.registerDraftProcDebugNameForTemplate(source_ctx.draft, symbol, view, template_ref);
@@ -7527,12 +7573,10 @@ const Builder = struct {
         // their own capability-driven relation below, where the declared row
         // is the host ABI.
         //
-        // A caller-owned (local-context-dependent) specialization has no such
-        // completion: it lowers its body inline at `root_node` below and
-        // registers the def at the declared interface, so no adapter would
-        // ever be generated and the caller would call the narrow body through
-        // its wide request. Declining here leaves the ordinary relation—and
-        // its loud rejection of a widened closed row—in charge.
+        // A caller-owned (local-context-dependent) specialization reaches an
+        // adapter too: instead of lowering its body at the wide request, it
+        // is defined below as a draft adapter that calls the caller-owned
+        // specialization at the declared row and re-tags its result.
         const closed_row_widened = template.target != .hosted and
             try relateClosedResultRowRequestInterface(
                 source_ctx.graph,
@@ -7540,7 +7584,7 @@ const Builder = struct {
                 template.checked_fn_root,
                 root_node,
                 request_fn_node,
-                if (local_context_dependent) .no_adapter else .adapter_reachable,
+                .adapter_reachable,
             );
         var hosted_widened = false;
         if (closed_row_widened) {
@@ -7586,6 +7630,39 @@ const Builder = struct {
             template.target != .hosted)
         {
             try relateFunctionRequestInterface(source_ctx.graph, root_node, request_fn_node);
+        }
+        if (local_context_dependent and closed_row_widened) {
+            // A caller-owned adapter lowers no template body: it calls the
+            // declared-row specialization requested below, which instantiates
+            // this template's codec contract, dispatch relations and interface
+            // relations itself, against a checked root it unifies with
+            // `root_node`. Instantiating them here as well would relate a
+            // second, unused copy of the template's internals to the same
+            // interface and replay its interface dependencies from the
+            // adapter's owner, where nothing calls them.
+            if (template.target == .hosted) {
+                Common.invariant("hosted template specialization depended on a local procedure context");
+            }
+            body_ctx.owner_context_fn_key = source_fn_key;
+            body_ctx.current_fn_key = source_fn_key;
+            try self.completeCallerOwnedResultRowWideningAdapter(
+                source_ctx,
+                &body_ctx,
+                spec_index,
+                caller_owner,
+                view,
+                template_ref,
+                template,
+                source_fn_ty,
+                source_fn_key,
+                root_node,
+                request_fn_node,
+                edge,
+                family,
+                signature_relation,
+                codec_contract,
+            );
+            return .{ .local = .{ .draft = fn_id } };
         }
         if (codec_contract) |contract| {
             try body_ctx.instantiateCodecContractAtCall(
@@ -7652,6 +7729,168 @@ const Builder = struct {
         source_ctx.draft.template_specs.items[spec_index].demand_end =
             @intCast(source_ctx.draft.runtime_value_demands.items.len);
         return .{ .local = .{ .draft = fn_id } };
+    }
+
+    /// Define a caller-owned specialization whose request relation DECLINED to
+    /// unify the template's closed checked result row with the requested one
+    /// (design.md "Result-Row Widening Adapter"). The coordinator adapter
+    /// cannot serve it: that adapter is built from program ids and requests
+    /// its source specialization from the coordinator, while this
+    /// specialization's body depends on the caller's local procedures and
+    /// lives in the caller's draft. So the adapter is built here, in the
+    /// draft, from graph cells: the specialization at `fn_id` becomes a
+    /// generated definition that calls the caller-owned specialization at the
+    /// template's DECLARED interface (`root_node`) and re-tags its result into
+    /// the requested row.
+    ///
+    /// The declared-row specialization is requested through the same
+    /// lookup-or-create path as every other request, under the owner the
+    /// widened request was made under. It is therefore joined and
+    /// deduplicated like any request at the declared row, and it is the
+    /// adapter's sibling rather than its descendant, so a recursive reference
+    /// inside its body can only ever select itself.
+    fn completeCallerOwnedResultRowWideningAdapter(
+        self: *Builder,
+        source_ctx: *BodyContext,
+        body_ctx: *BodyContext,
+        spec_index: usize,
+        caller_owner: DraftOwner,
+        view: ModuleView,
+        template_ref: names.ProcTemplate,
+        template: checked.CheckedProcedureTemplate,
+        source_fn_ty: checked.CheckedTypeId,
+        source_fn_key: names.TypeDigest,
+        root_node: NodeId,
+        request_fn_node: NodeId,
+        edge: EdgeEvidence,
+        family: DraftTemplateFamilyAddress,
+        signature_relation: Ast.SignatureRelation,
+        codec_contract: ?DraftCodecContractContext,
+    ) Allocator.Error!void {
+        const graph = source_ctx.graph;
+        const spec = source_ctx.draft.template_specs.items[spec_index];
+        const fn_id = spec.fn_id;
+        if (!spec.widened_result_row) {
+            Common.compilerBug("caller-owned widening adapter built for a request its relation unified");
+        }
+        const declared_row = closedResultRowOrNull(view, template.checked_fn_root) orelse
+            Common.compilerBug("result-row widening relation declined for a template with no closed checked result row");
+        const try_capability: ?HostedTryAdapterCapability = if (declared_row.behind_try)
+            (try self.hostedTryAdapterCapability(view, template.hosted_try_adapter)) orelse
+                Common.compilerBug("closed Try result row had no checker-recorded Try capability")
+        else
+            null;
+        // A generated-private request carries a producer-authored backing the
+        // declared interface does not; calling a declared-row body through it
+        // would discard that backing.
+        if (try graph.containsGeneratedPrivate(request_fn_node)) {
+            Common.compilerBug("caller-owned result-row widening request carried a generated-private interface");
+        }
+
+        const specs_before = source_ctx.draft.template_specs.items.len;
+        const narrow_slot = narrow: {
+            const caller_scope = try source_ctx.draft.enterOwner(caller_owner);
+            defer caller_scope.leave();
+            break :narrow try self.lowerDraftTemplateSpecFromEvidence(
+                source_ctx,
+                view,
+                template_ref,
+                template,
+                source_fn_ty,
+                source_fn_key,
+                root_node,
+                edge,
+                family,
+                .instantiation,
+                signature_relation,
+                codec_contract,
+            );
+        };
+        const narrow_fn = switch (narrow_slot) {
+            .local => |target| switch (target) {
+                .draft => |draft_fn| draft_fn,
+                .final => Common.compilerBug("caller-owned declared-row specialization resolved outside the caller's draft"),
+            },
+        };
+        if (narrow_fn == fn_id) {
+            Common.compilerBug("caller-owned widening adapter selected itself as its declared-row specialization");
+        }
+        // The declared interface lists exactly the declared labels, so the
+        // request above is a fixpoint of the widening relation.
+        const narrow_spec = source_ctx.draft.template_spec_by_fn.get(narrow_fn) orelse
+            Common.compilerBug("caller-owned declared-row specialization had no specialization record");
+        if (source_ctx.draft.template_specs.items[narrow_spec].widened_result_row) {
+            Common.compilerBug("caller-owned declared-row specialization widened the declared row again");
+        }
+        // A declared-row specialization this request created is owned exactly
+        // as the widened request was, never by the adapter: its lexical owner
+        // and its recursion ancestry are the caller's. (One found instead was
+        // created by an earlier request, under that request's owner.) This
+        // restates what the lookup-or-create path above constructs; it guards
+        // only the created case, since a found specialization's owner was
+        // fixed by the request that created it.
+        if (narrow_spec >= specs_before and
+            (!std.meta.eql(source_ctx.draft.fns.items[@intFromEnum(narrow_fn)].parent_owner, caller_owner) or
+                !std.meta.eql(source_ctx.draft.template_specs.items[narrow_spec].lexical_owner, spec.lexical_owner)))
+        {
+            Common.compilerBug("caller-owned declared-row specialization was not owned by the widened request's owner");
+        }
+        const callee_fn_node = try body_ctx.draftFnSlotTypeNode(narrow_slot, root_node);
+        try relateFunctionRequestInterface(graph, root_node, callee_fn_node);
+
+        const declared = try graph.functionNodes(root_node);
+        const request = try graph.functionNodes(request_fn_node);
+        if (declared.args.len != request.args.len) {
+            Common.compilerBug("result-row widening request changed arity from its checked interface");
+        }
+        const declared_row_node = if (try_capability) |capability|
+            (graphHostedTryInfoOrNull(graph, capability, declared.ret) orelse
+                Common.compilerBug("closed Try result row did not instantiate to its checker-recorded Try nominal")).err
+        else
+            declared.ret;
+        // Graph-side counterpart of `requireLoweredDeclaredRowLabels`: the
+        // instantiated declared row must list exactly the checker's labels.
+        const declared_tags = (try graph.tagRowNodesOrNull(declared_row_node)) orelse
+            Common.compilerBug("closed result row did not instantiate to a tag union");
+        if (declared_tags.tags.len != checkedClosedRowLabelCount(view, declared_row.row)) {
+            Common.compilerBug("instantiated declared result row disagreed with the checker's recorded labels");
+        }
+
+        const args_start = body_ctx.row_injection_args.items.len;
+        defer body_ctx.row_injection_args.shrinkRetainingCapacity(args_start);
+        const call_args_start = body_ctx.row_injection_exprs.items.len;
+        defer body_ctx.row_injection_exprs.shrinkRetainingCapacity(call_args_start);
+        for (request.args) |arg_node| {
+            const cell = DraftTypeCell.fromGraphNode(arg_node);
+            const local = try body_ctx.addLocalWithBinderCell(self.symbols.fresh(), cell, null);
+            try body_ctx.row_injection_args.append(self.allocator, .{ .local = local, .ty = cell });
+            try body_ctx.row_injection_exprs.append(self.allocator, try body_ctx.addExprWithTypeCell(cell, .{ .local = local }));
+        }
+        const call = try body_ctx.addExprWithTypeCell(DraftTypeCell.fromGraphNode(declared.ret), .{ .call_proc = .{
+            .callee = draftProcCalleeForSlot(narrow_slot),
+            .args = try body_ctx.addExprSpan(body_ctx.row_injection_exprs.items[call_args_start..]),
+        } });
+        const body = if (try_capability) |capability|
+            try body_ctx.injectTryErrorRowAtNodes(capability, call, declared.ret, request.ret)
+        else
+            try body_ctx.injectTagRowAtNodes(call, declared.ret, request.ret);
+
+        var adapter_template = source_ctx.draft.fns.items[@intFromEnum(fn_id)].source;
+        // The same identity the coordinator adapter carries: the template is
+        // the one ADAPTED, beside a deliberately wide function type.
+        adapter_template.fn_def = .{ .checked_generated = template_ref };
+        source_ctx.draft.fns.items[@intFromEnum(fn_id)].source = adapter_template;
+        _ = try source_ctx.draft.addNestedDef(.{
+            .symbol = spec.symbol,
+            .fn_def = adapter_template,
+            .fn_id = .{ .draft = fn_id },
+            .args = try source_ctx.draft.addTypedLocalSpan(body_ctx.row_injection_args.items[args_start..]),
+            .body = body,
+            .ret = DraftTypeCell.fromGraphNode(request.ret),
+        });
+        source_ctx.draft.template_specs.items[spec_index].state = .lowered;
+        source_ctx.draft.template_specs.items[spec_index].demand_end =
+            @intCast(source_ctx.draft.runtime_value_demands.items.len);
     }
 
     /// Lower one already-registered context-free specialization into the
@@ -8372,7 +8611,7 @@ const Builder = struct {
             try seen.put(current, {});
             switch (type_store.get(current)) {
                 .named => |named| {
-                    if (named.kind != .alias and (!sameTypeDef(named.def, owner_def) or !self.sameNominalArgs(named.args, mono_args))) {
+                    if (named.kind != .alias and (!sameTypeDef(named.def, owner_def) or !try self.sameNominalArgs(named.args, mono_args))) {
                         return current;
                     }
                     const next = named.backing orelse return current;
@@ -8383,7 +8622,11 @@ const Builder = struct {
         }
     }
 
-    fn sameNominalArgs(self: *Builder, actual_span: Type.Span, expected: []const Type.TypeId) bool {
+    /// Whether two nominal argument lists are the same Monotypes. Decided by
+    /// exact equality (`typeEql`), the authority on reuse, rather than by
+    /// specialization digest, so the interface digest stays a pre-filter
+    /// everywhere (design.md "Digest Domains").
+    fn sameNominalArgs(self: *Builder, actual_span: Type.Span, expected: []const Type.TypeId) Allocator.Error!bool {
         const type_store = self.activeTypeStore();
         const name_store = self.activeNameStore();
         const actual = type_store.span(actual_span);
@@ -8391,9 +8634,7 @@ const Builder = struct {
         for (expected, 0..) |expected_ty, index| {
             const actual_ty = GuardedList.at(actual, index);
             if (actual_ty == expected_ty) continue;
-            const actual_digest = type_store.specializationDigest(name_store, actual_ty);
-            const expected_digest = type_store.specializationDigest(name_store, expected_ty);
-            if (!std.mem.eql(u8, actual_digest.bytes[0..], expected_digest.bytes[0..])) return false;
+            if (!try type_store.typeEql(name_store, actual_ty, expected_ty)) return false;
         }
         return true;
     }
@@ -18664,6 +18905,18 @@ const BodyContext = struct {
     /// (see `OptionalDestructBind`), drained by the same owners that drain
     /// `pattern_literal_guards`.
     optional_destruct_binds: std.ArrayList(OptionalDestructBind) = .empty,
+    /// Scratch for the caller-owned result-row widening adapter and its draft
+    /// re-tag helpers (`injectTagRowAtNodes`). A body context lowers one
+    /// specialization and builds at most one such adapter, so these are not
+    /// shared across adapters: they start empty and allocate only if this
+    /// context builds one. Within that adapter each use appends from the
+    /// current length and shrinks back when done, so the call's arguments and
+    /// every re-tagged tag's payloads share one buffer per kind instead of
+    /// allocating a list per tag.
+    row_injection_branches: std.ArrayList(DraftBranch) = .empty,
+    row_injection_pats: std.ArrayList(DraftPatId) = .empty,
+    row_injection_exprs: std.ArrayList(DraftExprId) = .empty,
+    row_injection_args: std.ArrayList(DraftTypedLocal) = .empty,
     /// Frozen-at-creation reachability topology attached to runtime demands
     /// emitted while lowering one match branch. The root plus explicit
     /// constructor payload/element cells prove when that branch cannot run.
@@ -19698,6 +19951,10 @@ const BodyContext = struct {
         self.direct_call_requests.deinit(self.allocator);
         self.pattern_literal_guards.deinit(self.allocator);
         self.optional_destruct_binds.deinit(self.allocator);
+        self.row_injection_branches.deinit(self.allocator);
+        self.row_injection_pats.deinit(self.allocator);
+        self.row_injection_exprs.deinit(self.allocator);
+        self.row_injection_args.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
         self.inhabitation_visiting.deinit(self.allocator);
         self.instantiation.deinit();
@@ -20169,6 +20426,157 @@ const BodyContext = struct {
             },
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(node), data),
         };
+    }
+
+    /// Pattern counterpart to `addConstructorExprAtNode`: a constructor
+    /// pattern at a graph node, with one explicit `.nominal` layer per nominal
+    /// layer of that node and no layer for a transparent alias.
+    fn addConstructorPatAtNode(self: *BodyContext, node: NodeId, data: BodyPatData) Allocator.Error!DraftPatId {
+        const representation_node = self.constructorRepresentationNode(node);
+        if (self.graph.content(representation_node) == .named) {
+            const backing = self.graph.namedNodes(representation_node).backing orelse
+                Common.invariant("named constructor graph node had no explicit backing");
+            return try self.addPatWithTypeCell(
+                DraftTypeCell.fromGraphNode(representation_node),
+                .{ .nominal = try self.addConstructorPatAtNode(backing.node, data) },
+            );
+        }
+        return try self.addPatWithTypeCell(DraftTypeCell.fromGraphNode(node), data);
+    }
+
+    /// Re-tag a value of a closed tag row into a row that includes it, built
+    /// from graph cells: the draft-domain twin of `Builder.tagRowInjectionExpr`
+    /// for a caller-owned result-row widening adapter. Each payload is bound
+    /// at the source row's payload cell and rebuilt unchanged; the widening
+    /// relation related every shared label's payloads exactly.
+    fn injectTagRowAtNodes(
+        self: *BodyContext,
+        source_expr: DraftExprId,
+        source_row: NodeId,
+        target_row: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const source = (try self.graph.tagRowNodesOrNull(source_row)) orelse
+            Common.compilerBug("result-row widening adapter source was not a tag row");
+        const target = (try self.graph.tagRowNodesOrNull(target_row)) orelse
+            Common.compilerBug("result-row widening adapter target was not a tag row");
+        const branches_start = self.row_injection_branches.items.len;
+        defer self.row_injection_branches.shrinkRetainingCapacity(branches_start);
+        for (source.tags) |source_tag| {
+            const target_tag = graphTagByName(target.tags, source_tag.name) orelse
+                Common.compilerBug("result-row widening request removed a declared label");
+            if (source_tag.payloads.len != target_tag.payloads.len) {
+                Common.compilerBug("result-row widening request changed a declared payload arity");
+            }
+            const pats_start = self.row_injection_pats.items.len;
+            defer self.row_injection_pats.shrinkRetainingCapacity(pats_start);
+            const exprs_start = self.row_injection_exprs.items.len;
+            defer self.row_injection_exprs.shrinkRetainingCapacity(exprs_start);
+            for (source_tag.payloads, target_tag.payloads) |source_payload, target_payload| {
+                if (!self.graph.sameClass(source_payload, target_payload)) {
+                    Common.compilerBug("result-row widening request changed a declared payload type");
+                }
+                const cell = DraftTypeCell.fromGraphNode(source_payload);
+                const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), cell, null);
+                try self.row_injection_pats.append(self.allocator, try self.addPatWithTypeCell(cell, .{ .bind = local }));
+                try self.row_injection_exprs.append(self.allocator, try self.addExprWithTypeCell(cell, .{ .local = local }));
+            }
+            const pat = try self.addConstructorPatAtNode(source_row, .{ .tag = .{
+                .name = source_tag.name,
+                .payloads = try self.addPatSpan(self.row_injection_pats.items[pats_start..]),
+            } });
+            const body = try self.addConstructorExprAtNode(target_row, .{ .tag = .{
+                .name = source_tag.name,
+                .payloads = try self.addExprSpan(self.row_injection_exprs.items[exprs_start..]),
+            } });
+            try self.row_injection_branches.append(self.allocator, .{ .pat = pat, .body = body });
+        }
+        return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(target_row), .{ .match_ = .{
+            .scrutinee = source_expr,
+            .branches = try self.addBranchSpan(self.row_injection_branches.items[branches_start..]),
+        } });
+    }
+
+    /// Require that one `Try` backing tag's payload cell is the nominal
+    /// argument the capability maps it to: the graph-side counterpart of
+    /// `Builder.hostedTryInfoOrNull`'s payload-mapping check.
+    fn requireTryBackingPayloadAtNode(
+        self: *BodyContext,
+        try_node: NodeId,
+        tag_name: names.TagNameId,
+        argument: NodeId,
+    ) Allocator.Error!void {
+        const representation_node = self.constructorRepresentationNode(try_node);
+        if (self.graph.content(representation_node) != .named) {
+            Common.compilerBug("closed Try result row did not instantiate to a nominal");
+        }
+        const backing = self.graph.namedNodes(representation_node).backing orelse
+            Common.compilerBug("Try nominal had no explicit backing");
+        const tags = (try self.graph.tagRowNodesOrNull(backing.node)) orelse
+            Common.compilerBug("Try nominal backing was not a tag row");
+        const tag = graphTagByName(tags.tags, tag_name) orelse
+            Common.compilerBug("Try nominal backing omitted its capability-recorded tag");
+        if (tag.payloads.len != 1 or !self.graph.sameClass(tag.payloads[0], argument)) {
+            Common.compilerBug("Try capability payload mapping disagreed with its nominal arguments");
+        }
+    }
+
+    /// Re-tag a `Try` whose error row is closed into a `Try` whose error row
+    /// includes it, built from graph cells: the draft-domain twin of
+    /// `Builder.hostedTryReturnInjectionExpr`. `Ok` is rebuilt unchanged;
+    /// `Err`'s payload goes through `injectTagRowAtNodes`.
+    fn injectTryErrorRowAtNodes(
+        self: *BodyContext,
+        capability: HostedTryAdapterCapability,
+        source_expr: DraftExprId,
+        source_try: NodeId,
+        target_try: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const source = graphHostedTryInfoOrNull(self.graph, capability, source_try) orelse
+            Common.compilerBug("result-row widening adapter source was not the capability's Try");
+        const target = graphHostedTryInfoOrNull(self.graph, capability, target_try) orelse
+            Common.compilerBug("result-row widening adapter target was not the capability's Try");
+        if (!self.graph.sameClass(source.ok, target.ok)) {
+            Common.compilerBug("Try adapter changed Ok type");
+        }
+        try self.requireTryBackingPayloadAtNode(source_try, capability.ok_tag, source.ok);
+        try self.requireTryBackingPayloadAtNode(source_try, capability.err_tag, source.err);
+        try self.requireTryBackingPayloadAtNode(target_try, capability.ok_tag, target.ok);
+        try self.requireTryBackingPayloadAtNode(target_try, capability.err_tag, target.err);
+
+        const ok_cell = DraftTypeCell.fromGraphNode(source.ok);
+        const ok_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), ok_cell, null);
+        const ok_pat = try self.addConstructorPatAtNode(source_try, .{ .tag = .{
+            .name = capability.ok_tag,
+            .payloads = try self.addPatSpan(&.{try self.addPatWithTypeCell(ok_cell, .{ .bind = ok_local })}),
+        } });
+        const ok_body = try self.addConstructorExprAtNode(target_try, .{ .tag = .{
+            .name = capability.ok_tag,
+            .payloads = try self.addExprSpan(&.{try self.addExprWithTypeCell(ok_cell, .{ .local = ok_local })}),
+        } });
+
+        const err_cell = DraftTypeCell.fromGraphNode(source.err);
+        const err_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), err_cell, null);
+        const err_pat = try self.addConstructorPatAtNode(source_try, .{ .tag = .{
+            .name = capability.err_tag,
+            .payloads = try self.addPatSpan(&.{try self.addPatWithTypeCell(err_cell, .{ .bind = err_local })}),
+        } });
+        const injected_err = try self.injectTagRowAtNodes(
+            try self.addExprWithTypeCell(err_cell, .{ .local = err_local }),
+            source.err,
+            target.err,
+        );
+        const err_body = try self.addConstructorExprAtNode(target_try, .{ .tag = .{
+            .name = capability.err_tag,
+            .payloads = try self.addExprSpan(&.{injected_err}),
+        } });
+
+        return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(target_try), .{ .match_ = .{
+            .scrutinee = source_expr,
+            .branches = try self.addBranchSpan(&.{
+                .{ .pat = ok_pat, .body = ok_body },
+                .{ .pat = err_pat, .body = err_body },
+            }),
+        } });
     }
 
     /// Follow only producer-authored transparent alias edges to the runtime
@@ -25044,6 +25452,12 @@ const BodyContext = struct {
         const source_region = self.hoistedConstSourceRegion(entry);
         return switch (template.state) {
             .stored_const => |stored| blk: {
+                if (stored.other_row_template) |row_template| {
+                    if (!try self.storedConstRepresentationMatchesType(self.view, stored, ty)) {
+                        try self.constrainTypeToMono(entry.checked_type, ty);
+                        break :blk try self.lowerConstEvalTemplateUse(self.view, row_template, entry.const_ref, ty, source_region, .{ .module = self.view.key, .root = entry.root });
+                    }
+                }
                 const stored_ty = try self.storedConstRootMonoType(self.view, stored, entry.checked_type);
                 if (!self.sameType(ty, stored_ty)) {
                     Common.invariant("stored hoisted const representation differed from its expected Monotype type");
@@ -25082,6 +25496,19 @@ const BodyContext = struct {
         const source_region = self.hoistedConstSourceRegion(entry);
         return switch (template.state) {
             .stored_const => |stored| blk: {
+                if (stored.other_row_template) |row_template| {
+                    if (!try self.storedConstRepresentationMatchesNode(self.view, stored, request_node)) {
+                        try self.graph.unify(try self.instNode(entry.checked_type), request_node);
+                        break :blk try self.lowerConstEvalTemplateUseAtNode(
+                            self.view,
+                            row_template,
+                            entry.const_ref,
+                            request_node,
+                            source_region,
+                            .{ .module = self.view.key, .root = entry.root },
+                        );
+                    }
+                }
                 const stored_node = try self.storedConstRootTypeNode(self.view, stored, entry.checked_type);
                 try relateRequestComponent(self.graph, request_node, stored_node);
                 const saved_loc = self.builder.current_loc;
@@ -25172,7 +25599,10 @@ const BodyContext = struct {
         if (self.loweringOwnHoistedConstRoot(entry)) return null;
         const template = self.view.const_templates.get(entry.const_ref);
         const hoisted_ty = switch (template.state) {
-            .stored_const => |stored| try self.storedConstRootMonoType(self.view, stored, entry.checked_type),
+            .stored_const => |stored| if (storedConstIsExactRepresentation(stored))
+                try self.storedConstRootMonoType(self.view, stored, entry.checked_type)
+            else
+                try self.graph.specializationTypeViewForNode(try self.instNode(entry.checked_type)),
             // Dispatch requires one concrete specialization type for this
             // selected const use. A generalized field whose presence has no
             // other evidence takes the declared required default in an
@@ -36113,6 +36543,11 @@ const BodyContext = struct {
         // A hosted declaration has no Roc body that can author a private
         // iterator representation. Its public request remains the exact ABI.
         if (template.target == .hosted) return current_node;
+        // A request whose relation declined to unify a closed result row is
+        // owed a widening adapter, which only template completion mints;
+        // lowering the body here would unify the declared row with the
+        // request's wider one.
+        if (spec.widened_result_row) return current_node;
 
         // Lower into the caller's worker-owned draft. The function keeps its
         // own ownership range, so ordered commit can retain or discard it
@@ -36176,8 +36611,18 @@ const BodyContext = struct {
             Common.invariant("checked const use reached Monotype without a requested checked type");
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
         const template = store_view.const_templates.get(const_use.const_ref);
+        // A use that re-opened a coerced row may be wider than every
+        // representation the constant has; the restore re-tags it, so type
+        // selection contributes only the request's own type.
+        if (coercedConstUseRow(template, const_use) != null) return try self.lowerTypeView(requested_ty);
         return switch (template.state) {
-            .stored_const => |stored| try self.storedConstRootMonoType(store_view, stored, requested_ty),
+            // A sealed-row template answers only a settled request, which
+            // this site cannot see, so it selects the request's own type here
+            // exactly as an eval-template constant does.
+            .stored_const => |stored| if (storedConstIsExactRepresentation(stored))
+                try self.storedConstRootMonoType(store_view, stored, requested_ty)
+            else
+                try self.lowerTypeView(requested_ty),
             // An unimplemented declaration keeps its declared type; only the
             // value is missing, and reaching it crashes.
             .eval_template, .unimplemented => try self.lowerTypeView(requested_ty),
@@ -36194,8 +36639,18 @@ const BodyContext = struct {
             Common.invariant("checked const use reached Monotype without a requested checked type");
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
         const template = store_view.const_templates.get(const_use.const_ref);
-        const requested_node = switch (template.state) {
-            .stored_const => |stored| try self.storedConstRootTypeNode(store_view, stored, requested_ty),
+        const requested_node = if (coercedConstUseRow(template, const_use) != null)
+            // See `constUseMonoType`: the restore relates and re-tags.
+            try self.instNode(requested_ty)
+        else switch (template.state) {
+            // Relating an open request to a sealed-row constant's stored
+            // representation would force the request narrow rather than
+            // observe that it already is, so this site contributes only the
+            // request's own node and the restore decides.
+            .stored_const => |stored| if (storedConstIsExactRepresentation(stored))
+                try self.storedConstRootTypeNode(store_view, stored, requested_ty)
+            else
+                try self.instNode(requested_ty),
             .eval_template, .unimplemented => try self.instNode(requested_ty),
             .reserved => Common.invariant("reserved checked const template reached Monotype type selection"),
         };
@@ -36216,8 +36671,17 @@ const BodyContext = struct {
 
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
         const template = store_view.const_templates.get(const_use.const_ref);
+        if (coercedConstUseRow(template, const_use)) |row| {
+            return try self.restoreCoercedConstUseAtNode(store_view, template, row, const_use, try self.activeNodeFromType(ty));
+        }
         return switch (template.state) {
             .stored_const => |stored| blk: {
+                if (stored.other_row_template) |row_template| {
+                    if (!try self.storedConstRepresentationMatchesType(store_view, stored, ty)) {
+                        try self.constrainTypeToMono(requested_ty, ty);
+                        break :blk try self.lowerConstEvalTemplateUse(store_view, row_template, const_use.const_ref, ty, null, null);
+                    }
+                }
                 const stored_ty = try self.storedConstRootMonoType(store_view, stored, requested_ty);
                 if (!self.sameType(ty, stored_ty)) {
                     Common.invariant("stored const representation differed from its expected Monotype type");
@@ -36277,8 +36741,25 @@ const BodyContext = struct {
 
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
         const template = store_view.const_templates.get(const_use.const_ref);
+        if (coercedConstUseRow(template, const_use)) |row| {
+            try self.graph.unify(try self.instNode(requested_ty), request_node);
+            return try self.restoreCoercedConstUseAtNode(store_view, template, row, const_use, request_node);
+        }
         return switch (template.state) {
             .stored_const => |stored| blk: {
+                if (stored.other_row_template) |row_template| {
+                    if (!try self.storedConstRepresentationMatchesNode(store_view, stored, request_node)) {
+                        try self.graph.unify(try self.instNode(requested_ty), request_node);
+                        break :blk try self.lowerConstEvalTemplateUseAtNode(
+                            store_view,
+                            row_template,
+                            const_use.const_ref,
+                            request_node,
+                            null,
+                            null,
+                        );
+                    }
+                }
                 const stored_node = try self.storedConstRootTypeNode(store_view, stored, requested_ty);
                 const interface_node = try self.instNode(requested_ty);
                 try relateRequestComponent(self.graph, request_node, stored_node);
@@ -36328,6 +36809,178 @@ const BodyContext = struct {
                 );
             },
         };
+    }
+
+    /// The constant's coerced row when THIS use re-opened it (design.md "Row
+    /// Subsumption"), or null. Both halves are the checker's own records: the
+    /// constant's (`ConstTemplate.coerced_row`) and the use's
+    /// (`ConstUseTemplate.coerced_result_row`); they must name the same cell.
+    fn coercedConstUseRow(template: checked.ConstTemplate, const_use: checked.ConstUseTemplate) ?checked.CoercedConstRow {
+        switch (const_use.coerced_result_row) {
+            .none => return null,
+            .direct => if (template.coerced_row != .direct) {
+                Common.invariant("a const use re-opened a direct row its constant does not coerce");
+            },
+            .try_error_row => if (template.coerced_row != .try_error_row) {
+                Common.invariant("a const use re-opened a Try error row its constant does not coerce");
+            },
+        }
+        return template.coerced_row;
+    }
+
+    /// Restore a coerced constant for a use that re-opened its row: the value
+    /// is produced at the constant's DECLARED row—its stored value, or its
+    /// eval template lowered at its own type—and re-tagged into the row the
+    /// use asks for. The request is never unified with the declared row, which
+    /// would narrow a request that already includes more tags.
+    fn restoreCoercedConstUseAtNode(
+        self: *BodyContext,
+        store_view: ModuleView,
+        template: checked.ConstTemplate,
+        row: checked.CoercedConstRow,
+        const_use: checked.ConstUseTemplate,
+        request_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        return switch (template.state) {
+            .stored_const => |stored| blk: {
+                // A sealed-row constant answers only a request that has
+                // settled on exactly its stored representation; any other
+                // request lowers the retained eval template, as for an
+                // uncoerced sealed-row constant.
+                if (stored.other_row_template) |row_template| {
+                    if (!try self.storedConstRepresentationMatchesNode(store_view, stored, request_node)) {
+                        break :blk try self.lowerConstEvalTemplateBodyAtNode(
+                            store_view,
+                            row_template,
+                            const_use.const_ref,
+                            request_node,
+                            null,
+                            null,
+                            row,
+                        );
+                    }
+                }
+                const stored_node = try self.graph.importMonoIndependent(
+                    try self.lowerConstCaptureType(store_view, stored.root_type),
+                );
+                var active_const_scope: ActiveConstBindingScope = .{};
+                const has_active_const_binding = try self.enterActiveConstBindingAtCell(
+                    store_view,
+                    const_use.const_ref,
+                    DraftTypeCell.fromGraphNode(stored_node),
+                    &active_const_scope,
+                );
+                defer self.leaveActiveConstBinding(&active_const_scope);
+                // The static-data candidate path keys its request by the
+                // use's checked type, which is not the stored row's here, so
+                // a coerced use restores the node directly.
+                const restored = try self.restoreConstNodeAtNodeWithStaticRoot(
+                    store_view,
+                    self.view,
+                    stored.node,
+                    stored_node,
+                    const_use.const_ref,
+                );
+                const finished = if (has_active_const_binding)
+                    try self.finishActiveConstBinding(active_const_scope.active, restored)
+                else
+                    restored;
+                break :blk try self.coerceConstRowAtNodes(store_view, row, finished, stored_node, request_node);
+            },
+            .eval_template => |eval| try self.lowerConstEvalTemplateBodyAtNode(
+                store_view,
+                eval,
+                const_use.const_ref,
+                request_node,
+                null,
+                null,
+                row,
+            ),
+            .reserved => Common.invariant("reserved checked const template reached Monotype"),
+            .unimplemented => Common.invariant("a declaration with no implementation recorded a row coercion"),
+        };
+    }
+
+    /// Serve `request_node` from `expr`, a value of a coerced constant at its
+    /// declared type `declared_node`. When the request's coerced row lists
+    /// more tags than the declared one, the two relate component-wise without
+    /// unifying that row (`resultRowWideningOrNull`, the relation the
+    /// Result-Row Widening Adapter uses) and the value is re-tagged into the
+    /// request's row; otherwise the two are the same type and relate exactly.
+    fn coerceConstRowAtNodes(
+        self: *BodyContext,
+        store_view: ModuleView,
+        row: checked.CoercedConstRow,
+        expr: DraftExprId,
+        declared_node: NodeId,
+        request_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const behind_try = switch (row) {
+            .none => Common.invariant("an uncoerced constant reached the coerced restore"),
+            .direct => false,
+            .try_error_row => true,
+        };
+        const widening = (try resultRowWideningOrNull(self.graph, behind_try, declared_node, request_node)) orelse {
+            try relateRequestComponent(self.graph, request_node, declared_node);
+            return expr;
+        };
+        for (widening.exact) |pair| {
+            try relateRequestComponent(self.graph, pair.public, pair.request);
+        }
+        try relateIncludedRowPayloads(self.graph, widening.widened.public, widening.widened.request);
+        return switch (row) {
+            .none => unreachable,
+            .direct => try self.injectTagRowAtNodes(expr, declared_node, request_node),
+            .try_error_row => |capability| try self.injectTryErrorRowAtNodes(
+                (try self.builder.hostedTryAdapterCapability(store_view, capability)) orelse unreachable,
+                expr,
+                declared_node,
+                request_node,
+            ),
+        };
+    }
+
+    /// Whether this template's stored value is the representation of EVERY
+    /// use. That is true of every stored constant that could exist before a
+    /// root with an unbound row tail could be compile-time evaluated: its
+    /// producer's solved type fixed one representation and each use was
+    /// checked against that type. Those uses keep the unconditional stored
+    /// path, so nothing about them moves.
+    ///
+    /// A sealed-row template instead answers only the request that resolved
+    /// to the row it was evaluated at, and behaves like an eval-template
+    /// constant everywhere else: it forces nothing while the request is still
+    /// open, and upgrades to the stored value only at the restore, once the
+    /// request has settled on exactly that representation.
+    fn storedConstIsExactRepresentation(stored: checked.StoredConstTemplate) bool {
+        return stored.other_row_template == null;
+    }
+
+    /// Whether a sealed-row constant's stored value is the representation
+    /// this SETTLED request asks for.
+    fn storedConstRepresentationMatchesType(
+        self: *BodyContext,
+        store_view: ModuleView,
+        stored: checked.StoredConstTemplate,
+        ty: Type.TypeId,
+    ) Allocator.Error!bool {
+        return self.sameType(ty, try self.lowerConstCaptureType(store_view, stored.root_type));
+    }
+
+    /// The same question where the request is still a live graph node. The node
+    /// is READ, never related: relating it to the stored representation would
+    /// force the request narrow rather than observe that it already is, which
+    /// is what the restore's own comment forbids. A node that has not resolved
+    /// has not committed to the stored representation, so the constant
+    /// re-lowers its body exactly as an eval-template constant would.
+    fn storedConstRepresentationMatchesNode(
+        self: *BodyContext,
+        store_view: ModuleView,
+        stored: checked.StoredConstTemplate,
+        request_node: NodeId,
+    ) Allocator.Error!bool {
+        if (!try self.graph.typeIsResolved(request_node)) return false;
+        return try self.storedConstRepresentationMatchesType(store_view, stored, try self.activeTypeFromNode(request_node));
     }
 
     /// Return the exact producer-owned runtime representation stored beside a
@@ -36390,6 +37043,23 @@ const BodyContext = struct {
         };
     }
 
+    /// Whether a const use reads its root's declared function instead of
+    /// lowering the root's body. The read calls the root's one function at
+    /// the use's type, so it is sound only for an `.exact` root, whose solved
+    /// type every use shares. A `.sealed_row` root is evaluated at its sealed
+    /// row (`CompileTimeRootRepresentation`); a use that instantiates that row
+    /// differently would make the read relate the root's own function to the
+    /// use's row and evaluate the root at it, so such a use lowers the body at
+    /// its own type, as `StoredConstTemplate.other_row_template` does once
+    /// the root is stored.
+    fn constRootReadDeclared(self: *BodyContext, store_view: ModuleView, root_id: checked.ComptimeRootId) bool {
+        if (!self.builder.comptimeValueReadDeclared(store_view, root_id)) return false;
+        return switch (store_view.compile_time_roots.root(root_id).representation) {
+            .exact => true,
+            .sealed_row => false,
+        };
+    }
+
     fn lowerConstEvalTemplateUse(
         self: *BodyContext,
         store_view: ModuleView,
@@ -36419,9 +37089,36 @@ const BodyContext = struct {
         current_entry_root: ?EntryRoot,
     ) Allocator.Error!DraftExprId {
         const body = store_view.checked_const_bodies.get(eval.body);
-        if (self.builder.comptimeValueReadDeclared(store_view, body.root)) {
+        if (self.constRootReadDeclared(store_view, body.root)) {
             return self.declaredComptimeValueRead(store_view, body.root, DraftTypeCell.fromGraphNode(request_node), const_use);
         }
+        return try self.lowerConstEvalTemplateBodyAtNode(
+            store_view,
+            eval,
+            const_use,
+            request_node,
+            source_region_override,
+            current_entry_root,
+            null,
+        );
+    }
+
+    /// Lower a const eval template's body for one use. With `coerced`, the
+    /// use re-opened the constant's coerced row (design.md "Row
+    /// Subsumption"): the body is lowered at its OWN declared type, never
+    /// unified with the request, and its result is re-tagged into the
+    /// request's row (`coerceConstRowAtNodes`).
+    fn lowerConstEvalTemplateBodyAtNode(
+        self: *BodyContext,
+        store_view: ModuleView,
+        eval: checked.ConstEvalTemplate,
+        const_use: checked.ConstLocator,
+        request_node: NodeId,
+        source_region_override: ?base.Region,
+        current_entry_root: ?EntryRoot,
+        coerced: ?checked.CoercedConstRow,
+    ) Allocator.Error!DraftExprId {
+        const body = store_view.checked_const_bodies.get(eval.body);
         const entry_template = store_view.templates.get(eval.entry_template.template);
 
         var body_ctx = try BodyContext.initWithMethodScope(
@@ -36451,11 +37148,22 @@ const BodyContext = struct {
             .root = body.root,
         };
 
+        // The node the body is lowered at: the request itself, or—for a use
+        // that re-opened a coerced row—the body's declared type, which the
+        // request only INCLUDES at that row.
+        const body_node = if (coerced != null) try body_ctx.instNode(body.checked_type) else request_node;
+        if (coerced) |row| {
+            if (self.constRootReadDeclared(store_view, body.root)) {
+                const read = try self.declaredComptimeValueRead(store_view, body.root, DraftTypeCell.fromGraphNode(body_node), const_use);
+                return try self.coerceConstRowAtNodes(store_view, row, read, body_node, request_node);
+            }
+        }
+
         var active_const_scope: ActiveConstBindingScope = .{};
         const has_active_const_binding = try body_ctx.enterActiveConstBindingAtCell(
             store_view,
             const_use,
-            DraftTypeCell.fromGraphNode(request_node),
+            DraftTypeCell.fromGraphNode(body_node),
             &active_const_scope,
         );
         defer body_ctx.leaveActiveConstBinding(&active_const_scope);
@@ -36468,19 +37176,23 @@ const BodyContext = struct {
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
 
-        const wrapper_fn_node = try body_ctx.graphFunctionNode(&.{}, request_node);
+        const wrapper_fn_node = try body_ctx.graphFunctionNode(&.{}, body_node);
         try self.graph.unify(
             try body_ctx.instNode(entry_template.checked_fn_root),
             wrapper_fn_node,
         );
-        try self.graph.unify(try body_ctx.instNode(body.checked_type), request_node);
+        if (coerced == null) try self.graph.unify(try body_ctx.instNode(body.checked_type), request_node);
 
-        const restored = try body_ctx.lowerComptimeRootExprAtCell(
+        const lowered = try body_ctx.lowerComptimeRootExprAtCell(
             body.body_expr,
-            DraftTypeCell.fromGraphNode(request_node),
+            DraftTypeCell.fromGraphNode(body_node),
         );
-        if (has_active_const_binding) return try body_ctx.finishActiveConstBinding(active_const_scope.active, restored);
-        return restored;
+        const restored = if (has_active_const_binding)
+            try body_ctx.finishActiveConstBinding(active_const_scope.active, lowered)
+        else
+            lowered;
+        const row = coerced orelse return restored;
+        return try self.coerceConstRowAtNodes(store_view, row, restored, body_node, request_node);
     }
 
     fn restoreConstNode(
@@ -43597,13 +44309,23 @@ const BodyContext = struct {
     }
 
     /// The schema of the entry template a const use evaluates through; a
-    /// stored or unimplemented const lowers no template body.
+    /// stored or unimplemented const lowers no template body. A sealed-row
+    /// const that this use cannot read the stored value of DOES lower one, and
+    /// its evidence is supplied by this use site like any other eval-template
+    /// const, so it reports the same schema they do.
     fn constUseSchema(self: *BodyContext, const_use: checked.ConstUseTemplate) SchemeRequirements {
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
         const template = store_view.const_templates.get(const_use.const_ref);
         return switch (template.state) {
             .eval_template => |eval| self.templateSchema(eval.entry_template),
-            .stored_const, .reserved, .unimplemented => emptySchema(store_view),
+            // Whether a sealed-row constant reads its stored value is not
+            // decided until the restore, so its use site reports the schema of
+            // the template it may still lower, like any eval-template const.
+            .stored_const => |stored| if (stored.other_row_template) |row_template|
+                self.templateSchema(row_template.entry_template)
+            else
+                emptySchema(store_view),
+            .reserved, .unimplemented => emptySchema(store_view),
         };
     }
 
@@ -44065,9 +44787,25 @@ const BodyContext = struct {
                         } };
                         derived[k] = true;
                     },
-                    .target => {},
+                    // The enclosing chain names the exact target; like a
+                    // `.direct` entry it is not selected again from the
+                    // receiver in this context's scope.
+                    .target => {
+                        out[k] = try self.materializeCheckedEvidenceRef(site_view, ref, param, purpose);
+                        derived[k] = true;
+                        try self.debugAssertDirectTargetMatchesReceiver(schema.view, param, subst[param.slot.?], out[k]);
+                    },
                 },
-                .direct => {},
+                // The checker selected this edge's exact target. Its identity
+                // is not selected again from the receiver: the owner's
+                // methods are visible from the site's scope, which need not
+                // be this context's (a local type's method, reached while
+                // relating a caller drafted from another module or scope).
+                .direct => {
+                    out[k] = try self.materializeCheckedEvidenceRef(site_view, ref, param, purpose);
+                    derived[k] = true;
+                    try self.debugAssertDirectTargetMatchesReceiver(schema.view, param, subst[param.slot.?], out[k]);
+                },
             };
             if (subst[param.slot.?] == .checked_error) {
                 out[k] = .checked_error;
@@ -44160,7 +44898,8 @@ const BodyContext = struct {
         }
         if (site_refs) |refs| {
             for (refs, schema.params, out) |ref, param, *entry| switch (ref.resolution) {
-                .direct, .constraint => {
+                .direct => {},
+                .constraint => {
                     entry.* = try self.mergeCheckedEvidenceContract(
                         entry.*,
                         try self.materializeCheckedEvidenceRef(site_view, ref, param, purpose),
@@ -44176,6 +44915,33 @@ const BodyContext = struct {
             try self.relateMaterializedEvidenceConstraints(&checked_ctx, schema, out);
         }
         return out;
+    }
+
+    /// Debug cross-check of a consumed `.direct` target, or of an enclosing
+    /// chain's target a `.constraint` entry forwards to: when the receiver's
+    /// owner and its method are visible from this context's scope, the
+    /// method selected there must be the checked target.
+    fn debugAssertDirectTargetMatchesReceiver(
+        self: *BodyContext,
+        view: ModuleView,
+        param: static_dispatch.EvidenceParamRecord,
+        slot: SubstSlot,
+        consumed: SpecEvidence,
+    ) Allocator.Error!void {
+        if (@import("builtin").mode != .Debug) return;
+        const node = switch (slot) {
+            .node => |node| node,
+            .checked_error => return,
+        };
+        const owner = self.methodOwnerFromNode(node) orelse return;
+        const found = (try self.lookupMethodTarget(owner, view, param.method)) orelse return;
+        const target = switch (consumed) {
+            .target => |target| target,
+            .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => Common.invariant("checked direct evidence did not name a target"),
+        };
+        if (found.target.module_idx != target.target.module_idx or found.target.def_idx != target.target.def_idx) {
+            Common.invariant("checked direct evidence target differed from the receiver owner's method");
+        }
     }
 
     /// Relate a selected target's callable to the constraint it satisfies,
@@ -62911,6 +63677,7 @@ test "issue 11362: checked instantiation reserves only recursive node identities
         .owner_module = .{},
         .args = try gpa.dupe(checked.CheckedTypeId, &.{variable}),
         .backing = function,
+        .declared_arity = 1,
     } });
     const recursive = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(1) }, false);
     try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ recursive, recursive }) });
@@ -63114,6 +63881,7 @@ fn testLazyCheckedInstantiationAliases(gpa: Allocator) (Allocator.Error || error
         .origin_module = try name_store.internModuleIdentity(&([_]u8{0} ** 32)),
         .owner_module = .{},
         .backing = acyclic,
+        .declared_arity = 0,
     } });
     var builder: Builder = undefined;
     builder.next_instantiation_scope = 0;
@@ -63190,6 +63958,7 @@ test "issue 11362: checked instantiation allocates placeholders only for recursi
         .origin_module = try name_store.internModuleIdentity(&([_]u8{0x62} ** 32)),
         .owner_module = .{},
         .backing = pair,
+        .declared_arity = 0,
     } });
     const recursive = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, false);
     try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ recursive, recursive }) });
@@ -63387,6 +64156,7 @@ test "lazy checked instantiation allocates only recursive placeholders and clear
                 .owner_module = .{},
                 .backing = function,
                 .args = try std.testing.allocator.dupe(checked.CheckedTypeId, &.{variable}),
+                .declared_arity = 1,
             } });
 
             var builder: Builder = undefined;
@@ -63496,6 +64266,7 @@ test "issue 11453: direct alias lowering shares runtime types without wrapper al
             .source_decl = @intCast(index),
             .args = try gpa.dupe(checked.CheckedTypeId, &.{unit}),
             .backing = previous,
+            .declared_arity = 1,
         } });
         previous = alias.*;
     }
@@ -63521,6 +64292,7 @@ test "issue 11453: direct alias lowering shares runtime types without wrapper al
         .origin_module = origin,
         .owner_module = .{},
         .backing = nominals[0],
+        .declared_arity = 0,
     } });
     const recursive = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(72) }, false);
     const recursive_alias = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(73) }, false);
@@ -63529,6 +64301,7 @@ test "issue 11453: direct alias lowering shares runtime types without wrapper al
         .origin_module = origin,
         .owner_module = .{},
         .backing = recursive,
+        .declared_arity = 0,
     } });
     try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{recursive_alias}) });
     const aliased_function = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(74) }, false);

@@ -11,11 +11,20 @@
 # up as a wrong branch on either backend.
 WidenNestedEvidenceClosedImpl := {}
 
-closed_ok : [Ok(Str), Err(Str)]
-closed_ok = Ok("ok")
+# `closed_ok` / `closed_err` is deliberately UNANNOTATED, and its row is read out of a nominal
+# field. Neither an annotation nor a forwarding function can produce a closed
+# row any more: an annotated value's implicitly opened row is quantified
+# (design.md "Polarity"), and a top-level function that FORWARDS a closed value
+# has its result row coerced open again at every use (design.md "Row
+# Subsumption"). A nominal declaration's body closes its rows as written, so a
+# field of `Closed` is a closed source that no coercion reopens, and
+# `closed_ok` / `closed_err` are top-level constants whose rows are closed,
+# which is what this fixture needs.
+Closed := { v : [Ok(Str), Err(Str)] }
 
-closed_err : [Ok(Str), Err(Str)]
-closed_err = Err("err")
+closed_ok = Closed.{ v: Ok("ok") }.v
+
+closed_err = Closed.{ v: Err("err") }.v
 
 Wrap(a) := [W(a)].{
     status : Wrap(a) -> [Ok(Str), Err(Str)] where [a.name : a -> Str]

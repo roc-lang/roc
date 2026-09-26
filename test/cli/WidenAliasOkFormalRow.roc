@@ -17,8 +17,17 @@ OkRes(a) : Try(a, [IoErr])
 describe : a -> OkRes([Red, Green, Blue]) where [a.status : a -> OkRes([Red, Green])]
 describe = |x| x.status()
 
-closed_value : OkRes([Red, Green])
-closed_value = Ok(Red)
+# `closed_value` is deliberately UNANNOTATED, and its row is read out of a nominal
+# field. Neither an annotation nor a forwarding function can produce a closed
+# row any more: an annotated value's implicitly opened row is quantified
+# (design.md "Polarity"), and a top-level function that FORWARDS a closed value
+# has its result row coerced open again at every use (design.md "Row
+# Subsumption"). A nominal declaration's body closes its rows as written, so a
+# field of `Closed` is a closed source that no coercion reopens, and `closed_value`
+# is a top-level constant whose row is closed, which is what this fixture needs.
+Closed := { v : OkRes([Red, Green]) }
+
+closed_value = Closed.{ v: Ok(Red) }.v
 
 Job := [Pending].{
     status : Job -> OkRes([Red, Green])

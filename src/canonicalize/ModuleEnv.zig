@@ -921,6 +921,131 @@ pub const BindingScheme = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// One definition whose annotated result row row subsumption COERCED: the body
+/// FORWARDED a closed value out through an implicitly opened result row instead
+/// of constructing one (design.md "Row Subsumption").
+///
+/// The definition still publishes the row its body can produce—closed—so
+/// importers, stored constants and Monotype's result-row widening adapter see
+/// the type they always did. What this record changes is what a USE may do with
+/// that row: each use re-opens its own copy of it, so two definitions with the
+/// same signature behave the same for their callers whether the body
+/// constructed its tags or forwarded them.
+///
+/// This is checker-authored provenance, not a property the solved type graph
+/// can be asked for. A row closed by forwarding and a row written closed are
+/// the same type; only the module that checked the body knows which it is,
+/// which is why the answer travels rather than the test.
+///
+/// `node_idx` is the DEFINITION node—the handle both a local lookup
+/// (`topLevelPattern`'s def) and an importing lookup (`resolveVarFromExternal`'s
+/// target node) already hold. Sorted by source node, like `binding_schemes`.
+pub const ResultRowCoercion = extern struct {
+    node_idx: u32,
+    /// Which cell the coerced row is: 0 for the signature's own result row, 1
+    /// for the error row of a `Try` standing as that result. The producer's
+    /// annotation walk decides this, so a use never has to work out for itself
+    /// whether a nominal in the result is `Try`.
+    behind_try: u32,
+    /// What the row belongs to: 0 for a FUNCTION (the row is its signature's
+    /// result, and a use copies the function's spine down to it), 1 for a
+    /// top-level VALUE (the row is the value's own root row, or its root
+    /// `Try`'s error row, and a use copies from the root).
+    is_value: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// One USE that re-opened a coerced definition's result row (design.md "Row
+/// Subsumption"): a local, external or associated lookup whose own type is
+/// the re-opened copy. Checker-authored, keyed by the lookup expression's
+/// node, and read by post-check stages to decide which uses a coercion
+/// reaches—never inferred from the definition's record, because a use can be
+/// left as instantiated (a definition still in flight, an error tail).
+///
+/// Sorted by source node, like `result_row_coercions`.
+pub const ResultRowReopen = extern struct {
+    node_idx: u32,
+    /// Which cell was re-opened, as in `ResultRowCoercion.behind_try`.
+    behind_try: u32,
+    /// What the re-opened row belongs to, as in `ResultRowCoercion.is_value`.
+    is_value: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// The largest declaration arity the checker's annotation walks track. Shared
+/// with `Check.max_tracked_alias_formals`, which aliases this constant so the
+/// recorded array width and the walk's own bound cannot drift apart.
+pub const max_tracked_alias_formals: usize = 8;
+
+/// One type declaration's answers for the checker's two syntactic annotation
+/// walks (design.md "Three Syntactic Walks"), authored by the declaring module's
+/// own `Check` and read verbatim by importers.
+///
+/// A declaration's variance is a property of its own annotation, so the module
+/// that owns the annotation is the only place it can be decided; an importer
+/// holds that module's `ModuleEnv` but not its ident store's meaning, which is
+/// why the answer travels rather than the walk. Every alias and nominal
+/// declaration has an entry, because the row-opening bits are always answered;
+/// the variance and `Try` axes are answered only where their walks answered,
+/// and an unanswered axis must be read as its consumer's existing conservative
+/// answer rather than as a permissive one. The table is kept sorted by
+/// `node_idx` for allocation-free imported lookup, like `binding_schemes`.
+pub const TypeDeclVariance = extern struct {
+    /// The declaration's CIR node index: a `CIR.Statement.Idx` widened, which
+    /// is exactly the `target_node_idx` an external type reference carries.
+    node_idx: u32,
+    /// The declaration header's arity, or 0 past `max_tracked_alias_formals`,
+    /// where neither the variance nor the `Try` axis is answered. A reference
+    /// whose argument count differs is an arity error reported elsewhere; until
+    /// then the positional correspondence this record assumes does not hold, so
+    /// consumers decline.
+    formal_count: u8,
+    /// Bit 0 (`variances_known_flag`): the variance walk answered, so
+    /// `formal_variances` is meaningful. The two axes have independent stop
+    /// conditions, so one entry can be half-known.
+    /// Bits 1 and 2 (`opens_row_pos_flag`, `opens_row_neg_flag`): whether a
+    /// reference to this declaration standing at a positive or a negative
+    /// position mints an implicitly opened row from the declaration's own body
+    /// (the checker's `declOpensRow`). Always answered.
+    flags: u8,
+    /// Which of THIS declaration's own formals reaches the builtin `Try`'s
+    /// ERROR cell across transparent alias layers, or `no_try_error_formal`.
+    /// "No such cell" and "could not answer" are the same answer for that axis,
+    /// so one sentinel covers both.
+    try_error_formal: u8,
+    /// The checker's `FormalVariance` as a `u8`, one per formal. Entries past
+    /// `formal_count` are meaningless.
+    formal_variances: [max_tracked_alias_formals]u8,
+    _padding: u8 = 0,
+
+    /// `try_error_formal` when no formal of this declaration reaches the
+    /// builtin `Try`'s error cell, or the walk could not answer.
+    pub const no_try_error_formal: u8 = 0xFF;
+
+    /// `flags` bit 0.
+    pub const variances_known_flag: u8 = 1;
+    /// `flags` bit 1.
+    pub const opens_row_pos_flag: u8 = 2;
+    /// `flags` bit 2.
+    pub const opens_row_neg_flag: u8 = 4;
+
+    /// Whether a reference to this declaration at a position of the given
+    /// polarity mints an implicitly opened row from the declaration's body.
+    pub fn opensRowAt(self: @This(), positive: bool) bool {
+        const flag = if (positive) opens_row_pos_flag else opens_row_neg_flag;
+        return self.flags & flag != 0;
+    }
+
+    /// Whether `formal_variances` is meaningful for this entry.
+    pub fn variancesKnown(self: @This()) bool {
+        return self.flags & variances_known_flag != 0;
+    }
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// One generated-codec dispatch relation that remains part of a binding's
 /// scheme across checked-module boundaries. `scheme_root` preserves alias
 /// identity when a cached checked environment is rechecked, and
@@ -1096,6 +1221,11 @@ scheme_use_pairs: SchemeUsePair.SafeList,
 /// Exact source bindings that checking generalized into rank-1 type schemes.
 /// Sorted by source node for allocation-free cross-module lookup.
 binding_schemes: BindingScheme.SafeList,
+/// Definitions whose annotated result row row subsumption coerces at each use.
+/// Sorted by source node for allocation-free lookup, like `binding_schemes`.
+result_row_coercions: ResultRowCoercion.SafeList,
+/// Lookups that re-opened such a row (`ResultRowReopen`). Sorted by node.
+result_row_reopens: ResultRowReopen.SafeList,
 /// Generated-codec relations carried by those schemes. Sorted by source node;
 /// multiple requirements for one binding occupy one contiguous run.
 binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList,
@@ -1109,6 +1239,11 @@ generated_codec_calls: GeneratedCodecCall.SafeList,
 rejected_static_dispatches: RejectedStaticDispatch.SafeList,
 /// Exact default identities selected at record-literal omission sites.
 record_omitted_defaults: RecordOmittedDefault.SafeList,
+/// Per-declaration answers for the checker's two syntactic annotation walks,
+/// authored by this module's own `Check` and read verbatim by importers.
+/// Sorted by source node for allocation-free cross-module lookup, like
+/// `binding_schemes`.
+type_decl_variances: TypeDeclVariance.SafeList,
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -1444,9 +1579,12 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.scheme_uses.relocate(offset);
     self.scheme_use_pairs.relocate(offset);
     self.binding_schemes.relocate(offset);
+    self.result_row_coercions.relocate(offset);
+    self.result_row_reopens.relocate(offset);
     self.binding_scheme_codec_requirements.relocate(offset);
     self.rejected_static_dispatches.relocate(offset);
     self.record_omitted_defaults.relocate(offset);
+    self.type_decl_variances.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -1548,11 +1686,14 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .scheme_uses = try SchemeUseRecord.SafeList.initCapacity(gpa, 8),
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
         .binding_schemes = try BindingScheme.SafeList.initCapacity(gpa, 8),
+        .result_row_coercions = try ResultRowCoercion.SafeList.initCapacity(gpa, 8),
+        .result_row_reopens = try ResultRowReopen.SafeList.initCapacity(gpa, 8),
         .binding_scheme_codec_requirements = try BindingSchemeCodecRequirement.SafeList.initCapacity(gpa, 4),
         .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
         .rejected_static_dispatches = try RejectedStaticDispatch.SafeList.initCapacity(gpa, 4),
         .record_omitted_defaults = try RecordOmittedDefault.SafeList.initCapacity(gpa, 4),
+        .type_decl_variances = try TypeDeclVariance.SafeList.initCapacity(gpa, 8),
     };
 }
 
@@ -1582,11 +1723,14 @@ pub fn deinit(self: *Self) void {
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
+    self.result_row_coercions.deinit(self.gpa);
+    self.result_row_reopens.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
     self.record_omitted_defaults.deinit(self.gpa);
+    self.type_decl_variances.deinit(self.gpa);
     self.top_level_demand_dependencies.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
@@ -1686,11 +1830,14 @@ pub fn deinitCachedModule(self: *Self) void {
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
+    self.result_row_coercions.deinit(self.gpa);
+    self.result_row_reopens.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
     self.record_omitted_defaults.deinit(self.gpa);
+    self.type_decl_variances.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
@@ -4329,11 +4476,14 @@ pub const Serialized = extern struct {
     scheme_uses: SchemeUseRecord.SafeList.Serialized,
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
     binding_schemes: BindingScheme.SafeList.Serialized,
+    result_row_coercions: ResultRowCoercion.SafeList.Serialized,
+    result_row_reopens: ResultRowReopen.SafeList.Serialized,
     binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList.Serialized,
     generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
     rejected_static_dispatches: RejectedStaticDispatch.SafeList.Serialized,
     record_omitted_defaults: RecordOmittedDefault.SafeList.Serialized,
+    type_decl_variances: TypeDeclVariance.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -4447,11 +4597,14 @@ pub const Serialized = extern struct {
         try self.scheme_uses.serialize(&env.scheme_uses, allocator, writer);
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
         try self.binding_schemes.serialize(&env.binding_schemes, allocator, writer);
+        try self.result_row_coercions.serialize(&env.result_row_coercions, allocator, writer);
+        try self.result_row_reopens.serialize(&env.result_row_reopens, allocator, writer);
         try self.binding_scheme_codec_requirements.serialize(&env.binding_scheme_codec_requirements, allocator, writer);
         try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
         try self.rejected_static_dispatches.serialize(&env.rejected_static_dispatches, allocator, writer);
         try self.record_omitted_defaults.serialize(&env.record_omitted_defaults, allocator, writer);
+        try self.type_decl_variances.serialize(&env.type_decl_variances, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -4520,11 +4673,14 @@ pub const Serialized = extern struct {
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
+            .result_row_coercions = self.result_row_coercions.deserializeInto(base_addr),
+            .result_row_reopens = self.result_row_reopens.deserializeInto(base_addr),
             .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
+            .type_decl_variances = self.type_decl_variances.deserializeInto(base_addr),
         };
 
         env.debugAssertModuleBasename();
@@ -4595,11 +4751,14 @@ pub const Serialized = extern struct {
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
+            .result_row_coercions = self.result_row_coercions.deserializeInto(base_addr),
+            .result_row_reopens = self.result_row_reopens.deserializeInto(base_addr),
             .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
+            .type_decl_variances = self.type_decl_variances.deserializeInto(base_addr),
         };
 
         env.debugAssertModuleBasename();
@@ -4673,11 +4832,14 @@ pub const Serialized = extern struct {
             .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
+            .result_row_coercions = try self.result_row_coercions.deserializeWithCopy(base_addr, gpa),
+            .result_row_reopens = try self.result_row_reopens.deserializeWithCopy(base_addr, gpa),
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
+            .type_decl_variances = try self.type_decl_variances.deserializeWithCopy(base_addr, gpa),
         };
 
         env.debugAssertModuleBasename();
@@ -4763,11 +4925,14 @@ pub const Serialized = extern struct {
             .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
+            .result_row_coercions = try self.result_row_coercions.deserializeWithCopy(base_addr, gpa),
+            .result_row_reopens = try self.result_row_reopens.deserializeWithCopy(base_addr, gpa),
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
+            .type_decl_variances = try self.type_decl_variances.deserializeWithCopy(base_addr, gpa),
         };
 
         env.debugAssertModuleBasename();
@@ -4971,6 +5136,69 @@ pub fn nodeIsBindingScheme(self: *const Self, node_idx: Node.Idx) bool {
         self.binding_schemes.items.items,
         @intFromEnum(node_idx),
     ) != null;
+}
+
+/// Record that the definition at `node_idx` closed its annotated result row by
+/// FORWARDING a closed value rather than by construction, so every use re-opens
+/// its own copy of that row. Producer-authored by the checker; see
+/// `ResultRowCoercion`.
+pub fn recordResultRowCoercion(self: *Self, node_idx: Node.Idx, behind_try: bool, is_value: bool) std.mem.Allocator.Error!void {
+    try upsertSortedByNode(
+        ResultRowCoercion,
+        &self.result_row_coercions,
+        self.gpa,
+        .{ .node_idx = @intFromEnum(node_idx), .behind_try = @intFromBool(behind_try), .is_value = @intFromBool(is_value) },
+    );
+}
+
+/// Record that the lookup at `node_idx` re-opened a coerced definition's
+/// result row. Producer-authored by the checker; see `ResultRowReopen`.
+pub fn recordResultRowReopen(self: *Self, node_idx: Node.Idx, behind_try: bool, is_value: bool) std.mem.Allocator.Error!void {
+    try upsertSortedByNode(
+        ResultRowReopen,
+        &self.result_row_reopens,
+        self.gpa,
+        .{ .node_idx = @intFromEnum(node_idx), .behind_try = @intFromBool(behind_try), .is_value = @intFromBool(is_value) },
+    );
+}
+
+/// The re-open the lookup at `raw_node` made, or null when it made none.
+pub fn resultRowReopenForNode(self: *const Self, raw_node: u32) ?ResultRowReopen {
+    return findSortedByNode(
+        ResultRowReopen,
+        self.result_row_reopens.items.items,
+        raw_node,
+    );
+}
+
+/// The coerced result row of the definition at `raw_node`, or null when that
+/// definition closed its result row as written. Read by every use of the
+/// binding, in this module and in importing ones, exactly like
+/// `nodeIsBindingScheme`.
+pub fn resultRowCoercionForNode(self: *const Self, raw_node: u32) ?ResultRowCoercion {
+    return findSortedByNode(
+        ResultRowCoercion,
+        self.result_row_coercions.items.items,
+        raw_node,
+    );
+}
+
+/// Record one type declaration's answers for the checker's syntactic
+/// annotation walks. Producer-authored: only the declaring module's own
+/// `Check` may call this.
+pub fn recordTypeDeclVariance(self: *Self, entry: TypeDeclVariance) std.mem.Allocator.Error!void {
+    try upsertSortedByNode(TypeDeclVariance, &self.type_decl_variances, self.gpa, entry);
+}
+
+/// The recorded answers for the declaration at `raw_node`, or null when this
+/// module's walk did not answer for it. Null is the conservative answer, never
+/// the permissive one; see `TypeDeclVariance`.
+pub fn typeDeclVarianceForNode(self: *const Self, raw_node: u32) ?TypeDeclVariance {
+    return findSortedByNode(
+        TypeDeclVariance,
+        self.type_decl_variances.items.items,
+        raw_node,
+    );
 }
 
 /// Record one exact generated-codec relation owned by a source binding scheme.

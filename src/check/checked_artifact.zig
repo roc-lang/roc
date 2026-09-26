@@ -1691,20 +1691,66 @@ fn verifyCompileTimeRequestsScheduled(
 /// already checked at the application, so they count as concrete).
 const ConcreteRootWalk = enum { value_graph, decl_template };
 
+/// Where in the type the walk currently stands. A `.record_extension` or
+/// `.tag_union_extension` is the tail of a record or tag union; every other
+/// position is a `.value` position. The two tails are kept apart because each
+/// seals to its own empty row, and a variable's recorded `row_default` must
+/// name the one its position needs.
+///
+/// The distinction exists because an unbound row tail has one runtime
+/// representation the whole compiler already agrees on and an unbound value
+/// does not. Monotype seals an undecided checked variable to the empty row
+/// (`lowerCheckedTypeVariable`, src/postcheck/monotype/lower.zig:7917-7932);
+/// in a row tail that adds nothing to it (the row is exactly its listed
+/// fields or tags), so the constant the interpreter evaluates is the value's
+/// representation at its SEALED row. In a value position `[]` is an arbitrary
+/// pick, so the root stays ineligible there.
+///
+/// A use that instantiates the row differently does not share that
+/// representation. Such a root therefore records `.sealed_row`
+/// (`CompileTimeRootRepresentation`) and keeps its eval template beside the
+/// stored value; see `StoredConstTemplate.other_row_template`. Lowering
+/// selects between those two explicit alternatives by comparing the use's
+/// settled Monotype against the stored representation.
+///
+/// The checker's own concreteness walk (`varIsConcreteHoistedConstType`,
+/// src/check/Check.zig) keeps the stricter rule on purpose: it decides whether
+/// a sub-expression becomes a root at all, and admitting an unbound tail there
+/// would hoist expressions that are not hoisted today. See its doc comment.
+const ConcreteRootPosition = enum { value, record_extension, tag_union_extension };
+
 fn checkedTypeIsConcreteCompileTimeRoot(
     allocator: Allocator,
     checked_types: *const CheckedTypeStore,
     root: CheckedTypeId,
+    quantified_row: *bool,
 ) Allocator.Error!bool {
     var active = collections.DenseMap(CheckedTypeId, void).init(allocator);
     defer active.deinit();
-    return try checkedTypeIsConcreteCompileTimeRootInner(.value_graph, checked_types, root, &active);
+    return try checkedTypeIsConcreteCompileTimeRootInner(.value_graph, .value, checked_types, root, quantified_row, &active);
+}
+
+/// Whether this published variable, standing at `position`, is an undecided
+/// row tail that Monotype will seal to that position's empty row. The sealing
+/// rule itself is `CheckedTypePayload.variableSealsToRowDefault`, shared with
+/// Monotype's sealed-cell guard so the two cannot drift; this adds only that
+/// the recorded default is the empty row of the tail the variable stands in.
+fn checkedTypeVariableSealsToCanonicalRow(variable: CheckedTypeVariable, position: ConcreteRootPosition) bool {
+    const expected: RowDefault = switch (position) {
+        .value => return false,
+        .record_extension => .empty_record,
+        .tag_union_extension => .empty_tag_union,
+    };
+    if (!(CheckedTypePayload{ .flex = variable }).variableSealsToRowDefault()) return false;
+    return variable.row_default.? == expected;
 }
 
 fn checkedTypeIsConcreteCompileTimeRootInner(
     comptime walk: ConcreteRootWalk,
+    position: ConcreteRootPosition,
     checked_types: *const CheckedTypeStore,
     root: CheckedTypeId,
+    quantified_row: *bool,
     active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     if (active.contains(root)) return true;
@@ -1718,18 +1764,25 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
     return switch (checked_types.payload(@enumFromInt(index))) {
         .pending => checkedArtifactInvariant("compile-time root checked type was pending", .{}),
         .err => false,
-        .flex => false,
+        // An undecided row tail seals to the empty row, which is the row's
+        // adds nothing to it, so the root is concrete AT ITS SEALED ROW. The
+        // caller records that so the stored representation can say so.
+        .flex => |variable| blk: {
+            if (!checkedTypeVariableSealsToCanonicalRow(variable, position)) break :blk false;
+            quantified_row.* = true;
+            break :blk true;
+        },
         .rigid => walk == .decl_template,
         .empty_record,
         .empty_tag_union,
         => true,
-        .alias => |alias| (try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, alias.args, active)) and
-            try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, alias.backing, active),
-        .record => |record| (try checkedFieldTypesAreConcreteCompileTimeRoots(walk, checked_types, record.fields, active)) and
-            try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, record.ext, active),
-        .tuple => |items| checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, items, active),
+        .alias => |alias| (try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, alias.declaredArgs(), quantified_row, active)) and
+            try checkedTypeIsConcreteCompileTimeRootInner(walk, position, checked_types, alias.backing, quantified_row, active),
+        .record => |record| (try checkedFieldTypesAreConcreteCompileTimeRoots(walk, checked_types, record.fields, quantified_row, active)) and
+            try checkedTypeIsConcreteCompileTimeRootInner(walk, .record_extension, checked_types, record.ext, quantified_row, active),
+        .tuple => |items| checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, items, quantified_row, active),
         .nominal => |nominal| blk: {
-            if (!try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, nominal.args, active)) break :blk false;
+            if (!try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, nominal.args, quantified_row, active)) break :blk false;
             switch (nominal.representation) {
                 .builtin => |builtin_type| switch (builtinRuntimeEncoding(builtin_type)) {
                     .primitive,
@@ -1760,14 +1813,14 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
             const backing = checked_types.nominalBackingTemplateForPayload(nominal) orelse break :blk true;
             // Declaration formals stand for the args checked above, so they
             // count as concrete while walking the backing template.
-            break :blk try checkedTypeIsConcreteCompileTimeRootInner(.decl_template, checked_types, backing, active);
+            break :blk try checkedTypeIsConcreteCompileTimeRootInner(.decl_template, .value, checked_types, backing, quantified_row, active);
         },
         // A function scheme is a concrete compile-time root exactly when its
         // args and return contain no identity variables.
-        .function => |function| (try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, function.args, active)) and
-            try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, function.ret, active),
-        .tag_union => |tag_union| (try checkedTagsAreConcreteCompileTimeRoots(walk, checked_types, tag_union.tags, active)) and
-            try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, tag_union.ext, active),
+        .function => |function| (try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, function.args, quantified_row, active)) and
+            try checkedTypeIsConcreteCompileTimeRootInner(walk, .value, checked_types, function.ret, quantified_row, active),
+        .tag_union => |tag_union| (try checkedTagsAreConcreteCompileTimeRoots(walk, checked_types, tag_union.tags, quantified_row, active)) and
+            try checkedTypeIsConcreteCompileTimeRootInner(walk, .tag_union_extension, checked_types, tag_union.ext, quantified_row, active),
     };
 }
 
@@ -1775,10 +1828,11 @@ fn checkedTypeSpanIsConcreteCompileTimeRoot(
     comptime walk: ConcreteRootWalk,
     checked_types: *const CheckedTypeStore,
     items: []const CheckedTypeId,
+    quantified_row: *bool,
     active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     for (items) |item| {
-        if (!try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, item, active)) return false;
+        if (!try checkedTypeIsConcreteCompileTimeRootInner(walk, .value, checked_types, item, quantified_row, active)) return false;
     }
     return true;
 }
@@ -1787,11 +1841,12 @@ fn checkedFieldTypesAreConcreteCompileTimeRoots(
     comptime walk: ConcreteRootWalk,
     checked_types: *const CheckedTypeStore,
     fields: []const CheckedRecordField,
+    quantified_row: *bool,
     active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     for (fields) |field| {
         if (field.kind.tag == .undetermined) return false;
-        if (!try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, field.ty, active)) return false;
+        if (!try checkedTypeIsConcreteCompileTimeRootInner(walk, .value, checked_types, field.ty, quantified_row, active)) return false;
     }
     return true;
 }
@@ -1813,7 +1868,129 @@ test "compile-time roots reject undetermined record field kinds" {
     };
     try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .record = .{ .fields = fields, .ext = leaf } }));
 
-    try std.testing.expect(!try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, root));
+    var quantified_row = false;
+    try std.testing.expect(!try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, root, &quantified_row));
+}
+
+test "compile-time roots accept a quantified row extension and report it" {
+    const allocator = std.testing.allocator;
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    const ext: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .flex = .{ .row_default = .empty_tag_union } }));
+
+    const tags = try allocator.alloc(CheckedTagBuild, 1);
+    tags[0] = .{ .name = testIndexId(canonical.TagLabelId, 3) };
+
+    const row: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .tag_union = .{
+        .tags = tags,
+        .ext = ext,
+    } }));
+
+    var quantified_row = false;
+    try std.testing.expect(try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, row, &quantified_row));
+    try std.testing.expect(quantified_row);
+
+    // The same variable in a VALUE position stays ineligible: the empty row
+    // adds nothing only in a row tail.
+    const elems = try allocator.alloc(CheckedTypeId, 1);
+    elems[0] = ext;
+    const value_position: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .tuple = elems }));
+
+    var value_quantified_row = false;
+    try std.testing.expect(!try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, value_position, &value_quantified_row));
+    try std.testing.expect(!value_quantified_row);
+}
+
+test "compile-time roots read an alias's declared arguments, not its hidden ones" {
+    // `v : Base` with `Base : [Other]`: the alias's one hidden argument is
+    // its row's tail (design.md "Hidden Alias Arguments"), a row position
+    // the backing already walks. Walked as an argument, at a value position,
+    // it would make the root ineligible.
+    const allocator = std.testing.allocator;
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    const ext: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .flex = .{ .row_default = .empty_tag_union } }));
+
+    const tags = try allocator.alloc(CheckedTagBuild, 1);
+    tags[0] = .{ .name = testIndexId(canonical.TagLabelId, 3) };
+    const row: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .tag_union = .{
+        .tags = tags,
+        .ext = ext,
+    } }));
+
+    const hidden_args = try allocator.dupe(CheckedTypeId, &.{ext});
+    const hidden: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .alias = .{
+        .name = testIndexId(canonical.TypeNameId, 1),
+        .origin_module = testIndexId(canonical.ModuleIdentityId, 1),
+        .owner_module = testCheckedModuleKey(106),
+        .backing = row,
+        .args = hidden_args,
+        .declared_arity = 0,
+    } }));
+    var hidden_quantified_row = false;
+    try std.testing.expect(try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, hidden, &hidden_quantified_row));
+    try std.testing.expect(hidden_quantified_row);
+
+    // The same variable written as a declared argument is a value position.
+    const declared_args = try allocator.dupe(CheckedTypeId, &.{ext});
+    const declared: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .alias = .{
+        .name = testIndexId(canonical.TypeNameId, 1),
+        .origin_module = testIndexId(canonical.ModuleIdentityId, 1),
+        .owner_module = testCheckedModuleKey(106),
+        .backing = row,
+        .args = declared_args,
+        .declared_arity = 1,
+    } }));
+    var declared_quantified_row = false;
+    try std.testing.expect(!try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, declared, &declared_quantified_row));
+}
+
+test "compile-time roots reject a row extension whose default is missing or names the other row" {
+    const allocator = std.testing.allocator;
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    // No recorded default: Monotype has no explicit row to seal it to.
+    const undefaulted: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .flex = .{} }));
+    const tags = try allocator.alloc(CheckedTagBuild, 1);
+    tags[0] = .{ .name = testIndexId(canonical.TagLabelId, 3) };
+    const tag_row: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .tag_union = .{
+        .tags = tags,
+        .ext = undefaulted,
+    } }));
+
+    var quantified_row = false;
+    try std.testing.expect(!try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, tag_row, &quantified_row));
+    try std.testing.expect(!quantified_row);
+
+    // A record tail whose default is the empty TAG UNION seals to the wrong row.
+    const leaf: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .empty_record));
+    const mismatched: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .flex = .{ .row_default = .empty_tag_union } }));
+    const fields = try allocator.alloc(CheckedRecordField, 1);
+    fields[0] = .{
+        .name = testIndexId(canonical.RecordFieldLabelId, 7),
+        .ty = leaf,
+        .kind = .undetermined(leaf),
+    };
+    const record_row: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .record = .{ .fields = fields, .ext = mismatched } }));
+
+    var record_quantified_row = false;
+    try std.testing.expect(!try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, record_row, &record_quantified_row));
+    try std.testing.expect(!record_quantified_row);
 }
 
 test "compile-time data roots with reachable callables require producer type evidence" {
@@ -1842,18 +2019,20 @@ test "compile-time data roots with reachable callables require producer type evi
         .ext = leaf,
     } }));
 
-    try std.testing.expect(!try checkedTypeIsContextFreeCompileTimeRoot(allocator, &store, false, root));
-    try std.testing.expect(try checkedTypeIsContextFreeCompileTimeRoot(allocator, &store, true, root));
+    var quantified_row = false;
+    try std.testing.expect(!try checkedTypeIsContextFreeCompileTimeRoot(allocator, &store, false, root, &quantified_row));
+    try std.testing.expect(try checkedTypeIsContextFreeCompileTimeRoot(allocator, &store, true, root, &quantified_row));
 }
 
 fn checkedTagsAreConcreteCompileTimeRoots(
     comptime walk: ConcreteRootWalk,
     checked_types: *const CheckedTypeStore,
     tags: []const CheckedTag,
+    quantified_row: *bool,
     active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     for (tags) |tag| {
-        if (!try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, tag.argsSlice(checked_types), active)) return false;
+        if (!try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, tag.argsSlice(checked_types), quantified_row, active)) return false;
     }
     return true;
 }
@@ -2856,6 +3035,15 @@ pub const CheckedAliasType = struct {
     builtin_origin: bool = false,
     backing: CheckedTypeId,
     args: []const CheckedTypeId = &.{},
+    /// How many of `args` are the declaration's formals, the arguments
+    /// written at the application; the rest are the hidden arguments the
+    /// checker's alias carried (`types.Alias.declared_arity`). Readers that
+    /// read arguments by the declaration's positions read only these.
+    declared_arity: u32,
+
+    pub fn declaredArgs(self: CheckedAliasType) []const CheckedTypeId {
+        return self.args[0..self.declared_arity];
+    }
 };
 
 /// Public `CheckedNominalDeclarationId` declaration.
@@ -3047,6 +3235,7 @@ pub const StoredAlias = struct {
     builtin_origin: bool = false,
     backing: CheckedTypeId,
     args: CheckedTypeRange = .{},
+    declared_arity: u32,
 };
 
 /// POD form of `CheckedNominalType`: `args` and `padding_field_types` are ranges
@@ -3131,6 +3320,7 @@ fn reconstructCheckedTypePayload(pool_owner: anytype, stored: StoredCheckedTypeP
             .builtin_origin = a.builtin_origin,
             .backing = a.backing,
             .args = pool_owner.typeIdPool()[a.args.start .. a.args.start + a.args.len],
+            .declared_arity = a.declared_arity,
         } },
         .record => |r| .{ .record = .{
             .fields = pool_owner.recordFieldPool()[r.fields.start .. r.fields.start + r.fields.len],
@@ -4559,6 +4749,7 @@ pub const CheckedTypeStore = struct {
                     .builtin_origin = a.builtin_origin,
                     .backing = a.backing,
                     .args = args,
+                    .declared_arity = a.declared_arity,
                 } };
             },
             .record => |r| blk: {
@@ -4658,8 +4849,6 @@ pub const CheckedTypeStore = struct {
         defer scheme_writer.deinit();
         var active = try CheckedSourceTypeRoots.init(allocator, module);
         errdefer active.deinit();
-        var local_type_declarations = try LocalTypeDeclarationIndex.init(allocator, module, source_nodes);
-        defer local_type_declarations.deinit();
         var top_level_defs = try TopLevelDefPatternIndex.init(allocator, module);
         defer top_level_defs.deinit(allocator);
         const module_env = module.moduleEnvConst();
@@ -4716,7 +4905,6 @@ pub const CheckedTypeStore = struct {
                     import_views,
                     &store,
                     &active,
-                    &local_type_declarations,
                     statement_idx,
                     nominal.header,
                     nominal.anno,
@@ -5610,6 +5798,7 @@ pub const CheckedTypeStore = struct {
                 .builtin_origin = a.builtin_origin,
                 .backing = a.backing,
                 .args = try allocator.dupe(CheckedTypeId, a.args),
+                .declared_arity = a.declared_arity,
             } },
             .record => |r| .{ .record = .{
                 .fields = try allocator.dupe(CheckedRecordField, r.fields),
@@ -5682,6 +5871,7 @@ pub const CheckedTypeStore = struct {
                 .builtin_origin = alias.builtin_origin,
                 .backing = try self.cloneCheckedTypeRootSubstituting(allocator, names, alias.backing, formals, actuals, active),
                 .args = try self.cloneCheckedTypeIdSliceSubstituting(allocator, names, alias.args, formals, actuals, active),
+                .declared_arity = alias.declared_arity,
             } },
             .record => |record| .{ .record = .{
                 .fields = try self.cloneCheckedRecordFieldsSubstituting(allocator, names, record.fields, formals, actuals, active),
@@ -5921,114 +6111,6 @@ fn deinitCheckedTypePayloadBuild(allocator: Allocator, payload: *CheckedTypePayl
     payload.* = .pending;
 }
 
-const LocalTypeDeclarationIndex = struct {
-    const FinalizedRelativeName = union(enum) {
-        unique: CIR.Statement.Idx,
-        ambiguous,
-    };
-
-    finalized_by_relative_name: std.AutoHashMap(Ident.Idx, FinalizedRelativeName),
-
-    fn init(
-        allocator: Allocator,
-        module: TypedCIR.Module,
-        source_nodes: *const CheckedSourceNodes,
-    ) Allocator.Error!LocalTypeDeclarationIndex {
-        var finalized_by_relative_name = std.AutoHashMap(Ident.Idx, FinalizedRelativeName).init(allocator);
-        errdefer finalized_by_relative_name.deinit();
-
-        const module_env = module.moduleEnvConst();
-        for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
-            if (!source_nodes.hasStatement(statement_idx)) continue;
-            const statement = module.getStatement(statement_idx);
-            const header_idx, const anno_idx = switch (statement) {
-                .s_alias_decl => |alias| .{ alias.header, alias.anno },
-                .s_nominal_decl => |nominal| .{ nominal.header, nominal.anno },
-                .s_decl,
-                .s_var,
-                .s_var_uninitialized,
-                .s_reassign,
-                .s_crash,
-                .s_dbg,
-                .s_expr,
-                .s_expect,
-                .s_for,
-                .s_while,
-                .s_infinite_loop,
-                .s_breakable_loop,
-                .s_break,
-                .s_return,
-                .s_import,
-                .s_where_alias_decl,
-                .s_type_anno,
-                .s_type_var_alias,
-                .s_runtime_error,
-                => continue,
-            };
-            if (anno_idx == .placeholder) continue;
-
-            const header = module.moduleEnvConst().store.getTypeHeader(header_idx);
-            if (finalized_by_relative_name.getPtr(header.relative_name)) |existing| {
-                switch (existing.*) {
-                    .unique => |existing_stmt| if (existing_stmt != statement_idx) {
-                        existing.* = .ambiguous;
-                    },
-                    .ambiguous => {},
-                }
-            } else {
-                try finalized_by_relative_name.put(header.relative_name, .{ .unique = statement_idx });
-            }
-        }
-
-        return .{ .finalized_by_relative_name = finalized_by_relative_name };
-    }
-
-    fn deinit(self: *LocalTypeDeclarationIndex) void {
-        self.finalized_by_relative_name.deinit();
-    }
-
-    fn finalizedStatementForReference(
-        self: *const LocalTypeDeclarationIndex,
-        module: TypedCIR.Module,
-        statement_idx: CIR.Statement.Idx,
-    ) CIR.Statement.Idx {
-        const statement = module.getStatement(statement_idx);
-        const header_idx, const anno_idx = switch (statement) {
-            .s_alias_decl => |alias| .{ alias.header, alias.anno },
-            .s_nominal_decl => |nominal| .{ nominal.header, nominal.anno },
-            .s_decl,
-            .s_var,
-            .s_var_uninitialized,
-            .s_reassign,
-            .s_crash,
-            .s_dbg,
-            .s_expr,
-            .s_expect,
-            .s_for,
-            .s_while,
-            .s_infinite_loop,
-            .s_breakable_loop,
-            .s_break,
-            .s_return,
-            .s_import,
-            .s_where_alias_decl,
-            .s_type_anno,
-            .s_type_var_alias,
-            .s_runtime_error,
-            => checkedArtifactInvariant("checked declaration template lookup referenced a non-type declaration", .{}),
-        };
-        if (anno_idx != .placeholder) return statement_idx;
-
-        const header = module.moduleEnvConst().store.getTypeHeader(header_idx);
-        return switch (self.finalized_by_relative_name.get(header.relative_name) orelse {
-            checkedArtifactInvariant("checked declaration template lookup referenced an unfinalized associated type placeholder", .{});
-        }) {
-            .unique => |finalized| finalized,
-            .ambiguous => checkedArtifactInvariant("checked declaration template lookup referenced an ambiguous associated type placeholder", .{}),
-        };
-    }
-};
-
 fn appendCheckedNominalDeclarationFromStatement(
     allocator: Allocator,
     module: TypedCIR.Module,
@@ -6036,7 +6118,6 @@ fn appendCheckedNominalDeclarationFromStatement(
     imports: CheckedImportViews,
     store: *CheckedTypeStore,
     active: *CheckedSourceTypeRoots,
-    local_type_declarations: *const LocalTypeDeclarationIndex,
     statement_idx: CIR.Statement.Idx,
     header_idx: CIR.TypeHeader.Idx,
     anno_idx: CIR.TypeAnno.Idx,
@@ -6091,34 +6172,6 @@ fn appendCheckedNominalDeclarationFromStatement(
     var formal_args_owned = formal_args.len != 0;
     errdefer if (formal_args_owned) allocator.free(formal_args);
 
-    const declaration_formals = if (header_args.len == 0) &.{} else blk: {
-        const out = try allocator.alloc(DeclarationFormal, header_args.len);
-        errdefer allocator.free(out);
-        for (header_args, formal_args, 0..) |arg_anno, formal_arg, i| {
-            const arg = module_env.store.getTypeAnno(arg_anno);
-            out[i] = .{
-                .name = switch (arg) {
-                    .rigid_var => |rigid| rigid.name,
-                    .apply,
-                    .rigid_var_lookup,
-                    .underscore,
-                    .lookup,
-                    .tag_union,
-                    .tag,
-                    .tuple,
-                    .record,
-                    .@"fn",
-                    .parens,
-                    .malformed,
-                    => checkedArtifactInvariant("nominal declaration header argument was not a rigid type variable", .{}),
-                },
-                .root = formal_arg,
-            };
-        }
-        break :blk out;
-    };
-    defer if (declaration_formals.len != 0) allocator.free(declaration_formals);
-
     const declared_record_fields = try declaredRecordFieldsFromDeclarationAnno(
         allocator,
         module,
@@ -6126,22 +6179,23 @@ fn appendCheckedNominalDeclarationFromStatement(
         imports,
         store,
         active,
-        local_type_declarations,
-        declaration_formals,
         anno_idx,
     );
     defer if (declared_record_fields.len != 0) allocator.free(declared_record_fields);
 
-    const backing = try appendCheckedTypeRootFromDeclarationAnno(
+    // The backing template is the checker's own declaration backing
+    // (`types.NominalDecl.backing`), generated with every referenced alias
+    // instantiated and its polarity markers closed as written. Its formal
+    // occurrences are the header variables `formal_args` publishes, so they
+    // name the same checked roots.
+    const backing = try appendCheckedTypeRoot(
         allocator,
         module,
         names,
         imports,
         store,
         active,
-        local_type_declarations,
-        declaration_formals,
-        anno_idx,
+        ModuleEnv.varFrom(anno_idx),
     );
     const padding_field_types = try paddingFieldTypesFromDeclaredRecordFields(allocator, declared_record_fields);
     var padding_field_types_owned = padding_field_types.len != 0;
@@ -6185,600 +6239,6 @@ fn appendCheckedNominalDeclarationFromStatement(
     try appendCheckedNominalDeclarationFromPayload(allocator, store, declaration_root, backing, declared_record_fields);
 }
 
-const DeclarationFormal = struct {
-    name: Ident.Idx,
-    root: CheckedTypeId,
-};
-
-fn declarationFormalRoot(formals: []const DeclarationFormal, name: Ident.Idx) ?CheckedTypeId {
-    for (formals) |formal| {
-        if (formal.name == name) return formal.root;
-    }
-    return null;
-}
-
-fn appendCheckedTypeRootFromDeclarationAnno(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
-    imports: CheckedImportViews,
-    store: *CheckedTypeStore,
-    active: *CheckedSourceTypeRoots,
-    local_type_declarations: *const LocalTypeDeclarationIndex,
-    declaration_formals: []const DeclarationFormal,
-    anno_idx: CIR.TypeAnno.Idx,
-) Allocator.Error!CheckedTypeId {
-    const module_env = module.moduleEnvConst();
-    const anno = module_env.store.getTypeAnno(anno_idx);
-    return switch (anno) {
-        .tag_union => |tag_union| blk: {
-            const tags = try checkedTagsFromDeclarationAnnoSpan(
-                allocator,
-                module,
-                names,
-                imports,
-                store,
-                active,
-                local_type_declarations,
-                declaration_formals,
-                tag_union.tags,
-            );
-            var tags_owned = true;
-            errdefer if (tags_owned) deinitCheckedTagsBuild(allocator, tags);
-            const ext = if (tag_union.ext) |ext_anno|
-                try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, store, active, local_type_declarations, declaration_formals, ext_anno)
-            else
-                try appendExplicitCheckedTypePayload(allocator, names, store, .empty_tag_union);
-            // The payload owns `tags` from here and releases it on failure.
-            tags_owned = false;
-            break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .tag_union = .{
-                .tags = tags,
-                .ext = ext,
-            } });
-        },
-        .record => |record| blk: {
-            const fields = try checkedRecordFieldsFromDeclarationAnnoSpan(
-                allocator,
-                module,
-                names,
-                imports,
-                store,
-                active,
-                local_type_declarations,
-                declaration_formals,
-                record.fields,
-            );
-            var fields_owned = true;
-            errdefer if (fields_owned) allocator.free(fields);
-            const ext = if (record.ext) |ext_anno|
-                try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, store, active, local_type_declarations, declaration_formals, ext_anno)
-            else
-                try appendExplicitCheckedTypePayload(allocator, names, store, .empty_record);
-            // The payload owns `fields` from here and releases it on failure.
-            fields_owned = false;
-            break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .record = .{
-                .fields = fields,
-                .ext = ext,
-            } });
-        },
-        .tuple => |tuple| blk: {
-            const elems = try checkedTypeIdsFromDeclarationAnnoSpan(
-                allocator,
-                module,
-                names,
-                imports,
-                store,
-                active,
-                local_type_declarations,
-                declaration_formals,
-                tuple.elems,
-            );
-            // The payload owns `elems` and releases it on failure.
-            break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .tuple = elems });
-        },
-        .@"fn" => |func| blk: {
-            const args = try checkedTypeIdsFromDeclarationAnnoSpan(
-                allocator,
-                module,
-                names,
-                imports,
-                store,
-                active,
-                local_type_declarations,
-                declaration_formals,
-                func.args,
-            );
-            var args_owned = true;
-            errdefer if (args_owned) allocator.free(args);
-            const ret = try appendCheckedTypeRootFromDeclarationAnno(
-                allocator,
-                module,
-                names,
-                imports,
-                store,
-                active,
-                local_type_declarations,
-                declaration_formals,
-                func.ret,
-            );
-            // The payload owns `args` from here and releases it on failure.
-            args_owned = false;
-            break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .function = .{
-                .kind = if (func.effectful) .effectful else .pure,
-                .args = args,
-                .ret = ret,
-            } });
-        },
-        .parens => |parens| try appendCheckedTypeRootFromDeclarationAnno(
-            allocator,
-            module,
-            names,
-            imports,
-            store,
-            active,
-            local_type_declarations,
-            declaration_formals,
-            parens.anno,
-        ),
-        .lookup => |lookup| switch (lookup.base) {
-            .local => |local| blk: {
-                const finalized = local_type_declarations.finalizedStatementForReference(module, local.decl_idx);
-                const result = try appendCheckedTypeRoot(
-                    allocator,
-                    module,
-                    names,
-                    imports,
-                    store,
-                    active,
-                    ModuleEnv.varFrom(finalized),
-                );
-                break :blk result;
-            },
-            .builtin,
-            .external,
-            .external_identity,
-            .pending,
-            => try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(anno_idx)),
-        },
-        .apply => |apply| blk: {
-            const actual_args = try checkedTypeIdsFromDeclarationAnnoSpan(
-                allocator,
-                module,
-                names,
-                imports,
-                store,
-                active,
-                local_type_declarations,
-                declaration_formals,
-                apply.args,
-            );
-            var actual_args_owned = actual_args.len > 0;
-            errdefer if (actual_args_owned) allocator.free(actual_args);
-            switch (apply.base) {
-                .local => |local| {
-                    const finalized = local_type_declarations.finalizedStatementForReference(module, local.decl_idx);
-                    if (actual_args.len == 0) {
-                        break :blk try appendCheckedTypeRoot(
-                            allocator,
-                            module,
-                            names,
-                            imports,
-                            store,
-                            active,
-                            ModuleEnv.varFrom(finalized),
-                        );
-                    }
-                    switch (module.getStatement(finalized)) {
-                        .s_alias_decl => {
-                            const result = try appendInstantiatedAliasDeclarationApplication(
-                                allocator,
-                                module,
-                                names,
-                                imports,
-                                store,
-                                active,
-                                local_type_declarations,
-                                finalized,
-                                actual_args,
-                            );
-                            if (actual_args_owned) {
-                                allocator.free(actual_args);
-                                actual_args_owned = false;
-                            }
-                            break :blk result;
-                        },
-                        .s_nominal_decl => {
-                            if (finalized != local.decl_idx) {
-                                checkedArtifactInvariant("checked declaration template generic nominal application referenced an associated-type placeholder", .{});
-                            }
-                            const generic_root = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(finalized));
-                            const result = try appendInstantiatedNamedApplicationFromTemplate(allocator, names, store, generic_root, actual_args);
-                            if (actual_args_owned) {
-                                allocator.free(actual_args);
-                                actual_args_owned = false;
-                            }
-                            break :blk result;
-                        },
-                        .s_decl,
-                        .s_var,
-                        .s_var_uninitialized,
-                        .s_reassign,
-                        .s_crash,
-                        .s_dbg,
-                        .s_expr,
-                        .s_expect,
-                        .s_for,
-                        .s_while,
-                        .s_infinite_loop,
-                        .s_breakable_loop,
-                        .s_break,
-                        .s_return,
-                        .s_import,
-                        .s_where_alias_decl,
-                        .s_type_anno,
-                        .s_type_var_alias,
-                        .s_runtime_error,
-                        => checkedArtifactInvariant("checked declaration template generic application referenced a non-type declaration", .{}),
-                    }
-                },
-                .builtin,
-                .external,
-                .external_identity,
-                .pending,
-                => {
-                    const generic_root = try appendCheckedTypeRoot(
-                        allocator,
-                        module,
-                        names,
-                        imports,
-                        store,
-                        active,
-                        ModuleEnv.varFrom(anno_idx),
-                    );
-                    const result = if (actual_args.len == 0)
-                        generic_root
-                    else
-                        try appendInstantiatedNamedApplicationFromTemplate(
-                            allocator,
-                            names,
-                            store,
-                            generic_root,
-                            actual_args,
-                        );
-                    if (actual_args_owned) {
-                        allocator.free(actual_args);
-                        actual_args_owned = false;
-                    }
-                    break :blk result;
-                },
-            }
-            if (actual_args_owned) {
-                allocator.free(actual_args);
-                actual_args_owned = false;
-            }
-            break :blk try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(anno_idx));
-        },
-        .rigid_var => |rigid| if (declarationFormalRoot(declaration_formals, rigid.name)) |formal|
-            formal
-        else
-            try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(anno_idx)),
-        .underscore,
-        => try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(anno_idx)),
-        .rigid_var_lookup => |lookup| blk: {
-            const source = module_env.store.getTypeAnno(lookup.ref);
-            switch (source) {
-                .rigid_var => |rigid| if (declarationFormalRoot(declaration_formals, rigid.name)) |formal| break :blk formal,
-                .apply,
-                .rigid_var_lookup,
-                .underscore,
-                .lookup,
-                .tag_union,
-                .tag,
-                .tuple,
-                .record,
-                .@"fn",
-                .parens,
-                .malformed,
-                => {},
-            }
-            break :blk try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(lookup.ref));
-        },
-        .tag,
-        .malformed,
-        => try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(anno_idx)),
-    };
-}
-
-fn appendInstantiatedNamedApplicationFromTemplate(
-    allocator: Allocator,
-    names: *const canonical.CanonicalNameStore,
-    store: *CheckedTypeStore,
-    generic_root: CheckedTypeId,
-    actual_args: []const CheckedTypeId,
-) Allocator.Error!CheckedTypeId {
-    const generic_payload = store.payload(generic_root);
-    return switch (generic_payload) {
-        .alias => |alias| blk: {
-            if (alias.args.len != actual_args.len) {
-                checkedArtifactInvariant("checked declaration template alias application arity mismatch", .{});
-            }
-
-            const formals = try allocator.dupe(CheckedTypeId, alias.args);
-            defer allocator.free(formals);
-
-            var active = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator);
-            defer active.deinit();
-            const backing = try store.cloneCheckedTypeRootSubstituting(
-                allocator,
-                names,
-                alias.backing,
-                formals,
-                actual_args,
-                &active,
-            );
-
-            // The payload owns `payload_args` and releases it on failure.
-            const payload_args = if (actual_args.len == 0) &.{} else try allocator.dupe(CheckedTypeId, actual_args);
-
-            break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .alias = .{
-                .name = alias.name,
-                .origin_module = alias.origin_module,
-                .owner_module = alias.owner_module,
-                .source_decl = alias.source_decl,
-                .builtin_origin = alias.builtin_origin,
-                .backing = backing,
-                .args = payload_args,
-            } });
-        },
-        .nominal => |nominal| blk: {
-            if (nominal.args.len != actual_args.len) {
-                checkedArtifactInvariant("checked declaration template nominal application arity mismatch", .{});
-            }
-
-            const formals = try allocator.dupe(CheckedTypeId, nominal.args);
-            defer allocator.free(formals);
-
-            var active = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator);
-            defer active.deinit();
-            const padding_field_types = try store.cloneCheckedTypeIdSliceSubstituting(
-                allocator,
-                names,
-                nominal.padding_field_types,
-                formals,
-                actual_args,
-                &active,
-            );
-            var padding_owned = true;
-            errdefer if (padding_owned and padding_field_types.len != 0) allocator.free(padding_field_types);
-
-            const payload_args = if (actual_args.len == 0) &.{} else try allocator.dupe(CheckedTypeId, actual_args);
-            var payload_args_owned = true;
-            errdefer if (payload_args_owned and payload_args.len != 0) allocator.free(payload_args);
-            const declared_fields = if (nominal.declared_fields.len == 0) &.{} else try allocator.dupe(CheckedDeclaredField, nominal.declared_fields);
-
-            // The payload owns all three slices from here and releases them on failure.
-            padding_owned = false;
-            payload_args_owned = false;
-            break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .nominal = .{
-                .name = nominal.name,
-                .origin_module = nominal.origin_module,
-                .owner_module = nominal.owner_module,
-                .source_decl = nominal.source_decl,
-                .builtin = nominal.builtin,
-                .is_opaque = nominal.is_opaque,
-                .representation = nominal.representation,
-                .args = payload_args,
-                .padding_field_types = padding_field_types,
-                .declared_fields = declared_fields,
-            } });
-        },
-        .pending,
-        .err,
-        .flex,
-        .rigid,
-        .record,
-        .tuple,
-        .function,
-        .empty_record,
-        .tag_union,
-        .empty_tag_union,
-        => checkedArtifactInvariant("checked declaration template application did not resolve to a named type", .{}),
-    };
-}
-
-fn appendInstantiatedAliasDeclarationApplication(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
-    imports: CheckedImportViews,
-    store: *CheckedTypeStore,
-    active: *CheckedSourceTypeRoots,
-    local_type_declarations: *const LocalTypeDeclarationIndex,
-    statement_idx: CIR.Statement.Idx,
-    actual_args: []const CheckedTypeId,
-) Allocator.Error!CheckedTypeId {
-    const statement = module.getStatement(statement_idx);
-    const alias = switch (statement) {
-        .s_alias_decl => |alias| alias,
-        .s_decl,
-        .s_var,
-        .s_var_uninitialized,
-        .s_reassign,
-        .s_crash,
-        .s_dbg,
-        .s_expr,
-        .s_expect,
-        .s_for,
-        .s_while,
-        .s_infinite_loop,
-        .s_breakable_loop,
-        .s_break,
-        .s_return,
-        .s_import,
-        .s_nominal_decl,
-        .s_where_alias_decl,
-        .s_type_anno,
-        .s_type_var_alias,
-        .s_runtime_error,
-        => checkedArtifactInvariant("checked declaration template alias application resolved to a non-alias declaration", .{}),
-    };
-    if (alias.anno == .placeholder) {
-        checkedArtifactInvariant("checked declaration template alias application resolved to an unfinalized alias declaration", .{});
-    }
-
-    const module_env = module.moduleEnvConst();
-    const header = module_env.store.getTypeHeader(alias.header);
-    const header_args = module_env.store.sliceTypeAnnos(header.args);
-    if (header_args.len != actual_args.len) {
-        checkedArtifactInvariant("checked declaration template alias application arity mismatch", .{});
-    }
-
-    const declaration_formals = if (header_args.len == 0) &.{} else blk: {
-        const out = try allocator.alloc(DeclarationFormal, header_args.len);
-        errdefer allocator.free(out);
-        for (header_args, actual_args, 0..) |arg_anno, actual_arg, i| {
-            const arg = module_env.store.getTypeAnno(arg_anno);
-            out[i] = .{
-                .name = switch (arg) {
-                    .rigid_var => |rigid| rigid.name,
-                    .apply,
-                    .rigid_var_lookup,
-                    .underscore,
-                    .lookup,
-                    .tag_union,
-                    .tag,
-                    .tuple,
-                    .record,
-                    .@"fn",
-                    .parens,
-                    .malformed,
-                    => checkedArtifactInvariant("alias declaration header argument was not a rigid type variable", .{}),
-                },
-                .root = actual_arg,
-            };
-        }
-        break :blk out;
-    };
-    defer if (declaration_formals.len != 0) allocator.free(declaration_formals);
-
-    const generic_root = try appendCheckedTypeRoot(
-        allocator,
-        module,
-        names,
-        imports,
-        store,
-        active,
-        ModuleEnv.varFrom(statement_idx),
-    );
-    const generic_payload = store.payload(generic_root);
-    if (generic_payload != .alias) {
-        checkedArtifactInvariant("checked declaration template alias application root was not an alias", .{});
-    }
-    const generic_alias = generic_payload.alias;
-    const alias_name = generic_alias.name;
-    const origin_module = generic_alias.origin_module;
-    const owner_module = generic_alias.owner_module;
-    const source_decl = generic_alias.source_decl;
-    const builtin_origin = generic_alias.builtin_origin;
-    const backing = try appendCheckedTypeRootFromDeclarationAnno(
-        allocator,
-        module,
-        names,
-        imports,
-        store,
-        active,
-        local_type_declarations,
-        declaration_formals,
-        alias.anno,
-    );
-
-    // The payload owns `payload_args` and releases it on failure.
-    const payload_args = if (actual_args.len == 0) &.{} else try allocator.dupe(CheckedTypeId, actual_args);
-
-    return try appendExplicitCheckedTypePayload(allocator, names, store, .{ .alias = .{
-        .name = alias_name,
-        .origin_module = origin_module,
-        .owner_module = owner_module,
-        .source_decl = source_decl,
-        .builtin_origin = builtin_origin,
-        .backing = backing,
-        .args = payload_args,
-    } });
-}
-
-fn checkedTypeIdsFromDeclarationAnnoSpan(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
-    imports: CheckedImportViews,
-    store: *CheckedTypeStore,
-    active: *CheckedSourceTypeRoots,
-    local_type_declarations: *const LocalTypeDeclarationIndex,
-    declaration_formals: []const DeclarationFormal,
-    span: CIR.TypeAnno.Span,
-) Allocator.Error![]const CheckedTypeId {
-    const annos = module.moduleEnvConst().store.sliceTypeAnnos(span);
-    if (annos.len == 0) return &.{};
-    const out = try allocator.alloc(CheckedTypeId, annos.len);
-    errdefer allocator.free(out);
-    for (annos, 0..) |anno, i| {
-        out[i] = try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, store, active, local_type_declarations, declaration_formals, anno);
-    }
-    return out;
-}
-
-fn checkedRecordFieldsFromDeclarationAnnoSpan(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
-    imports: CheckedImportViews,
-    store: *CheckedTypeStore,
-    active: *CheckedSourceTypeRoots,
-    local_type_declarations: *const LocalTypeDeclarationIndex,
-    declaration_formals: []const DeclarationFormal,
-    span: CIR.TypeAnno.RecordField.Span,
-) Allocator.Error![]const CheckedRecordField {
-    const fields = module.moduleEnvConst().store.sliceAnnoRecordFields(span);
-    if (fields.len == 0) return &.{};
-    // Unnamed (`_` / `_name`) fields are layout padding, not real fields; they
-    // stay in the canonical record annotation (declared order) but are excluded
-    // from the backing row here so they are never name-resolved or unified.
-    var named_count: usize = 0;
-    for (fields) |field_idx| {
-        const field = module.moduleEnvConst().store.getAnnoRecordField(field_idx);
-        if (field.is_unnamed) continue;
-        named_count += 1;
-    }
-    if (named_count == 0) return &.{};
-    const out = try allocator.alloc(CheckedRecordField, named_count);
-    errdefer allocator.free(out);
-    var out_index: usize = 0;
-    for (fields) |field_idx| {
-        const field = module.moduleEnvConst().store.getAnnoRecordField(field_idx);
-        if (field.is_unnamed) continue;
-        out[out_index] = .{
-            .name = try names.internRecordFieldIdent(module.identStoreConst(), field.name),
-            .ty = try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, store, active, local_type_declarations, declaration_formals, field.ty),
-            // The annotation pins the kind concretely (design.md "Field
-            // Kinds"): `?:` publishes `optional`, `??` publishes `defaulted`
-            // with this module's canonical identity (design.md "Defaulted
-            // Fields"), plain `:` publishes `required`. `?:` and `??` never
-            // combine—canonicalization rejects `a ?: T ?? d` outright.
-            .kind = if (field.is_optional)
-                .optional
-            else if (field.default_value) |default_expr_idx|
-                .defaultedFromParts(
-                    try names.internModuleIdentity(module.moduleEnvConst().moduleIdentityHash(module.moduleEnvConst().selfModuleIdentity())),
-                    @intFromEnum(default_expr_idx),
-                )
-            else
-                .required,
-        };
-        out_index += 1;
-    }
-    return out;
-}
-
 /// Records a nominal declaration's top-level record fields in declared order.
 /// Named fields refer to backing row entries by label; unnamed (`_` / `_name`)
 /// fields carry their resolved type because they are layout padding, excluded
@@ -6790,12 +6250,10 @@ fn declaredRecordFieldsFromDeclarationAnno(
     imports: CheckedImportViews,
     store: *CheckedTypeStore,
     active: *CheckedSourceTypeRoots,
-    local_type_declarations: *const LocalTypeDeclarationIndex,
-    declaration_formals: []const DeclarationFormal,
     anno_idx: CIR.TypeAnno.Idx,
 ) Allocator.Error![]const CheckedNominalRecordField {
     // The backing record may be wrapped in parentheses; unwrap before reading its
-    // fields (mirrors the parens handling in appendCheckedTypeRootFromDeclarationAnno).
+    // fields.
     var record_anno = anno_idx;
     const record = while (true) {
         switch (module.moduleEnvConst().store.getTypeAnno(record_anno)) {
@@ -6821,7 +6279,9 @@ fn declaredRecordFieldsFromDeclarationAnno(
     for (fields, 0..) |field_idx, index| {
         const field = module.moduleEnvConst().store.getAnnoRecordField(field_idx);
         out[index] = if (field.is_unnamed)
-            .{ .padding = try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, store, active, local_type_declarations, declaration_formals, field.ty) }
+            // A padding field stays out of the backing row, but the checker
+            // generates its type in place like any field's.
+            .{ .padding = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(field.ty)) }
         else
             .{ .named = try names.internRecordFieldIdent(module.identStoreConst(), field.name) };
     }
@@ -6892,58 +6352,6 @@ fn declaredFieldsFromDeclarationAnno(
     }
     if (padding_cursor != padding_field_types.len) {
         checkedArtifactInvariant("nominal declaration recorded padding types that were missing from declared field order", .{});
-    }
-    return out;
-}
-
-fn checkedTagsFromDeclarationAnnoSpan(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
-    imports: CheckedImportViews,
-    store: *CheckedTypeStore,
-    active: *CheckedSourceTypeRoots,
-    local_type_declarations: *const LocalTypeDeclarationIndex,
-    declaration_formals: []const DeclarationFormal,
-    span: CIR.TypeAnno.Span,
-) Allocator.Error![]const CheckedTagBuild {
-    const annos = module.moduleEnvConst().store.sliceTypeAnnos(span);
-    if (annos.len == 0) return &.{};
-    const out = try allocator.alloc(CheckedTagBuild, annos.len);
-    for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
-    errdefer deinitCheckedTagsBuild(allocator, out);
-
-    for (annos, 0..) |anno_idx, i| {
-        const anno = module.moduleEnvConst().store.getTypeAnno(anno_idx);
-        const tag = switch (anno) {
-            .tag => |tag| tag,
-            .apply,
-            .rigid_var,
-            .rigid_var_lookup,
-            .underscore,
-            .lookup,
-            .tag_union,
-            .tuple,
-            .record,
-            .@"fn",
-            .parens,
-            .malformed,
-            => checkedArtifactInvariant("nominal declaration tag union contained a non-tag annotation", .{}),
-        };
-        out[i] = .{
-            .name = try names.internTagIdent(module.identStoreConst(), tag.name),
-            .args = try checkedTypeIdsFromDeclarationAnnoSpan(
-                allocator,
-                module,
-                names,
-                imports,
-                store,
-                active,
-                local_type_declarations,
-                declaration_formals,
-                tag.args,
-            ),
-        };
     }
     return out;
 }
@@ -8367,6 +7775,14 @@ const CheckedSourceTypeRoots = struct {
         graph_analysis: SourceTypeGraphAnalysis,
         key_writer: canonical_type_keys.TypeWriter,
         local_nominal_declarations: LocalNominalDeclarationIds,
+        /// A row's entries gathered down its structural extension links,
+        /// used as a stack: each row being stored owns the entries
+        /// above the base it recorded (`flatCheckedRow`).
+        row_tags: std.ArrayList(types.Tag) = .empty,
+        row_fields: std.ArrayList(types.RecordField) = .empty,
+        row_tag_sort: std.ArrayList(types.Tag) = .empty,
+        row_field_sort: std.ArrayList(types.RecordField) = .empty,
+        row_text_ranks: base.TextRankCache,
     },
 
     fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!CheckedSourceTypeRoots {
@@ -8380,6 +7796,7 @@ const CheckedSourceTypeRoots = struct {
                 .graph_analysis = graph_analysis,
                 .key_writer = canonical_type_keys.TypeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst()),
                 .local_nominal_declarations = local_nominal_declarations,
+                .row_text_ranks = base.TextRankCache.init(allocator),
             },
         };
     }
@@ -8389,6 +7806,12 @@ const CheckedSourceTypeRoots = struct {
             scratch.local_nominal_declarations.deinit();
             scratch.key_writer.deinit();
             scratch.graph_analysis.deinit();
+            const allocator = scratch.key_writer.builder.allocator;
+            scratch.row_tags.deinit(allocator);
+            scratch.row_fields.deinit(allocator);
+            scratch.row_tag_sort.deinit(allocator);
+            scratch.row_field_sort.deinit(allocator);
+            scratch.row_text_ranks.deinit();
         }
         self.scratch = null;
     }
@@ -8667,6 +8090,7 @@ fn copyCheckedTypePayload(
             .builtin_origin = alias.source_decl.originIsBuiltin(),
             .backing = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, module.typeStoreConst().getAliasBackingVar(alias)),
             .args = try copyCheckedTypeRange(allocator, module, names, imports, store, active, module.typeStoreConst().sliceAliasArgs(alias)),
+            .declared_arity = alias.declared_arity,
         } },
         // The checked artifact models required fields only, so a presence
         // variable never becomes a standalone checked type. Poison to err if one
@@ -8714,12 +8138,16 @@ fn copyCheckedFlatType(
         .empty_record => .empty_record,
         .empty_tag_union => .empty_tag_union,
         .record => |record| blk: {
-            if (record.fields.len() == 0 and checkedRecordExtIsEmpty(module, record.ext)) {
+            const scratch = &active.scratch.?;
+            const base_len = scratch.row_fields.items.len;
+            defer scratch.row_fields.shrinkRetainingCapacity(base_len);
+            const tail = try gatherFlatRecordRow(allocator, module, scratch, record);
+            if (scratch.row_fields.items.len == base_len and checkedRecordExtIsEmpty(module, tail)) {
                 break :blk .empty_record;
             }
-            const fields = try copyCheckedRecordFields(allocator, module, names, imports, store, active, record.fields);
+            const fields = try copyCheckedRecordFields(allocator, module, names, imports, store, active, base_len);
             errdefer allocator.free(fields);
-            const ext = try appendCheckedTypeRootWithRowDefault(allocator, module, names, imports, store, active, record.ext, .empty_record);
+            const ext = try appendCheckedTypeRootWithRowDefault(allocator, module, names, imports, store, active, tail, .empty_record);
             break :blk .{ .record = .{ .fields = fields, .ext = ext } };
         },
         .tuple => |tuple| .{
@@ -8749,15 +8177,106 @@ fn copyCheckedFlatType(
         .fn_effectful => |func| .{ .function = try copyCheckedFunctionType(allocator, module, names, imports, store, active, .effectful, func) },
         .fn_unbound => |func| .{ .function = try copyCheckedFunctionType(allocator, module, names, imports, store, active, .pure, func) },
         .tag_union => |tag_union| blk: {
-            if (tag_union.tags.len() == 0 and checkedTagUnionExtIsEmpty(module, tag_union.ext)) {
+            const scratch = &active.scratch.?;
+            const base_len = scratch.row_tags.items.len;
+            defer scratch.row_tags.shrinkRetainingCapacity(base_len);
+            const tail = try gatherFlatTagUnionRow(allocator, module, scratch, tag_union);
+            if (scratch.row_tags.items.len == base_len and checkedTagUnionExtIsEmpty(module, tail)) {
                 break :blk .empty_tag_union;
             }
-            const tags = try copyCheckedTags(allocator, module, names, imports, store, active, tag_union.tags);
+            const tags = try copyCheckedTags(allocator, module, names, imports, store, active, base_len);
             errdefer deinitCheckedTagsBuild(allocator, tags);
-            const ext = try appendCheckedTypeRootWithRowDefault(allocator, module, names, imports, store, active, tag_union.ext, .empty_tag_union);
+            const ext = try appendCheckedTypeRootWithRowDefault(allocator, module, names, imports, store, active, tail, .empty_tag_union);
             break :blk .{ .tag_union = .{ .tags = tags, .ext = ext } };
         },
     };
+}
+
+/// A checked root's row payload is flat through structural row links
+/// (design.md "Checked Row Payloads"): the row's own entries and those of
+/// every `record` its extension reaches directly are one payload, ordered as
+/// the type key orders them, and its extension is the first link that is not
+/// a record (an empty record, a variable, an alias link, or an error).
+/// Checked roots are shared by key, and the key reads a row the same way
+/// whatever links the solver stored it in, so the stored payload is then
+/// determined by the key rather than by whichever variable first reached it.
+/// Pushes the fields onto `scratch.row_fields` and returns the tail.
+fn gatherFlatRecordRow(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    scratch: anytype,
+    head: types.Record,
+) Allocator.Error!Var {
+    const type_store = module.typeStoreConst();
+    const base_len = scratch.row_fields.items.len;
+    var link = head;
+    var tail = head.ext;
+    var steps: u64 = type_store.len();
+    while (true) : (steps -= 1) {
+        if (steps == 0) checkedArtifactInvariant("checked record row extension chain did not end", .{});
+        const fields = type_store.getRecordFieldsSlice(link.fields);
+        for (fields.items(.name), fields.items(.presence)) |name, presence| {
+            try scratch.row_fields.append(allocator, .{ .name = name, .presence = presence });
+        }
+        tail = link.ext;
+        link = switch (type_store.resolveVar(link.ext).desc.content) {
+            .structure => |flat| switch (flat) {
+                .record => |record| record,
+                .empty_record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => break,
+            },
+            .flex, .rigid, .alias, .field_presence, .err => break,
+        };
+    }
+    const gathered = scratch.row_fields.items[base_len..];
+    if (gathered.len > 1) {
+        const ranks = try module.identStoreConst().textRanks(&scratch.row_text_ranks);
+        try base.TextRankCache.sortByRank(types.RecordField, gathered, &scratch.row_field_sort, allocator, ranks, recordFieldTextRank);
+    }
+    return tail;
+}
+
+/// `gatherFlatRecordRow` for a tag union: pushes the tags onto
+/// `scratch.row_tags` and returns the tail.
+fn gatherFlatTagUnionRow(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    scratch: anytype,
+    head: types.TagUnion,
+) Allocator.Error!Var {
+    const type_store = module.typeStoreConst();
+    const base_len = scratch.row_tags.items.len;
+    var link = head;
+    var tail = head.ext;
+    var steps: u64 = type_store.len();
+    while (true) : (steps -= 1) {
+        if (steps == 0) checkedArtifactInvariant("checked tag union row extension chain did not end", .{});
+        const tags = type_store.getTagsSlice(link.tags);
+        for (tags.items(.name), tags.items(.args)) |name, args| {
+            try scratch.row_tags.append(allocator, .{ .name = name, .args = args });
+        }
+        tail = link.ext;
+        link = switch (type_store.resolveVar(link.ext).desc.content) {
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| tag_union,
+                .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .record, .empty_record => break,
+            },
+            .flex, .rigid, .alias, .field_presence, .err => break,
+        };
+    }
+    const gathered = scratch.row_tags.items[base_len..];
+    if (gathered.len > 1) {
+        const ranks = try module.identStoreConst().textRanks(&scratch.row_text_ranks);
+        try base.TextRankCache.sortByRank(types.Tag, gathered, &scratch.row_tag_sort, allocator, ranks, tagTextRank);
+    }
+    return tail;
+}
+
+fn recordFieldTextRank(ranks: []const u32, field: types.RecordField) u32 {
+    return ranks[field.name.idx];
+}
+
+fn tagTextRank(ranks: []const u32, tag: types.Tag) u32 {
+    return ranks[tag.name.idx];
 }
 
 fn checkedRecordExtIsEmpty(module: TypedCIR.Module, ext: Var) bool {
@@ -8861,16 +8380,20 @@ fn copyCheckedRecordFields(
     imports: CheckedImportViews,
     store: *CheckedTypeStore,
     active: *CheckedSourceTypeRoots,
-    range: types.RecordField.SafeMultiList.Range,
+    /// The row's fields are `active.scratch.row_fields.items[base_len..]`
+    /// (`gatherFlatRecordRow`); storing a field's types can push and pop
+    /// entries above them, so they are read by index.
+    base_len: usize,
 ) Allocator.Error![]const CheckedRecordField {
-    const fields = module.typeStoreConst().getRecordFieldsSlice(range);
-    const field_names = fields.items(.name);
-    const field_presences = fields.items(.presence);
-    if (field_names.len == 0) return &.{};
+    const count = active.scratch.?.row_fields.items.len - base_len;
+    if (count == 0) return &.{};
 
-    const out = try allocator.alloc(CheckedRecordField, field_names.len);
+    const out = try allocator.alloc(CheckedRecordField, count);
     errdefer allocator.free(out);
-    for (field_names, field_presences, 0..) |field_name, field_presence, i| {
+    for (0..count) |i| {
+        const row_field = active.scratch.?.row_fields.items[base_len + i];
+        const field_name = row_field.name;
+        const field_presence = row_field.presence;
         // Publish the independent value and kind axes; see design.md "Field Kinds".
         var kind: CheckedFieldKind = .required;
         const ty: CheckedTypeId = switch (field_presence.decode()) {
@@ -8935,23 +8458,25 @@ fn copyCheckedTags(
     imports: CheckedImportViews,
     store: *CheckedTypeStore,
     active: *CheckedSourceTypeRoots,
-    range: types.Tag.SafeMultiList.Range,
+    /// The row's tags are `active.scratch.row_tags.items[base_len..]`
+    /// (`gatherFlatTagUnionRow`); storing a payload can push and pop
+    /// entries above them, so they are read by index.
+    base_len: usize,
 ) Allocator.Error![]const CheckedTagBuild {
-    const tags = module.typeStoreConst().getTagsSlice(range);
-    const tag_names = tags.items(.name);
-    const tag_args = tags.items(.args);
-    if (tag_names.len == 0) return &.{};
+    const count = active.scratch.?.row_tags.items.len - base_len;
+    if (count == 0) return &.{};
 
-    const out = try allocator.alloc(CheckedTagBuild, tag_names.len);
+    const out = try allocator.alloc(CheckedTagBuild, count);
     for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
     errdefer {
-        for (out[0..tag_names.len]) |tag| allocator.free(tag.args);
+        for (out) |tag| allocator.free(tag.args);
         allocator.free(out);
     }
-    for (tag_names, tag_args, 0..) |tag_name, arg_range, i| {
+    for (0..count) |i| {
+        const row_tag = active.scratch.?.row_tags.items[base_len + i];
         out[i] = .{
-            .name = try names.internTagIdent(module.identStoreConst(), tag_name),
-            .args = try copyCheckedTypeRange(allocator, module, names, imports, store, active, module.typeStoreConst().sliceVars(arg_range)),
+            .name = try names.internTagIdent(module.identStoreConst(), row_tag.name),
+            .args = try copyCheckedTypeRange(allocator, module, names, imports, store, active, module.typeStoreConst().sliceVars(row_tag.args)),
         };
     }
     return out;
@@ -9578,13 +9103,15 @@ test "poisoned record field presence preserves its value type and canonical key"
     try testing.expectEqualSlices(u8, &source_key.bytes, &checked_key_info.key.bytes);
 }
 
-test "optional record fields publish through the declaration annotation path" {
+test "a nominal declaration template's field kinds are the checker's" {
+    // The template's backing is the checker's own declaration backing, whose
+    // record fields carry the kinds the annotation pinned.
     const testing = std.testing;
     const TestEnv = @import("test/TestEnv.zig");
     const allocator = testing.allocator;
 
     var test_env = try TestEnv.init("Main",
-        \\Thing : { world ?: {}, req : {} }
+        \\Thing := { world ?: {}, req : {} }
         \\
         \\mk! : Thing
         \\mk! = { req: {} }
@@ -9592,26 +9119,179 @@ test "optional record fields publish through the declaration annotation path" {
     defer test_env.deinit();
     try test_env.assertNoErrors();
 
-    const source_modules = [_]TypedCIR.Modules.SourceModule{
-        .{ .precompiled = test_env.module_env },
+    var template = try NominalTemplateForTest.build(allocator, test_env.module_env);
+    defer template.deinit();
+    const fields = switch (template.store.payload(template.backing)) {
+        .record => |record| record.fields,
+        .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
     };
+    // `world` is the one optional field and `req` the one required field.
+    try testing.expectEqual(@as(usize, 2), fields.len);
+    var optional: usize = 0;
+    var required: usize = 0;
+    for (fields) |field| {
+        switch (field.kind.tag) {
+            .optional => optional += 1,
+            .required => required += 1,
+            .defaulted, .undetermined, .err => return error.TestUnexpectedResult,
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), optional);
+    try testing.expectEqual(@as(usize, 1), required);
+}
+
+/// The checked declaration template of the module's last nominal
+/// declaration, built the way checked module data builds it.
+const NominalTemplateForTest = struct {
+    modules: TypedCIR.Modules,
+    names: canonical.CanonicalNameStore,
+    store: CheckedTypeStore,
+    active: CheckedSourceTypeRoots,
+    allocator: Allocator,
+    backing: CheckedTypeId,
+    declaration_index: usize,
+    /// The checker's own variable for the backing record's first field.
+    first_field_var: ?Var,
+
+    fn build(allocator: Allocator, module_env: *ModuleEnv) (Allocator.Error || error{TestUnexpectedResult})!NominalTemplateForTest {
+        const source_modules = [_]TypedCIR.Modules.SourceModule{.{ .precompiled = module_env }};
+        var self: NominalTemplateForTest = .{
+            .modules = try TypedCIR.Modules.init(allocator, &source_modules),
+            .names = canonical.CanonicalNameStore.init(allocator),
+            .store = .{},
+            .active = undefined,
+            .allocator = allocator,
+            .backing = undefined,
+            .declaration_index = undefined,
+            .first_field_var = null,
+        };
+        errdefer {
+            self.store.deinit(allocator);
+            self.names.deinit();
+            self.modules.deinit();
+        }
+        const module = self.modules.module(0);
+        self.active = try CheckedSourceTypeRoots.init(allocator, module);
+        errdefer self.active.deinit();
+
+        var nominal_stmt: ?CIR.Statement.Idx = null;
+        for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+            if (module_env.store.getStatement(statement_idx) == .s_nominal_decl) nominal_stmt = statement_idx;
+        }
+        const statement_idx = nominal_stmt orelse return error.TestUnexpectedResult;
+        const nominal = module_env.store.getStatement(statement_idx).s_nominal_decl;
+        const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1), .direct = &.{} };
+        try appendCheckedNominalDeclarationFromStatement(
+            allocator,
+            module,
+            &self.names,
+            imports,
+            &self.store,
+            &self.active,
+            statement_idx,
+            nominal.header,
+            nominal.anno,
+            nominal.is_opaque,
+        );
+        const declarations = self.store.nominal_declarations.items;
+        if (declarations.len == 0) return error.TestUnexpectedResult;
+        self.declaration_index = declarations.len - 1;
+        self.backing = declarations[self.declaration_index].backing;
+        const backing_anno = module_env.store.getTypeAnno(nominal.anno);
+        if (backing_anno == .record) {
+            const fields = module_env.store.sliceAnnoRecordFields(backing_anno.record.fields);
+            if (fields.len != 0) self.first_field_var = ModuleEnv.varFrom(module_env.store.getAnnoRecordField(fields[0]).ty);
+        }
+        return self;
+    }
+
+    /// The declaration's formal arguments, read after any root was added.
+    fn formalArgs(self: *const NominalTemplateForTest) []const CheckedTypeId {
+        return self.store.nominal_declarations.items[self.declaration_index].formalArgs(&self.store);
+    }
+
+    fn deinit(self: *NominalTemplateForTest) void {
+        self.active.deinit();
+        self.store.deinit(self.allocator);
+        self.names.deinit();
+        self.modules.deinit();
+    }
+
+    /// The template backing record's field that the checker's
+    /// `first_field_var` names.
+    fn firstField(self: *NominalTemplateForTest) (Allocator.Error || error{TestUnexpectedResult})!CheckedTypeId {
+        const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1), .direct = &.{} };
+        const field_var = self.first_field_var orelse return error.TestUnexpectedResult;
+        const checker_field = try appendCheckedTypeRoot(self.allocator, self.modules.module(0), &self.names, imports, &self.store, &self.active, field_var);
+        const fields = switch (self.store.payload(self.backing)) {
+            .record => |record| record.fields,
+            .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
+        };
+        for (fields) |field| {
+            if (field.ty == checker_field) return field.ty;
+        }
+        return error.TestUnexpectedResult;
+    }
+};
+
+test "a checked row payload is flat through structural links and stops at alias links" {
+    // Checked roots are shared by key, and the key reads a row the same way
+    // however its links are stored, so the payload must too: `[B] ext [A]`
+    // and `[A, B]` are one root with one flat payload, as are
+    // `{ b } ext { a }` and `{ a, b }`. An alias link in the extension stays
+    // the extension, as the key leaves it.
+    const testing = std.testing;
+    const TestEnv = @import("test/TestEnv.zig");
+    const allocator = testing.allocator;
+
+    var test_env = try TestEnv.init("Main",
+        \\Base : [Z]
+        \\
+        \\value = 1
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    const module_env = test_env.module_env;
+    const types_store = &module_env.types;
+    const a_name = try module_env.insertIdent(base.Ident.for_text("A"));
+    const b_name = try module_env.insertIdent(base.Ident.for_text("B"));
+    const empty_tags = try types_store.freshFromContent(.{ .structure = .empty_tag_union });
+    const empty_record = try types_store.freshFromContent(.{ .structure = .empty_record });
+    const unit = try types_store.freshFromContent(.{ .structure = .empty_record });
+
+    const tag_a = try types_store.mkTag(a_name, &.{});
+    const tag_b = try types_store.mkTag(b_name, &.{unit});
+    const inner_tags = try types_store.freshFromContent(try types_store.mkTagUnion(&.{tag_a}, empty_tags));
+    const chained_tags = try types_store.freshFromContent(try types_store.mkTagUnion(&.{tag_b}, inner_tags));
+    const flat_tags = try types_store.freshFromContent(try types_store.mkTagUnion(&.{ tag_a, tag_b }, empty_tags));
+
+    const field_a = types.RecordField{ .name = a_name, .presence = .required(unit) };
+    const field_b = types.RecordField{ .name = b_name, .presence = .required(unit) };
+    const inner_record = try types_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try types_store.appendRecordFields(&.{field_a}),
+        .ext = empty_record,
+    } } });
+    const chained_record = try types_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try types_store.appendRecordFields(&.{field_b}),
+        .ext = inner_record,
+    } } });
+    const flat_record = try types_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try types_store.appendRecordFields(&.{ field_a, field_b }),
+        .ext = empty_record,
+    } } });
+
+    // `[A] ext Base`: the alias link stays the extension.
+    const base_decl: CIR.Statement.Idx = for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+        if (module_env.store.getStatement(statement_idx) == .s_alias_decl) break statement_idx;
+    } else return error.TestUnexpectedResult;
+    const base_alias = types_store.resolveVar(ModuleEnv.varFrom(base_decl)).desc.content.alias;
+    const base_instance = try types_store.freshFromContent(.{ .alias = base_alias });
+    const through_alias = try types_store.freshFromContent(try types_store.mkTagUnion(&.{tag_a}, base_instance));
+
+    const source_modules = [_]TypedCIR.Modules.SourceModule{.{ .precompiled = module_env }};
     var modules = try TypedCIR.Modules.init(allocator, &source_modules);
     defer modules.deinit();
     const module = modules.module(0);
-    const module_env = module.moduleEnvConst();
-
-    // Find `Thing`'s alias declaration and its record annotation span.
-    const record_span = blk: {
-        for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
-            const statement = module_env.store.getStatement(statement_idx);
-            if (statement != .s_alias_decl) continue;
-            const anno = module_env.store.getTypeAnno(statement.s_alias_decl.anno);
-            if (anno != .record) continue;
-            break :blk anno.record.fields;
-        }
-        return error.TestUnexpectedResult;
-    };
-
     var names = canonical.CanonicalNameStore.init(allocator);
     defer names.deinit();
     var store = CheckedTypeStore{};
@@ -9619,29 +9299,101 @@ test "optional record fields publish through the declaration annotation path" {
     var active = try CheckedSourceTypeRoots.init(allocator, module);
     defer active.deinit();
     const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1), .direct = &.{} };
-    var source_nodes = try CheckedSourceNodes.init(allocator, module);
-    defer source_nodes.deinit(allocator);
-    var local_type_declarations = try LocalTypeDeclarationIndex.init(allocator, module, &source_nodes);
-    defer local_type_declarations.deinit();
 
-    const fields = try checkedRecordFieldsFromDeclarationAnnoSpan(
-        allocator,
-        module,
-        &names,
-        imports,
-        &store,
-        &active,
-        &local_type_declarations,
-        &.{},
-        record_span,
+    // The chained spelling is reached first, so before flattening it would
+    // have chosen the stored payload.
+    const chained_tags_root = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, chained_tags);
+    const flat_tags_root = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, flat_tags);
+    try testing.expectEqual(chained_tags_root, flat_tags_root);
+    const tag_union = store.payload(chained_tags_root).tag_union;
+    try testing.expectEqual(@as(usize, 2), tag_union.tags.len);
+    try testing.expect(store.payload(tag_union.ext) == .empty_tag_union);
+
+    const chained_record_root = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, chained_record);
+    const flat_record_root = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, flat_record);
+    try testing.expectEqual(chained_record_root, flat_record_root);
+    const record = store.payload(chained_record_root).record;
+    try testing.expectEqual(@as(usize, 2), record.fields.len);
+    try testing.expect(store.payload(record.ext) == .empty_record);
+
+    const through_alias_root = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, through_alias);
+    const aliased = store.payload(through_alias_root).tag_union;
+    try testing.expectEqual(@as(usize, 1), aliased.tags.len);
+    try testing.expect(store.payload(aliased.ext) == .alias);
+}
+
+test "a nominal declaration template is the checker's backing, with every alias argument closed" {
+    // The template's backing is the checker's declaration backing, whose
+    // alias instances carry all their arguments (design.md "Hidden Alias
+    // Arguments") with every marker closed as the nominal body writes it. So
+    // a nominal with no formals has a template with no variable left in it,
+    // and the field's alias lists its hidden arguments.
+    const testing = std.testing;
+    const TestEnv = @import("test/TestEnv.zig");
+    const allocator = testing.allocator;
+    const cases = [_]struct { source: []const u8, hidden: u32 }{
+        // `Fwd(e; e⁺)`: the spine's hidden formal takes `e`'s argument.
+        .{ .source =
+        \\Fwd(e) : e -> e
+        \\
+        \\Holder := { f : Fwd({}) }
+        , .hidden = 1 },
+        // `W(a; m)`: a marker slot, closed.
+        .{ .source =
+        \\W(a) : (a, [Other])
+        \\
+        \\Holder := { f : W({}) }
+        , .hidden = 1 },
+        // `M(e; e⁺, m)`: the spine's hidden formal, then a marker.
+        .{ .source =
+        \\M(e) : (e, [Other]) -> e
+        \\
+        \\Holder := { f : M({}) }
+        , .hidden = 2 },
+        // `Outer(a; m₁, m₂)`: a nested zero-argument alias's marker is a
+        // marker of this body too, beside the body's own.
+        .{ .source =
+        \\Inner : [Other]
+        \\
+        \\Outer(a) : (a, Inner, [More])
+        \\
+        \\Holder := { f : Outer({}) }
+        , .hidden = 2 },
+    };
+    for (cases) |case| {
+        var test_env = try TestEnv.init("Main", case.source);
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+        var template = try NominalTemplateForTest.build(allocator, test_env.module_env);
+        defer template.deinit();
+        const field = try template.firstField();
+        const alias = template.store.payload(field).alias;
+        try testing.expectEqual(@as(u32, 1), alias.declared_arity);
+        try testing.expectEqual(@as(usize, 1 + case.hidden), alias.args.len);
+        try testing.expect(!try checkedTypeContainsIdentityVariablesPayloads(allocator, &template.store, template.backing));
+    }
+}
+
+test "a nominal declaration template's formal occurrences are its formal roots" {
+    // `Holder(a)`'s `a`, passed into `W`, is the header formal's own checked
+    // root in the template, in the alias's argument and in its backing.
+    const testing = std.testing;
+    const TestEnv = @import("test/TestEnv.zig");
+    const allocator = testing.allocator;
+    var test_env = try TestEnv.init("Main",
+        \\W(a) : (a, [Other])
+        \\
+        \\Holder(a) := { f : W(a) }
     );
-    defer allocator.free(fields);
-
-    try testing.expectEqual(@as(usize, 2), fields.len);
-    try testing.expectEqualStrings("world", names.recordFieldLabelText(fields[0].name));
-    try testing.expectEqual(CheckedFieldKind.Tag.optional, fields[0].kind.tag);
-    try testing.expectEqualStrings("req", names.recordFieldLabelText(fields[1].name));
-    try testing.expectEqual(CheckedFieldKind.Tag.required, fields[1].kind.tag);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    var template = try NominalTemplateForTest.build(allocator, test_env.module_env);
+    defer template.deinit();
+    const alias = template.store.payload(try template.firstField()).alias;
+    try testing.expectEqual(@as(usize, 1), template.formalArgs().len);
+    try testing.expectEqual(template.formalArgs()[0], alias.args[0]);
+    const elems = template.store.payload(alias.backing).tuple;
+    try testing.expectEqual(template.formalArgs()[0], elems[0]);
 }
 
 const EmptyTagCheckedOutputTestError = @import("test/TestEnv.zig").TestEnvError || error{
@@ -16037,6 +15789,12 @@ pub const ConstUseTemplate = struct {
     const_ref: ConstRef,
     requested_source_ty_template: canonical.CanonicalTypeKey,
     requested_source_ty_payload: ?CheckedTypeId = null,
+    /// This use re-opened the constant's coerced row
+    /// (`ResolvedValueRefRecord.coerced_result_row`), so its requested type
+    /// may list more tags there than the constant's representation: lowering
+    /// restores the constant at its declared row and re-tags it
+    /// (`ConstTemplate.coerced_row`).
+    coerced_result_row: CoercedResultRow = .none,
 };
 
 /// Public `ArtifactTopLevelProcedureBindingRef` declaration.
@@ -16430,6 +16188,11 @@ pub const ResolvedValueRefRecord = struct {
     /// in-progress specialization only when its recorded scheme substitution
     /// is the active specialization's substitution.
     recursive_reference: bool = false,
+    /// This lookup's own type re-opened a coerced definition's result row
+    /// (`ModuleEnv.ResultRowReopen`, design.md "Row Subsumption"), and which
+    /// cell. A post-check stage that serves the use at a row wider than the
+    /// definition's reads this rather than comparing types.
+    coerced_result_row: CoercedResultRow = .none,
 };
 
 /// Public `ResolvedValueRefTable` declaration.
@@ -16531,7 +16294,11 @@ pub const ResolvedValueRefTable = struct {
                     std.debug.panic("checked artifact invariant violated: resolved value ref type key differs from its published root", .{});
                 }
             }
-            try attachUseTypePayload(&resolved_ref, checked_type_key, checked_ty);
+            const coerced_result_row: CoercedResultRow = if (module.moduleEnvConst().resultRowReopenForNode(node_idx)) |reopen|
+                if (reopen.behind_try != 0) .try_error_row else .direct
+            else
+                .none;
+            try attachUseTypePayload(&resolved_ref, checked_type_key, checked_ty, coerced_result_row);
 
             const id: ResolvedValueRefId = @enumFromInt(@as(u32, @intCast(records.items.len)));
             try records.append(allocator, .{
@@ -16540,6 +16307,7 @@ pub const ResolvedValueRefTable = struct {
                 .checked_ty = checked_ty,
                 .scope_depth = 0,
                 .recursive_reference = recursive_reference_nodes.contains(node_idx),
+                .coerced_result_row = coerced_result_row,
             });
             by_checked_expr[@intFromEnum(checked_expr)] = id;
             if (resolved_ref == .local_proc and resolved_ref.local_proc.is_alias) {
@@ -16897,15 +16665,18 @@ fn attachUseTypePayload(
     ref: *ResolvedValueRef,
     key: canonical.CanonicalTypeKey,
     checked_ty: CheckedTypeId,
+    coerced_result_row: CoercedResultRow,
 ) Allocator.Error!void {
     switch (ref.*) {
         .top_level_const => |*use| {
             use.requested_source_ty_template = key;
             use.requested_source_ty_payload = checked_ty;
+            use.coerced_result_row = coerced_result_row;
         },
         .imported_const => |*use| {
             use.requested_source_ty_template = key;
             use.requested_source_ty_payload = checked_ty;
+            use.coerced_result_row = coerced_result_row;
         },
         .selected_hoisted_const => |*selected| {
             selected.const_use.requested_source_ty_template = key;
@@ -21386,6 +21157,7 @@ test "hosted Try adapter capability recognizes only closed structural error rows
         .origin_module = module_identity,
         .owner_module = testCheckedModuleKey(105),
         .backing = closed_row,
+        .declared_arity = 0,
     } });
 
     try std.testing.expect(checkedTypeIsClosedTagRow(&store, empty_row));
@@ -21527,8 +21299,19 @@ fn hostedTryAdapterCapabilityForCheckedRoot(
         }
         remaining -= 1;
     };
-    remaining = checked_types.payloads.items.len;
-    current = function.ret;
+    return try tryAdapterCapabilityForResultCell(names, checked_types, function.ret);
+}
+
+/// The `Try` constructor information for a result cell whose `Try` error row
+/// is closed: a function's return (`hostedTryAdapterCapabilityForCheckedRoot`)
+/// or a coerced top-level value's root (`ConstTemplate.coerced_row`).
+fn tryAdapterCapabilityForResultCell(
+    names: *canonical.CanonicalNameStore,
+    checked_types: *const CheckedTypeStore,
+    cell: CheckedTypeId,
+) Allocator.Error!?HostedTryAdapterCapability {
+    var remaining = checked_types.payloads.items.len;
+    var current = cell;
     const nominal = while (true) {
         switch (checked_types.payload(current)) {
             .alias => |alias| current = alias.backing,
@@ -27093,6 +26876,30 @@ pub const CompileTimeRootRequestEligibility = enum(u8) {
     ineligible,
 };
 
+/// What the root's evaluated value is a representation OF.
+///
+/// `exact`: the root's solved type leaves no row tail unbound, so the stored
+/// value is the representation every use asks for.
+///
+/// `sealed_row`: the solved type leaves at least one row extension unbound
+/// (`ConcreteRootPosition.record_extension` / `.tag_union_extension`), so the value was evaluated with
+/// each such tail sealed to the empty row. A use that instantiates one of
+/// those rows differently does not share that representation, and lowering
+/// gives it the root's eval template instead
+/// (`StoredConstTemplate.other_row_template`). Both alternatives are explicit
+/// output of this stage; lowering selects between them by comparing the use's
+/// settled Monotype against `StoredConstTemplate.root_type`.
+///
+/// One constant per instantiation is not expressible here. This decision is
+/// made for one module with no importer in view (`CompileTimeRootTable.fromModule`),
+/// and `copy_import` stamps every imported descriptor generalized, so the
+/// defining module can never bound the set of rows its constant will be asked
+/// for.
+pub const CompileTimeRootRepresentation = enum(u8) {
+    exact,
+    sealed_row,
+};
+
 /// Public `CompileTimeRoot` declaration.
 pub const CompileTimeRoot = struct {
     id: ComptimeRootId,
@@ -27105,6 +26912,7 @@ pub const CompileTimeRoot = struct {
     expr: CheckedExprId,
     checked_type: CheckedTypeId,
     request_eligibility: CompileTimeRootRequestEligibility,
+    representation: CompileTimeRootRepresentation = .exact,
     payload: CompileTimeRootPayload,
 
     pub fn literalConversionKind(self: CompileTimeRoot) ?CompileTimeLiteralConversionKind {
@@ -27488,13 +27296,16 @@ fn publishCompileTimeRootRequestEligibility(
             .repl_expr,
             => false,
         };
+        var quantified_row = false;
         const context_free = try checkedTypeIsContextFreeCompileTimeRoot(
             allocator,
             &checked_types.store,
             producer_callable_type_is_fixed,
             root.checked_type,
+            &quantified_row,
         );
         root.request_eligibility = if (context_free) .eligible else .ineligible;
+        root.representation = if (context_free and quantified_row) .sealed_row else .exact;
     }
 }
 
@@ -27783,8 +27594,9 @@ fn checkedTypeIsContextFreeCompileTimeRoot(
     checked_types: *const CheckedTypeStore,
     producer_callable_type_is_fixed: bool,
     root: CheckedTypeId,
+    quantified_row: *bool,
 ) Allocator.Error!bool {
-    if (!try checkedTypeIsConcreteCompileTimeRoot(allocator, checked_types, root)) return false;
+    if (!try checkedTypeIsConcreteCompileTimeRoot(allocator, checked_types, root, quantified_row)) return false;
 
     // A callable root or an annotated data producer fixes its callable graph at
     // the producer. An unannotated data root can instead receive callable type
@@ -29050,6 +28862,7 @@ pub const TopLevelValueTable = struct {
                 module.moduleIndex(),
                 checked_pattern,
                 source_scheme,
+                try coercedConstRowForDef(module, names, checked_type_publication, def_idx, source_ty),
             ) };
 
             const entry_idx: u32 = @intCast(entries.items.len);
@@ -32039,6 +31852,15 @@ pub const StoredConstTemplate = struct {
     /// Exact producer-owned Monotype representation used to evaluate `node`.
     /// This is explicit post-check evidence, stored in `ConstStore.type_store`.
     root_type: const_store.ConstTypeId,
+    /// Present exactly when the producing root published
+    /// `CompileTimeRootRepresentation.sealed_row`: `root_type` is then the
+    /// representation with every quantified row tail sealed to the empty row,
+    /// and a use whose own checked type seals to a DIFFERENT representation
+    /// re-lowers this eval template at that type instead of reading the stored
+    /// value. Null means `root_type` is the exact representation of every use,
+    /// which is the only case that existed before quantified rows could be
+    /// compile-time roots; those uses keep the unconditional stored path.
+    other_row_template: ?ConstEvalTemplate = null,
 };
 
 /// Public `ConstTemplateState` declaration.
@@ -32057,7 +31879,55 @@ pub const ConstTemplate = struct {
     owner: ConstOwner,
     source_scheme: canonical.CanonicalTypeSchemeKey,
     state: ConstTemplateState,
+    /// The checker's row-subsumption record for this top-level value
+    /// (`ModuleEnv.ResultRowCoercion` with `is_value`): which of its rows a
+    /// use may ask for wider than the value was produced at. Every stored or
+    /// evaluated representation of the constant stays at its declared row, and
+    /// a use that re-opened the row (`ResolvedValueRefRecord
+    /// .coerced_result_row`) restores it there and re-tags it into its own.
+    coerced_row: CoercedConstRow = .none,
 };
+
+/// Which row of a top-level value row subsumption coerces (design.md "Row
+/// Subsumption"): none, the value's own root tag row, or the error row of the
+/// `Try` that is its root—with the `Try` constructor information the re-tag
+/// needs, recorded exactly as a closed-result procedure template records it.
+pub const CoercedConstRow = union(enum) {
+    none,
+    direct,
+    try_error_row: HostedTryAdapterCapability,
+};
+
+/// The cell of a use's re-opened result row (`ModuleEnv.ResultRowReopen`).
+pub const CoercedResultRow = enum(u8) {
+    none,
+    direct,
+    try_error_row,
+};
+
+/// The checker's row-subsumption record for the top-level value `def_idx`, as
+/// the constant's `CoercedConstRow`. A value's record is always a VALUE's
+/// (`is_value`): the checker records a function-result coercion only for a
+/// function definition, and a function definition is never a constant.
+fn coercedConstRowForDef(
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    checked_type_publication: *const CheckedTypePublication,
+    def_idx: CIR.Def.Idx,
+    source_ty: Var,
+) Allocator.Error!CoercedConstRow {
+    const record = module.moduleEnvConst().resultRowCoercionForNode(@intFromEnum(ModuleEnv.nodeIdxFrom(def_idx))) orelse
+        return .none;
+    if (record.is_value == 0) {
+        checkedArtifactInvariant("a top-level constant carried a function-result row coercion", .{});
+    }
+    if (record.behind_try == 0) return .direct;
+    const root = checked_type_publication.rootForSourceVar(module, source_ty) orelse
+        checkedArtifactInvariant("a coerced top-level value's type root was not published", .{});
+    const capability = (try tryAdapterCapabilityForResultCell(names, &checked_type_publication.store, root)) orelse
+        checkedArtifactInvariant("a value coerced at its Try error row was not a Try with a closed error row", .{});
+    return .{ .try_error_row = capability };
+}
 
 /// Public `ConstTemplateTable` declaration.
 pub const ConstTemplateTable = struct {
@@ -32077,8 +31947,11 @@ pub const ConstTemplateTable = struct {
         module_idx: u32,
         pattern: CheckedPatternId,
         source_scheme: canonical.CanonicalTypeSchemeKey,
+        coerced_row: CoercedConstRow,
     ) Allocator.Error!ConstRef {
-        return self.appendTopLevel(allocator, artifact_key, module_idx, pattern, source_scheme, .reserved);
+        const ref = try self.appendTopLevel(allocator, artifact_key, module_idx, pattern, source_scheme, .reserved);
+        self.templates.items[@intFromEnum(ref.template)].coerced_row = coerced_row;
+        return ref;
     }
 
     /// Record a top-level constant whose declaration never received a value.
@@ -35183,6 +35056,7 @@ pub const CheckedTypeProjector = struct {
                 .builtin_origin = alias.builtin_origin,
                 .backing = try self.projectCheckedTypeViewRootInner(source, source_names, alias.backing, active),
                 .args = try self.projectCheckedTypeViewIds(source, source_names, alias.args, active),
+                .declared_arity = alias.declared_arity,
             } },
             .record => |record| .{ .record = .{
                 .fields = try self.projectCheckedTypeViewRecordFields(source, source_names, record.fields, active),
@@ -35600,6 +35474,7 @@ pub const CheckedTypeProjector = struct {
             .builtin_origin = alias.builtin_origin,
             .backing = try self.projectImportedCheckedType(imported, alias.backing),
             .args = args,
+            .declared_arity = alias.declared_arity,
         } };
     }
 
@@ -35933,6 +35808,7 @@ const CheckedTypeStoreImportProjector = struct {
                 .builtin_origin = alias.builtin_origin,
                 .backing = try self.project(alias.backing),
                 .args = try self.projectIds(alias.args),
+                .declared_arity = alias.declared_arity,
             } },
             .record => |record| blk: {
                 const fields = try self.projectRecordFields(record.fields);
@@ -38605,6 +38481,7 @@ test "checked type identity scan terminates on self-referential alias backing" {
         .origin_module = module_identity,
         .owner_module = testCheckedModuleKey(90),
         .backing = root,
+        .declared_arity = 0,
     } });
 
     try std.testing.expect(!try store.checkedTypeContainsIdentityVariables(allocator, root));
@@ -39234,6 +39111,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         .builtin_origin = false,
         .backing = b,
         .args = alias_args,
+        .declared_arity = 2,
     } });
     try store.roots.append(gpa, .{ .id = c, .key = .{ .bytes = [_]u8{4} ** 32 } });
     try store.payloads.append(gpa, alias_stored);
@@ -39912,9 +39790,13 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, replace the golden bytes below with the assertion output. Bump
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
+    // Updated for the intentional layout change that gave a checked alias
+    // (`StoredAlias`) its `declared_arity`: the checker's alias instances
+    // carry hidden arguments after their declared ones (design.md "Hidden
+    // Alias Arguments").
     const golden: [32]u8 = .{
-        0x55, 0xF3, 0x96, 0x56, 0xD4, 0x62, 0x21, 0x1D, 0x04, 0x9C, 0xE2, 0x23, 0x95, 0x2D, 0x80, 0xB4,
-        0x25, 0xEA, 0x1E, 0x63, 0xD9, 0x15, 0x71, 0x6E, 0xA8, 0xCC, 0xCD, 0xC5, 0xAA, 0x2C, 0xAA, 0x5B,
+        0xF1, 0x18, 0xD2, 0xD4, 0x85, 0xEC, 0x6F, 0xF5, 0x74, 0x8E, 0xAF, 0x58, 0xB3, 0xA0, 0xE9, 0xDA,
+        0x55, 0xC4, 0xA6, 0xAE, 0xF8, 0xDA, 0xAC, 0xFB, 0x02, 0xEB, 0x7B, 0x8F, 0xA2, 0x29, 0x27, 0x51,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

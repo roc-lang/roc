@@ -167,6 +167,40 @@ fn hostedFallibleStrOk() callconv(.c) FallibleStrResult {
     };
 }
 
+// Matches the Roc type `Try(Str, [NotFound, PermissionDenied])` for
+// FallibleNotFound.not_found!. The error row's tags are numbered
+// alphabetically.
+const NotFoundErr = enum(u8) {
+    not_found = 0,
+    permission_denied = 1,
+};
+
+const NotFoundResult = extern struct {
+    payload: extern union {
+        err: NotFoundErr,
+        ok: RocStr,
+    },
+    tag: FallibleStrResultTag,
+};
+
+/// Hosted function: FallibleNotFound.not_found!
+/// Always returns Err(NotFound).
+fn hostedFallibleNotFound() callconv(.c) NotFoundResult {
+    return .{
+        .payload = .{ .err = .not_found },
+        .tag = .err,
+    };
+}
+
+/// Hosted function: FallibleEcho.echo!
+/// Returns Err with the tag it was given.
+fn hostedFallibleEcho(err: NotFoundErr) callconv(.c) NotFoundResult {
+    return .{
+        .payload = .{ .err = err },
+        .tag = .err,
+    };
+}
+
 // --- Symbol-ABI runtime exports
 // The fixed runtime symbols every symbol-ABI host defines, plus this
 // platform's hosted function symbols. All hidden: they are link-time plumbing
@@ -177,6 +211,8 @@ fn getOps() *RocOps {
 }
 
 comptime {
+    @export(&hostedFallibleEcho, .{ .name = "roc_fallible_echo", .visibility = .hidden });
+    @export(&hostedFallibleNotFound, .{ .name = "roc_fallible_not_found", .visibility = .hidden });
     @export(&hostedFallibleStrOk, .{ .name = "roc_fallible_str_ok", .visibility = .hidden });
     @export(&hostedFallibleStrOk, .{ .name = "roc_fallible_str_ok_str_err", .visibility = .hidden });
     @export(&hostedStderrLine, .{ .name = "roc_stderr_line", .visibility = .hidden });

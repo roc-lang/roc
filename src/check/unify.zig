@@ -496,7 +496,21 @@ const Unifier = struct {
         });
     }
 
-    fn contentForMerge(self: *Self, vars: *const ResolvedVarDescs, content: Content) std.mem.Allocator.Error!Content {
+    fn contentForMerge(self: *Self, vars: *const ResolvedVarDescs, requested: Content) std.mem.Allocator.Error!Content {
+        // An alias can never be its own backing. When the backing of the
+        // alias view being merged is already one of the two classes (a flex
+        // meeting `Id(a)` whose backing `a` is that flex), the merged class
+        // IS that backing: it keeps the backing's own content and the alias
+        // view is dropped (design.md "Hidden Alias Arguments").
+        const content = switch (requested) {
+            .alias => |alias| blk: {
+                const backing = self.types_store.resolveVar(self.types_store.getAliasBackingVar(alias));
+                if (backing.desc_idx == vars.a.desc_idx) break :blk vars.a.desc.content;
+                if (backing.desc_idx == vars.b.desc_idx) break :blk vars.b.desc.content;
+                break :blk requested;
+            },
+            .flex, .rigid, .field_presence, .structure, .err => requested,
+        };
         // If a row extension reaches the merge destination, union_ would overwrite
         // that destination and turn the extension into a self-cycle. Preserve the
         // destination's current row meaning before the overwrite happens.
@@ -986,6 +1000,14 @@ const Unifier = struct {
     /// this checks:
     /// * that the arities are the same
     /// * that parallel arguments unify
+    ///
+    /// The arguments are ALL of them, the hidden ones too (`Alias.declared_arity`).
+    /// A declaration's body has no variables but its formals and its hidden
+    /// arguments, and every instance's backing is that body under all of its
+    /// arguments, so agreeing arguments mean agreeing backings: a result-row
+    /// twin or a coerced re-open changed the hidden argument it replaced,
+    /// and relating that argument relates the widened row (design.md
+    /// "Hidden Alias Arguments").
     ///
     /// NOTE: the rust version of this function `unify_two_aliases` is *significantly* more
     /// complicated than the version here

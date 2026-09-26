@@ -575,6 +575,12 @@ checking_executable_root: bool = false,
 /// treatment of a variable binding. Deliberately NOT set for mutable `var`
 /// bindings, which must never generalize.
 checking_binding_rhs: bool = false,
+/// Whether the immediate binding RHS is a TOP-LEVEL definition's rather than a
+/// block-local `s_decl`'s. Only an implicitly opened row on a top-level value
+/// generalizes (`isGeneralizableValueBinding`); a local one keeps the inferred
+/// behaviour of an unannotated local and is sealed by Monotype's row defaults
+/// (design.md "Polarity").
+checking_top_level_binding_rhs: bool = false,
 /// Pattern for the immediate binding RHS being checked.
 checking_binding_rhs_pattern: ?CIR.Pattern.Idx = null,
 /// The outer RHS expression of the currently checked `_ = ...` discard binding,
@@ -612,12 +618,40 @@ host_boundary_annotations: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, void),
 /// audit (`auditImplicitOpenExts`).
 implicit_open_exts: std.ArrayListUnmanaged(ImplicitOpenExt),
 annotation_implicit_open_exts: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, ImplicitOpenExtRange),
-/// The `implicit_open_exts` ranges of top-level VALUE bindings that do not
-/// generalize (a weak shared row; design.md "Polarity"). Grounded to `[]`
-/// after the module solves (`closeWeakValueImplicitOpenExts`), so the
-/// published type—what importers copy and what stored constants are sealed
-/// against—is the closed row the annotation produced before polarity.
-weak_value_implicit_open_ext_ranges: std.ArrayListUnmanaged(ImplicitOpenExtRange),
+/// The result-row site of every adapter-reachable row the annotation currently
+/// being generated closed AS WRITTEN (`OpeningBehavior.as_written`), whether
+/// written inline or contributed by an alias it names. Scratch for one
+/// `generateAnnotationType` call.
+written_result_rows: std.ArrayListUnmanaged(ResultRowSite),
+/// The copies one result-spine copy has made so far, by source root
+/// (`spineCopiedAlias`). Each copy uses the run past its own base and
+/// truncates it on the way out, so the list is empty between copies.
+spine_copies: std.ArrayListUnmanaged(SpineCopy),
+/// Scratch for collecting an alias declaration's hidden arguments
+/// (`generateAliasDecl`): the walk's worklist and visited roots, and the
+/// argument list being built. Empty between declarations.
+alias_slot_stack: std.ArrayListUnmanaged(Var),
+alias_slot_seen: std.AutoHashMapUnmanaged(Var, void),
+alias_decl_args: std.ArrayListUnmanaged(Var),
+/// The resolved vars of one alias body's result spine, root first
+/// (`aliasFormalOccursOffSpine`). Empty between declarations.
+alias_spine_path: std.ArrayListUnmanaged(Var),
+/// Per host-boundary annotation: the one adapter-reachable result row its
+/// generation closed as written, or `.none`. A hosted function's row is closed
+/// by declaration rather than by a body, so this is the whole producer answer
+/// row subsumption needs for it (`hostedResultRowCoercedSite`). The value names
+/// a position, not a type variable, so a speculative generation that is
+/// rolled back cannot leave it dangling; generating the annotation again
+/// writes the same answer.
+host_annotation_result_rows: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, ResultRowSite),
+/// The `implicit_open_exts` ranges of VALUE bindings whose rows were minted
+/// but NOT quantified—the residue of the syntactic pre-test that decides
+/// value generalization (`annotationOpensValueRow`; design.md "Three
+/// Syntactic Walks"). Grounded to `[]` after the module solves
+/// (`groundUnquantifiedValueImplicitOpenExts`), so an extension the pre-test
+/// did not see can still not reach the published type—what importers copy and
+/// what stored constants are sealed against—as a bare flex.
+unquantified_value_implicit_open_ext_ranges: std.ArrayListUnmanaged(ImplicitOpenExtRange),
 /// Every implicitly opened extension the post-body audit
 /// (`auditImplicitOpenExts`) visited and did not report, in visit order, with
 /// the binding that owns it. A generated codec validated after that audit can
@@ -853,6 +887,21 @@ where_method_use_record_by_fn_var: std.AutoHashMapUnmanaged(Var, u32) = .empty,
 /// unification.
 dispatch_derivations: std.ArrayListUnmanaged(DispatchDerivation) = .empty,
 dispatch_derivation_by_child_fn_var: std.AutoHashMapUnmanaged(Var, Var) = .empty,
+/// The constraint each discharge rewrote a node into structural equality or
+/// hashing for (`rewriteDerivedIsEqMethodCallAsStructuralEq`,
+/// `rewriteDerivedMethodCallAsStructuralHash`). The rewritten node keeps no
+/// constraint var of its own, so this is where its component obligations,
+/// derived under that constraint (`dispatch_derivations`), are reached from.
+structural_rewrite_constraints: std.ArrayListUnmanaged(StructuralRewriteConstraint) = .empty,
+/// Storage for the dispatch-target join, rebuilt (not reallocated) by each
+/// settled-state pass that consumes it: the default-cycle walk and hoisted-
+/// root pruning. It is keyed by resolved classes, and solving continues
+/// between those passes, so each pass rebuilds it at its own settled state.
+dispatch_join_scratch: DispatchJoinIndex = .{},
+/// Per-root scratch of hoisted-root pruning's evidence walk, cleared for
+/// every root.
+hoist_evidence_seen_vars: std.AutoHashMapUnmanaged(Var, void) = .empty,
+hoist_evidence_type_vars: std.AutoHashMapUnmanaged(Var, void) = .empty,
 /// Reusable scratch for the receiver-embedding walk of recursive-dispatch
 /// detection: the in-progress (small, big) pair stack that cuts cyclic
 /// structure, and the completed-pair memo that keeps shared substructure
@@ -866,6 +915,11 @@ scratch_embed_cut_count: usize = 0,
 /// Scratch buffer for the (scheme var → fresh var) pairs of one constrained
 /// scheme instantiation, flushed into `cir.scheme_uses`.
 scratch_evidence_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty,
+/// Positions still to visit in one declaration body's variance walk
+/// (`walkDeclFormalVariances`), reused across walks.
+formal_variance_pending: std.ArrayListUnmanaged(FormalVariancePending) = .empty,
+/// The declaration pre-pass's working state (`recordTypeDeclVariances`).
+type_decl_prepass: TypeDeclPrepass = .{},
 scratch_evidence_pair_set: std.AutoHashMapUnmanaged(ModuleEnv.SchemeUsePair, void) = .empty,
 /// Exact internal calls collected while validating one compiler-generated
 /// parser or encoder. Successful validation publishes this scratch range to
@@ -1393,6 +1447,11 @@ const DispatchTargetInstantiation = struct {
 const DispatchDerivation = struct {
     child_fn_var: Var,
     parent_fn_var: Var,
+};
+
+const StructuralRewriteConstraint = struct {
+    expr: CIR.Expr.Idx,
+    constraint_fn_var: Var,
 };
 
 const SchemeReachabilityVisit = struct {
@@ -2955,7 +3014,14 @@ fn initAssumePrepared(
         .host_boundary_annotations = .empty,
         .implicit_open_exts = .empty,
         .annotation_implicit_open_exts = .empty,
-        .weak_value_implicit_open_ext_ranges = .empty,
+        .written_result_rows = .empty,
+        .spine_copies = .empty,
+        .alias_slot_stack = .empty,
+        .alias_slot_seen = .empty,
+        .alias_decl_args = .empty,
+        .alias_spine_path = .empty,
+        .host_annotation_result_rows = .empty,
+        .unquantified_value_implicit_open_ext_ranges = .empty,
         .late_implicit_open_ext_audits = .empty,
         .erroneous_value_patterns = .empty,
         .rejected_default_exprs = .empty,
@@ -3040,6 +3106,11 @@ pub fn fixupTypeWriter(self: *Self) void {
     // Defaulted fields render their default's source snippet when it was
     // declared in this module (design.md "Defaulted Fields").
     self.type_writer.setDefaultSourceResolver(self.cir, ModuleEnv.typeWriterDefaultSource);
+    // This writer renders the types of reported errors: a widened alias
+    // instance shows its declared arguments and its backing, so two
+    // instances of one alias never read alike when their types differ
+    // (design.md "Hidden Alias Arguments").
+    self.type_writer.widened_aliases = .name_and_backing;
 }
 
 /// Deinit owned fields
@@ -3094,7 +3165,14 @@ pub fn deinit(self: *Self) void {
     self.host_boundary_annotations.deinit(self.gpa);
     self.implicit_open_exts.deinit(self.gpa);
     self.annotation_implicit_open_exts.deinit(self.gpa);
-    self.weak_value_implicit_open_ext_ranges.deinit(self.gpa);
+    self.written_result_rows.deinit(self.gpa);
+    self.spine_copies.deinit(self.gpa);
+    self.alias_slot_stack.deinit(self.gpa);
+    self.alias_slot_seen.deinit(self.gpa);
+    self.alias_decl_args.deinit(self.gpa);
+    self.alias_spine_path.deinit(self.gpa);
+    self.host_annotation_result_rows.deinit(self.gpa);
+    self.unquantified_value_implicit_open_ext_ranges.deinit(self.gpa);
     self.late_implicit_open_ext_audits.deinit(self.gpa);
     self.codec_row_demands.deinit(self.gpa);
     self.codec_row_demand_tags.deinit(self.gpa);
@@ -3205,10 +3283,16 @@ pub fn deinit(self: *Self) void {
     self.dispatch_target_instantiation_by_fn_var.deinit(self.gpa);
     self.where_method_use_record_by_fn_var.deinit(self.gpa);
     self.dispatch_derivations.deinit(self.gpa);
+    self.structural_rewrite_constraints.deinit(self.gpa);
+    self.dispatch_join_scratch.deinit(self.gpa);
+    self.hoist_evidence_seen_vars.deinit(self.gpa);
+    self.hoist_evidence_type_vars.deinit(self.gpa);
     self.dispatch_derivation_by_child_fn_var.deinit(self.gpa);
     self.scratch_embed_active_pairs.deinit(self.gpa);
     self.scratch_embed_memo.deinit(self.gpa);
     self.scratch_evidence_pairs.deinit(self.gpa);
+    self.formal_variance_pending.deinit(self.gpa);
+    self.type_decl_prepass.deinit(self.gpa);
     self.scratch_evidence_pair_set.deinit(self.gpa);
     self.open_literal_vars.deinit(self.gpa);
     self.open_numeral_literals.deinit(self.gpa);
@@ -5760,7 +5844,7 @@ fn walkSettledRoot(
                     .var_ = self.types.getAliasBackingVar(alias),
                     .starts_row = entry.starts_row,
                 });
-                try self.appendSettledTypeReachVars(walk_stack, self.types.sliceAliasArgs(alias), true);
+                try self.appendSettledTypeReachVars(walk_stack, self.types.sliceAliasDeclaredArgs(alias), true);
             },
             .structure => |flat_type| switch (flat_type) {
                 .tuple => |tuple| try self.appendSettledTypeReachVars(walk_stack, self.types.sliceVars(tuple.elems), true),
@@ -7479,6 +7563,7 @@ fn instantiateVarPolarized(
     polarity_behavior: PolarityVarBehavior,
     polarity: Polarity,
     reach: Instantiator.AdapterReach,
+    written_rows: WrittenResultRows,
     evidence: InstantiationEvidence,
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
@@ -7486,6 +7571,8 @@ fn instantiateVarPolarized(
 
     var opened_marker_exts: std.ArrayListUnmanaged(Instantiator.OpenedMarkerExt) = .empty;
     defer opened_marker_exts.deinit(self.gpa);
+    var closed_marker_reaches: std.ArrayListUnmanaged(Instantiator.AdapterReach) = .empty;
+    defer closed_marker_reaches.deinit(self.gpa);
     var instantiate_ctx = Instantiator{
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
@@ -7500,15 +7587,21 @@ fn instantiateVarPolarized(
         .current_reach = reach,
         .try_nominal = self.tryNominalIdent(),
         .opened_marker_exts = &opened_marker_exts,
+        .closed_marker_reaches = switch (written_rows) {
+            .record => &closed_marker_reaches,
+            .ignore => null,
+        },
     };
     const instantiated = try self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false, evidence);
     try self.recordOpenedMarkerExts(opened_marker_exts.items, region_behavior);
+    try self.recordClosedMarkerReaches(closed_marker_reaches.items);
     return instantiated;
 }
 
 /// Record alias markers an annotation-position instantiation resolved open,
 /// so the post-body audit covers rows opened through an alias exactly like
-/// rows opened directly in the annotation.
+/// rows opened directly in the annotation, and row subsumption coerces one
+/// exactly where it would coerce the inline spelling (`ResultRowSite`).
 fn recordOpenedMarkerExts(self: *Self, opened: []const Instantiator.OpenedMarkerExt, region_behavior: InstantiateRegionBehavior) std.mem.Allocator.Error!void {
     if (opened.len == 0) return;
     const region = switch (region_behavior) {
@@ -7522,7 +7615,242 @@ fn recordOpenedMarkerExts(self: *Self, opened: []const Instantiator.OpenedMarker
             .region = region,
             .listed_tags = marker.listed_tags,
             .union_var = marker.union_var,
+            .result_row = CoercibleRow.forReach(marker.reach),
         });
+    }
+}
+
+/// The result-row twin one declaration application may build
+/// (`Instantiator.ResultRowTwin`), with what the checker needs to build it
+/// when the instantiation first takes it and to record it once consumed.
+const ResultRowTwinSite = struct {
+    twin: Instantiator.ResultRowTwin,
+    /// The shared argument the twin is a copy of: the one substituted for
+    /// the formal the declaration's spine ends at.
+    arg: Var,
+    region: Region,
+    /// The argument's row as it qualified (`resultRowTwinRow`).
+    source: TwinRow,
+    /// Set when the twin is built: its extension and the union that
+    /// extension opens (the chain's innermost link).
+    ext: Var = undefined,
+    union_var: Var = undefined,
+};
+
+/// A row an argument qualifies for a twin with: where its extension chain
+/// ends, and the innermost link, whose extension that tail is.
+const TwinRow = struct {
+    tail: Var,
+    innermost_union: Var,
+    innermost_tags: types_mod.Tag.SafeMultiList.Range,
+};
+
+/// The result-row twin of a declaration application standing on the result
+/// row (`Instantiator.ResultRowTwin`), when the argument its spine ends at is
+/// a row that the inline spelling would open there. Nothing is built here:
+/// the instantiation builds the twin when the declaration's spine slot
+/// first takes it (`buildResultRowTwin`); the instantiator finds that slot by
+/// the template variable's identity.
+///
+/// A declaration qualifies when it stands at the whole signature, at the
+/// signature's direct result, or at a result `Try`'s error row, and its
+/// result spine ends at one of its formals (`types.Alias.spine`): its hidden
+/// `e⁺` when the body uses the formal elsewhere too, the declared formal
+/// itself when not. Whether as
+/// the function's return (`Fwd(e) : Try(Str, e) -> Try(Str, e)`) or as the
+/// row's own extension (`Wrap(ext) : [HostErr(U64), ..ext]` in
+/// `Try(U64, Wrap(Base))`). The spine ends at one place, so an application
+/// has at most one twin. An argument the application already generated at a
+/// reachable position (a `Try`'s error argument, `applyTryErrorArgIndex`)
+/// opens there in place and needs no twin; a second opened row would make
+/// the signature decline to coerce.
+///
+/// The argument qualifies as `resultRowTwinRow` says.
+fn resultRowTwinSite(
+    self: *Self,
+    decl_alias: types_mod.Alias,
+    ctx: GenTypeAnnoCtx,
+    polarity: Polarity,
+    arg_vars: []const Var,
+    arg_annos: []const CIR.TypeAnno.Idx,
+    reached_arg_index: ?usize,
+) ?ResultRowTwinSite {
+    const anno_ctx = switch (ctx) {
+        .annotation => |anno_ctx| anno_ctx,
+        .type_decl => return null,
+    };
+    switch (anno_ctx.adapter_reach) {
+        .signature, .result, .try_row, .value_try_row => {},
+        .nested => return null,
+    }
+    if (polarity != .pos) return null;
+    switch (decl_alias.spine.kind) {
+        .formal, .declared => {},
+        .none, .marker => return null,
+    }
+    const formal_index: usize = decl_alias.spine.base;
+    if (reached_arg_index == formal_index) return null;
+    const arg_var = arg_vars[formal_index];
+    const source = self.resultRowTwinRow(arg_var) orelse return null;
+    const slot = self.types.aliasSpineSlot(decl_alias).?;
+    return .{
+        .twin = .{ .slot = self.types.resolveVar(slot).var_ },
+        .arg = arg_var,
+        .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(arg_annos[formal_index])),
+        .source = source,
+    };
+}
+
+/// The row `arg_var` qualifies for a result-row twin with, if it does: through
+/// transparent alias layers, a tag row, read down its whole extension chain
+/// (its `tag_union` links and alias links, as `reopenedTagRow` reads a
+/// coerced row), that lists at least one tag and whose tail this annotation
+/// generated: `[]` (the argument was generated closed for its formal's
+/// variance) or the flagged flex of an implicitly opened row (generated open
+/// for a covariant formal). Any other tail was written (`..r`) and means the
+/// same thing at every occurrence, and a row with no tags asserts
+/// uninhabitedness; neither is reopened by position, so neither gets a twin.
+/// An alias layer or link whose declaration's spine ends at no slot
+/// (`types.AliasSpine.none`) fixes its row's end as written, so a row through
+/// one gets no twin either.
+///
+/// The walk needs no depth bound. `arg_var` was generated from the
+/// annotation a moment ago, so its alias layers are the ones the annotation
+/// and the declarations it names write, and nothing solved has merged into
+/// it. Those layers are finite: a declaration is generated before any use
+/// instantiates it, and an alias that reaches itself is reported
+/// (`recursive_alias`) and its reference poisoned to an error, where this
+/// walk stops. So an argument gets a twin however many alias layers it is
+/// spelled through, exactly as its inline spelling does.
+fn resultRowTwinRow(self: *Self, arg_var: Var) ?TwinRow {
+    var has_tags = false;
+    var innermost: ?struct { var_: Var, tags: types_mod.Tag.SafeMultiList.Range } = null;
+    var current = arg_var;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                switch (alias.spine.kind) {
+                    .marker, .formal, .declared => {},
+                    .none => return null,
+                }
+                current = self.types.getAliasBackingVar(alias);
+                continue;
+            },
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| {
+                    if (tag_union.tags.count > 0) has_tags = true;
+                    innermost = .{ .var_ = resolved.var_, .tags = tag_union.tags };
+                    current = tag_union.ext;
+                    continue;
+                },
+                .empty_tag_union => {},
+                .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record => return null,
+            },
+            .flex => |flex| {
+                if (!resolved.desc.flags.annotation_tag_ext or flex.constraints.len() != 0) return null;
+            },
+            .rigid, .field_presence, .err => return null,
+        }
+        const link = innermost orelse return null;
+        if (!has_tags) return null;
+        return .{ .tail = resolved.var_, .innermost_union = link.var_, .innermost_tags = link.tags };
+    }
+}
+
+/// What the instantiator calls to build the twin on its first take.
+const ResultRowTwinBuild = struct {
+    check: *Self,
+    site: *ResultRowTwinSite,
+    opening: GenTypeAnnoCtx.AnnotationGenCtx.OpeningBehavior,
+    env: *Env,
+
+    fn build(ctx: *anyopaque) std.mem.Allocator.Error!Var {
+        const self: *ResultRowTwinBuild = @ptrCast(@alignCast(ctx));
+        return self.check.buildResultRowTwin(self.site, self.opening, self.env);
+    }
+};
+
+/// Build the twin: the argument's row with its own extension, opened the way
+/// a row written at the result is. The row is copied down its whole extension
+/// chain with the tail replaced (`copiedTagRowChain`), keeping every alias
+/// layer and link with its spine slot re-pointed at the copy, so it is
+/// presented as the inline spelling's row is; tag payloads stay shared. A
+/// where-method signature's twin takes the deferral marker as its extension,
+/// decided per use rather than audited, exactly as a row written at its
+/// result does.
+///
+/// A host-boundary annotation keeps its rows as written, so its "twin" is the
+/// argument itself: substituting it changes nothing, and taking it only
+/// reports the site the as-written row stands on (`written_result_rows`),
+/// exactly as a row the declaration's own marker closes there reports it.
+fn buildResultRowTwin(
+    self: *Self,
+    site: *ResultRowTwinSite,
+    opening: GenTypeAnnoCtx.AnnotationGenCtx.OpeningBehavior,
+    env: *Env,
+) std.mem.Allocator.Error!Var {
+    if (opening == .as_written) {
+        site.ext = site.source.tail;
+        site.union_var = site.source.innermost_union;
+        return site.arg;
+    }
+    const ext = switch (opening) {
+        .implicit_open => blk: {
+            const open_ext = try self.fresh(env, site.region);
+            try self.types.markAnnotationTagExt(open_ext);
+            break :blk open_ext;
+        },
+        .per_use => try self.freshFromContent(.{ .rigid = Rigid.init(self.cir.idents.polarity_var) }, env, site.region),
+        .as_written => unreachable, // handled above
+    };
+    var copy = self.beginSpineCopy(ext);
+    defer self.endSpineCopy(copy);
+    var innermost: ?Var = null;
+    const twin = try self.copiedTagRowChain(site.arg, &copy, &innermost, env, site.region);
+    site.ext = ext;
+    site.union_var = innermost.?;
+    return twin;
+}
+
+/// Record the twin, when the instantiation took it, as the implicitly opened
+/// result row it now is, at the site its reach names, exactly as a row
+/// written there is recorded. A host-boundary twin reports the site its
+/// as-written row stands on instead. A where-method twin's row is a deferral
+/// marker, decided per use rather than audited, so it records nothing, like
+/// the inline spelling's.
+fn recordConsumedResultRowTwin(self: *Self, site: *const ResultRowTwinSite, ctx: GenTypeAnnoCtx) std.mem.Allocator.Error!void {
+    const opening = switch (ctx) {
+        .annotation => |anno_ctx| anno_ctx.opening,
+        .type_decl => return,
+    };
+    const reach = site.twin.consumed_at orelse return;
+    switch (opening) {
+        .as_written => try self.recordClosedMarkerReaches(&.{reach}),
+        .implicit_open => try self.implicit_open_exts.append(self.gpa, .{
+            .var_ = site.ext,
+            .region = site.region,
+            .listed_tags = site.source.innermost_tags,
+            .union_var = site.union_var,
+            .result_row = CoercibleRow.forReach(reach),
+        }),
+        .per_use => {},
+    }
+}
+
+/// Record the reaches of alias markers a host-boundary annotation's
+/// instantiation closed as written, so a row that annotation names through an
+/// alias reports the same result-row site the inline spelling reports
+/// (`written_result_rows`).
+fn recordClosedMarkerReaches(self: *Self, reaches: []const Instantiator.AdapterReach) std.mem.Allocator.Error!void {
+    for (reaches) |reach| {
+        const site: ResultRowSite = switch (reach) {
+            .result => .direct,
+            .try_row => .try_error_row,
+            // No hosted definition is a value.
+            .signature, .value_try_row, .nested => .none,
+        };
+        if (site != .none) try self.written_result_rows.append(self.gpa, site);
     }
 }
 
@@ -7711,7 +8039,7 @@ fn instantiateVarWithSubs(
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
-    return self.instantiateVarWithSubsPolarized(var_to_instantiate, subs, env, region_behavior, .close, .pos, .nested);
+    return self.instantiateVarWithSubsPolarized(var_to_instantiate, subs, env, region_behavior, .close, .pos, .nested, .ignore, null);
 }
 
 /// `instantiateVarWithSubs` with explicit polarity var handling; see
@@ -7725,12 +8053,16 @@ fn instantiateVarWithSubsPolarized(
     polarity_behavior: PolarityVarBehavior,
     polarity: Polarity,
     reach: Instantiator.AdapterReach,
+    written_rows: WrittenResultRows,
+    twin_build: ?*ResultRowTwinBuild,
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     var opened_marker_exts: std.ArrayListUnmanaged(Instantiator.OpenedMarkerExt) = .empty;
     defer opened_marker_exts.deinit(self.gpa);
+    var closed_marker_reaches: std.ArrayListUnmanaged(Instantiator.AdapterReach) = .empty;
+    defer closed_marker_reaches.deinit(self.gpa);
     var instantiate_ctx = Instantiator{
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
@@ -7745,9 +8077,16 @@ fn instantiateVarWithSubsPolarized(
         .current_reach = reach,
         .try_nominal = self.tryNominalIdent(),
         .opened_marker_exts = &opened_marker_exts,
+        .closed_marker_reaches = switch (written_rows) {
+            .record => &closed_marker_reaches,
+            .ignore => null,
+        },
+        .result_row_twin = if (twin_build) |build| &build.site.twin else null,
+        .result_row_twin_builder = if (twin_build) |build| .{ .ctx = build, .build = ResultRowTwinBuild.build } else null,
     };
     const instantiated = try self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false, .none);
     try self.recordOpenedMarkerExts(opened_marker_exts.items, region_behavior);
+    try self.recordClosedMarkerReaches(closed_marker_reaches.items);
     return instantiated;
 }
 
@@ -9530,6 +9869,11 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // implicitly opened by polarity).
     try self.collectHostBoundaryAnnotations();
 
+    // Publish this module's declarations' variance and `Try` error-cell
+    // answers, before any annotation is generated, so both the speculative and
+    // the real generation read the identical table.
+    try self.recordTypeDeclVariances();
+
     // Create a solver env
     var env = try self.env_pool.acquire();
     defer self.env_pool.release(env);
@@ -9559,10 +9903,11 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         const stmt_var = ModuleEnv.varFrom(stmt_idx);
 
         switch (stmt) {
-            .s_alias_decl => |alias| {
-                try self.setVarRank(stmt_var, &env);
-                try self.predeclareAliasDecl(stmt_var, alias, &env);
-            },
+            // An alias reserves no shell: its content is installed once its
+            // body is generated, since its hidden arguments are variables of
+            // that body (`generateAliasDecl`). Every reference generates it
+            // first (`ensureTypeDeclGenerated`).
+            .s_alias_decl => try self.setVarRank(stmt_var, &env),
             .s_nominal_decl => |nominal| {
                 try self.setVarRank(stmt_var, &env);
                 try self.predeclareNominalDecl(stmt_var, nominal, &env);
@@ -9794,7 +10139,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.reportNonExhaustiveLambdaParams(&env);
     try self.reportNonExhaustiveForPatterns(&env);
 
-    try self.closeWeakValueImplicitOpenExts(&env);
+    try self.groundUnquantifiedValueImplicitOpenExts(&env);
 
     try self.pruneSelectedHoistedRootsAfterSolving();
     // Pruning can mark a destructured name erroneous; its uses are poisoned
@@ -9993,8 +10338,11 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     defer self.gpa.free(keep_roots);
     @memset(keep_roots, false);
 
+    const dispatch_join_ref: ?*const DispatchJoinIndex = if (root_count != 0) try self.fillDispatchJoinIndex() else null;
+
     var keep_oracle = try HoistedRootKeepOracle.init(self.gpa, self.selected_hoisted_roots.items, keep_roots);
     defer keep_oracle.deinit(self.gpa);
+    keep_oracle.dispatch_join = dispatch_join_ref;
 
     var kept_count: usize = 0;
     var kept_expr_count: u32 = 0;
@@ -10089,7 +10437,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     std.debug.assert(kept == kept_count);
     self.selected_hoisted_roots.shrinkRetainingCapacity(kept);
     self.debugAssertHoistSelectionConsistent();
-    try self.debugVerifyKeptHoistedRootDependencies();
+    try self.debugVerifyKeptHoistedRootDependencies(dispatch_join_ref);
 }
 
 fn hoistedRootIsIntrinsicallyKept(
@@ -10141,7 +10489,7 @@ fn hoistedRootIsIntrinsicallyKept(
     return try self.varIsConcreteHoistedConstType(type_var);
 }
 
-fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
+fn debugVerifyKeptHoistedRootDependencies(self: *Self, dispatch_join: ?*const DispatchJoinIndex) Allocator.Error!void {
     if (builtin.mode != .Debug) return;
 
     const root_count = self.selected_hoisted_roots.items.len;
@@ -10151,6 +10499,7 @@ fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
 
     var keep_oracle = try HoistedRootKeepOracle.init(self.gpa, self.selected_hoisted_roots.items, keep_roots);
     defer keep_oracle.deinit(self.gpa);
+    keep_oracle.dispatch_join = dispatch_join;
 
     for (self.selected_hoisted_roots.items, 0..) |root, i| {
         if (root.body == .pattern_error) {
@@ -10168,6 +10517,19 @@ fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
     }
 }
 
+/// Whether a hoisted constant's complete value type is fixed.
+///
+/// This is the checker-side relative of `checkedTypeIsConcreteCompileTimeRoot`
+/// (src/check/checked_artifact.zig), but it answers a DIFFERENT question and
+/// deliberately keeps the stricter rule. That one decides whether a root the
+/// checker already selected may be requested, and admits an unbound row tail
+/// by publishing the value's representation at its sealed row. This one
+/// decides whether a sub-expression becomes a root at all: admitting an
+/// unbound tail here would hoist expressions that are not hoisted today (every
+/// `Try`-returning call carries one), which changes what a program with no
+/// quantified row of its own emits. A sub-expression left unhoisted stays
+/// inline, which is what it does today, so the two rules cannot disagree about
+/// any root that exists.
 fn varIsConcreteHoistedConstType(self: *Self, var_: Var) Allocator.Error!bool {
     self.var_set.clearRetainingCapacity();
     return try self.varIsConcreteHoistedConstTypeInternal(.value_graph, .data_constant, var_, &self.var_set);
@@ -10257,7 +10619,7 @@ fn varIsConcreteHoistedConstTypeInternal(
         .field_presence,
         => false,
         .rigid => walk == .decl_template,
-        .alias => |alias| (try self.varsAreConcreteHoistedConstTypes(walk, purpose, self.types.sliceAliasArgs(alias), visited)) and
+        .alias => |alias| (try self.varsAreConcreteHoistedConstTypes(walk, purpose, self.types.sliceAliasDeclaredArgs(alias), visited)) and
             try self.varIsConcreteHoistedConstTypeInternal(walk, purpose, self.types.getAliasBackingVar(alias), visited),
         .structure => |flat| try self.flatTypeIsConcreteHoistedConst(walk, purpose, flat, visited),
     };
@@ -10359,11 +10721,14 @@ const HoistedDependencyContext = struct {
     callable_stability: std.AutoHashMapUnmanaged(HoistedCallableKey, HoistedCallableState) = .{},
     /// Stability of promoted local procedures, keyed by their lambda.
     local_procedure_stability: std.AutoHashMapUnmanaged(CIR.Expr.Idx, HoistedCallableState) = .{},
+    /// Constraint vars whose selected dispatch targets the root reaches.
+    dispatch_seeds: std.ArrayListUnmanaged(Var) = .empty,
 
     fn deinit(self: *@This(), allocator: Allocator) void {
         self.bindings.deinit(allocator);
         self.callable_stability.deinit(allocator);
         self.local_procedure_stability.deinit(allocator);
+        self.dispatch_seeds.deinit(allocator);
     }
 
     fn mark(self: *const @This()) usize {
@@ -10402,6 +10767,9 @@ fn hoistSelectionInvariant(comptime message: []const u8) noreturn {
 }
 
 const HoistedRootKeepOracle = struct {
+    /// The dispatch-target join, built once for every pruning pass that has
+    /// roots to judge; null only when there are none.
+    dispatch_join: ?*const DispatchJoinIndex = null,
     pattern_roots: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
     expr_roots: std.AutoHashMapUnmanaged(CIR.Expr.Idx, u32) = .{},
     keep_roots: []const bool,
@@ -10459,7 +10827,141 @@ fn hoistedRootDependenciesAreKept(
 ) Allocator.Error!bool {
     var context = HoistedDependencyContext{};
     defer context.deinit(self.gpa);
-    return try self.hoistedRootDependenciesAreKeptInternal(expr, &context, keep_oracle);
+    if (!try self.hoistedRootDependenciesAreKeptInternal(expr, &context, keep_oracle)) return false;
+    const join = keep_oracle.dispatch_join orelse return true;
+    return !try self.hoistedRootReachesBlockLocalMethod(&context, join);
+}
+
+/// Whether a dispatch target the root's checked evidence selects, directly
+/// or nested in another selected target's evidence, is a method of a
+/// nominal declared in a function body. Such a method exists only in the
+/// block that declares it, and a kept root never contains that declaration
+/// (its method is a lambda, which a root never keeps), so the root cannot be
+/// evaluated on its own.
+fn hoistedRootReachesBlockLocalMethod(
+    self: *Self,
+    context: *HoistedDependencyContext,
+    join: *const DispatchJoinIndex,
+) Allocator.Error!bool {
+    const visited = &self.hoist_evidence_seen_vars;
+    visited.clearRetainingCapacity();
+    const type_visited = &self.hoist_evidence_type_vars;
+    type_visited.clearRetainingCapacity();
+    while (context.dispatch_seeds.pop()) |seed| {
+        const resolved = self.types.resolveVar(seed).var_;
+        if ((try visited.getOrPut(self.gpa, resolved)).found_existing) continue;
+        // Inspection selects a type's `to_inspect` override by the type
+        // itself, with no dispatch constraint: any type the root instantiates
+        // is one inspection inside the root may reach.
+        if (try self.typeReachesBlockLocalInspectOverride(resolved, type_visited)) return true;
+        if (join.children_by_parent.get(resolved)) |children| {
+            try context.dispatch_seeds.appendSlice(self.gpa, children.items);
+        }
+        const inst_indices = join.instantiations_by_var.get(resolved) orelse continue;
+        for (inst_indices.items) |inst_index| {
+            const instantiation = self.dispatch_target_instantiations.items[inst_index];
+            if (self.methodBindingIsBlockLocal(instantiation.target_env, instantiation.target_binding)) return true;
+            const record_index = join.dispatch_scheme_uses.get(@intFromEnum(instantiation.constraint_fn_var)) orelse continue;
+            try self.appendSchemeUseSeeds(record_index, &context.dispatch_seeds);
+        }
+    }
+    return false;
+}
+
+/// Whether inspecting a value of `var_`'s type can reach a nominal whose
+/// `to_inspect` override is declared in a function body. Inspecting a function
+/// never inspects its argument or result types.
+fn typeReachesBlockLocalInspectOverride(
+    self: *Self,
+    var_: Var,
+    visited: *std.AutoHashMapUnmanaged(Var, void),
+) Allocator.Error!bool {
+    const resolved = self.types.resolveVar(var_);
+    if ((try visited.getOrPut(self.gpa, resolved.var_)).found_existing) return false;
+    switch (resolved.desc.content) {
+        .structure => |flat| switch (flat) {
+            .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return false,
+            .record => |record| {
+                const fields = self.types.getRecordFieldsSlice(record.fields);
+                for (fields.items(.presence)) |presence| {
+                    if (try self.typeReachesBlockLocalInspectOverride(presence.typeVar(), visited)) return true;
+                }
+                return try self.typeReachesBlockLocalInspectOverride(record.ext, visited);
+            },
+            .tuple => |tuple| {
+                for (self.types.sliceVars(tuple.elems)) |elem| {
+                    if (try self.typeReachesBlockLocalInspectOverride(elem, visited)) return true;
+                }
+                return false;
+            },
+            .tag_union => |tag_union| {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                for (tags.items(.args)) |tag_args| {
+                    for (self.types.sliceVars(tag_args)) |arg| {
+                        if (try self.typeReachesBlockLocalInspectOverride(arg, visited)) return true;
+                    }
+                }
+                return try self.typeReachesBlockLocalInspectOverride(tag_union.ext, visited);
+            },
+            .nominal_type => |nominal| {
+                const original_env = self.getNominalOriginEnv(nominal);
+                if (self.lookupStaticDispatchMethodBinding(original_env, nominal.sourceDeclOptional(), self.cir, self.cir.idents.to_inspect)) |found| {
+                    if (self.methodBindingIsBlockLocal(found.env, found.binding)) return true;
+                }
+                for (self.types.sliceNominalArgs(nominal)) |arg| {
+                    if (try self.typeReachesBlockLocalInspectOverride(arg, visited)) return true;
+                }
+                const template = self.nominalDeclBackingTemplate(nominal) orelse return false;
+                return try self.typeReachesBlockLocalInspectOverride(template, visited);
+            },
+        },
+        .alias => |alias| return try self.typeReachesBlockLocalInspectOverride(self.types.getAliasBackingVar(alias), visited),
+        .flex, .rigid, .field_presence, .err => return false,
+    }
+}
+
+/// Whether a method binding belongs to a nominal declared in a function body,
+/// in whichever module declared it: such a binding's type node is the local
+/// statement canonicalization introduced for it, never a top-level def.
+fn methodBindingIsBlockLocal(_: *const Self, env: *const ModuleEnv, binding: ModuleEnv.MethodBinding) bool {
+    return env.store.nodes.get(binding.type_node_idx).tag == .statement_decl;
+}
+
+fn appendSchemeUseSeeds(self: *Self, record_index: u32, seeds: *std.ArrayListUnmanaged(Var)) Allocator.Error!void {
+    const record = self.cir.scheme_uses.items.items[record_index];
+    const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+    for (pairs) |pair| try seeds.append(self.gpa, @enumFromInt(pair.fresh_var));
+}
+
+/// Record the dispatch constraints an expression of a root instantiates or
+/// discharges, for `hoistedRootReachesBlockLocalMethod`.
+fn noteHoistedRootDispatchSeeds(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    context: *HoistedDependencyContext,
+    keep_oracle: *const HoistedRootKeepOracle,
+) Allocator.Error!void {
+    const join = keep_oracle.dispatch_join orelse return;
+    if (join.node_to_scheme_uses.get(@intFromEnum(expr_idx))) |record_indices| {
+        for (record_indices.items) |record_index| try self.appendSchemeUseSeeds(record_index, &context.dispatch_seeds);
+    }
+    const expr = self.cir.store.getExpr(expr_idx);
+    const constraint_fn_var: ?Var = if (expr == .e_dispatch_call)
+        expr.e_dispatch_call.constraint_fn_var
+    else if (expr == .e_method_eq)
+        expr.e_method_eq.constraint_fn_var
+    else if (expr == .e_type_dispatch_call)
+        expr.e_type_dispatch_call.constraint_fn_var
+    else if (expr == .e_interpolation)
+        expr.e_interpolation.constraint_fn_var
+    else if (expr == .e_call)
+        expr.e_call.constraint_fn_var
+    else
+        null;
+    if (constraint_fn_var) |fn_var| try context.dispatch_seeds.append(self.gpa, fn_var);
+    if (join.structural_rewrites_by_expr.get(expr_idx)) |rewrites| {
+        try context.dispatch_seeds.appendSlice(self.gpa, rewrites.items);
+    }
 }
 
 /// Whether a binding a hoisted root reads stays available once the root is
@@ -10485,11 +10987,17 @@ fn hoistedRootDependenciesAreKeptInternal(
 ) Allocator.Error!bool {
     if (self.hoistExprInvalidated(expr)) return false;
     if (self.exprHasDedicatedLiteralConversionRoot(expr)) return false;
+    try self.noteHoistedRootDispatchSeeds(expr, context, keep_oracle);
 
     return switch (self.cir.store.getExpr(expr)) {
         .e_lookup_local => |lookup| self.hoistedRootBindingIsKept(lookup.pattern_idx, context, keep_oracle),
+        // A method of a nominal declared in a function body exists only in
+        // that body's block.
+        .e_lookup_associated_local => |lookup| if (self.cir.lookupMethodBindingForOwnerConst(@enumFromInt(lookup.type_node_idx), lookup.item_ident)) |binding|
+            !self.methodBindingIsBlockLocal(self.cir, binding)
+        else
+            true,
         .e_lookup_external,
-        .e_lookup_associated_local,
         .e_lookup_associated,
         .e_lookup_associated_resolved,
         .e_str_segment,
@@ -13827,6 +14335,8 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
                         self.aliasOriginModule(),
                         @intFromEnum(type_alias.alias_stmt_idx),
                         self.cir.module_role == .builtin,
+                        0,
+                        .none,
                     ),
                     env,
                 );
@@ -14367,6 +14877,10 @@ fn generateForClauseAliasApplication(
             decl_alias.origin_module,
             decl_alias.source_decl.toOptional(),
             decl_alias.source_decl.originIsBuiltin(),
+            // A for-clause alias's body is its rigid alone: no hidden
+            // arguments.
+            anno_arg_vars.len,
+            .none,
         ),
         env,
     );
@@ -14388,6 +14902,10 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 
     // Copy builtin types into this module's type store
     try self.copyBuiltinTypes();
+
+    // Every local declaration's walk answers, before any annotation is
+    // generated, as `checkFileInternal` records them.
+    try self.recordTypeDeclVariances();
 
     // Create a solver env
     var env = try self.env_pool.acquire();
@@ -14430,7 +14948,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.checkBindingRootsForInfiniteTypes();
     try self.recheckNominalConstructorBackings(&env);
 
-    try self.closeWeakValueImplicitOpenExts(&env);
+    try self.groundUnquantifiedValueImplicitOpenExts(&env);
 
     try self.finalizeExpectEffectSlots();
 
@@ -14549,6 +15067,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     if (self.checking_executable_root) self.checking_immediate_callee = true;
     defer self.checking_immediate_callee = saved_checking_immediate_callee;
     self.checking_binding_rhs = true;
+    self.checking_top_level_binding_rhs = true;
     self.checking_binding_rhs_pattern = def.pattern;
     const saved_active_scheme_root = self.active_scheme_root;
     // A singleton value definition has no scheme boundary and therefore owns
@@ -14581,17 +15100,65 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
             env,
         );
 
-        // A top-level value binding that does not generalize (not a function,
-        // not a pure signature, not a value alias, and no written type
-        // variable) shares its implicitly opened rows weakly with every use;
-        // whatever is still open after the module solves is grounded to `[]`
-        // (`closeWeakValueImplicitOpenExts`).
-        if (!generalizes_regardless and
-            !self.cir.store.getAnnotation(annotation_idx).mentions_type_var)
-        {
+        // Every value binding's implicitly opened rows are recorded, whatever
+        // the syntactic pre-test (`annotationOpensValueRow`) predicted, so
+        // `groundUnquantifiedValueImplicitOpenExts` can close the ones that
+        // did not end up quantified once the module solves. The pre-test is
+        // not the filter: an extension it approved can still fail to quantify
+        // when the body unifies it with an outer-rank row, and an extension it
+        // did not predict joins no scheme at all. What actually decides is
+        // the extension's rank, read there after solving.
+        if (!generalizes_regardless) {
             if (self.annotation_implicit_open_exts.get(annotation_idx)) |range| {
-                if (range.len > 0) try self.weak_value_implicit_open_ext_ranges.append(self.gpa, range);
+                if (range.len > 0) try self.unquantified_value_implicit_open_ext_ranges.append(self.gpa, range);
             }
+        }
+
+        // Row subsumption: this definition's body FORWARDED a closed value out
+        // through its annotated result row instead of constructing one, so the
+        // row it publishes is an implementation detail of the body rather than
+        // something the author asked for. Record it, and every use—here and in
+        // importing modules—re-opens its own copy of that row
+        // (`reopenCoercedResultRow`).
+        //
+        // Restricted to TOP-LEVEL definitions (this is the only place one is
+        // checked). A local definition has no procedure template or stored
+        // constant for lowering to adapt at: a local function's callee is a
+        // `.local_proc` dispatch target (`lower.AdapterReachability
+        // .no_adapter`), and a local value is lowered inline.
+        //
+        // A FUNCTION coerces the result row of its signature. A signature
+        // with a `where` clause coerces too: a use whose static-dispatch
+        // evidence resolves to a local procedure is lowered as a caller-owned
+        // specialization (`local_context_dependent` in `lower.zig`), and that
+        // specialization is defined as a widening adapter in the caller's
+        // draft when its use widened the row
+        // (`lower.completeCallerOwnedResultRowWideningAdapter`). A hosted
+        // function has no body; its row is closed by declaration, so its
+        // producer answer comes from the annotation alone
+        // (`hostedResultRowCoercedSite`).
+        //
+        // A VALUE coerces its root row, or the error row of the `Try` that is
+        // its root: every use restores the value at its declared row and
+        // re-tags it into the row the use asks for (`lower
+        // .restoreCoercedConstUseAtNode`). The row's subject must match the
+        // definition's: a value binding whose annotation is a function type
+        // (`f : S -> [A]; f = g`) has no procedure template of its own for an
+        // adapter to complete, so its result row is not coerced.
+        const coerced: CoercibleRow = if (def_expr == .e_hosted_lambda)
+            .{ .site = self.hostedResultRowCoercedSite(annotation_idx) }
+        else
+            self.annotationResultRowCoercedSite(annotation_idx);
+        const subject_matches = switch (coerced.subject) {
+            .function_result => def_is_function,
+            .value => !def_is_function,
+        };
+        if (coerced.site != .none and subject_matches) {
+            try self.cir.recordResultRowCoercion(
+                ModuleEnv.nodeIdxFrom(def_idx),
+                coerced.site == .try_error_row,
+                coerced.subject == .value,
+            );
         }
     }
     if (def.annotation != null) {
@@ -16313,31 +16880,6 @@ fn aliasOriginModule(self: *const Self) base.ModuleIdentity.Idx {
     return self.cir.selfModuleIdentity();
 }
 
-fn predeclareAliasDecl(
-    self: *Self,
-    decl_var: Var,
-    alias: std.meta.fieldInfo(CIR.Statement, .s_alias_decl).type,
-    env: *Env,
-) std.mem.Allocator.Error!void {
-    const header = self.cir.store.getTypeHeader(alias.header);
-    const header_args = self.cir.store.sliceTypeAnnos(header.args);
-    const header_vars = try self.generateHeaderVars(header_args, env);
-    const backing_var: Var = ModuleEnv.varFrom(alias.anno);
-
-    try self.unifyWithTargetRank(
-        decl_var,
-        try self.types.mkAliasWithSourceDeclAndBuiltinOrigin(
-            .{ .ident_idx = header.relative_name },
-            backing_var,
-            header_vars,
-            self.aliasOriginModule(),
-            @intFromEnum(decl_var),
-            self.cir.module_role == .builtin,
-        ),
-        env,
-    );
-}
-
 fn predeclareNominalDecl(
     self: *Self,
     decl_var: Var,
@@ -16398,19 +16940,21 @@ fn registerLocalNominalDecl(
     });
 }
 
-fn predeclaredAliasArgs(self: *const Self, decl_var: Var) ?[]Var {
-    const resolved = self.types.resolveVar(decl_var).desc.content;
-    if (resolved != .alias) return null;
-    return self.types.sliceAliasArgs(resolved.alias);
-}
-
 fn predeclaredNominalArgs(self: *const Self, decl_var: Var) ?[]Var {
     const resolved = self.types.resolveVar(decl_var).desc.content;
     if (resolved != .structure or resolved.structure != .nominal_type) return null;
     return self.types.sliceNominalArgs(resolved.structure.nominal_type);
 }
 
-/// Generate types for an alias type declaration
+/// Generate types for an alias type declaration.
+///
+/// The declaration's content is installed only once its body is generated:
+/// its HIDDEN arguments (`types.Alias.declared_arity`) are variables of the
+/// body, which exist only then (design.md "Hidden Alias Arguments"). Every
+/// reference to an alias declaration generates it first
+/// (`ensureTypeDeclGenerated`), so nothing reads the declaration var before
+/// this installs it; a platform's for-clause aliases are built separately
+/// (`processRequiresTypes`).
 fn generateAliasDecl(
     self: *Self,
     decl_idx: CIR.Statement.Idx,
@@ -16437,26 +16981,11 @@ fn generateAliasDecl(
     const header_args = self.cir.store.sliceTypeAnnos(header.args);
 
     // Next, generate the provided arg types and build the map of rigid variables in the header
-    const predeclared_header_vars = self.predeclaredAliasArgs(decl_var);
-    const header_vars = if (predeclared_header_vars) |vars| vars else try self.generateHeaderVars(header_args, env);
+    const header_vars = try self.generateHeaderVars(header_args, env);
     for (header_args) |header_arg_idx| {
         if (self.cir.store.getTypeAnno(header_arg_idx) == .malformed) {
             self.markTypeDeclInvalid(decl_idx);
         }
-    }
-    if (predeclared_header_vars == null) {
-        try self.unifyWithTargetRank(
-            decl_var,
-            try self.types.mkAliasWithSourceDeclAndBuiltinOrigin(
-                .{ .ident_idx = header.relative_name },
-                ModuleEnv.varFrom(alias.anno),
-                header_vars,
-                self.aliasOriginModule(),
-                @intFromEnum(decl_idx),
-                self.cir.module_role == .builtin,
-            ),
-            env,
-        );
     }
 
     self.type_decl_rigid_vars.clearRetainingCapacity();
@@ -16471,20 +17000,433 @@ fn generateAliasDecl(
     // Now we have a built of list of rigid variables for the decl lhs (header).
     // With this in hand, we can now generate the type for the lhs (body).
     self.seen_annos.unsetAll();
-    const backing_var: Var = ModuleEnv.varFrom(alias.anno);
+    const body_var: Var = ModuleEnv.varFrom(alias.anno);
+    const body_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(alias.anno));
     try self.generateAnnoTypeInPlace(alias.anno, env, .{ .type_decl = .{
         .idx = decl_idx,
         .name = header.relative_name,
         .type_ = .alias,
-        .backing_var = backing_var,
+        .backing_var = body_var,
         .is_opaque = false,
         .num_args = @intCast(header_args.len),
     } }, .pos);
 
-    if (!try self.validateAliasRows(backing_var, env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(alias.anno)))) {
+    const spine = try self.aliasDeclSpine(body_var, header_vars, env, body_region);
+
+    if (!try self.validateAliasRows(spine.backing, env, body_region)) {
         self.markTypeDeclInvalid(decl_idx);
         try self.markErroneous(decl_var);
         return;
+    }
+
+    // The argument list: the declared formals, then the hidden ones.
+    const args = &self.alias_decl_args;
+    std.debug.assert(args.items.len == 0);
+    defer args.clearRetainingCapacity();
+    try args.appendSlice(self.gpa, header_vars);
+    try self.appendAliasHiddenArgs(spine, args);
+
+    try self.unifyWithTargetRank(
+        decl_var,
+        try self.types.mkAliasWithSourceDeclAndBuiltinOrigin(
+            .{ .ident_idx = header.relative_name },
+            spine.backing,
+            args.items,
+            self.aliasOriginModule(),
+            @intFromEnum(decl_idx),
+            self.cir.module_role == .builtin,
+            header_vars.len,
+            spine.spine,
+        ),
+        env,
+    );
+}
+
+/// An alias declaration's backing and the end of its result spine, as
+/// `generateAliasDecl` installs them.
+const AliasDeclSpine = struct {
+    /// The declaration's backing: its generated body, or a copy of the body
+    /// along its result spine whose end is `slot`.
+    backing: Var,
+    spine: types_mod.AliasSpine,
+    /// The hidden argument the spine ends at: set for `.marker` and
+    /// `.formal`.
+    slot: ?Var,
+};
+
+/// The reaches a declaration body's result spine can be walked at: its root
+/// can stand anywhere a use stands on the result spine
+/// (`Instantiator.AdapterReach.onSpine`). Stepped member-wise through
+/// `Instantiator.AdapterReach.step`, dropping every member that leaves the
+/// spine.
+const SpineReaches = std.EnumSet(Instantiator.AdapterReach);
+
+fn spineRootReaches() SpineReaches {
+    return SpineReaches.initMany(&.{ .signature, .result, .try_row, .value_try_row });
+}
+
+fn stepSpineReaches(reaches: SpineReaches, edge: Instantiator.AdapterReach.Edge) SpineReaches {
+    var stepped = SpineReaches.initEmpty();
+    var iter = reaches.iterator();
+    while (iter.next()) |reach| {
+        const next = reach.step(edge);
+        if (next.onSpine()) stepped.insert(next);
+    }
+    return stepped;
+}
+
+/// Where a declaration body's result spine ends: the one path from its root
+/// through alias backings, the root function's return, a builtin `Try`'s
+/// error argument and tag-union extensions, stepped by the same grammar the
+/// instantiator's frames step by (`Instantiator.AdapterReach.step`). It is
+/// one path: at every position each reach either continues along the same
+/// edge or leaves the spine. The path's vars are left in
+/// `alias_spine_path`, root first, end last.
+const SpineEnd = struct {
+    end: Var,
+    /// Whether the path passed through an alias layer whose own spine ends at
+    /// one of its formals. Everything past that layer's slot is the argument
+    /// the application substituted there, which the application also
+    /// substitutes at the formal's other occurrences.
+    through_formal: bool,
+};
+
+/// Whether `formal_root` occurs in `body_var` anywhere but at the end of its
+/// result spine: some edge other than the spine's own reaches it. The spine
+/// is the path `aliasSpineEnd` left in `alias_spine_path`; along it, each
+/// link's spine child is not counted, and neither is each alias layer's own
+/// spine slot, which a copy of the spine replaces with it
+/// (`spineCopiedAlias`).
+fn aliasFormalOccursOffSpine(self: *Self, formal_root: Var) std.mem.Allocator.Error!bool {
+    const path = self.alias_spine_path.items;
+    const stack = &self.alias_slot_stack;
+    const seen = &self.alias_slot_seen;
+    std.debug.assert(stack.items.len == 0 and seen.count() == 0);
+    defer {
+        stack.clearRetainingCapacity();
+        seen.clearRetainingCapacity();
+    }
+    // Along the spine itself, each link's spine child (and an alias layer's
+    // own spine slot, which a copy re-points) is the spine's edge, not an
+    // occurrence. Every other child is off the spine.
+    for (path[0 .. path.len - 1], 1..) |link, next| {
+        try self.pushAliasSlotWalkChildren(link, path[next]);
+    }
+    // Off the spine every edge counts, including one into a spine link: a
+    // link the body also reaches elsewhere (`N(x) : x -> x` applied to
+    // `[A, ..e]` puts one row at the input and on the spine) carries its
+    // spine child, and so the formal, at that other position too.
+    while (stack.pop()) |current| {
+        const resolved = self.types.resolveVar(current);
+        if (resolved.var_ == formal_root) return true;
+        const entry = try seen.getOrPut(self.gpa, resolved.var_);
+        if (entry.found_existing) continue;
+        try self.pushAliasSlotWalkChildren(resolved.var_, null);
+    }
+    return false;
+}
+
+/// Push `var_`'s children onto the off-spine worklist of
+/// `aliasFormalOccursOffSpine`. With `spine_child` set, `var_` is walked as a
+/// link of the spine: the edge to `spine_child`, and an alias layer's spine
+/// slot, are left out.
+fn pushAliasSlotWalkChildren(self: *Self, var_: Var, spine_child: ?Var) std.mem.Allocator.Error!void {
+    const stack = &self.alias_slot_stack;
+    const resolved = self.types.resolveVar(var_);
+    switch (resolved.desc.content) {
+        .rigid, .flex, .field_presence, .err => {},
+        .alias => |alias| {
+            const slot_index: ?usize = if (spine_child != null) self.types.aliasSpineSlotIndex(alias) else null;
+            for (self.types.sliceAliasArgs(alias), 0..) |arg, index| {
+                if (slot_index == index) continue;
+                try stack.append(self.gpa, arg);
+            }
+            if (spine_child == null) try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+        },
+        .structure => |flat| switch (flat) {
+            .empty_record, .empty_tag_union => {},
+            .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+            .nominal_type => |nominal| for (self.types.sliceNominalArgs(nominal), 0..) |arg, index| {
+                if (spine_child != null and index == try_error_type_arg_index and self.types.resolveVar(arg).var_ == spine_child.?) continue;
+                try stack.append(self.gpa, arg);
+            },
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                try stack.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
+                if (spine_child == null) try stack.append(self.gpa, func.ret);
+            },
+            .record => |record| {
+                try stack.append(self.gpa, record.ext);
+                for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                    if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
+                    try stack.append(self.gpa, presence.typeVar());
+                }
+            },
+            .tag_union => |tag_union| {
+                for (self.types.getTagsSlice(tag_union.tags).items(.args)) |args| {
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(args));
+                }
+                if (spine_child == null) try stack.append(self.gpa, tag_union.ext);
+            },
+        },
+    }
+}
+
+fn aliasSpineEnd(self: *Self, root: Var) std.mem.Allocator.Error!SpineEnd {
+    const path = &self.alias_spine_path;
+    path.clearRetainingCapacity();
+    var current = root;
+    var reaches = spineRootReaches();
+    var through_formal = false;
+    const try_ident = self.tryNominalIdent();
+    var guard = types_mod.debug.IterationGuard.init("aliasSpineEnd");
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current);
+        try path.append(self.gpa, resolved.var_);
+        const next: ?struct { var_: Var, reaches: SpineReaches } = switch (resolved.desc.content) {
+            .alias => |alias| blk: {
+                switch (alias.spine.kind) {
+                    // A hidden `e⁺` is the argument the application also
+                    // substitutes at `e`'s other positions.
+                    .formal => through_formal = true,
+                    .none, .marker, .declared => {},
+                }
+                break :blk .{ .var_ = self.types.getAliasBackingVar(alias), .reaches = stepSpineReaches(reaches, .alias_backing) };
+            },
+            .structure => |flat| switch (flat) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| .{ .var_ = func.ret, .reaches = stepSpineReaches(reaches, .func_return) },
+                .nominal_type => |nominal| blk: {
+                    if (!try_ident.matches(nominal)) break :blk null;
+                    const args = self.types.sliceNominalArgs(nominal);
+                    if (args.len <= try_error_type_arg_index) break :blk null;
+                    break :blk .{ .var_ = args[try_error_type_arg_index], .reaches = stepSpineReaches(reaches, .try_error_arg) };
+                },
+                .tag_union => |tag_union| .{ .var_ = tag_union.ext, .reaches = stepSpineReaches(reaches, .tag_ext) },
+                .record, .tuple, .empty_record, .empty_tag_union => null,
+            },
+            .flex, .rigid, .field_presence, .err => null,
+        };
+        const step = next orelse return .{ .end = resolved.var_, .through_formal = through_formal };
+        if (step.reaches.count() == 0) return .{ .end = resolved.var_, .through_formal = through_formal };
+        current = step.var_;
+        reaches = step.reaches;
+    }
+}
+
+/// Decide where a freshly generated alias body's result spine ends and give
+/// that end its own hidden argument (design.md "Hidden Alias Arguments"):
+///
+/// - An occurrence of formal `e` that the body also uses elsewhere gets a
+///   hidden formal `e⁺`, a rigid named `e`, in place of that one occurrence.
+///   The body is copied along its spine down to `e⁺` (`copiedSpine`); every
+///   other position keeps `e`. An ordinary reference substitutes both by
+///   name, to the same argument; a result-row twin replaces only `e⁺`.
+/// - A formal the body uses nowhere else is the slot itself (`.declared`):
+///   splitting it would leave the declared `e` with no body position,
+///   related only through the argument list, which over-constrains every
+///   same-alias relation the inline spelling does not make.
+/// - A polarity marker of this body is the spine slot itself. When the path
+///   reached it through another alias's formal slot, the marker came in
+///   with that application's argument, which the application also
+///   substitutes at the formal's other occurrences (`N(x) : x -> x` applied
+///   to `[A]`), so the spine is copied down to a fresh marker of its own and
+///   the output row is decided apart from the input one, as the inline
+///   spelling decides it.
+/// - Any other end (a row written closed, a nominal, a non-`Try` function
+///   result, an error) is no slot: nothing re-opens it.
+fn aliasDeclSpine(
+    self: *Self,
+    body_var: Var,
+    header_vars: []const Var,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!AliasDeclSpine {
+    const found = try self.aliasSpineEnd(body_var);
+    defer self.alias_spine_path.clearRetainingCapacity();
+    const end = self.types.resolveVar(found.end);
+    const rigid = switch (end.desc.content) {
+        .rigid => |rigid| rigid,
+        .flex, .alias, .structure, .field_presence, .err => return .{ .backing = body_var, .spine = .none, .slot = null },
+    };
+    if (rigid.name.eql(self.cir.idents.polarity_var)) {
+        if (!found.through_formal) return .{ .backing = body_var, .spine = .marker, .slot = end.var_ };
+        const marker = try self.freshFromContent(.{ .rigid = Rigid.init(self.cir.idents.polarity_var) }, env, region);
+        return .{
+            .backing = try self.copiedSpineFromRoot(body_var, marker, env, region),
+            .spine = .marker,
+            .slot = marker,
+        };
+    }
+    for (header_vars, 0..) |header_var, formal_index| {
+        if (self.types.resolveVar(header_var).var_ != end.var_) continue;
+        // A formal the body uses nowhere else is its own slot: a hidden `e⁺`
+        // would leave the declared `e` with no body position, related only
+        // through the argument list, which no inline spelling relates.
+        if (!try self.aliasFormalOccursOffSpine(end.var_)) return .{
+            .backing = body_var,
+            .spine = try types_mod.AliasSpine.formalChecked(.declared, formal_index),
+            .slot = null,
+        };
+        const hidden_formal = try self.freshFromContent(.{ .rigid = Rigid.init(rigid.name) }, env, region);
+        return .{
+            .backing = try self.copiedSpineFromRoot(body_var, hidden_formal, env, region),
+            .spine = try types_mod.AliasSpine.formalChecked(.formal, formal_index),
+            .slot = hidden_formal,
+        };
+    }
+    return .{ .backing = body_var, .spine = .none, .slot = null };
+}
+
+/// `root` copied along its result spine (`aliasSpineEnd`) with `end` in
+/// place of the spine's end.
+fn copiedSpineFromRoot(self: *Self, root: Var, end: Var, env: *Env, region: Region) std.mem.Allocator.Error!Var {
+    var copy = self.beginSpineCopy(end);
+    defer self.endSpineCopy(copy);
+    return try self.copiedSpine(root, spineRootReaches(), &copy, env, region);
+}
+
+/// A copy of `var_` along its result spine at `reaches`, down to the copy's
+/// end: the links on the spine are copied with their other children shared,
+/// and each alias layer on it keeps its arguments with its spine slot
+/// re-pointed at the copy (`spineCopiedAlias`). Stops exactly where
+/// `aliasSpineEnd` stops.
+fn copiedSpine(
+    self: *Self,
+    var_: Var,
+    reaches: SpineReaches,
+    copy: *SpineCopyCtx,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!Var {
+    if (self.spineCopyOf(copy, var_)) |copied| return copied;
+    const resolved = self.types.resolveVar(var_);
+    switch (resolved.desc.content) {
+        .alias => |alias| {
+            const next = stepSpineReaches(reaches, .alias_backing);
+            if (next.count() != 0) {
+                const backing = try self.copiedSpine(self.types.getAliasBackingVar(alias), next, copy, env, region);
+                return try self.spineCopiedAlias(alias, resolved.var_, backing, copy, env, region);
+            }
+        },
+        .structure => |flat| switch (flat) {
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                const next = stepSpineReaches(reaches, .func_return);
+                if (next.count() != 0) {
+                    const ret = try self.copiedSpine(func.ret, next, copy, env, region);
+                    return try self.copiedFuncWithRet(switch (flat) {
+                        .fn_pure => .pure,
+                        .fn_effectful => .effectful,
+                        .fn_unbound => .unbound,
+                        .nominal_type, .tag_union, .record, .tuple, .empty_record, .empty_tag_union => unreachable,
+                    }, resolved.var_, func, ret, env, region);
+                }
+            },
+            .nominal_type => |nominal| {
+                const next = stepSpineReaches(reaches, .try_error_arg);
+                const args = self.types.sliceNominalArgs(nominal);
+                if (self.tryNominalIdent().matches(nominal) and args.len > try_error_type_arg_index and next.count() != 0) {
+                    const err = try self.copiedSpine(args[try_error_type_arg_index], next, copy, env, region);
+                    return try self.copiedTryWithErrorRow(resolved.var_, nominal, err, env, region);
+                }
+            },
+            .tag_union => |link| {
+                const ext = try self.copiedSpine(link.ext, stepSpineReaches(reaches, .tag_ext), copy, env, region);
+                const copied = try self.freshFromContent(
+                    .{ .structure = .{ .tag_union = .{ .tags = link.tags, .ext = ext } } },
+                    env,
+                    region,
+                );
+                try self.recordSpineCopy(resolved.var_, copied);
+                return copied;
+            },
+            .record, .tuple, .empty_record, .empty_tag_union => {},
+        },
+        .flex, .rigid, .field_presence, .err => {},
+    }
+    const end = copy.end.?;
+    try self.recordSpineCopy(resolved.var_, end);
+    return end;
+}
+
+/// Append an alias declaration's hidden arguments to `args`: the hidden
+/// spine slot first (`AliasDeclSpine.slot`), then every other polarity marker the
+/// backing reaches, each once, in walk order. Formals and markers are the
+/// only variables an alias body has (`..` and `_` are rejected in a type
+/// declaration), and a nested application's markers are this body's own
+/// (`PolarityVarBehavior.preserve`), so after this every variable of the
+/// backing is an argument.
+fn appendAliasHiddenArgs(
+    self: *Self,
+    spine: AliasDeclSpine,
+    args: *std.ArrayListUnmanaged(Var),
+) std.mem.Allocator.Error!void {
+    const stack = &self.alias_slot_stack;
+    const seen = &self.alias_slot_seen;
+    std.debug.assert(stack.items.len == 0 and seen.count() == 0);
+    defer {
+        stack.clearRetainingCapacity();
+        seen.clearRetainingCapacity();
+    }
+    if (spine.slot) |slot| {
+        const root = self.types.resolveVar(slot).var_;
+        try args.append(self.gpa, root);
+        try seen.put(self.gpa, root, {});
+    }
+    try stack.append(self.gpa, spine.backing);
+    while (stack.pop()) |current| {
+        const resolved = self.types.resolveVar(current);
+        const entry = try seen.getOrPut(self.gpa, resolved.var_);
+        if (entry.found_existing) continue;
+        switch (resolved.desc.content) {
+            .rigid => |rigid| if (rigid.name.eql(self.cir.idents.polarity_var)) {
+                try args.append(self.gpa, resolved.var_);
+            },
+            .flex, .field_presence, .err => {},
+            .alias => |alias| {
+                try self.pushAliasSlotWalkReversed(self.types.sliceAliasArgs(alias));
+                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+            },
+            .structure => |flat| switch (flat) {
+                .empty_record, .empty_tag_union => {},
+                .tuple => |tuple| try self.pushAliasSlotWalkReversed(self.types.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| try self.pushAliasSlotWalkReversed(self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try self.pushAliasSlotWalkReversed(self.types.sliceVars(func.effect_deps));
+                    try stack.append(self.gpa, func.ret);
+                    try self.pushAliasSlotWalkReversed(self.types.sliceVars(func.args));
+                },
+                .record => |record| {
+                    try stack.append(self.gpa, record.ext);
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    var i = fields.len;
+                    while (i > 0) {
+                        i -= 1;
+                        const presence = fields.items(.presence)[i];
+                        if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
+                        try stack.append(self.gpa, presence.typeVar());
+                    }
+                },
+                .tag_union => |tag_union| {
+                    try stack.append(self.gpa, tag_union.ext);
+                    const tag_args = self.types.getTagsSlice(tag_union.tags).items(.args);
+                    var i = tag_args.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try self.pushAliasSlotWalkReversed(self.types.sliceVars(tag_args[i]));
+                    }
+                },
+            },
+        }
+    }
+}
+
+/// Push `vars` onto the hidden-argument walk so they pop in order.
+fn pushAliasSlotWalkReversed(self: *Self, vars: []const Var) std.mem.Allocator.Error!void {
+    var i = vars.len;
+    while (i > 0) {
+        i -= 1;
+        try self.alias_slot_stack.append(self.gpa, vars[i]);
     }
 }
 
@@ -16781,6 +17723,12 @@ const GenTypeAnnoCtx = union(enum) {
             /// A type argument of a `Try` result. The adapter re-tags a row
             /// written here, but nothing below it.
             try_row,
+            /// The error argument of a `Try` standing as a bare VALUE
+            /// annotation's whole type (`Instantiator.AdapterReach
+            /// .value_try_row`). Row subsumption coerces a row written here
+            /// for a top-level value; a where-method row here is generated
+            /// as written, as at `.nested`.
+            value_try_row,
             /// Every other position: inside a `List`, a record field, a
             /// tuple, a tag payload, a function, or a non-`Try` nominal.
             nested,
@@ -16826,14 +17774,37 @@ const GenTypeAnnoCtx = union(enum) {
     fn instantiationReach(self: GenTypeAnnoCtx) Instantiator.AdapterReach {
         return switch (self) {
             .annotation => |anno_ctx| switch (anno_ctx.adapter_reach) {
-                // A declaration standing as the whole where-method signature
-                // is walked by the instantiator from its direct result.
-                .signature, .result => .result,
+                // A declaration standing as the whole signature—an annotated
+                // definition's or a where-method's—is walked by the
+                // instantiator exactly as the `.@"fn"` arm walks a function
+                // written there: a function re-aims its return to `.result`
+                // and its arguments to `.nested`. A declaration that is not a
+                // function stands as a bare VALUE annotation, which has no
+                // call boundary to adapt at and so contributes no result row
+                // (the `.signature => .none` of the inline walk's
+                // `ResultRowSite`).
+                .signature => .signature,
+                .result => .result,
                 .try_row => .try_row,
+                .value_try_row => .value_try_row,
                 .nested => .nested,
             },
             // A declaration body has no use-site result position to reach.
             .type_decl => .nested,
+        };
+    }
+
+    /// Whether a declaration this ctx instantiates reports the adapter-reachable
+    /// rows it closes as written (`Check.written_result_rows`). Only an
+    /// as-written annotation closes a row by declaration; every other
+    /// annotation's rows are decided by opening or deferral instead.
+    fn writtenResultRows(self: GenTypeAnnoCtx) WrittenResultRows {
+        return switch (self) {
+            .annotation => |anno_ctx| switch (anno_ctx.opening) {
+                .as_written => .record,
+                .implicit_open, .per_use => .ignore,
+            },
+            .type_decl => .ignore,
         };
     }
 
@@ -16856,7 +17827,7 @@ const GenTypeAnnoCtx = union(enum) {
                 // position's own row stay deferred.
                 .per_use => switch (anno_ctx.adapter_reach) {
                     .signature, .result, .try_row => .defer_open,
-                    .nested => .close,
+                    .value_try_row, .nested => .close,
                 },
                 .as_written => .close,
             },
@@ -16906,6 +17877,11 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
     // the post-body audit (`auditImplicitOpenExts`); the range is committed
     // at the end of this function.
     const implicit_open_exts_start: u32 = @intCast(self.implicit_open_exts.items.len);
+    // Every adapter-reachable row this generation closes as written (only a
+    // host-boundary annotation records any); folded into
+    // `host_annotation_result_rows` below and truncated on the way out.
+    const written_result_rows_start = self.written_result_rows.items.len;
+    defer self.written_result_rows.shrinkRetainingCapacity(written_result_rows_start);
 
     // Reset seen type annos
     self.seen_annos.unsetAll();
@@ -16923,8 +17899,28 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
         .as_written
     else
         .implicit_open;
-    const ctx = GenTypeAnnoCtx{ .annotation = .{ .where = annotation.where, .opening = opening } };
+    // An ordinary annotation's walk starts at `.signature`, exactly like a
+    // where-method signature's (`Check.methodAnnotationCtx`): the function
+    // arm re-aims that to `.result` on the return and `.nested` everywhere
+    // else, and a `Try` standing at `.result` passes `.try_row` to its error
+    // argument. Under `.implicit_open` the reach decides nothing about HOW a
+    // row opens—every output-position row still gets a fresh flex—only
+    // WHICH opened row row subsumption may coerce (see `ImplicitOpenExt.result_row`).
+    const ctx = GenTypeAnnoCtx{ .annotation = .{
+        .where = annotation.where,
+        .opening = opening,
+        .adapter_reach = .signature,
+    } };
     try self.generateAnnoTypeInPlace(annotation.anno, env, ctx, .pos);
+    // Read before the where clause is generated: a where-method signature's
+    // rows are its own, not this signature's result.
+    if (opening == .as_written) {
+        try self.host_annotation_result_rows.put(
+            self.gpa,
+            annotation_idx,
+            singleResultRowSite(self.written_result_rows.items[written_result_rows_start..]),
+        );
+    }
     if (annotation.where) |where_span| {
         if (try self.generateRemainingWhereConstraintOwners(where_span, env, ctx)) {
             try self.markErroneous(ModuleEnv.varFrom(annotation.anno));
@@ -16965,6 +17961,14 @@ const ImplicitOpenExt = struct {
     /// row that can still be found in a solved type. Null where the minting
     /// site did not see the union.
     union_var: ?Var = null,
+    /// Whether this extension opens the one row per signature the Monotype
+    /// result-row widening adapter can re-tag, and which cell that is
+    /// (`AdapterReach.result` / `.try_row`). That is the only position row
+    /// subsumption coerces at (design.md "Row Subsumption"), because
+    /// it is the only position whose closed body value lowering can adapt
+    /// rather than widen. For a bare value annotation it is the value's
+    /// root row or root `Try` error row (`CoercibleRow.subject`).
+    result_row: CoercibleRow = .{},
 };
 
 /// The slice of `implicit_open_exts` one annotation's generation minted.
@@ -16972,6 +17976,619 @@ const ImplicitOpenExtRange = struct {
     start: u32,
     len: u32,
 };
+
+/// Where the one row a coerced definition re-opens per use sits in its
+/// signature: the signature's direct result row, or the ERROR row of a `Try`
+/// standing as that direct result. These are exactly the two cells the Monotype
+/// result-row widening adapter can re-tag (`lower.closedResultRowOrNull`'s
+/// `ClosedResultRow.behind_try`), and the annotation walk is what decides which
+/// one this signature has (`AdapterReach.result` / `.try_row`).
+///
+/// The producer's answer travels with the coercion record rather than being
+/// re-derived at each use, so the use site never has to decide for itself
+/// whether a nominal in the result is `Try`.
+const ResultRowSite = enum {
+    /// This signature opened no adapter-reachable result row.
+    none,
+    /// The signature's own result row.
+    direct,
+    /// The error row of a `Try` standing as the signature's result.
+    try_error_row,
+};
+
+/// What a coerced row belongs to. A FUNCTION's is the result row of its
+/// signature, re-opened at every use by copying the function's spine down to
+/// its return; a top-level VALUE's is the value's own root row (or the error
+/// row of the `Try` that is its root), re-opened by copying from the root.
+/// The annotation walk decides which, by where the row sits: a row reached
+/// through the signature's own function is a function result, a row standing
+/// as the annotation's root (`.signature` / `.value_try_row`) is a value's.
+const ResultRowSubject = enum(u1) { function_result, value };
+
+/// One annotation's coercible row: which cell (`ResultRowSite`) and whose
+/// (`ResultRowSubject`). `.site == .none` means the annotation opened no
+/// coercible row at this position.
+const CoercibleRow = struct {
+    site: ResultRowSite = .none,
+    subject: ResultRowSubject = .function_result,
+
+    /// The row an instantiated declaration's marker or twin stands on.
+    fn forReach(reach: Instantiator.AdapterReach) CoercibleRow {
+        return switch (reach) {
+            .result => .{ .site = .direct },
+            .try_row => .{ .site = .try_error_row },
+            .signature => .{ .site = .direct, .subject = .value },
+            .value_try_row => .{ .site = .try_error_row, .subject = .value },
+            .nested => .{},
+        };
+    }
+
+    /// The row an inline annotation position stands on.
+    fn forAnnotationReach(reach: GenTypeAnnoCtx.AnnotationGenCtx.AdapterReach) CoercibleRow {
+        return switch (reach) {
+            .result => .{ .site = .direct },
+            .try_row => .{ .site = .try_error_row },
+            .signature => .{ .site = .direct, .subject = .value },
+            .value_try_row => .{ .site = .try_error_row, .subject = .value },
+            .nested => .{},
+        };
+    }
+};
+
+/// Whether an annotation-position instantiation reports the adapter-reachable
+/// rows it closes as written (`GenTypeAnnoCtx.writtenResultRows`).
+const WrittenResultRows = enum { record, ignore };
+
+/// The one site in `sites`, or `.none` when there is none or more than one.
+/// More than one is not a coercion site for the reason `coercibleResultRowExt`
+/// gives: lowering re-tags exactly one row per template.
+fn singleResultRowSite(sites: []const ResultRowSite) ResultRowSite {
+    return if (sites.len == 1) sites[0] else .none;
+}
+
+/// Row subsumption for a HOSTED function (design.md "Row Subsumption"): the
+/// `Try` error row its annotation closed as written. A hosted row is closed by
+/// declaration—`..` is rejected at a host boundary—not by a body, so it is
+/// coerced whenever the annotation reports one, and every use re-opens its own
+/// copy exactly as a use of a forwarding Roc function does.
+///
+/// Only the `Try` error row. A widened hosted request is served by the hosted
+/// adapter, which calls the extern at its declared type and re-tags the error
+/// row of its `Try` result (`lower.hostedTryReturnInjectionExpr`); a hosted
+/// function's DIRECT result row has no such adapter, so widening it would
+/// emit the extern at a type the host never compiled against. That row keeps
+/// its declared closed row, and a widening use is an ordinary mismatch.
+fn hostedResultRowCoercedSite(self: *const Self, annotation_idx: CIR.Annotation.Idx) ResultRowSite {
+    return switch (self.host_annotation_result_rows.get(annotation_idx) orelse .none) {
+        .try_error_row => .try_error_row,
+        .direct, .none => .none,
+    };
+}
+
+/// The one implicitly opened extension of `annotation_idx` that row subsumption
+/// may coerce, or null when the annotation opened no adapter-reachable result
+/// row.
+///
+/// More than one is not a coercion site: lowering re-tags exactly one row per
+/// template (`lower.resultRowWideningOrNull`), so a second would be a row a use
+/// could widen and no adapter could serve. Generation cannot currently mint
+/// two—the walk reaches `.result` once and `.try_row` only under it, and a `Try`
+/// at `.result` contributes only its error row—so this declines rather than
+/// asserting, and the definition keeps closing by body.
+fn coercibleResultRowExt(self: *const Self, annotation_idx: CIR.Annotation.Idx) ?ImplicitOpenExt {
+    const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return null;
+    var found: ?ImplicitOpenExt = null;
+    for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
+        if (entry.result_row.site == .none) continue;
+        if (found != null) return null;
+        found = entry;
+    }
+    return found;
+}
+
+/// Whether `annotation_idx`'s adapter-reachable result row was closed BY THE
+/// BODY—the body forwarded a value out of a closed source (an input-position
+/// parameter, a nominal field, a hosted result) instead of constructing its
+/// result—and, if so, which cell that row is.
+///
+/// This is the whole test row subsumption turns on. `unifyTwoTagUnions` reaches
+/// a closed row only through its `.exactly_the_same` arm, which grounds the
+/// annotation's extension to the empty tag union; every other way the body can
+/// touch the row leaves a flex (it produced an open row, or never touched it) or
+/// a row carrying tags (it extended the row, which the audit reports and
+/// poisons). So a ground extension means exactly "forwarded, did not construct".
+fn annotationResultRowCoercedSite(self: *const Self, annotation_idx: CIR.Annotation.Idx) CoercibleRow {
+    const entry = self.coercibleResultRowExt(annotation_idx) orelse return .{};
+    const resolved = self.types.resolveVar(entry.var_);
+    if (resolved.desc.content != .structure) return .{};
+    if (resolved.desc.content.structure != .empty_tag_union) return .{};
+    return entry.result_row;
+}
+
+/// The producing module's answer for the definition at `node_idx`: whether it
+/// closed its annotated result row by FORWARDING a closed value, and which cell
+/// that row is. Read from the module that checked the body, whether that is
+/// this one or an imported one.
+fn coercedResultRowSite(env: *const ModuleEnv, node_idx: CIR.Node.Idx) CoercibleRow {
+    const record = env.resultRowCoercionForNode(@intFromEnum(node_idx)) orelse return .{};
+    return .{
+        .site = if (record.behind_try != 0) .try_error_row else .direct,
+        .subject = if (record.is_value != 0) .value else .function_result,
+    };
+}
+
+/// Re-open the result row of `use_var`, one use's view of a COERCED binding
+/// (design.md "Row Subsumption").
+///
+/// The definition publishes the row its body can actually produce—closed—so
+/// importers, stored constants and the Monotype result-row widening adapter all
+/// see the type they always did, and the adapter is minted for a widened
+/// request by the machinery that already serves a closed result row. What the
+/// coercion changes is what a USE may do with that row: a body that FORWARDS a
+/// closed value is no longer distinguishable, at its callers, from a body that
+/// CONSTRUCTS its result. So this copies the spine from the use's root down to
+/// that one row and gives the copied row a fresh extension.
+///
+/// Copying the spine, rather than re-opening the extension in place, is not
+/// optional.
+/// A forwarder's argument row and result row are ONE unification class inside
+/// its body—`id = |x| x` publishes a single row var in both positions—so
+/// writing through the extension would open the INPUT row too, and an unlisted
+/// argument would start type-checking. Every var off the spine stays shared,
+/// which is what an instantiation of a ground scheme shares today.
+///
+/// Returns `use_var` unchanged when the spine is not the shape the annotation
+/// walk recorded, or when the row carries an already-reported type error (see
+/// `reopenedTagRow`, which also states why a row that is not closed is an
+/// invariant violation rather than a case).
+fn reopenCoercedResultRow(
+    self: *Self,
+    use_var: Var,
+    row: CoercibleRow,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!?Var {
+    if (row.site == .none) return null;
+    // The copy's new end is minted once the tail is known to be closed
+    // (`reopenedTagRow`).
+    var copy = self.beginSpineCopy(null);
+    defer self.endSpineCopy(copy);
+    return switch (row.subject) {
+        .function_result => try self.reopenCoercedSignature(use_var, row.site, &copy, env, region),
+        // A value's row stands at its root: the copy starts at the cell.
+        .value => try self.reopenCoercedResultCell(use_var, row.site, &copy, env, region),
+    };
+}
+
+/// `reopenCoercedResultRow` at a lookup expression: the use's own type, and a
+/// per-use record of the re-open (`ModuleEnv.ResultRowReopen`) when one was
+/// made, so post-check stages read which uses re-opened rather than inferring
+/// it from the definition. A use left as instantiated—a definition in flight,
+/// an error tail—records nothing.
+fn reopenCoercedLookup(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    use_var: Var,
+    row: CoercibleRow,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!Var {
+    const reopened = (try self.reopenCoercedResultRow(use_var, row, env, region)) orelse return use_var;
+    try self.cir.recordResultRowReopen(
+        ModuleEnv.nodeIdxFrom(expr_idx),
+        row.site == .try_error_row,
+        row.subject == .value,
+    );
+    return reopened;
+}
+
+/// The signature layer of `reopenCoercedResultRow`: the function's arguments
+/// and effect kind are the use's own and only its return is copied.
+///
+/// Every alias layer on the spine, here and in the cell, error-row and
+/// extension layers below, is kept around its copied backing with its spine
+/// slot re-pointed at the copy (`spineCopiedAlias`), so each layer is still
+/// its declaration's body under its arguments: `Fwd(e; e⁺) : e -> e⁺` keeps
+/// the use's `e` and takes the re-opened row at `e⁺` (design.md "Hidden
+/// Alias Arguments").
+fn reopenCoercedSignature(
+    self: *Self,
+    var_: Var,
+    site: ResultRowSite,
+    copy: *SpineCopyCtx,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!?Var {
+    const resolved = self.types.resolveVar(var_);
+    switch (resolved.desc.content) {
+        .alias => |alias| {
+            const backing = (try self.reopenCoercedSignature(
+                self.types.getAliasBackingVar(alias),
+                site,
+                copy,
+                env,
+                region,
+            )) orelse return null;
+            return try self.spineCopiedAlias(alias, resolved.var_, backing, copy, env, region);
+        },
+        .structure => |flat| switch (flat) {
+            .fn_pure => |func| return try self.copiedFuncWithResult(.pure, resolved.var_, func, site, copy, env, region),
+            .fn_effectful => |func| return try self.copiedFuncWithResult(.effectful, resolved.var_, func, site, copy, env, region),
+            .fn_unbound => |func| return try self.copiedFuncWithResult(.unbound, resolved.var_, func, site, copy, env, region),
+            .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => return null,
+        },
+        .flex, .rigid, .field_presence, .err => return null,
+    }
+}
+
+/// `reopenCoercedSignature`'s function layer.
+/// Which function constructor a spine copy rebuilds.
+const SpineFuncKind = enum { pure, effectful, unbound };
+
+fn copiedFuncWithResult(
+    self: *Self,
+    kind: SpineFuncKind,
+    source: Var,
+    func: types_mod.Func,
+    site: ResultRowSite,
+    copy: *SpineCopyCtx,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!?Var {
+    const ret = (try self.reopenCoercedResultCell(func.ret, site, copy, env, region)) orelse return null;
+    return try self.copiedFuncWithRet(kind, source, func, ret, env, region);
+}
+
+/// `func` (the function at `source`) copied with `ret` as its return, its
+/// arguments, effect dependencies and effect kind shared, recorded as
+/// `source`'s spine copy.
+fn copiedFuncWithRet(
+    self: *Self,
+    kind: SpineFuncKind,
+    source: Var,
+    func: types_mod.Func,
+    ret: Var,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!Var {
+    // `appendVars` refuses a slice that lives in the var list it appends to,
+    // and the copy above may have grown that list, so both spans are copied out
+    // first.
+    var args_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
+    const args_alloc = args_sfa.get();
+    const args = try args_alloc.dupe(Var, self.types.sliceVars(func.args));
+    defer args_alloc.free(args);
+    const effect_deps = try args_alloc.dupe(Var, self.types.sliceVars(func.effect_deps));
+    defer args_alloc.free(effect_deps);
+    const content = switch (kind) {
+        .pure => try self.types.mkFuncPure(args, ret),
+        .effectful => try self.types.mkFuncEffectful(args, ret),
+        .unbound => try self.types.mkFuncUnboundWithEffectDeps(args, ret, effect_deps),
+    };
+    const copied = try self.freshFromContent(content, env, region);
+    try self.recordSpineCopy(source, copied);
+    return copied;
+}
+
+/// `nominal` (the application at `source`) copied with `err` as its
+/// `Try` error argument, recorded as `source`'s spine copy.
+fn copiedTryWithErrorRow(
+    self: *Self,
+    source: Var,
+    nominal: types_mod.NominalType,
+    err: Var,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!Var {
+    var args_sfa = std.heap.stackFallback(8 * @sizeOf(Var), self.gpa);
+    const args_alloc = args_sfa.get();
+    const args = try args_alloc.dupe(Var, self.types.sliceNominalArgs(nominal));
+    defer args_alloc.free(args);
+    args[try_error_type_arg_index] = err;
+    const content = try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
+        nominal.ident,
+        args,
+        nominal.origin_module,
+        nominal.sourceDeclOptional(),
+        nominal.isOpaque(),
+        nominal.originIsBuiltin(),
+    );
+    const copied = try self.freshFromContent(content, env, region);
+    try self.recordSpineCopy(source, copied);
+    return copied;
+}
+
+/// The result cell of `reopenCoercedResultRow`: the row itself, or the `Try`
+/// nominal whose error argument is the row.
+fn reopenCoercedResultCell(
+    self: *Self,
+    var_: Var,
+    site: ResultRowSite,
+    copy: *SpineCopyCtx,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!?Var {
+    const resolved = self.types.resolveVar(var_);
+    switch (resolved.desc.content) {
+        .alias => |alias| {
+            const backing = (try self.reopenCoercedResultCell(
+                self.types.getAliasBackingVar(alias),
+                site,
+                copy,
+                env,
+                region,
+            )) orelse return null;
+            return try self.spineCopiedAlias(alias, resolved.var_, backing, copy, env, region);
+        },
+        .structure => |flat| switch (flat) {
+            .tag_union => |tag_union| {
+                if (site != .direct) return null;
+                return try self.reopenedTagRow(resolved.var_, tag_union, copy, env, region);
+            },
+            .nominal_type => |nominal| {
+                if (site != .try_error_row) return null;
+                const args = self.types.sliceNominalArgs(nominal);
+                if (args.len <= try_error_type_arg_index) return null;
+                const err = (try self.reopenCoercedErrorRow(
+                    args[try_error_type_arg_index],
+                    copy,
+                    env,
+                    region,
+                )) orelse return null;
+                return try self.copiedTryWithErrorRow(resolved.var_, nominal, err, env, region);
+            },
+            .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .empty_record, .empty_tag_union => return null,
+        },
+        .flex, .rigid, .field_presence, .err => return null,
+    }
+}
+
+/// The `Try` error row beneath `reopenCoercedResultCell`'s nominal.
+fn reopenCoercedErrorRow(
+    self: *Self,
+    var_: Var,
+    copy: *SpineCopyCtx,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!?Var {
+    const resolved = self.types.resolveVar(var_);
+    switch (resolved.desc.content) {
+        .alias => |alias| {
+            const backing = (try self.reopenCoercedErrorRow(
+                self.types.getAliasBackingVar(alias),
+                copy,
+                env,
+                region,
+            )) orelse return null;
+            return try self.spineCopiedAlias(alias, resolved.var_, backing, copy, env, region);
+        },
+        .structure => |flat| switch (flat) {
+            .tag_union => |tag_union| return try self.reopenedTagRow(resolved.var_, tag_union, copy, env, region),
+            .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => return null,
+        },
+        .flex, .rigid, .field_presence, .err => return null,
+    }
+}
+
+/// The same row with a fresh, unbound extension in place of its closed tail.
+///
+/// The row is read as a ROW, not as its head: it can reach a use spelled as an
+/// extension chain (`[B | [C | []]]`) rather than as one `tag_union`. A
+/// partial scheme's uses share its ground rows—`fwd : a, [B, C] -> [B, C]`
+/// copies the root to reach `a` and shares `[B, C]`, which is both the
+/// argument and the result row of a forwarder—so a use that unifies a literal
+/// `[B, ..]` into that row restructures it into a chain for every later use.
+/// Reading only the head would find a `tag_union` where the tail should be and
+/// leave every later use closed. So every link of the chain is copied
+/// (`copiedTagRowChain`) and only the tail is replaced. The tail rule is
+/// explicit:
+/// - `[]` is the closed tail the coercion re-opens: it becomes a fresh flex,
+///   the copy's new end.
+/// - An error tail means the row already took part in a reported type error;
+///   the use is left unchanged (returns null) so checking recovers without a
+///   second diagnostic.
+/// - Anything else is impossible: the definition recorded its coercion only
+///   because its tail was grounded to `[]` (by the body, or as written at a
+///   host boundary), and unification can restructure a closed row but never
+///   re-open it.
+///
+/// An alias link is read through its backing and kept around its copy, its
+/// spine slot re-pointed at the copy, exactly as the alias layers above the
+/// row are (see `reopenCoercedSignature`). A row's extension can be an alias
+/// the annotation names: `Errs : Wrap(Base)` with `Wrap(ext) : [HostErr(U64),
+/// ..ext]` continues `Errs`'s row through `Base`, whose own marker is the
+/// row's tail. A hosted annotation closes that tail as written and no body
+/// ever unifies it, so the link survives to every use.
+fn reopenedTagRow(
+    self: *Self,
+    source: Var,
+    tag_union: types_mod.TagUnion,
+    copy: *SpineCopyCtx,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!?Var {
+    const tail = self.types.resolveVar(self.tagRowChainTail(tag_union.ext));
+    switch (tail.desc.content) {
+        .structure => |flat| switch (flat) {
+            .empty_tag_union => {},
+            .tag_union, .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record => std.debug.panic("type checker invariant violated: a coerced result row's extension chain did not end in a closed tail", .{}),
+        },
+        .err => return null,
+        .alias, .flex, .rigid, .field_presence => std.debug.panic("type checker invariant violated: a coerced result row's extension chain did not end in a closed tail", .{}),
+    }
+    copy.end = try self.fresh(env, region);
+    var innermost: ?Var = null;
+    const ext = try self.copiedTagRowChain(tag_union.ext, copy, &innermost, env, region);
+    const copied = try self.freshFromContent(
+        .{ .structure = .{ .tag_union = .{ .tags = tag_union.tags, .ext = ext } } },
+        env,
+        region,
+    );
+    try self.recordSpineCopy(source, copied);
+    return copied;
+}
+
+/// The var a tag row's extension chain ends in: `var_` followed through
+/// alias layers, alias links and `tag_union` links.
+fn tagRowChainTail(self: *Self, var_: Var) Var {
+    var current = var_;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |link| current = link.ext,
+                .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => return resolved.var_,
+            },
+            .flex, .rigid, .field_presence, .err => return resolved.var_,
+        }
+    }
+}
+
+/// One copy of a result spine in progress (`spineCopiedAlias`): where its
+/// entries in `Check.spine_copies` start, and the new end every copied link
+/// shares. A re-open learns its end once it has checked the tail
+/// (`reopenedTagRow`); a twin and a declaration's spine copy know it up
+/// front.
+const SpineCopyCtx = struct {
+    base: usize,
+    end: ?Var,
+};
+
+/// One var a spine copy copied: `source` is the resolved root of the
+/// original, `copy` what the copy put in its place.
+const SpineCopy = struct {
+    source: Var,
+    copy: Var,
+};
+
+fn beginSpineCopy(self: *Self, end: ?Var) SpineCopyCtx {
+    return .{ .base = self.spine_copies.items.len, .end = end };
+}
+
+fn endSpineCopy(self: *Self, copy: SpineCopyCtx) void {
+    self.spine_copies.shrinkRetainingCapacity(copy.base);
+}
+
+fn recordSpineCopy(self: *Self, source: Var, copied: Var) std.mem.Allocator.Error!void {
+    try self.spine_copies.append(self.gpa, .{ .source = self.types.resolveVar(source).var_, .copy = copied });
+}
+
+/// What the spine copy in progress put in `source`'s place, when it has
+/// reached `source` (by resolved root).
+fn spineCopyOf(self: *Self, copy: *const SpineCopyCtx, source: Var) ?Var {
+    const root = self.types.resolveVar(source).var_;
+    for (self.spine_copies.items[copy.base..]) |entry| {
+        if (entry.source == root) return entry.copy;
+    }
+    return null;
+}
+
+/// A copy of the tag row `var_` down its whole extension chain with the
+/// copy's end in place of the chain's tail (`tagRowChainTail`). Every
+/// `tag_union` link is copied with its own tags, whose payloads stay shared,
+/// as they are off the spine. Alias layers and links are kept around their
+/// copied backing with their spine slot re-pointed at the copy
+/// (`spineCopiedAlias`). `innermost` receives the copy of the chain's last
+/// `tag_union` link, the one the end extends.
+fn copiedTagRowChain(
+    self: *Self,
+    var_: Var,
+    copy: *SpineCopyCtx,
+    innermost: *?Var,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!Var {
+    if (self.spineCopyOf(copy, var_)) |copied| return copied;
+    const resolved = self.types.resolveVar(var_);
+    switch (resolved.desc.content) {
+        .alias => |alias| {
+            const backing = try self.copiedTagRowChain(self.types.getAliasBackingVar(alias), copy, innermost, env, region);
+            return try self.spineCopiedAlias(alias, resolved.var_, backing, copy, env, region);
+        },
+        .structure => |flat| switch (flat) {
+            .tag_union => |link| {
+                const ext = try self.copiedTagRowChain(link.ext, copy, innermost, env, region);
+                const copied = try self.freshFromContent(
+                    .{ .structure = .{ .tag_union = .{ .tags = link.tags, .ext = ext } } },
+                    env,
+                    region,
+                );
+                try self.recordSpineCopy(resolved.var_, copied);
+                if (innermost.* == null) innermost.* = copied;
+                return copied;
+            },
+            .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => {},
+        },
+        .flex, .rigid, .field_presence, .err => {},
+    }
+    const end = copy.end.?;
+    try self.recordSpineCopy(resolved.var_, end);
+    return end;
+}
+
+/// `alias` (the layer at `source`) rebuilt around `backing`, a copy of its
+/// old backing along the result spine. Only its spine slot
+/// (`types.Alias.spine`, `Store.aliasSpineSlotIndex`) changes: it takes
+/// what the copy put in the slot's place, so the layer is still its
+/// declaration's body under its arguments. Every other argument stays, the
+/// declared `e` too when it was the same variable as the hidden `e⁺`; that
+/// split is the point (design.md "Hidden Alias Arguments").
+///
+/// The slot is found on the copied path by identity. A row merge can flatten
+/// the chain the backing reaches, so that the slot's own links are no longer
+/// on it; the slot is then a row whose tail the path's tail shares, and it is
+/// copied down its own chain to the same end (`copiedTagRowChain`), so
+/// `backing ≅ body[args]` still holds as types.
+///
+/// A layer whose declaration's spine ends at no slot cannot be on a copied
+/// spine: its row's end is written in its body, so no annotation opens it,
+/// no twin qualifies through it (`resultRowTwinRow`), and no coerced re-open
+/// reaches it.
+fn spineCopiedAlias(
+    self: *Self,
+    alias: types_mod.Alias,
+    source: Var,
+    backing: Var,
+    copy: *SpineCopyCtx,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!Var {
+    const slot_index = self.types.aliasSpineSlotIndex(alias) orelse std.debug.panic(
+        "type checker invariant violated: a result-spine copy passed through an alias layer whose declaration's spine ends at no slot",
+        .{},
+    );
+    const slot = self.types.sliceAliasArgs(alias)[slot_index];
+    const slot_copy = self.spineCopyOf(copy, slot) orelse off_path: {
+        switch (self.types.resolveVar(slot).desc.content) {
+            .alias, .structure, .flex, .rigid, .err => {},
+            .field_presence => std.debug.panic("type checker invariant violated: an alias spine slot was a field presence", .{}),
+        }
+        var innermost: ?Var = null;
+        break :off_path try self.copiedTagRowChain(slot, copy, &innermost, env, region);
+    };
+    // `appendVars` refuses a slice that lives in the var list it appends to,
+    // and the copy above may have grown that list, so the args are copied out
+    // first.
+    var args_sfa = std.heap.stackFallback(8 * @sizeOf(Var), self.gpa);
+    const args_alloc = args_sfa.get();
+    const args = try args_alloc.dupe(Var, self.types.sliceAliasArgs(alias));
+    defer args_alloc.free(args);
+    args[slot_index] = slot_copy;
+    const content = try self.types.mkAliasWithSourceDeclAndBuiltinOrigin(
+        alias.ident,
+        backing,
+        args,
+        alias.origin_module,
+        alias.source_decl.toOptional(),
+        alias.source_decl.originIsBuiltin(),
+        alias.declared_arity,
+        alias.spine,
+    );
+    const copied = try self.freshFromContent(content, env, region);
+    try self.recordSpineCopy(source, copied);
+    return copied;
+}
 
 /// One extension the post-body audit cleared, kept for the late audit, with
 /// the binding that owns it named by source region.
@@ -17068,7 +18685,7 @@ fn implicitOpenExtCarriesTags(self: *const Self, entry: ImplicitOpenExt) bool {
 ///
 /// Codec relations can be validated after the post-body audit read the row,
 /// so this runs once nothing further unifies, before
-/// `closeWeakValueImplicitOpenExts` grounds the remaining extensions to `[]`.
+/// `groundUnquantifiedValueImplicitOpenExts` grounds the remaining extensions to `[]`.
 /// Provenance is exact: each demand names its owning expression and the tags
 /// it requires, so neither timing nor type-graph reachability decides who
 /// widened a row.
@@ -17318,20 +18935,37 @@ fn reportImplicitOpenExtExtension(
     try self.markErroneous(entry.var_);
 }
 
-/// After the module solves, ground every still-open implicitly opened
-/// extension of a top-level weak value binding to `[]` (design.md
-/// "Polarity"). Nothing in this module can widen the row any further, and
-/// the closed row is exactly what the annotation produced before polarity,
-/// so importers and Monotype's stored constants see the type they always
-/// did. An extension that meanwhile joined a generalized scheme (a function's
-/// quantified row) is left alone: closing a quantified variable after it has
-/// been instantiated would desync the scheme from its uses.
+/// After the module solves, ground to `[]` every implicitly opened extension
+/// of a value binding that did NOT generalize (design.md "Three Syntactic
+/// Walks"). This is a BACKSTOP, not the rule: an annotated value binding that
+/// mints such an extension generalizes, so the extension is quantified and
+/// skipped here by its rank. Every value binding's range is recorded and the
+/// rank is the only filter, so what reaches the grounding below is exactly
+/// what did not quantify: an extension the pre-test approved whose body
+/// unified it with an outer-rank row (`x = if c e else Boom` with `e` a
+/// top-level weak value). The pre-test itself no longer has a module-boundary
+/// gap, because an imported declaration's row-opening answer is published
+/// (`TypeDeclVariance.opensRowAt`).
+///
+/// Grounding is what the gap needs. An extension left bare-flex in the
+/// published type is copied by `copy_import.zig` with `rank = .generalized`,
+/// so an importer would quantify per use a row this module never decided to
+/// quantify—the rule silently changing at a module boundary—and Monotype
+/// would seal the defining module's own stored constant to `[]` regardless
+/// (`lower.zig` `lowerCheckedTypeVariable`).
+///
+/// An extension that joined a generalized scheme is left alone: closing a
+/// quantified variable after it has been instantiated would desync the scheme
+/// from its uses.
+///
+/// The pass is permanent for that reason: whether a row quantifies depends on
+/// what the body unifies it with, which no syntactic walk can see.
 ///
 /// Every entry point runs this AFTER `runLateImplicitOpenExtAudit`, for the
 /// reason stated there: grounding an extension empties it, and the late audit
 /// only reads extensions that still carry tags.
-fn closeWeakValueImplicitOpenExts(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    for (self.weak_value_implicit_open_ext_ranges.items) |range| {
+fn groundUnquantifiedValueImplicitOpenExts(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    for (self.unquantified_value_implicit_open_ext_ranges.items) |range| {
         for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
             const resolved = self.types.resolveVar(entry.var_);
             if (resolved.desc.content != .flex) continue;
@@ -17369,6 +19003,44 @@ fn externalTypeRefTargetsBuiltin(self: *const Self, import_idx: CIR.Import.Idx) 
     return self.imported_modules[module_idx].module_role == .builtin;
 }
 
+/// An annotation base naming a declaration another module owns: through one of
+/// this module's imports (`.external`), or by content identity after following
+/// an exposed alias out of one (`.external_identity`). Both reach the same
+/// kind of published record; only the way to the declaring module differs.
+const ImportedDeclRef = union(enum) {
+    external: @FieldType(CIR.TypeAnno.LocalOrExternal, "external"),
+    external_identity: @FieldType(CIR.TypeAnno.LocalOrExternal, "external_identity"),
+};
+
+/// The declaring module's recorded answers for the declaration an external type
+/// reference names, or null when the reference's import did not resolve (a
+/// failure already reported where the import is diagnosed).
+///
+/// The record is written by the declaring module's own `Check`
+/// (`recordTypeDeclVariances`), which is the only place a declaration's own
+/// annotation can be read, and it writes one for every alias and nominal
+/// declaration. A resolved reference whose module or record is missing is
+/// therefore a broken invariant rather than an unknown answer.
+fn importedTypeDeclVariance(self: *const Self, ref: ImportedDeclRef) ?ModuleEnv.TypeDeclVariance {
+    const env: *const ModuleEnv, const target_node_idx: u32 = switch (ref) {
+        .external => |ext| blk: {
+            const module_idx = self.cir.imports.getResolvedModule(ext.module_idx) orelse return null;
+            if (module_idx >= self.imported_modules.len) {
+                std.debug.panic("type checker invariant violated: resolved import {d} is outside the imported modules ({d})", .{
+                    module_idx,
+                    self.imported_modules.len,
+                });
+            }
+            break :blk .{ self.imported_modules[module_idx], ext.target_node_idx };
+        },
+        .external_identity => |ext| .{ self.moduleEnvForIdentity(self.cir, ext.module_identity).env, ext.target_node_idx },
+    };
+    return env.typeDeclVarianceForNode(target_node_idx) orelse std.debug.panic(
+        "type checker invariant violated: module '{s}' published no declaration record for type node {d}",
+        .{ env.module_name, target_node_idx },
+    );
+}
+
 /// Whether this type application is the builtin `Try(ok, err)`. A `Try`
 /// result's ERROR row is the only position below a where-method signature's
 /// direct result that the result-row widening adapter re-tags (design.md
@@ -17401,7 +19073,18 @@ fn annoApplyIsBuiltinTry(self: *const Self, apply: CIR.TypeAnno.Apply) bool {
 /// The largest declaration arity the alias walk below tracks. A reference with
 /// more type arguments than this returns null, which keeps the pre-walk
 /// `.nested` behaviour; the bound exists so the walk needs no allocation.
-const max_tracked_alias_formals: usize = 8;
+///
+/// Aliased from `ModuleEnv` rather than declared here, because
+/// `ModuleEnv.TypeDeclVariance` sizes its recorded array with the same
+/// constant: a declaration this walk tracks and a declaration the record can
+/// carry must be the same set.
+const max_tracked_alias_formals: usize = ModuleEnv.max_tracked_alias_formals;
+
+/// Type-argument index of `Builtin.Try`'s error row. Deliberately the same
+/// constant as the Monotype relation's
+/// (`src/postcheck/monotype/lower.zig:1727`) and the instantiator's
+/// (`src/types/instantiate.zig:36`).
+const try_error_type_arg_index: usize = 1;
 
 /// Which of `apply`'s OWN argument indices lands in the builtin `Try`'s ERROR
 /// argument, crossing transparent alias declarations.
@@ -17411,30 +19094,61 @@ const max_tracked_alias_formals: usize = 8;
 /// every argument of `Res([IoErr])` generated out of reach - while lowering
 /// crosses the same alias and WOULD re-tag that row: `closedResultRowOrNull`
 /// reads the return through `resolvedPayload`, which walks alias backings, and
-/// `hostedTryNamedOrNull` (src/postcheck/monotype/lower.zig:13046) crosses them
+/// `hostedTryNamedOrNull` (src/postcheck/monotype/lower.zig:13093) crosses them
 /// by design. The opened set was therefore strictly smaller than the adaptable
 /// set, which is under-opening: safe (an ordinary mismatch) but wrong, since
 /// keeping the opened set equal to the adaptable set is the rule this whole
 /// axis exists to hold.
 ///
+/// An IMPORTED alias is answered from the declaring module's recorded
+/// `try_error_formal` rather than declined, for the same reason: lowering does
+/// not know module boundaries either, so `Res(e) : Try(Str, e)` written in
+/// another module is adapted exactly as the byte-identical local spelling is.
+///
 /// Fail-closed everywhere: any shape not recognized exactly returns null, which
 /// is the `.nested` answer this walk replaced.
 fn applyTryErrorArgIndex(self: *const Self, apply: CIR.TypeAnno.Apply) ?usize {
-    // Type-argument index of `Builtin.Try`'s error row. Deliberately the same
-    // constant as the Monotype relation's
-    // (`src/postcheck/monotype/lower.zig:1727`) and the instantiator's
-    // (`src/types/instantiate.zig:36`).
-    const try_error_type_arg_index: usize = 1;
     if (self.annoApplyIsBuiltinTry(apply)) return try_error_type_arg_index;
 
-    // `origin[i]` is the index, among the ORIGINAL reference's arguments, that
+    const args_len = self.cir.store.sliceTypeAnnos(apply.args).len;
+    if (args_len > max_tracked_alias_formals) return null;
+    return switch (apply.base) {
+        .local => |local_ref| self.declTryErrorFormalIndex(local_ref.decl_idx, args_len),
+        .external => |ext| self.importedTryErrorFormalIndex(.{ .external = ext }, args_len),
+        .external_identity => |ext| self.importedTryErrorFormalIndex(.{ .external_identity = ext }, args_len),
+        .builtin, .pending => null,
+    };
+}
+
+/// Which of the IMPORTED declaration's own formals reaches the builtin `Try`'s
+/// error cell, for a reference that passes it `formal_count` arguments.
+///
+/// An unresolved import, a record that declined that axis, and a reference
+/// whose argument count differs from the declaration's arity are one answer:
+/// null, the conservative one. The arity mismatch is a user error reported
+/// where the reference is generated; declining keeps this walk from naming a
+/// formal the reference does not have.
+fn importedTryErrorFormalIndex(self: *const Self, ref: ImportedDeclRef, formal_count: usize) ?usize {
+    const record = self.importedTypeDeclVariance(ref) orelse return null;
+    if (record.try_error_formal == ModuleEnv.TypeDeclVariance.no_try_error_formal) return null;
+    if (record.formal_count != formal_count) return null;
+    if (record.try_error_formal >= formal_count) return null;
+    return @as(usize, record.try_error_formal);
+}
+
+/// Which of `decl_idx`'s own `formal_count` formals reaches the builtin `Try`'s
+/// ERROR argument, crossing transparent alias declarations. This is the walk
+/// `applyTryErrorArgIndex` dispatches into, and the walk the pre-pass runs to
+/// author a declaration's own record.
+fn declTryErrorFormalIndex(self: *const Self, decl_idx: CIR.Statement.Idx, formal_count: usize) ?usize {
+    // `origin[i]` is the index, among the ORIGINAL declaration's formals, that
     // the current layer's argument `i` came from.
     var origin: [max_tracked_alias_formals]usize = undefined;
-    var origin_len = self.cir.store.sliceTypeAnnos(apply.args).len;
+    var origin_len = formal_count;
     if (origin_len > max_tracked_alias_formals) return null;
     for (0..origin_len) |index| origin[index] = index;
 
-    var current = apply;
+    var current_decl = decl_idx;
     // Bounded like the Monotype-side alias walks, and for the same reason: a
     // declaration chain that closes on itself must terminate here, and a hang
     // is the worst outcome for a guard whose only job is to answer. Exhaustion
@@ -17443,14 +19157,7 @@ fn applyTryErrorArgIndex(self: *const Self, apply: CIR.TypeAnno.Apply) ?usize {
     // the fail-closed answer.
     var remaining: usize = @intCast(self.cir.store.nodes.len());
     while (remaining > 0) : (remaining -= 1) {
-        // Cross-module aliases are deliberately out of scope: the declaration's
-        // CIR lives in another module. Fail-closed, so it is a limitation
-        // rather than a wrong answer.
-        const base_ref = switch (current.base) {
-            .local => |local_ref| local_ref,
-            .builtin, .external, .external_identity, .pending => return null,
-        };
-        const alias_decl = switch (self.cir.store.getStatement(base_ref.decl_idx)) {
+        const alias_decl = switch (self.cir.store.getStatement(current_decl)) {
             .s_alias_decl => |decl| decl,
             .s_decl,
             .s_var,
@@ -17515,7 +19222,23 @@ fn applyTryErrorArgIndex(self: *const Self, apply: CIR.TypeAnno.Apply) ?usize {
         }
         origin = next_origin;
         origin_len = body_args.len;
-        current = body;
+
+        // Where the next layer's declaration lives. A mid-chain IMPORTED alias
+        // (`Outer(e) : Lib.Res(e)`) is answered from its own record, which the
+        // declaring module composed the same way this loop does, so the chain
+        // needs no cross-module code of its own.
+        switch (body.base) {
+            .local => |local_ref| current_decl = local_ref.decl_idx,
+            .external => |ext| {
+                const formal_index = self.importedTryErrorFormalIndex(.{ .external = ext }, origin_len) orelse return null;
+                return origin[formal_index];
+            },
+            .external_identity => |ext| {
+                const formal_index = self.importedTryErrorFormalIndex(.{ .external_identity = ext }, origin_len) orelse return null;
+                return origin[formal_index];
+            },
+            .builtin, .pending => return null,
+        }
     }
     return null;
 }
@@ -17624,11 +19347,28 @@ const FormalVariance = enum {
         return .invariant;
     }
 
-    /// One occurrence standing at `polarity` within the declaration body.
-    fn ofOccurrence(polarity: Polarity) FormalVariance {
-        return switch (polarity) {
-            .pos => .covariant,
-            .neg => .contravariant,
+    /// The variance of a position under a function argument, relative to
+    /// the declaration's root.
+    fn flip(self: FormalVariance) FormalVariance {
+        return switch (self) {
+            .unused => .unused,
+            .covariant => .contravariant,
+            .contravariant => .covariant,
+            .invariant => .invariant,
+        };
+    }
+
+    /// The variance, relative to the enclosing declaration's root, of an
+    /// argument substituted for a formal of this variance at a position of
+    /// variance `position`. Null when the formal is unused: that argument
+    /// stands at no position of the body. Monotone in `self`, which the
+    /// pre-pass's fixpoint relies on.
+    fn composeVariance(self: FormalVariance, position: FormalVariance) ?FormalVariance {
+        return switch (self) {
+            .unused => null,
+            .covariant => position,
+            .contravariant => position.flip(),
+            .invariant => .invariant,
         };
     }
 
@@ -17643,35 +19383,76 @@ const FormalVariance = enum {
     }
 };
 
-/// How many nested declarations `applyFormalVariances` descends through. Only
-/// the DECLARATION chain is native-stack recursion; each declaration's body is
-/// walked iteratively, so an alias spine thousands of layers deep costs no
-/// native stack. A reference below this depth is walked as unmodeled, the same
-/// answer a cross-module or builtin reference gets.
-const max_formal_variance_decl_depth: usize = 8;
-
-/// How many positions of one declaration body may be pending at once. Sized
-/// for the nesting and fan-out of a real declaration, not for a generated
-/// spine.
-const max_formal_variance_pending: usize = 256;
-
-/// The total positions one `applyFormalVariances` may visit, across the
-/// declarations it descends through. Bounded for the same reason the alias
-/// walk in `applyTryErrorArgIndex` is: a guard whose only job is to answer
-/// must answer in bounded time, whatever declaration graph it is handed.
-const max_formal_variance_nodes: usize = 2048;
-
-/// One position of a declaration body still to be visited, and where that
-/// position sits relative to the declaration's own root.
+/// One position of a declaration body still to be visited
+/// (`walkDeclFormalVariances`), and its variance relative to the
+/// declaration's own root.
 const FormalVariancePending = struct {
     anno: CIR.TypeAnno.Idx,
-    polarity: Polarity,
-    /// Set for every position below a reference whose variance this walk
-    /// cannot read (`ApplyDeclKnowledge.unknown`). A formal found here is
-    /// joined as `.invariant` rather than by its polarity: the declaration on
-    /// the other side may place it in either position, and only invariant
-    /// covers both.
-    unknown: bool = false,
+    variance: FormalVariance,
+};
+
+/// The declaration pre-pass's working state (`recordTypeDeclVariances`),
+/// kept across runs so its buffers are reused.
+const TypeDeclPrepass = struct {
+    /// Every local alias and nominal declaration, once.
+    decls: std.ArrayListUnmanaged(CIR.Statement.Idx) = .empty,
+    position_of: std.AutoHashMapUnmanaged(CIR.Statement.Idx, u32) = .empty,
+    /// `(referenced, referencing)` positions: one body naming a declaration.
+    edges: std.ArrayListUnmanaged([2]u32) = .empty,
+    /// The referencing positions of `decls[i]` are
+    /// `dependents[dependent_starts[i]..dependent_starts[i + 1]]`.
+    dependent_starts: std.ArrayListUnmanaged(u32) = .empty,
+    dependents: std.ArrayListUnmanaged(u32) = .empty,
+    fill_cursor: std.ArrayListUnmanaged(u32) = .empty,
+    queue: std.ArrayListUnmanaged(u32) = .empty,
+    queued: std.ArrayListUnmanaged(bool) = .empty,
+    refs_stack: std.ArrayListUnmanaged(CIR.TypeAnno.Idx) = .empty,
+
+    fn clear(self: *TypeDeclPrepass) void {
+        self.decls.clearRetainingCapacity();
+        self.position_of.clearRetainingCapacity();
+        self.edges.clearRetainingCapacity();
+        self.dependent_starts.clearRetainingCapacity();
+        self.dependents.clearRetainingCapacity();
+        self.fill_cursor.clearRetainingCapacity();
+        self.queue.clearRetainingCapacity();
+        self.queued.clearRetainingCapacity();
+        self.refs_stack.clearRetainingCapacity();
+    }
+
+    fn deinit(self: *TypeDeclPrepass, gpa: std.mem.Allocator) void {
+        self.decls.deinit(gpa);
+        self.position_of.deinit(gpa);
+        self.edges.deinit(gpa);
+        self.dependent_starts.deinit(gpa);
+        self.dependents.deinit(gpa);
+        self.fill_cursor.deinit(gpa);
+        self.queue.deinit(gpa);
+        self.queued.deinit(gpa);
+        self.refs_stack.deinit(gpa);
+    }
+
+    fn resetQueue(self: *TypeDeclPrepass, gpa: std.mem.Allocator, decl_count: usize) std.mem.Allocator.Error!void {
+        self.queue.clearRetainingCapacity();
+        try self.queued.resize(gpa, decl_count);
+        @memset(self.queued.items, false);
+    }
+
+    fn enqueue(self: *TypeDeclPrepass, gpa: std.mem.Allocator, position: u32) std.mem.Allocator.Error!void {
+        if (self.queued.items[position]) return;
+        self.queued.items[position] = true;
+        try self.queue.append(gpa, position);
+    }
+
+    fn pop(self: *TypeDeclPrepass) ?u32 {
+        const position = self.queue.pop() orelse return null;
+        self.queued.items[position] = false;
+        return position;
+    }
+
+    fn dependentsOf(self: *const TypeDeclPrepass, position: u32) []const u32 {
+        return self.dependents.items[self.dependent_starts.items[position]..self.dependent_starts.items[position + 1]];
+    }
 };
 
 /// What this walk can know about the declaration a type application
@@ -17702,28 +19483,50 @@ const ApplyDeclKnowledge = union(enum) {
     /// formal in an arrow's ARGUMENT would be contravariant, and this class
     /// would then answer it covariantly—reopening the hole `unknown` closes.
     covariant,
-    /// Another module's declaration. Its CIR and its formal names live in
-    /// stores this walk cannot read, so its variance is UNKNOWN, and unknown
-    /// is treated as the most RESTRICTIVE variance: invariant, which generates
-    /// the argument closed whatever the reference's own polarity is. Guessing
-    /// covariance instead would open a row the declaration may hold
-    /// contravariantly, which is the annotation silently ceasing to bound the
-    /// caller. Recording each declaration's variance in the checked module
-    /// data an importer already reads (design.md "Polarity") would replace
-    /// this with the real answer; that is a pure relaxation, since it can only
-    /// ever accept more programs.
+    /// Another module's declaration whose producer recorded its formals'
+    /// variances (`ModuleEnv.TypeDeclVariance`). Read verbatim: the declaring
+    /// module walked its own annotation, in its own CIR and its own ident
+    /// store, which is the only place that walk can run.
+    ///
+    /// Produced only for a record that answers the variance axis at this
+    /// reference's exact arity, so this case never means "a record exists but
+    /// says nothing": that is `.unknown`, because dropping the conservative
+    /// answer without a real one in hand is the permissive guess this whole
+    /// union exists to refuse.
+    imported: ModuleEnv.TypeDeclVariance,
+    /// Another module's declaration this walk has no answer for. Its variance
+    /// is UNKNOWN, and unknown is treated as the most RESTRICTIVE variance:
+    /// invariant, which generates the argument closed whatever the reference's
+    /// own polarity is. Guessing covariance instead would open a row the
+    /// declaration may hold contravariantly, which is the annotation silently
+    /// ceasing to bound the caller.
+    ///
+    /// What still lands here now that declarations publish their variances: an
+    /// unresolved import, a `.pending` base (which carries a type name, not a
+    /// node index, so it can never key a record), a reference whose argument
+    /// count differs from the declaration's arity, and a declaration whose
+    /// producer did not answer the variance axis: an arity past
+    /// `max_tracked_alias_formals`.
     unknown,
 };
 
-/// Which of the three `ApplyDeclKnowledge` cases this application is.
+/// Which of the four `ApplyDeclKnowledge` cases this application is.
 fn applyDeclKnowledge(self: *const Self, apply: CIR.TypeAnno.Apply) ApplyDeclKnowledge {
     return switch (apply.base) {
         .builtin => .covariant,
         .local => |local_ref| .{ .local = local_ref.decl_idx },
+        // The `Builtin` exemption stays AHEAD of the record deliberately.
+        // `Try`'s error row is an external reference from every ordinary
+        // module, so making `Builtin` depend on a walk having succeeded would
+        // close every annotated error row in the language the day that walk
+        // stops answering. The record is consulted only where the answer today
+        // is `.unknown`.
         .external => |ext| if (self.externalTypeRefTargetsBuiltin(ext.module_idx))
             .covariant
         else
-            .unknown,
+            self.importedApplyDeclKnowledge(.{ .external = ext }, apply),
+        // A `.pending` base names its type by ident rather than by node index,
+        // so there is nothing to key a record on.
         .pending => |pend| if (self.externalTypeRefTargetsBuiltin(pend.module_idx))
             .covariant
         else
@@ -17731,8 +19534,31 @@ fn applyDeclKnowledge(self: *const Self, apply: CIR.TypeAnno.Apply) ApplyDeclKno
         .external_identity => |ext| if (self.identityTypeRefTargetsBuiltin(ext.module_identity))
             .covariant
         else
-            .unknown,
+            self.importedApplyDeclKnowledge(.{ .external_identity = ext }, apply),
     };
+}
+
+/// `applyDeclKnowledge` for a non-`Builtin` declaration another module owns:
+/// its published record when that record answers this reference's arity.
+fn importedApplyDeclKnowledge(self: *const Self, ref: ImportedDeclRef, apply: CIR.TypeAnno.Apply) ApplyDeclKnowledge {
+    const record = self.importedTypeDeclVariance(ref) orelse return .unknown;
+    if (!recordAnswersFormalVariances(record, self.cir.store.sliceTypeAnnos(apply.args).len)) return .unknown;
+    return .{ .imported = record };
+}
+
+/// Whether `record` answers the variance axis for a reference with `args_len`
+/// arguments.
+///
+/// The arity check covers a reference whose argument count differs from the
+/// declaration's, a user error reported where the reference is generated:
+/// the record then declines rather than answer for formals the reference does
+/// not have. It is the same check the local walk applies to itself in
+/// `applyFormalVariances`. The record itself is keyed by the exact
+/// declaration node, so it always describes the declaration referenced.
+fn recordAnswersFormalVariances(record: ModuleEnv.TypeDeclVariance, args_len: usize) bool {
+    return record.variancesKnown() and
+        record.formal_count <= max_tracked_alias_formals and
+        record.formal_count == args_len;
 }
 
 /// Write one variance into `out[0..len]` and return `len`, for a reference
@@ -17748,34 +19574,51 @@ fn uniformFormalVariances(
     return len;
 }
 
-/// Allocation-free state of one `applyFormalVariances` walk.
+/// One recorded variance byte as a `FormalVariance`.
 ///
-/// Every bound below costs PRECISION only: when one is hit the walk reports
-/// itself exhausted, the whole answer is discarded, and every argument keeps
-/// the application's own polarity, which is what all of them did before this
-/// walk existed. A partial answer is never used, because a walk that stopped
-/// early can miss an occurrence and name a variance the declaration does not
-/// have.
-const FormalVarianceWalk = struct {
-    /// Declarations currently being walked, outermost first. A reference back
-    /// into one of them is a cycle (`Tree(a) := [Node(Tree(a)), Leaf(a)]`):
-    /// its arguments are walked as unmodeled rather than descended into again,
-    /// so the walk terminates without discarding the rest of the body.
-    open_decls: [max_formal_variance_decl_depth]CIR.Statement.Idx,
-    open_decls_len: usize,
-    /// Positions the walk may still visit.
-    fuel: usize,
-    /// Set when a bound was hit. See the type's doc comment.
-    exhausted: bool,
-};
+/// Matched against the enum's own fields rather than converted, so a byte
+/// outside the enum—serialized data that no `Check` wrote—stops the build as a
+/// broken invariant instead of being read as some variance.
+fn formalVarianceFromRecordByte(raw: u8) FormalVariance {
+    inline for (@typeInfo(FormalVariance).@"enum".fields) |field| {
+        if (raw == field.value) return @field(FormalVariance, field.name);
+    }
+    std.debug.panic("type checker invariant violated: a published formal variance byte {d} names no variance", .{raw});
+}
+
+/// Copy a declaring module's recorded formal variances into `out` and return
+/// how many were written.
+///
+/// There is no decline path: `applyDeclKnowledge` produces `.imported` only for
+/// a record that answers at this exact arity
+/// (`recordAnswersFormalVariances`), so a record that says nothing is already
+/// `.unknown` by the time this runs. Returning null here instead would make an
+/// unanswered record MORE permissive than an unreadable one, since a null
+/// answer lets every argument keep the reference's own polarity.
+fn importedFormalVariances(
+    out: *[max_tracked_alias_formals]FormalVariance,
+    len: usize,
+    record: ModuleEnv.TypeDeclVariance,
+) usize {
+    std.debug.assert(recordAnswersFormalVariances(record, len));
+    for (out[0..len], record.formal_variances[0..len]) |*slot, raw| {
+        slot.* = formalVarianceFromRecordByte(raw);
+    }
+    return len;
+}
 
 /// The variance of each formal of the declaration `apply` references, written
 /// into `out`, returning how many formals were written. Null only when a LOCAL
-/// declaration's walk could not answer—an arity past the tracked bound, a
-/// statement that is not a type declaration, a cycle, or an exhausted walk—in
-/// which case every argument keeps the application's own polarity, as it always
-/// did. A reference whose declaration is not local answers from
-/// `ApplyDeclKnowledge` instead, and answers for every formal at once.
+/// reference has no answer: its declaration is not an alias or nominal
+/// declaration, its arity is past the tracked bound, or the reference's
+/// argument count differs from the declaration's (an arity error reported
+/// where the reference is generated). Every argument then keeps the
+/// application's own polarity. A local declaration's answer is the one the
+/// pre-pass computed for it (`recordTypeDeclVariances`); a reference whose
+/// declaration is not local answers from `ApplyDeclKnowledge` instead: for
+/// every formal at once when the declaration is compiler-owned or
+/// unreadable, and per formal when it is imported and its producer recorded
+/// the answer.
 fn applyFormalVariances(
     self: *const Self,
     apply: CIR.TypeAnno.Apply,
@@ -17785,37 +19628,53 @@ fn applyFormalVariances(
     const local_decl_idx = switch (self.applyDeclKnowledge(apply)) {
         .local => |decl_idx| decl_idx,
         .covariant => return uniformFormalVariances(out, args_len, .covariant),
+        .imported => |record| return importedFormalVariances(out, args_len, record),
         .unknown => return uniformFormalVariances(out, args_len, .invariant),
     };
-    var walk = FormalVarianceWalk{
-        .open_decls = undefined,
-        .open_decls_len = 0,
-        .fuel = max_formal_variance_nodes,
-        .exhausted = false,
-    };
-    const formals_len = self.declFormalVariances(local_decl_idx, out, &walk) orelse return null;
-    if (walk.exhausted) return null;
-    // An arity mismatch is reported by the caller; until then the positional
-    // correspondence this walk assumes does not hold.
-    if (formals_len != args_len) return null;
-    return formals_len;
+    const record = self.localTypeDeclVariance(local_decl_idx) orelse return null;
+    if (!recordAnswersFormalVariances(record, args_len)) return null;
+    for (out[0..args_len], record.formal_variances[0..args_len]) |*slot, raw| {
+        slot.* = formalVarianceFromRecordByte(raw);
+    }
+    return args_len;
 }
 
-/// The variance of each of `decl_idx`'s own formals within its body, written
-/// into `out`, returning how many formals were written. Null when `decl_idx`
-/// is not an alias or nominal declaration this walk models.
-fn declFormalVariances(
-    self: *const Self,
-    decl_idx: CIR.Statement.Idx,
-    out: *[max_tracked_alias_formals]FormalVariance,
-    walk: *FormalVarianceWalk,
-) ?usize {
-    if (walk.exhausted) return null;
-    if (walk.open_decls_len == max_formal_variance_decl_depth) return null;
-    for (walk.open_decls[0..walk.open_decls_len]) |open_decl| {
-        if (open_decl == decl_idx) return null;
+/// The pre-pass's record for a LOCAL declaration, or null when the statement
+/// is not an alias or nominal declaration. Every local alias and nominal
+/// declaration has one once `recordTypeDeclVariances` has run, which it does
+/// before any annotation is generated, so a missing one is a broken
+/// invariant.
+fn localTypeDeclVariance(self: *const Self, decl_idx: CIR.Statement.Idx) ?ModuleEnv.TypeDeclVariance {
+    switch (self.cir.store.getStatement(decl_idx)) {
+        .s_alias_decl, .s_nominal_decl => {},
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => return null,
     }
+    return self.cir.typeDeclVarianceForNode(@intFromEnum(decl_idx)) orelse
+        std.debug.panic("type checker invariant violated: local type declaration {d} has no pre-pass variance record", .{@intFromEnum(decl_idx)});
+}
 
+/// The header formals and body of an alias or nominal declaration, or null
+/// for any other statement.
+fn typeDeclFormalsAndBody(self: *const Self, decl_idx: CIR.Statement.Idx) ?struct { []const CIR.TypeAnno.Idx, CIR.TypeAnno.Idx } {
     const header, const body = switch (self.cir.store.getStatement(decl_idx)) {
         .s_alias_decl => |decl| .{ decl.header, decl.anno },
         .s_nominal_decl => |decl| .{ decl.header, decl.anno },
@@ -17840,171 +19699,391 @@ fn declFormalVariances(
         .s_runtime_error,
         => return null,
     };
-
-    const formals = self.cir.store.sliceTypeAnnos(self.cir.store.getTypeHeader(header).args);
-    if (formals.len > max_tracked_alias_formals) return null;
-    for (out[0..formals.len]) |*variance| variance.* = .unused;
-
-    walk.open_decls[walk.open_decls_len] = decl_idx;
-    walk.open_decls_len += 1;
-    defer walk.open_decls_len -= 1;
-
-    // A declaration's body root is an output position relative to the
-    // declaration itself, the same convention `generateAnnotationType` starts
-    // an annotation walk with.
-    self.accumulateFormalVariances(body, formals, .pos, out, walk);
-    return formals.len;
+    return .{ self.cir.store.sliceTypeAnnos(self.cir.store.getTypeHeader(header).args), body };
 }
 
-/// Join into `out[i]` the variance of every occurrence of `formals[i]` within
-/// `root_anno_idx`, which itself stands at `root_polarity` relative to the
-/// declaration whose formals these are.
+/// One pass of the variance fixpoint over one declaration: the variance of
+/// each of `formals` within `body`, read against the answers the pre-pass
+/// holds for every OTHER local declaration the body references (and for this
+/// one, where it references itself). Written into `out[0..formals.len]`.
 ///
-/// The body is walked on an explicit stack, not the native one: a declaration
-/// body can be an alias spine thousands of layers deep
-/// (`A(a) : List(List(... List(B(a)) ...))`), which a recursive descent cannot
-/// survive. Only the DECLARATION chain recurses, bounded by
-/// `max_formal_variance_decl_depth`.
-fn accumulateFormalVariances(
-    self: *const Self,
-    root_anno_idx: CIR.TypeAnno.Idx,
+/// The body is walked on an explicit stack (`formal_variance_pending`), not
+/// the native one: a declaration body can be a spine thousands of layers
+/// deep (`A(a) : List(List(... List(B(a)) ...))`). A referenced declaration
+/// is never descended into; its recorded answer is read instead, so there is
+/// no declaration chain to bound.
+///
+/// Each occurrence joins the VARIANCE of the position it stands at relative
+/// to the declaration's root, which composes exactly: a function argument
+/// flips it, and an argument of a reference whose formal has variance `w`
+/// stands at `w` composed with it (`FormalVariance.composeVariance`). A
+/// formal the referenced declaration never uses contributes nothing, and one
+/// it uses both ways makes everything beneath it invariant. That composition
+/// is monotone in `w`, which is what lets the pre-pass iterate a group of
+/// mutually recursive declarations to its least fixpoint.
+fn walkDeclFormalVariances(
+    self: *Self,
     formals: []const CIR.TypeAnno.Idx,
-    root_polarity: Polarity,
-    out: *[max_tracked_alias_formals]FormalVariance,
-    walk: *FormalVarianceWalk,
-) void {
-    var pending: [max_formal_variance_pending]FormalVariancePending = undefined;
-    var pending_len: usize = 1;
-    pending[0] = .{ .anno = root_anno_idx, .polarity = root_polarity };
+    body: CIR.TypeAnno.Idx,
+    out: []FormalVariance,
+) std.mem.Allocator.Error!void {
+    for (out) |*variance| variance.* = .unused;
+    const pending = &self.formal_variance_pending;
+    pending.clearRetainingCapacity();
+    try pending.append(self.gpa, .{ .anno = body, .variance = .covariant });
 
-    while (pending_len > 0) {
-        if (walk.fuel == 0) {
-            walk.exhausted = true;
-            return;
-        }
-        walk.fuel -= 1;
-
-        pending_len -= 1;
-        const here = pending[pending_len];
-
-        // Room for the positions this node opens up, checked once before any
-        // is pushed.
-        const anno = self.cir.store.getTypeAnno(here.anno);
-        const child_count: usize = switch (anno) {
-            .rigid_var, .rigid_var_lookup, .lookup, .underscore, .malformed => 0,
-            .parens => 1,
-            .@"fn" => |func| self.cir.store.sliceTypeAnnos(func.args).len + 1,
-            .tag_union => |tag_union| self.cir.store.sliceTypeAnnos(tag_union.tags).len +
-                @intFromBool(tag_union.ext != null),
-            .tag => |tag| self.cir.store.sliceTypeAnnos(tag.args).len,
-            .tuple => |tuple| self.cir.store.sliceTypeAnnos(tuple.elems).len,
-            .record => |record| self.cir.store.sliceAnnoRecordFields(record.fields).len +
-                @intFromBool(record.ext != null),
-            .apply => |inner| self.cir.store.sliceTypeAnnos(inner.args).len,
-        };
-        if (pending_len + child_count > pending.len) {
-            walk.exhausted = true;
-            return;
-        }
-
-        switch (anno) {
+    while (pending.pop()) |here| {
+        switch (self.cir.store.getTypeAnno(here.anno)) {
             .rigid_var, .rigid_var_lookup => {
                 if (self.annoFormalIndex(here.anno, formals)) |formal_index| {
-                    const occurrence: FormalVariance = if (here.unknown)
-                        .invariant
-                    else
-                        FormalVariance.ofOccurrence(here.polarity);
-                    out[formal_index] = out[formal_index].join(occurrence);
+                    out[formal_index] = out[formal_index].join(here.variance);
                 }
             },
-            .parens => |parens| {
-                pending[pending_len] = .{ .anno = parens.anno, .polarity = here.polarity, .unknown = here.unknown };
-                pending_len += 1;
-            },
+            .parens => |parens| try pending.append(self.gpa, .{ .anno = parens.anno, .variance = here.variance }),
             .@"fn" => |func| {
-                // The same rule the annotation walk uses: argument positions
-                // negate the surrounding polarity, the return preserves it.
+                // Argument positions flip the surrounding variance, the
+                // return keeps it.
                 for (self.cir.store.sliceTypeAnnos(func.args)) |arg_anno_idx| {
-                    pending[pending_len] = .{ .anno = arg_anno_idx, .polarity = here.polarity.flip(), .unknown = here.unknown };
-                    pending_len += 1;
+                    try pending.append(self.gpa, .{ .anno = arg_anno_idx, .variance = here.variance.flip() });
                 }
-                pending[pending_len] = .{ .anno = func.ret, .polarity = here.polarity, .unknown = here.unknown };
-                pending_len += 1;
+                try pending.append(self.gpa, .{ .anno = func.ret, .variance = here.variance });
             },
             .tag_union => |tag_union| {
                 for (self.cir.store.sliceTypeAnnos(tag_union.tags)) |tag_anno_idx| {
-                    pending[pending_len] = .{ .anno = tag_anno_idx, .polarity = here.polarity, .unknown = here.unknown };
-                    pending_len += 1;
+                    try pending.append(self.gpa, .{ .anno = tag_anno_idx, .variance = here.variance });
                 }
-                if (tag_union.ext) |ext_anno_idx| {
-                    pending[pending_len] = .{ .anno = ext_anno_idx, .polarity = here.polarity, .unknown = here.unknown };
-                    pending_len += 1;
-                }
+                if (tag_union.ext) |ext_anno_idx| try pending.append(self.gpa, .{ .anno = ext_anno_idx, .variance = here.variance });
             },
-            .tag => |tag| {
-                for (self.cir.store.sliceTypeAnnos(tag.args)) |tag_arg_idx| {
-                    pending[pending_len] = .{ .anno = tag_arg_idx, .polarity = here.polarity, .unknown = here.unknown };
-                    pending_len += 1;
-                }
+            .tag => |tag| for (self.cir.store.sliceTypeAnnos(tag.args)) |tag_arg_idx| {
+                try pending.append(self.gpa, .{ .anno = tag_arg_idx, .variance = here.variance });
             },
-            .tuple => |tuple| {
-                for (self.cir.store.sliceTypeAnnos(tuple.elems)) |elem_anno_idx| {
-                    pending[pending_len] = .{ .anno = elem_anno_idx, .polarity = here.polarity, .unknown = here.unknown };
-                    pending_len += 1;
-                }
+            .tuple => |tuple| for (self.cir.store.sliceTypeAnnos(tuple.elems)) |elem_anno_idx| {
+                try pending.append(self.gpa, .{ .anno = elem_anno_idx, .variance = here.variance });
             },
             .record => |record| {
                 for (self.cir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
-                    pending[pending_len] = .{
-                        .anno = self.cir.store.getAnnoRecordField(field_idx).ty,
-                        .polarity = here.polarity,
-                        .unknown = here.unknown,
-                    };
-                    pending_len += 1;
+                    try pending.append(self.gpa, .{ .anno = self.cir.store.getAnnoRecordField(field_idx).ty, .variance = here.variance });
                 }
-                if (record.ext) |ext_anno_idx| {
-                    pending[pending_len] = .{ .anno = ext_anno_idx, .polarity = here.polarity, .unknown = here.unknown };
-                    pending_len += 1;
-                }
+                if (record.ext) |ext_anno_idx| try pending.append(self.gpa, .{ .anno = ext_anno_idx, .variance = here.variance });
             },
             .apply => |inner| {
-                // A nested reference composes the same way the top-level one
-                // does, and it splits the same three ways
-                // (`ApplyDeclKnowledge`): a local declaration is walked, a
-                // compiler-owned one is covariant and its arguments keep this
-                // position's own polarity, and one this walk cannot read marks
-                // its arguments unknown, so any formal beneath it is joined
-                // invariant rather than by a polarity the declaration may not
-                // have.
+                // A nested reference splits the same four ways the top-level
+                // one does (`ApplyDeclKnowledge`). A local declaration's
+                // formals compose by their current answers. A compiler-owned
+                // one is covariant, so its arguments keep this position's
+                // variance. One this walk has no answer for makes everything
+                // beneath it invariant: the declaration on the other side may
+                // place it in either position.
+                //
+                // An IMPORTED declaration's record is deliberately NOT read
+                // here, and is treated exactly as unknown. Reading it at a
+                // nested reference is not monotone: it opens rows at even
+                // depths and CLOSES them at odd ones, so it rejects programs
+                // that check today. That is a separate, sweep-gated change.
                 const inner_args = self.cir.store.sliceTypeAnnos(inner.args);
-                var inner_variances: [max_tracked_alias_formals]FormalVariance = undefined;
-                const inner_knowledge = self.applyDeclKnowledge(inner);
-                const inner_modeled = inner_blk: {
-                    const inner_decl_idx = switch (inner_knowledge) {
-                        .local => |decl_idx| decl_idx,
-                        .covariant, .unknown => break :inner_blk false,
-                    };
-                    const written = self.declFormalVariances(inner_decl_idx, &inner_variances, walk) orelse
-                        break :inner_blk false;
-                    break :inner_blk written == inner_args.len;
-                };
-                if (walk.exhausted) return;
-                for (inner_args, 0..) |inner_arg_idx, inner_index| {
-                    pending[pending_len] = .{
-                        .anno = inner_arg_idx,
-                        .polarity = if (inner_modeled)
-                            inner_variances[inner_index].compose(here.polarity)
-                        else
-                            here.polarity,
-                        .unknown = here.unknown or inner_knowledge == .unknown,
-                    };
-                    pending_len += 1;
+                switch (self.applyDeclKnowledge(inner)) {
+                    .local => |inner_decl_idx| {
+                        const record = self.localTypeDeclVariance(inner_decl_idx);
+                        if (record != null and recordAnswersFormalVariances(record.?, inner_args.len)) {
+                            for (inner_args, record.?.formal_variances[0..inner_args.len]) |inner_arg_idx, raw| {
+                                const inner_variance = formalVarianceFromRecordByte(raw);
+                                const variance = inner_variance.composeVariance(here.variance) orelse continue;
+                                try pending.append(self.gpa, .{ .anno = inner_arg_idx, .variance = variance });
+                            }
+                        } else {
+                            // No answer for this reference (not a type
+                            // declaration, past the tracked arity, or an
+                            // arity error reported where it is generated):
+                            // its arguments keep this position's variance,
+                            // as they keep its polarity at generation.
+                            for (inner_args) |inner_arg_idx| {
+                                try pending.append(self.gpa, .{ .anno = inner_arg_idx, .variance = here.variance });
+                            }
+                        }
+                    },
+                    .covariant => for (inner_args) |inner_arg_idx| {
+                        try pending.append(self.gpa, .{ .anno = inner_arg_idx, .variance = here.variance });
+                    },
+                    .imported, .unknown => for (inner_args) |inner_arg_idx| {
+                        try pending.append(self.gpa, .{ .anno = inner_arg_idx, .variance = .invariant });
+                    },
                 }
             },
             // No formal can be named by any of these.
             .lookup, .underscore, .malformed => {},
         }
     }
+}
+
+/// Publish every parameterized type declaration in this module's answers for
+/// the two syntactic annotation walks, so an importer reads them instead of
+/// declining (`ModuleEnv.TypeDeclVariance`).
+///
+/// A declaration's variance is a property of its own annotation, and that
+/// annotation's formal names are interned in THIS module's ident store, so this
+/// is the only place the answer can be computed. An importer holds a `*const
+/// ModuleEnv` for every direct import but cannot resolve the import indexes
+/// inside another module's declaration body, which is why the answer travels
+/// rather than the walk.
+///
+/// A PRE-PASS rather than a memo filled on first cross-module lookup.
+/// `predeclareAnnotationScheme` generates an annotation speculatively and then
+/// unwinds exactly three side effects - problems, snapshots, annotation nodes -
+/// under the claim that the def afterwards checks byte-for-byte as before that
+/// pre-pass existed. A memo written inside that window would survive the
+/// rollback and be read by the body pass, which is a side effect the rollback
+/// does not model. Written here the table is complete before the window opens,
+/// and both generations read the identical one.
+///
+/// Each axis is the least fixpoint of its walk over every local declaration
+/// at once, iterated on a worklist: a walk reads each declaration its body
+/// names from that declaration's current record and never enters its body,
+/// so no declaration chain is followed, recursion among nominal declarations
+/// needs no special case, and the answer does not depend on where a walk
+/// starts or how deep a declaration is spelled.
+///
+/// Both walks read CIR only, so nothing needs to have been generated yet;
+/// `externalTypeRefTargetsBuiltin` needs resolved imports, which
+/// `preflightForTypeChecking` guarantees. Checking goes on to mutate CIR
+/// EXPRESSIONS (dispatch rewrites) and declaration TYPE VARS, never declaration
+/// type ANNOTATIONS, which is all these walks read - so the answer recorded
+/// here stays true for the rest of the run.
+fn recordTypeDeclVariances(self: *Self) std.mem.Allocator.Error!void {
+    const prepass = &self.type_decl_prepass;
+    prepass.clear();
+
+    // The same union of spans `checkFileInternal` itself generates
+    // declarations from, each declaration once.
+    for (0..self.cir.type_decls.span.len) |stmt_offset| {
+        try self.addPrepassTypeDecl(self.cir.store.statementAt(self.cir.type_decls, stmt_offset));
+    }
+    for (0..self.cir.all_statements.span.len) |stmt_offset| {
+        try self.addPrepassTypeDecl(self.cir.store.statementAt(self.cir.all_statements, stmt_offset));
+    }
+    // The REPL generates its declarations from `builtin_statements`, and a
+    // platform's for-clause aliases live outside both spans above; every one
+    // of them is a local declaration a reference can name.
+    for (0..self.cir.builtin_statements.span.len) |stmt_offset| {
+        try self.addPrepassTypeDecl(self.cir.store.statementAt(self.cir.builtin_statements, stmt_offset));
+    }
+    for (self.cir.for_clause_aliases.items.items) |for_clause| {
+        try self.addPrepassTypeDecl(for_clause.alias_stmt_idx);
+    }
+    const decl_count = prepass.decls.items.len;
+
+    // Reverse reference edges: which declarations' bodies name each one.
+    for (prepass.decls.items, 0..) |decl_idx, referencing| {
+        const formals_and_body = self.typeDeclFormalsAndBody(decl_idx).?;
+        try self.collectLocalTypeDeclRefs(formals_and_body[1], @intCast(referencing));
+    }
+    try prepass.dependent_starts.resize(self.gpa, decl_count + 1);
+    @memset(prepass.dependent_starts.items, 0);
+    for (prepass.edges.items) |edge| prepass.dependent_starts.items[edge[0] + 1] += 1;
+    for (1..decl_count + 1) |index| prepass.dependent_starts.items[index] += prepass.dependent_starts.items[index - 1];
+    try prepass.dependents.resize(self.gpa, prepass.edges.items.len);
+    try prepass.fill_cursor.resize(self.gpa, decl_count);
+    @memcpy(prepass.fill_cursor.items, prepass.dependent_starts.items[0..decl_count]);
+    for (prepass.edges.items) |edge| {
+        prepass.dependents.items[prepass.fill_cursor.items[edge[0]]] = edge[1];
+        prepass.fill_cursor.items[edge[0]] += 1;
+    }
+
+    // Every declaration's record, before any walk reads one: variances start
+    // at `.unused` (the fixpoint's bottom) and row-opening at NO.
+    for (prepass.decls.items) |decl_idx| {
+        const formals, _ = self.typeDeclFormalsAndBody(decl_idx).?;
+        const tracked_arity = formals.len <= max_tracked_alias_formals;
+        var entry = ModuleEnv.TypeDeclVariance{
+            .node_idx = @intFromEnum(decl_idx),
+            .formal_count = if (tracked_arity) @intCast(formals.len) else 0,
+            .flags = if (tracked_arity) ModuleEnv.TypeDeclVariance.variances_known_flag else 0,
+            .try_error_formal = ModuleEnv.TypeDeclVariance.no_try_error_formal,
+            .formal_variances = [_]u8{@intFromEnum(FormalVariance.unused)} ** max_tracked_alias_formals,
+        };
+        // A placeholder alias opens at a positive position, as `declOpensRow`
+        // answers for it.
+        if (self.aliasBodyIsPlaceholder(decl_idx)) entry.flags |= ModuleEnv.TypeDeclVariance.opens_row_pos_flag;
+        if (tracked_arity) {
+            if (self.declTryErrorFormalIndex(decl_idx, formals.len)) |formal_index| {
+                entry.try_error_formal = @intCast(formal_index);
+            }
+        }
+        try self.cir.recordTypeDeclVariance(entry);
+    }
+
+    // Formal variances: the least fixpoint over every declaration at once.
+    // A walk reads each referenced declaration's current answer and never
+    // descends into it, and the composition is monotone, so every answer
+    // only grows (each formal at most twice) and the result is the same
+    // whatever order the worklist runs in.
+    try prepass.resetQueue(self.gpa, decl_count);
+    for (prepass.decls.items, 0..) |decl_idx, position| {
+        const formals, _ = self.typeDeclFormalsAndBody(decl_idx).?;
+        if (formals.len <= max_tracked_alias_formals) try prepass.enqueue(self.gpa, @intCast(position));
+    }
+    while (prepass.pop()) |position| {
+        const decl_idx = prepass.decls.items[position];
+        const formals, const body = self.typeDeclFormalsAndBody(decl_idx).?;
+        var variances: [max_tracked_alias_formals]FormalVariance = undefined;
+        try self.walkDeclFormalVariances(formals, body, variances[0..formals.len]);
+        var entry = self.cir.typeDeclVarianceForNode(@intFromEnum(decl_idx)).?;
+        var changed = false;
+        for (variances[0..formals.len], entry.formal_variances[0..formals.len]) |variance, *raw| {
+            const previous = formalVarianceFromRecordByte(raw.*);
+            if (previous == variance) continue;
+            // An answer only rises. One that fell would mean a composition
+            // that is not monotone, under which the worklist need not stop.
+            std.debug.assert(previous.join(variance) == variance);
+            raw.* = @intFromEnum(variance);
+            changed = true;
+        }
+        if (!changed) continue;
+        try self.cir.recordTypeDeclVariance(entry);
+        for (prepass.dependentsOf(position)) |dependent| {
+            const dependent_formals, _ = self.typeDeclFormalsAndBody(prepass.decls.items[dependent]).?;
+            if (dependent_formals.len <= max_tracked_alias_formals) try prepass.enqueue(self.gpa, dependent);
+        }
+    }
+
+    // Row opening: the least fixpoint over the alias declarations, read
+    // against the final variances. A reference whose alias reaches itself
+    // is generated as an error and mints nothing (`recursive_alias`), and
+    // the least fixpoint is exactly that: a cycle contributes only what its
+    // declarations' bodies mint elsewhere.
+    try prepass.resetQueue(self.gpa, decl_count);
+    for (prepass.decls.items, 0..) |decl_idx, position| {
+        if (self.aliasBodyForRowOpening(decl_idx) != null) try prepass.enqueue(self.gpa, @intCast(position));
+    }
+    while (prepass.pop()) |position| {
+        const decl_idx = prepass.decls.items[position];
+        const body = self.aliasBodyForRowOpening(decl_idx).?;
+        var entry = self.cir.typeDeclVarianceForNode(@intFromEnum(decl_idx)).?;
+        const opens_flags = ModuleEnv.TypeDeclVariance.opens_row_pos_flag | ModuleEnv.TypeDeclVariance.opens_row_neg_flag;
+        var flags = entry.flags & ~opens_flags;
+        if (self.annoOpensRow(body, .pos)) flags |= ModuleEnv.TypeDeclVariance.opens_row_pos_flag;
+        if (self.annoOpensRow(body, .neg)) flags |= ModuleEnv.TypeDeclVariance.opens_row_neg_flag;
+        if (flags == entry.flags) continue;
+        entry.flags = flags;
+        try self.cir.recordTypeDeclVariance(entry);
+        for (prepass.dependentsOf(position)) |dependent| {
+            if (self.aliasBodyForRowOpening(prepass.decls.items[dependent]) != null) try prepass.enqueue(self.gpa, dependent);
+        }
+    }
+}
+
+/// Add an alias or nominal declaration to the pre-pass, once.
+fn addPrepassTypeDecl(self: *Self, decl_idx: CIR.Statement.Idx) std.mem.Allocator.Error!void {
+    if (self.typeDeclFormalsAndBody(decl_idx) == null) return;
+    const prepass = &self.type_decl_prepass;
+    const entry = try prepass.position_of.getOrPut(self.gpa, decl_idx);
+    if (entry.found_existing) return;
+    entry.value_ptr.* = @intCast(prepass.decls.items.len);
+    try prepass.decls.append(self.gpa, decl_idx);
+}
+
+/// Whether `decl_idx` is an alias declaration still holding its placeholder
+/// annotation.
+fn aliasBodyIsPlaceholder(self: *const Self, decl_idx: CIR.Statement.Idx) bool {
+    return switch (self.cir.store.getStatement(decl_idx)) {
+        .s_alias_decl => |alias| alias.anno == .placeholder,
+        .s_nominal_decl,
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => false,
+    };
+}
+
+/// The body whose row opening an alias declaration's record answers, or
+/// null when the declaration is not an alias with a finished body. Only an
+/// alias body carries polarity markers; a nominal body closes as written.
+fn aliasBodyForRowOpening(self: *const Self, decl_idx: CIR.Statement.Idx) ?CIR.TypeAnno.Idx {
+    return switch (self.cir.store.getStatement(decl_idx)) {
+        .s_alias_decl => |alias| if (alias.anno == .placeholder) null else alias.anno,
+        .s_nominal_decl,
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => null,
+    };
+}
+
+/// Record an edge from every local alias or nominal declaration `body`
+/// names to the pre-pass declaration at `referencing`.
+fn collectLocalTypeDeclRefs(self: *Self, body: CIR.TypeAnno.Idx, referencing: u32) std.mem.Allocator.Error!void {
+    const prepass = &self.type_decl_prepass;
+    const stack = &prepass.refs_stack;
+    stack.clearRetainingCapacity();
+    try stack.append(self.gpa, body);
+    while (stack.pop()) |anno_idx| {
+        switch (self.cir.store.getTypeAnno(anno_idx)) {
+            .rigid_var, .rigid_var_lookup, .underscore, .malformed => {},
+            .parens => |parens| try stack.append(self.gpa, parens.anno),
+            .@"fn" => |func| {
+                try stack.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(func.args));
+                try stack.append(self.gpa, func.ret);
+            },
+            .tag_union => |tag_union| {
+                try stack.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tag_union.tags));
+                if (tag_union.ext) |ext| try stack.append(self.gpa, ext);
+            },
+            .tag => |tag| try stack.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tag.args)),
+            .tuple => |tuple| try stack.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tuple.elems)),
+            .record => |record| {
+                for (self.cir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
+                    try stack.append(self.gpa, self.cir.store.getAnnoRecordField(field_idx).ty);
+                }
+                if (record.ext) |ext| try stack.append(self.gpa, ext);
+            },
+            .lookup => |lookup| try self.addPrepassEdge(lookup.base, referencing),
+            .apply => |apply| {
+                try self.addPrepassEdge(apply.base, referencing);
+                try stack.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(apply.args));
+            },
+        }
+    }
+}
+
+fn addPrepassEdge(self: *Self, decl_base: CIR.TypeAnno.LocalOrExternal, referencing: u32) std.mem.Allocator.Error!void {
+    const local = switch (decl_base) {
+        .local => |local| local,
+        .builtin, .external, .external_identity, .pending => return,
+    };
+    const prepass = &self.type_decl_prepass;
+    const referenced = prepass.position_of.get(local.decl_idx) orelse return;
+    try prepass.edges.append(self.gpa, .{ referenced, referencing });
 }
 
 /// Push every constraint one where clause places on `owner_var`. A method
@@ -18287,6 +20366,7 @@ fn unifyAnnoWithExternalType(
         ctx.polarityVarBehavior(),
         polarity,
         ctx.instantiationReach(),
+        ctx.writtenResultRows(),
         .none,
     );
     _ = try self.unify(anno_var, ext_instantiated_var, env);
@@ -18465,7 +20545,7 @@ fn instantiateWhereAliasConstraint(
         // A faithful copy: the declaration's where-method signatures keep
         // their polarity markers, which the referencing annotation's own body
         // uses and obligations resolve.
-        .fn_var = try self.instantiateVarWithSubsPolarized(constraint.fn_var, subs, env, .{ .explicit = region }, .preserve, .pos, .nested),
+        .fn_var = try self.instantiateVarWithSubsPolarized(constraint.fn_var, subs, env, .{ .explicit = region }, .preserve, .pos, .nested, .ignore, null),
         .origin = .{ .where_clause = .{} },
     };
 }
@@ -18477,6 +20557,193 @@ fn resolvedRigid(self: *Self, var_: Var) ?Rigid {
     return switch (self.types.resolveVar(var_).desc.content) {
         .rigid => |rigid| rigid,
         .flex, .alias, .field_presence, .structure, .err => null,
+    };
+}
+
+/// Whether generating `annotation_idx` will mint at least one IMPLICITLY
+/// OPENED extension, the pre-test that makes an annotated value binding
+/// generalize (`isGeneralizableValueBinding`).
+///
+/// This is the THIRD hand-maintained walk over an annotation's own CIR
+/// (design.md "Three Syntactic Walks"), and it exists for a TIMING reason
+/// rather than a semantic one: `checkExpr` consults `shouldGeneralize` and
+/// pushes the binding's rank BEFORE the frame materializes the annotation, so
+/// the decision cannot read `annotation_implicit_open_exts`, which
+/// `generateAnnotationType` only commits once generation is done.
+///
+/// The walk mirrors `generateAnnoTypeInPlace`'s opening decision, and the two
+/// error directions are NOT symmetric:
+///
+///   * Answering YES where the generator mints nothing is SAFE. The rank push
+///     is paid, and the generalize call then quantifies nothing, exactly as it
+///     already does for a concrete annotation that happens to satisfy
+///     `mentions_type_var` (`x : (a -> a)` writes a var in a negative
+///     position and generalizes today). So every position this walk cannot
+///     read answers YES.
+///   * Answering NO where the generator MINTS is not safe: the extension would
+///     be neither quantified nor closed, and would reach the module boundary
+///     as a bare flex that `copy_import.zig` stamps `.generalized`: the rule
+///     silently changing at a boundary the author did not write.
+fn annotationOpensValueRow(self: *const Self, annotation_idx: CIR.Annotation.Idx) bool {
+    // A host-boundary annotation keeps its rows as written and mints nothing
+    // (see `generateAnnotationType`).
+    if (self.host_boundary_annotations.contains(annotation_idx)) return false;
+    return self.annoOpensRow(self.cir.store.getAnnotation(annotation_idx).anno, .pos);
+}
+
+/// One position of the walk above. `polarity` tracks
+/// `generateAnnoTypeInPlace`'s own polarity exactly. A referenced local
+/// alias is answered by its pre-pass record, never by entering its body, so
+/// the walk is bounded by this annotation's own size.
+fn annoOpensRow(
+    self: *const Self,
+    anno_idx: CIR.TypeAnno.Idx,
+    polarity: Polarity,
+) bool {
+    return switch (self.cir.store.getTypeAnno(anno_idx)) {
+        // A written type variable is answered by `mentions_type_var`, which is
+        // consulted beside this walk; nothing here mints on its own.
+        .rigid_var, .rigid_var_lookup, .underscore, .malformed => false,
+        .parens => |p| self.annoOpensRow(p.anno, polarity),
+        // Argument positions negate the surrounding polarity; the return
+        // position preserves it (`generateAnnoTypeInPlace`'s `.@"fn"` arm).
+        .@"fn" => |f| self.anyAnnoOpensRow(f.args, polarity.flip()) or
+            self.annoOpensRow(f.ret, polarity),
+        .tuple => |t| self.anyAnnoOpensRow(t.elems, polarity),
+        .tag => |t| self.anyAnnoOpensRow(t.args, polarity),
+        .record => |r| blk: {
+            for (self.cir.store.sliceAnnoRecordFields(r.fields)) |field_idx| {
+                if (self.annoOpensRow(self.cir.store.getAnnoRecordField(field_idx).ty, polarity)) break :blk true;
+            }
+            break :blk if (r.ext) |ext_idx| self.annoOpensRow(ext_idx, polarity) else false;
+        },
+        .tag_union => |tu| blk: {
+            const tags = self.cir.store.sliceTypeAnnos(tu.tags);
+            // A union with no tags is never opened: `[]` asserts
+            // uninhabitedness, which opening would destroy.
+            if (polarity == .pos and tags.len > 0) {
+                if (tu.ext) |ext_idx| {
+                    // An anonymous `..` in an output position means exactly
+                    // what absence means there, and is minted the same way.
+                    if (self.annoIsAnonymousOpenExt(ext_idx)) break :blk true;
+                } else {
+                    break :blk true;
+                }
+            }
+            if (self.anyAnnoOpensRow(tu.tags, polarity)) break :blk true;
+            break :blk if (tu.ext) |ext_idx| self.annoOpensRow(ext_idx, polarity) else false;
+        },
+        .lookup => |l| self.declOpensRow(l.base, polarity),
+        .apply => |a| blk: {
+            if (self.declOpensRow(a.base, polarity)) break :blk true;
+            // A reference this walk has no variance answer for generates
+            // everything beneath it `.as_written` at every depth, so no
+            // argument of one can mint. An IMPORTED reference whose producer
+            // recorded its variances is not one of those: the generator drops
+            // the `.as_written` floor for it, so its arguments mint exactly as
+            // a local reference's do and this walk must follow. Exhaustive by
+            // construction, for the same reason the generator's own
+            // `variance_unknown` is: adding an `ApplyDeclKnowledge` variant
+            // must be a compile error here rather than a silent answer.
+            switch (self.applyDeclKnowledge(a)) {
+                .unknown => break :blk false,
+                .local, .covariant, .imported => {},
+            }
+            var formal_variances: [max_tracked_alias_formals]FormalVariance = undefined;
+            const formal_variances_len = self.applyFormalVariances(a, &formal_variances);
+            for (self.cir.store.sliceTypeAnnos(a.args), 0..) |arg_idx, arg_index| {
+                const arg_polarity = if (formal_variances_len == null)
+                    polarity
+                else
+                    formal_variances[arg_index].compose(polarity);
+                if (self.annoOpensRow(arg_idx, arg_polarity)) break :blk true;
+            }
+            break :blk false;
+        },
+    };
+}
+
+fn anyAnnoOpensRow(
+    self: *const Self,
+    annos: CIR.TypeAnno.Span,
+    polarity: Polarity,
+) bool {
+    for (self.cir.store.sliceTypeAnnos(annos)) |anno_idx| {
+        if (self.annoOpensRow(anno_idx, polarity)) return true;
+    }
+    return false;
+}
+
+/// Whether instantiating the declaration a `.lookup` or `.apply` references
+/// resolves a polarity marker OPEN at this position, the third mint site
+/// `recordOpenedMarkerExts`.
+///
+/// An ALIAS declaration body mints a marker for every extensionless tag union
+/// it holds, and `polarityVarBehavior` resolves those by the referencing
+/// position's polarity, so the alias body is walked at this position's own
+/// polarity. A NOMINAL body has no use-site polarity and closes as written, a
+/// `.builtin` reference is built by `setBuiltinTypeContent` without
+/// instantiating anything, and a `.pending` reference is poisoned before it
+/// generates.
+///
+/// `.external` and `.external_identity` name a declaration whose CIR lives in
+/// another module, so this walk reads the answer that module's own `Check`
+/// published instead (`TypeDeclVariance.opensRowAt`, written by
+/// `recordTypeDeclVariances` from this same walk over the local declaration).
+/// A Builtin nominal such as `Str` answers NO from its record exactly as a
+/// local nominal does, so no blanket answer for imports is needed.
+/// `declOpensRow` for a declaration another module owns: its producer's
+/// published answer. Every alias and nominal declaration has a record, so a
+/// missing one means the reference does not name a type declaration.
+fn importedDeclOpensRow(self: *const Self, ref: ImportedDeclRef, polarity: Polarity) bool {
+    const record = self.importedTypeDeclVariance(ref) orelse return false;
+    return record.opensRowAt(polarity == .pos);
+}
+
+fn declOpensRow(
+    self: *const Self,
+    decl_base: CIR.TypeAnno.LocalOrExternal,
+    polarity: Polarity,
+) bool {
+    return switch (decl_base) {
+        .builtin, .pending => false,
+        .external => |ext| self.importedDeclOpensRow(.{ .external = ext }, polarity),
+        .external_identity => |ext| self.importedDeclOpensRow(.{ .external_identity = ext }, polarity),
+        // Only an ALIAS body carries polarity markers. A nominal body closes
+        // as written, and nothing else is a type declaration at all. Listed
+        // exhaustively rather than with an `else`, so a new statement kind is
+        // a compile error here instead of a silent NO from a walk whose whole
+        // job is to not answer NO wrongly.
+        .local => |local| switch (self.cir.store.getStatement(local.decl_idx)) {
+            // A finished alias is answered by its pre-pass record
+            // (`recordTypeDeclVariances`), the least fixpoint of this walk
+            // over its body.
+            .s_alias_decl => |alias| if (alias.anno == .placeholder)
+                polarity == .pos
+            else
+                self.localTypeDeclVariance(local.decl_idx).?.opensRowAt(polarity == .pos),
+            .s_nominal_decl,
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_where_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => false,
+        },
     };
 }
 
@@ -18703,6 +20970,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             ctx.polarityVarBehavior(),
                             polarity,
                             ctx.instantiationReach(),
+                            ctx.writtenResultRows(),
                             .none,
                         );
                         _ = try self.unify(anno_var, instantiated_var, env);
@@ -18758,28 +21026,33 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             // design.md "Result-Row Widening Adapter".
             // Exhaustive by construction: adding an `AdapterReach` variant is a
             // compile error here rather than a silent `false`.
-            const reach_admits_try_error_row = switch (ctx) {
+            const try_error_reach: ?GenTypeAnnoCtx.AnnotationGenCtx.AdapterReach = switch (ctx) {
                 .annotation => |anno_ctx| switch (anno_ctx.adapter_reach) {
                     // The signature's direct result is the only position whose
                     // `Try` the adapter re-tags.
-                    .result => true,
-                    // In practice a where-method signature is a function, so
+                    .result => .try_row,
+                    // A `Try` standing as a bare VALUE annotation's whole
+                    // type: its error row is the one row subsumption coerces
+                    // for a top-level value (design.md "Row Subsumption").
+                    // A where-method signature is a function in practice, so
                     // the `.@"fn"` arm re-aims `.signature` to `.result`
-                    // before any apply is reached; answering `false` here is
-                    // what the old `== .result` did either way. `.try_row`
-                    // reaches nothing below itself. `.nested` is out of reach.
-                    .signature, .try_row, .nested => false,
+                    // before any apply is reached, and a `.value_try_row`
+                    // row is generated as written there anyway.
+                    .signature => .value_try_row,
+                    // `.try_row` reaches nothing below itself. `.nested` is
+                    // out of reach.
+                    .try_row, .value_try_row, .nested => null,
                 },
-                .type_decl => false,
+                .type_decl => null,
             };
             // `applyTryErrorArgIndex`, not `annoApplyIsBuiltinTry`: the error
             // cell is found across transparent alias layers, the same ones
             // lowering crosses, so an alias whose FORMAL is the error row opens
             // exactly like a `Try` written directly.
             const try_error_arg_index = self.applyTryErrorArgIndex(a);
-            const try_error_row_reachable = try_error_arg_index != null and reach_admits_try_error_row;
+            const try_error_row_reachable = try_error_arg_index != null and try_error_reach != null;
             const nested_arg_ctx = ctx.withReach(.nested);
-            const try_error_arg_ctx = ctx.withReach(.try_row);
+            const try_error_arg_ctx = ctx.withReach(try_error_reach orelse .nested);
             const anno_args = self.cir.store.sliceTypeAnnos(a.args);
             var formal_variances: [max_tracked_alias_formals]FormalVariance = undefined;
             const formal_variances_len = self.applyFormalVariances(a, &formal_variances);
@@ -18789,9 +21062,15 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             // level in, and `Lib.Producer([A] -> Str)` would open the `[A]` it
             // must keep as written. Refusing to open at every depth is the
             // answer that stays conservative under descent.
+            //
+            // An imported declaration whose producer recorded its formals'
+            // variances is NOT unknown: the answer is the one the declaring
+            // module's own walk computed, so the floor drops and each argument
+            // is generated at the real composed polarity, exactly as the
+            // byte-identical local spelling generates it.
             const variance_unknown = switch (self.applyDeclKnowledge(a)) {
                 .unknown => true,
-                .local, .covariant => false,
+                .local, .covariant, .imported => false,
             };
             for (anno_args, 0..) |anno_arg, arg_index| {
                 const reached_arg_ctx = if (try_error_row_reachable and arg_index == try_error_arg_index.?)
@@ -18899,7 +21178,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     const decl_arg_vars, const decl_name = blk: {
                         if (decl_resolved == .alias) {
                             const decl_alias = decl_resolved.alias;
-                            break :blk .{ self.types.sliceAliasArgs(decl_alias), decl_alias.ident.ident_idx };
+                            break :blk .{ self.types.sliceAliasDeclaredArgs(decl_alias), decl_alias.ident.ident_idx };
                         } else if (decl_resolved == .structure and decl_resolved.structure == .nominal_type) {
                             const decl_nominal = decl_resolved.structure.nominal_type;
                             break :blk .{ self.types.sliceNominalArgs(decl_nominal), decl_nominal.ident.ident_idx };
@@ -18941,6 +21220,15 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
                         try self.rigid_var_substitutions.put(self.gpa, decl_arg_rigid.name, anno_arg_var);
                     }
+                    var twin_site: ?ResultRowTwinSite = if (decl_is_alias) self.resultRowTwinSite(
+                        decl_resolved.alias,
+                        ctx,
+                        polarity,
+                        anno_arg_vars,
+                        anno_args,
+                        if (try_error_row_reachable) try_error_arg_index.? else null,
+                    ) else null;
+                    var twin_build: ResultRowTwinBuild = undefined;
 
                     // Then instantiate the variable, substituting the rigid
                     // variables in the definition with the applied args from
@@ -18953,7 +21241,14 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         ctx.polarityVarBehavior(),
                         polarity,
                         ctx.instantiationReach(),
+                        ctx.writtenResultRows(),
+                        twin_blk: {
+                            const site = if (twin_site) |*site| site else break :twin_blk null;
+                            twin_build = .{ .check = self, .site = site, .opening = ctx.annotation.opening, .env = env };
+                            break :twin_blk &twin_build;
+                        },
                     );
+                    if (twin_site) |*site| try self.recordConsumedResultRowTwin(site, ctx);
                     if (decl_is_alias and !try self.validateAliasRows(instantiated_var, env, anno_region)) {
                         try self.markErroneous(anno_var);
                         return;
@@ -18970,7 +21265,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         const ext_arg_vars, const ext_name = blk: {
                             switch (ext_resolved) {
                                 .alias => |decl_alias| {
-                                    break :blk .{ self.types.sliceAliasArgs(decl_alias), decl_alias.ident.ident_idx };
+                                    break :blk .{ self.types.sliceAliasDeclaredArgs(decl_alias), decl_alias.ident.ident_idx };
                                 },
                                 .structure => |flat_type| {
                                     if (flat_type == .nominal_type) {
@@ -19025,6 +21320,15 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
                             try self.rigid_var_substitutions.put(self.gpa, decl_arg_rigid.name, anno_arg_var);
                         }
+                        var twin_site: ?ResultRowTwinSite = if (ext_is_alias) self.resultRowTwinSite(
+                            ext_resolved.alias,
+                            ctx,
+                            polarity,
+                            anno_arg_vars,
+                            anno_args,
+                            if (try_error_row_reachable) try_error_arg_index.? else null,
+                        ) else null;
+                        var twin_build: ResultRowTwinBuild = undefined;
 
                         // Then instantiate the variable, substituting the rigid
                         // variables in the definition with the applied args from
@@ -19037,7 +21341,14 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             ctx.polarityVarBehavior(),
                             polarity,
                             ctx.instantiationReach(),
+                            ctx.writtenResultRows(),
+                            twin_blk: {
+                                const site = if (twin_site) |*site| site else break :twin_blk null;
+                                twin_build = .{ .check = self, .site = site, .opening = ctx.annotation.opening, .env = env };
+                                break :twin_blk &twin_build;
+                            },
                         );
+                        if (twin_site) |*site| try self.recordConsumedResultRowTwin(site, ctx);
                         if (ext_is_alias and !try self.validateAliasRows(instantiated_var, env, anno_region)) {
                             try self.markErroneous(anno_var);
                             return;
@@ -19075,7 +21386,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     .signature => ctx.withReach(.result),
                     // A function nested inside a result row, inside a `Try`
                     // row, or anywhere else is out of the adapter's reach.
-                    .result, .try_row, .nested => ctx.withReach(.nested),
+                    .result, .try_row, .value_try_row, .nested => ctx.withReach(.nested),
                 },
                 // A declaration body has no use-site result position to reach;
                 // `withReach` is a no-op on `.type_decl` (see `withReach`).
@@ -19183,8 +21494,29 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 // Out of reach: generated as written, so a body use that widens
                 // it is an ordinary mismatch instead of a widening no lowering
                 // can express.
-                .nested => false,
+                .value_try_row, .nested => false,
             };
+            // The one implicitly opened row per signature that lowering can
+            // ADAPT instead of widening, and therefore the only row row
+            // subsumption coerces at (design.md "Row Subsumption").
+            // Read only for `.implicit_open`; a `.per_use` row already defers
+            // its whole open/closed decision through `deferred_open` above.
+            const result_row_site: CoercibleRow = if (!implicitly_open) .{} else CoercibleRow.forAnnotationReach(ctx.annotation.adapter_reach);
+            // A host-boundary annotation closes this row as written. When it
+            // stands at the adapter-reachable result row, that site is the
+            // producer answer row subsumption reads for a hosted function
+            // (`hostedResultRowCoercedSite`). Only a row the walk itself
+            // closes: an explicit extension (`..`, `..others`) is not closed,
+            // and `[]` is never opened.
+            if (output_opening == .as_written and tag_union.ext == null) {
+                const written_site: ResultRowSite = switch (ctx.annotation.adapter_reach) {
+                    .result => .direct,
+                    .try_row => .try_error_row,
+                    // No hosted definition is a value.
+                    .signature, .value_try_row, .nested => .none,
+                };
+                if (written_site != .none) try self.written_result_rows.append(self.gpa, written_site);
+            }
             const ext_var = inner_blk: {
                 if (tag_union.ext) |ext_anno_idx| {
                     if ((implicitly_open or deferred_open) and self.annoIsAnonymousOpenExt(ext_anno_idx)) {
@@ -19203,6 +21535,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             .explicit_ext_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(ext_anno_idx)),
                             .listed_tags = tags_range,
                             .union_var = anno_var,
+                            .result_row = result_row_site,
                         });
                         break :inner_blk open_ext_var;
                     }
@@ -19222,6 +21555,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         .region = anno_region,
                         .listed_tags = tags_range,
                         .union_var = anno_var,
+                        .result_row = result_row_site,
                     });
                     break :inner_blk open_ext_var;
                 }
@@ -21293,8 +23627,10 @@ fn beginExprCheckFrame(
 
     // Consume the binding-RHS flag: it applies only to this expression.
     frame.is_binding_rhs = self.checking_binding_rhs;
+    const is_top_level_binding_rhs = self.checking_top_level_binding_rhs;
     const binding_rhs_pattern = self.checking_binding_rhs_pattern;
     self.checking_binding_rhs = false;
+    self.checking_top_level_binding_rhs = false;
     self.checking_binding_rhs_pattern = null;
     if (frame.is_binding_rhs) {
         if (binding_rhs_pattern) |pattern_idx| {
@@ -21310,7 +23646,7 @@ fn beginExprCheckFrame(
     if (frame.suppress_group_member_generalize) self.suppress_generalize_expr = null;
 
     frame.should_generalize = !frame.suppress_group_member_generalize and
-        self.shouldGeneralize(expr, expected.annotation, frame.is_binding_rhs, frame.is_call_arg);
+        self.shouldGeneralize(expr, expected.annotation, frame.is_binding_rhs, frame.is_call_arg, is_top_level_binding_rhs);
     if (frame.should_generalize) self.active_scheme_root = expr_var_raw;
 
     if (frame.should_generalize) {
@@ -22377,10 +24713,21 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 self.markCurrentHoistRuntimeDependency();
             }
 
+            // Row subsumption: a definition that forwarded a closed value out
+            // through its annotated result row publishes that row closed, and
+            // every use re-opens its own copy of it (design.md "Deferred: Row
+            // Subsumption"). Read here, where the definition this lookup names
+            // is known.
+            const coerced_result_row: CoercibleRow = if (mb_processing_def) |processing_def|
+                coercedResultRowSite(self.cir, ModuleEnv.nodeIdxFrom(processing_def.def_idx))
+            else
+                .{};
+
             const resolved_pat = self.types.resolveVar(pat_var);
             if (resolved_pat.desc.rank == Rank.generalized or self.isBindingSchemeVar(pat_var)) {
                 const instantiated = try self.instantiateBindingVar(pat_var, env, .use_last_var, .{ .value_use = expr_idx });
-                _ = try self.unify(expr_var, instantiated, env);
+                const use_var = try self.reopenCoercedLookup(expr_idx, instantiated, coerced_result_row, env, expr_region);
+                _ = try self.unify(expr_var, use_var, env);
             } else {
                 // A fully checked top-level definition whose type is ground
                 // is copied at each use. Sharing its var would merge every
@@ -22392,10 +24739,18 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                     processing_def.status == .processed and try self.varIsGround(pat_var)
                 else
                     false;
-                const use_var = if (checked_ground_def)
+                const copied_var = if (checked_ground_def)
                     try self.instantiateVarOrphan(pat_var, env, env.rank(), .use_last_var)
                 else
                     pat_var;
+                // A coerced definition is ground—its result row was closed by
+                // its body—so this is the branch it arrives on, and the copy
+                // above is the per-use copy the re-open needs. Copying the
+                // spine is still what separates the row from the definition's:
+                // a forwarder's argument and result rows are ONE class even in
+                // a full copy, so writing through the extension would open the
+                // input row too (see `reopenCoercedResultRow`).
+                const use_var = try self.reopenCoercedLookup(expr_idx, copied_var, coerced_result_row, env, expr_region);
                 _ = try self.unify(expr_var, use_var, env);
                 if (mb_processing_def) |processing_def| {
                     try self.recordSharedSchemeUse(
@@ -22435,7 +24790,17 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                         .{ .explicit = expr_region },
                         .{ .value_use = expr_idx },
                     );
-                    _ = try self.unify(expr_var, ext_instantiated_var, env);
+                    // The producing module's own answer for its definition,
+                    // read here exactly as a local use reads it (design.md
+                    // "Row Subsumption").
+                    const ext_use_var = try self.reopenCoercedLookup(
+                        expr_idx,
+                        ext_instantiated_var,
+                        coercedResultRowSite(ext_ref.other_cir, ext_ref.other_cir_node_idx),
+                        env,
+                        expr_region,
+                    );
+                    _ = try self.unify(expr_var, ext_use_var, env);
                 }
             } else {
                 try self.markErroneous(expr_var);
@@ -24152,7 +26517,8 @@ fn exprDefinesMethod(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
 ///     annotated value (numeric literals use the separate defaulting path), never
 ///     a bare number or tag union. Restricted to binding-RHS position so bare
 ///     lookups in arbitrary subexpressions aren't generalized out from under their
-///     surrounding context.
+///     surrounding context. A BLOCK-LOCAL alias of a value (not a function) is
+///     not generalized: a local value is one runtime cell lowered at one type.
 ///   - **An annotated value binding** whose annotation introduces a free type var
 ///     (see `isGeneralizableValueBinding`). The rank push lets the generalizer
 ///     quantify exactly the generalizable vars—with none (e.g. a concrete
@@ -24163,26 +26529,112 @@ fn shouldGeneralize(
     annotation: ?CIR.Annotation.Idx,
     is_binding_rhs: bool,
     is_call_arg: bool,
+    is_top_level_binding_rhs: bool,
 ) bool {
     if (isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg) return true;
-    if (is_binding_rhs and (expr == .e_lookup_local or expr == .e_lookup_external)) return true;
-    return self.isGeneralizableValueBinding(annotation, is_binding_rhs);
+    if (is_binding_rhs and (expr == .e_lookup_local or expr == .e_lookup_external)) {
+        // A block-local alias generalizes only when it names a FUNCTION (a
+        // scheme alias whose uses instantiate the function). Any other local
+        // alias is a value, one runtime cell lowered at one type, so it cannot
+        // stand for the several instantiations a scheme allows, whether the
+        // referent's scheme quantifies a row (`made : [B(Str), D]`), an
+        // element (`empty : List(a)`), or anything else (design.md "Row
+        // Subsumption").
+        if (!is_top_level_binding_rhs and !self.lookupInstantiatesFunction(expr)) return false;
+        return true;
+    }
+    return self.isGeneralizableValueBinding(annotation, is_binding_rhs, is_top_level_binding_rhs);
+}
+
+/// Whether the type a lookup instantiates is a function. The type is the
+/// referent's own scheme: a local or top-level definition's pattern type, the
+/// predeclared annotation scheme of a top-level definition not yet checked,
+/// or an imported definition's type in its own module. A type that is still
+/// a variable is not a function.
+fn lookupInstantiatesFunction(self: *const Self, expr: CIR.Expr) bool {
+    if (expr == .e_lookup_local) {
+        const pattern = expr.e_lookup_local.pattern_idx;
+        const var_ = if (self.topLevelPattern(pattern)) |processing_def| switch (processing_def.status) {
+            .not_processed => self.predeclaredSchemeVar(processing_def.def_idx) orelse ModuleEnv.varFrom(pattern),
+            .processing, .processed => ModuleEnv.varFrom(pattern),
+        } else ModuleEnv.varFrom(pattern);
+        return storeVarIsFunction(self.types, var_);
+    }
+    if (expr == .e_lookup_external) {
+        const ext = expr.e_lookup_external;
+        // Canonicalization already reported an unresolved import.
+        const module_idx = self.cir.imports.getResolvedModule(ext.module_idx) orelse return false;
+        if (module_idx >= self.imported_modules.len) {
+            std.debug.panic("check invariant violated: a resolved import named a module outside the imported modules", .{});
+        }
+        const other = self.imported_modules[module_idx];
+        return storeVarIsFunction(&other.types, @enumFromInt(ext.target_node_idx));
+    }
+    return false;
+}
+
+fn storeVarIsFunction(store: *const types_mod.Store, var_: Var) bool {
+    var current = var_;
+    while (true) {
+        const resolved = store.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                current = store.getAliasBackingVar(alias);
+                continue;
+            },
+            .structure => |flat| return switch (flat) {
+                .fn_pure, .fn_effectful, .fn_unbound => true,
+                .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => false,
+            },
+            .err, .flex, .rigid, .field_presence => return false,
+        }
+    }
 }
 
 /// True when a value binding generalizes to its annotated scheme: it sits in
 /// binding-RHS position (only a binding's own right-hand side qualifies; a call
-/// argument never generalizes on its own) and has an annotation introducing a
-/// type variable. The polymorphic annotation is the opt-in, honored regardless
-/// of whether the RHS does work (an expansive definition pays per-specialization—
-/// the cost the author chose by writing the scheme).
+/// argument never generalizes on its own) and has an annotation that quantifies
+/// something. Two spellings do:
+///
+///   - The annotation WRITES a type variable (`mentions_type_var`), including
+///     the anonymous `..` of an explicitly opened row.
+///   - The annotation mints an IMPLICITLY opened extension
+///     (`annotationOpensValueRow`) and the binding is TOP-LEVEL: an
+///     extensionless tag union standing in an output position. The row the
+///     author did not close is the one polarity opens, and it is quantified
+///     for the same reason a written one is.
+///
+/// The second is why a value annotation has exactly ONE meaning again. Before
+/// it, such a row was a single weak variable shared by every use in the module
+/// and grounded to `[]` afterwards, which made the verdict depend on the SOURCE
+/// ORDER of independent uses: the first use to widen the row fixed it, and a
+/// later use at the annotated width was then reported as the error. Quantifying
+/// the row gives every use its own copy, so uses cannot see each other.
+///
+/// The second is restricted to top-level bindings, as is every generalized
+/// VALUE row: a block-local value is one runtime cell lowered at one type, so
+/// it cannot stand for several instantiations of a row. A local annotated
+/// value therefore keeps the inferred behaviour of an unannotated one, and a
+/// local alias of a value is monomorphic (`shouldGeneralize`). The one way
+/// left to write a generalized local row is an explicit type variable on a
+/// local value annotation (`x : [A, ..]`), which still reaches Monotype
+/// without binding-scheme metadata and panics "instantiation widened a closed
+/// tag union" when a use instantiates it wider; that pre-existing lowering gap
+/// is not widened here.
+///
+/// The annotation is the opt-in either way, honored regardless of whether the
+/// RHS does work (an expansive definition pays per-specialization—the cost the
+/// author chose by writing the scheme).
 fn isGeneralizableValueBinding(
     self: *const Self,
     annotation: ?CIR.Annotation.Idx,
     is_binding_rhs: bool,
+    is_top_level_binding_rhs: bool,
 ) bool {
     if (!is_binding_rhs) return false;
     const annotation_idx = annotation orelse return false;
-    return self.cir.store.getAnnotation(annotation_idx).mentions_type_var;
+    if (self.cir.store.getAnnotation(annotation_idx).mentions_type_var) return true;
+    return is_top_level_binding_rhs and self.annotationOpensValueRow(annotation_idx);
 }
 
 fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
@@ -24706,6 +27158,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     local_procedure_candidate_pushed = true;
                 }
                 self.checking_binding_rhs = true;
+                self.checking_top_level_binding_rhs = false;
                 self.checking_binding_rhs_pattern = decl_stmt.pattern;
                 // The frame's pattern var owns the scheme, so requirement
                 // candidates recorded while checking the RHS and at the
@@ -25167,7 +27620,7 @@ fn singleParameterWrapperPayload(self: *Self, wrapper_var: Var) ?Var {
     const resolved = self.types.resolveVar(wrapper_var);
     return switch (resolved.desc.content) {
         .alias => |alias| blk: {
-            const args = self.types.sliceAliasArgs(alias);
+            const args = self.types.sliceAliasDeclaredArgs(alias);
             if (args.len != 1) break :blk null;
             break :blk args[0];
         },
@@ -25220,230 +27673,6 @@ fn tryArgsFromVar(self: *Self, try_var: Var) ?TryArgs {
             .flex, .rigid, .field_presence, .err => return null,
         }
     }
-}
-
-/// Whether a `?` condition is a direct call of a hosted function—the only
-/// shape the hosted-try-question-widening rule (design.md "Hosted Try Question
-/// Widening") applies to. The callee is statically resolved from the call's
-/// function expression (the local or external lookup canonicalization
-/// produced); dispatch calls and value-carried functions are never direct
-/// hosted calls, so `?` on them gets no widening.
-fn tryConditionIsDirectHostedCall(self: *Self, cond_idx: CIR.Expr.Idx) bool {
-    const expr = self.cir.store.getExpr(cond_idx);
-    if (expr != .e_call) return false;
-    const call = expr.e_call;
-    const callable_def = self.hoistedCallableDefForExpr(self.cir, call.func) orelse return false;
-    const def = callable_def.module.store.getDef(callable_def.def);
-    return callable_def.module.store.getExpr(def.expr) == .e_hosted_lambda;
-}
-
-/// The hosted-try-question-widening rule (design.md "Hosted Try Question
-/// Widening"): `?` on a direct call of a hosted function widens the condition
-/// to a fresh `Try` at the enclosing annotated return's error row when every
-/// visible error in the callee's row is included in it. The redirect targets
-/// the fresh `Try`, so the hosted callee's declared closed row—the host
-/// ABI's shape—is what checking outputs for the callee itself. For every
-/// other callee, a closed error row meeting an open annotated row stays a
-/// type error (issue #9798's program is rejected by design); the caller gates
-/// on `tryConditionIsDirectHostedCall`.
-///
-/// This is a typing mechanism, not the host ABI's protection. What a hosted
-/// extern is emitted at is decided at the producer: Monotype lowering admits
-/// only the hosted declaration's own type at an extern boundary and stops the
-/// build otherwise (`requireHostedExternAtDeclaredAbi`,
-/// src/postcheck/monotype/lower.zig, and design.md "Host Symbol ABI"). Widening
-/// the condition here therefore changes which programs typecheck and which
-/// caller-side adapter lowering generates; it cannot change the boundary. Judge
-/// changes to this rewrite as type-semantics choices on that basis.
-fn widenTryConditionForExpectedReturn(
-    self: *Self,
-    cond_var: Var,
-    expected_return: Var,
-    env: *Env,
-    region: Region,
-) std.mem.Allocator.Error!void {
-    const actual_try = self.tryArgsFromVar(cond_var) orelse return;
-    const expected_try = self.tryArgsFromVar(expected_return) orelse return;
-
-    if (!try self.tryErrorRowNeedsUseSiteWidening(actual_try.err, expected_try.err)) {
-        return;
-    }
-
-    // Ordinary tag-union unification rejects closed-vs-open rigid rows; this
-    // use-site rewrite runs only after proving the callee's visible errors are
-    // included in the expected row.
-    const widened_try_var = try self.freshFromContent(
-        try self.mkTryContent(actual_try.ok, expected_try.err),
-        env,
-        region,
-    );
-    const cond_root = self.types.resolveVar(cond_var).var_;
-    if (cond_root != widened_try_var) {
-        try self.types.dangerousSetVarRedirect(.hosted_try_question_widening, cond_root, widened_try_var);
-    }
-}
-
-fn tryErrorRowNeedsUseSiteWidening(self: *Self, actual_err: Var, expected_err: Var) std.mem.Allocator.Error!bool {
-    // The shortcut below declines the rule when ordinary unification already
-    // relates the pair. That is sound only when taking it is observationally
-    // the same as applying the rule, and it is not when the relation is bought
-    // by GROUNDING the expected row's still-open extension: rolling the probe
-    // back and then performing that same binding for real publishes a CLOSED
-    // row from an annotation that reads open, so two definitions with
-    // byte-identical annotations stop being interchangeable for their callers
-    // (design.md "Polarity"). So when the expected row still ends open, the
-    // declared condition—every visible error in the callee's row is included
-    // in the expected row—decides on its own. Widening then targets the
-    // annotated row itself, which leaves the extension unbound and hands
-    // lowering the same adapter request an annotation listing strictly more
-    // tags already produces.
-    if (!self.tryErrorRowEndsOpen(expected_err) and
-        try self.probeCanUseAs(expected_err, actual_err))
-    {
-        return false;
-    }
-
-    var visited_actual = std.AutoHashMap(Var, void).init(self.gpa);
-    defer visited_actual.deinit();
-    return try self.actualTagRowIsIncludedInExpected(actual_err, expected_err, &visited_actual);
-}
-
-/// Whether an error row's extension chain still ends in an unbound extension.
-/// The expected row here is always an annotated return's error row
-/// (`expected_result` is set only for an annotated lambda), so an unbound tail
-/// is the annotation's implicitly opened extension (design.md "Polarity") and
-/// unifying a closed row into it would ground it rather than flow through it.
-/// A rigid tail (a written `..others`) and an already-closed row are both
-/// bound, so both read as not-open. This walks explicit row topology produced
-/// by checking; it inspects no source syntax.
-fn tryErrorRowEndsOpen(self: *Self, err_var: Var) bool {
-    var current = err_var;
-    var guard = types_mod.debug.IterationGuard.init("tryErrorRowEndsOpen");
-    while (true) {
-        guard.tick();
-        const resolved = self.types.resolveVar(current);
-        switch (resolved.desc.content) {
-            .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            .structure => |flat| switch (flat) {
-                .tag_union => |tag_union| current = tag_union.ext,
-                .empty_tag_union => return false,
-                .record,
-                .tuple,
-                .nominal_type,
-                .fn_pure,
-                .fn_effectful,
-                .fn_unbound,
-                .empty_record,
-                => return false,
-            },
-            .flex => return true,
-            .rigid, .field_presence, .err => return false,
-        }
-    }
-}
-
-fn probeCanUseAs(self: *Self, expected_var: Var, actual_var: Var) std.mem.Allocator.Error!bool {
-    var probe = try self.beginProbe(null);
-    defer probe.rollback();
-    return try self.probeUnifyWithoutRecordingProblems(expected_var, actual_var);
-}
-
-fn actualTagRowIsIncludedInExpected(
-    self: *Self,
-    actual_var: Var,
-    expected_var: Var,
-    visited_actual: *std.AutoHashMap(Var, void),
-) std.mem.Allocator.Error!bool {
-    const actual_resolved = self.types.resolveVar(actual_var);
-    if (visited_actual.contains(actual_resolved.var_)) return true;
-    try visited_actual.put(actual_resolved.var_, {});
-
-    switch (actual_resolved.desc.content) {
-        .alias => |alias| return try self.actualTagRowIsIncludedInExpected(
-            self.types.getAliasBackingVar(alias),
-            expected_var,
-            visited_actual,
-        ),
-        .structure => |flat| switch (flat) {
-            .empty_tag_union => return true,
-            .tag_union => |tag_union| {
-                const tags = self.types.getTagsSlice(tag_union.tags);
-                const names = tags.items(.name);
-                const args_ranges = tags.items(.args);
-                for (names, args_ranges) |name, args| {
-                    const actual_tag = types_mod.Tag{ .name = name, .args = args };
-                    if (!try self.expectedTagRowContainsTag(expected_var, actual_tag)) {
-                        return false;
-                    }
-                }
-                return try self.actualTagRowIsIncludedInExpected(tag_union.ext, expected_var, visited_actual);
-            },
-            .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return false,
-        },
-        .err => return true,
-        .flex, .rigid, .field_presence => return false,
-    }
-}
-
-fn expectedTagRowContainsTag(
-    self: *Self,
-    expected_var: Var,
-    actual_tag: types_mod.Tag,
-) std.mem.Allocator.Error!bool {
-    var visited_expected = std.AutoHashMap(Var, void).init(self.gpa);
-    defer visited_expected.deinit();
-
-    const expected_tag = try self.findVisibleTagInRow(expected_var, actual_tag.name, &visited_expected) orelse return false;
-    return try self.tagsCanUseSamePayloads(expected_tag, actual_tag);
-}
-
-fn findVisibleTagInRow(
-    self: *Self,
-    row_var: Var,
-    tag_name: Ident.Idx,
-    visited: *std.AutoHashMap(Var, void),
-) std.mem.Allocator.Error!?types_mod.Tag {
-    const row_resolved = self.types.resolveVar(row_var);
-    if (visited.contains(row_resolved.var_)) return null;
-    try visited.put(row_resolved.var_, {});
-
-    switch (row_resolved.desc.content) {
-        .alias => |alias| return try self.findVisibleTagInRow(
-            self.types.getAliasBackingVar(alias),
-            tag_name,
-            visited,
-        ),
-        .structure => |flat| switch (flat) {
-            .tag_union => |tag_union| {
-                const tags = self.types.getTagsSlice(tag_union.tags);
-                const names = tags.items(.name);
-                const args_ranges = tags.items(.args);
-                for (names, args_ranges) |name, args| {
-                    if (name.eql(tag_name)) {
-                        return types_mod.Tag{ .name = name, .args = args };
-                    }
-                }
-                return try self.findVisibleTagInRow(tag_union.ext, tag_name, visited);
-            },
-            .empty_tag_union => return null,
-            .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return null,
-        },
-        .err, .flex, .rigid, .field_presence => return null,
-    }
-}
-
-fn tagsCanUseSamePayloads(self: *Self, expected_tag: types_mod.Tag, actual_tag: types_mod.Tag) std.mem.Allocator.Error!bool {
-    if (expected_tag.args.len() != actual_tag.args.len()) return false;
-
-    var expected_args = self.types.iterVars(expected_tag.args);
-    var actual_args = self.types.iterVars(actual_tag.args);
-    while (expected_args.next()) |expected_arg| {
-        const actual_arg = actual_args.next().?;
-        if (!try self.probeCanUseAs(expected_arg, actual_arg)) {
-            return false;
-        }
-    }
-    return true;
 }
 
 // if-else //
@@ -26022,10 +28251,6 @@ fn checkMatchExpr(
         if (!try_result.isEstablished()) {
             has_invalid_try = true;
             had_type_error = true;
-        } else if (self.currentExpectedReturnResult()) |expected_return| {
-            if (self.tryConditionIsDirectHostedCall(match.cond)) {
-                try self.widenTryConditionForExpectedReturn(cond_var, expected_return, env, expr_region);
-            }
         }
     }
     if (!match.is_try_suffix and !match.skip_exhaustiveness) {
@@ -27981,7 +30206,18 @@ fn checkResolvedAssociatedTarget(
         region,
         .{ .value_use = expr_idx },
     );
-    _ = try self.unify(expr_var, target_var, env);
+    // Row subsumption: an associated item named through an alias of its
+    // owner is a use of that definition exactly like a local or external
+    // lookup of it, so it reads the producing module's coercion record the
+    // same way (design.md "Row Subsumption").
+    const use_var = try self.reopenCoercedLookup(
+        expr_idx,
+        target_var,
+        coercedResultRowSite(target_env, ModuleEnv.nodeIdxFrom(target_def_idx)),
+        env,
+        region,
+    );
+    _ = try self.unify(expr_var, use_var, env);
 }
 
 fn failAssociatedLookup(
@@ -28552,6 +30788,7 @@ const Probe = struct {
     accepted_nominal_constructor_backings_len: usize,
     dispatch_target_instantiations_len: usize,
     dispatch_derivations_len: usize,
+    structural_rewrite_constraints_len: usize,
     imported_schemes_len: usize,
 
     fn rollback(self: *Probe) void {
@@ -28616,6 +30853,7 @@ const Probe = struct {
         }
         self.check.probe_depth -= 1;
         self.check.shrinkDispatchDerivationsTo(self.dispatch_derivations_len);
+        self.check.structural_rewrite_constraints.shrinkRetainingCapacity(self.structural_rewrite_constraints_len);
         while (self.check.imported_schemes.items.len > self.imported_schemes_len) {
             const removed = self.check.imported_schemes.pop().?;
             self.check.discardImportedSchemeMetadata(removed.scheme_var);
@@ -28695,6 +30933,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .accepted_nominal_constructor_backings_len = accepted_nominal_constructor_backings_len,
         .dispatch_target_instantiations_len = dispatch_target_instantiations_len,
         .dispatch_derivations_len = dispatch_derivations_len,
+        .structural_rewrite_constraints_len = self.structural_rewrite_constraints.items.len,
         .imported_schemes_len = imported_schemes_len,
         .savepoint = savepoint,
     };
@@ -28785,6 +31024,283 @@ fn beginCommitProbe(self: *Self, env: *Env) std.mem.Allocator.Error!CommitProbe 
         .snapshots_mark = self.snapshots.mark(),
         .probe = try self.beginProbe(env),
     };
+}
+
+/// Test harness for the hidden-argument invariant (design.md "Hidden Alias
+/// Arguments"): whether `instance_var`, an instance of a declaration of this
+/// module, is its declaration's body under ALL of its arguments. The
+/// declaration's backing is re-instantiated with every template argument,
+/// declared and hidden, mapped to the instance's argument at the same index,
+/// and the copy, rolled back afterwards, is compared with the instance's
+/// backing. A template variable that is no argument would reach the rigid
+/// substitution below with no entry for it, which asserts. The comparison is
+/// structural with identical leaves (`typesStructurallyIdentical`), not a
+/// unification, which would accept a backing more specific than its body
+/// under its arguments. Returns null for an alias this module did not
+/// declare: that declaration's variables live in the declaring module's
+/// store, whose own run of this harness covers its instances there.
+pub fn aliasInstanceIsFaithful(self: *Self, instance_var: Var) Allocator.Error!?bool {
+    const instance = switch (self.types.resolveVar(instance_var).desc.content) {
+        .alias => |alias| alias,
+        .flex, .rigid, .structure, .field_presence, .err => return null,
+    };
+    if (instance.origin_module != self.cir.selfModuleIdentity()) return null;
+    const decl_stmt = instance.source_decl.toOptional() orelse return null;
+    const decl = switch (self.types.resolveVar(ModuleEnv.varFrom(@as(CIR.Statement.Idx, @enumFromInt(decl_stmt)))).desc.content) {
+        .alias => |alias| alias,
+        .flex, .rigid, .structure, .field_presence, .err => return null,
+    };
+    const template_args = self.types.sliceAliasArgs(decl);
+    const instance_args = self.types.sliceAliasArgs(instance);
+    if (template_args.len != instance_args.len or decl.declared_arity != instance.declared_arity) return false;
+
+    var savepoint = try self.types.createSavepoint();
+    defer self.types.rollbackToSavepoint(&savepoint);
+    self.var_map.clearRetainingCapacity();
+    for (template_args, instance_args) |template_arg, instance_arg| {
+        try self.var_map.put(self.types.resolveVar(template_arg).var_, instance_arg);
+    }
+    var no_rigids: std.AutoHashMapUnmanaged(Ident.Idx, Var) = .empty;
+    var instantiator = Instantiator{
+        .store = self.types,
+        .idents = self.cir.getIdentStoreConst(),
+        .var_map = &self.var_map,
+        .current_rank = .outermost,
+        .rigid_behavior = .{ .substitute_rigids = &no_rigids },
+        .rank_behavior = .ignore_rank,
+        .polarity_var_ident = self.cir.idents.polarity_var,
+        .anonymous_ext_ident = self.cir.idents.open_ext,
+        .polarity_var_behavior = .preserve,
+    };
+    const copy = try instantiator.instantiateVar(self.types.getAliasBackingVar(decl));
+    self.var_map.clearRetainingCapacity();
+    return try self.typesStructurallyIdentical(copy, self.types.getAliasBackingVar(instance));
+}
+
+/// Test harness half of `aliasInstanceIsFaithful`: whether `a` and `b` are
+/// the same type STRUCTURALLY, with every leaf (flex, rigid, row tail) the
+/// same variable on both sides. Unification would accept a `b` more specific
+/// than `a`; this does not. Aliases are read through their backing (each
+/// instance is checked on its own). Tag unions and records are compared down
+/// their whole extension chains, since a merge can flatten one side's chain;
+/// a record field's presence is compared too: two solved kinds must be
+/// equal (a field with no presence variable is required), and two unsolved
+/// presence variables are leaves like any other. A function's effect
+/// dependencies are compared pairwise with its arguments and return.
+fn typesStructurallyIdentical(self: *Self, a: Var, b: Var) Allocator.Error!bool {
+    var pairs: std.ArrayListUnmanaged([2]Var) = .empty;
+    defer pairs.deinit(self.gpa);
+    var visited: std.AutoHashMapUnmanaged([2]Var, void) = .empty;
+    defer visited.deinit(self.gpa);
+    var a_tags: std.ArrayListUnmanaged(types_mod.Tag) = .empty;
+    defer a_tags.deinit(self.gpa);
+    var b_tags: std.ArrayListUnmanaged(types_mod.Tag) = .empty;
+    defer b_tags.deinit(self.gpa);
+    var a_fields: std.ArrayListUnmanaged(types_mod.RecordField) = .empty;
+    defer a_fields.deinit(self.gpa);
+    var b_fields: std.ArrayListUnmanaged(types_mod.RecordField) = .empty;
+    defer b_fields.deinit(self.gpa);
+    // Which right-hand row entries a left-hand one already matched: each
+    // matches once, so a row listing a label twice is not the row listing
+    // two labels.
+    var b_consumed: std.ArrayListUnmanaged(bool) = .empty;
+    defer b_consumed.deinit(self.gpa);
+    try pairs.append(self.gpa, .{ a, b });
+    while (pairs.pop()) |pair| {
+        const left = self.types.resolveVar(self.aliasBackingThrough(pair[0]));
+        const right = self.types.resolveVar(self.aliasBackingThrough(pair[1]));
+        if (left.var_ == right.var_) continue;
+        const key = [2]Var{ left.var_, right.var_ };
+        if ((try visited.getOrPut(self.gpa, key)).found_existing) continue;
+        const left_flat = switch (left.desc.content) {
+            .structure => |flat| flat,
+            // Distinct leaves: the two sides name different variables.
+            .flex, .rigid, .field_presence, .err, .alias => return false,
+        };
+        const right_flat = switch (right.desc.content) {
+            .structure => |flat| flat,
+            .flex, .rigid, .field_presence, .err, .alias => return false,
+        };
+        switch (left_flat) {
+            .tag_union, .empty_tag_union => {
+                switch (right_flat) {
+                    .tag_union, .empty_tag_union => {},
+                    .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record => return false,
+                }
+                a_tags.clearRetainingCapacity();
+                b_tags.clearRetainingCapacity();
+                const left_tail = try self.collectRowTags(left.var_, &a_tags);
+                const right_tail = try self.collectRowTags(right.var_, &b_tags);
+                if (a_tags.items.len != b_tags.items.len) return false;
+                b_consumed.clearRetainingCapacity();
+                try b_consumed.appendNTimes(self.gpa, false, b_tags.items.len);
+                for (a_tags.items) |left_tag| {
+                    const right_index = for (b_tags.items, b_consumed.items, 0..) |candidate, consumed, index| {
+                        if (!consumed and candidate.name.eql(left_tag.name)) break index;
+                    } else return false;
+                    b_consumed.items[right_index] = true;
+                    const right_tag = b_tags.items[right_index];
+                    const left_args = self.types.sliceVars(left_tag.args);
+                    const right_args = self.types.sliceVars(right_tag.args);
+                    if (left_args.len != right_args.len) return false;
+                    for (left_args, right_args) |x, y| try pairs.append(self.gpa, .{ x, y });
+                }
+                try pairs.append(self.gpa, .{ left_tail, right_tail });
+            },
+            .fn_pure, .fn_effectful, .fn_unbound => |left_func| {
+                const right_func = switch (right_flat) {
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| func,
+                    .tag_union, .empty_tag_union, .record, .tuple, .nominal_type, .empty_record => return false,
+                };
+                if (std.meta.activeTag(left_flat) != std.meta.activeTag(right_flat)) return false;
+                const left_args = self.types.sliceVars(left_func.args);
+                const right_args = self.types.sliceVars(right_func.args);
+                if (left_args.len != right_args.len) return false;
+                for (left_args, right_args) |x, y| try pairs.append(self.gpa, .{ x, y });
+                try pairs.append(self.gpa, .{ left_func.ret, right_func.ret });
+                const left_deps = self.types.sliceVars(left_func.effect_deps);
+                const right_deps = self.types.sliceVars(right_func.effect_deps);
+                if (left_deps.len != right_deps.len) return false;
+                for (left_deps, right_deps) |x, y| try pairs.append(self.gpa, .{ x, y });
+            },
+            .nominal_type => |left_nominal| {
+                const right_nominal = switch (right_flat) {
+                    .nominal_type => |nominal| nominal,
+                    .tag_union, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .empty_record => return false,
+                };
+                if (!left_nominal.ident.ident_idx.eql(right_nominal.ident.ident_idx) or left_nominal.origin_module != right_nominal.origin_module) return false;
+                const left_args = self.types.sliceNominalArgs(left_nominal);
+                const right_args = self.types.sliceNominalArgs(right_nominal);
+                if (left_args.len != right_args.len) return false;
+                for (left_args, right_args) |x, y| try pairs.append(self.gpa, .{ x, y });
+            },
+            .tuple => |left_tuple| {
+                const right_tuple = switch (right_flat) {
+                    .tuple => |tuple| tuple,
+                    .tag_union, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound, .record, .nominal_type, .empty_record => return false,
+                };
+                const left_elems = self.types.sliceVars(left_tuple.elems);
+                const right_elems = self.types.sliceVars(right_tuple.elems);
+                if (left_elems.len != right_elems.len) return false;
+                for (left_elems, right_elems) |x, y| try pairs.append(self.gpa, .{ x, y });
+            },
+            .record, .empty_record => {
+                switch (right_flat) {
+                    .record, .empty_record => {},
+                    .tag_union, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound, .tuple, .nominal_type => return false,
+                }
+                a_fields.clearRetainingCapacity();
+                b_fields.clearRetainingCapacity();
+                const left_tail = try self.collectRecordFields(left.var_, &a_fields);
+                const right_tail = try self.collectRecordFields(right.var_, &b_fields);
+                if (a_fields.items.len != b_fields.items.len) return false;
+                b_consumed.clearRetainingCapacity();
+                try b_consumed.appendNTimes(self.gpa, false, b_fields.items.len);
+                for (a_fields.items) |left_field| {
+                    const right_index = for (b_fields.items, b_consumed.items, 0..) |candidate, consumed, index| {
+                        if (!consumed and candidate.name.eql(left_field.name)) break index;
+                    } else return false;
+                    b_consumed.items[right_index] = true;
+                    const right_field = b_fields.items[right_index];
+                    try pairs.append(self.gpa, .{ left_field.presence.typeVar(), right_field.presence.typeVar() });
+                    switch (self.solvedFieldPresence(left_field.presence)) {
+                        .kind => |left_kind| switch (self.solvedFieldPresence(right_field.presence)) {
+                            .kind => |right_kind| if (!fieldPresenceEql(left_kind, right_kind)) return false,
+                            .unsolved => return false,
+                        },
+                        .unsolved => |left_var| switch (self.solvedFieldPresence(right_field.presence)) {
+                            .kind => return false,
+                            .unsolved => |right_var| try pairs.append(self.gpa, .{ left_var, right_var }),
+                        },
+                    }
+                }
+                try pairs.append(self.gpa, .{ left_tail, right_tail });
+            },
+        }
+    }
+    return true;
+}
+
+/// `var_` read through alias backings.
+fn aliasBackingThrough(self: *Self, var_: Var) Var {
+    var current = var_;
+    while (true) {
+        switch (self.types.resolveVar(current).desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .flex, .rigid, .structure, .field_presence, .err => return current,
+        }
+    }
+}
+
+/// A record field's presence as the harness compares it: a solved kind (a
+/// field with no presence variable is required), or the unsolved variable
+/// carrying it.
+const HarnessFieldPresence = union(enum) {
+    kind: types_mod.FieldPresence,
+    unsolved: Var,
+};
+
+fn solvedFieldPresence(self: *Self, presence: types_mod.RecordField.Presence) HarnessFieldPresence {
+    const presence_var = presence.presenceVar() orelse return .{ .kind = .required };
+    const resolved = self.types.resolveVar(presence_var);
+    return switch (resolved.desc.content) {
+        .field_presence => |kind| .{ .kind = kind },
+        .flex, .rigid, .structure, .alias, .err => .{ .unsolved = resolved.var_ },
+    };
+}
+
+/// Whether two solved field presences are the same kind.
+fn fieldPresenceEql(a: types_mod.FieldPresence, b: types_mod.FieldPresence) bool {
+    return switch (a) {
+        .required => b == .required,
+        .optional => b == .optional,
+        .defaulted => |a_default| switch (b) {
+            .defaulted => |b_default| a_default.eql(b_default),
+            .required, .optional => false,
+        },
+    };
+}
+
+/// Append every field the record `record` lists, down its extension chain
+/// through alias links, to `out`; return the chain's tail.
+fn collectRecordFields(self: *Self, record: Var, out: *std.ArrayListUnmanaged(types_mod.RecordField)) Allocator.Error!Var {
+    var current = record;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .record => |fields_record| {
+                    const fields = self.types.getRecordFieldsSlice(fields_record.fields);
+                    for (fields.items(.name), fields.items(.presence)) |name, presence| try out.append(self.gpa, .{ .name = name, .presence = presence });
+                    current = fields_record.ext;
+                },
+                .empty_record, .tag_union, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound, .tuple, .nominal_type => return resolved.var_,
+            },
+            .flex, .rigid, .field_presence, .err => return resolved.var_,
+        }
+    }
+}
+
+/// Append every tag the row `row` lists, down its extension chain through
+/// alias links, to `out`; return the chain's tail.
+fn collectRowTags(self: *Self, row: Var, out: *std.ArrayListUnmanaged(types_mod.Tag)) Allocator.Error!Var {
+    var current = row;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| {
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.name), tags.items(.args)) |name, args| try out.append(self.gpa, .{ .name = name, .args = args });
+                    current = tag_union.ext;
+                },
+                .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record => return resolved.var_,
+            },
+            .flex, .rigid, .field_presence, .err => return resolved.var_,
+        }
+    }
 }
 
 fn probeUnifyWithoutRecordingProblems(
@@ -29261,6 +31777,7 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     var evidence = DefaultWalkEvidence{
         .omitted_defaults_by_expr = .init(self.gpa),
         .next_omitted_default = try self.gpa.alloc(?u32, self.cir.record_omitted_defaults.items.items.len),
+        .join = &self.dispatch_join_scratch,
     };
     defer evidence.deinit(self.gpa);
     for (self.cir.record_omitted_defaults.items.items, 0..) |omitted, index| {
@@ -29283,59 +31800,7 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
         }
     }
 
-    // Scheme-use evidence indexes for the dispatch joins. A dispatch fired
-    // inside an INSTANTIATED scheme carries the instantiation copy's
-    // constraint var, never the var written at the body's dispatch site
-    // (generalization copies it per use), so var equality alone can only
-    // join monomorphic sites. The recorded scheme-use pairs are the exact
-    // (scheme var -> fresh copy) linkage:
-    //  - value_use / nested_function_use records key by their LOCAL
-    //    instantiating node, so any walked expression that instantiated a
-    //    scheme (a generic def lookup, a foreign helper lookup) seeds the
-    //    fresh copies of that scheme's constrained vars;
-    //  - dispatch_target records key by the discharged constraint's raw fn
-    //    var ("unique per constraint instantiation"), chaining a followed
-    //    target's OWN interior dispatches without node ambiguity (a
-    //    dispatch_target record's node_idx may be a foreign module's CIR
-    //    index and is never compared against local nodes here).
-    for (self.cir.scheme_uses.items.items, 0..) |record, record_index| {
-        const slot: ModuleEnv.SchemeUseRecord.Slot = @enumFromInt(record.slot_kind);
-        switch (slot) {
-            .value_use, .nested_function_use => {
-                const entry = try evidence.node_to_scheme_uses.getOrPut(self.gpa, record.node_idx);
-                if (!entry.found_existing) entry.value_ptr.* = .empty;
-                try entry.value_ptr.append(self.gpa, @intCast(record_index));
-            },
-            .dispatch_target => {
-                // Keyed by the discharged constraint's raw fn var, which is
-                // unique per constraint instantiation (see above). A clash
-                // would silently drop a dispatch chain link and let a real
-                // cycle through, so it must fail loudly, in release too.
-                const entry = try evidence.dispatch_scheme_uses.getOrPut(self.gpa, record.slot_data);
-                if (entry.found_existing) {
-                    std.debug.panic(
-                        "type checker invariant violated: two dispatch_target scheme-use records share constraint fn var {d}",
-                        .{record.slot_data},
-                    );
-                }
-                entry.value_ptr.* = @intCast(record_index);
-            },
-            // A shared use copies no vars (it shares the in-flight
-            // definition's), so it has no fresh pairs to seed; the walk
-            // reaches the shared body through the ordinary reference edge.
-            .shared_value_use, .recursive_dispatch_target, .recursive_reference => {},
-            // A where-method use carries a complete structural copy map, but
-            // only to relate callable identities during checked-artifact construction.
-            // It has no child dispatch requirements and is not an edge in the default walk.
-            .where_method_use => {},
-        }
-    }
-    for (self.dispatch_target_instantiations.items, 0..) |instantiation, index| {
-        const resolved = self.types.resolveVar(instantiation.constraint_fn_var).var_;
-        const entry = try evidence.instantiations_by_var.getOrPut(self.gpa, resolved);
-        if (!entry.found_existing) entry.value_ptr.* = .empty;
-        try entry.value_ptr.append(self.gpa, @intCast(index));
-    }
+    _ = try self.fillDispatchJoinIndex();
 
     for (self.pending_default_checks.items) |pending| {
         // An erroring default already reported (an explicitly recorded
@@ -29587,6 +32052,31 @@ const DefaultWalkEvidence = struct {
     omitted_defaults_by_expr: collections.DenseMap(CIR.Expr.Idx, u32),
     next_omitted_default: []?u32,
     pattern_to_def_expr: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
+    join: *const DispatchJoinIndex,
+
+    fn deinit(evidence: *DefaultWalkEvidence, gpa: std.mem.Allocator) void {
+        evidence.omitted_defaults_by_expr.deinit();
+        gpa.free(evidence.next_omitted_default);
+        evidence.pattern_to_def_expr.deinit(gpa);
+    }
+};
+
+/// Scheme-use evidence indexes joining an expression to the dispatch targets
+/// selected for it. A dispatch fired inside an INSTANTIATED scheme carries the
+/// instantiation copy's constraint var, never the var written at the body's
+/// dispatch site (generalization copies it per use), so var equality alone can
+/// only join monomorphic sites. The recorded scheme-use pairs are the exact
+/// (scheme var -> fresh copy) linkage:
+///  - value_use / nested_function_use records key by their LOCAL
+///    instantiating node, so any expression that instantiated a scheme (a
+///    generic def lookup, a foreign helper lookup) seeds the fresh copies of
+///    that scheme's constrained vars;
+///  - dispatch_target records key by the discharged constraint's raw fn var
+///    ("unique per constraint instantiation"), chaining a followed target's
+///    OWN interior dispatches without node ambiguity (a dispatch_target
+///    record's node_idx may be a foreign module's CIR index and is never
+///    compared against local nodes).
+const DispatchJoinIndex = struct {
     /// Local instantiating node -> scheme-use record indices
     /// (`value_use`/`nested_function_use` slots only).
     node_to_scheme_uses: std.AutoHashMapUnmanaged(u32, std.ArrayListUnmanaged(u32)) = .empty,
@@ -29595,20 +32085,108 @@ const DefaultWalkEvidence = struct {
     dispatch_scheme_uses: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     /// Resolved constraint fn var -> `dispatch_target_instantiations` indices.
     instantiations_by_var: std.AutoHashMapUnmanaged(Var, std.ArrayListUnmanaged(u32)) = .empty,
+    /// Resolved parent constraint fn var -> the child constraint fn vars
+    /// derived under it (`dispatch_derivations`), e.g. a structural
+    /// comparison's component obligations.
+    children_by_parent: std.AutoHashMapUnmanaged(Var, std.ArrayListUnmanaged(Var)) = .empty,
+    /// Structurally rewritten node -> the constraints its rewrites discharged
+    /// (`structural_rewrite_constraints`).
+    structural_rewrites_by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, std.ArrayListUnmanaged(Var)) = .empty,
 
-    fn deinit(evidence: *DefaultWalkEvidence, gpa: std.mem.Allocator) void {
-        evidence.omitted_defaults_by_expr.deinit();
-        gpa.free(evidence.next_omitted_default);
-        evidence.pattern_to_def_expr.deinit(gpa);
-        var node_lists = evidence.node_to_scheme_uses.valueIterator();
+    /// Empty every index, keeping the outer tables' capacity.
+    fn clear(index: *DispatchJoinIndex, gpa: std.mem.Allocator) void {
+        var node_lists = index.node_to_scheme_uses.valueIterator();
         while (node_lists.next()) |list| list.deinit(gpa);
-        evidence.node_to_scheme_uses.deinit(gpa);
-        evidence.dispatch_scheme_uses.deinit(gpa);
-        var inst_lists = evidence.instantiations_by_var.valueIterator();
+        index.node_to_scheme_uses.clearRetainingCapacity();
+        index.dispatch_scheme_uses.clearRetainingCapacity();
+        var inst_lists = index.instantiations_by_var.valueIterator();
         while (inst_lists.next()) |list| list.deinit(gpa);
-        evidence.instantiations_by_var.deinit(gpa);
+        index.instantiations_by_var.clearRetainingCapacity();
+        var child_lists = index.children_by_parent.valueIterator();
+        while (child_lists.next()) |list| list.deinit(gpa);
+        index.children_by_parent.clearRetainingCapacity();
+        var rewrite_lists = index.structural_rewrites_by_expr.valueIterator();
+        while (rewrite_lists.next()) |list| list.deinit(gpa);
+        index.structural_rewrites_by_expr.clearRetainingCapacity();
+    }
+
+    fn deinit(index: *DispatchJoinIndex, gpa: std.mem.Allocator) void {
+        var child_lists = index.children_by_parent.valueIterator();
+        while (child_lists.next()) |list| list.deinit(gpa);
+        index.children_by_parent.deinit(gpa);
+        var rewrite_lists = index.structural_rewrites_by_expr.valueIterator();
+        while (rewrite_lists.next()) |list| list.deinit(gpa);
+        index.structural_rewrites_by_expr.deinit(gpa);
+        var node_lists = index.node_to_scheme_uses.valueIterator();
+        while (node_lists.next()) |list| list.deinit(gpa);
+        index.node_to_scheme_uses.deinit(gpa);
+        index.dispatch_scheme_uses.deinit(gpa);
+        var inst_lists = index.instantiations_by_var.valueIterator();
+        while (inst_lists.next()) |list| list.deinit(gpa);
+        index.instantiations_by_var.deinit(gpa);
     }
 };
+
+/// Fill `dispatch_join_scratch` from the current settled state, reusing its
+/// storage.
+fn fillDispatchJoinIndex(self: *Self) Allocator.Error!*const DispatchJoinIndex {
+    const index = &self.dispatch_join_scratch;
+    index.clear(self.gpa);
+    try self.buildDispatchJoinIndex(index);
+    return index;
+}
+
+fn buildDispatchJoinIndex(self: *Self, index: *DispatchJoinIndex) Allocator.Error!void {
+    for (self.cir.scheme_uses.items.items, 0..) |record, record_index| {
+        const slot: ModuleEnv.SchemeUseRecord.Slot = @enumFromInt(record.slot_kind);
+        switch (slot) {
+            .value_use, .nested_function_use => {
+                const entry = try index.node_to_scheme_uses.getOrPut(self.gpa, record.node_idx);
+                if (!entry.found_existing) entry.value_ptr.* = .empty;
+                try entry.value_ptr.append(self.gpa, @intCast(record_index));
+            },
+            .dispatch_target => {
+                // Keyed by the discharged constraint's raw fn var, which is
+                // unique per constraint instantiation (`DispatchJoinIndex`). A clash
+                // would silently drop a dispatch chain link and let a real
+                // cycle through, so it must fail loudly, in release too.
+                const entry = try index.dispatch_scheme_uses.getOrPut(self.gpa, record.slot_data);
+                if (entry.found_existing) {
+                    std.debug.panic(
+                        "type checker invariant violated: two dispatch_target scheme-use records share constraint fn var {d}",
+                        .{record.slot_data},
+                    );
+                }
+                entry.value_ptr.* = @intCast(record_index);
+            },
+            // A shared use copies no vars (it shares the in-flight
+            // definition's), so it has no fresh pairs to seed; the walk
+            // reaches the shared body through the ordinary reference edge.
+            .shared_value_use, .recursive_dispatch_target, .recursive_reference => {},
+            // A where-method use carries a complete structural copy map, but
+            // only to relate callable identities during checked-artifact construction.
+            // It has no child dispatch requirements and is not an edge in the default walk.
+            .where_method_use => {},
+        }
+    }
+    for (self.dispatch_target_instantiations.items, 0..) |instantiation, instantiation_index| {
+        const resolved = self.types.resolveVar(instantiation.constraint_fn_var).var_;
+        const entry = try index.instantiations_by_var.getOrPut(self.gpa, resolved);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(self.gpa, @intCast(instantiation_index));
+    }
+    for (self.dispatch_derivations.items) |derivation| {
+        const resolved_parent = self.types.resolveVar(derivation.parent_fn_var).var_;
+        const entry = try index.children_by_parent.getOrPut(self.gpa, resolved_parent);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(self.gpa, derivation.child_fn_var);
+    }
+    for (self.structural_rewrite_constraints.items) |rewrite| {
+        const entry = try index.structural_rewrites_by_expr.getOrPut(self.gpa, rewrite.expr);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(self.gpa, rewrite.constraint_fn_var);
+    }
+}
 
 /// Whether materializing `root` transitively reaches a construction omitting
 /// the field that carries `root` as its own default. The walk descends every
@@ -29683,7 +32261,7 @@ fn defaultMaterializationIsRecursive(
             const resolved_seed = self.types.resolveVar(seed_var).var_;
             const seen_seed = try visited_seed_vars.getOrPut(self.gpa, resolved_seed);
             if (seen_seed.found_existing) continue;
-            const inst_indices = evidence.instantiations_by_var.get(resolved_seed) orelse continue;
+            const inst_indices = evidence.join.instantiations_by_var.get(resolved_seed) orelse continue;
             for (inst_indices.items) |inst_index| {
                 const seen_inst = try visited_instantiations.getOrPut(self.gpa, inst_index);
                 if (seen_inst.found_existing) continue;
@@ -29693,7 +32271,7 @@ fn defaultMaterializationIsRecursive(
                     // call, so its function body walks.
                     try invoked_work.append(self.gpa, self.cir.store.getDef(instantiation.target_binding.def_idx).expr);
                 }
-                if (evidence.dispatch_scheme_uses.get(@intFromEnum(instantiation.constraint_fn_var))) |record_index| {
+                if (evidence.join.dispatch_scheme_uses.get(@intFromEnum(instantiation.constraint_fn_var))) |record_index| {
                     const record = self.cir.scheme_uses.items.items[record_index];
                     const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
                     for (pairs) |pair| {
@@ -29830,7 +32408,7 @@ fn defaultMaterializationIsRecursive(
         // This is how a dispatch performed INSIDE an instantiated scheme
         // body—local or foreign—reaches its stamped target: the body-side
         // dispatch node carries the pristine scheme's var, never the copy.
-        if (evidence.node_to_scheme_uses.get(@intFromEnum(expr_idx))) |record_indices| {
+        if (evidence.join.node_to_scheme_uses.get(@intFromEnum(expr_idx))) |record_indices| {
             for (record_indices.items) |record_index| {
                 const record = self.cir.scheme_uses.items.items[record_index];
                 const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
@@ -33126,11 +35704,6 @@ fn pushReturnConstraintFrame(
     });
 }
 
-fn currentExpectedReturnResult(self: *const Self) ?Var {
-    if (self.return_constraint_frames.items.len == 0) return null;
-    return self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1].expected_result;
-}
-
 fn expectedReturnResultFor(self: *const Self, lambda_idx: CIR.Expr.Idx) ?Var {
     std.debug.assert(self.return_constraint_frames.items.len > 0);
     const frame = self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1];
@@ -34585,13 +37158,15 @@ fn dispatchEmbedCoupleGrade(
     const small_content = small.desc.content;
     const big_content = big.desc.content;
 
+    // A pair of one alias is graded by backing and declared arguments
+    // together; a hidden argument is a variable of the backing already.
     if (small_content == .alias and big_content == .alias and
         dispatchSameAliasIdentity(small_content.alias, big_content.alias))
     {
         const small_alias = small_content.alias;
         const big_alias = big_content.alias;
-        const small_args = self.types.sliceAliasArgs(small_alias);
-        const big_args = self.types.sliceAliasArgs(big_alias);
+        const small_args = self.types.sliceAliasDeclaredArgs(small_alias);
+        const big_args = self.types.sliceAliasDeclaredArgs(big_alias);
         if (small_args.len != big_args.len) return .none;
         var strict = false;
         switch (try self.dispatchReceiverEmbedGrade(
@@ -34864,7 +37439,7 @@ fn dispatchEmbedDivesIntoChild(
         .flex, .rigid, .field_presence, .err => return false,
         .alias => |alias| {
             if (try self.dispatchEmbedsInto(small_var, self.types.getAliasBackingVar(alias))) return true;
-            for (self.types.sliceAliasArgs(alias)) |arg| {
+            for (self.types.sliceAliasDeclaredArgs(alias)) |arg| {
                 if (try self.dispatchEmbedsInto(small_var, arg)) return true;
             }
             return false;
@@ -35028,7 +37603,7 @@ fn dispatchReceiverSizeInner(
         .flex, .rigid, .field_presence, .err => {},
         .alias => |alias| {
             try self.dispatchReceiverSizeInner(active, self.types.getAliasBackingVar(alias), result);
-            for (self.types.sliceAliasArgs(alias)) |arg| {
+            for (self.types.sliceAliasDeclaredArgs(alias)) |arg| {
                 try self.dispatchReceiverSizeInner(active, arg, result);
             }
         },
@@ -35162,10 +37737,12 @@ fn instantiateDispatchTargetMethodVar(
         break :blk expr_var_for_method;
     } else if (method_lookup.is_this_module) blk: {
         const local_method_type_var = predeclared_scheme_for_method orelse method_type_var;
-        break :blk try self.instantiateBindingVar(local_method_type_var, env, .use_last_var, evidence);
+        const instantiated = try self.instantiateBindingVar(local_method_type_var, env, .use_last_var, evidence);
+        break :blk try self.reopenCoercedDispatchTarget(instantiated, method_lookup, env, region);
     } else blk: {
         const imported_scheme = try self.importedMethodScheme(method_lookup);
-        break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = region }, evidence);
+        const instantiated = try self.instantiateVar(imported_scheme, env, .{ .explicit = region }, evidence);
+        break :blk try self.reopenCoercedDispatchTarget(instantiated, method_lookup, env, region);
     };
     if (predeclared_annotation) |annotation_idx| {
         try self.recordPredeclaredDispatchUse(
@@ -35217,6 +37794,28 @@ fn instantiateDispatchTargetMethodVar(
     });
     self.dispatch_target_instantiation_by_fn_var.putAssumeCapacityNoClobber(constraint.fn_var, raw_index);
     return method_var;
+}
+
+/// Row subsumption at a static-dispatch use: the selected target is a use of
+/// its definition exactly like a lookup of it, so it reads the producing
+/// module's coercion record for that definition and re-opens its own copy of
+/// the result row (design.md "Row Subsumption"). A target whose definition is
+/// still in flight has no record yet, so its use is left as instantiated, as
+/// a lookup's is. A target that reuses an in-flight cycle var performs no
+/// instantiation and is never passed here.
+fn reopenCoercedDispatchTarget(
+    self: *Self,
+    method_var: Var,
+    method_lookup: StaticDispatchMethodBinding,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    return (try self.reopenCoercedResultRow(
+        method_var,
+        coercedResultRowSite(method_lookup.env, ModuleEnv.nodeIdxFrom(method_lookup.binding.def_idx)),
+        env,
+        region,
+    )) orelse method_var;
 }
 
 /// Resolve one selected dispatch target. Revisiting an edge is the common
@@ -37049,7 +39648,7 @@ fn varViolatesHostBoundaryRuleInternal(
     return switch (resolved.desc.content) {
         .structure => |flat_type| try self.flatTypeViolatesHostBoundaryRule(flat_type, visited, rule),
         .alias => |alias| blk: {
-            if (try self.varsViolateHostBoundaryRule(self.types.sliceAliasArgs(alias), visited, rule)) break :blk true;
+            if (try self.varsViolateHostBoundaryRule(self.types.sliceAliasDeclaredArgs(alias), visited, rule)) break :blk true;
             break :blk try self.varViolatesHostBoundaryRuleInternal(self.types.getAliasBackingVar(alias), visited, rule);
         },
         .flex, .rigid, .err, .field_presence => unreachable,
@@ -37150,7 +39749,7 @@ fn recordExtIsClosedForHostBoundary(
 
         switch (resolved.desc.content) {
             .alias => |alias| {
-                if (try self.varsViolateHostBoundaryRule(self.types.sliceAliasArgs(alias), visited, .closed_rows)) return false;
+                if (try self.varsViolateHostBoundaryRule(self.types.sliceAliasDeclaredArgs(alias), visited, .closed_rows)) return false;
                 current = self.types.getAliasBackingVar(alias);
             },
             .structure => |flat_type| switch (flat_type) {
@@ -37189,7 +39788,7 @@ fn tagUnionExtIsClosedForHostBoundary(
 
         switch (resolved.desc.content) {
             .alias => |alias| {
-                if (try self.varsViolateHostBoundaryRule(self.types.sliceAliasArgs(alias), visited, .closed_rows)) return false;
+                if (try self.varsViolateHostBoundaryRule(self.types.sliceAliasDeclaredArgs(alias), visited, .closed_rows)) return false;
                 current = self.types.getAliasBackingVar(alias);
             },
             .structure => |flat_type| switch (flat_type) {
@@ -37520,6 +40119,10 @@ fn mkDerivedComponentConstraint(
     };
     try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+    // The component's obligation belongs to the parent comparison: record the
+    // edge so a consumer that reached the parent reaches the component's
+    // selected target too.
+    try self.recordDispatchDerivations(constraint_range, parent_constraint.fn_var);
 
     const constrained_var = try self.freshFromContent(
         .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
@@ -40401,7 +43004,7 @@ fn analyzeDerivedMap(
             nominal = named;
         },
         .alias => |alias| {
-            const alias_args = try self.gpa.dupe(Var, self.types.sliceAliasArgs(alias));
+            const alias_args = try self.gpa.dupe(Var, self.types.sliceAliasDeclaredArgs(alias));
             defer self.gpa.free(alias_args);
             if (!try self.declaredMapArgsAreEligible(alias_args, env, region)) return null;
             backing_var = self.types.getAliasBackingVar(alias);
@@ -40638,7 +43241,9 @@ fn satisfyDerivedIsEqConstraint(
     _ = try self.unify(try self.freshBool(env, region), resolved_func.ret, env);
     if (!self.rewriteDerivedIsEqMethodCallAsStructuralEq(constraint)) {
         try self.markStaticDispatchRejected(constraint);
+        return;
     }
+    try self.recordStructuralRewriteConstraint(constraint);
 }
 
 /// Satisfy a derived `to_hash` constraint for an anonymous structural type.
@@ -40685,7 +43290,18 @@ fn satisfyDerivedToHashConstraint(
     _ = try self.unify(hasher_arg, ret, env);
     if (!self.rewriteDerivedMethodCallAsStructuralHash(constraint)) {
         try self.markStaticDispatchRejected(constraint);
+        return;
     }
+    try self.recordStructuralRewriteConstraint(constraint);
+}
+
+/// Record the constraint a discharge rewrote its node into structural
+/// equality or hashing for (`structural_rewrite_constraints`).
+fn recordStructuralRewriteConstraint(self: *Self, constraint: StaticDispatchConstraint) Allocator.Error!void {
+    const expr_idx = constraintIntroExpr(constraint) orelse return;
+    const expr = self.cir.store.getExpr(expr_idx);
+    if (expr != .e_structural_eq and expr != .e_structural_hash) return;
+    try self.structural_rewrite_constraints.append(self.gpa, .{ .expr = expr_idx, .constraint_fn_var = constraint.fn_var });
 }
 
 fn satisfyImplicitParserConstraint(

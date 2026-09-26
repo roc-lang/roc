@@ -663,3 +663,201 @@ test "instantiate - annotation tag closure authority belongs to the definition" 
     try std.testing.expect(faithful_copy != original);
     try std.testing.expect(env.types.resolveVar(faithful_copy).desc.flags.annotation_tag_ext);
 }
+
+/// A generalized zero-argument alias `Base : [Other]` whose union's extension
+/// is the declaration's polarity marker (`types.polarity_var_text`), carried
+/// as its one hidden argument, the spine slot (design.md "Hidden Alias
+/// Arguments").
+fn mkMarkerAlias(env: *TestEnv, name: []const u8) std.mem.Allocator.Error!Var {
+    const marker = try env.types.freshFromContentWithRank(try env.mkRigidVar(types_mod.polarity_var_text), .generalized);
+    const other = try env.idents.insert(env.gpa, .for_text("Other"));
+    const tags = try env.types.appendTags(&[_]Tag{.{ .name = other, .args = try env.types.appendVars(&[_]Var{}) }});
+    const backing = try env.types.freshFromContentWithRank(.{ .structure = .{ .tag_union = .{ .tags = tags, .ext = marker } } }, .generalized);
+    return try env.types.freshFromContentWithRank(try mkAliasWithHidden(env, name, backing, &[_]Var{}, &[_]Var{marker}, .marker), .generalized);
+}
+
+fn mkAliasWithHidden(
+    env: *TestEnv,
+    name: []const u8,
+    backing: Var,
+    declared: []const Var,
+    hidden: []const Var,
+    spine: types_mod.AliasSpine,
+) std.mem.Allocator.Error!Content {
+    var args: [8]Var = undefined;
+    @memcpy(args[0..declared.len], declared);
+    @memcpy(args[declared.len..][0..hidden.len], hidden);
+    return try env.types.mkAliasWithSourceDeclAndBuiltinOrigin(
+        .{ .ident_idx = try env.idents.insert(env.gpa, .for_text(name)) },
+        backing,
+        args[0 .. declared.len + hidden.len],
+        base.ModuleIdentity.Idx.NONE,
+        null,
+        false,
+        declared.len,
+        spine,
+    );
+}
+
+fn instantiateWithMarkers(
+    env: *TestEnv,
+    var_: Var,
+    behavior: Instantiator.PolarityVarBehavior,
+    polarity: types_mod.Polarity,
+) std.mem.Allocator.Error!Var {
+    var instantiator = Instantiator{
+        .store = &env.types,
+        .idents = &env.idents,
+        .var_map = &env.var_map,
+        .rigid_behavior = .fresh_flex,
+        .current_rank = .outermost,
+        .polarity_var_ident = try env.idents.insert(env.gpa, .for_text(types_mod.polarity_var_text)),
+        .polarity_var_behavior = behavior,
+        .current_polarity = polarity,
+        .current_reach = .result,
+    };
+    env.var_map.clearRetainingCapacity();
+    return try instantiator.instantiateVar(var_);
+}
+
+/// The ext var of the tag union `var_` resolves to.
+fn tagUnionExt(env: *TestEnv, var_: Var) Var {
+    return env.types.resolveVar(var_).desc.content.structure.tag_union.ext;
+}
+
+test "instantiate - a hidden marker slot takes its backing position's copy whatever the marker resolves to" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const original = try mkMarkerAlias(&env, "Base");
+    const behaviors = [_]struct { Instantiator.PolarityVarBehavior, types_mod.Polarity }{
+        .{ .resolve_by_polarity, .pos },
+        .{ .resolve_by_polarity, .neg },
+        .{ .close, .pos },
+        .{ .preserve, .pos },
+        .{ .defer_open, .pos },
+    };
+    for (behaviors) |case| {
+        const copy = try instantiateWithMarkers(&env, original, case[0], case[1]);
+        const alias = env.types.resolveVar(copy).desc.content.alias;
+        try std.testing.expectEqual(@as(usize, 0), env.types.sliceAliasDeclaredArgs(alias).len);
+        const hidden = env.types.aliasHiddenArgs(alias);
+        try std.testing.expectEqual(@as(usize, 1), hidden.len);
+        try std.testing.expectEqual(types_mod.AliasSpine.Kind.marker, alias.spine.kind);
+        const ext = tagUnionExt(&env, env.types.getAliasBackingVar(alias));
+        try std.testing.expectEqual(env.types.resolveVar(ext).var_, env.types.resolveVar(hidden[0]).var_);
+    }
+}
+
+test "instantiate - a nested alias's lifted marker slot is the same var at both layers" {
+    // `Errs : Base` lists `Base`'s marker as its own hidden argument.
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const inner = try mkMarkerAlias(&env, "Base");
+    const marker = env.types.aliasHiddenArgs(env.types.resolveVar(inner).desc.content.alias)[0];
+    const outer = try env.types.freshFromContentWithRank(try mkAliasWithHidden(&env, "Errs", inner, &[_]Var{}, &[_]Var{marker}, .marker), .generalized);
+    const copy = try instantiateWithMarkers(&env, outer, .resolve_by_polarity, .pos);
+    const outer_alias = env.types.resolveVar(copy).desc.content.alias;
+    const inner_alias = env.types.resolveVar(env.types.getAliasBackingVar(outer_alias)).desc.content.alias;
+    const ext = tagUnionExt(&env, env.types.getAliasBackingVar(inner_alias));
+    try std.testing.expectEqual(env.types.resolveVar(ext).var_, env.types.resolveVar(env.types.aliasHiddenArgs(outer_alias)[0]).var_);
+    try std.testing.expectEqual(env.types.resolveVar(ext).var_, env.types.resolveVar(env.types.aliasHiddenArgs(inner_alias)[0]).var_);
+    // Resolved open at a positive result position: a fresh flex.
+    try std.testing.expect(env.types.resolveVar(ext).desc.content == .flex);
+}
+
+const TwinBuild = struct {
+    twin: Var,
+    builds: u32 = 0,
+
+    fn build(ctx: *anyopaque) std.mem.Allocator.Error!Var {
+        const self: *TwinBuild = @ptrCast(@alignCast(ctx));
+        self.builds += 1;
+        return self.twin;
+    }
+};
+
+test "instantiate - Id(a; a+): an ordinary use shares one var, a result-row twin splits the hidden formal" {
+    // `Id(a) : a` is `Id(a; a⁺) : a⁺`: the body's one occurrence is the
+    // hidden formal, a rigid named like `a`.
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const a = try env.types.freshFromContentWithRank(try env.mkRigidVar("a"), .generalized);
+    const a_hidden = try env.types.freshFromContentWithRank(try env.mkRigidVar("a"), .generalized);
+    const decl = try env.types.freshFromContentWithRank(try mkAliasWithHidden(&env, "Id", a_hidden, &[_]Var{a}, &[_]Var{a_hidden}, try types_mod.AliasSpine.formalChecked(.formal, 0)), .generalized);
+    const arg = try env.types.freshFromContentWithRank(.{ .structure = .empty_tag_union }, .outermost);
+    var subs = std.AutoHashMapUnmanaged(Ident.Idx, Var){};
+    defer subs.deinit(gpa);
+    try subs.put(gpa, env.types.resolveVar(a).desc.content.rigid.name, arg);
+
+    // Ordinary reference: both substitute by name to the one argument.
+    {
+        var instantiator = Instantiator{
+            .store = &env.types,
+            .idents = &env.idents,
+            .var_map = &env.var_map,
+            .rigid_behavior = .{ .substitute_rigids = &subs },
+            .current_rank = .outermost,
+        };
+        env.var_map.clearRetainingCapacity();
+        const copy = try instantiator.instantiateVar(decl);
+        const alias = env.types.resolveVar(copy).desc.content.alias;
+        const args = env.types.sliceAliasArgs(alias);
+        try std.testing.expectEqual(arg, args[0]);
+        try std.testing.expectEqual(arg, args[1]);
+        try std.testing.expectEqual(arg, env.types.getAliasBackingVar(alias));
+    }
+
+    // Standing on the result row: only the hidden formal takes the twin.
+    {
+        const twin_var = try env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, .outermost);
+        var twin = Instantiator.ResultRowTwin{ .slot = env.types.resolveVar(a_hidden).var_ };
+        var twin_build = TwinBuild{ .twin = twin_var };
+        var instantiator = Instantiator{
+            .store = &env.types,
+            .idents = &env.idents,
+            .var_map = &env.var_map,
+            .rigid_behavior = .{ .substitute_rigids = &subs },
+            .current_rank = .outermost,
+            .current_reach = .result,
+            .current_polarity = .pos,
+            .result_row_twin = &twin,
+            .result_row_twin_builder = .{ .ctx = &twin_build, .build = TwinBuild.build },
+        };
+        env.var_map.clearRetainingCapacity();
+        const copy = try instantiator.instantiateVar(decl);
+        const alias = env.types.resolveVar(copy).desc.content.alias;
+        const args = env.types.sliceAliasArgs(alias);
+        try std.testing.expectEqual(arg, args[0]);
+        try std.testing.expectEqual(twin_var, args[1]);
+        try std.testing.expectEqual(twin_var, env.types.getAliasBackingVar(alias));
+        try std.testing.expectEqual(@as(u32, 1), twin_build.builds);
+        try std.testing.expectEqual(Instantiator.AdapterReach.result, twin.consumed_at.?);
+    }
+
+    // Off the result row (a negative position): no twin.
+    {
+        var twin = Instantiator.ResultRowTwin{ .slot = env.types.resolveVar(a_hidden).var_ };
+        var twin_build = TwinBuild{ .twin = arg };
+        var instantiator = Instantiator{
+            .store = &env.types,
+            .idents = &env.idents,
+            .var_map = &env.var_map,
+            .rigid_behavior = .{ .substitute_rigids = &subs },
+            .current_rank = .outermost,
+            .current_reach = .result,
+            .current_polarity = .neg,
+            .result_row_twin = &twin,
+            .result_row_twin_builder = .{ .ctx = &twin_build, .build = TwinBuild.build },
+        };
+        env.var_map.clearRetainingCapacity();
+        _ = try instantiator.instantiateVar(decl);
+        try std.testing.expectEqual(@as(u32, 0), twin_build.builds);
+        try std.testing.expect(twin.consumed_at == null);
+    }
+}

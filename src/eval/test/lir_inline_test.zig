@@ -8935,6 +8935,1091 @@ fn checkedGeneratedFnCount(program: *const MonoAst.Program) usize {
     return count;
 }
 
+/// Monotype functions specializing the template the program's widening
+/// adapters adapt, other than the adapters themselves: the declared-row
+/// specializations the adapters call. Every adapter in the program must adapt
+/// one and the same template.
+fn adaptedTemplateSpecializationCount(program: *const MonoAst.Program) usize {
+    var adapted: ?@TypeOf(program.view().fns[0].source.fn_def.checked_generated) = null;
+    for (program.view().fns) |function| {
+        switch (function.source.fn_def) {
+            .checked_generated => |template| {
+                if (adapted) |known| {
+                    if (!std.meta.eql(known, template)) @panic("widening adapters adapted more than one template");
+                }
+                adapted = template;
+            },
+            .local_template, .imported_template, .nested, .local_hosted, .imported_hosted, .parser_runtime, .encoder_for_runtime => {},
+        }
+    }
+    const template = adapted orelse return 0;
+    var count: usize = 0;
+    for (program.view().fns) |function| {
+        switch (function.source.fn_def) {
+            .local_template, .imported_template => |candidate| {
+                if (std.meta.eql(candidate, template)) count += 1;
+            },
+            .checked_generated, .nested, .local_hosted, .imported_hosted, .parser_runtime, .encoder_for_runtime => {},
+        }
+    }
+    return count;
+}
+
+test "row subsumption coerced definition is reached through a generated adapter" {
+    const allocator = std.testing.allocator;
+    // The narrowest witness for row subsumption (design.md "Deferred: Row
+    // Subsumption"). `id` FORWARDS a closed value—its parameter—out through an
+    // implicitly opened result row, so it publishes an open row a caller may
+    // widen, and `wider` does. The published type says nothing about which of
+    // the two specialization strategies is correct here, so the checker's
+    // recorded coercion is what decides: the impl stays specialized at its own
+    // declared row and is reached through a generated adapter that re-tags.
+    // Running the program proves neither—it answers "A" whether the body was
+    // adapted or specialized wide—so the adapter count is the only witness.
+    const coerced =
+        \\id : [A, B] -> [A, B]
+        \\id = |x| x
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| id(x)
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\expect show(wider(A)) == "A"
+        \\
+        \\main = 0
+    ;
+    var coerced_lowered = try lowerMonotypeModuleWithOptions(allocator, coerced, .{
+        .root_selection = .test_expects,
+    });
+    defer coerced_lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&coerced_lowered.mono));
+
+    // The first control: the same program with nothing widened. `id` is still
+    // coerced, so this also pins that the coercion alone mints nothing.
+    const exact =
+        \\id : [A, B] -> [A, B]
+        \\id = |x| x
+        \\
+        \\same : [A, B] -> [A, B]
+        \\same = |x| id(x)
+        \\
+        \\show : [A, B] -> Str
+        \\show = |v| match v { A => "A", B => "B" }
+        \\
+        \\expect show(same(A)) == "A"
+        \\
+        \\main = 0
+    ;
+    var exact_lowered = try lowerMonotypeModuleWithOptions(allocator, exact, .{
+        .root_selection = .test_expects,
+    });
+    defer exact_lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&exact_lowered.mono));
+
+    // The second control, and the point of the whole design: the same
+    // signature with a CONSTRUCTING body, widened exactly as above. That body
+    // can produce the caller's wider row, so its template is specialized wide
+    // and no adapter is owed. The two programs differ only in how the body was
+    // written, they publish the same type, and they are served by opposite
+    // strategies—which is why the fact has to be recorded rather than derived.
+    const constructing =
+        \\id : [A, B] -> [A, B]
+        \\id = |_| A
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| id(x)
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\expect show(wider(A)) == "A"
+        \\
+        \\main = 0
+    ;
+    var constructing_lowered = try lowerMonotypeModuleWithOptions(allocator, constructing, .{
+        .root_selection = .test_expects,
+    });
+    defer constructing_lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&constructing_lowered.mono));
+}
+
+/// Lower `source`, require exactly `expected_adapters` generated adapters, then
+/// run it and require `main` to be `True`. The adapter count proves which
+/// strategy served the widened use; running proves the re-tag is right, which
+/// the count alone cannot (a misordered injection still counts as one adapter).
+fn expectRowSubsumptionProgram(source: []const u8, expected_adapters: usize) TestError!void {
+    const allocator = std.testing.allocator;
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+    try std.testing.expectEqual(expected_adapters, checkedGeneratedFnCount(&lowered.mono));
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
+}
+
+test "row subsumption coerces a forwarded Try error row through a re-tagging adapter" {
+    // The `Try` error-row cell (`ResultRowSite.try_error_row`). `Gone` sorts
+    // before `NotFound`, so the declared row numbers `NotFound` 0 and the
+    // requested row numbers it 1: a missing or misordered re-tag reports
+    // `Gone` where `fwd` forwarded `NotFound`.
+    try expectRowSubsumptionProgram(
+        \\fwd : Try(Str, [NotFound]) -> Try(Str, [NotFound])
+        \\fwd = |t| t
+        \\
+        \\wider : Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])
+        \\wider = |t| fwd(t)
+        \\
+        \\show : Try(Str, [Gone, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(NotFound) => "NotFound" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Err(NotFound))) == "NotFound" and show(wider(Ok("x"))) == "Ok(x)"
+    , 1);
+}
+
+test "row subsumption coerces a forwarded row spelled through an alias" {
+    // The alias spelling of the direct result row. `Extra` sorts between `Err`
+    // and `Ok`, so a wrong re-tag shows up as a wrong discriminant.
+    try expectRowSubsumptionProgram(
+        \\Status : [Ok(Str), Err(Str)]
+        \\
+        \\fwd : Status -> Status
+        \\fwd = |s| s
+        \\
+        \\wider : Status -> [Ok(Str), Err(Str), Extra]
+        \\wider = |s| fwd(s)
+        \\
+        \\show : [Ok(Str), Err(Str), Extra] -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Ok("a"))) == "Ok(a)" and show(wider(Err("b"))) == "Err(b)"
+    , 1);
+}
+
+test "row subsumption coerces a forwarded Try error row spelled through an alias" {
+    try expectRowSubsumptionProgram(
+        \\IoResult(a) : Try(a, [NotFound])
+        \\
+        \\fwd : IoResult(Str) -> IoResult(Str)
+        \\fwd = |t| t
+        \\
+        \\wider : IoResult(Str) -> Try(Str, [Gone, NotFound])
+        \\wider = |t| fwd(t)
+        \\
+        \\show : Try(Str, [Gone, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(NotFound) => "NotFound" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Err(NotFound))) == "NotFound" and show(wider(Ok("x"))) == "Ok(x)"
+    , 1);
+}
+
+test "row subsumption coerces the result occurrence of a parameterised function alias" {
+    // `Fwd(e)` puts `e` in its input AND its result. The result occurrence is
+    // its own row (the instantiator's result-row twin), so the widened use is
+    // served by one adapter exactly as the inline spelling is. `Gone` sorts
+    // before `NotFound`, so a missing re-tag reports the wrong tag.
+    try expectRowSubsumptionProgram(
+        \\Fwd(e) : Try(Str, e) -> Try(Str, e)
+        \\
+        \\fwd : Fwd([NotFound])
+        \\fwd = |t| t
+        \\
+        \\wider : Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])
+        \\wider = |t| fwd(t)
+        \\
+        \\show : Try(Str, [Gone, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(NotFound) => "NotFound" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Err(NotFound))) == "NotFound" and show(wider(Ok("x"))) == "Ok(x)"
+    , 1);
+}
+
+test "row subsumption coerces an alias argument standing on the result row of a function alias" {
+    // `Res([E])` in `Fwd`'s return: the alias backing decides the argument
+    // row's reach, so the error row is the adapter-reachable one.
+    try expectRowSubsumptionProgram(
+        \\Res(e) : Try(Str, e)
+        \\
+        \\Fwd : Res([E]) -> Res([E])
+        \\
+        \\fwd : Fwd
+        \\fwd = |t| t
+        \\
+        \\wider : Try(Str, [E]) -> Try(Str, [D, E])
+        \\wider = |t| fwd(t)
+        \\
+        \\show : Try(Str, [D, E]) -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(D) => "D", Err(E) => "E" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Err(E))) == "E" and show(wider(Ok("x"))) == "Ok(x)"
+    , 1);
+}
+
+test "row subsumption serves a method call to a coerced forwarder" {
+    // A static-dispatch use and a qualified use of the same coerced method
+    // both widen the row; both are served by the one adapter at that row.
+    try expectRowSubsumptionProgram(
+        \\Holder := [Holder].{
+        \\    fwd : Holder, [A, C] -> [A, C]
+        \\    fwd = |_, x| x
+        \\}
+        \\
+        \\by_method : Holder, [A, C] -> [A, B, C]
+        \\by_method = |h, x| h.fwd(x)
+        \\
+        \\by_name : Holder, [A, C] -> [A, B, C]
+        \\by_name = |h, x| Holder.fwd(h, x)
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\main : Bool
+        \\main = {
+        \\    h : Holder
+        \\    h = Holder
+        \\    show(by_method(h, C)) == "C" and show(by_name(h, C)) == "C" and show(by_method(h, A)) == "A"
+        \\}
+    , 1);
+}
+
+test "row subsumption serves a widened use inside the forwarder's recursive group" {
+    // `wider` and `fwd` form one recursive group, so `wider`'s use of `fwd`
+    // instantiates the predeclared annotation. `fwd`'s body still forwards,
+    // so its row is coerced and the widened call is served by an adapter.
+    try expectRowSubsumptionProgram(
+        \\fwd : [A, C], U64 -> [A, C]
+        \\fwd = |x, n| if n == 0 x else {
+        \\    _ = wider(x, n - 1)
+        \\    x
+        \\}
+        \\
+        \\wider : [A, C], U64 -> [A, B, C]
+        \\wider = |x, n| fwd(x, n)
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\main : Bool
+        \\main = show(wider(C, 2)) == "C" and show(wider(A, 0)) == "A"
+    , 1);
+}
+
+test "row subsumption re-tags a coerced row whose extension chain has an alias link" {
+    // `Errs`'s row continues through the alias `Base`, so the coerced row's
+    // extension chain has an alias link. `Aborted` sorts first, so every
+    // declared discriminant shifts in the widened row.
+    try expectRowSubsumptionProgram(
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\fwd : Try(U64, Errs) -> Try(U64, Errs)
+        \\fwd = |t| t
+        \\
+        \\wider : Try(U64, Errs) -> Try(U64, [Aborted, HostErr(U64), Other])
+        \\wider = |t| fwd(t)
+        \\
+        \\show : Try(U64, [Aborted, HostErr(U64), Other]) -> Str
+        \\show = |v| match v { Ok(_) => "Ok", Err(Aborted) => "Aborted", Err(HostErr(_)) => "HostErr", Err(Other) => "Other" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Err(Other))) == "Other" and show(wider(Err(HostErr(1)))) == "HostErr"
+    , 1);
+    try expectRowSubsumptionProgram(
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\fwd : Errs -> Errs
+        \\fwd = |t| t
+        \\
+        \\wider : Errs -> [Aborted, HostErr(U64), Other]
+        \\wider = |t| fwd(t)
+        \\
+        \\show : [Aborted, HostErr(U64), Other] -> Str
+        \\show = |v| match v { Aborted => "Aborted", HostErr(_) => "HostErr", Other => "Other" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Other)) == "Other" and show(wider(HostErr(1))) == "HostErr"
+    , 1);
+}
+
+test "row subsumption re-tags a function alias argument whose row continues through an alias link" {
+    // The argument `Errs` reaches `Fwd`'s result occurrence as a twin copied
+    // down its alias link `Base`. `Aborted` sorts first, so every declared
+    // discriminant shifts in the widened row.
+    try expectRowSubsumptionProgram(
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Errs : Wrap(Base)
+        \\
+        \\Fwd(e) : e -> e
+        \\
+        \\fwd : Fwd(Errs)
+        \\fwd = |t| t
+        \\
+        \\wider : Errs -> [Aborted, HostErr(U64), Other]
+        \\wider = |t| fwd(t)
+        \\
+        \\show : [Aborted, HostErr(U64), Other] -> Str
+        \\show = |v| match v { Aborted => "Aborted", HostErr(_) => "HostErr", Other => "Other" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Other)) == "Other" and show(wider(HostErr(1))) == "HostErr"
+    , 1);
+}
+
+test "row subsumption - an opened alias application widens into a wider application of its alias" {
+    // `mk`'s result is a twin copied through the alias link `Wrap`, which
+    // keeps its layer with the twin at its spine slot. It meets
+    // `Wrap([Aborted, Other])` through that argument (design.md "Hidden Alias
+    // Arguments"), as the inline spelling `[Aborted, HostErr(U64), Other]`
+    // does.
+    try expectRowSubsumptionProgram(
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\Mk(e) : Str -> e
+        \\
+        \\mk : Mk(Wrap([Other]))
+        \\mk = |_| Other
+        \\
+        \\pick : Bool -> Wrap([Aborted, Other])
+        \\pick = |b| if b mk("") else Aborted
+        \\
+        \\show : Wrap([Aborted, Other]) -> Str
+        \\show = |v| match v { Aborted => "Aborted", HostErr(_) => "HostErr", Other => "Other" }
+        \\
+        \\main : Bool
+        \\main = show(pick(Bool.True)) == "Other" and show(pick(Bool.False)) == "Aborted"
+    , 0);
+}
+
+test "row subsumption - a re-opened alias application widens into a wider application of its alias" {
+    // The use's re-opened result keeps its alias layers, each with its spine
+    // slot re-pointed at the re-opened row, and meets the wider application
+    // of the same alias through that argument.
+    try expectRowSubsumptionProgram(
+        \\Base : [Other]
+        \\
+        \\Wrap(ext) : [HostErr(U64), ..ext]
+        \\
+        \\fwd : Wrap(Base) -> Wrap(Base)
+        \\fwd = |t| t
+        \\
+        \\wider : Wrap(Base) -> Wrap([Aborted, Other])
+        \\wider = |t| fwd(t)
+        \\
+        \\show : Wrap([Aborted, Other]) -> Str
+        \\show = |v| match v { Aborted => "Aborted", HostErr(_) => "HostErr", Other => "Other" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Other)) == "Other" and show(wider(HostErr(1))) == "HostErr"
+    , 1);
+}
+
+test "row subsumption re-tags an identity alias applied at the result row" {
+    // `Aborted` sorts between `A` and `B`, so `B`'s discriminant shifts in
+    // the widened row.
+    try expectRowSubsumptionProgram(
+        \\Id(a) : a
+        \\
+        \\fwd : [A, B] -> Id([A, B])
+        \\fwd = |x| x
+        \\
+        \\wider : [A, B] -> [A, Aborted, B]
+        \\wider = |x| fwd(x)
+        \\
+        \\show : [A, Aborted, B] -> Str
+        \\show = |v| match v { A => "A", Aborted => "Aborted", B => "B" }
+        \\
+        \\main : Bool
+        \\main = show(wider(A)) == "A" and show(wider(B)) == "B"
+    , 1);
+}
+
+test "row subsumption coerces a forwarder whose signature is a function alias" {
+    // The signature NAMES a whole function type. Its result row is the direct
+    // result exactly as in `fwd : Status -> Status`, so the widened use is
+    // served by one adapter. `Extra` sorts between `Err` and `Ok`, and the
+    // `Try` cell's `Gone` sorts before `NotFound`, so a wrong re-tag shows up
+    // as a wrong discriminant in either cell.
+    try expectRowSubsumptionProgram(
+        \\Status : [Ok(Str), Err(Str)]
+        \\
+        \\Fwd : Status -> Status
+        \\
+        \\fwd : Fwd
+        \\fwd = |s| s
+        \\
+        \\wider : Status -> [Ok(Str), Err(Str), Extra]
+        \\wider = |s| fwd(s)
+        \\
+        \\show : [Ok(Str), Err(Str), Extra] -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Ok("a"))) == "Ok(a)" and show(wider(Err("b"))) == "Err(b)"
+    , 1);
+    try expectRowSubsumptionProgram(
+        \\FwdTry : Try(Str, [NotFound]) -> Try(Str, [NotFound])
+        \\
+        \\fwd : FwdTry
+        \\fwd = |t| t
+        \\
+        \\wider : Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])
+        \\wider = |t| fwd(t)
+        \\
+        \\show : Try(Str, [Gone, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(NotFound) => "NotFound" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Err(NotFound))) == "NotFound" and show(wider(Ok("x"))) == "Ok(x)"
+    , 1);
+}
+
+test "row subsumption coerces a forwarder named through an alias of its owner" {
+    // `Named.fwd` is an associated lookup through an alias of the nominal that
+    // owns `fwd`, a use of the same definition a direct lookup names, so it
+    // re-opens the same coerced row and is served by one adapter.
+    try expectRowSubsumptionProgram(
+        \\Owner := [].{
+        \\    fwd : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]
+        \\    fwd = |s| s
+        \\}
+        \\
+        \\Named : Owner
+        \\
+        \\wider : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str), Extra]
+        \\wider = |s| Named.fwd(s)
+        \\
+        \\show : [Ok(Str), Err(Str), Extra] -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Ok("a"))) == "Ok(a)" and show(wider(Err("b"))) == "Err(b)"
+    , 1);
+}
+
+test "row subsumption coerces a generic forwarder" {
+    // A coerced definition that is also generalized over a type variable takes
+    // the checker's generalized instantiation branch rather than the
+    // monomorphic one; the widened use must still be served by an adapter.
+    try expectRowSubsumptionProgram(
+        \\pick : a, [A, B] -> [A, B]
+        \\pick = |_, t| t
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |t| pick("s", t)
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\main : Bool
+        \\main = show(wider(A)) == "A" and show(wider(B)) == "B"
+    , 1);
+}
+
+test "row subsumption serves a where-clause forwarder whose evidence is a local procedure" {
+    // `Loc.get` is a LOCAL procedure, so the use of `fwd` is lowered as a
+    // caller-owned specialization. Its widened row is served by an adapter
+    // built in the caller's draft that calls the caller-owned specialization
+    // at the declared row and re-tags the result. The declared row numbers
+    // `B` 0 and `C` 1 while the requested row numbers them 1 and 2, so a
+    // missing or misordered re-tag reports the wrong tag.
+    try expectRowSubsumptionProgram(
+        \\fwd : a, [B, C] -> [B, C] where [a.get : a -> Str]
+        \\fwd = |x, t| {
+        \\    _s = x.get()
+        \\    t
+        \\}
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\outer : {} -> Bool
+        \\outer = |_| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "loc"
+        \\    }
+        \\
+        \\    wider : Loc, [B, C] -> [A, B, C]
+        \\    wider = |l, t| fwd(l, t)
+        \\
+        \\    show(wider(Loc.L, B)) == "B" and show(wider(Loc.L, C)) == "C"
+        \\}
+        \\
+        \\main : Bool
+        \\main = outer({})
+    , 1);
+}
+
+test "row subsumption serves a where-clause forwarder's Try error row through a caller-owned adapter" {
+    // `Gone` sorts before `NotFound`, so the declared row numbers `NotFound`
+    // 0 and the requested row numbers it 1: a missing or misordered re-tag
+    // reports `Gone` where `fwd` forwarded `NotFound`.
+    try expectRowSubsumptionProgram(
+        \\fwd : a, Try(Str, [NotFound]) -> Try(Str, [NotFound]) where [a.get : a -> Str]
+        \\fwd = |x, t| {
+        \\    _s = x.get()
+        \\    t
+        \\}
+        \\
+        \\show : Try(Str, [Gone, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(NotFound) => "NotFound" }
+        \\
+        \\outer : {} -> Bool
+        \\outer = |_| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "loc"
+        \\    }
+        \\
+        \\    wider : Loc, Try(Str, [NotFound]) -> Try(Str, [Gone, NotFound])
+        \\    wider = |l, t| fwd(l, t)
+        \\
+        \\    show(wider(Loc.L, Err(NotFound))) == "NotFound" and show(wider(Loc.L, Ok("x"))) == "Ok(x)"
+        \\}
+        \\
+        \\main : Bool
+        \\main = outer({})
+    , 1);
+}
+
+test "row subsumption serves a recursive where-clause forwarder through a caller-owned adapter" {
+    // The recursive reference inside `fwd`'s body is at the declared row, so
+    // it joins the declared-row specialization the adapter calls rather than
+    // the adapter itself.
+    try expectRowSubsumptionProgram(
+        \\fwd : a, [B, C], U64 -> [B, C] where [a.get : a -> Str]
+        \\fwd = |x, t, n| {
+        \\    _s = x.get()
+        \\    if n == 0 t else fwd(x, t, n - 1)
+        \\}
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\outer : {} -> Bool
+        \\outer = |_| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "loc"
+        \\    }
+        \\
+        \\    wider : Loc, [B, C] -> [A, B, C]
+        \\    wider = |l, t| fwd(l, t, 3)
+        \\
+        \\    show(wider(Loc.L, B)) == "B" and show(wider(Loc.L, C)) == "C"
+        \\}
+        \\
+        \\main : Bool
+        \\main = outer({})
+    , 1);
+}
+
+test "row subsumption shares one caller-owned adapter between two uses at the same row" {
+    // Both `show(fwd(..))` uses request the same wide row inside one caller,
+    // so they join one adapter; `narrow`'s use at the declared row joins the
+    // adapter's declared-row specialization and needs no adapter at all.
+    try expectRowSubsumptionProgram(
+        \\fwd : a, [B, C] -> [B, C] where [a.get : a -> Str]
+        \\fwd = |x, t| {
+        \\    _s = x.get()
+        \\    t
+        \\}
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\outer : {} -> Bool
+        \\outer = |_| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "loc"
+        \\    }
+        \\
+        \\    narrow : [B, C] -> Str
+        \\    narrow = |t| match fwd(Loc.L, t) { B => "B", C => "C" }
+        \\
+        \\    show(fwd(Loc.L, B)) == "B" and show(fwd(Loc.L, C)) == "C" and narrow(C) == "C"
+        \\}
+        \\
+        \\main : Bool
+        \\main = outer({})
+    , 1);
+}
+
+test "row subsumption serves a where-clause forwarder whose evidence is top-level" {
+    // Top-level evidence keeps the specialization context-free, so the
+    // coordinator's template completion mints the adapter.
+    try expectRowSubsumptionProgram(
+        \\fwd : a, [B, C] -> [B, C] where [a.get : a -> Str]
+        \\fwd = |x, t| {
+        \\    _s = x.get()
+        \\    t
+        \\}
+        \\
+        \\Top := [T].{
+        \\    get : Top -> Str
+        \\    get = |_| "top"
+        \\}
+        \\
+        \\wider : Top, [B, C] -> [A, B, C]
+        \\wider = |l, t| fwd(l, t)
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\main : Bool
+        \\main = show(wider(Top.T, B)) == "B" and show(wider(Top.T, C)) == "C"
+    , 1);
+}
+
+test "row subsumption serves a generic forwarder at two widened uses in one body" {
+    // A partial scheme shares its ground row between uses; the first use's
+    // literal argument restructures that row, and the second use must still
+    // be widened. Both uses request one row, so they share one adapter.
+    try expectRowSubsumptionProgram(
+        \\fwd : a, [B, C] -> [B, C]
+        \\fwd = |_, t| t
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\main : Bool
+        \\main = show(fwd("x", B)) == "B" and show(fwd("y", C)) == "C"
+    , 1);
+}
+
+test "row subsumption serves a generic forwarder's Try error row at two widened uses in one body" {
+    // `Gone` sorts first, so every declared error tag moves in the requested
+    // row and a missing or misordered re-tag reports the wrong tag.
+    try expectRowSubsumptionProgram(
+        \\fwd : a, Try(Str, [Missing, NotFound]) -> Try(Str, [Missing, NotFound])
+        \\fwd = |_, t| t
+        \\
+        \\show : Try(Str, [Gone, Missing, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => s, Err(Gone) => "Gone", Err(Missing) => "Missing", Err(NotFound) => "NotFound" }
+        \\
+        \\main : Bool
+        \\main = show(fwd("x", Err(NotFound))) == "NotFound" and show(fwd("y", Err(Missing))) == "Missing"
+    , 1);
+}
+
+test "row subsumption serves a generic forwarder at a let-bound use and a later use" {
+    try expectRowSubsumptionProgram(
+        \\fwd : a, [B, C] -> [B, C]
+        \\fwd = |_, t| t
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\check : {} -> Bool
+        \\check = |_| {
+        \\    x = fwd("x", C)
+        \\    show(x) == "C" and show(fwd("x", B)) == "B"
+        \\}
+        \\
+        \\main : Bool
+        \\main = check({})
+    , 1);
+}
+
+test "row subsumption serves a where-clause forwarder with top-level evidence at two uses in one body" {
+    try expectRowSubsumptionProgram(
+        \\fwd : a, [B, C] -> [B, C] where [a.get : a -> Str]
+        \\fwd = |x, t| {
+        \\    _s = x.get()
+        \\    t
+        \\}
+        \\
+        \\Top := [T].{
+        \\    get : Top -> Str
+        \\    get = |_| "top"
+        \\}
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\main : Bool
+        \\main = show(fwd(Top.T, B)) == "B" and show(fwd(Top.T, C)) == "C"
+    , 1);
+}
+
+test "row subsumption serves two different wide rows in one caller from one declared-row specialization" {
+    // Two widened rows are two adapters, and both call the one caller-owned
+    // specialization at the declared row.
+    const allocator = std.testing.allocator;
+    const source =
+        \\fwd : a, [B, C] -> [B, C] where [a.get : a -> Str]
+        \\fwd = |x, t| {
+        \\    _s = x.get()
+        \\    t
+        \\}
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\show2 : [B, C, D] -> Str
+        \\show2 = |v| match v { B => "B", C => "C", D => "D" }
+        \\
+        \\outer : {} -> Bool
+        \\outer = |_| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "loc"
+        \\    }
+        \\
+        \\    show(fwd(Loc.L, B)) == "B" and show2(fwd(Loc.L, C)) == "C"
+        \\}
+        \\
+        \\main : Bool
+        \\main = outer({})
+    ;
+    try expectRowSubsumptionProgram(source, 2);
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), adaptedTemplateSpecializationCount(&lowered.mono));
+}
+
+test "row subsumption serves a local-evidence where-clause forwarder passed as a value" {
+    try expectRowSubsumptionProgram(
+        \\fwd : a, [B, C] -> [B, C] where [a.get : a -> Str]
+        \\fwd = |x, t| {
+        \\    _s = x.get()
+        \\    t
+        \\}
+        \\
+        \\apply : (l, [B, C] -> [A, B, C]), l, [B, C] -> [A, B, C]
+        \\apply = |f, l, t| f(l, t)
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\outer : {} -> Bool
+        \\outer = |_| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "loc"
+        \\    }
+        \\
+        \\    show(apply(fwd, Loc.L, B)) == "B" and show(apply(fwd, Loc.L, C)) == "C"
+        \\}
+        \\
+        \\main : Bool
+        \\main = outer({})
+    , 1);
+}
+
+test "row subsumption serves a where-clause forwarder whose recursion joins partially" {
+    // The recursive reference passes a different closure, so it joins the
+    // declared-row specialization through a partial recursive interface
+    // match. That specialization must be the adapter's sibling rather than
+    // its descendant; `completeCallerOwnedResultRowWideningAdapter` checks the
+    // owner it was created under, which is what this program pins.
+    try expectRowSubsumptionProgram(
+        \\fwd : a, (U64 -> U64), [B, C], U64 -> [B, C] where [a.get : a -> Str]
+        \\fwd = |x, f, t, n| {
+        \\    _s = x.get()
+        \\    if n == 0 t else fwd(x, |v| f(v) + 1, t, n - 1)
+        \\}
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\outer : {} -> Bool
+        \\outer = |_| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "loc"
+        \\    }
+        \\
+        \\    wide : Loc, [B, C] -> [A, B, C]
+        \\    wide = |l, t| fwd(l, |v| v, t, 3)
+        \\
+        \\    show(wide(Loc.L, B)) == "B" and show(wide(Loc.L, C)) == "C"
+        \\}
+        \\
+        \\main : Bool
+        \\main = outer({})
+    , 1);
+}
+
+test "row subsumption serves a forwarder whose widened row carries an iterator" {
+    // A result carrying an iterator reaches the eager iterator path, which
+    // must leave a widened request to template completion's adapter.
+    try expectRowSubsumptionProgram(
+        \\fwd : [Some(Iter(U64)), None] -> [Some(Iter(U64)), None]
+        \\fwd = |t| t
+        \\
+        \\sum : [Some(Iter(U64)), None, Extra] -> U64
+        \\sum = |v| match v {
+        \\    Some(it) => List.from_iter(it).sum()
+        \\    None => 0
+        \\    Extra => 99
+        \\}
+        \\
+        \\main : Bool
+        \\main = sum(fwd(Some([1, 2, 3].iter()))) == 6 and sum(fwd(None)) == 0
+    , 1);
+}
+
+test "row subsumption serves a local-evidence where-clause forwarder whose widened row carries an iterator" {
+    try expectRowSubsumptionProgram(
+        \\fwd : a, [Some(Iter(U64)), None] -> [Some(Iter(U64)), None] where [a.get : a -> Str]
+        \\fwd = |x, t| {
+        \\    _s = x.get()
+        \\    t
+        \\}
+        \\
+        \\sum : [Some(Iter(U64)), None, Extra] -> U64
+        \\sum = |v| match v {
+        \\    Some(it) => List.from_iter(it).sum()
+        \\    None => 0
+        \\    Extra => 99
+        \\}
+        \\
+        \\outer : List(U64) -> Bool
+        \\outer = |xs| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "loc"
+        \\    }
+        \\
+        \\    sum(fwd(Loc.L, Some(xs.iter().map(|v| v + 1)))) == 9 and sum(fwd(Loc.L, None)) == 0
+        \\}
+        \\
+        \\main : Bool
+        \\main = outer([1, 2, 3])
+    , 1);
+}
+
+test "row subsumption serves a generic forwarder's Try error row after a use chains it" {
+    try expectRowSubsumptionProgram(
+        \\fwd : a, Try(Str, [Missing, NotFound]) -> Try(Str, [Missing, NotFound])
+        \\fwd = |_, t| t
+        \\
+        \\nf = |_| Err(NotFound)
+        \\
+        \\show : Try(Str, [Gone, Missing, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => s, Err(Gone) => "Gone", Err(Missing) => "Missing", Err(NotFound) => "NotFound" }
+        \\
+        \\main : Bool
+        \\main = show(fwd("x", nf({}))) == "NotFound" and show(fwd("y", nf({}))) == "NotFound"
+    , 1);
+}
+
+test "row subsumption coerces a forwarder passed as a value" {
+    // The coerced function is not called directly: it is passed to a
+    // higher-order function at the wider function type, so the widening is
+    // requested of the function VALUE.
+    try expectRowSubsumptionProgram(
+        \\id : [A, B] -> [A, B]
+        \\id = |x| x
+        \\
+        \\apply : ([A, B] -> [A, B, C]), [A, B] -> [A, B, C]
+        \\apply = |f, x| f(x)
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\main : Bool
+        \\main = show(apply(id, A)) == "A" and show(apply(id, B)) == "B"
+    , 1);
+}
+
+/// Compile `source` (with `imports`), require it to check cleanly, and
+/// require `main` to be `True`. A coerced VALUE has no adapter to count—its
+/// uses are re-tagged where they restore the constant—so running is the
+/// witness: an unserved widened use stops Monotype ("instantiation widened a
+/// closed tag union"), and a misordered re-tag answers wrong. `main` is a
+/// constant, so its body (and every coerced use in it) is lowered by Monotype
+/// when it is evaluated at compile time; the `.boxy` restore of a coerced use
+/// is exercised at run time by `test/cli/RowSubsumptionValue.roc`.
+fn expectRowSubsumptionValueProgram(
+    source: []const u8,
+    imports: []const helpers.ModuleSource,
+) TestError!void {
+    const allocator = std.testing.allocator;
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        imports,
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
+}
+
+test "row subsumption - value re-tags a stored constant's direct row" {
+    // `vd` forwards a closed nominal field, so its row is coerced and every
+    // use restores the stored `[B(Str), D]` and re-tags it: `B` is 0 there and
+    // 1 in `[A, B(Str), C, D]`, `D` is 1 there and 3 here.
+    try expectRowSubsumptionValueProgram(
+        \\Closed := { d : [B(Str), D], e : [B(Str), D] }
+        \\
+        \\source : Closed
+        \\source = { d: B("x"), e: D }
+        \\
+        \\vd : [B(Str), D]
+        \\vd = source.d
+        \\
+        \\ve : [B(Str), D]
+        \\ve = source.e
+        \\
+        \\show : [A, B(Str), C, D] -> Str
+        \\show = |v| match v { A => "A", B(s) => "B(${s})", C => "C", D => "D" }
+        \\
+        \\main : Bool
+        \\main = show(vd) == "B(x)" and show(ve) == "D"
+    , &.{});
+}
+
+test "row subsumption - value re-tags a stored constant's Try error row" {
+    try expectRowSubsumptionValueProgram(
+        \\Closed := { r : Try(Str, [NotFound]), o : Try(Str, [NotFound]) }
+        \\
+        \\source : Closed
+        \\source = { r: Err(NotFound), o: Ok("y") }
+        \\
+        \\vr : Try(Str, [NotFound])
+        \\vr = source.r
+        \\
+        \\vo : Try(Str, [NotFound])
+        \\vo = source.o
+        \\
+        \\show : Try(Str, [Gone, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(NotFound) => "NotFound" }
+        \\
+        \\main : Bool
+        \\main = show(vr) == "NotFound" and show(vo) == "Ok(y)"
+    , &.{});
+}
+
+test "row subsumption - value serves a use at its declared row unchanged" {
+    // The use that re-opened the row but settled on exactly the declared
+    // row relates it exactly: no re-tag.
+    try expectRowSubsumptionValueProgram(
+        \\Closed := { d : [B(Str), D] }
+        \\
+        \\vd : [B(Str), D]
+        \\vd = Closed.{ d: D }.d
+        \\
+        \\show : [B(Str), D] -> Str
+        \\show = |v| match v { B(s) => "B(${s})", D => "D" }
+        \\
+        \\main : Bool
+        \\main = show(vd) == "D"
+    , &.{});
+}
+
+test "row subsumption - value re-tags through a compile-time finalizer" {
+    // `w = vd` is itself a constant: its body's use of `vd` is lowered while
+    // `w` is evaluated at compile time, and `w` stores the 4-tag value.
+    try expectRowSubsumptionValueProgram(
+        \\Closed := { d : [B(Str), D] }
+        \\
+        \\vd : [B(Str), D]
+        \\vd = Closed.{ d: D }.d
+        \\
+        \\w : [A, B(Str), C, D]
+        \\w = vd
+        \\
+        \\show : [A, B(Str), C, D] -> Str
+        \\show = |v| match v { A => "A", B(s) => "B(${s})", C => "C", D => "D" }
+        \\
+        \\main : Bool
+        \\main = show(w) == "D"
+    , &.{});
+}
+
+test "row subsumption - value whose error row is coerced and ok row sealed" {
+    // `Ok(X)` constructs, so the ok row is quantified (a sealed-row
+    // constant); `Err(e)` forwards, so the error row is coerced. A use wider
+    // at either row lowers the retained eval template at the declared type
+    // and re-tags; a use at exactly the stored row reads the stored value.
+    try expectRowSubsumptionValueProgram(
+        \\Closed := { r : Try(Str, [E]) }
+        \\
+        \\pick : Closed
+        \\pick = { r: Err(E) }
+        \\
+        \\v : Try([X], [E])
+        \\v = match pick.r {
+        \\    Ok(_) => Ok(X)
+        \\    Err(e) => Err(e)
+        \\}
+        \\
+        \\wide_err : Try([X], [D, E]) -> Str
+        \\wide_err = |t| match t { Ok(X) => "X", Err(D) => "D", Err(E) => "E" }
+        \\
+        \\wide_ok : Try([W, X], [E]) -> Str
+        \\wide_ok = |t| match t { Ok(W) => "W", Ok(X) => "X", Err(E) => "E" }
+        \\
+        \\exact : Try([X], [E]) -> Str
+        \\exact = |t| match t { Ok(X) => "X", Err(E) => "E" }
+        \\
+        \\main : Bool
+        \\main = wide_err(v) == "E" and wide_ok(v) == "E" and exact(v) == "E"
+    , &.{});
+}
+
+test "row subsumption - value imported from another module is re-tagged at the use" {
+    try expectRowSubsumptionValueProgram(
+        \\import Lib
+        \\
+        \\show : [A, B(Str), C, D] -> Str
+        \\show = |v| match v { A => "A", B(s) => "B(${s})", C => "C", D => "D" }
+        \\
+        \\main : Bool
+        \\main = show(Lib.vd) == "B(lib)"
+    , &.{.{ .name = "Lib", .source =
+        \\Lib := [].{
+        \\    Closed := { d : [B(Str), D] }
+        \\
+        \\    vd : [B(Str), D]
+        \\    vd = Closed.{ d: B("lib") }.d
+        \\}
+    }});
+}
+
 test "W6b widened closed where-method impl is reached through a generated adapter" {
     const allocator = std.testing.allocator;
     // `status` is published at the closed row `[Ok(Str), Err(Str)]` while
@@ -8948,8 +10033,9 @@ test "W6b widened closed where-method impl is reached through a generated adapte
         \\describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
         \\describe = |x| x.status()
         \\
-        \\closed_value : [Ok(Str), Err(Str)]
-        \\closed_value = Ok("cv")
+        \\Closed := { v : [Ok(Str), Err(Str)] }
+        \\
+        \\closed_value = Closed.{ v: Ok("cv") }.v
         \\
         \\Job := [Pending].{
         \\    status : Job -> [Ok(Str), Err(Str)]
@@ -8975,8 +10061,9 @@ test "W6b widened closed where-method impl is reached through a generated adapte
         \\describe : a -> [Ok(Str), Err(Str)] where [a.status : a -> [Ok(Str), Err(Str)]]
         \\describe = |x| x.status()
         \\
-        \\closed_value : [Ok(Str), Err(Str)]
-        \\closed_value = Ok("cv")
+        \\Closed := { v : [Ok(Str), Err(Str)] }
+        \\
+        \\closed_value = Closed.{ v: Ok("cv") }.v
         \\
         \\Job := [Pending].{
         \\    status : Job -> [Ok(Str), Err(Str)]
@@ -9010,8 +10097,9 @@ test "W6b question-widened closed Try impl is reached through a generated adapte
         \\    Ok(s)
         \\}
         \\
-        \\closed_try : Try(Str, [NotFound])
-        \\closed_try = Ok("hit")
+        \\Closed := { v : Try(Str, [NotFound]) }
+        \\
+        \\closed_try = Closed.{ v: Ok("hit") }.v
         \\
         \\Src := [S].{
         \\    fetch : Src -> Try(Str, [NotFound])
@@ -9041,11 +10129,11 @@ test "W6b closed impl reached through nested evidence is adapted" {
     // and only proves it computes the right answer; the adapter count is what
     // proves the mechanism.
     const source =
-        \\closed_ok : [Ok(Str), Err(Str)]
-        \\closed_ok = Ok("ok")
+        \\Closed := { v : [Ok(Str), Err(Str)] }
         \\
-        \\closed_err : [Ok(Str), Err(Str)]
-        \\closed_err = Err("err")
+        \\closed_ok = Closed.{ v: Ok("ok") }.v
+        \\
+        \\closed_err = Closed.{ v: Err("err") }.v
         \\
         \\Wrap(a) := [W(a)].{
         \\    status : Wrap(a) -> [Ok(Str), Err(Str)] where [a.name : a -> Str]
@@ -9137,11 +10225,11 @@ test "W6b direct-result widening adapter re-tags into the requested row at run t
     // can catch. (`Err` maps 0 to 0 and proves nothing on its own; it is here
     // so both constructors travel through the adapter.)
     const source =
-        \\closed_ok : [Ok(Str), Err(Str)]
-        \\closed_ok = Ok("ok")
+        \\Closed := { v : [Ok(Str), Err(Str)] }
         \\
-        \\closed_err : [Ok(Str), Err(Str)]
-        \\closed_err = Err("bad")
+        \\closed_ok = Closed.{ v: Ok("ok") }.v
+        \\
+        \\closed_err = Closed.{ v: Err("bad") }.v
         \\
         \\Job := [Pending, Failed].{
         \\    status : Job -> [Ok(Str), Err(Str)]
@@ -9197,11 +10285,11 @@ test "W6b Try error-row widening adapter re-tags into the requested row at run t
     // row numbers `Gone` 0 and `NotFound` 1, and a missing or misordered
     // injection reports `Gone` where the callee returned `NotFound`.
     const source =
-        \\closed_hit : Try(Str, [NotFound])
-        \\closed_hit = Ok("hit")
+        \\Closed := { v : Try(Str, [NotFound]) }
         \\
-        \\closed_miss : Try(Str, [NotFound])
-        \\closed_miss = Err(NotFound)
+        \\closed_hit = Closed.{ v: Ok("hit") }.v
+        \\
+        \\closed_miss = Closed.{ v: Err(NotFound) }.v
         \\
         \\Src := [Found, Missing].{
         \\    fetch : Src -> Try(Str, [NotFound])
@@ -9266,11 +10354,11 @@ test "W6b alias-wrapped closed Try error row is adapted and re-tagged at run tim
     const source =
         \\IoResult(a) : Try(a, [NotFound])
         \\
-        \\closed_hit : IoResult(Str)
-        \\closed_hit = Ok("hit")
+        \\Closed := { v : IoResult(Str) }
         \\
-        \\closed_miss : IoResult(Str)
-        \\closed_miss = Err(NotFound)
+        \\closed_hit = Closed.{ v: Ok("hit") }.v
+        \\
+        \\closed_miss = Closed.{ v: Err(NotFound) }.v
         \\
         \\Src := [Found, Missing].{
         \\    fetch : Src -> IoResult(Str)
@@ -11572,6 +12660,81 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
 }
 
+/// `stored_parser_gate_source` with the stored constant's error row written
+/// OPEN. An explicitly opened row is quantified whatever the value-binding
+/// generalization rules say about an implicitly opened one, so this spelling
+/// reaches the identity-variable path on its own.
+///
+/// The checked type store skips hash-consing for a graph containing an
+/// identity variable, so `Try(…)` over the quantified row got a different
+/// `CheckedTypeId` from the same `Try(…)` written closed. Lowering seals the
+/// row and both become one Monotype, but while the specialization digest still
+/// encoded that id, this program emitted ELEVEN procedures where the closed
+/// spelling emitted ten, splitting `rename_field : Format, Str -> Str`, whose
+/// own type never mentions the row. This probe is the direct gate on that
+/// defect; it is independent of how any binding came to be generalized.
+const stored_parser_open_error_row_gate_source =
+    \\Format := [Default].{
+    \\    rename_field : Format, Str -> Str
+    \\    rename_field = |_, name| name
+    \\
+    \\    parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError])
+    \\    parse_str = |_, state|
+    \\        match state {
+    \\            Present(value) => Ok({ value, rest: Done })
+    \\            Done => Err(FormatError)
+    \\        }
+    \\
+    \\    parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError])
+    \\    parse_record_start = |_, state| Ok(Uncounted(state))
+    \\
+    \\    parse_record_field : Format,
+    \\    Encoding.FieldName.FieldNames(_shape),
+    \\    State -> Try(
+    \\        [
+    \\            Field({ field : Encoding.FieldName(_shape), rest : State }),
+    \\            TryField({ name : Str, rest : State }),
+    \\            TryFieldCaseless({ name : Str, rest : State }),
+    \\            Continue(State),
+    \\            Done(State),
+    \\        ],
+    \\        [FormatError],
+    \\    )
+    \\    parse_record_field = |_, _, state|
+    \\        match state {
+    \\            Present(_) => Ok(TryField({ name: "foo", rest: state }))
+    \\            Done => Ok(Done(state))
+    \\        }
+    \\
+    \\    parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError])
+    \\    parse_record_after_field = |_, state| Ok(Continue(state))
+    \\
+    \\    skip_record_field : Format, State -> Try(State, [FormatError])
+    \\    skip_record_field = |_, _| Ok(Done)
+    \\}
+    \\
+    \\State := [Present(Str), Done]
+    \\
+    \\parse_stored : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str), ..])
+    \\parse_stored = {
+    \\    Shape : { foo : Str }
+    \\    Shape.parser_for(Format.Default)
+    \\}
+    \\
+    \\main : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\main = |state| parse_stored(state)
+;
+
+test "stored codec restore does not split on an open error row" {
+    // Same procedure count as the closed spelling above. How the constant's
+    // error row was written is a CHECKED-side distinction that lowering erases
+    // by sealing the row, so it must not reach specialization identity.
+    const allocator = std.testing.allocator;
+    const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_open_error_row_gate_source);
+    try std.testing.expectEqual(@as(usize, 10), stats.functions);
+    try std.testing.expectEqual(@as(usize, 11), stats.definitions);
+}
+
 /// `stored_parser_gate_source` over a shape whose field KIND is decided at the
 /// freeze (`bar ?: Str`). This program panicked while the restore was still
 /// eager ("resolved Monotype view requested for an unresolved instantiation
@@ -11931,4 +13094,100 @@ test "provenance: an overflow inside a TCE loop reports the overflowing line" {
         return;
     };
     return error.TestUnexpectedResult;
+}
+
+/// Falsification pair for the `roc.monotype.type.interface.v4` narrowing, which
+/// stopped the specialization digest from observing checked-side provenance
+/// that lowering erases (`monotype/type.zig` `encodeTypeNode`).
+///
+/// `Holder(a).describe` dispatches on its argument, so `Holder(Marker)` and
+/// `Holder(Other)` MUST stay two specializations. The two nominals are both
+/// zero-sized single-tag unions, so no layout difference can re-split them
+/// downstream: the only thing separating the two requests is the `args` span of
+/// the `named` node, whose `def` is identical in both. `args` are encoded in
+/// every digest mode and must stay discriminating. Collapsing this pair would
+/// make one of the two `expect`s print the other's answer.
+///
+/// The base program calls `describe` twice at the SAME nominal argument, so
+/// both programs lower both `label` impls and both call `describe` twice; the
+/// only difference is the nominal in the final call.
+const nominal_arg_specialization_base_source =
+    \\Marker := [M].{
+    \\    label : Marker -> Str
+    \\    label = |_| "marker"
+    \\}
+    \\
+    \\Other := [O].{
+    \\    label : Other -> Str
+    \\    label = |_| "other"
+    \\}
+    \\
+    \\Holder(a) := [H(a)].{
+    \\    describe : Holder(a) -> Str where [a.label : a -> Str]
+    \\    describe = |h| match h { H(inner) => inner.label() }
+    \\}
+    \\
+    \\expect Marker.M.label() == "marker"
+    \\expect Other.O.label() == "other"
+    \\expect Holder.H(Marker.M).describe() == "marker"
+    \\expect Holder.H(Marker.M).describe() == "marker"
+    \\
+    \\main = 0
+;
+
+/// `nominal_arg_specialization_base_source` with the last call moved to the
+/// other nominal argument.
+const nominal_arg_specialization_split_source =
+    \\Marker := [M].{
+    \\    label : Marker -> Str
+    \\    label = |_| "marker"
+    \\}
+    \\
+    \\Other := [O].{
+    \\    label : Other -> Str
+    \\    label = |_| "other"
+    \\}
+    \\
+    \\Holder(a) := [H(a)].{
+    \\    describe : Holder(a) -> Str where [a.label : a -> Str]
+    \\    describe = |h| match h { H(inner) => inner.label() }
+    \\}
+    \\
+    \\expect Marker.M.label() == "marker"
+    \\expect Other.O.label() == "other"
+    \\expect Holder.H(Marker.M).describe() == "marker"
+    \\expect Holder.H(Other.O).describe() == "other"
+    \\
+    \\main = 0
+;
+
+test "nominal arguments still split a specialization after the interface.v4 narrowing" {
+    const allocator = std.testing.allocator;
+
+    var one_nominal = try lowerMonotypeModuleWithOptions(allocator, nominal_arg_specialization_base_source, .{
+        .root_selection = .test_expects,
+    });
+    defer one_nominal.deinit(allocator);
+
+    var two_nominals = try lowerMonotypeModuleWithOptions(allocator, nominal_arg_specialization_split_source, .{
+        .root_selection = .test_expects,
+    });
+    defer two_nominals.deinit(allocator);
+
+    // Measured 2026-09-20. The two programs differ only in the nominal
+    // argument of the last call, so every procedure the second one adds is
+    // attributable to that argument: `describe` at `Holder(Other)` and the
+    // `label` impl its where-clause dispatch reaches.
+    try std.testing.expectEqual(@as(usize, 4), one_nominal.mono.view().fns.len);
+    try std.testing.expectEqual(@as(usize, 6), two_nominals.mono.view().fns.len);
+
+    // The load-bearing assertion, and the reason this test exists: the second
+    // nominal argument must buy procedures at all. If the specialization
+    // digest ever stops observing `args`, `Holder(Marker)` and `Holder(Other)`
+    // key one specialization, both counts match, and one of the two `expect`s
+    // gets the other's answer. That is a miscompile, not an over-specialization
+    // win, so a change that flattens this pair must be reverted rather than
+    // re-measured.
+    try std.testing.expect(two_nominals.mono.view().fns.len > one_nominal.mono.view().fns.len);
+    try std.testing.expect(two_nominals.mono.view().specs.len > one_nominal.mono.view().specs.len);
 }

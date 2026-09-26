@@ -672,11 +672,16 @@ fn stepAlias(ctx: *CopyContext, frame: *AliasFrame) std.mem.Allocator.Error!bool
                 const dest_vars_span = try ctx.dest_store.appendVars(machine.values.items[frame.values_base..]);
                 machine.values.items.len = frame.values_base;
                 const translated_origin = try ctx.copyOriginModule(frame.source.origin_module);
+                // The copy keeps which arguments are declared and where the
+                // spine ends: an importer relates and re-opens it exactly as
+                // the exporter does (design.md "Hidden Alias Arguments").
                 try finishFrame(ctx, frame.fill, Content{ .alias = Alias{
                     .ident = types_mod.TypeIdent{ .ident_idx = frame.translated_ident },
                     .vars = .{ .nonempty = dest_vars_span },
                     .origin_module = translated_origin,
                     .source_decl = frame.source.source_decl,
+                    .declared_arity = frame.source.declared_arity,
+                    .spine = frame.source.spine,
                 } });
                 return true;
             },

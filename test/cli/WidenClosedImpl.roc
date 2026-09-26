@@ -10,8 +10,17 @@ WidenClosedImpl := {}
 describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
 describe = |x| x.status()
 
-closed_value : [Ok(Str), Err(Str)]
-closed_value = Ok("cv")
+# `closed_value` is deliberately UNANNOTATED, and its row is read out of a nominal
+# field. Neither an annotation nor a forwarding function can produce a closed
+# row any more: an annotated value's implicitly opened row is quantified
+# (design.md "Polarity"), and a top-level function that FORWARDS a closed value
+# has its result row coerced open again at every use (design.md "Row
+# Subsumption"). A nominal declaration's body closes its rows as written, so a
+# field of `Closed` is a closed source that no coercion reopens, and `closed_value`
+# is a top-level constant whose row is closed, which is what this fixture needs.
+Closed := { v : [Ok(Str), Err(Str)] }
+
+closed_value = Closed.{ v: Ok("cv") }.v
 
 Job := [Pending].{
     status : Job -> [Ok(Str), Err(Str)]

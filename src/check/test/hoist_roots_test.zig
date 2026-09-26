@@ -311,6 +311,342 @@ test "hoist roots are not selected for static dispatch requiring where evidence"
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
+test "hoist roots are not selected for a closed call whose evidence is a local nominal's method" {
+    // `getit(Loc.L)` is closed, but its evidence is `Loc.get`, which exists
+    // only in the block that declares `Loc`; before, the call was hoisted
+    // out of that block. `Loc.L`'s backing tag alone is plain data.
+    var test_env = try TestEnv.init("Test",
+        \\getit : a -> Str where [a.get : a -> Str]
+        \\getit = |x| x.get()
+        \\
+        \\main = |arg| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "p"
+        \\    }
+        \\    x = getit(Loc.L)
+        \\    Str.concat(x, arg)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try expectNoSelectedCallRoot(&test_env);
+}
+
+test "hoist roots are not selected for a call whose local nominal receiver flows through a binding" {
+    // The evidence names `Loc.get` although the call mentions only `l`.
+    var test_env = try TestEnv.init("Test",
+        \\getit : a -> Str where [a.get : a -> Str]
+        \\getit = |x| x.get()
+        \\
+        \\main = |arg| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "p"
+        \\    }
+        \\    l : Loc
+        \\    l = Loc.L
+        \\    x = getit(l)
+        \\    Str.concat(x, arg)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try expectNoSelectedCallRoot(&test_env);
+}
+
+test "hoist roots are not selected for a call on a local nominal value that escaped its block" {
+    var test_env = try TestEnv.init("Test",
+        \\getit : a -> Str where [a.get : a -> Str]
+        \\getit = |x| x.get()
+        \\
+        \\main = |arg| {
+        \\    z = {
+        \\        Loc := [L].{
+        \\            get : Loc -> Str
+        \\            get = |_| "e"
+        \\        }
+        \\        Loc.L
+        \\    }
+        \\    Str.concat(getit(z), arg)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try expectNoSelectedCallRoot(&test_env);
+}
+
+test "hoist roots are still selected for constant data built from a local nominal" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    Loc := [L, M].{
+        \\        get : Loc -> Str
+        \\        get = |_| "p"
+        \\    }
+        \\    table : List(Loc)
+        \\    table = [Loc.L, Loc.M, Loc.L]
+        \\    List.len(table) + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    var binding_roots: usize = 0;
+    for (test_env.checker.selectedHoistedRoots()) |root| {
+        if (root.pattern != null) binding_roots += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), binding_roots);
+}
+
+test "hoist roots are not selected for record equality whose component is a local nominal's method" {
+    // The comparison is structural; its component obligation is the local
+    // `Loc.is_eq`, reached through the recorded derivation edge.
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    Loc := [L, M].{
+        \\        is_eq : Loc, Loc -> Bool
+        \\        is_eq = |_, _| Bool.True
+        \\    }
+        \\    x = { k: Loc.L, n: 1.I64 } == { k: Loc.M, n: 1.I64 }
+        \\    x and arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try expectNoSelectedComparisonRoot(&test_env);
+}
+
+test "hoist roots are not selected for tuple equality whose component is a local nominal's method" {
+    // The comparison is structural; its component obligation is the local
+    // `Loc.is_eq`, reached through the recorded derivation edge.
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    Loc := [L, M].{
+        \\        is_eq : Loc, Loc -> Bool
+        \\        is_eq = |_, _| Bool.True
+        \\    }
+        \\    x = (Loc.L, 1.I64) == (Loc.M, 1.I64)
+        \\    x and arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try expectNoSelectedComparisonRoot(&test_env);
+}
+
+test "hoist roots are not selected for tag payload equality whose component is a local nominal's method" {
+    // The comparison is structural; its component obligation is the local
+    // `Loc.is_eq`, reached through the recorded derivation edge.
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    Loc := [L, M].{
+        \\        is_eq : Loc, Loc -> Bool
+        \\        is_eq = |_, _| Bool.True
+        \\    }
+        \\    x = Wrap(Loc.L) == Wrap(Loc.M)
+        \\    x and arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try expectNoSelectedComparisonRoot(&test_env);
+}
+
+test "hoist roots are not selected for record hashing whose component is a local nominal's method" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    Loc := [L, M].{
+        \\        is_eq : Loc, Loc -> Bool
+        \\        is_eq = |_, _| Bool.True
+        \\        to_hash : Loc, Hasher -> Hasher
+        \\        to_hash = |_, hasher| Hasher.write_u64(hasher, 0)
+        \\    }
+        \\    n = Dict.empty().insert({ k: Loc.L }, 1.I64).len()
+        \\    n + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try expectNoSelectedComparisonRoot(&test_env);
+}
+
+test "hoist roots are not selected for tuple hashing whose component is a local nominal's method" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    Loc := [L, M].{
+        \\        is_eq : Loc, Loc -> Bool
+        \\        is_eq = |_, _| Bool.True
+        \\        to_hash : Loc, Hasher -> Hasher
+        \\        to_hash = |_, hasher| Hasher.write_u64(hasher, 0)
+        \\    }
+        \\    n = Dict.empty().insert((Loc.L, 1.I64), 1.I64).len()
+        \\    n + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try expectNoSelectedComparisonRoot(&test_env);
+}
+
+test "hoist roots are not selected for tag payload hashing whose component is a local nominal's method" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    Loc := [L, M].{
+        \\        is_eq : Loc, Loc -> Bool
+        \\        is_eq = |_, _| Bool.True
+        \\        to_hash : Loc, Hasher -> Hasher
+        \\        to_hash = |_, hasher| Hasher.write_u64(hasher, 0)
+        \\    }
+        \\    n = Dict.empty().insert(Wrap(Loc.L), 1.I64).len()
+        \\    n + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try expectNoSelectedComparisonRoot(&test_env);
+}
+
+test "hoist roots are not selected for inspecting a local nominal with a block-local override" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    Loc := [L].{
+        \\        to_inspect : Loc -> Str
+        \\        to_inspect = |_| "custom"
+        \\    }
+        \\    x = Str.inspect(Loc.L)
+        \\    Str.concat(x, arg)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try expectNoSelectedCallRoot(&test_env);
+}
+
+test "hoist roots are not selected for a generic callee inspecting a local nominal with a block-local override" {
+    var test_env = try TestEnv.init("Test",
+        \\show : a -> Str
+        \\show = |x| Str.inspect(x)
+        \\
+        \\main = |arg| {
+        \\    Loc := [L].{
+        \\        to_inspect : Loc -> Str
+        \\        to_inspect = |_| "custom"
+        \\    }
+        \\    x = show({ k: Loc.L })
+        \\    Str.concat(x, arg)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try expectNoSelectedCallRoot(&test_env);
+}
+
+test "hoist roots are still selected for inspecting a local nominal without an override" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    Loc := [L]
+        \\    x = Str.inspect(Loc.L)
+        \\    Str.concat(x, arg)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    var binding_roots: usize = 0;
+    for (test_env.checker.selectedHoistedRoots()) |root| {
+        if (root.pattern != null) binding_roots += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), binding_roots);
+}
+
+test "hoist roots are not selected for a call whose evidence is an imported module's block-local method" {
+    const source_a =
+        \\module [mk]
+        \\
+        \\mk = |_| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "a"
+        \\    }
+        \\    Loc.L
+        \\}
+    ;
+    var test_env_a = try TestEnv.init("Maker", source_a);
+    defer test_env_a.deinit();
+
+    const source_b =
+        \\import Maker
+        \\
+        \\getit : a -> Str where [a.get : a -> Str]
+        \\getit = |x| x.get()
+        \\
+        \\main = |arg| {
+        \\    x = getit(Maker.mk({}))
+        \\    Str.concat(x, arg)
+        \\}
+    ;
+    var test_env_b = try TestEnv.initWithImport("Main", source_b, "Maker", &test_env_a);
+    defer test_env_b.deinit();
+    try test_env_b.assertNoErrors();
+    try expectNoSelectedCallRoot(&test_env_b);
+}
+
+fn expectNoSelectedComparisonRoot(test_env: *const TestEnv) error{TestUnexpectedResult}!void {
+    for (test_env.checker.selectedHoistedRoots()) |root| {
+        if (root.pattern != null) return error.TestUnexpectedResult;
+        const tag = std.meta.activeTag(test_env.checker.cir.store.getExpr(root.expr));
+        const comparison_tags = [_]std.meta.Tag(CIR.Expr){ .e_call, .e_binop, .e_dispatch_call, .e_method_eq, .e_structural_eq, .e_structural_hash };
+        if (std.mem.findScalar(std.meta.Tag(CIR.Expr), &comparison_tags, tag) != null) return error.TestUnexpectedResult;
+    }
+}
+
+fn expectNoSelectedCallRoot(test_env: *const TestEnv) error{TestUnexpectedResult}!void {
+    for (test_env.checker.selectedHoistedRoots()) |root| {
+        const tag = std.meta.activeTag(test_env.checker.cir.store.getExpr(root.expr));
+        if (tag == .e_call or tag == .e_binop or tag == .e_dispatch_call) return error.TestUnexpectedResult;
+    }
+}
+
+test "hoist roots are still selected beside a local nominal for expressions not referring to it" {
+    var test_env = try TestEnv.init("Test",
+        \\add_one = |n| n + 1.I64
+        \\
+        \\getit : a -> Str where [a.get : a -> Str]
+        \\getit = |x| x.get()
+        \\
+        \\main = |arg| {
+        \\    Loc := [L].{
+        \\        get : Loc -> Str
+        \\        get = |_| "p"
+        \\    }
+        \\    y = add_one(41.I64)
+        \\    x = getit(Loc.L)
+        \\    Str.concat(Str.concat(x, arg), y.to_str())
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    var binding_roots: usize = 0;
+    for (test_env.checker.selectedHoistedRoots()) |root| {
+        if (root.pattern == null) continue;
+        binding_roots += 1;
+        try expectExprTag(&test_env, root.expr, .e_call);
+    }
+    try std.testing.expectEqual(@as(usize, 1), binding_roots);
+}
+
 test "hoist roots are not selected for a boxed callable" {
     var test_env = try TestEnv.init("Test",
         \\make_probe = || Box.box(|value| value + 1.I64)

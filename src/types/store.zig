@@ -798,11 +798,6 @@ pub const Store = struct {
     /// or add a member (and the design.md declaration it cites) in the same
     /// change. "It makes a test pass" is not a rule.
     pub const RedirectRule = enum {
-        /// (ii) design.md "Hosted Try Question Widening": `?` on a direct call
-        /// of a hosted function widens the condition's closed error row to the
-        /// enclosing annotated return's error row when every visible error is
-        /// included, keeping the hosted callee's declared closed row intact.
-        hosted_try_question_widening,
         /// (ii) design.md "Polarity" / Rewrite Inventory
         /// `closeTagRowsForDerivation`: a polarity marker rigid in tag-ext
         /// position (the alias-declaration-body deferral, which stands for
@@ -933,6 +928,8 @@ pub const Store = struct {
             origin_module,
             source_decl,
             false,
+            args.len,
+            .none,
         );
     }
 
@@ -944,8 +941,13 @@ pub const Store = struct {
         origin_module: base.ModuleIdentity.Idx,
         source_decl: ?u32,
         builtin_origin: bool,
+        /// How many of `args` are the declaration's formals; the rest are
+        /// hidden (`Alias.declared_arity`).
+        declared_arity: usize,
+        spine: types.AliasSpine,
     ) std.mem.Allocator.Error!Content {
         const packed_source_decl = try SourceDecl.fromOptionalWithBuiltinOriginChecked(source_decl, builtin_origin);
+        const packed_declared_arity = try Alias.checkedArity(declared_arity, args.len, spine);
         const backing_idx = try self.appendVar(backing_var);
         var span = try self.appendVars(args);
 
@@ -959,6 +961,8 @@ pub const Store = struct {
                 .vars = .{ .nonempty = span },
                 .origin_module = origin_module,
                 .source_decl = packed_source_decl,
+                .declared_arity = packed_declared_arity,
+                .spine = spine,
             },
         };
     }
@@ -1216,11 +1220,46 @@ pub const Store = struct {
         return self.vars.get(alias.vars.nonempty.start).*;
     }
 
-    /// Get the arg vars for this alias type
+    /// Get every arg var of this alias type: the declared arguments followed by
+    /// the hidden ones (see `sliceAliasDeclaredArgs` / `aliasHiddenArgs`). A
+    /// graph walk (rank, occurs, reachability, copying, unification) visits
+    /// all of them; a reader that reads arguments by the declaration's
+    /// positions reads only the declared ones.
     pub fn sliceAliasArgs(self: *const Self, alias: Alias) []Var {
         std.debug.assert(alias.vars.nonempty.count > 0);
         const slice = self.vars.sliceRange(alias.vars.nonempty);
         return slice[1..];
+    }
+
+    /// The arguments written at the application, one per declared formal, in
+    /// the declaration's order: what arity checks, positional readers and
+    /// presentation read.
+    pub fn sliceAliasDeclaredArgs(self: *const Self, alias: Alias) []Var {
+        return self.sliceAliasArgs(alias)[0..alias.declared_arity];
+    }
+
+    /// The arguments the declaration added after its declared formals
+    /// (`Alias.declared_arity`): the spine slot first when it is hidden
+    /// (`Alias.spine`), then the body's other polarity markers.
+    pub fn aliasHiddenArgs(self: *const Self, alias: Alias) []Var {
+        return self.sliceAliasArgs(alias)[alias.declared_arity..];
+    }
+
+    /// Which argument the result spine ends at, when the declaration's spine
+    /// ends at a slot (`Alias.spine`): the first hidden argument, or, for a
+    /// formal the body uses nowhere else, that declared argument.
+    pub fn aliasSpineSlotIndex(_: *const Self, alias: Alias) ?usize {
+        return switch (alias.spine.kind) {
+            .none => null,
+            .marker, .formal => alias.declared_arity,
+            .declared => alias.spine.base,
+        };
+    }
+
+    /// The argument the result spine ends at (`aliasSpineSlotIndex`).
+    pub fn aliasSpineSlot(self: *const Self, alias: Alias) ?Var {
+        const index = self.aliasSpineSlotIndex(alias) orelse return null;
+        return self.sliceAliasArgs(alias)[index];
     }
 
     /// Get the an iterator arg vars for this alias type
@@ -2117,7 +2156,7 @@ test "declared redirects preserve destination checked identity and structural ba
     try store.union_(a, b, .{ .content = .err, .rank = Rank.outermost });
 
     const destination = try store.freshFromContent(.{ .structure = .empty_record });
-    try store.dangerousSetVarRedirect(.hosted_try_question_widening, b, destination);
+    try store.dangerousSetVarRedirect(.derivation_marker_ext_closure, b, destination);
 
     const storage = store.resolveStorageRoot(a);
     try std.testing.expectEqual(@as(u8, 1), store.getUnionRank(storage.storage_var));
