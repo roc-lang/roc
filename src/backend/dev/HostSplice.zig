@@ -460,7 +460,7 @@ test "compiler functions resolve and the dict seed is the evaluator's zero" {
     try std.testing.expect(compilerFunction(BuiltinFn.crash_str.symbolName(), &table) != null);
     try std.testing.expectEqual(@intFromPtr(&comptimeDictSeed), compilerFunction(BuiltinFn.dict_pseudo_seed.symbolName(), &table).?);
     try std.testing.expect(compilerFunction("memcpy", &table) != null);
-    try std.testing.expect(compilerFunction("roc__proc_00", &table) == null);
+    try std.testing.expect(compilerFunction("roc__p00", &table) == null);
 }
 
 test "a stub jumps to its target" {
@@ -538,9 +538,9 @@ test "comptime hook bindings are explicit for every private ABI symbol" {
     // Ordinary compiler symbols retain precedence over image definitions.
     try symbols.put("memcpy", 8);
     try std.testing.expectEqual(Binding.compiler_function, try binder.classify("memcpy"));
-    try symbols.put("roc__proc_example", 8);
-    try std.testing.expectEqual(Binding.image, try binder.classify("roc__proc_example"));
-    try std.testing.expectEqual(@as(?usize, 4104), binder.address("roc__proc_example"));
+    try symbols.put("roc__pexample", 8);
+    try std.testing.expectEqual(Binding.image, try binder.classify("roc__pexample"));
+    try std.testing.expectEqual(@as(?usize, 4104), binder.address("roc__pexample"));
 
     if (builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .aarch64) {
         var executable = try ExecutableMemory.initWritable(targets.count() * stub_size, stub_size, 0);
