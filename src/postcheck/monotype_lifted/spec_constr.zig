@@ -16679,7 +16679,7 @@ test "substitution resolves equivalent named types with distinct checked provena
     try std.testing.expectEqual(replacement, program.getExpr(boundary.value).data.local);
 }
 
-test "known match fold aborts on undecidable branches and trips the invariant when every branch is excluded" {
+test "known match fold aborts on undecidable branches and keeps the match when every branch is excluded" {
     const allocator = std.testing.allocator;
     var program = emptyLiftedProgramForTest(allocator);
     defer program.deinit();
