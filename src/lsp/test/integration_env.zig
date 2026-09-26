@@ -20,6 +20,11 @@ pub fn configureChecker(checker: *SyntaxChecker, cache_root: []const u8) void {
     checker.cache_config.cache_dir = cache_root;
 }
 
+/// Path to the test platform, relative to the root of a `TmpDir`, spelled with
+/// forward slashes so it can be embedded in a Roc string literal. Platform
+/// specs must be relative, and every `TmpDir` sits at `.zig-cache/tmp/<name>`.
+pub const tmp_dir_platform_path = "../../../test/str/platform/main.roc";
+
 /// Temporary directory handle created under `.zig-cache/tmp` for a spec.
 pub const TmpDir = struct {
     dir: std.Io.Dir,

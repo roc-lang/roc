@@ -10,16 +10,7 @@ const integration_spec = @import("integration_spec.zig");
 const test_env = @import("integration_env.zig");
 
 fn platformPath(allocator: std.mem.Allocator) integration_spec.SpecError![]u8 {
-    // Resolve from repo root to ensure absolute path
-    const repo_root = try std.Io.Dir.cwd().realPathFileAlloc(test_env.io, ".", allocator);
-    defer allocator.free(repo_root);
-    const path = try std.fs.path.join(allocator, &.{ repo_root, "test", "str", "platform", "main.roc" });
-    // Convert backslashes to forward slashes for cross-platform Roc source compatibility
-    // Roc interprets backslashes as escape sequences in string literals
-    for (path) |*c| {
-        if (c.* == '\\') c.* = '/';
-    }
-    return path;
+    return allocator.dupe(u8, test_env.tmp_dir_platform_path);
 }
 
 // Test Harness
