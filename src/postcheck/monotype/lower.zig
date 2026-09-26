@@ -44789,7 +44789,15 @@ const BodyContext = struct {
                     },
                     .target => {},
                 },
-                .direct => {},
+                // The checker selected this edge's exact target. Its identity
+                // is not selected again from the receiver: the owner's
+                // methods are visible from the site's scope, which need not
+                // be this context's (a local type's method, reached while
+                // relating a caller drafted from another module or scope).
+                .direct => {
+                    out[k] = try self.materializeCheckedEvidenceRef(site_view, ref, param, purpose);
+                    derived[k] = true;
+                },
             };
             if (subst[param.slot.?] == .checked_error) {
                 out[k] = .checked_error;
@@ -44882,7 +44890,8 @@ const BodyContext = struct {
         }
         if (site_refs) |refs| {
             for (refs, schema.params, out) |ref, param, *entry| switch (ref.resolution) {
-                .direct, .constraint => {
+                .direct => {},
+                .constraint => {
                     entry.* = try self.mergeCheckedEvidenceContract(
                         entry.*,
                         try self.materializeCheckedEvidenceRef(site_view, ref, param, purpose),
