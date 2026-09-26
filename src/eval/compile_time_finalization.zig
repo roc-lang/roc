@@ -266,9 +266,6 @@ pub const ProgramSession = struct {
     /// The Solved program the runtime consumer continues, when its Solved
     /// policy is compile-time evaluation's.
     runtime_prepared: ?lir.CheckedPipeline.PreparedSolved,
-    /// A copy of the specialized program for a runtime consumer whose Solved
-    /// policy differs from compile-time evaluation's.
-    runtime_monotype: ?lir.CheckedPipeline.PreparedMonotype,
     /// The position of each runtime request in the specialized program's root
     /// plan.
     runtime_positions: []u32,
@@ -276,7 +273,6 @@ pub const ProgramSession = struct {
     pub fn deinit(self: *ProgramSession) void {
         if (self.host) |*host| host.deinit();
         if (self.runtime_prepared) |*prepared| prepared.deinit();
-        if (self.runtime_monotype) |*monotype| monotype.deinit();
         self.allocator.free(self.runtime_positions);
         self.allocator.free(self.modules.root.relation_modules);
         self.allocator.free(self.modules.imports);
@@ -316,20 +312,21 @@ pub const ProgramSession = struct {
             } else if (expected != actual) finalizationInvariant("runtime request policy differs from the declared consumer");
         }
         self.runtime_target = null;
-        if (target.specialization_strategy == .boxy) {
-            return lir.CheckedPipeline.lowerCheckedModulesToLir(allocator, self.modules, roots, target);
-        }
-        try lir.CheckedPipeline.requireHostedProceduresBound(self.modules, target);
-        const prepared = if (self.runtime_prepared) |shared| shared: {
+        if (self.runtime_prepared) |prepared| {
             self.runtime_prepared = null;
-            break :shared shared;
-        } else if (self.runtime_monotype) |monotype| forked: {
-            self.runtime_monotype = null;
-            var own = monotype;
-            lir.CheckedPipeline.SolvedPolicy.fromTarget(target).applyTo(&own.target);
-            break :forked try lir.CheckedPipeline.prepareMonotypeToSolved(own);
-        } else finalizationInvariant("runtime program was already consumed");
-        return self.continueRuntimeConsumer(allocator, prepared, target);
+            var owned = prepared;
+            lir.CheckedPipeline.requireHostedProceduresBound(self.modules, target) catch |err| {
+                owned.deinit();
+                return err;
+            };
+            return self.continueRuntimeConsumer(allocator, owned, target);
+        }
+        // Any other runtime consumer specializes the checked modules itself
+        // under its own policy, reading every compile-time value from the
+        // modules' constant stores. Solved programs built under different
+        // inlining and SpecConstr policies specialize one function
+        // differently, so only the stores name a value in both.
+        return lir.CheckedPipeline.lowerCheckedModulesToLir(allocator, self.modules, roots, target);
     }
 
     /// Lower the runtime consumer's own share of the specialized program,
@@ -624,8 +621,6 @@ pub fn finalizeProgram(
     errdefer if (host) |*program| program.deinit();
     var runtime_prepared: ?lir.CheckedPipeline.PreparedSolved = null;
     errdefer if (runtime_prepared) |*prepared| prepared.deinit();
-    var runtime_monotype: ?lir.CheckedPipeline.PreparedMonotype = null;
-    errdefer if (runtime_monotype) |*monotype| monotype.deinit();
 
     if (requests.items.len != 0) {
         var union_roots = program_roots;
@@ -645,13 +640,10 @@ pub fn finalizeProgram(
         var monotype_owned = true;
         errdefer if (monotype_owned) monotype.deinit();
         // A runtime consumer whose Solved policy is compile-time evaluation's
-        // continues the same Solved program; any other one prepares its own
-        // from a copy of the specialized program.
+        // continues the same Solved program; see `ProgramSession.takeRuntime`
+        // for every other one.
         const shares_solved = lss_runtime and
             std.meta.eql(lir.CheckedPipeline.SolvedPolicy.fromTarget(runtime_target.?), lir.CheckedPipeline.SolvedPolicy.fromTarget(host_target));
-        if (lss_runtime and !shares_solved) {
-            runtime_monotype = try monotype.forkForConsumer(runtime_target.?.target_usize, runtime_target.?.inline_expects);
-        }
         monotype_owned = false;
         var prepared = try lir.CheckedPipeline.prepareMonotypeToSolved(monotype);
         var prepared_owned = true;
@@ -664,10 +656,11 @@ pub fn finalizeProgram(
             const host_manifest = try allocator.alloc(u32, compile_time_root_count);
             defer allocator.free(host_manifest);
             for (host_manifest, 0..) |*position, ordinal| position.* = @intCast(ordinal);
-            // A runtime consumer reads its compile-time values out of this
-            // program's frozen data, so the roots the program records reads
-            // of materialize their completed values here.
-            const completed_values = if (lss_runtime)
+            // A runtime consumer continuing this Solved program reads its
+            // compile-time values out of this program's frozen data, so the
+            // roots the program records reads of materialize their completed
+            // values here.
+            const completed_values = if (shares_solved)
                 try collectCompletedValueRequests(allocator, modules, &prepared)
             else
                 &[_]lir.CheckedPipeline.CompletedValueRequest{};
@@ -729,7 +722,6 @@ pub fn finalizeProgram(
         .runtime_target = runtime_target,
         .host = host,
         .runtime_prepared = runtime_prepared,
-        .runtime_monotype = runtime_monotype,
         .runtime_positions = runtime_positions,
     };
 }

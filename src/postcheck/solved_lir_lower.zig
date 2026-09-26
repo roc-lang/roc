@@ -1950,6 +1950,10 @@ const Lowerer = struct {
                         try self.add(.{ .ty = ty });
                         if (l.recursive_value_locals.contains(id)) {
                             try self.add(.{ .ty = try l.boxedRecursiveSlotTypeOfType(ty) });
+                            // Binding the local also names its slot at the
+                            // runtime backing; see `rememberRecursiveSlotLocalForType`.
+                            const runtime_ty = l.runtimeBackingType(ty);
+                            if (runtime_ty != ty) try self.add(.{ .ty = try l.recursiveSlotTypeOfType(runtime_ty) });
                         }
                     },
                     .ty => |ty| {

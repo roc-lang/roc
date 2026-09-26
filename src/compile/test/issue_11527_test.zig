@@ -19,7 +19,7 @@ fn countLowLevelOps(result: *const lir.Program.Result, op: lir.LIR.LowLevel) usi
     return count;
 }
 
-test "issue 11527: a small uniform compile-time list constant is not rebuilt at every use" {
+fn expectConstantListNotRebuilt(target: lir.CheckedPipeline.TargetConfig) !void {
     if (is_freestanding) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
@@ -89,10 +89,6 @@ test "issue 11527: a small uniform compile-time list constant is not rebuilt at 
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    // The default target matches the compile-time host program's width and
-    // expect mode, so one program serves both consumers: the path a default
-    // `roc build` takes.
-    const target: lir.CheckedPipeline.TargetConfig = .{};
     coord.runtime_lowering = .{ .target = target };
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
@@ -110,7 +106,31 @@ test "issue 11527: a small uniform compile-time list constant is not rebuilt at 
     // https://github.com/roc-lang/roc/issues/11527
     try std.testing.expectEqual(@as(usize, 0), countLowLevelOps(&runtime.lir_result, .list_with_capacity));
     try std.testing.expectEqual(@as(usize, 0), countLowLevelOps(&runtime.lir_result, .list_append_unsafe));
-    // The reads are still served: the constant's value occupies a static
-    // data slot, as any non-uniform constant list already does.
-    try std.testing.expect(runtime.lir_result.static_data_values.items.len > 0);
+    // The reads are still served, from immutable data: a static-data slot,
+    // or a packed byte literal backed by static bytes.
+    try std.testing.expect(countStaticListReads(&runtime.lir_result) > 0);
+}
+
+fn countStaticListReads(result: *const lir.Program.Result) usize {
+    var count: usize = 0;
+    for (result.store.getCFStmts()) |stmt| {
+        if (stmt != .assign_literal) continue;
+        switch (stmt.assign_literal.value) {
+            .static_data, .bytes_literal => count += 1,
+            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .null_ptr, .proc_ref => {},
+        }
+    }
+    return count;
+}
+
+test "issue 11527: a dev build does not rebuild a small uniform compile-time list constant at every use" {
+    // Dev's Solved policy is compile-time evaluation's, so the runtime
+    // consumer continues that Solved program.
+    try expectConstantListNotRebuilt(.{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .iterator_fusion });
+}
+
+test "issue 11527: an optimized build does not rebuild a small uniform compile-time list constant at every use" {
+    // An optimized Solved policy differs from compile-time evaluation's, so
+    // the runtime consumer specializes the checked modules itself.
+    try expectConstantListNotRebuilt(.{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .all_calls, .inline_expects = .omit });
 }
