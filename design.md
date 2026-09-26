@@ -2411,9 +2411,18 @@ a misclassified spine (a shared formal taken for `.declared`) would break
 exactly that, which is why `Check.aliasInstanceIsFaithful` compares an
 instance's backing with the body under its arguments STRUCTURALLY, with
 identical leaves, rather than by unification, which accepts a backing more
-specific than the body. Two applications of one alias agree in every argument
-once related, so neither is more widened than
-the other, and the merge keeps b's view.
+specific than the body. The comparison covers the whole type: tag unions and
+records down their full extension chains (a merge can flatten either), each
+record field's presence (two solved kinds must be equal, a field with no
+presence variable being required; unsolved presence variables are leaves),
+and each function's effect dependencies. The checker asserts none of this at
+run time. A per-instance check that a `.declared` slot has exactly one backing
+position was considered and rejected: after a merge, a class can stand at
+several positions of one backing through no fault of the spine, so the
+assertion would fire on faithful instances. The structural harness, run over
+every instance of the accept-side programs, is what pins it. Two applications
+of one alias agree in every argument once related, so neither is more widened
+than the other, and the merge keeps b's view.
 
 Which content a merged class keeps is presentation only. An alias meeting a
 structure is related through its backing, and the two stay separate views of
@@ -2436,8 +2445,11 @@ occurs, reachability, copying, `copy_import`, checked module data
 alias application the checked module data builds from a declaration's syntax
 carries the declaration's hidden arguments too, its hidden formal taking its
 formal's argument and each marker slot the closed row the builder writes, so
-it keys and compares like the checker's instance), dispatch
-evidence, and every post-check stage, which reads the backing. A reader that
+it keys and compares like the checker's instance; a reference to an alias
+with no declared arguments is built the same way, never as the declaration's
+own root, whose markers are unbound), dispatch evidence (an `alias_arg` step
+indexes all the arguments, and the declared ones keep their declared
+indices), and every post-check stage, which reads the backing. A reader that
 reads arguments by the declaration's positions reads only the declared ones
 (`Store.sliceAliasDeclaredArgs`, `CheckedAliasType.declaredArgs`): arity
 checks and the reference's substitution zip, derived `map` eligibility, the
@@ -2445,9 +2457,10 @@ record-builder wrapper payload, compile-time root and hoisted-constant
 concreteness, settled value rows, host-boundary rules, static-dispatch
 receiver embedding and size, and every presentation (the TypeWriter, error
 snapshots, docs, and the package API's arity and references). Boxy describes an
-alias by its backing's representation, including in a descriptor template
-(`descriptorTemplatePayloadLayoutForRep`, for an alias representation only;
-nominal and box wrappers keep their own descriptor payload layout).
+alias by the first representation under its alias layers, including in a
+descriptor template (`descriptorTemplatePayloadLayoutForRep`): it steps
+through `.alias_backing` edges alone, so a transparent nominal or a box under
+the aliases keeps its own descriptor payload layout.
 
 Presentation reads the hidden arguments to decide whether an instance is
 WIDENED (`TypeWriter.aliasIsWidened`): a marker slot resolves, through alias
@@ -2487,18 +2500,28 @@ through a nested alias's shared argument is split, not declared" and "a nested
 alias layer never relates a drifted backing by its arguments"), "the
 faithfulness harness rejects a backing more specific than its body", "every alias
 instance is its declaration's body under all its arguments" (the faithfulness
-harness `Check.aliasInstanceIsFaithful`), `unify_test.zig` ("a hidden argument
+harness `Check.aliasInstanceIsFaithful`, whose accept-side programs are
+also checked to have no errors), "the faithfulness harness compares records
+down their chains and by field presence", "the faithfulness harness compares
+a function's effect dependencies", `unify_test.zig` ("a hidden argument
 carries a widened row into the relation", "an open hidden slot meets a closed
 one through the arguments", "a declared argument the body does not use is
 related exactly", "a flex never takes an alias view whose backing is that
 flex"), `test_rigid_instantiation.zig`, the generalizer's "an alias is ranked
-by its hidden arguments too", the checked module data test "compile-time roots
-read an alias's declared arguments, not its hidden ones", the LIR tests "row
+by its hidden arguments too", the checked module data tests "a
+declaration-template alias application carries the hidden arguments the
+checker's instance carries" (a hidden formal, a marker, both, and a nested
+alias's marker) and "compile-time roots read an alias's declared arguments,
+not its hidden ones", the LIR tests "row
 subsumption - an opened alias application widens into a wider application of
 its alias" and "... a re-opened alias application ...", and the CLI fixtures
 `test/fx-open/hosted_repeated_formal.roc` (a hosted `H(e) : e => Try(Str, e)`
 widening its error row on every backend while its input keeps the declared
-row), `test/echo/boxy_alias_open_row_retag.roc`, `test/bump/alias_hidden_args_*`
+row), `test/echo/boxy_alias_open_row_retag.roc`,
+`test/echo/boxy_alias_layers_retag.roc` (two alias layers over an opened row,
+and aliases over a transparent nominal and a box), the dispatch evidence test
+"an evidence path reaches a declared alias argument at its declared index,
+before the hidden ones", `test/bump/alias_hidden_args_*`
 and the checked-module cache round trip.
 
 ## Nominal Constructor Backing Relation

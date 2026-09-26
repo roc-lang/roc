@@ -6514,19 +6514,16 @@ fn appendCheckedTypeRootFromDeclarationAnno(
             parens.anno,
         ),
         .lookup => |lookup| switch (lookup.base) {
-            .local => |local| blk: {
-                const finalized = local_type_declarations.finalizedStatementForReference(module, local.decl_idx);
-                const result = try appendCheckedTypeRoot(
-                    allocator,
-                    module,
-                    names,
-                    imports,
-                    store,
-                    active,
-                    ModuleEnv.varFrom(finalized),
-                );
-                break :blk result;
-            },
+            .local => |local| try appendLocalZeroArgumentTypeReference(
+                allocator,
+                module,
+                names,
+                imports,
+                store,
+                active,
+                local_type_declarations,
+                local_type_declarations.finalizedStatementForReference(module, local.decl_idx),
+            ),
             .builtin,
             .external,
             .external_identity,
@@ -6551,14 +6548,15 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 .local => |local| {
                     const finalized = local_type_declarations.finalizedStatementForReference(module, local.decl_idx);
                     if (actual_args.len == 0) {
-                        break :blk try appendCheckedTypeRoot(
+                        break :blk try appendLocalZeroArgumentTypeReference(
                             allocator,
                             module,
                             names,
                             imports,
                             store,
                             active,
-                            ModuleEnv.varFrom(finalized),
+                            local_type_declarations,
+                            finalized,
                         );
                     }
                     switch (module.getStatement(finalized)) {
@@ -6789,6 +6787,57 @@ fn appendInstantiatedNamedApplicationFromTemplate(
         .tag_union,
         .empty_tag_union,
         => checkedArtifactInvariant("checked declaration template application did not resolve to a named type", .{}),
+    };
+}
+
+/// A reference, with no arguments, to a type declaration of this module,
+/// inside a declaration's body. An alias is built from its declaration's
+/// syntax like an applied one, so its hidden arguments close as the
+/// checker's instance closes them; the declaration's own root would carry
+/// its unbound template markers. Any other declaration is its root.
+fn appendLocalZeroArgumentTypeReference(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    imports: CheckedImportViews,
+    store: *CheckedTypeStore,
+    active: *CheckedSourceTypeRoots,
+    local_type_declarations: *const LocalTypeDeclarationIndex,
+    finalized: CIR.Statement.Idx,
+) Allocator.Error!CheckedTypeId {
+    return switch (module.getStatement(finalized)) {
+        .s_alias_decl => try appendInstantiatedAliasDeclarationApplication(
+            allocator,
+            module,
+            names,
+            imports,
+            store,
+            active,
+            local_type_declarations,
+            finalized,
+            &.{},
+        ),
+        .s_nominal_decl,
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(finalized)),
     };
 }
 
@@ -9878,19 +9927,49 @@ test "optional record fields publish through the declaration annotation path" {
 }
 
 test "a declaration-template alias application carries the hidden arguments the checker's instance carries" {
-    // `Fwd(e) : e -> e` is `Fwd(e; e⁺)` (design.md "Hidden Alias
-    // Arguments"). Built from its syntax under `{}` for a nominal backing, the
-    // application lists `e⁺` too, so it is the same checked type as the
-    // checker's own instance of `Fwd({})`.
+    // Built from an alias declaration's syntax under `{}` for a nominal
+    // backing, the application lists the declaration's hidden arguments too
+    // (design.md "Hidden Alias Arguments"), so it is the same checked type as
+    // the checker's own instance in the nominal's field. The last alias
+    // declaration of each program is the one applied.
+    const cases = [_]struct { source: []const u8, hidden: u32 }{
+        // `Fwd(e; e⁺)`: the spine's hidden formal takes `e`'s argument.
+        .{ .source =
+        \\Fwd(e) : e -> e
+        \\
+        \\Holder := { f : Fwd({}) }
+        , .hidden = 1 },
+        // `W(a; m)`: a marker slot is the closed row the body writes.
+        .{ .source =
+        \\W(a) : (a, [Other])
+        \\
+        \\Holder := { f : W({}) }
+        , .hidden = 1 },
+        // `M(e; e⁺, m)`: the spine's hidden formal, then a marker.
+        .{ .source =
+        \\M(e) : (e, [Other]) -> e
+        \\
+        \\Holder := { f : M({}) }
+        , .hidden = 2 },
+        // `Outer(a; m₁, m₂)`: a nested alias's marker is a marker of this
+        // body too, beside the body's own.
+        .{ .source =
+        \\Inner : [Other]
+        \\
+        \\Outer(a) : (a, Inner, [More])
+        \\
+        \\Holder := { f : Outer({}) }
+        , .hidden = 2 },
+    };
+    for (cases) |case| try expectTemplateAliasApplicationMatchesChecker(case.source, case.hidden);
+}
+
+fn expectTemplateAliasApplicationMatchesChecker(source: []const u8, hidden: u32) (@import("test/TestEnv.zig").TestEnvError || error{TestUnexpectedResult})!void {
     const testing = std.testing;
     const TestEnv = @import("test/TestEnv.zig");
     const allocator = testing.allocator;
 
-    var test_env = try TestEnv.init("Main",
-        \\Fwd(e) : e -> e
-        \\
-        \\Holder := { f : Fwd({}) }
-    );
+    var test_env = try TestEnv.init("Main", source);
     defer test_env.deinit();
     try test_env.assertNoErrors();
 
@@ -9902,11 +9981,11 @@ test "a declaration-template alias application carries the hidden arguments the 
     const module = modules.module(0);
     const module_env = module.moduleEnvConst();
 
-    var fwd_stmt: ?CIR.Statement.Idx = null;
+    var alias_stmt: ?CIR.Statement.Idx = null;
     var field_anno: ?CIR.TypeAnno.Idx = null;
     for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
         const statement = module_env.store.getStatement(statement_idx);
-        if (statement == .s_alias_decl) fwd_stmt = statement_idx;
+        if (statement == .s_alias_decl) alias_stmt = statement_idx;
         if (statement == .s_nominal_decl) {
             const record = module_env.store.getTypeAnno(statement.s_nominal_decl.anno).record;
             field_anno = module_env.store.getAnnoRecordField(module_env.store.sliceAnnoRecordFields(record.fields)[0]).ty;
@@ -9934,15 +10013,23 @@ test "a declaration-template alias application carries the hidden arguments the 
         &store,
         &active,
         &local_type_declarations,
-        fwd_stmt orelse return error.TestUnexpectedResult,
+        alias_stmt orelse return error.TestUnexpectedResult,
         &.{unit},
     );
     const checker_built = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, ModuleEnv.varFrom(field_anno orelse return error.TestUnexpectedResult));
 
     const template_alias = store.payload(template_built).alias;
+    const checker_alias = store.payload(checker_built).alias;
     try testing.expectEqual(@as(u32, 1), template_alias.declared_arity);
-    try testing.expectEqual(store.payload(checker_built).alias.args.len, template_alias.args.len);
+    try testing.expectEqual(@as(usize, 1 + hidden), checker_alias.args.len);
+    try testing.expectEqual(checker_alias.args.len, template_alias.args.len);
     try testing.expect(try store.view().rootExactEql(allocator, template_built, checker_built));
+    // A dispatch-evidence path's `alias_arg` step indexes all of an alias's
+    // arguments (`dispatch_evidence.walk`), so each index selects the same
+    // argument on both spellings.
+    for (template_alias.args, checker_alias.args) |template_arg, checker_arg| {
+        try testing.expect(try store.view().rootExactEql(allocator, template_arg, checker_arg));
+    }
 }
 
 const EmptyTagCheckedOutputTestError = @import("test/TestEnv.zig").TestEnvError || error{

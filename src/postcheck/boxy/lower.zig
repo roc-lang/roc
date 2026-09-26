@@ -4678,13 +4678,29 @@ const ProcedureBuilder = struct {
         // An alias is its backing: it carries no descriptor requirement of
         // its own, so its own descriptor payload layout would be its storage
         // (for an alias over a dynamic row, the row's erased box, which lists
-        // none of the row's tags). It is described by its identity
-        // representation, as `typeDescForRep` describes it.
+        // none of the row's tags). It is described by the first
+        // representation under its alias layers. Only alias layers are
+        // stepped through: a transparent nominal or a box under them keeps
+        // its own descriptor payload layout.
         const rep = self.plan.representations.items[@intFromEnum(rep_id)];
         return switch (rep.kind) {
-            .alias => self.descriptorPayloadLayoutForRep(identity_rep),
+            .alias => self.descriptorPayloadLayoutForRep(self.aliasLayersBackingRep(rep_id)),
             .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => self.descriptorPayloadLayoutForRep(rep_id),
         };
+    }
+
+    /// The first representation under `rep_id`'s alias layers, reached by
+    /// `.alias_backing` edges alone.
+    fn aliasLayersBackingRep(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
+        var current = rep_id;
+        var depth: u16 = 0;
+        while (self.plan.representations.items[@intFromEnum(current)].kind == .alias) {
+            if (depth == 1024) boxyLowerInvariant("alias backing chain exceeded boxy procedure builder limit");
+            depth += 1;
+            current = self.singleChildRepForDesc(current, .alias_backing) orelse
+                boxyLowerInvariant("alias representation had no backing child");
+        }
+        return current;
     }
 
     fn layoutIsBoxStorage(self: *const ProcedureBuilder, layout_idx: layout.Idx) bool {

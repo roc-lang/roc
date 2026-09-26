@@ -30705,8 +30705,12 @@ pub fn aliasInstanceIsFaithful(self: *Self, instance_var: Var) Allocator.Error!?
 /// the same type STRUCTURALLY, with every leaf (flex, rigid, row tail) the
 /// same variable on both sides. Unification would accept a `b` more specific
 /// than `a`; this does not. Aliases are read through their backing (each
-/// instance is checked on its own), and rows are compared down their whole
-/// extension chains, since a merge can flatten one side's chain.
+/// instance is checked on its own). Tag unions and records are compared down
+/// their whole extension chains, since a merge can flatten one side's chain;
+/// a record field's presence is compared too: two solved kinds must be
+/// equal (a field with no presence variable is required), and two unsolved
+/// presence variables are leaves like any other. A function's effect
+/// dependencies are compared pairwise with its arguments and return.
 fn typesStructurallyIdentical(self: *Self, a: Var, b: Var) Allocator.Error!bool {
     var pairs: std.ArrayListUnmanaged([2]Var) = .empty;
     defer pairs.deinit(self.gpa);
@@ -30716,6 +30720,10 @@ fn typesStructurallyIdentical(self: *Self, a: Var, b: Var) Allocator.Error!bool 
     defer a_tags.deinit(self.gpa);
     var b_tags: std.ArrayListUnmanaged(types_mod.Tag) = .empty;
     defer b_tags.deinit(self.gpa);
+    var a_fields: std.ArrayListUnmanaged(types_mod.RecordField) = .empty;
+    defer a_fields.deinit(self.gpa);
+    var b_fields: std.ArrayListUnmanaged(types_mod.RecordField) = .empty;
+    defer b_fields.deinit(self.gpa);
     try pairs.append(self.gpa, .{ a, b });
     while (pairs.pop()) |pair| {
         const left = self.types.resolveVar(self.aliasBackingThrough(pair[0]));
@@ -30765,6 +30773,10 @@ fn typesStructurallyIdentical(self: *Self, a: Var, b: Var) Allocator.Error!bool 
                 if (left_args.len != right_args.len) return false;
                 for (left_args, right_args) |x, y| try pairs.append(self.gpa, .{ x, y });
                 try pairs.append(self.gpa, .{ left_func.ret, right_func.ret });
+                const left_deps = self.types.sliceVars(left_func.effect_deps);
+                const right_deps = self.types.sliceVars(right_func.effect_deps);
+                if (left_deps.len != right_deps.len) return false;
+                for (left_deps, right_deps) |x, y| try pairs.append(self.gpa, .{ x, y });
             },
             .nominal_type => |left_nominal| {
                 const right_nominal = switch (right_flat) {
@@ -30787,23 +30799,33 @@ fn typesStructurallyIdentical(self: *Self, a: Var, b: Var) Allocator.Error!bool 
                 if (left_elems.len != right_elems.len) return false;
                 for (left_elems, right_elems) |x, y| try pairs.append(self.gpa, .{ x, y });
             },
-            .empty_record => switch (right_flat) {
-                .empty_record => {},
-                .tag_union, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound, .record, .nominal_type, .tuple => return false,
-            },
-            .record => |left_record| {
-                const right_record = switch (right_flat) {
-                    .record => |record| record,
-                    .tag_union, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound, .tuple, .nominal_type, .empty_record => return false,
-                };
-                const left_fields = self.types.getRecordFieldsSlice(left_record.fields);
-                const right_fields = self.types.getRecordFieldsSlice(right_record.fields);
-                if (left_fields.len != right_fields.len) return false;
-                for (left_fields.items(.name), left_fields.items(.presence), right_fields.items(.name), right_fields.items(.presence)) |ln, lp, rn, rp| {
-                    if (!ln.eql(rn)) return false;
-                    try pairs.append(self.gpa, .{ lp.typeVar(), rp.typeVar() });
+            .record, .empty_record => {
+                switch (right_flat) {
+                    .record, .empty_record => {},
+                    .tag_union, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound, .tuple, .nominal_type => return false,
                 }
-                try pairs.append(self.gpa, .{ left_record.ext, right_record.ext });
+                a_fields.clearRetainingCapacity();
+                b_fields.clearRetainingCapacity();
+                const left_tail = try self.collectRecordFields(left.var_, &a_fields);
+                const right_tail = try self.collectRecordFields(right.var_, &b_fields);
+                if (a_fields.items.len != b_fields.items.len) return false;
+                for (a_fields.items) |left_field| {
+                    const right_field = for (b_fields.items) |candidate| {
+                        if (candidate.name.eql(left_field.name)) break candidate;
+                    } else return false;
+                    try pairs.append(self.gpa, .{ left_field.presence.typeVar(), right_field.presence.typeVar() });
+                    switch (self.solvedFieldPresence(left_field.presence)) {
+                        .kind => |left_kind| switch (self.solvedFieldPresence(right_field.presence)) {
+                            .kind => |right_kind| if (!fieldPresenceEql(left_kind, right_kind)) return false,
+                            .unsolved => return false,
+                        },
+                        .unsolved => |left_var| switch (self.solvedFieldPresence(right_field.presence)) {
+                            .kind => return false,
+                            .unsolved => |right_var| try pairs.append(self.gpa, .{ left_var, right_var }),
+                        },
+                    }
+                }
+                try pairs.append(self.gpa, .{ left_tail, right_tail });
             },
         }
     }
@@ -30817,6 +30839,56 @@ fn aliasBackingThrough(self: *Self, var_: Var) Var {
         switch (self.types.resolveVar(current).desc.content) {
             .alias => |alias| current = self.types.getAliasBackingVar(alias),
             .flex, .rigid, .structure, .field_presence, .err => return current,
+        }
+    }
+}
+
+/// A record field's presence as the harness compares it: a solved kind (a
+/// field with no presence variable is required), or the unsolved variable
+/// carrying it.
+const HarnessFieldPresence = union(enum) {
+    kind: types_mod.FieldPresence,
+    unsolved: Var,
+};
+
+fn solvedFieldPresence(self: *Self, presence: types_mod.RecordField.Presence) HarnessFieldPresence {
+    const presence_var = presence.presenceVar() orelse return .{ .kind = .required };
+    const resolved = self.types.resolveVar(presence_var);
+    return switch (resolved.desc.content) {
+        .field_presence => |kind| .{ .kind = kind },
+        .flex, .rigid, .structure, .alias, .err => .{ .unsolved = resolved.var_ },
+    };
+}
+
+/// Whether two solved field presences are the same kind.
+fn fieldPresenceEql(a: types_mod.FieldPresence, b: types_mod.FieldPresence) bool {
+    return switch (a) {
+        .required => b == .required,
+        .optional => b == .optional,
+        .defaulted => |a_default| switch (b) {
+            .defaulted => |b_default| a_default.eql(b_default),
+            .required, .optional => false,
+        },
+    };
+}
+
+/// Append every field the record `record` lists, down its extension chain
+/// through alias links, to `out`; return the chain's tail.
+fn collectRecordFields(self: *Self, record: Var, out: *std.ArrayListUnmanaged(types_mod.RecordField)) Allocator.Error!Var {
+    var current = record;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .record => |fields_record| {
+                    const fields = self.types.getRecordFieldsSlice(fields_record.fields);
+                    for (fields.items(.name), fields.items(.presence)) |name, presence| try out.append(self.gpa, .{ .name = name, .presence = presence });
+                    current = fields_record.ext;
+                },
+                .empty_record, .tag_union, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound, .tuple, .nominal_type => return resolved.var_,
+            },
+            .flex, .rigid, .field_presence, .err => return resolved.var_,
         }
     }
 }

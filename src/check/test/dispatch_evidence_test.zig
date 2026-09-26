@@ -287,3 +287,43 @@ test "imported scheme copy enumerates the same param list as the defining module
     }
     try std.testing.expect(found_matching_record);
 }
+
+test "an evidence path reaches a declared alias argument at its declared index, before the hidden ones" {
+    // `Pick(e, a; e⁺, m)` (design.md "Hidden Alias Arguments"): the hidden
+    // arguments follow the declared ones, so the `alias_arg` step naming the
+    // dispatcher in `a` is `a`'s declared index, and every spelling of the
+    // application that lists the same arguments resolves it the same way.
+    const source =
+        \\Pick(e, a) : (a, [Other], e) -> e
+        \\
+        \\helper : Pick([A], b) where [b.to_str : b -> Str]
+        \\helper = |(_, _, e)| e
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const gpa = std.testing.allocator;
+    const env = test_env.module_env;
+    const root = try defVar(env, "helper");
+    const alias = env.types.resolveVar(root).desc.content.alias;
+    try std.testing.expectEqual(@as(u16, 2), alias.declared_arity);
+    try std.testing.expectEqual(@as(usize, 4), env.types.sliceAliasArgs(alias).len);
+
+    var params = std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam).empty;
+    defer params.deinit(gpa);
+    // The params' paths alias the scratch's pool, so it outlives them.
+    var scratch = dispatch_evidence.Scratch{};
+    defer scratch.deinit(gpa);
+    try dispatch_evidence.enumerateEvidenceParams(gpa, &env.types, root, &scratch, &params);
+
+    try std.testing.expectEqual(@as(usize, 1), params.items.len);
+    const path = params.items[0].path;
+    try std.testing.expectEqual(@as(usize, 1), path.len);
+    try std.testing.expectEqual(@intFromEnum(dispatch_evidence.PathStep.Kind.alias_arg), path[0].kind);
+    try std.testing.expectEqual(@as(u32, 1), path[0].data);
+    try std.testing.expectEqual(
+        env.types.resolveVar(params.items[0].dispatcher_var).var_,
+        env.types.resolveVar(env.types.sliceAliasArgs(alias)[path[0].data]).var_,
+    );
+}

@@ -10796,10 +10796,23 @@ test "check type - hidden alias arguments - every alias instance is its declarat
         \\use : [A, C] -> [A, C, D]
         \\use = |x| f(x)
         ,
+        \\R(e) : { name : Str, err : Try(U64, [Bad, ..e]) }
+        \\
+        \\Holder : { inner : R([X]) }
+        \\
+        \\mk : Str -> Holder
+        \\mk = |s| { inner: { name: s, err: Err(X) } }
+        \\
+        \\name_of : Holder -> Str
+        \\name_of = |h| h.inner.name
+        ,
     };
     for (programs) |source| {
         var test_env = try TestEnv.init("Test", source);
         defer test_env.deinit();
+        // Every program here is accepted: a rejected one could leave
+        // instances the harness never meets on an accepted path.
+        try test_env.assertNoErrors();
         try expectEveryAliasInstanceFaithful(&test_env);
     }
 }
@@ -10845,6 +10858,154 @@ test "check type - hidden alias arguments - the faithfulness harness rejects a b
     }
 }
 
+/// The statement index of the module's only type alias declaration.
+fn onlyAliasDeclStatement(test_env: *TestEnv) error{TestUnexpectedResult}!u32 {
+    const module_env = test_env.module_env;
+    return for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+        if (module_env.store.getStatement(statement_idx) == .s_alias_decl) break @intFromEnum(statement_idx);
+    } else error.TestUnexpectedResult;
+}
+
+/// An instance of the module's only alias declaration, applied to `args`
+/// (its declared arguments and then its hidden ones), whose backing is
+/// `backing`.
+fn aliasInstanceWithBacking(test_env: *TestEnv, args: []const types.Var, backing: types.Var) (std.mem.Allocator.Error || error{TestUnexpectedResult})!types.Var {
+    const types_store = &test_env.module_env.types;
+    const decl_stmt = try onlyAliasDeclStatement(test_env);
+    const decl_alias = types_store.resolveVar(@enumFromInt(decl_stmt)).desc.content.alias;
+    return try types_store.freshFromContent(try types_store.mkAliasWithSourceDeclAndBuiltinOrigin(
+        decl_alias.ident,
+        backing,
+        args,
+        decl_alias.origin_module,
+        decl_stmt,
+        false,
+        decl_alias.declared_arity,
+        decl_alias.spine,
+    ));
+}
+
+test "check type - hidden alias arguments - the faithfulness harness compares records down their chains and by field presence" {
+    const source =
+        \\Rec(a, b) : { x : a, y : b }
+        \\
+        \\p : Rec(U64, Str)
+        \\p = { x: 1, y: "s" }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    const types_store = &test_env.module_env.types;
+    const decl_stmt = try onlyAliasDeclStatement(&test_env);
+    const decl_alias = types_store.resolveVar(@enumFromInt(decl_stmt)).desc.content.alias;
+    const body_record = types_store.resolveVar(types_store.getAliasBackingVar(decl_alias)).desc.content.structure.record;
+    const body_presence = types_store.getRecordFieldsSlice(body_record.fields).items(.presence)[0];
+    try std.testing.expect(body_presence.presenceVar() == null);
+
+    const a = try types_store.fresh();
+    const b = try types_store.fresh();
+    const x_name = types_store.getRecordFieldsSlice(body_record.fields).items(.name)[0];
+    const y_name = types_store.getRecordFieldsSlice(body_record.fields).items(.name)[1];
+    const optional = try types_store.freshFromContent(.{ .field_presence = .optional });
+    const closed = try types_store.freshFromContent(.{ .structure = .empty_record });
+    const flat = try types_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try types_store.appendRecordFields(&.{ .{ .name = x_name, .presence = .required(a) }, .{ .name = y_name, .presence = .required(b) } }),
+        .ext = closed,
+    } } });
+    // `{ x : a }` extended by `{ y : b }`: the body's record split down a
+    // chain, as a merge can leave it.
+    const y_link = try types_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try types_store.appendRecordFields(&.{.{ .name = y_name, .presence = .required(b) }}),
+        .ext = closed,
+    } } });
+    const chained = try types_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try types_store.appendRecordFields(&.{.{ .name = x_name, .presence = .required(a) }}),
+        .ext = y_link,
+    } } });
+    // The same chain, with a field the body lacks further down it.
+    const extra_link = try types_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try types_store.appendRecordFields(&.{ .{ .name = y_name, .presence = .required(b) }, .{ .name = decl_alias.ident.ident_idx, .presence = .required(a) } }),
+        .ext = closed,
+    } } });
+    const extra = try types_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try types_store.appendRecordFields(&.{.{ .name = x_name, .presence = .required(a) }}),
+        .ext = extra_link,
+    } } });
+    // `x` carried on a presence variable: solved required, as a merge with
+    // a record literal leaves it, it is the body's required `x`; solved
+    // optional, or unsolved, it is not.
+    const required = try types_store.freshFromContent(.{ .field_presence = .required });
+    const unsolved = try types_store.fresh();
+    var carried: [3]types.Var = undefined;
+    for (&carried, [_]types.Var{ required, optional, unsolved }) |*backing, presence| {
+        backing.* = try types_store.freshFromContent(.{ .structure = .{ .record = .{
+            .fields = try types_store.appendRecordFields(&.{ .{ .name = x_name, .presence = .unknown(presence, a) }, .{ .name = y_name, .presence = .required(b) } }),
+            .ext = closed,
+        } } });
+    }
+    const backings = [_]struct { backing: types.Var, faithful: bool }{
+        .{ .backing = flat, .faithful = true },
+        .{ .backing = chained, .faithful = true },
+        .{ .backing = extra, .faithful = false },
+        .{ .backing = carried[0], .faithful = true },
+        .{ .backing = carried[1], .faithful = false },
+        .{ .backing = carried[2], .faithful = false },
+    };
+    for (backings) |case| {
+        const instance = try aliasInstanceWithBacking(&test_env, &.{ a, b }, case.backing);
+        try std.testing.expectEqual(@as(?bool, case.faithful), try test_env.checker.aliasInstanceIsFaithful(instance));
+    }
+}
+
+test "check type - hidden alias arguments - the faithfulness harness compares a function's effect dependencies" {
+    const source =
+        \\Fn(a, b) : a -> (a, b)
+        \\
+        \\f : Fn(U64, Str)
+        \\f = |x| (x, "s")
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    const types_store = &test_env.module_env.types;
+    const decl_stmt = try onlyAliasDeclStatement(&test_env);
+    const decl_alias = types_store.resolveVar(@enumFromInt(decl_stmt)).desc.content.alias;
+    const body = types_store.resolveVar(types_store.getAliasBackingVar(decl_alias)).desc.content.structure;
+    const body_func = switch (body) {
+        .fn_pure, .fn_effectful, .fn_unbound => |func| func,
+        .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(usize, 0), types_store.sliceVars(body_func.effect_deps).len);
+
+    // The body's result is a tuple, so its spine ends at no slot and the
+    // alias has no hidden argument.
+    try std.testing.expectEqual(@as(usize, 2), types_store.sliceAliasArgs(decl_alias).len);
+    const a = try types_store.fresh();
+    const b = try types_store.fresh();
+    const pair = try types_store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try types_store.appendVars(&.{ a, b }) } } });
+    const dependency = try types_store.fresh();
+    const dependency_sets = [_]struct { deps: []const types.Var, faithful: bool }{
+        .{ .deps = &.{}, .faithful = true },
+        .{ .deps = &.{dependency}, .faithful = false },
+    };
+    for (dependency_sets) |case| {
+        const func = types.Func{
+            .args = try types_store.appendVars(&.{a}),
+            .ret = pair,
+            .effect_deps = try types_store.appendVars(case.deps),
+        };
+        const flat: types.FlatType = switch (body) {
+            .fn_pure => .{ .fn_pure = func },
+            .fn_effectful => .{ .fn_effectful = func },
+            .fn_unbound => .{ .fn_unbound = func },
+            .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
+        };
+        const backing = try types_store.freshFromContent(.{ .structure = flat });
+        const instance = try aliasInstanceWithBacking(&test_env, &.{ a, b }, backing);
+        try std.testing.expectEqual(@as(?bool, case.faithful), try test_env.checker.aliasInstanceIsFaithful(instance));
+    }
+}
+
 /// Every alias instance reachable from any expression's type in the module
 /// passes `Check.aliasInstanceIsFaithful`.
 fn expectEveryAliasInstanceFaithful(test_env: *TestEnv) (std.mem.Allocator.Error || error{TestUnexpectedResult})!void {
@@ -10877,6 +11038,7 @@ fn expectEveryAliasInstanceFaithful(test_env: *TestEnv) (std.mem.Allocator.Error
                     .fn_pure, .fn_effectful, .fn_unbound => |func| {
                         try stack.appendSlice(gpa, types_store.sliceVars(func.args));
                         try stack.append(gpa, func.ret);
+                        try stack.appendSlice(gpa, types_store.sliceVars(func.effect_deps));
                     },
                     .tag_union => |tag_union| {
                         for (types_store.getTagsSlice(tag_union.tags).items(.args)) |args| {
@@ -10886,7 +11048,14 @@ fn expectEveryAliasInstanceFaithful(test_env: *TestEnv) (std.mem.Allocator.Error
                     },
                     .nominal_type => |nominal| try stack.appendSlice(gpa, types_store.sliceNominalArgs(nominal)),
                     .tuple => |tuple| try stack.appendSlice(gpa, types_store.sliceVars(tuple.elems)),
-                    .record, .empty_record, .empty_tag_union => {},
+                    .record => |record| {
+                        for (types_store.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                            try stack.append(gpa, presence.typeVar());
+                            if (presence.presenceVar()) |presence_var| try stack.append(gpa, presence_var);
+                        }
+                        try stack.append(gpa, record.ext);
+                    },
+                    .empty_record, .empty_tag_union => {},
                 },
                 .flex, .rigid, .field_presence, .err => {},
             }
