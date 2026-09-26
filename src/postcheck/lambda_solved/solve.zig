@@ -148,6 +148,13 @@ const Solver = struct {
     /// meeting of two uses unify the whole type again.
     shared_leaf_context: ?u32,
     mono_set_pool: collections.DenseMapPool(MonoType.TypeId, void),
+    /// Uninhabitedness of lifted Monotypes whose proof never stopped at a
+    /// type already on the walk's path. Such a result is a pure function of
+    /// the immutable Monotype, independent of where the walk began.
+    mono_uninhabited: collections.DenseMap(MonoType.TypeId, bool),
+    /// Path stops seen by the Monotype uninhabitedness walk currently
+    /// running; a result is recorded only when its subtree added none.
+    mono_uninhabited_path_stops: u32 = 0,
     clone_map_pool: collections.DenseMapPool(MonoType.TypeId, Type.TypeVarId),
 
     const FunctionShape = struct {
@@ -267,6 +274,7 @@ const Solver = struct {
             .tag_row_indexes = .empty,
             .shared_leaf_context = null,
             .mono_set_pool = collections.DenseMapPool(MonoType.TypeId, void).init(allocator),
+            .mono_uninhabited = collections.DenseMap(MonoType.TypeId, bool).init(allocator),
             .clone_map_pool = collections.DenseMapPool(MonoType.TypeId, Type.TypeVarId).init(allocator),
         };
     }
@@ -277,6 +285,7 @@ const Solver = struct {
         self.tag_row_indexes.deinit(self.allocator);
         self.clone_map_pool.deinit();
         self.mono_set_pool.deinit();
+        self.mono_uninhabited.deinit();
         self.solved_position_pool.deinit();
         self.solved_set_pool.deinit();
         for (self.leaf_contexts.items) |*ctx| ctx.deinit();
@@ -2292,6 +2301,7 @@ const Solver = struct {
             // Probe leaves against the lifted store instead of materializing:
             // uninhabitedness is a pure function of the Monotype.
             .mono => |leaf| blk: {
+                if (self.mono_uninhabited.get(leaf.id)) |result| break :blk result;
                 var mono_visiting = self.mono_set_pool.acquire();
                 defer self.mono_set_pool.release(&mono_visiting);
                 break :blk try self.monoProvenUninhabited(leaf.id, &mono_visiting);
@@ -2342,10 +2352,24 @@ const Solver = struct {
         id: MonoType.TypeId,
         visiting: *collections.DenseMap(MonoType.TypeId, void),
     ) Allocator.Error!bool {
+        if (self.mono_uninhabited.get(id)) |result| return result;
         const entry = try visiting.getOrPut(id);
-        if (entry.found_existing) return false;
+        if (entry.found_existing) {
+            self.mono_uninhabited_path_stops += 1;
+            return false;
+        }
         defer _ = visiting.remove(id);
+        const stops = self.mono_uninhabited_path_stops;
+        const result = try self.monoProvenUninhabitedContent(id, visiting);
+        if (stops == self.mono_uninhabited_path_stops) try self.mono_uninhabited.put(id, result);
+        return result;
+    }
 
+    fn monoProvenUninhabitedContent(
+        self: *Solver,
+        id: MonoType.TypeId,
+        visiting: *collections.DenseMap(MonoType.TypeId, void),
+    ) Allocator.Error!bool {
         return switch (self.lifted.types.get(id)) {
             .named => |named| if (named.backing) |backing|
                 if (backing.use == .inspectable)
