@@ -234,7 +234,9 @@ pub const Constants = struct {
     ///      the checked instance its containing value stores.
     /// 107: Checked type keys refer to each context-free subtree by its own
     ///      key.
-    pub const CACHE_VERSION = 107;
+    /// 108: Checked type keys use one-byte tags and varint integers, and a
+    ///      synthetic function over composed children shares its source key.
+    pub const CACHE_VERSION = 108;
 };
 
 /// Configuration for the Roc cache system.

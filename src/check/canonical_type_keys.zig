@@ -26,6 +26,9 @@ const LiteralKind = types.StaticDispatchConstraint.LiteralKind;
 pub const TypeKeyInfo = struct {
     key: canonical.CanonicalTypeKey,
     contains_identity_variables: bool,
+    /// Whether the key's encoding wrote no identity or cycle token, so an
+    /// enclosing type refers to this type by the key itself.
+    composable: bool,
 };
 
 /// Public `fromVar` function.
@@ -51,6 +54,7 @@ pub fn fromVarInfo(
     return .{
         .key = .{ .bytes = builder.digestKey().bytes },
         .contains_identity_variables = builder.contains_identity_variables,
+        .composable = builder.encodingComposes(),
     };
 }
 
@@ -174,24 +178,6 @@ pub fn fromConcreteVar(
     return .{ .bytes = builder.digestKey().bytes };
 }
 
-/// Public `emptyTagUnion` function.
-pub fn emptyTagUnion() canonical.CanonicalTypeKey {
-    var hasher = TypeDigestHasher.init();
-    writeByteSlice(&hasher, "[]");
-    return .{ .bytes = hasher.finalResult() };
-}
-
-/// Public `defaultDec` function.
-pub fn defaultDec(idents: *const Ident.Store) canonical.CanonicalTypeKey {
-    var hasher = TypeDigestHasher.init();
-    writeByteSlice(&hasher, "nominal");
-    writeIdentText(&hasher, idents, builtinDecTypeIdent(idents));
-    writeIdentText(&hasher, idents, builtinModuleIdent(idents));
-    writeBoolValue(&hasher, true);
-    writeU32Value(&hasher, 0);
-    return .{ .bytes = hasher.finalResult() };
-}
-
 /// Public `schemeFromVar` function.
 pub fn schemeFromVar(
     allocator: Allocator,
@@ -201,7 +187,7 @@ pub fn schemeFromVar(
 ) Allocator.Error!canonical.CanonicalTypeSchemeKey {
     var builder = Builder.init(allocator, store, env);
     defer builder.deinit();
-    try builder.writeTag("canonical_type_scheme");
+    try builder.writeTag(.canonical_type_scheme);
     try builder.writeVar(var_);
     return .{ .bytes = builder.digestKey().bytes };
 }
@@ -235,7 +221,7 @@ pub const SchemeWriter = struct {
         if (builtin.is_test) self.test_digests += 1;
         const builder = &self.builder;
         builder.resetDigest();
-        try builder.writeTag("canonical_type_scheme");
+        try builder.writeTag(.canonical_type_scheme);
         try builder.writeVar(var_);
         return .{ .bytes = builder.digestKey().bytes };
     }
@@ -282,7 +268,7 @@ pub const TypeWriter = struct {
     pub fn fromVar(self: *TypeWriter, var_: Var) Allocator.Error!TypeKeyInfo {
         if (self.builder.retain_composed_keys and self.builder.sharesComposedKeys()) {
             if (self.builder.composed_keys.get(self.builder.store.resolveVar(var_).var_)) |key| {
-                return .{ .key = key, .contains_identity_variables = false };
+                return .{ .key = key, .contains_identity_variables = false, .composable = true };
             }
         }
         self.builder.resetDigest();
@@ -290,6 +276,7 @@ pub const TypeWriter = struct {
         return .{
             .key = .{ .bytes = self.builder.digestKey().bytes },
             .contains_identity_variables = self.builder.contains_identity_variables,
+            .composable = self.builder.encodingComposes(),
         };
     }
 
@@ -478,15 +465,77 @@ const NodeMark = struct {
     position: NodePosition,
 };
 
+/// One-byte node and field tags of the checked-type key encoding, shared by
+/// both key encoders. Values start at 2 so a tag never equals the boolean
+/// byte a required record field writes in the same position.
+pub const KeyTag = enum(u8) {
+    opaque_root = 2,
+    err_var,
+    flex,
+    rigid,
+    defaulted_empty_tag_union,
+    identity_var_anchor,
+    identity_var_ref,
+    cycle,
+    err,
+    presence_required,
+    presence_optional,
+    presence_defaulted,
+    alias,
+    nominal,
+    empty_record,
+    empty_tag_union,
+    tuple,
+    fn_pure,
+    fn_effectful,
+    record,
+    field_default,
+    presence_optional_field,
+    presence_variable,
+    tag_union,
+    canonical_type_scheme,
+    child_key,
+    named,
+    padding,
+};
+
+pub fn appendKeyTag(buf: *std.ArrayList(u8), allocator: Allocator, tag: KeyTag) Allocator.Error!void {
+    try buf.append(allocator, @intFromEnum(tag));
+}
+
+/// Unsigned LEB128. Every integer in the encoding sits at a position its
+/// preceding tag fixes, so the self-delimiting form keeps the encoding
+/// uniquely decodable.
+pub fn appendKeyVarint(buf: *std.ArrayList(u8), allocator: Allocator, value: u32) Allocator.Error!void {
+    var rest = value;
+    while (rest >= 0x80) : (rest >>= 7) {
+        try buf.append(allocator, @as(u8, @truncate(rest)) | 0x80);
+    }
+    try buf.append(allocator, @truncate(rest));
+}
+
 /// Refer to a composed subtree by its key. Both checked-type key encoders
 /// write exactly these bytes in place of a context-free subtree.
 pub fn writeChildKeyReference(buf: *std.ArrayList(u8), allocator: Allocator, key: canonical.CanonicalTypeKey) Allocator.Error!void {
-    const tag = "child_key";
-    var header: [4 + tag.len]u8 = undefined;
-    std.mem.writeInt(u32, header[0..4], tag.len, .little);
-    @memcpy(header[4..], tag);
-    try buf.appendSlice(allocator, &header);
+    try appendKeyTag(buf, allocator, .child_key);
     try buf.appendSlice(allocator, &key.bytes);
+}
+
+/// The key of a function node whose arguments and return are all composed
+/// subtrees: exactly the bytes a digest walk writes for such a node.
+pub fn composedFunctionKey(
+    allocator: Allocator,
+    effectful: bool,
+    arg_keys: []const canonical.CanonicalTypeKey,
+    ret_key: canonical.CanonicalTypeKey,
+) Allocator.Error!canonical.CanonicalTypeKey {
+    var buf = std.ArrayList(u8).empty;
+    defer buf.deinit(allocator);
+    try appendKeyTag(&buf, allocator, if (effectful) .fn_effectful else .fn_pure);
+    try appendKeyVarint(&buf, allocator, @intCast(arg_keys.len));
+    for (arg_keys) |key| try writeChildKeyReference(&buf, allocator, key);
+    try writeChildKeyReference(&buf, allocator, ret_key);
+    return .{ .bytes = TypeDigestHasher.hash(buf.items) };
 }
 
 /// One ordered type traversal, specialized for the data its caller consumes.
@@ -713,7 +762,7 @@ fn Walk(comptime digest: bool) type {
             for (self.opaque_roots) |opaque_root| {
                 if (opaque_root == root) {
                     self.identity_tokens += 1;
-                    try self.writeTag("opaque");
+                    try self.writeTag(.opaque_root);
                     try self.writeU32(@intFromEnum(root));
                     return true;
                 }
@@ -721,7 +770,7 @@ fn Walk(comptime digest: bool) type {
 
             if (self.err_by_var and resolved.desc.content == .err) {
                 self.err_tokens += 1;
-                try self.writeTag("err_var");
+                try self.writeTag(.err_var);
                 try self.writeU32(@intFromEnum(root));
                 return true;
             }
@@ -732,7 +781,7 @@ fn Walk(comptime digest: bool) type {
             if (resolved.desc.flags.empty_tag_union_is_default) {
                 return try self.writeIdentityVariable(
                     root,
-                    "defaulted_empty_tag_union",
+                    .defaulted_empty_tag_union,
                     null,
                     types.StaticDispatchConstraint.SafeList.Range.empty(),
                 );
@@ -748,19 +797,19 @@ fn Walk(comptime digest: bool) type {
                     }
                     invariantViolation("concrete canonical type key requested for unsolved flex type variable");
                 }
-                return try self.writeIdentityVariable(root, "flex", flex.name, flex.constraints);
+                return try self.writeIdentityVariable(root, .flex, flex.name, flex.constraints);
             }
             if (content_tag == .rigid) {
                 const rigid = resolved.desc.content.rigid;
                 if (self.require_concrete) {
                     invariantViolation("concrete canonical type key requested for unsolved rigid type variable");
                 }
-                return try self.writeIdentityVariable(root, "rigid", rigid.name, rigid.constraints);
+                return try self.writeIdentityVariable(root, .rigid, rigid.name, rigid.constraints);
             }
 
             if (try self.active.getOrPush(root)) |slot| {
                 self.cycle_tokens += 1;
-                try self.writeTag("cycle");
+                try self.writeTag(.cycle);
                 try self.writeU32(slot);
                 return true;
             }
@@ -807,6 +856,11 @@ fn Walk(comptime digest: bool) type {
             try writeChildKeyReference(&self.buf, self.allocator, key);
         }
 
+        /// Whether everything written since the last reset is context-free.
+        fn encodingComposes(self: *const Self) bool {
+            return self.identity_tokens == 0 and self.cycle_tokens == 0;
+        }
+
         /// The key of the digest this builder has written.
         fn digestKey(self: *const Self) canonical.CanonicalTypeKey {
             return .{ .bytes = TypeDigestHasher.hash(self.buf.items) };
@@ -817,7 +871,7 @@ fn Walk(comptime digest: bool) type {
         fn writeIdentityVariable(
             self: *Self,
             root: Var,
-            comptime tag: []const u8,
+            comptime tag: KeyTag,
             name: ?Ident.Idx,
             constraints: types.StaticDispatchConstraint.SafeList.Range,
         ) Allocator.Error!bool {
@@ -825,7 +879,7 @@ fn Walk(comptime digest: bool) type {
             self.identity_tokens += 1;
             if (self.identity_anchors) |anchors| {
                 if (anchors.contains(root)) {
-                    try self.writeTag("identity_var_anchor");
+                    try self.writeTag(.identity_var_anchor);
                     try self.writeU32(@intFromEnum(root));
                     return true;
                 }
@@ -833,7 +887,7 @@ fn Walk(comptime digest: bool) type {
             const slot: u32 = @intCast(self.identity_variables.entries.items.len);
             if (digest) {
                 if (try self.identity_variables.getOrPush(root)) |existing| {
-                    try self.writeTag("identity_var_ref");
+                    try self.writeTag(.identity_var_ref);
                     try self.writeU32(existing);
                     return true;
                 }
@@ -867,7 +921,7 @@ fn Walk(comptime digest: bool) type {
                 .err => {
                     if (self.detect_errors) self.contains_error = true;
                     self.err_tokens += 1;
-                    try self.writeTag("err");
+                    try self.writeTag(.err);
                     return false;
                 },
                 .flex => |flex| {
@@ -888,10 +942,10 @@ fn Walk(comptime digest: bool) type {
                 },
                 .field_presence => |field_presence| {
                     switch (field_presence) {
-                        .required => try self.writeTag("presence_required"),
-                        .optional => try self.writeTag("presence_optional"),
+                        .required => try self.writeTag(.presence_required),
+                        .optional => try self.writeTag(.presence_optional),
                         .defaulted => |id| {
-                            try self.writeTag("presence_defaulted");
+                            try self.writeTag(.presence_defaulted);
                             try self.writeBytes(self.env.moduleIdentityHash(id.origin_module));
                             try self.writeU32(id.expr_node);
                         },
@@ -899,7 +953,7 @@ fn Walk(comptime digest: bool) type {
                     return false;
                 },
                 .alias => |alias| {
-                    try self.writeTag("alias");
+                    try self.writeTag(.alias);
                     try self.writeNamedSourceIdentity(alias.origin_module, alias.ident.ident_idx, alias.source_decl.toOptional());
                     try self.frames.append(self.allocator, .{ .alias = .{
                         .backing = self.store.getAliasBackingVar(alias),
@@ -953,7 +1007,7 @@ fn Walk(comptime digest: bool) type {
         }
 
         fn writeLiteralDefault(self: *Self, kind: LiteralKind) Allocator.Error!void {
-            try self.writeTag("nominal");
+            try self.writeTag(.nominal);
             switch (types.literal_defaulting.defaultTargetForKind(kind)) {
                 .dec => try self.writeIdent(builtinDecTypeIdent(self.idents)),
                 .str => try self.writeIdent(builtinStrTypeIdent(self.idents)),
@@ -968,23 +1022,23 @@ fn Walk(comptime digest: bool) type {
         fn writeFlat(self: *Self, flat: types.FlatType) Allocator.Error!bool {
             switch (flat) {
                 .empty_record => {
-                    try self.writeTag("empty_record");
+                    try self.writeTag(.empty_record);
                     return false;
                 },
                 .empty_tag_union => {
-                    try self.writeTag("[]");
+                    try self.writeTag(.empty_tag_union);
                     return false;
                 },
                 .record => |record| return try self.writeNormalizedRecordPayload(record.fields, record.ext),
                 .tuple => |tuple| {
-                    try self.writeTag("tuple");
+                    try self.writeTag(.tuple);
                     return try self.pushVarRange(tuple.elems);
                 },
                 .nominal_type => |nominal| {
                     if (self.detect_errors and self.store.nominalDeclIsInvalid(nominal)) {
                         self.contains_error = true;
                     }
-                    try self.writeTag("nominal");
+                    try self.writeTag(.nominal);
                     try self.writeNamedSourceIdentity(nominal.origin_module, nominal.ident.ident_idx, nominal.sourceDeclOptional());
                     try self.writeBool(nominal.isOpaque());
                     const args = self.store.sliceNominalArgs(nominal);
@@ -992,11 +1046,11 @@ fn Walk(comptime digest: bool) type {
                     return try self.pushVars(args);
                 },
                 .fn_pure, .fn_unbound => |func| {
-                    try self.writeTag("fn_pure");
+                    try self.writeTag(.fn_pure);
                     return try self.pushFunc(func);
                 },
                 .fn_effectful => |func| {
-                    try self.writeTag("fn_effectful");
+                    try self.writeTag(.fn_effectful);
                     return try self.pushFunc(func);
                 },
                 .tag_union => |tag_union| return try self.writeNormalizedTagUnionPayload(tag_union.tags, tag_union.ext),
@@ -1172,11 +1226,11 @@ fn Walk(comptime digest: bool) type {
             }
             if (tail == null and fields.len == 0) {
                 self.pending_fields.items.len = fields_base;
-                try self.writeTag("empty_record");
+                try self.writeTag(.empty_record);
                 return false;
             }
 
-            try self.writeTag("record");
+            try self.writeTag(.record);
             try self.writeU32(@intCast(fields.len));
             try self.frames.append(self.allocator, .{ .record = .{
                 .fields_base = fields_base,
@@ -1204,21 +1258,21 @@ fn Walk(comptime digest: bool) type {
                                         .field_presence => |presence| switch (presence) {
                                             .required => try self.writeBool(false),
                                             .defaulted => |id| {
-                                                try self.writeTag("field_default");
+                                                try self.writeTag(.field_default);
                                                 try self.writeBytes(self.env.moduleIdentityHash(id.origin_module));
                                                 try self.writeU32(id.expr_node);
                                             },
-                                            .optional => try self.writeTag("presence_optional_field"),
+                                            .optional => try self.writeTag(.presence_optional_field),
                                         },
                                         .flex => {
-                                            try self.writeTag("presence_variable");
+                                            try self.writeTag(.presence_variable);
                                             frame.stage = .presence_var;
                                             if (!try self.request(unknown.presence)) return false;
                                         },
                                         .err => {
                                             if (self.detect_errors) self.contains_error = true;
                                             self.err_tokens += 1;
-                                            try self.writeTag("err");
+                                            try self.writeTag(.err);
                                         },
                                         .rigid, .alias, .structure => invariantViolation("canonical type key reached a field presence variable holding non-presence content"),
                                     }
@@ -1249,7 +1303,7 @@ fn Walk(comptime digest: bool) type {
                         if (frame.tail) |tail_var| {
                             if (!try self.request(tail_var)) return false;
                         } else {
-                            try self.writeTag("empty_record");
+                            try self.writeTag(.empty_record);
                         }
                     },
                     .done => {
@@ -1316,11 +1370,11 @@ fn Walk(comptime digest: bool) type {
             }
             if (tail == null and tags.len == 0) {
                 self.pending_tags.items.len = tags_base;
-                try self.writeTag("[]");
+                try self.writeTag(.empty_tag_union);
                 return false;
             }
 
-            try self.writeTag("tag_union");
+            try self.writeTag(.tag_union);
             try self.writeU32(@intCast(tags.len));
             try self.frames.append(self.allocator, .{ .tag_union = .{
                 .tags_base = tags_base,
@@ -1362,7 +1416,7 @@ fn Walk(comptime digest: bool) type {
                         if (frame.tail) |tail_var| {
                             if (!try self.request(tail_var)) return false;
                         } else {
-                            try self.writeTag("[]");
+                            try self.writeTag(.empty_tag_union);
                         }
                     },
                     .done => {
@@ -1442,15 +1496,9 @@ fn Walk(comptime digest: bool) type {
             try self.writeBytes(self.idents.getText(ident));
         }
 
-        fn writeTag(self: *Self, comptime tag: []const u8) Allocator.Error!void {
+        fn writeTag(self: *Self, comptime tag: KeyTag) Allocator.Error!void {
             if (!digest) return;
-            const encoded = comptime blk: {
-                var bytes: [4 + tag.len]u8 = undefined;
-                std.mem.writeInt(u32, bytes[0..4], tag.len, .little);
-                @memcpy(bytes[4..], tag);
-                break :blk bytes;
-            };
-            try self.buf.appendSlice(self.allocator, &encoded);
+            try appendKeyTag(&self.buf, self.allocator, tag);
         }
 
         fn writeBytes(self: *Self, bytes: []const u8) Allocator.Error!void {
@@ -1466,9 +1514,7 @@ fn Walk(comptime digest: bool) type {
 
         fn writeU32(self: *Self, value: u32) Allocator.Error!void {
             if (!digest) return;
-            var bytes: [4]u8 = undefined;
-            std.mem.writeInt(u32, &bytes, value, .little);
-            try self.buf.appendSlice(self.allocator, &bytes);
+            try appendKeyVarint(&self.buf, self.allocator, value);
         }
     };
 }
@@ -1483,29 +1529,6 @@ fn builtinStrTypeIdent(idents: *const Ident.Store) Ident.Idx {
 
 fn builtinModuleIdent(idents: *const Ident.Store) Ident.Idx {
     return idents.builtinModuleIdent();
-}
-
-fn writeIdentText(hasher: *TypeDigestHasher, idents: *const Ident.Store, ident: Ident.Idx) void {
-    writeByteSlice(hasher, idents.getText(ident));
-}
-
-fn writeByteSlice(hasher: *TypeDigestHasher, bytes: []const u8) void {
-    writeU32Value(hasher, @intCast(bytes.len));
-    hasher.update(bytes);
-}
-
-fn writeBoolValue(hasher: *TypeDigestHasher, value: bool) void {
-    const byte: u8 = if (value) 1 else 0;
-    hasher.update(std.mem.asBytes(&byte));
-}
-
-fn writeU32Value(hasher: *TypeDigestHasher, value: u32) void {
-    hasher.update(&.{
-        @as(u8, @truncate(value)),
-        @as(u8, @truncate(value >> 8)),
-        @as(u8, @truncate(value >> 16)),
-        @as(u8, @truncate(value >> 24)),
-    });
 }
 
 fn invariantViolation(comptime message: []const u8) noreturn {
@@ -2283,4 +2306,180 @@ test "err-sensitive keys distinguish erroneous content inside closed subtrees" {
     _ = try writer.fromVar(outer_a);
     _ = try writer.fromVar(outer_b);
     try std.testing.expect(!std.meta.eql(try writer.fromVarErrSensitive(outer_a), try writer.fromVarErrSensitive(outer_b)));
+}
+
+/// Test-only reader of the key encoding: it consumes one node per call and
+/// fails unless every byte is accounted for by the grammar, so an encoding
+/// change that makes two shapes share a byte sequence cannot go unnoticed.
+const KeyEncodingReader = struct {
+    bytes: []const u8,
+    pos: usize = 0,
+    tags: std.ArrayList(KeyTag) = .empty,
+    allocator: Allocator,
+
+    fn byte(self: *KeyEncodingReader) !u8 {
+        if (self.pos >= self.bytes.len) return error.TestUnexpectedResult;
+        self.pos += 1;
+        return self.bytes[self.pos - 1];
+    }
+
+    fn tag(self: *KeyEncodingReader) !KeyTag {
+        const raw = try self.byte();
+        const value = std.enums.fromInt(KeyTag, raw) orelse return error.TestUnexpectedResult;
+        try self.tags.append(self.allocator, value);
+        return value;
+    }
+
+    fn varint(self: *KeyEncodingReader) !u32 {
+        var value: u32 = 0;
+        var shift: u5 = 0;
+        while (true) {
+            const b = try self.byte();
+            value |= @as(u32, b & 0x7f) << shift;
+            if (b & 0x80 == 0) return value;
+            shift += 7;
+        }
+    }
+
+    fn skip(self: *KeyEncodingReader, len: usize) !void {
+        if (self.pos + len > self.bytes.len) return error.TestUnexpectedResult;
+        self.pos += len;
+    }
+
+    fn lengthPrefixed(self: *KeyEncodingReader) !void {
+        try self.skip(try self.varint());
+    }
+
+    fn boolean(self: *KeyEncodingReader) !bool {
+        return switch (try self.byte()) {
+            0 => false,
+            1 => true,
+            else => error.TestUnexpectedResult,
+        };
+    }
+
+    fn namedSource(self: *KeyEncodingReader) !void {
+        try self.lengthPrefixed();
+        if (try self.boolean()) {
+            _ = try self.varint();
+        } else {
+            try self.lengthPrefixed();
+        }
+    }
+
+    fn node(self: *KeyEncodingReader) anyerror!void {
+        switch (try self.tag()) {
+            .child_key => try self.skip(32),
+            .cycle, .identity_var_ref, .identity_var_anchor, .err_var, .opaque_root => _ = try self.varint(),
+            .flex, .rigid, .defaulted_empty_tag_union => {
+                _ = try self.varint();
+                if (try self.boolean()) try self.lengthPrefixed();
+                if (try self.varint() != 0) return error.TestUnexpectedResult;
+            },
+            .err, .presence_required, .presence_optional, .empty_record, .empty_tag_union => {},
+            .presence_defaulted => {
+                try self.lengthPrefixed();
+                _ = try self.varint();
+            },
+            .alias => {
+                try self.namedSource();
+                try self.node();
+                for (0..try self.varint()) |_| try self.node();
+            },
+            .nominal => {
+                try self.namedSource();
+                _ = try self.boolean();
+                for (0..try self.varint()) |_| try self.node();
+            },
+            .tuple => for (0..try self.varint()) |_| try self.node(),
+            .fn_pure, .fn_effectful => {
+                for (0..try self.varint()) |_| try self.node();
+                try self.node();
+            },
+            .record => {
+                for (0..try self.varint()) |_| {
+                    try self.lengthPrefixed();
+                    switch (self.bytes[self.pos]) {
+                        0 => self.pos += 1,
+                        else => switch (try self.tag()) {
+                            .field_default => {
+                                try self.lengthPrefixed();
+                                _ = try self.varint();
+                            },
+                            .presence_optional_field => {},
+                            .presence_variable => try self.node(),
+                            else => return error.TestUnexpectedResult,
+                        },
+                    }
+                    try self.node();
+                }
+                try self.node();
+            },
+            .tag_union => {
+                for (0..try self.varint()) |_| {
+                    try self.lengthPrefixed();
+                    for (0..try self.varint()) |_| try self.node();
+                }
+                try self.node();
+            },
+            .field_default, .presence_optional_field, .presence_variable, .canonical_type_scheme, .named, .padding => return error.TestUnexpectedResult,
+        }
+    }
+};
+
+test "key encodings decode back into their tag sequence" {
+    const allocator = std.testing.allocator;
+
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
+    try env.setContentIdentity([_]u8{0x5A} ** 32);
+    const alias_ident = try env.insertIdent(Ident.for_text("Alias"));
+    const nominal_ident = try env.insertIdent(Ident.for_text("Wrapper"));
+    const a_name = try env.insertIdent(Ident.for_text("a"));
+    const b_name = try env.insertIdent(Ident.for_text("b"));
+    const some_name = try env.insertIdent(Ident.for_text("Some"));
+    const none_name = try env.insertIdent(Ident.for_text("None"));
+
+    var store = try TypeStore.initCapacity(allocator, 32, 16);
+    defer store.deinit();
+    const empty = try store.freshFromContent(.{ .structure = .empty_record });
+    const open = try store.fresh();
+    const record = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try store.appendRecordFields(&.{
+            .{ .name = a_name, .presence = .required(empty) },
+            .{ .name = b_name, .presence = .required(open) },
+        }),
+        .ext = open,
+    } } });
+    const tag_union = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{
+            .{ .name = some_name, .args = try store.appendVars(&.{empty}) },
+            .{ .name = none_name, .args = try store.appendVars(&.{}) },
+        }),
+        .ext = open,
+    } } });
+    const alias = try store.freshFromContent(try store.mkAlias(.{ .ident_idx = alias_ident }, record, &.{empty}, env.selfModuleIdentity()));
+    const nominal = try store.freshFromContent(try store.mkNominal(.{ .ident_idx = nominal_ident }, &.{ open, empty }, env.selfModuleIdentity(), false));
+    const function = try store.freshFromContent(.{ .structure = .{ .fn_pure = .{
+        .args = try store.appendVars(&.{ record, tag_union }),
+        .ret = alias,
+    } } });
+    const root = try store.freshFromContent(.{ .structure = .{ .tuple = .{
+        .elems = try store.appendVars(&.{ nominal, function }),
+    } } });
+
+    var builder = Builder.init(allocator, &store, &env);
+    defer builder.deinit();
+    try builder.writeVar(root);
+
+    var reader = KeyEncodingReader{ .bytes = builder.buf.items, .allocator = allocator };
+    defer reader.tags.deinit(allocator);
+    try reader.node();
+    try std.testing.expectEqual(builder.buf.items.len, reader.pos);
+    for ([_]KeyTag{ .tuple, .nominal, .flex, .child_key, .fn_pure, .record, .identity_var_ref, .tag_union, .alias }) |expected| {
+        const found = for (reader.tags.items) |seen| {
+            if (seen == expected) break true;
+        } else false;
+        try std.testing.expect(found);
+    }
 }

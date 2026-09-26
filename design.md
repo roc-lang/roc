@@ -3236,7 +3236,10 @@ a subtree is walked, so every nested subtree whose encoding writes neither is
 encoded as a `child_key` reference to that subtree's own key. The solver-side
 and checked-side encoders compose at exactly these nodes, a key requested for
 a root hashes that root's own encoding, and error-sensitive dispatch-state keys,
-which name each erroneous root, compose only error-free subtrees.
+which name each erroneous root, compose only error-free subtrees. Each checked
+root records whether its key is composable, and a synthetic function root over
+composable children is keyed exactly as a source function node with those
+children, so the two share one root.
 
 Type digests, checked type keys, recursive layout keys, and derived callable
 and evidence digests use the shared `base.TypeDigestHasher`: SHA-256 over the
