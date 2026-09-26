@@ -162,6 +162,9 @@ pub const Evaluator = struct {
     abort_record: ?Abort,
     /// Value carried by `error.Returned`.
     return_value: Value,
+    /// The type `return_value` was produced at; the function's result type
+    /// may list its tags in a wider row.
+    return_type: Type.TypeId,
     /// Value carried by `error.Broke`.
     break_value: Value,
     /// Values carried by `error.Continued`.
@@ -196,6 +199,7 @@ pub const Evaluator = struct {
             .unsupported = null,
             .abort_record = null,
             .return_value = .unit,
+            .return_type = undefined,
             .break_value = .unit,
             .continue_values = &.{},
             // Written by every jump before the error.Jumped unwind that reads it.
@@ -260,12 +264,14 @@ pub const Evaluator = struct {
     fn runRootBody(self: *Evaluator, root_index: usize) Error!RunOutcome {
         const saved_abort = self.abort_record;
         const saved_return = self.return_value;
+        const saved_return_type = self.return_type;
         const saved_break = self.break_value;
         const saved_continue = self.continue_values;
         const saved_jump_values = self.jump_values;
         defer {
             self.abort_record = saved_abort;
             self.return_value = saved_return;
+            self.return_type = saved_return_type;
             self.break_value = saved_break;
             self.continue_values = saved_continue;
             self.jump_values = saved_jump_values;
@@ -288,7 +294,7 @@ pub const Evaluator = struct {
         defer frame.deinit();
 
         const value = self.evalExpr(&frame, body) catch |err| switch (err) {
-            error.Returned => self.return_value,
+            error.Returned => try self.convertValue(self.return_value, self.return_type, fn_.ret),
             error.Aborted => return RunOutcome{ .aborted = self.abort_record.? },
             error.OutOfMemory => return error.OutOfMemory,
             error.Unsupported => return error.Unsupported,
@@ -480,6 +486,7 @@ pub const Evaluator = struct {
             },
             .return_ => |value_expr| {
                 self.return_value = try self.evalExpr(frame, value_expr);
+                self.return_type = self.exprType(value_expr);
                 return error.Returned;
             },
             .uninitialized => return .uninitialized,
@@ -773,7 +780,7 @@ pub const Evaluator = struct {
         }
 
         return self.evalExpr(&frame, body) catch |err| switch (err) {
-            error.Returned => self.return_value,
+            error.Returned => try self.convertValue(self.return_value, self.return_type, fn_.ret),
             error.OutOfMemory,
             error.Unsupported,
             error.Aborted,
@@ -858,6 +865,7 @@ pub const Evaluator = struct {
             },
             .return_ => |expr_id| {
                 self.return_value = try self.evalExpr(frame, expr_id);
+                self.return_type = self.exprType(expr_id);
                 return error.Returned;
             },
             .crash => |sid| return self.crashAbort(self.program.stringLiteralText(sid)),
@@ -972,6 +980,83 @@ pub const Evaluator = struct {
     fn rebuildErr(self: *Evaluator, result_ty: Type.TypeId, payloads: []const Value) EvalError!Value {
         const err_index = self.tagIndexByText(result_ty, "Err") orelse return self.unsupported_("enclosing Err tag not found");
         return .{ .tag = .{ .discriminant = @intCast(err_index), .payloads = payloads } };
+    }
+
+    /// A value moving between two types whose tag rows differ, as an error
+    /// payload does when `?` returns it at the enclosing function's wider
+    /// error row: a tag's discriminant indexes its own type's row, so each
+    /// tag moves to the same-named tag of the target row, through payloads,
+    /// fields, items, elements and boxes.
+    fn convertValue(self: *Evaluator, value: Value, from: Type.TypeId, to: Type.TypeId) Error!Value {
+        if (from == to) return value;
+        const from_content = self.structural(from);
+        const to_content = self.structural(to);
+        switch (value) {
+            .tag => |tag| {
+                if (from_content != .tag_union or to_content != .tag_union) return self.unsup("tag value converted between non-tag-union types");
+                const from_tags = self.program.types.tagSpan(from_content.tag_union);
+                const to_tags = self.program.types.tagSpan(to_content.tag_union);
+                const source_tag = GuardedList.at(from_tags, tag.discriminant);
+                const target_index = for (0..to_tags.len) |i| {
+                    if (self.program.names.tagLabelTextEql(GuardedList.at(to_tags, i).name, source_tag.name)) break i;
+                } else return self.unsup("converted tag absent from the target row");
+                const from_tys = self.program.types.span(source_tag.payloads);
+                const to_tys = self.program.types.span(GuardedList.at(to_tags, target_index).payloads);
+                if (from_tys.len != tag.payloads.len or to_tys.len != tag.payloads.len) return self.unsup("converted tag payload arity");
+                const payloads = self.alloc().alloc(Value, tag.payloads.len) catch return error.OutOfMemory;
+                for (tag.payloads, payloads, 0..) |payload, *out, i| {
+                    out.* = try self.convertValue(payload, GuardedList.at(from_tys, i), GuardedList.at(to_tys, i));
+                }
+                return .{ .tag = .{ .discriminant = @intCast(target_index), .payloads = payloads } };
+            },
+            .record, .tuple => |items| {
+                const from_tys, const to_tys = switch (from_content) {
+                    .record => |fields| blk: {
+                        if (to_content != .record) return self.unsup("record value converted to a non-record type");
+                        const from_fields = self.program.types.fieldSpan(fields);
+                        const to_fields = self.program.types.fieldSpan(to_content.record);
+                        if (from_fields.len != items.len or to_fields.len != items.len) return self.unsup("converted record field count");
+                        const f = self.alloc().alloc(Type.TypeId, items.len) catch return error.OutOfMemory;
+                        const t = self.alloc().alloc(Type.TypeId, items.len) catch return error.OutOfMemory;
+                        for (0..items.len) |i| {
+                            f[i] = GuardedList.at(from_fields, i).ty;
+                            t[i] = GuardedList.at(to_fields, i).ty;
+                        }
+                        break :blk .{ f, t };
+                    },
+                    .tuple => |elems| blk: {
+                        if (to_content != .tuple) return self.unsup("tuple value converted to a non-tuple type");
+                        const from_elems = self.program.types.span(elems);
+                        const to_elems = self.program.types.span(to_content.tuple);
+                        if (from_elems.len != items.len or to_elems.len != items.len) return self.unsup("converted tuple arity");
+                        const f = self.alloc().alloc(Type.TypeId, items.len) catch return error.OutOfMemory;
+                        const t = self.alloc().alloc(Type.TypeId, items.len) catch return error.OutOfMemory;
+                        for (0..items.len) |i| {
+                            f[i] = GuardedList.at(from_elems, i);
+                            t[i] = GuardedList.at(to_elems, i);
+                        }
+                        break :blk .{ f, t };
+                    },
+                    else => return self.unsup("aggregate value converted from a non-aggregate type"),
+                };
+                const out = self.alloc().alloc(Value, items.len) catch return error.OutOfMemory;
+                for (items, out, from_tys, to_tys) |item, *dest, f, t| dest.* = try self.convertValue(item, f, t);
+                return if (value == .record) .{ .record = out } else .{ .tuple = out };
+            },
+            .list => |elems| {
+                if (from_content != .list or to_content != .list) return self.unsup("list value converted between non-list types");
+                const out = self.alloc().alloc(Value, elems.len) catch return error.OutOfMemory;
+                for (elems, out) |elem, *dest| dest.* = try self.convertValue(elem, from_content.list, to_content.list);
+                return .{ .list = out };
+            },
+            .box => |inner| {
+                if (from_content != .box or to_content != .box) return self.unsup("box value converted between non-box types");
+                const out = self.alloc().create(Value) catch return error.OutOfMemory;
+                out.* = try self.convertValue(inner.*, from_content.box, to_content.box);
+                return .{ .box = out };
+            },
+            .unit, .int, .float32, .float64, .dec, .bool_, .str, .capture_record, .callable, .erased_fn, .uninitialized => return value,
+        }
     }
 
     fn evalTryRecordSequence(self: *Evaluator, frame: *Frame, result_ty: Type.TypeId, seq: Ast.TryRecordSequence) EvalError!Value {

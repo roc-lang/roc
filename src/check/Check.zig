@@ -23204,10 +23204,15 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
                     arg_vars[i] = try self.fresh(env, self.cir.store.getExprRegion(arg_expr_idx));
                 }
+                // The resolved method's result joins the call's own type only
+                // once every argument is accepted, as a plain call's does: a
+                // rejected call is retired to an erroneous value, which must
+                // not reach the method's signature and so every other call.
+                const result_var = try self.fresh(env, self.cir.store.getExprRegion(expr_idx));
                 const constraint_fn_var = try self.mkMethodCallConstraint(
                     receiver_var,
                     arg_vars,
-                    expr_var,
+                    result_var,
                     method_call.method_name,
                     env,
                     method_call.method_name_region,
@@ -23238,11 +23243,16 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) did_err = true;
                 if (!did_err) {
                     for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
-                        const arg_result = try self.unifyInContext(
+                        // As for a direct call's arguments, a rejected
+                        // argument relation leaves the argument's own type
+                        // intact: it is shared with the value's other uses,
+                        // such as the element a `for` loop binds.
+                        const arg_result = try self.unifyOwnedRelation(
                             arg_vars[i],
                             ModuleEnv.varFrom(arg_expr_idx),
                             env,
                             methodCallArgContext(method_call.method_name, expr_idx, i, arg_expr_idxs),
+                            if (self.exprIsFreshRecordConstruction(arg_expr_idx)) .construction else .exact,
                         );
                         if (arg_result.isProblem()) {
                             did_err = true;
@@ -23251,6 +23261,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                     }
                     if (did_err) try self.retireCallLikeExpr(expr_idx, expr_var);
                 }
+                if (!did_err) _ = try self.unify(expr_var, result_var, env);
                 eager_constraint_fn_var = constraint_fn_var;
             } else {
                 for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
