@@ -1037,7 +1037,7 @@ pub const Evaluator = struct {
                         }
                         break :blk .{ f, t };
                     },
-                    else => return self.unsup("aggregate value converted from a non-aggregate type"),
+                    .primitive, .named, .capture_record, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst => return self.unsup("aggregate value converted from a non-aggregate type"),
                 };
                 const out = self.alloc().alloc(Value, items.len) catch return error.OutOfMemory;
                 for (items, out, from_tys, to_tys) |item, *dest, f, t| dest.* = try self.convertValue(item, f, t);

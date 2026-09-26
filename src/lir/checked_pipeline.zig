@@ -895,12 +895,12 @@ pub const Observers = struct {
     }
 };
 
-/// The settings a program's Solved stage is prepared under: the inlining
-/// and SpecConstr decisions made before any consumer lowers LIR. Consumers
-/// share one Solved program only when they share these.
 /// Serves closed specializations from the object cache.
 pub const SpecCacheLookup = postcheck.Common.SpecCacheLookup;
 
+/// The settings a program's Solved stage is prepared under: the inlining
+/// and SpecConstr decisions made before any consumer lowers LIR. Consumers
+/// share one Solved program only when they share these.
 pub const SolvedPolicy = struct {
     inline_mode: InlineMode,
     spec_constr_clone_inlining: SpecConstrCloneInlining,
