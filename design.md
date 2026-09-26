@@ -4807,9 +4807,10 @@ edge records a symbolic dispatch-plan reference for Monotype to re-execute,
 and Monotype never
 instantiates a dispatch plan outside the specialization that owns it.
 
-A checked edge whose evidence entry names a concrete target (`.direct`)
-supplies that target to Monotype as is: its identity is never selected again
-from the receiver's owner. The owner's methods are visible from the checked
+A checked edge whose evidence entry names a concrete target (`.direct`), or
+forwards to an enclosing chain entry that does (`.constraint` reaching a
+`.target`), supplies that target to Monotype as is: its identity is never
+selected again from the receiver's owner. The owner's methods are visible from the checked
 site's scope, which need not be the scope of the context relating the edge: a
 caller drafted as another function's callee relates its own call edges in its
 drafter's context, and a method of a type the caller declares locally is

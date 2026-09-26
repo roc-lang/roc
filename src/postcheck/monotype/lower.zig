@@ -44787,7 +44787,13 @@ const BodyContext = struct {
                         } };
                         derived[k] = true;
                     },
-                    .target => {},
+                    // The enclosing chain names the exact target; like a
+                    // `.direct` entry it is not selected again from the
+                    // receiver in this context's scope.
+                    .target => {
+                        out[k] = try self.materializeCheckedEvidenceRef(site_view, ref, param, purpose);
+                        derived[k] = true;
+                    },
                 },
                 // The checker selected this edge's exact target. Its identity
                 // is not selected again from the receiver: the owner's
