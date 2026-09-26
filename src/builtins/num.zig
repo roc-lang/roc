@@ -87,21 +87,103 @@ pub fn mul_u128(a: u128, b: u128) U256 {
     return .{ .hi = hi, .lo = lo };
 }
 
+/// Result of parsing a number from the longest numeric prefix of some bytes.
+///
+/// `consumed` is the byte length of the longest token matching the type's
+/// numeric grammar. `errorcode` is 0 on success, `prefix_parse_not_a_number`
+/// when no prefix matched (`consumed` is then 0), or `prefix_parse_out_of_range`
+/// when a token matched but the whole-token `from_str` of it failed.
+pub fn NumPrefixParseResult(comptime T: type) type {
+    return extern struct {
+        value: T,
+        consumed: u64,
+        errorcode: u8,
+    };
+}
+
+/// `NumPrefixParseResult.errorcode` when no prefix of the input is a number token.
+pub const prefix_parse_not_a_number: u8 = 1;
+/// `NumPrefixParseResult.errorcode` when the matched token does not denote a value of the type.
+pub const prefix_parse_out_of_range: u8 = 2;
+
+fn prefixParseResult(comptime T: type, consumed: usize, value: ?T) NumPrefixParseResult(T) {
+    if (consumed == 0) {
+        return .{ .value = 0, .consumed = 0, .errorcode = prefix_parse_not_a_number };
+    }
+    if (value) |success| {
+        return .{ .value = success, .consumed = consumed, .errorcode = 0 };
+    }
+    return .{ .value = 0, .consumed = consumed, .errorcode = prefix_parse_out_of_range };
+}
+
 /// Parses an integer from a RocStr
 pub fn parseIntFromStr(comptime T: type, buf: RocStr) NumParseResult(T) {
-    const bytes = buf.asSlice();
-    const parsed = if (hasExplicitRadix(bytes))
-        parseIntNoFmt(T, bytes)
-    else if (decimal_parse.parseInt(T, bytes)) |value|
-        value
-    else
-        error.InvalidCharacter;
-
-    if (parsed) |success| {
+    if (parseIntSlice(T, buf.asSlice())) |success| {
         return .{ .errorcode = 0, .value = success };
-    } else |_| {
+    } else {
         return .{ .errorcode = 1, .value = 0 };
     }
+}
+
+/// Whole-input integer parse (`from_str` semantics): the input must be exactly
+/// one integer token, and the token must denote a value of `T`.
+pub fn parseIntSlice(comptime T: type, bytes: []const u8) ?T {
+    const consumed = intPrefixLen(bytes);
+    if (consumed == 0 or consumed != bytes.len) return null;
+    return parseIntToken(T, bytes);
+}
+
+/// Parse an integer from the longest integer token at the start of `bytes`.
+pub fn parseIntPrefix(comptime T: type, bytes: []const u8) NumPrefixParseResult(T) {
+    const consumed = intPrefixLen(bytes);
+    if (consumed == 0) return prefixParseResult(T, 0, null);
+    return prefixParseResult(T, consumed, parseIntToken(T, bytes[0..consumed]));
+}
+
+/// Length of the longest integer token at the start of `bytes`, or 0.
+///
+/// An integer token is either an explicit-radix token (`sign? 0x|0o|0b` then
+/// digits of that radix, `_` only between digits) or a decimal token
+/// (`sign? D (_? D)* (e sign? D (_? D)*)?`). A radix prefix without any digit
+/// of its radix is not a radix token, so `"0x"` matches the decimal token `"0"`.
+pub fn intPrefixLen(bytes: []const u8) usize {
+    const radix_len = radixIntPrefixLen(bytes);
+    if (radix_len != 0) return radix_len;
+    return decimal_parse.prefixLen(bytes, .int);
+}
+
+fn parseIntToken(comptime T: type, token: []const u8) ?T {
+    if (hasExplicitRadix(token)) return parseIntNoFmt(T, token) catch null;
+    return decimal_parse.parseInt(T, token);
+}
+
+fn radixIntPrefixLen(bytes: []const u8) usize {
+    if (!hasExplicitRadix(bytes)) return 0;
+    const digits_start: usize = @as(usize, @intFromBool(bytes[0] == '-' or bytes[0] == '+')) + 2;
+    const radix: u8 = switch (bytes[digits_start - 1]) {
+        'b', 'B' => 2,
+        'o', 'O' => 8,
+        'x', 'X' => 16,
+        else => unreachable,
+    };
+
+    var end = digits_start;
+    var index = digits_start;
+    while (index < bytes.len) : (index += 1) {
+        const byte = bytes[index];
+        if (byte == '_') {
+            if (index == digits_start or index + 1 == bytes.len or !isRadixDigit(bytes[index + 1], radix)) break;
+            continue;
+        }
+        if (!isRadixDigit(byte, radix)) break;
+        end = index + 1;
+    }
+    return if (end == digits_start) 0 else end;
+}
+
+fn isRadixDigit(byte: u8, radix: u8) bool {
+    const digit = digitValue(byte) orelse return false;
+    return digit < radix;
 }
 
 const ParseIntError = error{
@@ -248,15 +330,94 @@ pub fn exportParseInt(comptime T: type, comptime name: []const u8) void {
 
 /// Parses a floating-point number from a RocStr.
 pub fn parseFloatFromStr(comptime T: type, buf: RocStr) NumParseResult(T) {
-    const bytes = buf.asSlice();
-    if (parse_float.parseFloat(T, bytes)) |success| {
-        if (std.math.isInf(success) and !isExplicitInfinity(bytes)) {
-            return .{ .errorcode = 1, .value = 0 };
-        }
+    if (parseFloatSlice(T, buf.asSlice())) |success| {
         return .{ .errorcode = 0, .value = success };
-    } else |_| {
+    } else {
         return .{ .errorcode = 1, .value = 0 };
     }
+}
+
+/// Whole-input float parse (`from_str` semantics): the input must be exactly
+/// one float token, and a finite token must not round to infinity.
+pub fn parseFloatSlice(comptime T: type, bytes: []const u8) ?T {
+    const consumed = floatPrefixLen(bytes);
+    if (consumed == 0 or consumed != bytes.len) return null;
+    return parseFloatToken(T, bytes);
+}
+
+/// Parse a float from the longest float token at the start of `bytes`.
+pub fn parseFloatPrefix(comptime T: type, bytes: []const u8) NumPrefixParseResult(T) {
+    const consumed = floatPrefixLen(bytes);
+    if (consumed == 0) return prefixParseResult(T, 0, null);
+    return prefixParseResult(T, consumed, parseFloatToken(T, bytes[0..consumed]));
+}
+
+/// Length of the longest float token at the start of `bytes`, or 0.
+///
+/// A float token is `sign?` followed by one of: a hex mantissa
+/// `0x (H+ | H+ . H* | . H+)` with optional `p sign? D+` exponent; a decimal
+/// mantissa `(D+ | D+ . D* | . D+)` with optional `e sign? D+` exponent; or
+/// `infinity`, `inf`, `nan` in any case. `_` is accepted only between digits.
+/// A hex prefix without any hex digit is not a hex token, so `"0x"` matches `"0"`.
+pub fn floatPrefixLen(bytes: []const u8) usize {
+    const start: usize = @intFromBool(bytes.len > 0 and (bytes[0] == '-' or bytes[0] == '+'));
+    const body = bytes[start..];
+
+    if (body.len >= 2 and body[0] == '0' and (body[1] == 'x' or body[1] == 'X')) {
+        const hex_len = floatMantissaExponentPrefixLen(body[2..], 16, 'p');
+        if (hex_len != 0) return start + 2 + hex_len;
+    }
+
+    const decimal_len = floatMantissaExponentPrefixLen(body, 10, 'e');
+    if (decimal_len != 0) return start + decimal_len;
+
+    if (std.ascii.startsWithIgnoreCase(body, "infinity")) return start + "infinity".len;
+    if (std.ascii.startsWithIgnoreCase(body, "inf")) return start + "inf".len;
+    if (std.ascii.startsWithIgnoreCase(body, "nan")) return start + "nan".len;
+    return 0;
+}
+
+fn floatMantissaExponentPrefixLen(bytes: []const u8, comptime radix: u8, comptime exponent_char: u8) usize {
+    var index: usize = 0;
+    var digits: usize = 0;
+    var had_point = false;
+    while (index < bytes.len) : (index += 1) {
+        const byte = bytes[index];
+        if (isRadixDigit(byte, radix)) {
+            digits += 1;
+        } else if (byte == '_' and index > 0 and isRadixDigit(bytes[index - 1], radix) and
+            index + 1 < bytes.len and isRadixDigit(bytes[index + 1], radix))
+        {
+            continue;
+        } else if (byte == '.' and !had_point) {
+            had_point = true;
+        } else {
+            break;
+        }
+    }
+    if (digits == 0) return 0;
+
+    if (index < bytes.len and (bytes[index] | 0x20) == exponent_char) {
+        var cursor = index + 1;
+        if (cursor < bytes.len and (bytes[cursor] == '-' or bytes[cursor] == '+')) cursor += 1;
+        if (cursor < bytes.len and isRadixDigit(bytes[cursor], 10)) {
+            while (cursor < bytes.len) : (cursor += 1) {
+                const byte = bytes[cursor];
+                if (isRadixDigit(byte, 10)) continue;
+                if (byte == '_' and isRadixDigit(bytes[cursor - 1], 10) and
+                    cursor + 1 < bytes.len and isRadixDigit(bytes[cursor + 1], 10)) continue;
+                break;
+            }
+            index = cursor;
+        }
+    }
+    return index;
+}
+
+fn parseFloatToken(comptime T: type, token: []const u8) ?T {
+    const value = parse_float.parseFloat(T, token) catch return null;
+    if (std.math.isInf(value) and !isExplicitInfinity(token)) return null;
+    return value;
 }
 
 fn isExplicitInfinity(bytes: []const u8) bool {
@@ -1252,6 +1413,12 @@ const NumTestHelperError = error{
     TestExpectedEqual,
 };
 
+/// Errors raised by the numeric prefix-parse test helpers.
+pub const PrefixTestError = error{
+    TestExpectedEqual,
+    TestUnexpectedResult,
+};
+
 fn expectParseIntText(comptime T: type, text: []const u8, expected: T, roc_ops: *RocOps) NumTestHelperError!void {
     const roc_str = @import("str.zig").RocStr.fromSlice(text, roc_ops);
     defer roc_str.decref(roc_ops);
@@ -1821,4 +1988,284 @@ test "mul_u128 overflow into high bits" {
     // 2^64 * 2^64 = 2^128, which should give hi = 1, lo = 0
     try std.testing.expectEqual(@as(u128, 1), result.hi);
     try std.testing.expectEqual(@as(u128, 0), result.lo);
+}
+
+// ── Numeric prefix parsing ──
+
+/// Generative input for numeric prefix-parse property tests: a random
+/// composition of small numeric-token pieces (signs, digit runs, `_`, radix
+/// prefixes, `.`, exponent markers, special-value words) and terminators.
+pub const prefix_parse_testing = struct {
+    const pieces = [_][]const u8{
+        "-",  "+", "_",  ".",  "0x",  "0o",       "0b",  "0X",
+        "e",  "E", "e+", "e-", "p",   "p-",       "P+",  "a",
+        "f",  "F", "g",  "x",  "inf", "infinity", "nan", "NaN",
+        "In", ",", " ",  "]",  "\n",  "9",        "1",   "0",
+    };
+
+    /// Fill `buf` with a random composition of pieces and return the used prefix.
+    pub fn randomText(random: std.Random, buf: []u8) []const u8 {
+        var len: usize = 0;
+        const piece_count = random.uintAtMost(usize, 7);
+        var i: usize = 0;
+        while (i < piece_count) : (i += 1) {
+            if (random.boolean()) {
+                const digit_count = random.intRangeAtMost(usize, 1, 3);
+                var d: usize = 0;
+                while (d < digit_count and len < buf.len) : (d += 1) {
+                    buf[len] = '0' + random.uintLessThan(u8, 10);
+                    len += 1;
+                }
+            } else {
+                const piece = pieces[random.uintLessThan(usize, pieces.len)];
+                if (len + piece.len > buf.len) break;
+                @memcpy(buf[len..][0..piece.len], piece);
+                len += piece.len;
+            }
+        }
+        return buf[0..len];
+    }
+
+    /// Check the prefix-parse properties of one generated input against the
+    /// whole-string parser of the same type.
+    pub fn expectProperties(comptime T: type, text: []const u8, comptime prefixLen: fn ([]const u8) usize, comptime parsePrefix: fn ([]const u8) NumPrefixParseResult(T), comptime parseWhole: fn ([]const u8) ?T) PrefixTestError!void {
+        const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
+        const result = parsePrefix(text);
+        const consumed: usize = @intCast(result.consumed);
+        try std.testing.expect(consumed <= text.len);
+        try std.testing.expectEqual(prefixLen(text), consumed);
+
+        switch (result.errorcode) {
+            0 => {
+                try std.testing.expect(consumed > 0);
+                const whole = parseWhole(text[0..consumed]) orelse return error.TestUnexpectedResult;
+                try std.testing.expectEqual(@as(Bits, @bitCast(whole)), @as(Bits, @bitCast(result.value)));
+            },
+            prefix_parse_out_of_range => {
+                try std.testing.expect(consumed > 0);
+                try std.testing.expectEqual(@as(?T, null), parseWhole(text[0..consumed]));
+            },
+            prefix_parse_not_a_number => try std.testing.expectEqual(@as(usize, 0), consumed),
+            else => return error.TestUnexpectedResult,
+        }
+
+        // Longest match: no longer prefix of the input is itself a whole token.
+        var longer = consumed + 1;
+        while (longer <= text.len) : (longer += 1) {
+            try std.testing.expect(prefixLen(text[0..longer]) != longer);
+        }
+
+        // Whole-string acceptance followed by a byte that continues no token.
+        if (parseWhole(text)) |whole| {
+            var buf: [64]u8 = undefined;
+            for (", ]\n") |terminator| {
+                @memcpy(buf[0..text.len], text);
+                buf[text.len] = terminator;
+                const terminated = parsePrefix(buf[0 .. text.len + 1]);
+                try std.testing.expectEqual(@as(u8, 0), terminated.errorcode);
+                try std.testing.expectEqual(@as(u64, text.len), terminated.consumed);
+                try std.testing.expectEqual(@as(Bits, @bitCast(whole)), @as(Bits, @bitCast(terminated.value)));
+            }
+        }
+    }
+};
+
+fn expectPrefixOk(comptime T: type, result: NumPrefixParseResult(T), expected: T, consumed: usize) PrefixTestError!void {
+    try std.testing.expectEqual(@as(u8, 0), result.errorcode);
+    try std.testing.expectEqual(@as(u64, consumed), result.consumed);
+    if (@typeInfo(T) == .float) {
+        const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
+        try std.testing.expectEqual(@as(Bits, @bitCast(expected)), @as(Bits, @bitCast(result.value)));
+    } else {
+        try std.testing.expectEqual(expected, result.value);
+    }
+}
+
+fn expectPrefixErr(comptime T: type, result: NumPrefixParseResult(T), errorcode: u8, consumed: usize) PrefixTestError!void {
+    try std.testing.expectEqual(errorcode, result.errorcode);
+    try std.testing.expectEqual(@as(u64, consumed), result.consumed);
+}
+
+test "parseIntPrefix width boundaries and overflow by one digit" {
+    inline for (.{ u8, u16, u32, u64, u128 }) |T| {
+        const max_text = comptime unsignedMaxText(T);
+        try expectPrefixOk(T, parseIntPrefix(T, max_text ++ ","), std.math.maxInt(T), max_text.len);
+        try expectPrefixErr(T, parseIntPrefix(T, comptime unsignedMaxPlusOneText(T) ++ "]"), prefix_parse_out_of_range, comptime unsignedMaxPlusOneText(T).len);
+        try expectPrefixErr(T, parseIntPrefix(T, max_text ++ "0 "), prefix_parse_out_of_range, max_text.len + 1);
+    }
+    inline for (.{ i8, i16, i32, i64, i128 }) |T| {
+        try expectPrefixOk(T, parseIntPrefix(T, comptime signedMaxText(T) ++ ","), std.math.maxInt(T), comptime signedMaxText(T).len);
+        try expectPrefixOk(T, parseIntPrefix(T, comptime signedMinText(T) ++ " "), std.math.minInt(T), comptime signedMinText(T).len);
+        try expectPrefixErr(T, parseIntPrefix(T, comptime signedMaxPlusOneText(T) ++ "]"), prefix_parse_out_of_range, comptime signedMaxPlusOneText(T).len);
+        try expectPrefixErr(T, parseIntPrefix(T, comptime signedMinMinusOneText(T) ++ "\n"), prefix_parse_out_of_range, comptime signedMinMinusOneText(T).len);
+    }
+
+    try expectPrefixErr(u8, parseIntPrefix(u8, "256,"), prefix_parse_out_of_range, 3);
+    try expectPrefixErr(u8, parseIntPrefix(u8, "300,"), prefix_parse_out_of_range, 3);
+    try expectPrefixErr(i8, parseIntPrefix(i8, "-129"), prefix_parse_out_of_range, 4);
+    try expectPrefixErr(i8, parseIntPrefix(i8, "128"), prefix_parse_out_of_range, 3);
+    try expectPrefixErr(u8, parseIntPrefix(u8, "1e99,"), prefix_parse_out_of_range, 4);
+}
+
+test "parseIntPrefix never ends a token on a dangling sign, underscore, or exponent" {
+    inline for (.{ u8, i8, u64, i128 }) |T| {
+        try expectPrefixErr(T, parseIntPrefix(T, ""), prefix_parse_not_a_number, 0);
+        try expectPrefixErr(T, parseIntPrefix(T, "-"), prefix_parse_not_a_number, 0);
+        try expectPrefixErr(T, parseIntPrefix(T, "+"), prefix_parse_not_a_number, 0);
+        try expectPrefixErr(T, parseIntPrefix(T, "-abc"), prefix_parse_not_a_number, 0);
+        try expectPrefixErr(T, parseIntPrefix(T, "_1"), prefix_parse_not_a_number, 0);
+        try expectPrefixErr(T, parseIntPrefix(T, " 1"), prefix_parse_not_a_number, 0);
+        try expectPrefixErr(T, parseIntPrefix(T, ".5"), prefix_parse_not_a_number, 0);
+
+        try expectPrefixOk(T, parseIntPrefix(T, "1_"), 1, 1);
+        try expectPrefixOk(T, parseIntPrefix(T, "1__2"), 1, 1);
+        try expectPrefixOk(T, parseIntPrefix(T, "1_2x"), 12, 3);
+        try expectPrefixOk(T, parseIntPrefix(T, "2e"), 2, 1);
+        try expectPrefixOk(T, parseIntPrefix(T, "2e+"), 2, 1);
+        try expectPrefixOk(T, parseIntPrefix(T, "2E+1,"), 20, 4);
+        try expectPrefixOk(T, parseIntPrefix(T, "2e_1"), 2, 1);
+        try expectPrefixOk(T, parseIntPrefix(T, "2e1_"), 20, 3);
+        try expectPrefixOk(T, parseIntPrefix(T, "2e-"), 2, 1);
+        try expectPrefixErr(T, parseIntPrefix(T, "2e-1"), prefix_parse_out_of_range, 4);
+        // `.` is not integer grammar: version strings split at the first `.`.
+        try expectPrefixOk(T, parseIntPrefix(T, "1.2.3"), 1, 1);
+    }
+    try expectPrefixOk(u32, parseIntPrefix(u32, "2e5ast"), 200_000, 3);
+    try expectPrefixOk(u8, parseIntPrefix(u8, "0e99999999999999999999,"), 0, 22);
+}
+
+test "parseIntPrefix radix tokens take the longest run of valid radix digits" {
+    inline for (.{ u8, i8, u64, i128 }) |T| {
+        try expectPrefixOk(T, parseIntPrefix(T, "0x"), 0, 1);
+        try expectPrefixOk(T, parseIntPrefix(T, "0xg"), 0, 1);
+        try expectPrefixOk(T, parseIntPrefix(T, "0x_1"), 0, 1);
+        try expectPrefixOk(T, parseIntPrefix(T, "0b12"), 1, 3);
+        try expectPrefixOk(T, parseIntPrefix(T, "0o78"), 7, 3);
+        try expectPrefixOk(T, parseIntPrefix(T, "0B1_0_"), 2, 5);
+        try expectPrefixOk(T, parseIntPrefix(T, "+0x1f,"), 31, 5);
+        // Hex digits include `e`, so there is no exponent after a radix prefix.
+        try expectPrefixOk(T, parseIntPrefix(T, "0x1e"), 30, 4);
+    }
+    try expectPrefixOk(u8, parseIntPrefix(u8, "0xFFg"), 255, 4);
+    try expectPrefixErr(u8, parseIntPrefix(u8, "0x100"), prefix_parse_out_of_range, 5);
+    try expectPrefixOk(i8, parseIntPrefix(i8, "-0x80]"), -128, 5);
+    try expectPrefixOk(i8, parseIntPrefix(i8, "-0x"), 0, 2);
+}
+
+test "parseIntPrefix unsigned negative zero is Ok and negative magnitudes are out of range" {
+    inline for (.{ u8, u16, u32, u64, u128 }) |T| {
+        try expectPrefixOk(T, parseIntPrefix(T, "-0,"), 0, 2);
+        try expectPrefixErr(T, parseIntPrefix(T, "-5,"), prefix_parse_out_of_range, 2);
+    }
+}
+
+test "parseIntPrefix integer exponents may be negative, and non-integral values are out of range" {
+    // The integer token grammar is `D (e sign? D)?`, independent of value, so
+    // whole-string `from_str` is unchanged: `1e-0` is an integer and `0e-5`,
+    // `2e-1` are complete tokens that do not denote integers.
+    try expectPrefixOk(i64, parseIntPrefix(i64, "1e-0,"), 1, 4);
+    try std.testing.expectEqual(@as(?i64, 1), parseIntSlice(i64, "1e-0"));
+    try std.testing.expectEqual(@as(?i64, 10), parseIntSlice(i64, "10e-00"));
+    try expectPrefixErr(i64, parseIntPrefix(i64, "0e-5,"), prefix_parse_out_of_range, 4);
+    try std.testing.expectEqual(@as(?i64, null), parseIntSlice(i64, "0e-5"));
+    try expectPrefixErr(u64, parseIntPrefix(u64, "2e-1,"), prefix_parse_out_of_range, 4);
+    try expectPrefixOk(u64, parseIntPrefix(u64, "2e-"), 2, 1);
+}
+
+test "parseFloatPrefix decimal mantissa forms" {
+    inline for (.{ f32, f64 }) |T| {
+        try expectPrefixOk(T, parseFloatPrefix(T, ".5"), 0.5, 2);
+        try expectPrefixOk(T, parseFloatPrefix(T, "1."), 1.0, 2);
+        try expectPrefixOk(T, parseFloatPrefix(T, "1.x"), 1.0, 2);
+        try expectPrefixOk(T, parseFloatPrefix(T, "1.5e3]"), 1500.0, 5);
+        try expectPrefixOk(T, parseFloatPrefix(T, "-.5e1,"), -5.0, 5);
+        try expectPrefixOk(T, parseFloatPrefix(T, "1_0 "), 10.0, 3);
+        try expectPrefixOk(T, parseFloatPrefix(T, "1_"), 1.0, 1);
+        try expectPrefixOk(T, parseFloatPrefix(T, "1._5"), 1.0, 2);
+        try expectPrefixOk(T, parseFloatPrefix(T, "2e"), 2.0, 1);
+        try expectPrefixOk(T, parseFloatPrefix(T, "2e+"), 2.0, 1);
+        try expectPrefixOk(T, parseFloatPrefix(T, "2e-1,"), 0.2, 4);
+        try expectPrefixOk(T, parseFloatPrefix(T, "1.2.3"), 1.2, 3);
+        try expectPrefixErr(T, parseFloatPrefix(T, ""), prefix_parse_not_a_number, 0);
+        try expectPrefixErr(T, parseFloatPrefix(T, "-"), prefix_parse_not_a_number, 0);
+        try expectPrefixErr(T, parseFloatPrefix(T, "."), prefix_parse_not_a_number, 0);
+        try expectPrefixErr(T, parseFloatPrefix(T, "e5"), prefix_parse_not_a_number, 0);
+        try expectPrefixErr(T, parseFloatPrefix(T, " 1"), prefix_parse_not_a_number, 0);
+    }
+}
+
+test "parseFloatPrefix hex floats" {
+    inline for (.{ f32, f64 }) |T| {
+        try expectPrefixOk(T, parseFloatPrefix(T, "0x1p3"), 8.0, 5);
+        try expectPrefixOk(T, parseFloatPrefix(T, "0x1.8p1,"), 3.0, 7);
+        try expectPrefixOk(T, parseFloatPrefix(T, "-0X1P-1]"), -0.5, 7);
+        try expectPrefixOk(T, parseFloatPrefix(T, "0x1p"), 1.0, 3);
+        try expectPrefixOk(T, parseFloatPrefix(T, "0x"), 0.0, 1);
+        try expectPrefixOk(T, parseFloatPrefix(T, "0xg"), 0.0, 1);
+        try expectPrefixOk(T, parseFloatPrefix(T, "0x.8"), 0.5, 4);
+    }
+}
+
+test "parseFloatPrefix special values underflow and overflow" {
+    inline for (.{ f32, f64 }) |T| {
+        const inf = std.math.inf(T);
+        try expectPrefixOk(T, parseFloatPrefix(T, "inf"), inf, 3);
+        try expectPrefixOk(T, parseFloatPrefix(T, "Infinity,"), inf, 8);
+        try expectPrefixOk(T, parseFloatPrefix(T, "-INF]"), -inf, 4);
+        try expectPrefixOk(T, parseFloatPrefix(T, "+infinix"), inf, 4);
+
+        const nan_result = parseFloatPrefix(T, "NaN,");
+        try std.testing.expectEqual(@as(u8, 0), nan_result.errorcode);
+        try std.testing.expectEqual(@as(u64, 3), nan_result.consumed);
+        try std.testing.expect(std.math.isNan(nan_result.value));
+        try std.testing.expectEqual(@as(u64, 4), parseFloatPrefix(T, "-nanx").consumed);
+
+        try expectPrefixErr(T, parseFloatPrefix(T, "in"), prefix_parse_not_a_number, 0);
+    }
+
+    try expectPrefixOk(f64, parseFloatPrefix(f64, "1e-400,"), 0.0, 6);
+    try expectPrefixOk(f32, parseFloatPrefix(f32, "1e-50,"), 0.0, 5);
+    try expectPrefixErr(f64, parseFloatPrefix(f64, "1e400,"), prefix_parse_out_of_range, 5);
+    try expectPrefixErr(f32, parseFloatPrefix(f32, "1e39,"), prefix_parse_out_of_range, 4);
+}
+
+fn IntPrefixFns(comptime T: type) type {
+    return struct {
+        fn prefix(bytes: []const u8) NumPrefixParseResult(T) {
+            return parseIntPrefix(T, bytes);
+        }
+        fn whole(bytes: []const u8) ?T {
+            return parseIntSlice(T, bytes);
+        }
+    };
+}
+
+fn FloatPrefixFns(comptime T: type) type {
+    return struct {
+        fn prefix(bytes: []const u8) NumPrefixParseResult(T) {
+            return parseFloatPrefix(T, bytes);
+        }
+        fn whole(bytes: []const u8) ?T {
+            return parseFloatSlice(T, bytes);
+        }
+    };
+}
+
+test "numeric prefix parse properties over generated token compositions" {
+    var prng = std.Random.DefaultPrng.init(0x7010_0bad_cafe);
+    const random = prng.random();
+    var buf: [48]u8 = undefined;
+
+    var iteration: usize = 0;
+    while (iteration < 20_000) : (iteration += 1) {
+        const text = prefix_parse_testing.randomText(random, &buf);
+        inline for (.{ u8, i8, u16, i32, u64, i64, u128, i128 }) |T| {
+            const fns = IntPrefixFns(T);
+            try prefix_parse_testing.expectProperties(T, text, intPrefixLen, fns.prefix, fns.whole);
+        }
+        inline for (.{ f32, f64 }) |T| {
+            const fns = FloatPrefixFns(T);
+            try prefix_parse_testing.expectProperties(T, text, floatPrefixLen, fns.prefix, fns.whole);
+        }
+    }
 }
