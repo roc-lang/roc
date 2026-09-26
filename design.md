@@ -3835,9 +3835,13 @@ method of a nominal type declared by a block inside a function body exists
 only in that block, so after solving a root is not selected when its checked
 dispatch evidence names such a method: a dispatch target selected at one of
 the root's own dispatch sites, one selected for a constraint a scheme
-instantiated in the root carries, or one nested in another selected target's
+instantiated in the root carries, one nested in another selected target's
 evidence (joined through the recorded scheme-use pairs, as the default-cycle
-walk joins them). A kept root never contains the method's declaration, which
+walk joins them), or one selected for a component of a structural
+comparison or hash (`{ k: Loc.L } == ...`). A structural discharge rewrites
+its node and keeps no constraint of its own, so checking records the
+constraint each rewrite discharged and a derivation edge from it to every
+component obligation it creates; the walk follows both. A kept root never contains the method's declaration, which
 is a lambda. The evidence decides, not the syntax: `getit(l)` with
 `l : Loc` bound earlier is kept out of a root exactly as `getit(Loc.L)` is,
 while constant data built from a local nominal (`[Loc.L, Loc.M]`) is still a

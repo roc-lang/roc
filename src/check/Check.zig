@@ -887,6 +887,12 @@ where_method_use_record_by_fn_var: std.AutoHashMapUnmanaged(Var, u32) = .empty,
 /// unification.
 dispatch_derivations: std.ArrayListUnmanaged(DispatchDerivation) = .empty,
 dispatch_derivation_by_child_fn_var: std.AutoHashMapUnmanaged(Var, Var) = .empty,
+/// The constraint each discharge rewrote a node into structural equality or
+/// hashing for (`rewriteDerivedIsEqMethodCallAsStructuralEq`,
+/// `rewriteDerivedMethodCallAsStructuralHash`). The rewritten node keeps no
+/// constraint var of its own, so this is where its component obligations,
+/// derived under that constraint (`dispatch_derivations`), are reached from.
+structural_rewrite_constraints: std.ArrayListUnmanaged(StructuralRewriteConstraint) = .empty,
 /// Reusable scratch for the receiver-embedding walk of recursive-dispatch
 /// detection: the in-progress (small, big) pair stack that cuts cyclic
 /// structure, and the completed-pair memo that keeps shared substructure
@@ -1432,6 +1438,11 @@ const DispatchTargetInstantiation = struct {
 const DispatchDerivation = struct {
     child_fn_var: Var,
     parent_fn_var: Var,
+};
+
+const StructuralRewriteConstraint = struct {
+    expr: CIR.Expr.Idx,
+    constraint_fn_var: Var,
 };
 
 const SchemeReachabilityVisit = struct {
@@ -3263,6 +3274,7 @@ pub fn deinit(self: *Self) void {
     self.dispatch_target_instantiation_by_fn_var.deinit(self.gpa);
     self.where_method_use_record_by_fn_var.deinit(self.gpa);
     self.dispatch_derivations.deinit(self.gpa);
+    self.structural_rewrite_constraints.deinit(self.gpa);
     self.dispatch_derivation_by_child_fn_var.deinit(self.gpa);
     self.scratch_embed_active_pairs.deinit(self.gpa);
     self.scratch_embed_memo.deinit(self.gpa);
@@ -10840,6 +10852,9 @@ fn hoistedRootReachesBlockLocalMethod(
     while (context.dispatch_seeds.pop()) |seed| {
         const resolved = self.types.resolveVar(seed).var_;
         if ((try visited.getOrPut(self.gpa, resolved)).found_existing) continue;
+        if (join.children_by_parent.get(resolved)) |children| {
+            try context.dispatch_seeds.appendSlice(self.gpa, children.items);
+        }
         const inst_indices = join.instantiations_by_var.get(resolved) orelse continue;
         for (inst_indices.items) |inst_index| {
             const instantiation = self.dispatch_target_instantiations.items[inst_index];
@@ -10888,6 +10903,9 @@ fn noteHoistedRootDispatchSeeds(
     else
         null;
     if (constraint_fn_var) |fn_var| try context.dispatch_seeds.append(self.gpa, fn_var);
+    if (join.structural_rewrites_by_expr.get(expr_idx)) |rewrites| {
+        try context.dispatch_seeds.appendSlice(self.gpa, rewrites.items);
+    }
 }
 
 /// Whether a binding a hoisted root reads stays available once the root is
@@ -30703,6 +30721,7 @@ const Probe = struct {
     accepted_nominal_constructor_backings_len: usize,
     dispatch_target_instantiations_len: usize,
     dispatch_derivations_len: usize,
+    structural_rewrite_constraints_len: usize,
     imported_schemes_len: usize,
 
     fn rollback(self: *Probe) void {
@@ -30767,6 +30786,7 @@ const Probe = struct {
         }
         self.check.probe_depth -= 1;
         self.check.shrinkDispatchDerivationsTo(self.dispatch_derivations_len);
+        self.check.structural_rewrite_constraints.shrinkRetainingCapacity(self.structural_rewrite_constraints_len);
         while (self.check.imported_schemes.items.len > self.imported_schemes_len) {
             const removed = self.check.imported_schemes.pop().?;
             self.check.discardImportedSchemeMetadata(removed.scheme_var);
@@ -30846,6 +30866,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .accepted_nominal_constructor_backings_len = accepted_nominal_constructor_backings_len,
         .dispatch_target_instantiations_len = dispatch_target_instantiations_len,
         .dispatch_derivations_len = dispatch_derivations_len,
+        .structural_rewrite_constraints_len = self.structural_rewrite_constraints.items.len,
         .imported_schemes_len = imported_schemes_len,
         .savepoint = savepoint,
     };
@@ -31997,8 +32018,21 @@ const DispatchJoinIndex = struct {
     dispatch_scheme_uses: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     /// Resolved constraint fn var -> `dispatch_target_instantiations` indices.
     instantiations_by_var: std.AutoHashMapUnmanaged(Var, std.ArrayListUnmanaged(u32)) = .empty,
+    /// Resolved parent constraint fn var -> the child constraint fn vars
+    /// derived under it (`dispatch_derivations`), e.g. a structural
+    /// comparison's component obligations.
+    children_by_parent: std.AutoHashMapUnmanaged(Var, std.ArrayListUnmanaged(Var)) = .empty,
+    /// Structurally rewritten node -> the constraints its rewrites discharged
+    /// (`structural_rewrite_constraints`).
+    structural_rewrites_by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, std.ArrayListUnmanaged(Var)) = .empty,
 
     fn deinit(index: *DispatchJoinIndex, gpa: std.mem.Allocator) void {
+        var child_lists = index.children_by_parent.valueIterator();
+        while (child_lists.next()) |list| list.deinit(gpa);
+        index.children_by_parent.deinit(gpa);
+        var rewrite_lists = index.structural_rewrites_by_expr.valueIterator();
+        while (rewrite_lists.next()) |list| list.deinit(gpa);
+        index.structural_rewrites_by_expr.deinit(gpa);
         var node_lists = index.node_to_scheme_uses.valueIterator();
         while (node_lists.next()) |list| list.deinit(gpa);
         index.node_to_scheme_uses.deinit(gpa);
@@ -32047,6 +32081,17 @@ fn buildDispatchJoinIndex(self: *Self, index: *DispatchJoinIndex) Allocator.Erro
         const entry = try index.instantiations_by_var.getOrPut(self.gpa, resolved);
         if (!entry.found_existing) entry.value_ptr.* = .empty;
         try entry.value_ptr.append(self.gpa, @intCast(instantiation_index));
+    }
+    for (self.dispatch_derivations.items) |derivation| {
+        const resolved_parent = self.types.resolveVar(derivation.parent_fn_var).var_;
+        const entry = try index.children_by_parent.getOrPut(self.gpa, resolved_parent);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(self.gpa, derivation.child_fn_var);
+    }
+    for (self.structural_rewrite_constraints.items) |rewrite| {
+        const entry = try index.structural_rewrites_by_expr.getOrPut(self.gpa, rewrite.expr);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(self.gpa, rewrite.constraint_fn_var);
     }
 }
 
@@ -39981,6 +40026,10 @@ fn mkDerivedComponentConstraint(
     };
     try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+    // The component's obligation belongs to the parent comparison: record the
+    // edge so a consumer that reached the parent reaches the component's
+    // selected target too.
+    try self.recordDispatchDerivations(constraint_range, parent_constraint.fn_var);
 
     const constrained_var = try self.freshFromContent(
         .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
@@ -43099,7 +43148,9 @@ fn satisfyDerivedIsEqConstraint(
     _ = try self.unify(try self.freshBool(env, region), resolved_func.ret, env);
     if (!self.rewriteDerivedIsEqMethodCallAsStructuralEq(constraint)) {
         try self.markStaticDispatchRejected(constraint);
+        return;
     }
+    try self.recordStructuralRewriteConstraint(constraint);
 }
 
 /// Satisfy a derived `to_hash` constraint for an anonymous structural type.
@@ -43146,7 +43197,18 @@ fn satisfyDerivedToHashConstraint(
     _ = try self.unify(hasher_arg, ret, env);
     if (!self.rewriteDerivedMethodCallAsStructuralHash(constraint)) {
         try self.markStaticDispatchRejected(constraint);
+        return;
     }
+    try self.recordStructuralRewriteConstraint(constraint);
+}
+
+/// Record the constraint a discharge rewrote its node into structural
+/// equality or hashing for (`structural_rewrite_constraints`).
+fn recordStructuralRewriteConstraint(self: *Self, constraint: StaticDispatchConstraint) Allocator.Error!void {
+    const expr_idx = constraintIntroExpr(constraint) orelse return;
+    const expr = self.cir.store.getExpr(expr_idx);
+    if (expr != .e_structural_eq and expr != .e_structural_hash) return;
+    try self.structural_rewrite_constraints.append(self.gpa, .{ .expr = expr_idx, .constraint_fn_var = constraint.fn_var });
 }
 
 fn satisfyImplicitParserConstraint(
