@@ -2,7 +2,12 @@
 
 const std = @import("std");
 const roc_target = @import("roc_target");
-const BuildEnv = @import("../compile_build.zig").BuildEnv;
+const compile_build = @import("../compile_build.zig");
+const BuildEnv = compile_build.BuildEnv;
+
+const RequirementTestError = compile_build.InitError || compile_build.BuildRootError ||
+    std.Io.Dir.WriteFileError || std.Io.Dir.RealPathFileAllocError || std.Io.Dir.CreateDirPathError ||
+    error{ TestExpectedEqual, TestUnexpectedResult };
 
 test "issue 11736: mistyped requirement containing a tag alias reports a mismatch" {
     const gpa = std.testing.allocator;
@@ -76,7 +81,7 @@ test "issue 11736: cached runtime body retains rejected requirement divergence" 
     try expectBlockRequirement("\"wrong\"", 1, false);
 }
 
-fn expectBlockRequirement(value: []const u8, expected_mismatches: usize, compile_time: bool) !void {
+fn expectBlockRequirement(value: []const u8, expected_mismatches: usize, compile_time: bool) RequirementTestError!void {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp_dir = std.testing.tmpDir(.{});

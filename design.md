@@ -3505,7 +3505,7 @@ sibling bindings, and a lookup at a checked-error index lowers to a runtime
 crash. There is no relation-less error fallback and no separate flow that
 "permits" user errors.
 Pairing turns each rejected requirement lookup into a checked runtime-error
-expression and republishes expression and statement divergence through the
+expression and updates expression and statement divergence through the
 existing checked dependency traversal. The unpaired platform stays immutable;
 the pairing cache preserves the changed bodies and divergence. A rejected
 lookup never supplies argument type evidence to a downstream call.
