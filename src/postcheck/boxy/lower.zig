@@ -1633,6 +1633,17 @@ const ProcedureBuilder = struct {
             if (structural_kind == .equality or
                 (exact_method == null and self.staticDictionarySlotIsStructuralEq(rep_id, requirement)))
             {
+                const frame_worker: ?Plan.WorkerPlanId = if (slot_template) |outer| outer.frame.worker_layout.worker else null;
+                const derived_key = Plan.DerivedComponentKey{
+                    .frame = try self.plan.derivedFrame(self.allocator, frame_worker, rep_id),
+                    .method = .equality,
+                    .rep = rep_id,
+                };
+                if (self.plan.derivedRootHasCalls(derived_key)) {
+                    const fn_type = if (exact_method) |method| method.callable_type else requirement.fn_ty;
+                    slots.items[slot_index] = try self.structuralDerivedMethodSlot(rep_id, requirement, fn_type, .equality, slot_template);
+                    continue;
+                }
                 const operand_desc = try self.structuralSlotOperandDesc(rep_id, slot_template);
                 const operand_layout = self.layout_plan.rep_layouts[@intFromEnum(rep_id)].worker.layoutIdx();
                 const arg_layouts_start: u32 = @intCast(self.result.boxy_method_arg_layouts.items.len);
@@ -1662,7 +1673,7 @@ const ProcedureBuilder = struct {
                 (exact_method == null and self.staticDictionarySlotIsStructuralHash(rep_id, requirement)))
             {
                 const fn_type = if (exact_method) |method| method.callable_type else requirement.fn_ty;
-                slots.items[slot_index] = try self.structuralHashMethodSlot(rep_id, requirement, fn_type);
+                slots.items[slot_index] = try self.structuralDerivedMethodSlot(rep_id, requirement, fn_type, .hash, slot_template);
                 continue;
             }
             if (exact_method) |method| {
@@ -1724,7 +1735,20 @@ const ProcedureBuilder = struct {
             defer frame_requirement_descs.deinit(self.allocator);
             if (slot_template) |frame_template| {
                 if (exact_method) |method| {
-                    for (self.plan.schemeRepSubstitutionSlice(method.requirement_substitution)) |pair| {
+                    // An instantiated method's requirement dispatcher stands for
+                    // this dictionary's own type, as a checked call's
+                    // substitution states for its scheme variables.
+                    var substitution_pairs = std.ArrayList(Plan.SchemeRepSubstitution).empty;
+                    defer substitution_pairs.deinit(self.allocator);
+                    try substitution_pairs.appendSlice(self.allocator, self.plan.schemeRepSubstitutionSlice(method.requirement_substitution));
+                    if (self.staticMethodInstantiation(method) != null) {
+                        try substitution_pairs.append(self.allocator, .{
+                            .scheme_rep = self.plan.repForSourceType(requirement.source_type) orelse
+                                boxyLowerInvariant("static dictionary requirement dispatcher type was not analyzed"),
+                            .site_rep = rep_id,
+                        });
+                    }
+                    for (substitution_pairs.items) |pair| {
                         const desc = self.plan.representations.items[@intFromEnum(pair.scheme_rep)].descriptor orelse continue;
                         if (!try frame_template.frame.repDescriptorNeedsFrame(pair.site_rep)) continue;
                         const materialization = try frame_template.frame.descriptorMaterializationForSourceRep(pair.site_rep);
@@ -1738,17 +1762,26 @@ const ProcedureBuilder = struct {
                         });
                         try method_hidden_desc_refs.append(self.allocator, materialization.desc);
                     }
-                    const callable_rep = self.plan.repForSourceType(method.callable_type) orelse
-                        boxyLowerInvariant("static dictionary method callable type was not analyzed");
                     var visited = collections.DenseMap(Plan.TypeRepId, void).init(self.allocator);
                     defer visited.deinit();
-                    try self.collectFrameCallableDescriptors(
-                        frame_template,
-                        callable_rep,
-                        &visited,
-                        &frame_requirement_descs,
-                        &method_hidden_desc_refs,
-                    );
+                    if (self.staticMethodInstantiation(method)) |instantiation| {
+                        const call = try self.concreteMethodCall(method.callable_type, instantiation);
+                        defer self.allocator.free(call.arg_reps);
+                        for (call.arg_reps) |arg_rep| {
+                            try self.collectFrameCallableDescriptors(frame_template, arg_rep, &visited, &frame_requirement_descs, &method_hidden_desc_refs);
+                        }
+                        try self.collectFrameCallableDescriptors(frame_template, call.ret, &visited, &frame_requirement_descs, &method_hidden_desc_refs);
+                    } else {
+                        const callable_rep = self.plan.repForSourceType(method.callable_type) orelse
+                            boxyLowerInvariant("static dictionary method callable type was not analyzed");
+                        try self.collectFrameCallableDescriptors(
+                            frame_template,
+                            callable_rep,
+                            &visited,
+                            &frame_requirement_descs,
+                            &method_hidden_desc_refs,
+                        );
+                    }
                 }
             }
             const worker_proc = try self.emitWorker(resolved);
@@ -1763,6 +1796,7 @@ const ProcedureBuilder = struct {
                 if (exact_method) |method| method.hidden_desc_sources else null,
                 if (exact_method) |method| method.requirement_substitution else .{},
                 frame_requirement_descs.items,
+                if (exact_method) |method| self.staticMethodInstantiation(method) else null,
             );
             // A template slot's adapter descriptors name the building frame's
             // descriptors wherever they describe a requirement it supplies.
@@ -2252,6 +2286,55 @@ const ProcedureBuilder = struct {
         };
     }
 
+    /// A dictionary method called at its recorded instantiation rather than
+    /// at a checked evidence callable.
+    const StaticMethodInstantiation = struct {
+        arg_types: []const Plan.CheckedTypeIdentity,
+        ret_type: Plan.CheckedTypeIdentity,
+    };
+
+    fn staticMethodInstantiation(self: *const ProcedureBuilder, method: Plan.DictionaryMethodEvidence) ?StaticMethodInstantiation {
+        const ret_type = method.instantiation_ret_type orelse return null;
+        return .{
+            .arg_types = self.plan.dictionaryMethodCallTypeSlice(method.instantiation_arg_types),
+            .ret_type = ret_type,
+        };
+    }
+
+    /// The argument and result representations of the edge a static
+    /// dictionary method is called at.
+    const ConcreteMethodCall = struct {
+        arg_reps: []Plan.TypeRepId,
+        ret: Plan.TypeRepId,
+    };
+
+    fn concreteMethodCall(
+        self: *ProcedureBuilder,
+        callable_type: Plan.CheckedTypeIdentity,
+        instantiation: ?StaticMethodInstantiation,
+    ) Allocator.Error!ConcreteMethodCall {
+        if (instantiation) |call| {
+            const arg_reps = try self.allocator.alloc(Plan.TypeRepId, call.arg_types.len);
+            for (call.arg_types, arg_reps) |arg_type, *arg_rep| {
+                arg_rep.* = self.plan.repForSourceType(arg_type) orelse
+                    boxyLowerInvariant("static dictionary method instantiation argument type was not analyzed");
+            }
+            return .{
+                .arg_reps = arg_reps,
+                .ret = self.plan.repForSourceType(call.ret_type) orelse
+                    boxyLowerInvariant("static dictionary method instantiation result type was not analyzed"),
+            };
+        }
+        const concrete_rep = self.plan.repForSourceType(callable_type) orelse
+            boxyLowerInvariant("static dictionary method callable type was not analyzed");
+        const concrete = self.staticMethodFunctionForRep(concrete_rep) orelse
+            boxyLowerInvariant("static dictionary method callable type was not callable");
+        const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(concrete.rep)].children);
+        const arg_reps = try self.allocator.alloc(Plan.TypeRepId, concrete.arg_count);
+        for (children[concrete.args_start..][0..concrete.arg_count], arg_reps) |child, *arg_rep| arg_rep.* = child.rep;
+        return .{ .arg_reps = arg_reps, .ret = concrete.ret };
+    }
+
     fn emitStaticMethodBoundaryAdapter(
         self: *ProcedureBuilder,
         worker_id: Plan.WorkerPlanId,
@@ -2264,6 +2347,7 @@ const ProcedureBuilder = struct {
         hidden_desc_sources: ?Plan.Span,
         requirement_substitution: Plan.Span,
         frame_requirement_descs: []const FrameRequirementDescriptor,
+        instantiation: ?StaticMethodInstantiation,
     ) Allocator.Error!LIR.LirProcSpecId {
         const worker = self.plan.workers.items[@intFromEnum(worker_id)];
         const worker_function = self.staticMethodFunctionForRep(worker.rep) orelse
@@ -2351,16 +2435,16 @@ const ProcedureBuilder = struct {
         // Such an adapter converts through the checked callable type at this
         // edge: the requirement side is lowered apart from the worker's
         // descriptor bindings, and each side reads only its own sources.
-        const concrete_function: ?StaticMethodFunction = if (try proc.staticMethodSidesShareDescriptors(requirement_function, worker_id)) concrete: {
-            const concrete_rep = self.plan.repForSourceType(requirement_fn_ty) orelse
-                boxyLowerInvariant("static dictionary method callable type was not analyzed");
-            const concrete = self.staticMethodFunctionForRep(concrete_rep) orelse
-                boxyLowerInvariant("static dictionary method callable type was not callable");
-            if (concrete.arg_count != requirement_function.arg_count) {
+        const concrete_function: ?ConcreteMethodCall = if (try proc.staticMethodSidesShareDescriptors(requirement_function, worker_id))
+            try self.concreteMethodCall(requirement_fn_ty, instantiation)
+        else
+            null;
+        defer if (concrete_function) |concrete| self.allocator.free(concrete.arg_reps);
+        if (concrete_function) |concrete| {
+            if (concrete.arg_reps.len != requirement_function.arg_count) {
                 boxyLowerInvariant("static dictionary method callable type arity disagreed with its requirement");
             }
-            break :concrete concrete;
-        } else null;
+        }
         var slot_sources = StaticDescriptorSourceMap{};
         defer slot_sources.deinit(self.allocator);
         for (descriptor_sources.entries.items) |entry| {
@@ -2383,10 +2467,7 @@ const ProcedureBuilder = struct {
             .sources = &requirement_sources,
             .context = &requirement_context,
         };
-        const concrete_children: []const Plan.RepChild = if (concrete_function) |concrete|
-            self.plan.childSlice(self.plan.representations.items[@intFromEnum(concrete.rep)].children)[concrete.args_start..][0..concrete.arg_count]
-        else
-            &.{};
+        const concrete_arg_reps: []const Plan.TypeRepId = if (concrete_function) |concrete| concrete.arg_reps else &.{};
 
         const requirement_arg_locals = try self.allocator.alloc(LIR.LocalId, requirement_args.len);
         defer self.allocator.free(requirement_arg_locals);
@@ -2486,7 +2567,7 @@ const ProcedureBuilder = struct {
             arg_index -= 1;
             if (worker_call_args[arg_index] == proc.arg_locals.items[arg_index]) continue;
             if (concrete_function != null) {
-                const concrete_arg = concrete_children[arg_index].rep;
+                const concrete_arg = concrete_arg_reps[arg_index];
                 const concrete_local = try proc.addFrameLocalForRep(concrete_arg);
                 continuation = try proc.assignStaticMethodBoundary(
                     worker_call_args[arg_index],
@@ -4053,31 +4134,44 @@ const ProcedureBuilder = struct {
         return materialization.desc;
     }
 
-    fn structuralHashMethodSlot(
+    /// A dictionary slot performing a derived `is_eq` or `to_hash` over
+    /// `rep_id`. When the derived type names the building frame's type
+    /// variables, the slot's worker receives that frame's descriptors and
+    /// dictionaries for them, after its two arguments, and its components
+    /// dispatch through them exactly as they would in the frame.
+    fn structuralDerivedMethodSlot(
         self: *ProcedureBuilder,
         rep_id: Plan.TypeRepId,
         requirement: Plan.DictionaryRequirement,
         fn_type: Plan.CheckedTypeIdentity,
+        method: Plan.DerivedMethod,
+        template: ?*DictTemplateFrame,
     ) Allocator.Error!LirProgram.BoxyMethodSlot {
         const requirement_rep = self.plan.repForSourceType(fn_type) orelse
-            boxyLowerInvariant("structural hash dictionary function type was not analyzed");
+            boxyLowerInvariant("structural dictionary function type was not analyzed");
         const function = self.staticMethodFunctionForRep(requirement_rep) orelse
-            boxyLowerInvariant("structural hash dictionary requirement was not a function");
+            boxyLowerInvariant("structural dictionary requirement was not a function");
         if (function.arg_count != 2) {
-            boxyLowerInvariant("structural hash dictionary requirement did not have two arguments");
+            boxyLowerInvariant("structural dictionary requirement did not have two arguments");
         }
         const function_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
-        const function_args = function_children[function.args_start..][0..function.arg_count];
-        const hasher_rep = function_args[1].rep;
+        const second_rep = switch (method) {
+            .equality => rep_id,
+            .hash => function_children[function.args_start + 1].rep,
+        };
         const source_layout = self.layout_plan.rep_layouts[@intFromEnum(rep_id)].worker.layoutIdx();
-        const hasher_layout = self.layout_plan.rep_layouts[@intFromEnum(hasher_rep)].worker.layoutIdx();
+        const second_layout = self.layout_plan.rep_layouts[@intFromEnum(second_rep)].worker.layoutIdx();
         const ret_layout = self.layout_plan.rep_layouts[@intFromEnum(function.ret)].worker.layoutIdx();
-        if (hasher_layout != ret_layout) {
+        if (method == .hash and second_layout != ret_layout) {
             boxyLowerInvariant("structural hash dictionary hasher argument and result layouts differed");
         }
         if (self.layout_plan.worker_layouts.len == 0) {
-            boxyLowerInvariant("structural hash dictionary was emitted without a worker layout context");
+            boxyLowerInvariant("structural dictionary was emitted without a worker layout context");
         }
+
+        const frame_worker: ?Plan.WorkerPlanId = if (template) |outer| outer.frame.worker_layout.worker else null;
+        const derived_frame = try self.plan.derivedFrame(self.allocator, frame_worker, rep_id);
+        const frame_template: ?*DictTemplateFrame = if (derived_frame != null) template.? else null;
 
         const source_rep = self.plan.representations.items[@intFromEnum(rep_id)];
         const saved_tail_builder = self.result.store.tail_call_builder;
@@ -4090,8 +4184,92 @@ const ProcedureBuilder = struct {
             constructlessOrigin(.derived),
         );
         defer proc.deinit();
-        const value = try proc.addArgLocalForRep(rep_id);
-        const hasher = try proc.addArgLocalForRep(hasher_rep);
+
+        var frame_descs = std.ArrayList(FrameRequirementDescriptor).empty;
+        defer frame_descs.deinit(self.allocator);
+        var frame_desc_refs = std.ArrayList(LIR.BoxyDescRef).empty;
+        defer frame_desc_refs.deinit(self.allocator);
+        var frame_dictionaries = std.ArrayList(Plan.Span).empty;
+        defer frame_dictionaries.deinit(self.allocator);
+        var frame_dict_refs = std.ArrayList(LIR.BoxyDictRef).empty;
+        defer frame_dict_refs.deinit(self.allocator);
+        if (frame_template) |outer| {
+            // The operand's own descriptor, like a worker argument's, so
+            // reads through it describe the value the frame built.
+            if (self.plan.representations.items[@intFromEnum(rep_id)].descriptor) |desc| {
+                try frame_descs.append(self.allocator, .{
+                    .desc = desc,
+                    .rep = rep_id,
+                    .slot = @intCast(frame_desc_refs.items.len),
+                    .kind = .frame_variable,
+                });
+                try frame_desc_refs.append(self.allocator, try self.structuralSlotOperandDesc(rep_id, outer));
+            }
+            var variables = std.ArrayList(Plan.TypeRepId).empty;
+            defer variables.deinit(self.allocator);
+            var visited = collections.DenseMap(Plan.TypeRepId, void).init(self.allocator);
+            defer visited.deinit();
+            try self.collectDerivedFrameVariables(rep_id, &visited, &variables);
+            for (variables.items) |variable| {
+                const variable_rep = self.plan.representations.items[@intFromEnum(variable)];
+                const desc = variable_rep.descriptor orelse
+                    boxyLowerInvariant("derived method type variable had no descriptor requirement");
+                if (frameRequirementDescriptorIndex(frame_descs.items, desc) == null) {
+                    const materialization = try outer.frame.descriptorMaterializationForSourceRep(variable);
+                    const local = materialization.desc.localOrNull() orelse
+                        boxyLowerInvariant("derived method frame type variable had no descriptor local");
+                    if (materialization.captures.len != 0) {
+                        boxyLowerInvariant("derived method frame type variable descriptor captured other locals");
+                    }
+                    try outer.capture(self.allocator, local);
+                    try frame_descs.append(self.allocator, .{
+                        .desc = desc,
+                        .rep = variable,
+                        .slot = @intCast(frame_desc_refs.items.len),
+                        .kind = .frame_variable,
+                    });
+                    try frame_desc_refs.append(self.allocator, materialization.desc);
+                }
+                if (variable_rep.dictionaries.len == 0) continue;
+                for (frame_dictionaries.items) |dictionaries| {
+                    if (std.meta.eql(dictionaries, variable_rep.dictionaries)) break;
+                } else {
+                    const local = outer.frame.boundDictionaryLocal(variable_rep.dictionaries);
+                    try outer.capture(self.allocator, local);
+                    try frame_dictionaries.append(self.allocator, variable_rep.dictionaries);
+                    try frame_dict_refs.append(self.allocator, .{ .local = local });
+                }
+            }
+        }
+        const frame_desc_locals = try self.allocator.alloc(LIR.LocalId, frame_descs.items.len);
+        defer self.allocator.free(frame_desc_locals);
+        for (frame_desc_locals) |*local| {
+            local.* = try proc.addFrameLocal(.opaque_ptr);
+            try proc.markReadOnlyDescriptorInput(local.*);
+        }
+        const frame_dict_locals = try self.allocator.alloc(LIR.LocalId, frame_dictionaries.items.len);
+        defer self.allocator.free(frame_dict_locals);
+        for (frame_dict_locals) |*local| local.* = try proc.addFrameLocal(.opaque_ptr);
+        if (frame_descs.items.len != 0) {
+            proc.template_frame_descriptors = true;
+            try proc.bindFrameRequirementDescriptors(frame_descs.items, frame_desc_locals, true);
+        }
+        if (frame_dictionaries.items.len != 0) {
+            try proc.ensureDictionaryLocals();
+            for (frame_dictionaries.items, frame_dict_locals) |dictionaries, local| {
+                for (0..dictionaries.len) |offset| {
+                    const index = dictionaries.start + offset;
+                    proc.dictionary_slots[index] = local;
+                    proc.dictionary_locals[index] = local;
+                    proc.dictionary_bound[index] = true;
+                }
+            }
+        }
+
+        const first = try proc.addArgLocalForRep(rep_id);
+        const second = try proc.addArgLocalForRep(second_rep);
+        try proc.arg_locals.appendSlice(self.allocator, frame_desc_locals);
+        try proc.arg_locals.appendSlice(self.allocator, frame_dict_locals);
         const result = try proc.addFrameLocalForRep(function.ret);
         const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
         const proc_symbol = self.symbols.fresh();
@@ -4105,7 +4283,16 @@ const ProcedureBuilder = struct {
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         }, proc.origin.loc);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = result } }, proc.derivedOrigin());
-        const body = try proc.lowerHashRepLocalsInto(result, value, hasher, rep_id, ret_stmt);
+        proc.derived_context = .{ .frame = derived_frame, .bindings_start = 0 };
+        const derived_body = switch (method) {
+            .equality => try proc.lowerEqRepLocalsInto(result, first, second, rep_id, false, ret_stmt),
+            .hash => try proc.lowerHashRepLocalsInto(result, first, second, rep_id, ret_stmt),
+        };
+        proc.derived_context = null;
+        const body = if (frame_template != null)
+            try proc.prependStaticDescriptorMaterializationsForScopedSlots(null, derived_body)
+        else
+            derived_body;
         const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
         const proc_spec = self.result.store.getProcSpecPtr(proc_id);
         proc_spec.body = body;
@@ -4113,22 +4300,65 @@ const ProcedureBuilder = struct {
         proc_spec.frame_locals = frame_span;
         proc_spec.stack_probe = self.stackProbeForProc(args_span, frame_span, ret_layout);
 
+        const operand_desc = try self.structuralSlotOperandDesc(rep_id, frame_template);
         const arg_layout_start: u32 = @intCast(self.result.boxy_method_arg_layouts.items.len);
-        try self.result.boxy_method_arg_layouts.appendSlice(self.allocator, &.{ source_layout, hasher_layout });
+        try self.result.boxy_method_arg_layouts.appendSlice(self.allocator, &.{ source_layout, second_layout });
         const arg_desc_start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
         try self.result.boxy_desc_refs.appendSlice(self.allocator, &.{
-            try self.staticDescRefForRep(rep_id),
-            try self.staticDescRefForRep(hasher_rep),
+            operand_desc,
+            switch (method) {
+                .equality => operand_desc,
+                .hash => try self.staticDescRefForRep(second_rep),
+            },
         });
+        const hidden_sources_start: u32 = @intCast(self.result.boxy_method_hidden_desc_sources.items.len);
+        for (0..frame_desc_refs.items.len) |index| {
+            try self.result.boxy_method_hidden_desc_sources.append(self.allocator, .{ .slot = @intCast(index) });
+        }
 
         return .{
             .method = requirement.fn_name,
             .proc = proc_id,
+            .hidden_descs = try self.appendStaticHiddenDescRefs(frame_desc_refs.items),
+            .nested_dicts = try self.appendStaticHiddenDictRefs(frame_dict_refs.items),
             .adapter = .{
                 .arg_layouts = .{ .start = arg_layout_start, .len = 2 },
                 .arg_descs = .{ .start = arg_desc_start, .len = 2 },
+                .hidden_desc_sources = .{ .start = hidden_sources_start, .len = @intCast(frame_desc_refs.items.len) },
             },
         };
+    }
+
+    /// The type variables `rep_id` names outside nominal backing templates,
+    /// each once: the values a derived method over it reads from its frame.
+    fn collectDerivedFrameVariables(
+        self: *ProcedureBuilder,
+        rep_id: Plan.TypeRepId,
+        visited: *collections.DenseMap(Plan.TypeRepId, void),
+        variables: *std.ArrayList(Plan.TypeRepId),
+    ) Allocator.Error!void {
+        if ((try visited.getOrPut(rep_id)).found_existing) return;
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        if (rep.kind == .dynamic) {
+            if (rep.sealed_default) |sealed| return try self.collectDerivedFrameVariables(sealed, visited, variables);
+            try variables.append(self.allocator, rep_id);
+            return;
+        }
+        if (rep.nominal_backing_arg_substitutions.len != 0) {
+            var substitutions = self.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+            while (substitutions.next()) |substitution| {
+                try self.collectDerivedFrameVariables(substitution.actual_rep, visited, variables);
+            }
+            return;
+        }
+        for (self.plan.childSlice(rep.children)) |child| {
+            try self.collectDerivedFrameVariables(child.rep, visited, variables);
+        }
+        for (self.plan.tagVariantSlice(rep.tag_variants)) |variant| {
+            for (self.plan.childSlice(variant.payloads)) |payload| {
+                try self.collectDerivedFrameVariables(payload.rep, visited, variables);
+            }
+        }
     }
 
     fn unreachableDictionaryMethodSlot(
@@ -12768,6 +12998,10 @@ const ProcBodyBuilder = struct {
     stored_capture_initializers: std.ArrayList(StoredCaptureInitializer),
     worker_return_descriptor_initializers: std.ArrayList(DescriptorArgLocal),
     structural_eq_active_reps: std.ArrayList(Plan.TypeRepId),
+    /// The derived `is_eq`/`to_hash` being lowered: the frame its component
+    /// decisions were planned for, and the formal bindings below it, which
+    /// belong to code outside the derivation.
+    derived_context: ?DerivedContext = null,
     next_join_point: u32,
     current_lambda: ?checked.CheckedExprId,
     /// Provenance of the construct this builder is currently lowering. The
@@ -13066,6 +13300,11 @@ const ProcBodyBuilder = struct {
     const NominalFormalBinding = struct {
         formal: Plan.TypeRepId,
         actual: Plan.TypeRepId,
+    };
+
+    const DerivedContext = struct {
+        frame: ?Plan.WorkerPlanId,
+        bindings_start: usize,
     };
 
     /// A descriptor local for a representation whose meaning depends on the
@@ -30370,7 +30609,9 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("boxy structural equality operand local layout disagreed with checked type");
         }
 
+        const outer_derived = try self.enterDerivedContext(self.worker_layout.worker, rep_id);
         var continuation = try self.lowerEqRepLocalsInto(target, lhs, rhs, rep_id, negated, next);
+        self.derived_context = outer_derived;
         if (self.parent.result.store.getLocal(lhs).boxy_desc) |desc| {
             if (desc.localOrNull()) |shared_desc| {
                 const snapshot = try self.snapshotDescriptorBindings();
@@ -30421,6 +30662,11 @@ const ProcBodyBuilder = struct {
         try self.structural_eq_active_reps.append(self.parent.allocator, rep_id);
         defer self.structural_eq_active_reps.items.len -= 1;
 
+        if (try self.derivedComponentDecisionFor(.equality, rep_id)) |decision| switch (decision) {
+            .structural => {},
+            .call => |index| return try self.lowerDerivedEqCallInto(target, lhs, rhs, index, negated, next),
+            .scheme_dictionary => |requirement| return try self.lowerDerivedEqDictionaryCallInto(target, lhs, rhs, rep_id, requirement, negated, next),
+        };
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
         return switch (rep.kind) {
             .in_progress => boxyLowerInvariant("in-progress boxy representation reached structural equality lowering"),
@@ -30765,9 +31011,8 @@ const ProcBodyBuilder = struct {
         on_equal: LIR.CFStmtId,
         on_not_equal: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const field_layout = self.workerRuntimeLayoutForRep(field_rep).layoutIdx();
-        const lhs_field = try self.addFrameLocal(field_layout);
-        const rhs_field = try self.addFrameLocal(field_layout);
+        const lhs_field = try self.addFrameLocalForRep(field_rep);
+        const rhs_field = try self.addFrameLocalForRep(field_rep);
         const eq = try self.addFrameLocal(.bool);
         var current = try self.boolSwitchNoContinuation(eq, on_equal, on_not_equal);
         current = try self.lowerEqRepLocalsInto(eq, lhs_field, rhs_field, field_rep, false, current);
@@ -30933,9 +31178,257 @@ const ProcBodyBuilder = struct {
         if (self.parent.result.store.getLocal(target).layout_idx != self.parent.result.store.getLocal(hasher).layout_idx) {
             boxyLowerInvariant("checked structural hash target layout differed from input hasher layout");
         }
-        var continuation = try self.lowerHashRepLocalsInto(target, value, hasher, self.repForType(value_expr.ty), next);
+        const value_rep = self.repForType(value_expr.ty);
+        const outer_derived = try self.enterDerivedContext(self.worker_layout.worker, value_rep);
+        var continuation = try self.lowerHashRepLocalsInto(target, value, hasher, value_rep, next);
+        self.derived_context = outer_derived;
         continuation = try self.lowerExprInto(hasher, hasher_id, continuation);
         return try self.lowerExprInto(value, value_id, continuation);
+    }
+
+    /// Lower `body` as a derived method over `rep_id` whose component
+    /// decisions were planned for this worker's frame.
+    fn enterDerivedContext(self: *ProcBodyBuilder, worker: ?Plan.WorkerPlanId, rep_id: Plan.TypeRepId) Allocator.Error!?DerivedContext {
+        const outer = self.derived_context;
+        self.derived_context = .{
+            .frame = try self.parent.plan.derivedFrame(self.parent.allocator, worker, rep_id),
+            .bindings_start = self.nominal_formal_bindings.items.len,
+        };
+        return outer;
+    }
+
+    /// The planned decision for a list, nominal, or type-variable component
+    /// of the derived method being lowered. Components that read a formal the
+    /// derivation bound, and sealed variables, keep their descriptor
+    /// comparison and have no decision.
+    fn derivedComponentDecisionFor(
+        self: *ProcBodyBuilder,
+        method: Plan.DerivedMethod,
+        rep_id: Plan.TypeRepId,
+    ) Allocator.Error!?Plan.DerivedComponentDecision {
+        const context = self.derived_context orelse return null;
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        switch (rep.kind) {
+            .dynamic => {
+                if (self.nominalFormalActualAbove(context.bindings_start, rep_id) != null) return null;
+                if (rep.sealed_default != null) return null;
+            },
+            .list, .nominal => if (try self.repDependsOnDerivedFormals(context.bindings_start, rep_id)) return null,
+            .in_progress,
+            .primitive,
+            .bool_tag_union,
+            .erased_callable,
+            .box,
+            .generated_field,
+            .generated_field_names,
+            .generated_tag_union_spec,
+            .empty_record,
+            .alias,
+            .record,
+            .tuple,
+            .tag_union,
+            .empty_tag_union,
+            => return null,
+        }
+        return self.parent.plan.derivedComponentDecision(.{ .frame = context.frame, .method = method, .rep = rep_id }) orelse
+            boxyLowerInvariant("derived method reached a component without a planned decision");
+    }
+
+    fn nominalFormalActualAbove(self: *const ProcBodyBuilder, start: usize, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
+        var index = self.nominal_formal_bindings.items.len;
+        while (index > start) {
+            index -= 1;
+            const binding = self.nominal_formal_bindings.items[index];
+            if (binding.formal == rep_id) return binding.actual;
+        }
+        return null;
+    }
+
+    fn repDependsOnDerivedFormals(self: *ProcBodyBuilder, start: usize, rep_id: Plan.TypeRepId) Allocator.Error!bool {
+        if (self.nominal_formal_bindings.items.len == start) return false;
+        var seen = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
+        defer seen.deinit();
+        return try self.repDependsOnDerivedFormalsInner(start, rep_id, &seen);
+    }
+
+    fn repDependsOnDerivedFormalsInner(
+        self: *ProcBodyBuilder,
+        start: usize,
+        rep_id: Plan.TypeRepId,
+        seen: *collections.DenseMap(Plan.TypeRepId, void),
+    ) Allocator.Error!bool {
+        if ((try seen.getOrPut(rep_id)).found_existing) return false;
+        if (self.nominalFormalActualAbove(start, rep_id) != null) return true;
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        if (rep.kind == .nominal and rep.nominal_backing_arg_substitutions.len != 0) {
+            var substitutions = self.parent.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+            while (substitutions.next()) |substitution| {
+                if (try self.repDependsOnDerivedFormalsInner(start, substitution.actual_rep, seen)) return true;
+            }
+            return false;
+        }
+        for (self.parent.plan.childSlice(rep.children)) |child| {
+            if (!Plan.childCarriesRuntimeDescriptor(child.role)) continue;
+            if (try self.repDependsOnDerivedFormalsInner(start, child.rep, seen)) return true;
+        }
+        for (self.parent.plan.tagVariantSlice(rep.tag_variants)) |variant| {
+            for (self.parent.plan.childSlice(variant.payloads)) |payload| {
+                if (try self.repDependsOnDerivedFormalsInner(start, payload.rep, seen)) return true;
+            }
+        }
+        return false;
+    }
+
+    /// Call a component type's own method worker, as a derived method's
+    /// component comparison.
+    fn lowerDerivedComponentCallInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        args: []const LIR.LocalId,
+        index: u32,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const call = self.parent.plan.derived_component_calls.items[index];
+        return try self.lowerWorkerCallLocalsInto(
+            target,
+            call.ret_type,
+            &call.arg_types,
+            &call.arg_types,
+            args,
+            null,
+            null,
+            null,
+            call.worker,
+            self.parent.plan.directCallHiddenDescriptorArgSlice(call.hidden_desc_args),
+            self.parent.plan.directCallHiddenDictionaryArgSlice(call.hidden_dict_args),
+            next,
+        );
+    }
+
+    /// Call a type-variable component's method through the frame's
+    /// dictionary for the scheme requirement checking gave it.
+    fn lowerDerivedDictionaryCallInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        args: []const LIR.LocalId,
+        component_rep: Plan.TypeRepId,
+        requirement_id: Plan.DictionaryRequirementId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const dict_local = self.dictionaryLocalForRequirementOrNull(requirement_id) orelse
+            boxyLowerInvariant("derived method reached a scheme requirement without a bound dictionary local");
+        if (!self.dictionaryBindingIsBound(requirement_id)) {
+            boxyLowerInvariant("derived method reached a scheme requirement with an unbound dictionary local");
+        }
+        const requirement = self.parent.plan.dictionaries.items[@intFromEnum(requirement_id)];
+        const requirement_rep = self.repForTypeRef(requirement.fn_ty);
+        const function = self.functionChildrenForRep(requirement_rep) orelse
+            boxyLowerInvariant("derived method scheme requirement was not a function");
+        if (function.arg_count != args.len) {
+            boxyLowerInvariant("derived method scheme requirement arity disagreed with its component call");
+        }
+        const children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(function.rep)].children);
+        const arg_reps = try self.parent.allocator.alloc(Plan.TypeRepId, args.len);
+        defer self.parent.allocator.free(arg_reps);
+        const arg_types = try self.parent.allocator.alloc(Plan.CheckedTypeIdentity, args.len);
+        defer self.parent.allocator.free(arg_types);
+        // The requirement is written in the scheme's variable; the derived
+        // value is that variable's component, described by this frame.
+        const component_type = self.parent.plan.representations.items[@intFromEnum(component_rep)].source_type;
+        const dispatcher_rep = children[function.args_start].rep;
+        for (children[function.args_start..][0..function.arg_count], arg_reps, arg_types, args) |child, *arg_rep, *arg_type, arg| {
+            const is_dispatcher = child.rep == dispatcher_rep;
+            arg_rep.* = if (is_dispatcher) component_rep else child.rep;
+            arg_type.* = if (is_dispatcher) component_type else child.source_type;
+            if (self.parent.result.store.getLocal(arg).layout_idx != self.workerRuntimeLayoutForRep(arg_rep.*).layoutIdx()) {
+                boxyLowerInvariant("derived method component argument layout disagreed with its scheme requirement");
+            }
+        }
+        const ret_type = self.parent.plan.representations.items[@intFromEnum(function.ret)].source_type;
+        const hidden_desc_args = try self.dictionaryCallHiddenDescriptorArgs(
+            requirement_rep,
+            arg_reps[0],
+            requirement_id,
+            0,
+            arg_types,
+            arg_reps,
+            ret_type,
+        );
+        defer self.parent.allocator.free(hidden_desc_args);
+        var arg_descriptor_initializers = std.ArrayList(DescriptorArgLocal).empty;
+        defer arg_descriptor_initializers.deinit(self.parent.allocator);
+        const argument_desc_locals = try self.dictionaryCallArgumentDescriptorLocals(arg_reps, args, &arg_descriptor_initializers);
+        defer self.parent.allocator.free(argument_desc_locals);
+        const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(hidden_desc_args, args, arg_reps, arg_reps);
+        defer self.parent.allocator.free(hidden_desc_locals);
+        const hidden_arg_locals = try self.parent.allocator.alloc(LIR.LocalId, hidden_desc_locals.len);
+        defer self.parent.allocator.free(hidden_arg_locals);
+        for (hidden_desc_locals, hidden_arg_locals) |hidden, *local| local.* = hidden.local;
+
+        const result_desc_info = self.resultDescriptorForCallTarget(
+            target,
+            try self.dictionaryCallResultDescriptorRef(function.ret, hidden_desc_args, hidden_desc_locals),
+        );
+        if (result_desc_info.desc) |desc| {
+            if (self.parent.result.store.getLocal(target).boxy_desc == null) self.parent.result.store.setLocalBoxyDesc(target, desc);
+        }
+        var continuation = try self.parent.result.store.addCFStmt(.{ .assign_call_dict = .{
+            .target = target,
+            .dict = .{ .local = dict_local },
+            .method = requirement.fn_name,
+            .method_slot = requirement.slot,
+            .args = try self.parent.result.store.addLocalSpan(args),
+            .arg_descs = try self.parent.result.store.addLocalSpan(argument_desc_locals),
+            .hidden_args = try self.parent.result.store.addLocalSpan(hidden_arg_locals),
+            .result_desc = result_desc_info.desc,
+            .next = next,
+        } }, self.derivedOrigin());
+        if (result_desc_info.materialize) |materialize| {
+            const desc = materialize.materialize orelse
+                boxyLowerInvariant("derived method dictionary call result descriptor materialization had no descriptor");
+            continuation = try self.prependDescriptorArgMaterialization(materialize, desc, continuation);
+        }
+        continuation = try self.prependHiddenDescriptorArgMaterialization(hidden_desc_locals, continuation);
+        return try self.prependDescriptorArgMaterializations(arg_descriptor_initializers.items, continuation);
+    }
+
+    fn lowerDerivedEqCallInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        lhs: LIR.LocalId,
+        rhs: LIR.LocalId,
+        index: u32,
+        negated: bool,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (!negated) return try self.lowerDerivedComponentCallInto(target, &.{ lhs, rhs }, index, next);
+        const raw = try self.addFrameLocal(.bool);
+        return try self.lowerDerivedComponentCallInto(raw, &.{ lhs, rhs }, index, try self.negateBoolInto(target, raw, next));
+    }
+
+    fn lowerDerivedEqDictionaryCallInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        lhs: LIR.LocalId,
+        rhs: LIR.LocalId,
+        component_rep: Plan.TypeRepId,
+        requirement: Plan.DictionaryRequirementId,
+        negated: bool,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (!negated) return try self.lowerDerivedDictionaryCallInto(target, &.{ lhs, rhs }, component_rep, requirement, next);
+        const raw = try self.addFrameLocal(.bool);
+        return try self.lowerDerivedDictionaryCallInto(raw, &.{ lhs, rhs }, component_rep, requirement, try self.negateBoolInto(target, raw, next));
+    }
+
+    fn negateBoolInto(self: *ProcBodyBuilder, target: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = .bool_not,
+            .rc_effect = LIR.LowLevel.bool_not.rcEffect(),
+            .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{source}),
+            .next = next,
+        } }, self.derivedOrigin());
     }
 
     fn lowerHashRepLocalsInto(
@@ -30946,6 +31439,11 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        if (try self.derivedComponentDecisionFor(.hash, rep_id)) |decision| switch (decision) {
+            .structural => {},
+            .call => |index| return try self.lowerDerivedComponentCallInto(target, &.{ value, hasher }, index, next),
+            .scheme_dictionary => |requirement| return try self.lowerDerivedDictionaryCallInto(target, &.{ value, hasher }, rep_id, requirement, next),
+        };
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
         return switch (rep.kind) {
             .in_progress => boxyLowerInvariant("in-progress boxy representation reached structural hash lowering"),
@@ -36380,6 +36878,19 @@ const ProcBodyBuilder = struct {
             if (std.mem.findScalar(LIR.LocalId, self.runtime_initialized_descriptor_locals.items, local) != null) continue;
             if (self.descriptorBindingIsBoundForRep(slot_rep)) continue;
             if (self.localIsReadOnlyDescriptorInput(local)) continue;
+            // A template dictionary's adapter binds the building frame's type
+            // variables; a representation naming them is described through
+            // those bindings.
+            if (self.template_frame_descriptors and try self.descriptorTemplateNeedsCapturesForKnownRep(slot_rep)) {
+                const materialization = try self.descriptorMaterializationForKnownRep(slot_rep);
+                continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+                    .target = local,
+                    .desc = materialization.desc,
+                    .captures = materialization.captures,
+                    .next = continuation,
+                } }, self.glueOrigin());
+                continue;
+            }
             continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = local,
                 .desc = try self.parent.staticDescRefForWorkerRepWithSourceMap(
