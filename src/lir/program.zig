@@ -318,8 +318,6 @@ pub const BoxyTypeDesc = struct {
     inspect_opaque: bool = false,
     copy_plan: BoxySpan = .{},
     drop_plan: BoxySpan = .{},
-    structural_eq: ?LIR.LirProcSpecId = null,
-    structural_hash: ?LIR.LirProcSpecId = null,
     inspect_method: ?BoxyMethodSlotId = null,
     /// The hidden descriptors `inspect_method`'s worker receives, in worker
     /// parameter order. They describe this descriptor's own type arguments,
@@ -366,11 +364,6 @@ pub const BoxyMethodSlot = struct {
     hidden_descs: BoxySpan = .{},
     nested_dicts: BoxySpan = .{},
     adapter: BoxyMethodAdapter = .{},
-    /// The slot is fulfilled by descriptor-guided structural equality of the
-    /// two explicit arguments; `proc` is unused. Anonymous structural types
-    /// have no method namespace, so their equality dictionary slots dispatch
-    /// to the runtime's structural comparison instead of a worker.
-    structural_eq: bool = false,
 };
 
 /// Runtime data for polymorphic behavior and static dispatch in boxy LIR.

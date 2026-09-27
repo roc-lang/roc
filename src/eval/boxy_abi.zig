@@ -1358,25 +1358,6 @@ pub fn roc_boxy_tag_payload(
         null;
 }
 
-/// Descriptor-guided structural equality.
-pub fn roc_boxy_eq(
-    lhs: ?[*]const u8,
-    rhs: ?[*]const u8,
-    value_layout: u32,
-    desc: *const BoxyTypeDesc,
-) callconv(.c) bool {
-    const g = requireGlobal();
-    enter(g);
-    defer leave(g);
-    return g.runtime.boxyValuesEqual(
-        hooks(g),
-        valueAt(lhs),
-        valueAt(rhs),
-        layoutIdx(value_layout),
-        desc,
-    ) catch abiCrash(g, "equality");
-}
-
 /// Render a descriptor-guided inspect string for a boxy value, writing the
 /// resulting `RocStr` through `out`.
 pub fn roc_boxy_inspect(
@@ -2251,7 +2232,7 @@ pub fn roc_boxy_call_dict(
         hidden_values[i] = .{ .ptr = @ptrCast(slot.ptr) };
     }
 
-    const prepared = g.runtime.prepareDictCall(
+    const call = g.runtime.prepareDictCall(
         hooks(g),
         scratch,
         dict,
@@ -2262,79 +2243,52 @@ pub fn roc_boxy_call_dict(
         .move,
     ) catch abiCrash(g, "dictionary call preparation");
 
-    switch (prepared) {
-        .structural_eq => |operand_desc| {
-            const equal = g.runtime.boxyValuesEqual(
-                hooks(g),
-                call_args[0].value,
-                call_args[1].value,
-                call_args[0].layout,
-                operand_desc,
-            ) catch abiCrash(g, "dictionary structural equality");
-            const out_ptr = out orelse abiCrash(g, "result write without an out pointer");
-            out_ptr[0] = if (equal) 1 else 0;
-            out_desc.* = null;
-            for (call_args) |arg| {
-                g.runtime.performBoxyLayoutDrop(
-                    hooks(g),
-                    arg.value,
-                    arg.layout,
-                    arg.source_desc,
-                    .decref,
-                    1,
-                    .atomic,
-                ) catch abiCrash(g, "structural dictionary argument release");
-            }
-        },
-        .call => |call| {
-            const registered = g.procs.get(@intFromEnum(call.proc)) orelse
-                abiCrash(g, "dictionary dispatch to an unregistered proc");
-            const arg_ptrs = scratch.alloc(?*const anyopaque, call.arg_values.len) catch abiCrash(g, "dictionary call argument collection");
-            for (call.arg_values, call.arg_layouts, 0..) |arg_value, arg_layout, i| {
-                arg_ptrs[i] = if (g.runtime.helper.sizeOf(arg_layout) == 0) null else @ptrCast(arg_value.ptr);
-            }
-            const ret_size = g.runtime.helper.sizeOf(registered.ret_layout);
-            const ret_value = hooks(g).allocValue(registered.ret_layout) catch abiCrash(g, "dictionary call result buffer");
-            var ret_desc: ?*const anyopaque = null;
-            registered.callee(
-                arg_ptrs.ptr,
-                if (ret_size == 0) null else @ptrCast(ret_value.ptr),
-                &ret_desc,
-            );
-            const resolved_ret_desc: ?*const BoxyTypeDesc = @ptrCast(@alignCast(ret_desc));
-            if (registered.ret_borrowed) {
-                g.runtime.performBoxyLayoutDrop(
-                    hooks(g),
-                    ret_value,
-                    registered.ret_layout,
-                    resolved_ret_desc,
-                    .incref,
-                    1,
-                    .atomic,
-                ) catch abiCrash(g, "borrowed dictionary result retain");
-            }
-            for (call.arg_values, call.arg_layouts, call.arg_descs, 0..) |arg_value, arg_layout, arg_desc, arg_index| {
-                if (arg_index >= 64 or ((registered.borrowed_params >> @as(u6, @intCast(arg_index))) & 1) == 0) continue;
-                g.runtime.performBoxyLayoutDrop(
-                    hooks(g),
-                    arg_value,
-                    arg_layout,
-                    arg_desc,
-                    .decref,
-                    1,
-                    .atomic,
-                ) catch abiCrash(g, "borrowed dictionary argument release");
-            }
-            const materialized = g.runtime.materializeCallResult(
-                hooks(g),
-                ret_value,
-                registered.ret_layout,
-                resolved_ret_desc,
-                result_desc,
-                layoutIdx(out_layout),
-            ) catch abiCrash(g, "dictionary call result materialization");
-            writeResult(g, out, materialized.value, layoutIdx(out_layout));
-            out_desc.* = materialized.desc;
-        },
+    const registered = g.procs.get(@intFromEnum(call.proc)) orelse
+        abiCrash(g, "dictionary dispatch to an unregistered proc");
+    const arg_ptrs = scratch.alloc(?*const anyopaque, call.arg_values.len) catch abiCrash(g, "dictionary call argument collection");
+    for (call.arg_values, call.arg_layouts, 0..) |arg_value, arg_layout, i| {
+        arg_ptrs[i] = if (g.runtime.helper.sizeOf(arg_layout) == 0) null else @ptrCast(arg_value.ptr);
     }
+    const ret_size = g.runtime.helper.sizeOf(registered.ret_layout);
+    const ret_value = hooks(g).allocValue(registered.ret_layout) catch abiCrash(g, "dictionary call result buffer");
+    var ret_desc: ?*const anyopaque = null;
+    registered.callee(
+        arg_ptrs.ptr,
+        if (ret_size == 0) null else @ptrCast(ret_value.ptr),
+        &ret_desc,
+    );
+    const resolved_ret_desc: ?*const BoxyTypeDesc = @ptrCast(@alignCast(ret_desc));
+    if (registered.ret_borrowed) {
+        g.runtime.performBoxyLayoutDrop(
+            hooks(g),
+            ret_value,
+            registered.ret_layout,
+            resolved_ret_desc,
+            .incref,
+            1,
+            .atomic,
+        ) catch abiCrash(g, "borrowed dictionary result retain");
+    }
+    for (call.arg_values, call.arg_layouts, call.arg_descs, 0..) |arg_value, arg_layout, arg_desc, arg_index| {
+        if (arg_index >= 64 or ((registered.borrowed_params >> @as(u6, @intCast(arg_index))) & 1) == 0) continue;
+        g.runtime.performBoxyLayoutDrop(
+            hooks(g),
+            arg_value,
+            arg_layout,
+            arg_desc,
+            .decref,
+            1,
+            .atomic,
+        ) catch abiCrash(g, "borrowed dictionary argument release");
+    }
+    const materialized = g.runtime.materializeCallResult(
+        hooks(g),
+        ret_value,
+        registered.ret_layout,
+        resolved_ret_desc,
+        result_desc,
+        layoutIdx(out_layout),
+    ) catch abiCrash(g, "dictionary call result materialization");
+    writeResult(g, out, materialized.value, layoutIdx(out_layout));
+    out_desc.* = materialized.desc;
 }

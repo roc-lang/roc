@@ -1131,7 +1131,6 @@ fn outcomeBindingTarget(stmt: LIR.CFStmt) ?LIR.LocalId {
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
-        .assign_boxy_eq,
         .assign_boxy_tag,
         .assign_boxy_tag_payload,
         .assign_call_dict,
@@ -1448,15 +1447,6 @@ fn computeOutcomeRestitution(
                     },
                     .assign_boxy_inspect => |assign| {
                         if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.source, assign.source_mode)) {
-                            valid = false;
-                            break;
-                        }
-                        try pushNext(&stack, allocator, next_state, assign.next);
-                    },
-                    .assign_boxy_eq => |assign| {
-                        if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.lhs, assign.source_mode) or
-                            !consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.rhs, assign.source_mode))
-                        {
                             valid = false;
                             break;
                         }
@@ -2133,7 +2123,6 @@ fn liftProcStmtFacts(
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
-        .assign_boxy_eq,
         .assign_boxy_tag,
         .assign_boxy_tag_payload,
         .boxy_tag_match,
@@ -2825,13 +2814,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             try liftBoxyTransfer(solver, assign.source, assign.source_mode, current);
             try liftBoxyDescRead(solver, assign.source_desc);
         },
-        .assign_boxy_eq => |assign| {
-            try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
-            try solver.unique_facts.append(allocator, .{ .birth = assign.target });
-            try liftBoxyTransfer(solver, assign.lhs, assign.source_mode, current);
-            try liftBoxyTransfer(solver, assign.rhs, assign.source_mode, current);
-            try liftBoxyDescRead(solver, assign.source_desc);
-        },
         .assign_boxy_tag => |assign| {
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
             try solver.unique_facts.append(allocator, .{ .birth = assign.target });
@@ -3442,7 +3424,7 @@ fn computeVisibilityFromLift(
                         try stack.append(allocator, stmt.body);
                         try stack.append(allocator, stmt.remainder);
                     },
-                    inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+                    inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                         try stack.append(allocator, stmt.next);
                     },
                     .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -3697,7 +3679,6 @@ fn computeVisibilityFromLift(
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_inspect,
-            .assign_boxy_eq,
             .boxy_tag_match,
             .debug,
             .expect,
@@ -5667,12 +5648,6 @@ fn computeUniquenessDetailed(
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.noteBirth(&born, assign.target);
                 try marks.transfer(allocator, &consumes, &destroyed, assign.source, assign.source_mode, @intCast(stmt_index));
-            },
-            .assign_boxy_eq => |assign| {
-                marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.noteBirth(&born, assign.target);
-                try marks.transfer(allocator, &consumes, &destroyed, assign.lhs, assign.source_mode, @intCast(stmt_index));
-                try marks.transfer(allocator, &consumes, &destroyed, assign.rhs, assign.source_mode, @intCast(stmt_index));
             },
             .assign_boxy_tag => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);

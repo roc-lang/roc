@@ -925,6 +925,10 @@ The initial reservation pass records exactly its module/root identities and
 reserved root functions; lowering uses that declaration table to select slot reads.
 Unrequested callable bindings retain their ordinary checked body computation.
 
+A shared compile-time value slot has its root type's own layout. A read whose
+target stores that type boxed, such as a recursive payload field, reads the
+slot at the type's layout and boxes the value into the target.
+
 Every shared compile-time value slot names an explicit failure-record slot with
 separate internal `failed: U8` (zero means success, one means failure) and
 `message: Str` fields. Empty crash messages remain
@@ -13322,12 +13326,33 @@ types; a type variable calls through the scheme requirement checking gave its
 enclosing worker; a nominal whose method is derived expands. Decisions are keyed
 by the derived frame, which is none when the derived type names no type
 variable (so every frame shares its static decisions) and otherwise the worker
-lowering it, and lowering reads them, never re-deciding. A structural slot
-whose derivation calls a method is a worker procedure; in a template it also
-receives the building frame's descriptors and dictionaries for the type
+lowering it, and lowering reads them, never re-deciding. Every derived
+comparison and hash is compiled code; Boxy has no descriptor-guided equality.
+
+Expanding a nominal enters its backing under an environment binding the
+backing's formals to the actuals of that use, resolved through the enclosing
+environment. Environments are ordered (each formal's innermost binding,
+ordered by formal) and interned in the plan, so a recursive nominal reached
+again under the same actuals reuses its environment, and decisions are keyed by
+environment as well as frame. A formal component converts to its actual, and a
+sealed variable to its sealed type, in one step; a `Box` component unboxes and
+continues with its payload. A component call planned inside a backing names the
+backing's own types, and its descriptors and dictionaries are resolved under
+the environment. A structural slot is always a worker procedure: in a template
+it also receives the building frame's descriptors and dictionaries for the type
 variables its operand names, and its operand's own descriptor, like a worker
-argument's. Components inside a generic nominal's backing that read the
-nominal's formals keep comparing by descriptor.
+argument's. A tag union on a recursive type's cycle is compared or hashed by a
+helper procedure keyed by method, representation, frame, and environment,
+registered before its body lowers so the recursion calls it; the helper
+receives its operand's descriptor, which describes the generic backing it
+compares, and the frame's descriptors and dictionaries its operand names.
+Derived branches merge through an explicit join before the derivation's
+continuation.
+
+A Boxy concrete tag payload read takes its field layout from the committed
+tag-union layout of its source. When that field is the boxed storage of a
+recursive position, the read targets the stored box and unboxes it to the
+payload's own layout, mirroring construction, which boxes it.
 
 Boxy box/unbox/adapt operations are explicit LIR statements or explicit helper
 calls selected by the lowerer:

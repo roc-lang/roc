@@ -133,23 +133,6 @@ fn customInspectSpecializesDescriptor(
     ret_desc.* = null;
 }
 
-test "boxy abi structural equality compares scalars through a descriptor" {
-    const allocator = std.testing.allocator;
-    var setup = try TestSetup.init(allocator);
-    defer setup.deinit();
-
-    const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .u64, .contains_refcounted = false },
-    };
-    try setup.startRuntime(allocator, .{ .type_descs = &descs });
-
-    var a: u64 = 42;
-    var b: u64 = 42;
-    var c: u64 = 7;
-    try std.testing.expect(boxy_abi.roc_boxy_eq(@ptrCast(&a), @ptrCast(&b), @intFromEnum(layout_mod.Idx.u64), &descs[0]));
-    try std.testing.expect(!boxy_abi.roc_boxy_eq(@ptrCast(&a), @ptrCast(&c), @intFromEnum(layout_mod.Idx.u64), &descs[0]));
-}
-
 test "boxy abi static descriptor lookup resolves ids to the descriptor table" {
     const allocator = std.testing.allocator;
     var setup = try TestSetup.init(allocator);
@@ -2041,75 +2024,6 @@ test "boxy abi dictionary call preserves a full descriptor across a payload-shap
     try std.testing.expectEqual(@as(?*const BoxyTypeDesc, null), out_desc);
 }
 
-test "boxy abi dictionary dispatch runs structural equality slots inline" {
-    const allocator = std.testing.allocator;
-    var setup = try TestSetup.init(allocator);
-    defer setup.deinit();
-
-    const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .u64, .contains_refcounted = false },
-    };
-    const desc_refs = [_]LirProgram.BoxyDescRef{
-        .{ .static = @enumFromInt(fixtureTableIndex(0)) },
-    };
-    const method_slots = [_]LirProgram.BoxyMethodSlot{
-        .{
-            .method = @enumFromInt(fixtureTableIndex(0)),
-            .proc = @enumFromInt(fixtureTableIndex(0)),
-            .hidden_descs = .{ .start = 0, .len = 1 },
-            .structural_eq = true,
-        },
-    };
-    const dicts = [_]LirProgram.BoxyDict{
-        .{ .method_slots = .{ .start = 0, .len = 1 } },
-    };
-    try setup.startRuntime(allocator, .{
-        .type_descs = &descs,
-        .desc_refs = &desc_refs,
-        .dicts = &dicts,
-        .method_slots = &method_slots,
-    });
-
-    var lhs: u64 = 42;
-    var rhs: u64 = 42;
-    const args = [_]boxy_abi.RocBoxyCallArg{
-        .{ .value = @ptrCast(&lhs), .layout = @intFromEnum(layout_mod.Idx.u64), .desc = null },
-        .{ .value = @ptrCast(&rhs), .layout = @intFromEnum(layout_mod.Idx.u64), .desc = null },
-    };
-    var out: u8 = 0;
-    var out_desc: ?*const BoxyTypeDesc = null;
-    boxy_abi.roc_boxy_call_dict(
-        @ptrCast(&out),
-        &out_desc,
-        &dicts[0],
-        0,
-        0,
-        &args,
-        args.len,
-        null,
-        0,
-        null,
-        @intFromEnum(layout_mod.Idx.bool),
-    );
-    try std.testing.expectEqual(@as(u8, 1), out);
-
-    rhs = 7;
-    boxy_abi.roc_boxy_call_dict(
-        @ptrCast(&out),
-        &out_desc,
-        &dicts[0],
-        0,
-        0,
-        &args,
-        args.len,
-        null,
-        0,
-        null,
-        @intFromEnum(layout_mod.Idx.bool),
-    );
-    try std.testing.expectEqual(@as(u8, 0), out);
-}
-
 test "boxy abi drop balances refcounts across incref and decref" {
     const allocator = std.testing.allocator;
     var setup = try TestSetup.init(allocator);
@@ -2190,14 +2104,7 @@ test "boxy abi sidecar view initializes the global runtime from image bytes" {
     try boxy_abi.initGlobalFromSidecarView(allocator, &view, env.get_ops());
     defer boxy_abi.deinitGlobal();
 
-    var a: u64 = 5;
-    var b: u64 = 5;
-    try std.testing.expect(boxy_abi.roc_boxy_eq(
-        @ptrCast(&a),
-        @ptrCast(&b),
-        @intFromEnum(layout_mod.Idx.u64),
-        &view.tables.type_descs[0],
-    ));
+    try std.testing.expectEqual(&view.tables.type_descs[0], boxy_abi.roc_boxy_static_desc(0));
 }
 
 test "boxy abi standalone sidecar preserves producer tag identities after literal removal" {
