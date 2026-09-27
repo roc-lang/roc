@@ -589,9 +589,10 @@ exhaustiveness_context: ExhaustivenessContext.Context = .{},
 /// Tracks all local lookup exprs so erroneous bindings can be poisoned explicitly
 /// after type checking has finished.
 value_lookup_tracking: std.ArrayListUnmanaged(ValueLookupEntry),
-/// Tracks every external, associated, and platform-required lookup expr. A
-/// consumer that rejects such a use poisons only the use's own occurrence, which
-/// must then become an explicit runtime error after type checking has finished.
+/// Tracks every external, associated, and platform-required lookup expr that
+/// instantiates its target's type. A consumer that rejects such a use poisons
+/// only the use's own occurrence, which must then become an explicit runtime
+/// error after type checking has finished.
 nonlocal_value_lookups: std.ArrayListUnmanaged(CIR.Expr.Idx),
 /// Tracks expressions whose checked type contains an error, even if annotation
 /// preservation later gives their raw expr var a non-error type.
@@ -22420,7 +22421,6 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             }
         },
         .e_lookup_external => |ext| {
-            try self.nonlocal_value_lookups.append(self.gpa, expr_idx);
             // With WaitingForDependencies phase, dependencies are guaranteed to be Done
             // before canonicalization, so target_node_idx is always valid.
             if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
@@ -22436,6 +22436,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 } else if (target_is_def and hostedDeclarationIsNotEffectful(ext_ref.other_cir, target_def)) {
                     try self.markNonEffectfulHostedDeclarationUse(expr_idx, expr_var);
                 } else {
+                    try self.nonlocal_value_lookups.append(self.gpa, expr_idx);
                     const ext_instantiated_var = try self.instantiateImportedBindingVar(
                         ext_ref.local_var,
                         env,
@@ -22449,24 +22450,21 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             }
         },
         .e_lookup_associated_local => |lookup| {
-            try self.nonlocal_value_lookups.append(self.gpa, expr_idx);
             try self.checkLocalAssociatedLookup(expr_idx, expr_var, lookup, expr_region, env);
         },
         .e_lookup_associated => |lookup| {
-            try self.nonlocal_value_lookups.append(self.gpa, expr_idx);
             try self.checkAssociatedLookup(expr_idx, expr_var, lookup, expr_region, env);
         },
         .e_lookup_associated_resolved => |lookup| {
-            try self.nonlocal_value_lookups.append(self.gpa, expr_idx);
             try self.checkResolvedAssociatedLookup(expr_idx, expr_var, lookup, expr_region, env);
         },
         .e_lookup_required => |req| {
-            try self.nonlocal_value_lookups.append(self.gpa, expr_idx);
             self.markCurrentHoistRuntimeDependency();
             // Look up the type from the platform's requires clause
             const requires_items = self.cir.requires_types.items.items;
             const idx = req.requires_idx.toU32();
             if (idx < requires_items.len) {
+                try self.nonlocal_value_lookups.append(self.gpa, expr_idx);
                 const required_type = requires_items[idx];
                 const type_var = ModuleEnv.varFrom(required_type.type_anno);
                 const instantiated_var = try self.instantiateVar(
@@ -27987,6 +27985,7 @@ fn checkResolvedAssociatedTarget(
         return;
     }
 
+    try self.nonlocal_value_lookups.append(self.gpa, expr_idx);
     const target_var = try self.methodTypeVarFromOriginalEnv(
         target_env,
         is_this_module,
@@ -28479,6 +28478,10 @@ fn poisonRecursiveNonFunctionProcessingDef(
 }
 
 fn poisonErroneousValueUses(self: *Self) Allocator.Error!void {
+    // Mismatch poisoning is the only way a use's own occurrence becomes
+    // erroneous, and it always reports a type problem, so a module without
+    // problems has no occurrence to retire.
+    const occurrences_may_be_poisoned = self.problems.problems.items.len != 0;
     for (self.value_lookup_tracking.items) |entry| {
         if (self.cir.store.getExpr(entry.expr_idx) == .e_runtime_error) continue;
 
@@ -28486,7 +28489,7 @@ fn poisonErroneousValueUses(self: *Self) Allocator.Error!void {
         if (!self.erroneous_value_patterns.contains(entry.pattern_idx) and
             self.types.resolveVar(pattern_var).desc.content != .err)
         {
-            try self.retireErroneousLookupOccurrence(entry.expr_idx);
+            if (occurrences_may_be_poisoned) try self.retireErroneousLookupOccurrence(entry.expr_idx);
             continue;
         }
 
@@ -28497,6 +28500,7 @@ fn poisonErroneousValueUses(self: *Self) Allocator.Error!void {
         } });
         try self.replaceExprWithRuntimeError(entry.expr_idx, diagnostic_idx);
     }
+    if (!occurrences_may_be_poisoned) return;
     for (self.nonlocal_value_lookups.items) |expr_idx| {
         try self.retireErroneousLookupOccurrence(expr_idx);
     }
@@ -40702,9 +40706,10 @@ fn satisfyDerivedIsEqConstraint(
     const arg0 = args[0];
     const arg1 = args[1];
     const ret = resolved_func.ret;
-    if (!try self.relateDerivedDispatchOperand(dispatcher_var, constraint, env, failure_expr, dispatcher_var, arg0)) return;
-    if (!try self.relateDerivedDispatchOperand(dispatcher_var, constraint, env, failure_expr, dispatcher_var, arg1)) return;
-    if (!try self.relateDerivedDispatchOperand(dispatcher_var, constraint, env, failure_expr, try self.freshBool(env, region), ret)) return;
+    const arg0_related = try self.relateDerivedDispatchOperand(dispatcher_var, constraint, env, failure_expr, dispatcher_var, arg0, true);
+    const arg1_related = try self.relateDerivedDispatchOperand(dispatcher_var, constraint, env, failure_expr, dispatcher_var, arg1, arg0_related);
+    const ret_related = try self.relateDerivedDispatchOperand(dispatcher_var, constraint, env, failure_expr, try self.freshBool(env, region), ret, arg0_related and arg1_related);
+    if (!(arg0_related and arg1_related and ret_related)) return;
     if (!self.rewriteDerivedIsEqMethodCallAsStructuralEq(constraint)) {
         try self.markStaticDispatchRejected(constraint);
     }
@@ -40713,7 +40718,9 @@ fn satisfyDerivedIsEqConstraint(
 /// Relate one operand or the result of a derived structural dispatch. They are
 /// independently solved producers, so a mismatch rejects the dispatch instead
 /// of poisoning them, and is reported once per dispatcher/method pair like any
-/// other dispatch failure. Returns whether the dispatch may proceed.
+/// other dispatch failure. Every relation still runs after a mismatch, so the
+/// dispatch's result keeps its type; only the first mismatch reports, which
+/// `report_mismatch` selects. Returns whether this relation was accepted.
 fn relateDerivedDispatchOperand(
     self: *Self,
     dispatcher_var: Var,
@@ -40722,9 +40729,11 @@ fn relateDerivedDispatchOperand(
     failure_expr: ?CIR.Expr.Idx,
     expected: Var,
     actual: Var,
+    report_mismatch: bool,
 ) Allocator.Error!bool {
     const result = try self.runUnify(expected, actual, env, .{ .on_mismatch = .write_no_report });
     if (!result.isProblem()) return true;
+    if (!report_mismatch) return false;
     if (!try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, failure_expr)) {
         _ = try self.appendTypeMismatch(expected, actual, .none);
         try self.poisonConstraintFailure(dispatcher_var, constraint, env, failure_expr);
@@ -40773,9 +40782,10 @@ fn satisfyDerivedToHashConstraint(
     const self_arg = args[0];
     const hasher_arg = args[1];
     const ret = resolved_func.ret;
-    if (!try self.relateDerivedDispatchOperand(dispatcher_var, constraint, env, failure_expr, dispatcher_var, self_arg)) return;
+    const self_related = try self.relateDerivedDispatchOperand(dispatcher_var, constraint, env, failure_expr, dispatcher_var, self_arg, true);
     // The Hasher argument is threaded through unchanged to the return type.
-    if (!try self.relateDerivedDispatchOperand(dispatcher_var, constraint, env, failure_expr, hasher_arg, ret)) return;
+    const hasher_related = try self.relateDerivedDispatchOperand(dispatcher_var, constraint, env, failure_expr, hasher_arg, ret, self_related);
+    if (!(self_related and hasher_related)) return;
     if (!self.rewriteDerivedMethodCallAsStructuralHash(constraint)) {
         try self.markStaticDispatchRejected(constraint);
     }
