@@ -8031,17 +8031,13 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
 
     // Determine output directory
     var output_dir = if (args.output_dir) |dir|
-        try cwd.openDir(ctx.io.std_io, dir, .{})
+        cwd.openDir(ctx.io.std_io, dir, .{}) catch |err| {
+            try stderr.print("Error: Could not open bundle output directory '{s}': {}\n", .{ dir, err });
+            return err;
+        }
     else
         cwd;
     defer if (args.output_dir != null) output_dir.close(ctx.io.std_io);
-
-    // Create a temporary directory for the output file
-    var tmp_dir = try std.Io.Dir.cwd().createDirPathOpen(ctx.io.std_io, ".roc_bundle_tmp", .{});
-    defer {
-        tmp_dir.close(ctx.io.std_io);
-        std.Io.Dir.cwd().deleteTree(ctx.io.std_io, ".roc_bundle_tmp") catch {};
-    }
 
     // Collect canonical source paths separately from their eventual archive
     // names. A command-line spelling is only a way to find a file; it must not
@@ -8146,14 +8142,32 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     };
     defer bundle_root_dir.close(ctx.io.std_io);
 
-    // Create temporary output file
-    const temp_filename = "temp_bundle.tar.zst";
-    const temp_file = try tmp_dir.createFile(ctx.io.std_io, temp_filename, .{
-        // Allow querying metadata (stat) on the handle, necessary for windows
-        .read = true,
-        .truncate = true,
-    });
-    defer temp_file.close(ctx.io.std_io);
+    // The content-addressed name is only known after compression finishes.
+    // Stage in the destination so publication never crosses filesystems, and
+    // exclusively create a unique file so concurrent invocations own their data.
+    var temp_name_buffer: [64]u8 = undefined;
+    var temp_filename: []const u8 = undefined;
+    const temp_file = while (true) {
+        var random: [16]u8 = undefined;
+        ctx.io.std_io.random(&random);
+        const hex = std.fmt.bytesToHex(random, .lower);
+        temp_filename = std.fmt.bufPrint(&temp_name_buffer, ".roc-bundle-{s}.tmp", .{hex}) catch unreachable;
+        break output_dir.createFile(ctx.io.std_io, temp_filename, .{
+            // Allow querying metadata (stat) on the handle, necessary for Windows.
+            .read = true,
+            .exclusive = true,
+        }) catch |err| switch (err) {
+            error.PathAlreadyExists => continue,
+            else => {
+                try stderr.print("Error: Could not create temporary bundle in '{s}': {}\n", .{ args.output_dir orelse ".", err });
+                return err;
+            },
+        };
+    };
+    var temp_file_exists = true;
+    defer if (temp_file_exists) output_dir.deleteFile(ctx.io.std_io, temp_filename) catch {};
+    var temp_file_open = true;
+    defer if (temp_file_open) temp_file.close(ctx.io.std_io);
 
     const EntryIterator = struct {
         entries: []const bundle.Entry,
@@ -8216,8 +8230,15 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     const compressed_stat = try temp_file.stat(ctx.io.std_io);
     const compressed_size = compressed_stat.size;
 
-    // Move the temp file to the final location
-    try tmp_dir.rename(temp_filename, output_dir, final_filename, ctx.io.std_io);
+    // Close before publication for Windows. Rename publishes the complete
+    // archive atomically, replacing an existing bundle with the same name.
+    temp_file.close(ctx.io.std_io);
+    temp_file_open = false;
+    output_dir.rename(temp_filename, output_dir, final_filename, ctx.io.std_io) catch |err| {
+        try stderr.print("Error: Could not publish bundle '{s}' in '{s}': {}\n", .{ final_filename, args.output_dir orelse ".", err });
+        return err;
+    };
+    temp_file_exists = false;
 
     // Calculate elapsed time
     const end_time = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;

@@ -467,6 +467,7 @@ const CustomCase = enum {
     build_issue_9435_hosted_nominal_return,
     bundle_complex_package,
     bundle_entrypoint_subdirectory,
+    bundle_issue_11608_output_dir_cross_device,
     install_run_roundtrip,
     install_hash_mismatch,
     install_glue_roundtrip,
@@ -2457,6 +2458,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test complex_package --verbose passes all tests", .body = .{ .command = .{ .args = &.{ "test", "--no-cache", "--verbose" }, .roc_file = "test/complex_package/main.roc", .contains = &.{ .{ .stream = .stdout, .text = "tests passed" }, .{ .stream = .stdout, .text = "PASS" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bundle complex_package includes all transitively imported modules", .body = .{ .custom = .bundle_complex_package } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bundle issue 10845 entry point in a subdirectory bundles relative to it", .body = .{ .custom = .bundle_entrypoint_subdirectory } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc bundle issue 11608 succeeds when --output-dir is on a different filesystem", .body = .{ .custom = .bundle_issue_11608_output_dir_cross_device } },
     .{ .id = 0, .suite = .subcommands, .name = "a destructure whose pattern rejects its value crashes at runtime instead of panicking the compiler", .backend = .dev, .body = .{ .command = .{ .args = &.{}, .roc_file = "test/cli/destructure_pattern_mismatch.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stdout, .text = "before" }, .{ .stream = .stderr, .text = "crashed" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "failed inline expect exits with code 1 and continues program (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{}, .roc_file = "test/cli/failed_inline_expect.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stdout, .text = "Hello, World!" }, .{ .stream = .stderr, .text = "expect failed" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "failed inline expect exits with code 1 and continues program (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/cli/failed_inline_expect.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stdout, .text = "Hello, World!" }, .{ .stream = .stderr, .text = "Expect failed" } } } } },
@@ -3524,6 +3526,7 @@ fn runCustomCase(
         .build_issue_9435_hosted_nominal_return => customBuildIssue9435(io, allocator, &env, &timer, timeout_ms),
         .bundle_complex_package => customBundleComplexPackage(io, allocator, &env, &timer, timeout_ms),
         .bundle_entrypoint_subdirectory => customBundleEntrypointSubdirectory(io, allocator, &env, &timer, timeout_ms),
+        .bundle_issue_11608_output_dir_cross_device => customBundleIssue11608OutputDirCrossDevice(io, allocator, &env, &timer, timeout_ms),
         .install_run_roundtrip => customInstallRunRoundtrip(io, allocator, &env, &timer, timeout_ms),
         .install_hash_mismatch => customInstallHashMismatch(io, allocator, &env, &timer, timeout_ms),
         .install_glue_roundtrip => customInstallGlueRoundtrip(io, allocator, &env, &timer, timeout_ms),
@@ -9598,6 +9601,101 @@ fn customBundleEntrypointSubdirectory(io: std.Io, allocator: Allocator, env: *co
     }
     if (std.mem.find(u8, outside_result.stderr, "outside the entry point directory") == null) {
         return failureFromRun(allocator, timer, outside_result, "roc bundle did not explain the outside-root file error");
+    }
+
+    return null;
+}
+
+/// Repro for https://github.com/roc-lang/roc/issues/11608
+/// `roc bundle --output-dir <dir>` must succeed even when the output directory
+/// lives on a different filesystem than the working directory. Expected:
+/// the archive is created inside the output directory and the command exits 0.
+/// (When the bug was live, the bundler renamed a cwd-local temp file into the
+/// output directory and failed with error.CrossDevice.)
+fn customBundleIssue11608OutputDirCrossDevice(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    if (builtin.os.tag != .linux) {
+        return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "cross-device bundle fixture requires Linux /dev/shm" };
+    }
+    const package_dir = createWorkSubdir(io, allocator, env, "bundle-crossfs") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create package dir: {}", .{err});
+
+    const package_main = std.fs.path.join(allocator, &.{ package_dir, "main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate main.roc path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = package_main, .data = "package [Helper] {}\n" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write main.roc: {}", .{err});
+    const package_helper = std.fs.path.join(allocator, &.{ package_dir, "Helper.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Helper.roc path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = package_helper, .data = "module []\n\nhelper : U64\nhelper = 42\n" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write Helper.roc: {}", .{err});
+
+    // Linux CI supplies /dev/shm as a separate tmpfs mount. Prove the fixture
+    // crosses filesystems so this test cannot silently become same-device coverage.
+    var output_root = std.Io.Dir.openDirAbsolute(io, "/dev/shm", .{}) catch |err|
+        return customInfraFailure(allocator, timer, "cross-device bundle test requires /dev/shm: {}", .{err});
+    defer output_root.close(io);
+    var random: [16]u8 = undefined;
+    io.random(&random);
+    const hex = std.fmt.bytesToHex(random, .lower);
+    const out_name = std.fmt.allocPrint(allocator, "roc-bundle-11608-{s}", .{hex}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output name: {}", .{err});
+    // createDir (not createDirPath) establishes ownership before cleanup is armed.
+    output_root.createDir(io, out_name, .default_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create cross-device output directory: {}", .{err});
+    defer output_root.deleteTree(io, out_name) catch {};
+    const out_dir_final = std.fs.path.join(allocator, &.{ "/dev/shm", out_name }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    var output_dir = output_root.openDir(io, out_name, .{ .iterate = true }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to open output directory: {}", .{err});
+    defer output_dir.close(io);
+    var package_dir_handle = std.Io.Dir.openDirAbsolute(io, package_dir, .{}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to open package directory: {}", .{err});
+    defer package_dir_handle.close(io);
+    const probe_name = "cross-device-probe";
+    package_dir_handle.writeFile(io, .{ .sub_path = probe_name, .data = "probe" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write cross-device probe: {}", .{err});
+    defer package_dir_handle.deleteFile(io, probe_name) catch {};
+    var cross_device = false;
+    package_dir_handle.rename(probe_name, output_dir, probe_name, io) catch |err| switch (err) {
+        error.CrossDevice => cross_device = true,
+        else => return customInfraFailure(allocator, timer, "cross-device probe failed: {}", .{err}),
+    };
+    if (!cross_device) return customInfraFailure(allocator, timer, "/dev/shm must be on a different filesystem from the test workspace", .{});
+
+    const roc_abs = if (std.fs.path.isAbsolute(roc_binary_path))
+        roc_binary_path
+    else
+        std.fs.path.join(allocator, &.{ project_root_path, roc_binary_path }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate roc path: {}", .{err});
+
+    const bundle_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before bundling");
+    const bundle_result = runRawInEnv(io, allocator, env, &.{ roc_abs, "bundle", "--output-dir", out_dir_final, "main.roc" }, package_dir, null, bundle_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "bundle spawn error: {}", .{err});
+    if (exitCode(bundle_result.term) != 0) {
+        return failureFromRun(allocator, timer, bundle_result, "roc bundle failed when --output-dir is on a different filesystem than the working directory");
+    }
+    const created_prefix = "Created: ";
+    const created_idx = std.mem.find(u8, bundle_result.stdout, created_prefix) orelse
+        return failureFromRun(allocator, timer, bundle_result, "roc bundle did not report a created file");
+    const created_rest = bundle_result.stdout[created_idx + created_prefix.len ..];
+    const created_eol = std.mem.find(u8, created_rest, "\n") orelse created_rest.len;
+    const created_path = std.mem.trim(u8, created_rest[0..created_eol], " \r");
+    if (!std.mem.eql(u8, std.fs.path.dirname(created_path) orelse "", out_dir_final)) {
+        return customFailure(allocator, timer, "roc bundle reported the archive at '{s}' instead of inside the requested output dir '{s}'", .{ created_path, out_dir_final });
+    }
+    const archive_filename = std.fs.path.basename(created_path);
+    const archive_path = std.fs.path.join(allocator, &.{ out_dir_final, archive_filename }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate archive path: {}", .{err});
+    std.Io.Dir.cwd().access(io, archive_path, .{}) catch |err|
+        return customFailure(allocator, timer, "roc bundle did not leave the archive in the output dir: {}", .{err});
+
+    var output_iter = output_dir.iterate();
+    while (output_iter.next(io) catch |err|
+        return customInfraFailure(allocator, timer, "failed to list bundle output: {}", .{err})) |entry|
+    {
+        if (!std.mem.eql(u8, entry.name, archive_filename)) {
+            return customFailure(allocator, timer, "bundle left unexpected output '{s}'", .{entry.name});
+        }
     }
 
     return null;
