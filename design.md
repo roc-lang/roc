@@ -9448,11 +9448,17 @@ than re-deriving a default from the checked type. A literal's numeric default
 applies only when nothing resolves the variable, so a numeric-literal variable
 that a scheme quantifies has no sealed default: every instantiation supplies its
 type through the descriptor the scheme's uses pass, exactly as for any other
-quantified variable. A flex variable carrying
-static-dispatch constraints that a quantifying scheme would have to own has no
-sealed default, because each of those needs a dictionary only a quantifying
-scheme can supply; reaching it without a bound descriptor, like reaching an
-unbound rigid variable, is a lowering invariant violation. The derived `is_eq`
+quantified variable. A flex variable carrying static-dispatch constraints
+follows the same rule: when a scheme quantifies it, its uses supply its
+descriptor and dictionaries, so it has no sealed default, and reaching it
+without a bound descriptor, like reaching an unbound rigid variable, is a
+lowering invariant violation. When no scheme quantifies it, nothing can supply
+either, so it seals to its default like any other unquantified variable, and
+each of its dispatches resolves against that default: through the default
+owner for a numeric default, and otherwise by the unpinned-dispatch rule
+(`unpinnedDispatchResolution`) the checker applies to a dispatcher no edge can
+pin, under which equality and hashing of the vacuous shape stay structural and
+every other dispatch is unreachable. The derived `is_eq`
 equality placeholder Check leaves on an undetermined variable inside values
 compared with structural equality is not such a constraint: it discharges by
 comparing structurally with no owner (the same carve-out Check's ambiguity
@@ -11750,7 +11756,12 @@ leaf counts as proven uninhabited when its recorded final default is: the
 checker left it unconstrained, requests are seeded before a body is lowered,
 so nothing inside the body can bind it to anything but that default, and an
 interface replay may close the same cell to that default at any moment, so
-evidence read before and after such a replay must agree. If compile-time
+evidence read before and after such a replay must agree. A component proven
+uninhabited resolves by the unpinned-dispatch rule
+(`unpinnedDispatchResolution`), the same one the checker applies to a
+dispatcher no edge can pin, before any structural derivation is attempted: a
+derived map needs a payload selection only checking can make, and no value
+exists to map. If compile-time
 evaluation stores that function inside another value before the
 callable is concrete, `ConstStore` retains the same symbolic entry in the
 function's evidence vector, including inside nested evidence trees. Pool offsets are not
@@ -13144,7 +13155,13 @@ that use. Planning determines the descriptors a body requires from the checked
 expression and pattern types it analyzes for that body: each unsealed type
 variable those types reach, and each one a callable the body creates or calls
 needs beyond its own scheme variables, unless the signature or checked evidence
-already supplies it. A variable a generalized local scope quantifies belongs to
+already supplies it. A use instantiates the callee's scheme variables it needs
+with the types its checked substitution names, and the body requires every
+variable of those types that its own scheme or an enclosing local scope
+quantifies. A variable reached only through a dispatch constraint's signature,
+such as the callback type `c` in `a.map : a, (c -> d) -> b`, appears in no type
+the body mentions, so the substitution is the only place it is named. A
+variable a generalized local scope quantifies belongs to
 the outermost scope listing it and is required only by that scope and the
 bodies it encloses. Descriptors required only by the callable body are captured from
 those planned use-site arguments; descriptors represented structurally in the

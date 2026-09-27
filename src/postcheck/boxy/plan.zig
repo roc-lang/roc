@@ -4893,14 +4893,18 @@ const Builder = struct {
                 .{ .source_type = source_type, .kind = .empty_tag_union }
             else blk: {
                 var rep = try self.dynamicRepresentation(source_type, flex.constraints, .flex);
-                // A literal's numeric default applies only if nothing resolves
-                // it: when a scheme quantifies the variable, each instantiation
-                // supplies its type through the descriptor the scheme's uses
-                // pass, so only an unquantified one seals to that default.
-                const seals = if (flex.numeric_default_phase != null)
+                // A literal's numeric default, and the default of a variable
+                // carrying dispatch constraints, applies only if nothing
+                // resolves the variable: when a scheme quantifies it, each
+                // instantiation supplies its type and dictionaries through the
+                // scheme's uses, so only an unquantified one seals to its
+                // default, and its dispatches then resolve against that
+                // default.
+                const seals = if (flex.numeric_default_phase != null or
+                    self.flexConstraintsRequireScheme(source_type, flex.constraints))
                     !self.quantified_variables.contains(source_type)
                 else
-                    !self.flexConstraintsRequireScheme(source_type, flex.constraints);
+                    true;
                 if (!self.host_mode and seals) {
                     rep.sealed_default = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
                     try self.plan.representations.append(self.allocator, .{
@@ -6742,9 +6746,20 @@ const Builder = struct {
         }.lessThan);
         var edges = std.ArrayList(WorkerEdge).empty;
         defer edges.deinit(self.allocator);
-        for (self.plan.nested_callable_uses.items) |use| try edges.append(self.allocator, .{ .caller = use.caller, .callee = use.worker });
-        for (self.plan.callable_uses.items) |use| try edges.append(self.allocator, .{ .caller = use.caller, .callee = use.worker });
-        for (self.plan.direct_calls.items) |call| try edges.append(self.allocator, .{ .caller = call.caller, .callee = call.worker });
+        var edge_substitutions = std.ArrayList(?SchemeCallSubstitution).empty;
+        defer edge_substitutions.deinit(self.allocator);
+        for (self.plan.nested_callable_uses.items) |use| {
+            try edges.append(self.allocator, .{ .caller = use.caller, .callee = use.worker });
+            try edge_substitutions.append(self.allocator, self.useSchemeSubstitution(use.worker, use.use));
+        }
+        for (self.plan.callable_uses.items) |use| {
+            try edges.append(self.allocator, .{ .caller = use.caller, .callee = use.worker });
+            try edge_substitutions.append(self.allocator, self.useSchemeSubstitution(use.worker, use.use));
+        }
+        for (self.plan.direct_calls.items) |call| {
+            try edges.append(self.allocator, .{ .caller = call.caller, .callee = call.worker });
+            try edge_substitutions.append(self.allocator, self.directCallSchemeSubstitution(call));
+        }
 
         var scopes = try self.computeWorkerScopeChains(edges.items);
         defer scopes.deinit(self.allocator);
@@ -6789,16 +6804,45 @@ const Builder = struct {
             }
         }
 
+        var image_leaves = WorkerDescriptorLeaves{ .set = collections.DenseMap(TypeRepId, void).init(self.allocator) };
+        defer image_leaves.deinit(self.allocator);
         var changed = true;
         while (changed) {
             changed = false;
-            for (edges.items) |edge| {
+            for (edges.items, edge_substitutions.items) |edge, substitution| {
                 if (edge.caller == edge.callee) continue;
                 const callee = @intFromEnum(edge.callee);
                 const caller = &needs[@intFromEnum(edge.caller)];
                 for ([_][]const TypeRepId{ signature[callee].order.items, needs[callee].order.items }) |leaves| {
                     for (leaves) |leaf| {
-                        if (own_scheme[callee].contains(leaf)) continue;
+                        if (own_scheme[callee].contains(leaf)) {
+                            // The use instantiates the callee's scheme
+                            // variable with a type the caller supplies. A
+                            // variable the caller's own scheme or an enclosing
+                            // local scope quantifies is described by the
+                            // caller's frame; when it is reached only through
+                            // a constraint signature it appears in no type the
+                            // caller's body mentions, so the substitution is
+                            // the only place it is named.
+                            const sub = substitution orelse continue;
+                            seen.clearRetainingCapacity();
+                            image_leaves.set.clearRetainingCapacity();
+                            image_leaves.order.clearRetainingCapacity();
+                            for (sub.scheme_vars, sub.site_types) |variable, site_type| {
+                                if (self.plan.repForSourceType(typeRef(sub.callee_view, variable)) != leaf) continue;
+                                if (sub.site_view.checked_types.payload(site_type) == .err) continue;
+                                const site_rep = self.plan.repForSourceType(typeRef(sub.site_view, site_type)) orelse
+                                    boxyPlanInvariant("callable use substitution type was not analyzed");
+                                try self.collectDescriptorLeaves(site_rep, &image_leaves, &seen);
+                            }
+                            for (image_leaves.order.items) |image_leaf| {
+                                if (!own_scheme[@intFromEnum(edge.caller)].contains(image_leaf) and
+                                    scopes.owner.get(image_leaf) == null) continue;
+                                if (!scopes.allows(edge.caller, image_leaf)) continue;
+                                if (try caller.add(self.allocator, image_leaf)) changed = true;
+                            }
+                            continue;
+                        }
                         if (!scopes.allows(edge.caller, leaf)) continue;
                         if (try caller.add(self.allocator, leaf)) changed = true;
                     }
@@ -10771,7 +10815,24 @@ const Builder = struct {
                 };
             }
         }
+        if (owner == null and self.repSealsUninhabited(source_rep)) {
+            switch (static_dispatch.unpinnedDispatchResolution(self.structuralKindForRequirement(requirement, requirement_view))) {
+                .structural => {},
+                .unreachable_value => return .{
+                    .requirement_type = requirement.fn_ty,
+                    .callable_type = requirement.fn_ty,
+                    .resolution = .unreachable_value,
+                },
+            }
+        }
         return try self.structuralDictionaryMethodEvidence(source_rep, requirement, requirement_view);
+    }
+
+    /// Whether an unquantified variable seals to the empty tag union, so no
+    /// value of its type exists and its dispatches follow the unpinned rule.
+    fn repSealsUninhabited(self: *const Builder, rep: TypeRepresentation) bool {
+        const sealed = rep.sealed_default orelse return false;
+        return self.plan.representations.items[@intFromEnum(sealed)].kind == .empty_tag_union;
     }
 
     fn defaultedDictionaryOwner(self: *Builder, rep_id: TypeRepId) ?static_dispatch.MethodOwner {
@@ -10906,17 +10967,9 @@ const Builder = struct {
         requirement_view: ModuleView,
     ) ?static_dispatch.StructuralKind {
         const canonical_names = requirement_view.canonical_names orelse return null;
-        if (canonical_names.lookupMethodName("is_eq")) |method| {
-            if (method == requirement.fn_name) return .equality;
-        }
-        if (canonical_names.lookupMethodName("to_hash")) |method| {
-            if (method == requirement.fn_name) return .hash;
-        }
-        if (canonical_names.lookupMethodName("parser_for")) |method| {
-            if (method == requirement.fn_name) return .parser;
-        }
-        if (canonical_names.lookupMethodName("encoder_for")) |method| {
-            if (method == requirement.fn_name) return .encoder;
+        for (static_dispatch.structural_method_kinds) |entry| {
+            const method = canonical_names.lookupMethodName(entry.method_name) orelse continue;
+            if (method == requirement.fn_name) return entry.kind;
         }
         return null;
     }
