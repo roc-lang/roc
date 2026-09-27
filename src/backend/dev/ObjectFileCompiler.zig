@@ -387,6 +387,7 @@ fn compileWithCodeGen(
 
     var rodata_relocations = std.ArrayList(ObjectWriter.IndexedDataRelocation).empty;
     defer rodata_relocations.deinit(allocator);
+    var zero_fill_size: u64 = 0;
 
     var owned_proc_symbol_names = std.ArrayList([]u8).empty;
     defer {
@@ -400,8 +401,8 @@ fn compileWithCodeGen(
     var seen_proc_symbol_names = std.StringHashMap(void).init(allocator);
     defer seen_proc_symbol_names.deinit();
 
-    try appendStaticDataExports(allocator, &codegen.codegen.symbols, static_data_exports, &rodata, &rodata_relocations, &symbols);
-    try appendStaticDataExports(allocator, &codegen.codegen.symbols, static_strings.exports, &rodata, &rodata_relocations, &symbols);
+    try appendStaticDataExports(allocator, &codegen.codegen.symbols, static_data_exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
+    try appendStaticDataExports(allocator, &codegen.codegen.symbols, static_strings.exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
     {
         // Readonly data named by native artifacts or spliced object-cache code
         // that this program did not define itself.
@@ -441,7 +442,7 @@ fn compileWithCodeGen(
                 .relocations = relocations,
             }) catch return CompilationError.OutOfMemory;
         }
-        try appendStaticDataExports(allocator, &codegen.codegen.symbols, extra.items, &rodata, &rodata_relocations, &symbols);
+        try appendStaticDataExports(allocator, &codegen.codegen.symbols, extra.items, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
     }
 
     for (proc_specs, 0..) |_, i| {
@@ -668,6 +669,7 @@ fn compileWithCodeGen(
         target,
         code,
         rodata.items,
+        zero_fill_size,
         resolved.symbols,
         relocations,
         rodata_relocations.items,
@@ -823,6 +825,7 @@ fn appendStaticDataExports(
     table: *SymbolTable.Table,
     exports: []const StaticDataExport,
     rodata: *std.ArrayList(u8),
+    zero_fill_size: *u64,
     relocations: *std.ArrayList(ObjectWriter.IndexedDataRelocation),
     symbols: *std.ArrayList(SymbolDefinition),
 ) CompilationError!void {
@@ -835,7 +838,9 @@ fn appendStaticDataExports(
     defer helpers.deinit();
     for (exports, data_symbols) |data_export, definition_id| {
         const start = rodata.items.len;
-        try appendStaticDataExport(allocator, data_export, definition_id, rodata, symbols);
+        try appendStaticDataExport(allocator, data_export, definition_id, rodata, zero_fill_size, symbols);
+        // A zero-fill export has no relocations, so this offset is only ever
+        // used for exports placed in readonly data.
         const aligned_offset = std.mem.alignForward(usize, start, @intCast(data_export.alignment));
         for (data_export.relocations) |relocation| {
             const id = switch (relocation.target) {
@@ -865,22 +870,22 @@ fn appendStaticDataExports(
     }
 }
 
+/// Whether an export is stored as zero-fill: bytes that are all zero and stay
+/// zero after linking, which excludes anything a relocation writes into.
+pub fn isZeroFillExport(data_export: StaticDataExport) bool {
+    if (data_export.bytes.len == 0 or data_export.relocations.len != 0) return false;
+    return std.mem.allEqual(u8, data_export.bytes, 0);
+}
+
 fn appendStaticDataExport(
     allocator: Allocator,
     data_export: StaticDataExport,
     id: SymbolTable.Id,
     rodata: *std.ArrayList(u8),
+    zero_fill_size: *u64,
     static_data_symbols: *std.ArrayList(SymbolDefinition),
 ) CompilationError!void {
     const alignment = @as(usize, @intCast(data_export.alignment));
-    const aligned_offset = std.mem.alignForward(usize, rodata.items.len, alignment);
-    rodata.appendNTimes(allocator, 0, aligned_offset - rodata.items.len) catch {
-        return CompilationError.OutOfMemory;
-    };
-    rodata.appendSlice(allocator, data_export.bytes) catch {
-        return CompilationError.OutOfMemory;
-    };
-
     const symbol_offset: usize = @intCast(data_export.symbol_offset);
     if (builtin.mode == .Debug and symbol_offset > data_export.bytes.len) {
         std.debug.panic(
@@ -888,6 +893,31 @@ fn appendStaticDataExport(
             .{ data_export.symbol_offset, data_export.bytes.len },
         );
     }
+    if (isZeroFillExport(data_export)) {
+        // The object declares the extent and stores none of the zeros.
+        const zero_fill_offset = std.mem.alignForward(u64, zero_fill_size.*, alignment);
+        zero_fill_size.* = zero_fill_offset + data_export.bytes.len;
+        static_data_symbols.append(allocator, .{ .id = id, .symbol = .{
+            .name = data_export.symbol_name,
+            .offset = zero_fill_offset + symbol_offset,
+            .size = data_export.bytes.len - symbol_offset,
+            .is_global = data_export.is_global,
+            .is_function = false,
+            .is_external = false,
+            .is_hidden = !data_export.is_exported,
+            .section = .zero_fill,
+        } }) catch {
+            return CompilationError.OutOfMemory;
+        };
+        return;
+    }
+    const aligned_offset = std.mem.alignForward(usize, rodata.items.len, alignment);
+    rodata.appendNTimes(allocator, 0, aligned_offset - rodata.items.len) catch {
+        return CompilationError.OutOfMemory;
+    };
+    rodata.appendSlice(allocator, data_export.bytes) catch {
+        return CompilationError.OutOfMemory;
+    };
 
     static_data_symbols.append(allocator, .{ .id = id, .symbol = .{
         .name = data_export.symbol_name,
@@ -923,8 +953,9 @@ fn compileStaticDataObjectBytes(
 
     var rodata_relocations = std.ArrayList(ObjectWriter.IndexedDataRelocation).empty;
     defer rodata_relocations.deinit(allocator);
+    var zero_fill_size: u64 = 0;
 
-    try appendStaticDataExports(allocator, &table, static_data_exports, &rodata, &rodata_relocations, &symbols);
+    try appendStaticDataExports(allocator, &table, static_data_exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
 
     // This object is linked separately from generated code. LLVM constant
     // expressions can reference any backing named by a frozen relocation,
@@ -944,6 +975,7 @@ fn compileStaticDataObjectBytes(
         target,
         &.{},
         rodata.items,
+        zero_fill_size,
         resolved.symbols,
         &.{},
         rodata_relocations.items,

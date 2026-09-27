@@ -994,6 +994,17 @@ app module, and the readonly object binds every node globally so those
 references resolve; only slots with function-pointer relocations stay
 external declarations. Slot reads therefore fold to immediates and
 relocatable addresses instead of loads from a linker symbol.
+A node whose bytes are all zero and that no relocation writes into is
+declared, not stored: the object writers place it in their format's zero-fill
+section (`.bss` for ELF and COFF, `__DATA,__bss` for Mach-O) by size and
+alignment alone, and the wasm module names its segment `.bss.<symbol>`, the
+name every wasm object uses to mark a zero-fill segment, which survives
+linking, so the segment is left out of the data section when linear memory
+is known to start zeroed. The loader maps zero pages for the extent, so the
+program sees the same memory while the binary carries none of the bytes; a
+zeroed work table is free in the file however large. A relocation would
+write a non-zero address into such bytes at link time, so anything relocated
+stays byte-backed, as does every root, whose slot addresses it.
 
 The guard pass also records each guard's crash statement identity. Failed root
 completion associates those statements with the original evaluated failure's
