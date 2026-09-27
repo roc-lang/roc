@@ -277,7 +277,7 @@ pub const DependencyGraph = struct {
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
             // Get the definition name from its pattern
-            const pattern = module_env.store.getPattern(def.pattern);
+            const pattern = module_env.store.getSourcePattern(def.pattern);
             if (std.meta.activeTag(pattern) != .assign) continue;
             const name = module_env.common.idents.getText(pattern.assign.ident);
             try export_names.append(allocator, name);

@@ -1961,17 +1961,6 @@ Existing read and declaration nodes retain their own occurrence data. Any toolin
 indexes over these explicit occurrences belong to the tooling snapshot and are not
 built or serialized by ordinary compilation.
 
-Replacing an expression or statement with a runtime error overwrites its node
-in place, so the checked tree no longer reaches the source subtree beneath it.
-The replacement retains the node it overwrote in `NodeStore.retired_source_nodes`,
-referenced from the runtime-error node's own payload; the subtree's children,
-regions, and type variables are untouched. Every checked-program consumer reads
-the runtime error through `getExpr`/`getStatement`. Source tooling (hover, goto
-definition, references, rename, completion) reads through
-`getSourceExpr`/`getSourceStatement`, which return the retained source node, so
-names inside erroneous code resolve exactly as they were canonicalized and
-checked. The table is empty for a module that checks without errors.
-
 The `$` prefix is a naming convention enforced only as a declaration-site
 warning. Canonicalization reports a mutable binder whose name lacks `$`, or an
 immutable binder whose name starts with `$`, when it identifies the source
@@ -3183,6 +3172,22 @@ Checked CIR is the last source-level representation. It owns:
 Checked CIR may contain source-level forms such as static-dispatch calls,
 method equality, type-dispatch calls, and source `for` loops because those are
 part of the checked source module.
+
+Rejected code is replaced in place with a runtime error node: an expression,
+statement, or literal pattern checking rejects, and a read of a `var` before it
+is initialized, which canonicalization rejects. Every later stage reads the
+crash and nothing of the rejected code. The node store keeps each node it
+replaces this way in `NodeStore.replaced_source_nodes`, and the runtime error
+names the node it replaced, so source-level tools read through the replacement
+to the code as written with `getSourceExpr`, `getSourceStatement`, and
+`getSourcePattern`. The kept node's children, regions, and type variables are
+the ones canonicalization and checking produced, so hover, completion,
+renaming a binding, listing its references, highlighting it, and going to its
+definition all see the occurrences inside rejected code. Compilation never
+reads the kept nodes, and a module without errors keeps none. A deferred
+import reference that resolves to nothing is settled as a runtime error without
+keeping anything, because the deferred node is a placeholder for the resolved
+form rather than source.
 
 Equality against a payload-free tag carries an explicit checked discriminant
 decision: the checked operation records the value operand and exact tag
@@ -13408,6 +13413,44 @@ The exact descriptor, dictionary, and adapter payload structs are owned by LIR,
 not by a backend. Their contents are serialized into LirImage when any reachable
 LIR statement references them. A backend may cache lowered helper code for a
 descriptor, dictionary, or adapter, but it must not change that data's meaning.
+
+A `BoxyTypeDesc` records the source-language shape of the value it describes
+(`BoxyDescShape`): primitive, record, tuple, tag union, list, box, erased
+storage, callable, or compiler-internal storage. Consumers that render or
+match source-language structure, such as inspection, dispatch on that shape.
+The payload layout only locates bytes, because layout erases structure: a
+zero-sized record, tuple, and single-tag union all share the `zst` layout.
+
+`nested_descs` holds exactly one descriptor per child position: struct field
+`i` (by original field index) is position `i`, and a list's item or a box's
+payload is position 0. Zero-sized and scalar children have positions too,
+because a child's descriptor is the only runtime record of its source-language
+identity: its tag names, its record or tuple structure, a nominal `to_inspect`
+method, or its opacity. Every producer (static, worker-instantiated, template,
+constructed-aggregate, adapter-specialized, erased-capture, and generated
+evidence descriptors) and every consumer uses these positions; no consumer
+locates a child descriptor by testing sibling layouts. Tag variants likewise
+carry a descriptor for every payload, keyed by payload index. A record
+descriptor names every position in `field_names`. A declared nominal's unnamed
+padding field is named `padding_field`, which inspection skips and which
+corresponds only to the padding field at the same position of another
+descriptor.
+
+Whether a child's value also carries a runtime descriptor for its memory
+operations is a separate question, answered by its storage layout. Memory
+walkers follow a child descriptor only for storage that needs one, and lowering
+attaches runtime descriptor locals only to such values. A child whose storage
+carries no runtime descriptor has a statically known identity, so lowering
+references its static descriptor directly instead of materializing a local.
+
+Once lowering has produced every descriptor,
+`LirProgram.Result.classifyBoxyDescClosures` records each static descriptor's
+`closure`: `closed` when every reachable reference is static, `captures` when
+reachable references read only the materialization's captured descriptor
+locals, and `context` otherwise. The runtime uses a closed descriptor in place
+and never copies it. It instantiates a capture-bound template once per distinct
+set of captured descriptors, memoized in the `DescMaterializationCache` shared
+by the interpreter and the machine-code Boxy ABI.
 
 Boxy tag and field names belong to `LirStore.boxy_names`, separate from literal
 backings. Lowering interns each spelling through the shared serial string

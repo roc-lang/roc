@@ -911,7 +911,7 @@ const FindTagAtOffsetContext = struct {
         const region = ctx.store.getRegionAt(node_idx);
         if (!regionContainsOffset(region, ctx.target_offset)) return;
 
-        const pattern = ctx.store.getPattern(pattern_idx);
+        const pattern = ctx.store.getSourcePattern(pattern_idx);
         switch (pattern) {
             .applied_tag => |tag| {
                 ctx.result = .{
@@ -1147,7 +1147,7 @@ pub fn collectReferences(
 /// the bound name. Callers that rewrite text must treat null as "do not touch
 /// this", not as "nothing to do".
 pub fn declarationNameRegion(module_env: *ModuleEnv, target_pattern: CIR.Pattern.Idx) ?LspRange {
-    const pattern = module_env.store.getPattern(target_pattern);
+    const pattern = module_env.store.getSourcePattern(target_pattern);
     const ident = if (pattern == .assign)
         pattern.assign.ident
     else if (pattern == .var_assign)
@@ -1404,7 +1404,7 @@ pub fn collectTopLevelDefinitionsInRange(
     const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
     for (defs_slice) |def_idx| {
         const def = module_env.store.getDef(def_idx);
-        const pattern = module_env.store.getPattern(def.pattern);
+        const pattern = module_env.store.getSourcePattern(def.pattern);
         if (std.meta.activeTag(pattern) != .assign) continue;
 
         const name = module_env.common.idents.getText(pattern.assign.ident);

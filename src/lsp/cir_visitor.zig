@@ -476,7 +476,7 @@ pub fn CirVisitor(comptime Context: type) type {
         pub fn walkPattern(self: *Self, store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) void {
             if (self.stopped) return;
 
-            const pattern = store.getPattern(pattern_idx);
+            const pattern = store.getSourcePattern(pattern_idx);
 
             // Pre-visit callback
             if (self.visit_pattern_pre) |hook| {
