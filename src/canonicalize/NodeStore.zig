@@ -279,13 +279,12 @@ const DiagnosticNodeTag = enum {
 
 gpa: Allocator,
 nodes: Node.List,
+/// Source nodes replaced in place by `.malformed` runtime errors, each named
+/// by its replacement's `source_node_plus_one`. Compilation reads the
+/// replacement; source-level tools read through it to the code as written.
+replaced_source_nodes: Node.List,
 regions: Region.List,
 write_occurrences: collections.SafeList(WriteOccurrence),
-/// Source nodes that checking overwrote with runtime errors, indexed through
-/// each replacement's `RetiredRuntimeError.retired_source`. Checked-program
-/// consumers never read this; source tooling reads through `getSourceExpr` and
-/// `getSourceStatement`. Empty for a module that checks without errors.
-retired_source_nodes: Node.List,
 int128_values: collections.SafeList(i128), // Typed storage for large numeric literals
 literal_dispatch_plans: collections.SafeList(LiteralDispatchPlan), // Checked literal dispatch metadata owned by literal nodes
 literal_pattern_contexts: collections.SafeList(LiteralPatternContext),
@@ -703,9 +702,9 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
     return .{
         .gpa = gpa,
         .nodes = nodes,
+        .replaced_source_nodes = .{},
         .regions = regions,
         .write_occurrences = .{},
-        .retired_source_nodes = .{},
         .int128_values = int128_values,
         .literal_dispatch_plans = literal_dispatch_plans,
         .literal_pattern_contexts = literal_pattern_contexts,
@@ -735,9 +734,9 @@ pub fn clone(self: *const NodeStore, gpa: Allocator) Allocator.Error!NodeStore {
     var cloned = NodeStore{
         .gpa = gpa,
         .nodes = try self.nodes.clone(gpa),
+        .replaced_source_nodes = try self.replaced_source_nodes.clone(gpa),
         .regions = try self.regions.clone(gpa),
         .write_occurrences = try self.write_occurrences.clone(gpa),
-        .retired_source_nodes = try self.retired_source_nodes.clone(gpa),
         .int128_values = try self.int128_values.clone(gpa),
         .literal_dispatch_plans = try self.literal_dispatch_plans.clone(gpa),
         .literal_pattern_contexts = try self.literal_pattern_contexts.clone(gpa),
@@ -767,9 +766,9 @@ pub fn clone(self: *const NodeStore, gpa: Allocator) Allocator.Error!NodeStore {
 /// Deinitializes the NodeStore, freeing any allocated resources.
 pub fn deinit(store: *NodeStore) void {
     store.nodes.deinit(store.gpa);
+    store.replaced_source_nodes.deinit(store.gpa);
     store.regions.deinit(store.gpa);
     store.write_occurrences.deinit(store.gpa);
-    store.retired_source_nodes.deinit(store.gpa);
     store.int128_values.deinit(store.gpa);
     store.literal_dispatch_plans.deinit(store.gpa);
     store.literal_pattern_contexts.deinit(store.gpa);
@@ -799,9 +798,9 @@ pub fn deinit(store: *NodeStore) void {
 /// This is used when loading a NodeStore from shared memory at a different address.
 pub fn relocate(store: *NodeStore, offset: isize) void {
     store.nodes.relocate(offset);
+    store.replaced_source_nodes.relocate(offset);
     store.regions.relocate(offset);
     store.write_occurrences.relocate(offset);
-    store.retired_source_nodes.relocate(offset);
     store.int128_values.relocate(offset);
     store.literal_dispatch_plans.relocate(offset);
     store.literal_pattern_contexts.relocate(offset);
@@ -1243,11 +1242,11 @@ fn getMethodNameRegion(store: *const NodeStore, data_idx: u32) Region {
 /// Retrieves a statement node from the store.
 pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.Statement {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(statement));
-    return store.statementFromNode(store.nodes.get(node_idx));
+    return @call(.always_inline, statementFromNode, .{ store, store.nodes.get(node_idx) });
 }
 
-/// The statement as source tooling sees it: the source statement checking
-/// replaced with a runtime error when there is one, otherwise `getStatement`.
+/// Retrieves a statement as written in source, reading through a runtime
+/// error put in its place.
 pub fn getSourceStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.Statement {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(statement));
     return store.statementFromNode(store.sourceNode(node_idx));
@@ -1443,9 +1442,9 @@ fn statementFromNode(store: *const NodeStore, node: Node) CIR.Statement {
             };
         },
         .malformed => {
-            const p = payload.diag_single_value;
+            const p = payload.malformed;
             return CIR.Statement{ .s_runtime_error = .{
-                .diagnostic = @enumFromInt(p.value),
+                .diagnostic = @enumFromInt(p.diagnostic),
             } };
         },
     }
@@ -1454,13 +1453,11 @@ fn statementFromNode(store: *const NodeStore, node: Node) CIR.Statement {
 /// Retrieves an expression node from the store.
 pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr));
-    return store.exprFromNode(node_idx, store.nodes.get(node_idx));
+    return @call(.always_inline, exprFromNode, .{ store, node_idx, store.nodes.get(node_idx) });
 }
 
-/// The expression as source tooling sees it: the source expression checking
-/// replaced with a runtime error when there is one, otherwise `getExpr`. Its
-/// children, regions, and type variables are the ones checking solved; only
-/// the checked program stops reaching them.
+/// Retrieves an expression as written in source, reading through a runtime
+/// error put in its place.
 pub fn getSourceExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr));
     return store.exprFromNode(node_idx, store.sourceNode(node_idx));
@@ -2018,9 +2015,9 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
             } };
         },
         .malformed => {
-            const p = payload.diag_single_value;
+            const p = payload.malformed;
             return CIR.Expr{ .e_runtime_error = .{
-                .diagnostic = @enumFromInt(p.value),
+                .diagnostic = @enumFromInt(p.diagnostic),
             } };
         },
     }
@@ -2493,6 +2490,7 @@ pub fn replaceExprWithTag(
 /// Replaces an existing expression with an in-place runtime error node.
 /// Used when an earlier compilation stage has already determined that the
 /// expression is erroneous and later stages must observe an explicit crash.
+/// The expression as written stays readable through `getSourceExpr`.
 pub fn replaceExprWithRuntimeError(
     store: *NodeStore,
     expr_idx: CIR.Expr.Idx,
@@ -2500,63 +2498,93 @@ pub fn replaceExprWithRuntimeError(
 ) Allocator.Error!void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
     _ = store.retireLiteralDispatchPlan(node_idx);
-    try store.replaceWithRetiredRuntimeError(node_idx, diagnostic_idx);
+    try store.replaceSourceNodeWithRuntimeError(node_idx, diagnostic_idx);
 }
 
 /// Replaces an existing statement with an in-place runtime error node after
 /// checking has rejected the statement and recorded its diagnostic.
+/// The statement as written stays readable through `getSourceStatement`.
 pub fn replaceStatementWithRuntimeError(
     store: *NodeStore,
     stmt_idx: CIR.Statement.Idx,
     diagnostic_idx: CIR.Diagnostic.Idx,
 ) Allocator.Error!void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(stmt_idx));
-    try store.replaceWithRetiredRuntimeError(node_idx, diagnostic_idx);
-}
-
-/// Overwrite a node with a runtime error, retaining the source node it held.
-/// A node that is already a replacement keeps the source it retired first; a
-/// node canonicalization made malformed has no source node to retain.
-fn replaceWithRetiredRuntimeError(
-    store: *NodeStore,
-    node_idx: Node.Idx,
-    diagnostic_idx: CIR.Diagnostic.Idx,
-) Allocator.Error!void {
-    const current = store.nodes.get(node_idx);
-    const retired_source: u32 = if (current.tag == .malformed)
-        current.getPayload().retired_runtime_error.retired_source
-    else
-        @intFromEnum(try store.retired_source_nodes.append(store.gpa, current)) + 1;
-    var node = Node.init(.malformed);
-    node.setPayload(.{ .retired_runtime_error = .{
-        .diagnostic = @intFromEnum(diagnostic_idx),
-        .retired_source = retired_source,
-    } });
-    store.nodes.set(node_idx, node);
-}
-
-/// The node source tooling reads at this index: the source node checking
-/// retired, when it replaced this one, otherwise the node itself.
-fn sourceNode(store: *const NodeStore, node_idx: Node.Idx) Node {
-    const node = store.nodes.get(node_idx);
-    if (node.tag != .malformed) return node;
-    const retired_source = node.getPayload().retired_runtime_error.retired_source;
-    if (retired_source == 0) return node;
-    return store.retired_source_nodes.get(@enumFromInt(retired_source - 1));
+    try store.replaceSourceNodeWithRuntimeError(@enumFromInt(@intFromEnum(stmt_idx)), diagnostic_idx);
 }
 
 /// Replace a rejected literal leaf while retaining the surrounding definition
 /// pattern and its binder identities. Retire the leaf's evidence atomically.
+/// The pattern as written stays readable through `getSourcePattern`.
 pub fn replacePatternWithRuntimeError(
+    store: *NodeStore,
+    pattern_idx: CIR.Pattern.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+) Allocator.Error!void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+    _ = store.retireLiteralDispatchPlan(node_idx);
+    try store.replaceSourceNodeWithRuntimeError(node_idx, diagnostic_idx);
+}
+
+/// Keep the node being replaced in `replaced_source_nodes` and put a runtime
+/// error in its place. Callers retire the node's checked metadata first, so
+/// the kept node carries only source structure. Replacing a node that is
+/// already a runtime error keeps the source node it was replaced from.
+fn replaceSourceNodeWithRuntimeError(
+    store: *NodeStore,
+    node_idx: Node.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+) Allocator.Error!void {
+    const replaced = store.nodes.get(node_idx);
+    const source_node_plus_one: u32 = if (replaced.tag == .malformed)
+        replaced.getPayload().malformed.source_node_plus_one
+    else
+        @intFromEnum(try store.replaced_source_nodes.append(store.gpa, replaced)) + 1;
+    var node = Node.init(.malformed);
+    node.setPayload(.{ .malformed = .{
+        .diagnostic = @intFromEnum(diagnostic_idx),
+        .source_node_plus_one = source_node_plus_one,
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Settle a deferred import reference expression that resolves to nothing as
+/// a runtime error. The deferred node is a placeholder for the resolved form,
+/// not source structure, so nothing is kept for it.
+pub fn settleDeferredExprAsRuntimeError(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const tag = store.nodes.get(node_idx).tag;
+    std.debug.assert(tag == .expr_deferred_import_ref or tag == .expr_deferred_nominal_external);
+    var node = Node.init(.malformed);
+    node.setPayload(.{ .malformed = .{ .diagnostic = @intFromEnum(diagnostic_idx) } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Settle a deferred import reference pattern that resolves to nothing as a
+/// runtime error. Like `settleDeferredExprAsRuntimeError`, nothing is kept.
+pub fn settleDeferredPatternAsRuntimeError(
     store: *NodeStore,
     pattern_idx: CIR.Pattern.Idx,
     diagnostic_idx: CIR.Diagnostic.Idx,
 ) void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
-    _ = store.retireLiteralDispatchPlan(node_idx);
+    std.debug.assert(store.nodes.get(node_idx).tag == .pattern_deferred_import_ref);
     var node = Node.init(.malformed);
-    node.setPayload(.{ .pattern_malformed = .{ .diagnostic = @intFromEnum(diagnostic_idx) } });
+    node.setPayload(.{ .malformed = .{ .diagnostic = @intFromEnum(diagnostic_idx) } });
     store.nodes.set(node_idx, node);
+}
+
+/// The node at `node_idx` as written in source: the node a runtime error
+/// replaced, if one did, and otherwise the node itself.
+fn sourceNode(store: *const NodeStore, node_idx: Node.Idx) Node {
+    const node = store.nodes.get(node_idx);
+    if (node.tag != .malformed) return node;
+    const source_node_plus_one = node.getPayload().malformed.source_node_plus_one;
+    if (source_node_plus_one == 0) return node;
+    return store.replaced_source_nodes.get(@enumFromInt(source_node_plus_one - 1));
 }
 
 /// Updates the body of an e_lambda expression.
@@ -2677,8 +2705,17 @@ fn isPatternTag(tag: Node.Tag) bool {
 /// Retrieves a pattern from the store.
 pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pattern {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
-    const node = store.nodes.get(node_idx);
+    return @call(.always_inline, patternFromNode, .{ store, store.nodes.get(node_idx) });
+}
 
+/// Retrieves a pattern as written in source, reading through a runtime error
+/// put in its place.
+pub fn getSourcePattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pattern {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+    return store.patternFromNode(store.sourceNode(node_idx));
+}
+
+fn patternFromNode(store: *const NodeStore, node: Node) CIR.Pattern {
     // Safety check: Handle cross-module node index issues where a pattern index
     // might point to a non-pattern node (e.g., type_header from another module)
     if (!isPatternTag(node.tag)) {
@@ -2870,9 +2907,9 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
         .pattern_underscore => return CIR.Pattern{ .underscore = {} },
         .malformed => {
-            const p = payload.diag_single_value;
+            const p = payload.malformed;
             return CIR.Pattern{ .runtime_error = .{
-                .diagnostic = @enumFromInt(p.value),
+                .diagnostic = @enumFromInt(p.diagnostic),
             } };
         },
     }
@@ -3004,9 +3041,9 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
             } };
         },
         .malformed => {
-            const p = payload.diag_single_value;
+            const p = payload.malformed;
             return CIR.TypeAnno{ .malformed = .{
-                .diagnostic = @enumFromInt(p.value),
+                .diagnostic = @enumFromInt(p.diagnostic),
             } };
         },
     }
@@ -3130,11 +3167,6 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement, region: base.Re
 pub fn setStatementNode(store: *NodeStore, stmt_idx: CIR.Statement.Idx, statement: CIR.Statement) Allocator.Error!void {
     const node = try store.makeStatementNode(statement);
     store.nodes.set(@enumFromInt(@intFromEnum(stmt_idx)), node);
-}
-
-/// Replaces an existing expression node with a runtime error expression.
-pub fn setExprRuntimeError(store: *NodeStore, expr_idx: CIR.Expr.Idx, diagnostic_idx: CIR.Diagnostic.Idx) Allocator.Error!void {
-    try store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
 }
 
 /// Creates a statement node, but does not append to the store.
@@ -3329,8 +3361,8 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
         },
         .s_runtime_error => |s| {
             node.tag = .malformed;
-            node.setPayload(.{ .diag_single_value = .{
-                .value = @intFromEnum(s.diagnostic),
+            node.setPayload(.{ .malformed = .{
+                .diagnostic = @intFromEnum(s.diagnostic),
             } });
         },
     }
@@ -3650,8 +3682,8 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_runtime_error => |e| {
             node.tag = .malformed;
-            node.setPayload(.{ .diag_single_value = .{
-                .value = @intFromEnum(e.diagnostic),
+            node.setPayload(.{ .malformed = .{
+                .diagnostic = @intFromEnum(e.diagnostic),
             } });
         },
         .e_crash => |c| {
@@ -4196,7 +4228,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         },
         .runtime_error => |e| {
             node.tag = .malformed;
-            node.setPayload(.{ .pattern_malformed = .{
+            node.setPayload(.{ .malformed = .{
                 .diagnostic = @intFromEnum(e.diagnostic),
             } });
         },
@@ -6007,8 +6039,8 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
 /// corresponding function in `ModuleEnv`.
 pub fn addMalformed(store: *NodeStore, diagnostic_idx: CIR.Diagnostic.Idx, region: Region) Allocator.Error!Node.Idx {
     var malformed_node = Node.init(.malformed);
-    malformed_node.setPayload(.{ .diag_single_value = .{
-        .value = @intFromEnum(diagnostic_idx),
+    malformed_node.setPayload(.{ .malformed = .{
+        .diagnostic = @intFromEnum(diagnostic_idx),
     } });
     const malformed_nid = try store.nodes.append(store.gpa, malformed_node);
     _ = try store.regions.append(store.gpa, region);
@@ -6586,9 +6618,9 @@ pub const Serialized = extern struct {
     literal_pattern_contexts: collections.SafeList(LiteralPatternContext).Serialized,
     interpolation_data: collections.SafeList(InterpolationData).Serialized,
     nodes: Node.List.Serialized,
+    replaced_source_nodes: Node.List.Serialized,
     regions: Region.List.Serialized,
     write_occurrences: collections.SafeList(WriteOccurrence).Serialized,
-    retired_source_nodes: Node.List.Serialized,
     span2_data: collections.SafeList(Span2).Serialized,
     span_with_node_data: collections.SafeList(SpanWithNode).Serialized,
     method_call_data: collections.SafeList(MethodCallData).Serialized,
@@ -6621,10 +6653,10 @@ pub const Serialized = extern struct {
         try self.interpolation_data.serialize(&store.interpolation_data, allocator, writer);
         // Serialize nodes
         try self.nodes.serialize(&store.nodes, allocator, writer);
+        try self.replaced_source_nodes.serialize(&store.replaced_source_nodes, allocator, writer);
         // Serialize regions
         try self.regions.serialize(&store.regions, allocator, writer);
         try self.write_occurrences.serialize(&store.write_occurrences, allocator, writer);
-        try self.retired_source_nodes.serialize(&store.retired_source_nodes, allocator, writer);
         // Serialize span2_data
         try self.span2_data.serialize(&store.span2_data, allocator, writer);
         // Serialize span_with_node_data
@@ -6667,9 +6699,9 @@ pub const Serialized = extern struct {
         return NodeStore{
             .gpa = gpa,
             .nodes = self.nodes.deserializeInto(base_addr),
+            .replaced_source_nodes = self.replaced_source_nodes.deserializeInto(base_addr),
             .regions = self.regions.deserializeInto(base_addr),
             .write_occurrences = self.write_occurrences.deserializeInto(base_addr),
-            .retired_source_nodes = self.retired_source_nodes.deserializeInto(base_addr),
             .int128_values = self.int128_values.deserializeInto(base_addr),
             .literal_dispatch_plans = self.literal_dispatch_plans.deserializeInto(base_addr),
             .literal_pattern_contexts = self.literal_pattern_contexts.deserializeInto(base_addr),
@@ -6700,10 +6732,10 @@ pub const Serialized = extern struct {
         return NodeStore{
             .gpa = gpa,
             .nodes = self.nodes.deserializeInto(base_addr),
+            .replaced_source_nodes = self.replaced_source_nodes.deserializeInto(base_addr),
             // Regions needs to be mutable (grown during type checking)
             .regions = try self.regions.deserializeWithCopy(base_addr, gpa),
             .write_occurrences = self.write_occurrences.deserializeInto(base_addr),
-            .retired_source_nodes = self.retired_source_nodes.deserializeInto(base_addr),
             .int128_values = self.int128_values.deserializeInto(base_addr),
             .literal_dispatch_plans = self.literal_dispatch_plans.deserializeInto(base_addr),
             .literal_pattern_contexts = self.literal_pattern_contexts.deserializeInto(base_addr),
@@ -6736,9 +6768,9 @@ pub const Serialized = extern struct {
         var store = NodeStore{
             .gpa = gpa,
             .nodes = try self.nodes.deserializeWithCopy(base_addr, gpa),
+            .replaced_source_nodes = try self.replaced_source_nodes.deserializeWithCopy(base_addr, gpa),
             .regions = try self.regions.deserializeWithCopy(base_addr, gpa),
             .write_occurrences = try self.write_occurrences.deserializeWithCopy(base_addr, gpa),
-            .retired_source_nodes = try self.retired_source_nodes.deserializeWithCopy(base_addr, gpa),
             .int128_values = try self.int128_values.deserializeWithCopy(base_addr, gpa),
             .literal_dispatch_plans = try self.literal_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .literal_pattern_contexts = try self.literal_pattern_contexts.deserializeWithCopy(base_addr, gpa),

@@ -396,7 +396,7 @@ pub const ScopeMap = struct {
     ) Allocator.Error!void {
         if (depth > 128) return;
 
-        const pattern = module_env.store.getPattern(pattern_idx);
+        const pattern = module_env.store.getSourcePattern(pattern_idx);
 
         switch (pattern) {
             .assign => |p| {

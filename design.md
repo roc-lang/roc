@@ -1951,17 +1951,6 @@ Existing read and declaration nodes retain their own occurrence data. Any toolin
 indexes over these explicit occurrences belong to the tooling snapshot and are not
 built or serialized by ordinary compilation.
 
-Replacing an expression or statement with a runtime error overwrites its node
-in place, so the checked tree no longer reaches the source subtree beneath it.
-The replacement retains the node it overwrote in `NodeStore.retired_source_nodes`,
-referenced from the runtime-error node's own payload; the subtree's children,
-regions, and type variables are untouched. Every checked-program consumer reads
-the runtime error through `getExpr`/`getStatement`. Source tooling (hover, goto
-definition, references, rename, completion) reads through
-`getSourceExpr`/`getSourceStatement`, which return the retained source node, so
-names inside erroneous code resolve exactly as they were canonicalized and
-checked. The table is empty for a module that checks without errors.
-
 The `$` prefix is a naming convention enforced only as a declaration-site
 warning. Canonicalization reports a mutable binder whose name lacks `$`, or an
 immutable binder whose name starts with `$`, when it identifies the source
@@ -3173,6 +3162,22 @@ Checked CIR is the last source-level representation. It owns:
 Checked CIR may contain source-level forms such as static-dispatch calls,
 method equality, type-dispatch calls, and source `for` loops because those are
 part of the checked source module.
+
+Rejected code is replaced in place with a runtime error node: an expression,
+statement, or literal pattern checking rejects, and a read of a `var` before it
+is initialized, which canonicalization rejects. Every later stage reads the
+crash and nothing of the rejected code. The node store keeps each node it
+replaces this way in `NodeStore.replaced_source_nodes`, and the runtime error
+names the node it replaced, so source-level tools read through the replacement
+to the code as written with `getSourceExpr`, `getSourceStatement`, and
+`getSourcePattern`. The kept node's children, regions, and type variables are
+the ones canonicalization and checking produced, so hover, completion,
+renaming a binding, listing its references, highlighting it, and going to its
+definition all see the occurrences inside rejected code. Compilation never
+reads the kept nodes, and a module without errors keeps none. A deferred
+import reference that resolves to nothing is settled as a runtime error without
+keeping anything, because the deferred node is a placeholder for the resolved
+form rather than source.
 
 Equality against a payload-free tag carries an explicit checked discriminant
 decision: the checked operation records the value operand and exact tag
@@ -12901,7 +12906,15 @@ A formal position holds its value in the worker representation of the owning
 nominal's actual argument. Tag-union and declared-aggregate boundary adapters
 therefore resolve a formal-typed payload or field to that actual before
 choosing its target descriptor, rather than preserving the source value's
-storage as they do for a bare type parameter. A worker argument's root
+storage as they do for a bare type parameter. Two uses of one declaration share
+its backing template, so a position inside it names neither side's storage:
+when the uses bind some formal to actuals that store differently (a target
+actual that is a bare type parameter excepted), a call-boundary adapter's
+target descriptor is the target's whole backing described under the target's
+own actuals, and the runtime conversion rewrites every position that formal
+reaches (`Dict(U64, List(Str))` passed as `Dict(U64, List(x))` rebuilds each
+value list with boxed items). Uses whose actuals agree keep the direct
+transfer. A worker argument's root
 descriptor may be rebuilt from the worker's own descriptors for the nominal's
 arguments. Reading a field through a nominal receiver takes the record's
 descriptor from the receiver's own descriptor.
@@ -13321,7 +13334,48 @@ a template is an invariant failure. A template slot also carries, after the
 worker's hidden descriptors, the requirement-side descriptors and the frame's
 own type variables that its method adapter needs; the adapter binds them
 (requirement descriptors only where the requirement side is lowered) and
-describes representations naming them through those bindings.
+describes representations naming them through those bindings. The slot's own
+adapter descriptors (the argument and invocation descriptors the runtime uses
+to call it) name the same frame descriptors at every position that describes a
+requirement the frame supplies, including positions nested inside a compound
+requirement argument; the runtime resolves them when it copies the template. A
+dictionary whose own representation names a frame descriptor is a template even
+when all of its methods are structural, and its structural slots describe their
+operand through the frame. The requirement descriptors come from the checked
+substitution of the call that passes the dictionary, which a method call reads
+from the evidence node its plan selected, exactly as an ordinary call reads it
+from its instantiated lookup.
+
+A static dictionary method selected from the dictionary's own type, with no
+checked evidence edge, is called at an explicit instantiation: the selected
+target's declared argument and result types, with the constrained variable's
+positions replaced by the dictionary's type and a requirement variable by the
+type the calling edge instantiated it to (a scheme variable that is a whole
+argument or the result of the callee takes the call's type there). The
+instantiation, not the target's generic declared callable, supplies the method
+worker's hidden descriptors and its nested dictionaries, so a generic target
+such as `List.is_eq` reached for `List(Str)` receives `Str`'s dictionary. A
+dictionary's method evidence entries are one contiguous span even when planning
+one of them plans a nested dictionary first.
+
+Derived `is_eq` and `to_hash` compare and hash each component with that
+component type's own method, exactly as a direct comparison would, which is
+the rule checking enforces when it derives them. Planning walks each derived
+root (a structural equality or hash expression, an unresolved dispatch allowed
+to derive, or a structural dictionary slot) and records a decision for every
+list, nominal, and type-variable component: a `List` or a nominal declaring its
+own method calls that method's worker, planned as a synthesized call at the
+component's checked type and the derivation's own second argument and result
+types; a type variable calls through the scheme requirement checking gave its
+enclosing worker; a nominal whose method is derived expands. Decisions are keyed
+by the derived frame, which is none when the derived type names no type
+variable (so every frame shares its static decisions) and otherwise the worker
+lowering it, and lowering reads them, never re-deciding. A structural slot
+whose derivation calls a method is a worker procedure; in a template it also
+receives the building frame's descriptors and dictionaries for the type
+variables its operand names, and its operand's own descriptor, like a worker
+argument's. Components inside a generic nominal's backing that read the
+nominal's formals keep comparing by descriptor.
 
 Boxy box/unbox/adapt operations are explicit LIR statements or explicit helper
 calls selected by the lowerer:
@@ -13419,6 +13473,44 @@ The exact descriptor, dictionary, and adapter payload structs are owned by LIR,
 not by a backend. Their contents are serialized into LirImage when any reachable
 LIR statement references them. A backend may cache lowered helper code for a
 descriptor, dictionary, or adapter, but it must not change that data's meaning.
+
+A `BoxyTypeDesc` records the source-language shape of the value it describes
+(`BoxyDescShape`): primitive, record, tuple, tag union, list, box, erased
+storage, callable, or compiler-internal storage. Consumers that render or
+match source-language structure, such as inspection, dispatch on that shape.
+The payload layout only locates bytes, because layout erases structure: a
+zero-sized record, tuple, and single-tag union all share the `zst` layout.
+
+`nested_descs` holds exactly one descriptor per child position: struct field
+`i` (by original field index) is position `i`, and a list's item or a box's
+payload is position 0. Zero-sized and scalar children have positions too,
+because a child's descriptor is the only runtime record of its source-language
+identity: its tag names, its record or tuple structure, a nominal `to_inspect`
+method, or its opacity. Every producer (static, worker-instantiated, template,
+constructed-aggregate, adapter-specialized, erased-capture, and generated
+evidence descriptors) and every consumer uses these positions; no consumer
+locates a child descriptor by testing sibling layouts. Tag variants likewise
+carry a descriptor for every payload, keyed by payload index. A record
+descriptor names every position in `field_names`. A declared nominal's unnamed
+padding field is named `padding_field`, which inspection skips and which
+corresponds only to the padding field at the same position of another
+descriptor.
+
+Whether a child's value also carries a runtime descriptor for its memory
+operations is a separate question, answered by its storage layout. Memory
+walkers follow a child descriptor only for storage that needs one, and lowering
+attaches runtime descriptor locals only to such values. A child whose storage
+carries no runtime descriptor has a statically known identity, so lowering
+references its static descriptor directly instead of materializing a local.
+
+Once lowering has produced every descriptor,
+`LirProgram.Result.classifyBoxyDescClosures` records each static descriptor's
+`closure`: `closed` when every reachable reference is static, `captures` when
+reachable references read only the materialization's captured descriptor
+locals, and `context` otherwise. The runtime uses a closed descriptor in place
+and never copies it. It instantiates a capture-bound template once per distinct
+set of captured descriptors, memoized in the `DescMaterializationCache` shared
+by the interpreter and the machine-code Boxy ABI.
 
 Boxy tag and field names belong to `LirStore.boxy_names`, separate from literal
 backings. Lowering interns each spelling through the shared serial string
