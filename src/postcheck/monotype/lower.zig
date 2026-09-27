@@ -45009,9 +45009,13 @@ const BodyContext = struct {
             if (structural) |kind| return .{ .structural = .{ .derivation = structuralDerivationWithoutMap(kind) } };
             Common.invariant("compiler-generated graph component owner had no exact checked method target");
         }
+        if (try self.nodeIsProvenUninhabited(component_node) or self.nodeFinalizesAsUninhabitedLeaf(component_node)) {
+            return switch (static_dispatch.unpinnedDispatchResolution(structural)) {
+                .structural => .{ .structural = .{ .derivation = structuralDerivationWithoutMap(structural.?) } },
+                .unreachable_value => .unreachable_value,
+            };
+        }
         if (structural) |kind| return .{ .structural = .{ .derivation = structuralDerivationWithoutMap(kind) } };
-        if (try self.nodeIsProvenUninhabited(component_node)) return .unreachable_value;
-        if (self.nodeFinalizesAsUninhabitedLeaf(component_node)) return .unreachable_value;
         Common.invariant("compiler-generated ownerless graph component had no checked structural or uninhabited evidence");
     }
 

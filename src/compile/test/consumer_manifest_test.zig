@@ -224,10 +224,9 @@ test "compile-time consumer materializes only the evaluated values the program r
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    // A separate runtime consumer continuing the compile-time Solved program
-    // (dev's Solved policy), so completed values are materialized for it
-    // rather than read out of the compile-time consumer's own slots.
-    const target: lir.CheckedPipeline.TargetConfig = .{ .inline_expects = .omit, .proc_debug_names = true, .inline_mode = .wrappers, .spec_constr_clone_inlining = .iterator_fusion };
+    // A separate runtime consumer, so completed values are materialized for
+    // it rather than read out of the compile-time consumer's own slots.
+    const target: lir.CheckedPipeline.TargetConfig = .{ .inline_expects = .omit, .proc_debug_names = true };
     coord.runtime_lowering = .{ .target = target };
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
@@ -308,9 +307,7 @@ test "one evaluated root has one completed-value slot however many places read i
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    // Dev's Solved policy: the runtime consumer continues the compile-time
-    // Solved program and reads the values materialized for it.
-    const target: lir.CheckedPipeline.TargetConfig = .{ .inline_expects = .omit, .proc_debug_names = true, .inline_mode = .wrappers, .spec_constr_clone_inlining = .iterator_fusion };
+    const target: lir.CheckedPipeline.TargetConfig = .{ .inline_expects = .omit, .proc_debug_names = true };
     coord.runtime_lowering = .{ .target = target };
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
@@ -438,7 +435,7 @@ test "a separate compile-time consumer lowers no runtime-only procedure" {
     // Asserted while the compile-time program is still whole, before any
     // consumer has taken the runtime continuation or released this code.
     try std.testing.expect(session.host != null);
-    try std.testing.expect(session.runtime_prepared == null);
+    try std.testing.expect(session.runtime_prepared != null);
     try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
     try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
     try std.testing.expectEqual(@as(u32, 1), metrics.lir_continuations);
@@ -539,14 +536,14 @@ test "a separate runtime consumer keeps the producer's root order and test-plan 
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
     try std.testing.expect(session.host != null);
-    try std.testing.expect(session.runtime_prepared == null);
+    try std.testing.expect(session.runtime_prepared != null);
 
     var runtime = try session.takeRuntime(allocator, requests, target);
     defer runtime.deinit();
-    // The runtime consumer specializes the checked modules itself, reading
-    // compile-time values from their constant stores.
-    try std.testing.expectEqual(@as(u32, 2), metrics.monotype_runs);
-    try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
+    // One specialization serves both consumers: the runtime consumer
+    // continues the Solved program compile-time evaluation ran in.
+    try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
+    try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
     try std.testing.expectEqual(@as(usize, 2), runtime.lir_result.root_metadata.items.len);
     for (expects.items, plan_metadata.items, runtime.lir_result.root_metadata.items) |request, declared, metadata| {
         try std.testing.expectEqual(request.order, metadata.order);

@@ -114,7 +114,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "k")))
-			(e-dispatch-call (method "insert") (constraint-fn-var 233)
+			(e-dispatch-call (method "insert") (constraint-fn-var 234)
 				(receiver
 					(e-call (constraint-fn-var 230)
 						(e-lookup-external

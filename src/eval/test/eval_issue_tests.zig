@@ -3367,6 +3367,167 @@ pub const tests = [_]TestCase{
         .expected = .{ .problem_and_crash = {} },
     },
     .{
+        // repro for https://github.com/roc-lang/roc/issues/11502
+        // A rejected relation poisons only the use it rejected. Lowering
+        // `check` instantiates every parameter's type, so the parameter read
+        // by the rejected use must keep its declared type; the use itself
+        // becomes the runtime error.
+        .name = "issue 11502: rejected equality leaves its operand parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    Ref :: { value : Str }.{
+        \\        is_eq : Ref, Ref -> Bool
+        \\        is_eq = |left, right| left.value == right.value
+        \\    }
+        \\
+        \\    check : Ref, Str -> Bool
+        \\    check = |a, b| a == b
+        \\}
+        \\
+        \\main = M.check({ value: "x" }, "x")
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected method call argument leaves its parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    Ref :: { value : Str }.{
+        \\        same : Ref, Ref -> Bool
+        \\        same = |left, right| left.value == right.value
+        \\    }
+        \\
+        \\    check : Ref, Str -> Bool
+        \\    check = |a, b| a.same(b)
+        \\}
+        \\
+        \\main = M.check({ value: "x" }, "x")
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected arithmetic operand leaves its parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    check : I64, Str -> I64
+        \\    check = |n, s| n + s
+        \\}
+        \\
+        \\main = M.check(1, "x")
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected if condition leaves its parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    check : Str, I64 -> I64
+        \\    check = |s, n| if s n else 2
+        \\}
+        \\
+        \\main = M.check("x", 1)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected match guard leaves its parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    check : Str, I64 -> I64
+        \\    check = |s, n| match n {
+        \\        _ if s => 1
+        \\        _ => 2
+        \\    }
+        \\}
+        \\
+        \\main = M.check("x", 1)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected list element leaves its parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    check : Str -> List(Bool)
+        \\    check = |s| [Bool.True, s]
+        \\}
+        \\
+        \\main = M.check("x").len()
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: body rejected by its annotation leaves the returned parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    check : Str -> Bool
+        \\    check = |s| s
+        \\}
+        \\
+        \\main = M.check("x")
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected derived equality argument leaves the captured parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    check : Str -> Bool
+        \\    check = |b| {
+        \\        f = |a| a.is_eq(b)
+        \\        f({ v: "x" })
+        \\    }
+        \\}
+        \\
+        \\main = M.check("x")
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected use of a top-level value leaves the value's type intact",
+        .source_kind = .module,
+        .source =
+        \\flag : Str
+        \\flag = "x"
+        \\
+        \\check : I64 -> I64
+        \\check = |n| if flag n else 2
+        \\
+        \\main = check(1)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected use of an imported value becomes a runtime error",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Flag",
+            .source =
+            \\Flag := [].{
+            \\    flag : Str
+            \\    flag = "x"
+            \\}
+            ,
+        }},
+        .source =
+        \\import Flag
+        \\
+        \\check : I64 -> I64
+        \\check = |n| if Flag.flag n else 2
+        \\
+        \\main = check(1)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
         // repro for https://github.com/roc-lang/roc/issues/11489
         // An unannotated function whose local recursive helper appends a
         // freshly appended inner list to an outer accumulator in two match

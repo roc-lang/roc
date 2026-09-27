@@ -26,7 +26,7 @@ export type RuntimeEvent = { kind: "dbg" | "expect_failed" | "crashed"; message:
 
 export interface SnippetResult {
   source: string;
-  kind: "expression" | "definition" | null;
+  kind: "expression" | "statement" | "definition" | null;
   definition_kind: DefinitionKind | null;
   name: string | null;
   status: "ok" | "diagnostic" | "crashed";
@@ -50,7 +50,7 @@ export interface EvalResult {
 
 export interface AnalyzeResult {
   status: "complete" | "incomplete" | "invalid";
-  kind: "expression" | "definition" | null;
+  kind: "expression" | "statement" | "definition" | null;
   definition_kind: DefinitionKind | null;
   name: string | null;
   diagnostics: Diagnostic[];

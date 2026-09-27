@@ -18,6 +18,7 @@ pub const formatStdin = fmt.formatStdin;
 pub const formatAst = fmt.formatAst;
 pub const formatAstWithOptions = fmt.formatAstWithOptions;
 pub const formatHeader = fmt.formatHeader;
+pub const redundantOpenExtensions = fmt.redundantOpenExtensions;
 pub const formatStatement = fmt.formatStatement;
 pub const formatExpr = fmt.formatExpr;
 pub const moduleFmtsStable = fmt.moduleFmtsStable;
@@ -25,4 +26,6 @@ pub const moduleFmtsStable = fmt.moduleFmtsStable;
 test "fmt tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(@import("fmt.zig"));
+    std.testing.refAllDecls(@import("open_rows.zig"));
+    std.testing.refAllDecls(@import("open_rows_test.zig"));
 }

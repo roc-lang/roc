@@ -135,9 +135,9 @@ main = ThingAlias.from_u64(41).value() + 1
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 303)
+		(e-dispatch-call (method "plus") (constraint-fn-var 304)
 			(receiver
-				(e-dispatch-call (method "value") (constraint-fn-var 294)
+				(e-dispatch-call (method "value") (constraint-fn-var 295)
 					(receiver
 						(e-call (constraint-fn-var 293)
 							(e-lookup-associated-resolved (source "ThingAlias.from_u64") (target-mod "where_clause_alias_type_dispatch_issue_9875") (target-node "15") (target-def "15"))
