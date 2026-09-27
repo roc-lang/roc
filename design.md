@@ -9444,26 +9444,25 @@ applies in `lowerCheckedTypeVariable`: its numeric default when it carries a
 numeric default phase, otherwise its row default (`{}` or `[]`), otherwise the
 empty tag union. Planning records that sealed representation as explicit
 `sealed_default` data on the flex representation, so lowering reads it rather
-than re-deriving a default from the checked type. A literal's numeric default
-applies only when nothing resolves the variable, so a numeric-literal variable
-that a scheme quantifies has no sealed default: every instantiation supplies its
-type through the descriptor the scheme's uses pass, exactly as for any other
-quantified variable. A flex variable carrying static-dispatch constraints
-follows the same rule: when a scheme quantifies it, its uses supply its
-descriptor and dictionaries, so it has no sealed default, and reaching it
-without a bound descriptor, like reaching an unbound rigid variable, is a
-lowering invariant violation. When no scheme quantifies it, nothing can supply
-either, so it seals to its default like any other unquantified variable, and
-each of its dispatches resolves against that default: through the default
-owner for a numeric default, and otherwise by the unpinned-dispatch rule
-(`unpinnedDispatchResolution`) the checker applies to a dispatcher no edge can
-pin, under which equality and hashing of the vacuous shape stay structural and
-every other dispatch is unreachable. The derived `is_eq`
+than re-deriving a default from the checked type. A default applies only when
+nothing resolves the variable, so a variable that a scheme quantifies has no
+sealed default, whether or not it carries a numeric default phase or
+static-dispatch constraints: every instantiation supplies its type, and its
+dictionaries, through the descriptor and dictionary arguments the scheme's uses
+pass, including when a worker is planned at a concrete instantiation and its
+body's variables take their representations from that instantiation. Reaching a
+quantified variable without a bound descriptor, like reaching an unbound rigid
+variable, is a lowering invariant violation. An unquantified variable carrying
+static-dispatch constraints seals like any other, and each of its dispatches
+resolves against its default: through the default owner for a numeric default,
+and otherwise by the unpinned-dispatch rule (`unpinnedDispatchResolution`) the
+checker applies to a dispatcher no edge can pin, under which equality and
+hashing of the vacuous shape stay structural and every other dispatch is
+unreachable. The derived `is_eq`
 equality placeholder Check leaves on an undetermined variable inside values
-compared with structural equality is not such a constraint: it discharges by
+compared with structural equality needs no dictionary: it discharges by
 comparing structurally with no owner (the same carve-out Check's ambiguity
-judgment applies), so planning seals the variable exactly like an unconstrained
-one and records no dictionary for it. A quantified variable's `is_eq` erased
+judgment applies), so planning records no dictionary for it. A quantified variable's `is_eq` erased
 requirement is owned instead—the scheme forwards it as compiler-derived structural
 evidence—so it keeps its dictionary requirement.
 

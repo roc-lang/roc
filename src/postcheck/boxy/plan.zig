@@ -4893,19 +4893,12 @@ const Builder = struct {
                 .{ .source_type = source_type, .kind = .empty_tag_union }
             else blk: {
                 var rep = try self.dynamicRepresentation(source_type, flex.constraints, .flex);
-                // A literal's numeric default, and the default of a variable
-                // carrying dispatch constraints, applies only if nothing
-                // resolves the variable: when a scheme quantifies it, each
-                // instantiation supplies its type and dictionaries through the
-                // scheme's uses, so only an unquantified one seals to its
-                // default, and its dispatches then resolve against that
-                // default.
-                const seals = if (flex.numeric_default_phase != null or
-                    self.flexConstraintsRequireScheme(source_type, flex.constraints))
-                    !self.quantified_variables.contains(source_type)
-                else
-                    true;
-                if (!self.host_mode and seals) {
+                // A default applies only if nothing resolves the variable:
+                // when a scheme quantifies it, each instantiation supplies its
+                // type and dictionaries through the scheme's uses, so only an
+                // unquantified one seals to its default, and its dispatches
+                // then resolve against that default.
+                if (!self.host_mode and !self.quantified_variables.contains(source_type)) {
                     rep.sealed_default = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
                     try self.plan.representations.append(self.allocator, .{
                         .source_type = source_type,
@@ -5357,20 +5350,6 @@ const Builder = struct {
         for (static_dispatch.structural_method_kinds) |entry| {
             if (entry.kind != .equality) continue;
             if (std.mem.eql(u8, names.methodNameText(constraint.fn_name), entry.method_name)) return true;
-        }
-        return false;
-    }
-
-    /// Whether the bare flex variable carries any checked constraint a
-    /// quantifying scheme would have to own. The ownerless structural-equality
-    /// placeholder does not count.
-    fn flexConstraintsRequireScheme(
-        self: *Builder,
-        source_type: CheckedTypeIdentity,
-        constraints: []const checked.CheckedStaticDispatchConstraint,
-    ) bool {
-        for (constraints) |constraint| {
-            if (!self.constraintIsOwnerlessStructuralEquality(source_type, constraint)) return true;
         }
         return false;
     }
@@ -6364,15 +6343,18 @@ const Builder = struct {
                 .num_literal = constraint.numeralInfo(),
             });
         }
+        // Analyzing a constraint's signature appends the requirements of the
+        // variables it mentions, which belong to those variables' own spans.
+        const span = Span{
+            .start = start,
+            .len = @intCast(self.plan.dictionaries.items.len - start),
+        };
         const view = self.moduleForId(source_type.module);
         for (constraints) |constraint| {
             if (self.constraintIsOwnerlessStructuralEquality(source_type, constraint)) continue;
             _ = try self.analyzeType(view, constraint.fn_ty);
         }
-        return .{
-            .start = start,
-            .len = @intCast(self.plan.dictionaries.items.len - start),
-        };
+        return span;
     }
 
     fn internDictionaryMethodSlot(
@@ -12928,6 +12910,10 @@ const Builder = struct {
             .promoted_proc => {},
             .decl => |decl| {
                 if (view.checked_bodies.expr(decl.expr).data == .runtime_error) return;
+                // A scheme alias binds no runtime value: each typed use
+                // instantiates its target, so the declaration's own generalized
+                // right-hand side is never lowered.
+                if (patternIsSchemeAlias(view, decl.pattern)) return;
                 try self.analyzePatternTypes(view, decl.pattern);
                 try self.analyzeExprTypes(view, decl.expr);
             },
@@ -12976,6 +12962,13 @@ const Builder = struct {
             },
             .return_ => |ret| try self.analyzeExprTypes(view, ret.expr),
         }
+    }
+
+    fn patternIsSchemeAlias(view: ModuleView, pattern_id: checked.CheckedPatternId) bool {
+        return switch (view.checked_bodies.pattern(pattern_id).data) {
+            .assign => |binder| view.checked_bodies.patternBinder(binder).is_scheme_alias,
+            .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => false,
+        };
     }
 
     fn analyzePatternTypes(self: *Builder, view: ModuleView, pattern_id: checked.CheckedPatternId) Allocator.Error!void {
