@@ -948,23 +948,30 @@ versioning, and overflow elision see the constant they would have seen from
 a literal in source; a table built by `List.repeat` with a compile-time
 length keeps no index check the prover can discharge, and no slot, failure
 record, or guard exists for the root. The decoded value is a construction
-tree, and a root whose every leaf is a scalar, the empty string, an empty
-list, or a list of copies of one construction lowers as that tree rather
-than as bytes, because static data is the wrong home for it: records,
+tree, and a root whose every leaf is a scalar, the empty string, or an
+empty list lowers as that tree rather than as bytes, because static data
+is the wrong home for it: records,
 tuples, and tag payloads of such parts rebuild field by field, so an
 empty `Dict` or `Set`, which is a record of empty lists, never reaches the
 image either. An empty list lowers to the `with_capacity` it was evaluated
 with: a frozen descriptor's capacity word is its length, so the freezer
 keeps each empty list's evaluated capacity on the root's export, keyed by
 its byte offset within the image, and the runtime rebuilds the request so
-the first append goes in place. A list of copies of one construction,
-which is what `List.repeat` and any constant fill loop produce, lowers to
-that repeat loop again: a table of zeros is a few instructions at runtime
-and would otherwise be that many bytes in the binary, and a static list
-can never be born unique, which would lose the in-place writes of every
-loop the table is carried through. A non-empty list with spare capacity
-freezes to its items alone; only the capacity of an empty list
-survives. A build that restores its compile-time values from a checked
+the first append goes in place. A list with items keeps its slot however
+uniform its contents: rebuilding a table of copies at every read would
+allocate at every read, while a mutating consumer of a static list gets its
+fresh unique copy from copy-on-first-mutation at the one allocation a
+rebuild would have spent, so the constructions are the scalars, the empty
+string, the empty list, and records, tuples and tags of those. A non-empty
+list with spare capacity freezes to its items alone; only the capacity of
+an empty list survives. Identical nodes of one frozen image are one symbol:
+two evaluations of the same constant expression, such as two `List.repeat`
+calls with the same arguments, freeze to separate allocations with the same
+contents, and both the evaluation's image and the runtime program's
+transcoded image merge such nodes to a fixed point (`mergeIdenticalNodes`),
+so a program's static data does not depend on whether its values were
+completed by this compilation or restored from the constant store, which
+already names one value once. A build that restores its compile-time values from a checked
 module's const store rather than from a completed host program, as every
 build after the first does, reaches the same constructions: the const
 store keeps an empty list's evaluated capacity and restores it as the
