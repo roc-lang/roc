@@ -35555,6 +35555,12 @@ fn checkFinalGeneratedCodecConstraints(self: *Self, env: *Env) Allocator.Error!v
 }
 
 fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pass: bool) std.mem.Allocator.Error!void {
+    try self.checkStaticDispatchConstraintsFrom(env, is_numeric_default_pass, 0);
+}
+
+/// Drain a dispatch suffix without replaying the enclosing relation. Generated
+/// codec methods must settle their own requirements before closing error rows.
+fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default_pass: bool, start: usize) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -35569,7 +35575,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
     // grounding consumes it, and every fresh child edge passes the lineage
     // detectors, which reject an exact repeated state or a strictly grown
     // re-entry of the same binding before it can extend the queue further.
-    var deferred_constraint_index: usize = 0;
+    var deferred_constraint_index: usize = start;
     while (deferred_constraint_index < env.deferred_static_dispatch_constraints.items.items.len) : (deferred_constraint_index += 1) {
         const deferred_constraint = env.deferred_static_dispatch_constraints.items.items[deferred_constraint_index];
         const retained_top = self.scratch_deferred_static_dispatch_constraints.top();
@@ -36686,8 +36692,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
         }
     }
 
-    // Now that we've processed all constraints, reset the array
-    env.deferred_static_dispatch_constraints.items.clearRetainingCapacity();
+    // Preserve the enclosing drain's prefix, if this is a method-local drain.
+    env.deferred_static_dispatch_constraints.items.shrinkRetainingCapacity(start);
 
     // Copy any flex constraints to try again later
     try env.deferred_static_dispatch_constraints.items.appendSlice(
@@ -41538,6 +41544,47 @@ fn instantiateGeneratedCodecMethodTarget(
     return method_var;
 }
 
+/// Settle the requirements produced by one selected method and its transitive
+/// targets before treating its error row as complete. Only the suffix belongs
+/// to this method: the prefix includes the derivation currently being checked.
+/// Each copied requirement is enqueued once, and each completed relation is
+/// permanently settled or rejected, so the loop ends when neither advances.
+fn settleGeneratedCodecMethodRequirements(
+    self: *Self,
+    env: *Env,
+    dispatchers_start: usize,
+    deferred_start: usize,
+    failure_expr: ?CIR.Expr.Idx,
+) Allocator.Error!void {
+    // All latch writes belong to newly instantiated dispatchers. Probe rollback
+    // truncates this suffix; no pre-probe latch or global pending cursor moves.
+    while (true) {
+        var appended = false;
+        var idx = dispatchers_start;
+        while (idx < self.instantiation_dispatchers.items.len) : (idx += 1) {
+            const dispatcher = self.instantiation_dispatchers.items[idx];
+            if (dispatcher.deferred_enqueued or dispatcher.constraints.len() == 0) continue;
+            if (self.types.resolveVar(dispatcher.dispatcher_var).desc.content == .flex) continue;
+            try self.enqueueDeferredDispatchConstraint(env, .{
+                .var_ = dispatcher.dispatcher_var,
+                .constraints = dispatcher.constraints,
+                .failure_expr = if (failure_expr) |expr| .from(@intFromEnum(expr)) else .none,
+            }, .{ .recorded = dispatcher.owner_group_index });
+            self.instantiation_dispatchers.items[idx].deferred_enqueued = true;
+            appended = true;
+        }
+        if (env.deferred_static_dispatch_constraints.items.items.len == deferred_start) return;
+        inheritDeferredConstraintFailureExpr(env, deferred_start, if (failure_expr) |expr| .from(@intFromEnum(expr)) else .none);
+        const settled_before = self.settled_static_dispatch_constraint_fns.count();
+        const dispatchers_before = self.instantiation_dispatchers.items.len;
+        const deferred_before = env.deferred_static_dispatch_constraints.items.items.len;
+        try self.checkStaticDispatchConstraintsFrom(env, false, deferred_start);
+        if (!appended and self.settled_static_dispatch_constraint_fns.count() == settled_before and
+            self.instantiation_dispatchers.items.len == dispatchers_before and
+            env.deferred_static_dispatch_constraints.items.items.len == deferred_before) return;
+    }
+}
+
 const NullTryInfo = struct {
     ok_var: Var,
     err_var: Var,
@@ -41793,14 +41840,7 @@ fn parseFormatMethodVarForEncoding(
                     method_name,
                 ) orelse break :blk null;
                 break :blk .{
-                    .var_ = try self.methodTypeVarFromOriginalEnv(
-                        method_lookup.env,
-                        method_lookup.is_this_module,
-                        method_lookup.binding.type_node_idx,
-                        env,
-                        region,
-                        .none,
-                    ),
+                    .var_ = try self.instantiateGeneratedFormatMethodTarget(method_lookup, env, region),
                     .dispatcher_name = nominal.ident.ident_idx,
                 };
             },
@@ -41828,20 +41868,28 @@ fn parseFormatMethodVarForEncoding(
                 method_name,
             ) orelse break :blk null;
             break :blk .{
-                .var_ = try self.methodTypeVarFromOriginalEnv(
-                    method_lookup.env,
-                    method_lookup.is_this_module,
-                    method_lookup.binding.type_node_idx,
-                    env,
-                    region,
-                    .none,
-                ),
+                .var_ = try self.instantiateGeneratedFormatMethodTarget(method_lookup, env, region),
                 .dispatcher_name = alias.ident.ident_idx,
             };
         },
         .err => null,
         .flex, .rigid, .field_presence => null,
     };
+}
+
+/// Allocate the generated call's evidence identity before instantiating the
+/// format method, so its copied where requirements are published at that exact
+/// call. Format calls need the same target evidence as custom nominal parsers.
+fn instantiateGeneratedFormatMethodTarget(
+    self: *Self,
+    method_lookup: StaticDispatchMethodBinding,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    const evidence_var = try self.fresh(env, region);
+    const method_var = try self.instantiateGeneratedCodecMethodTarget(method_lookup, evidence_var, env, region);
+    _ = try self.unify(evidence_var, method_var, env);
+    return evidence_var;
 }
 
 fn reportDerivedParseMissingMethod(
@@ -41928,6 +41976,8 @@ fn validateParseFormatMethod(
         .tag_union,
         => shape_var,
     };
+    const dispatchers_start = self.instantiation_dispatchers.items.len;
+    const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr);
     };
@@ -41974,6 +42024,7 @@ fn validateParseFormatMethod(
         },
     });
     if (!result.isEstablished()) return .reported_error;
+    try self.settleGeneratedCodecMethodRequirements(env, dispatchers_start, deferred_start, failure_expr);
     if (spec_decl != .tag_union) switch (try self.constrainDerivedParserFormatError(err_var, child_err_var, constraint, failure_expr, env, region)) {
         .ok => {},
         .unsupported, .reported_error => |validation| return validation,
@@ -42097,6 +42148,8 @@ fn validateDictProtocolMethod(
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!DerivedParseValidation {
     const method_name = try self.protocolMethodName(method_text);
+    const dispatchers_start = self.instantiation_dispatchers.items.len;
+    const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr);
     };
@@ -42113,6 +42166,7 @@ fn validateDictProtocolMethod(
         },
     });
     if (!result.isEstablished()) return .reported_error;
+    if (is_parser) try self.settleGeneratedCodecMethodRequirements(env, dispatchers_start, deferred_start, failure_expr);
     if (is_parser) switch (try self.constrainDerivedParserFormatError(parent_result.err, child_err_var, constraint, failure_expr, env, region)) {
         .ok => {},
         .unsupported, .reported_error => |validation| return validation,
@@ -42133,6 +42187,8 @@ fn validateParseKeyMethod(
 ) Allocator.Error!DerivedParseValidation {
     const method_text = try self.parseDictKeyMethodText(key_var) orelse return .ok;
     const method_name = try @constCast(self.cir).insertIdent(base.Ident.for_text(method_text));
+    const dispatchers_start = self.instantiation_dispatchers.items.len;
+    const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr);
     };
@@ -42147,6 +42203,7 @@ fn validateParseKeyMethod(
         },
     });
     if (!result.isEstablished()) return .reported_error;
+    try self.settleGeneratedCodecMethodRequirements(env, dispatchers_start, deferred_start, failure_expr);
     switch (try self.constrainDerivedParserFormatError(err_var, child_err_var, constraint, failure_expr, env, region)) {
         .ok => {},
         .unsupported, .reported_error => |validation| return validation,
@@ -42491,6 +42548,8 @@ fn validateSkipRecordFieldMethod(
 ) Allocator.Error!DerivedParseValidation {
     const method_name = try self.protocolMethodName("skip_record_field");
     if (self.hasReusableGeneratedCodecCall(method_name, walk)) return .ok;
+    const dispatchers_start = self.instantiation_dispatchers.items.len;
+    const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr);
     };
@@ -42505,6 +42564,7 @@ fn validateSkipRecordFieldMethod(
         },
     });
     if (!result.isEstablished()) return .reported_error;
+    try self.settleGeneratedCodecMethodRequirements(env, dispatchers_start, deferred_start, failure_expr);
     switch (try self.constrainDerivedParserFormatError(err_var, child_err_var, constraint, failure_expr, env, region)) {
         .ok => {},
         .unsupported, .reported_error => |validation| return validation,
@@ -43356,6 +43416,8 @@ fn validateDerivedParseNominal(
     const expected_ret = try self.freshParseResultTryVar(nominal_var, state_var, child_err_var, env, region);
     const expected_runtime_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{state_var}, expected_ret), env, region);
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{encoding_var}, expected_runtime_fn), env, region);
+    const dispatchers_start = self.instantiation_dispatchers.items.len;
+    const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
     const method_var = try self.instantiateGeneratedCodecMethodTarget(method_lookup, expected_fn, env, region);
     const result = try self.unifyInContext(method_var, expected_fn, env, .{
         .method_type = .{
@@ -43426,6 +43488,7 @@ fn validateDerivedParseNominal(
     // inclusion holds by construction and there is no child extension left to
     // close.
     if (generated_parser) return .ok;
+    try self.settleGeneratedCodecMethodRequirements(env, dispatchers_start, deferred_start, failure_expr);
     return try self.constrainDerivedParserErrorRowIncludes(err_var, child_err_var, constraint, failure_expr, env, region);
 }
 
