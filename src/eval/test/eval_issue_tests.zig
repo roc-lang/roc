@@ -3751,6 +3751,156 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"select 1\"" },
     },
     .{
+        // repro for https://github.com/roc-lang/roc/issues/11725
+        // `from_quote`'s `where` clause asks for a derived `parser_for` of a
+        // record row that the caller returns inside a tag union
+        // (`[Nope, Yes(row)]`); `run` converts a `from_quote` literal there.
+        // Expected: the program checks cleanly and `main` evaluates to `Nope`.
+        .name = "issue 11725: from_quote where clause derived parser_for of record row returned in tag union",
+        .source_kind = .module,
+        .source =
+        \\Fmt := {}.{
+        \\    parse_record_start = |_, s| Ok(Uncounted(s))
+        \\    parse_record_field = |_, _, s| Ok(Done(s))
+        \\    parse_record_after_field = |_, s| Ok(Continue(s))
+        \\    skip_record_field = |_, s| Ok(s)
+        \\}
+        \\
+        \\Sql(row) := {}.{
+        \\    from_quote : Str -> Try(Sql(row), [BadQuotedBytes(Str)])
+        \\        where [row.parser_for : Fmt -> ({} -> Try({ value : row, rest : {} }, _))]
+        \\    from_quote = |_| Ok(Sql.({}))
+        \\}
+        \\
+        \\query : Sql(row) -> [Nope, Yes(row)]
+        \\query = |_| Nope
+        \\
+        \\run : {} -> [Nope, Yes({})]
+        \\run = |_| query("")
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "Nope" },
+    },
+    .{
+        .name = "issue 11725: from_numeral retains nested parser_for evidence",
+        .source_kind = .module,
+        .source =
+        \\Fmt := {}.{
+        \\    parse_record_start = |_, s| Ok(Uncounted(s))
+        \\    parse_record_field = |_, _, s| Ok(Done(s))
+        \\    parse_record_after_field = |_, s| Ok(Continue(s))
+        \\    skip_record_field = |_, s| Ok(s)
+        \\}
+        \\
+        \\Sql(row) := {}.{
+        \\    from_numeral : Numeral -> Try(Sql(row), [InvalidNumeral(Str)])
+        \\        where [row.parser_for : Fmt -> ({} -> Try({ value : row, rest : {} }, _))]
+        \\    from_numeral = |_| Ok(Sql.({}))
+        \\}
+        \\
+        \\query : Sql(row) -> [Nope, Yes(row)]
+        \\query = |_| Nope
+        \\
+        \\run : {} -> [Nope, Yes({})]
+        \\run = |_| query(0)
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "Nope" },
+    },
+    .{
+        .name = "issue 11725: dependent from_quote rejection in an untaken branch is eager",
+        .source_kind = .module,
+        .source =
+        \\Fmt := {}.{
+        \\    parse_record_start = |_, s| Ok(Uncounted(s))
+        \\    parse_record_field = |_, _, s| Ok(Done(s))
+        \\    parse_record_after_field = |_, s| Ok(Continue(s))
+        \\    skip_record_field = |_, s| Ok(s)
+        \\}
+        \\
+        \\Sql(row) := {}.{
+        \\    from_quote : Str -> Try(Sql(row), [BadQuotedBytes(Str)])
+        \\        where [row.parser_for : Fmt -> ({} -> Try({ value : row, rest : {} }, _))]
+        \\    from_quote = |_| Err(BadQuotedBytes("rejected"))
+        \\}
+        \\
+        \\query : Sql(row) -> [Nope, Yes(row)]
+        \\query = |_| Nope
+        \\
+        \\run : {} -> [Nope, Yes({})]
+        \\run = |_| if False query("") else Nope
+        \\
+        \\main = run({})
+        ,
+        .expected = .problem,
+    },
+    .{
+        .name = "issue 11725: uninstantiated from_quote evidence has no conversion root",
+        .source_kind = .module,
+        .source =
+        \\Fmt := {}.{
+        \\    parse_record_start = |_, s| Ok(Uncounted(s))
+        \\    parse_record_field = |_, _, s| Ok(Done(s))
+        \\    parse_record_after_field = |_, s| Ok(Continue(s))
+        \\    skip_record_field = |_, s| Ok(s)
+        \\}
+        \\
+        \\Sql(row) := {}.{
+        \\    from_quote : Str -> Try(Sql(row), [BadQuotedBytes(Str)])
+        \\        where [row.parser_for : Fmt -> ({} -> Try({ value : row, rest : {} }, _))]
+        \\    from_quote = |_| Err(BadQuotedBytes("rejected"))
+        \\}
+        \\
+        \\query : Sql(row) -> [Nope, Yes(row)]
+        \\query = |_| Nope
+        \\
+        \\run : {} -> [Nope, Yes({})]
+        \\run = |_| query("")
+        \\
+        \\main = 0.I64
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
+        .name = "issue 11725: from_quote codec evidence follows distinct row specializations",
+        .source_kind = .module,
+        .source =
+        \\Fmt := {}.{
+        \\    parse_record_start = |_, s| Ok(Uncounted(s))
+        \\    parse_record_field = |_, _, s| Ok(Done(s))
+        \\    parse_record_after_field = |_, s| Ok(Continue(s))
+        \\    skip_record_field = |_, s| Ok(s)
+        \\}
+        \\
+        \\Sql(row) := {}.{
+        \\    from_quote : Str -> Try(Sql(row), [BadQuotedBytes(Str)])
+        \\        where [row.parser_for : Fmt -> ({} -> Try({ value : row, rest : {} }, _))]
+        \\    from_quote = |_| Ok(Sql.({}))
+        \\}
+        \\
+        \\query : Sql(row) -> [Nope, Yes(row)]
+        \\query = |_| Nope
+        \\
+        \\run : {} -> [Nope, Yes(row)]
+        \\    where [row.parser_for : Fmt -> ({} -> Try({ value : row, rest : {} }, _))]
+        \\run = |_| query("")
+        \\
+        \\Row := {}.{
+        \\    parser_for : Fmt -> ({} -> Try({ value : Row, rest : {} }, [Bad]))
+        \\    parser_for = |_| |s| Ok({ value: Row.({}), rest: s })
+        \\}
+        \\
+        \\as_record : [Nope, Yes({})]
+        \\as_record = run({})
+        \\as_nominal : [Nope, Yes(Row)]
+        \\as_nominal = run({})
+        \\main = (as_record, as_nominal)
+        ,
+        .expected = .{ .inspect_str = "(Nope, Nope)" },
+    },
+    .{
         // A `?` whose closed error row the enclosing annotated result rejects
         // is a checked error that crashes when reached. The function keeps its
         // body's result type, so a caller that widens the error row still
