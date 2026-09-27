@@ -27,9 +27,6 @@ pub const RuntimeLoweringConfig = struct {
     explicit_roots: ?lir.CheckedPipeline.RootRequestSet = null,
     root_module: ?*const check.CheckedArtifact.CheckedModuleArtifact = null,
     target: lir.CheckedPipeline.TargetConfig,
-    /// The object cache's artifacts, for the compile-time evaluator to
-    /// splice the entries `target.spec_cache` serves into its image.
-    splice_source: ?eval.CompileTimeFinalization.SpliceSource = null,
     include_provided_data_exports: bool = false,
     include_internal_static_data: bool = false,
 };
@@ -215,6 +212,9 @@ pub const BuildEnv = struct {
     // Actor model coordinator (owns all mutable compilation state)
     coordinator: ?*Coordinator = null,
     runtime_lowering: ?RuntimeLoweringConfig = null,
+    /// See `eval.CompileTimeFinalization.CompileTimeObjectCache`.
+    compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
+    compile_time_object_cache_owner: ?CompileTimeObjectCacheOwner = null,
     /// Let a caller declare a test plan from prepared artifacts before CTFE.
     defer_post_check: bool = false,
     // Cache manager for compiled modules
@@ -438,6 +438,8 @@ pub const BuildEnv = struct {
         self.workspace_roots.deinit();
 
         self.sink.deinit();
+        // Last: the coordinator's retained programs may borrow cached code.
+        if (self.compile_time_object_cache_owner) |owner| owner.deinit(owner.context);
     }
 
     /// Set the cache manager for this build environment
@@ -813,7 +815,31 @@ pub const BuildEnv = struct {
         coord.enable_hosted_transform = true;
         coord.setWatchInputTracking(self.track_watch_inputs);
         coord.runtime_lowering = self.runtime_lowering;
+        coord.compile_time_object_cache = self.compile_time_object_cache;
         self.coordinator = coord;
+    }
+
+    /// The storage behind a compile-time object cache, which this build
+    /// environment owns once attached.
+    pub const CompileTimeObjectCacheOwner = struct {
+        context: *anyopaque,
+        /// Gives the cache this build environment, whose module set decides
+        /// which packs it loads, before compile-time evaluation reads it.
+        bind: *const fn (*anyopaque, *BuildEnv) void,
+        deinit: *const fn (*anyopaque) void,
+    };
+
+    /// Every command that checks a program attaches this the same way, so
+    /// compile-time evaluation reads one object cache whatever the command.
+    pub fn setCompileTimeObjectCache(
+        self: *BuildEnv,
+        cache: eval.CompileTimeFinalization.CompileTimeObjectCache,
+        owner: CompileTimeObjectCacheOwner,
+    ) void {
+        std.debug.assert(self.compile_time_object_cache_owner == null);
+        if (self.coordinator) |coordinator| coordinator.compile_time_object_cache = cache;
+        self.compile_time_object_cache = cache;
+        self.compile_time_object_cache_owner = owner;
     }
 
     pub fn setRuntimeLowering(self: *BuildEnv, config: RuntimeLoweringConfig) void {
@@ -862,6 +888,17 @@ pub const BuildEnv = struct {
 
         var header_info = try self.parseHeaderDeps(root_abs);
         defer header_info.deinit(self.gpa);
+
+        // Absolute platform specs are rejected for every command, matching the
+        // run path, so a project cannot pass `roc check` and then fail on its
+        // first `roc run`.
+        for (header_info.resolver_root.deps) |dep| {
+            if (dep.is_platform and std.fs.path.isAbsolute(dep.spec)) {
+                try self.emitAbsolutePlatformPathReport(dep.spec);
+                try self.makeWorkspaceReportsDrainable();
+                return error.InvalidDependency;
+            }
+        }
 
         // Every header kind names a module this build can root at: apps and
         // default apps produce programs, and the rest are compiled for their own
@@ -1132,6 +1169,11 @@ pub const BuildEnv = struct {
 
     pub fn finishCheckedProgram(self: *BuildEnv) CompileDiscoveredError!void {
         const coord = self.coordinator orelse unreachable;
+        if (self.compile_time_object_cache_owner) |owner| owner.bind(owner.context, self);
+        const test_modules = try self.collectProgramTestModules(self.gpa);
+        defer self.gpa.free(test_modules);
+        coord.program_test_modules = test_modules;
+        defer coord.program_test_modules = &.{};
         coord.finishCheckedProgram(self.post_check_publication_mode) catch |err| {
             self.emitAccumulatedReportsForError();
             return err;
@@ -1893,6 +1935,27 @@ pub const BuildEnv = struct {
     fn makeWorkspaceReportsDrainable(self: *BuildEnv) Allocator.Error!void {
         try self.sink.buildOrder(&[_][]const u8{"workspace"}, &[_][]const u8{"root"}, &[_]u32{0});
         self.sink.tryEmit();
+    }
+
+    /// Emit the same "Absolute Platform Path" report the CLI run path produces
+    /// (see `validatePlatformSpec` in `src/cli/main.zig`), so `check` and `build`
+    /// reject absolute platform specs with an identical diagnostic.
+    fn emitAbsolutePlatformPathReport(self: *BuildEnv, platform_spec: []const u8) Allocator.Error!void {
+        var report = try Report.init(
+            self.gpa,
+            "Absolute Platform Path",
+            "Absolute paths are not allowed for platform specifications.",
+            .runtime_error,
+        );
+        errdefer report.deinit();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(platform_spec, .path);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addText("Tip: Use a relative path like ");
+        try report.document.addAnnotated("../path/to/platform", .emphasized);
+        try report.document.addText(" or a URL.");
+        try self.sink.emitReport("workspace", "root", report);
     }
 
     fn validateDiscoveredPlatformTargetFiles(
@@ -2760,6 +2823,40 @@ pub const BuildEnv = struct {
     /// compiler-owned platform, because a path dependency declared inside a
     /// fetched dependency arrived by download too and must not inherit the
     /// root's ownership.
+    /// The checked modules whose `expect`s are the developer's own tests,
+    /// exactly the modules `roc test` runs, ordered by package and module
+    /// name so every command evaluates their test roots in one order.
+    fn collectProgramTestModules(
+        self: *BuildEnv,
+        allocator: Allocator,
+    ) Allocator.Error![]check.CheckedArtifact.CheckedModuleArtifactKey {
+        const coord = self.coordinator orelse unreachable;
+        var test_owned_packages = try self.collectTestOwnedPackages(allocator);
+        defer test_owned_packages.deinit(allocator);
+
+        const Entry = struct { package: []const u8, module: []const u8, key: check.CheckedArtifact.CheckedModuleArtifactKey };
+        var entries = std.ArrayList(Entry).empty;
+        defer entries.deinit(allocator);
+        var pkg_it = coord.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            if (!test_owned_packages.contains(entry.key_ptr.*)) continue;
+            for (entry.value_ptr.*.modules.items) |*mod| {
+                const artifact = mod.checkedArtifact() orelse continue;
+                try entries.append(allocator, .{ .package = entry.key_ptr.*, .module = mod.name, .key = artifact.key });
+            }
+        }
+        std.mem.sort(Entry, entries.items, {}, struct {
+            fn lessThan(_: void, a: Entry, b: Entry) bool {
+                const package_order = std.mem.order(u8, a.package, b.package);
+                if (package_order != .eq) return package_order == .lt;
+                return std.mem.lessThan(u8, a.module, b.module);
+            }
+        }.lessThan);
+        const keys = try allocator.alloc(check.CheckedArtifact.CheckedModuleArtifactKey, entries.items.len);
+        for (entries.items, keys) |entry, *key| key.* = entry.key;
+        return keys;
+    }
+
     fn collectTestOwnedPackages(
         self: *BuildEnv,
         allocator: Allocator,
@@ -4236,6 +4333,67 @@ test "issue 9737: logicalModuleToPath frees its scratch path exactly once on the
     // it must free its `with_ext` scratch allocation exactly once; freeing it a
     // second time is a double free that the testing allocator detects.
     try std.testing.expectError(error.PathOutsideWorkspace, env.logicalModuleToPath("/tmp/roc-issue-9737", "Mod"));
+}
+
+// Regression test for https://github.com/roc-lang/roc/issues/11714
+// `roc check` and `roc build` must reject an absolute platform path with the
+// same report `roc run` produces.
+test "discoverDependencies rejects absolute platform spec with Absolute Platform Path report" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(tmp_root);
+
+    // The platform file never needs to exist: discovery aborts before
+    // resolution reads it.
+    const platform_spec = try std.fs.path.join(allocator, &.{ tmp_root, "pf", "main.roc" });
+    defer allocator.free(platform_spec);
+
+    // Windows paths contain backslashes, which must be escaped inside a Roc
+    // string literal.
+    const platform_spec_literal = try std.mem.replaceOwned(u8, allocator, platform_spec, "\\", "\\\\");
+    defer allocator.free(platform_spec_literal);
+
+    const app_source = try std.fmt.allocPrint(
+        allocator,
+        "app [main!] {{ pf: platform \"{s}\" }}\n\nmain! = || {{}}\n",
+        .{platform_spec_literal},
+    );
+    defer allocator.free(app_source);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "app.roc", .data = app_source });
+
+    const app_path = try std.fs.path.join(allocator, &.{ tmp_root, "app.roc" });
+    defer allocator.free(app_path);
+
+    var env = try BuildEnv.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        tmp_root,
+        testing.io,
+    );
+    defer env.deinit();
+
+    try testing.expectError(error.InvalidDependency, env.discoverDependencies(app_path));
+
+    const drained = try env.drainReports();
+    defer env.freeDrainedReports(drained);
+
+    var found = false;
+    for (drained) |mod| {
+        for (mod.reports) |report| {
+            if (std.mem.eql(u8, report.title, "Absolute Platform Path")) {
+                try testing.expectEqual(reporting.Severity.runtime_error, report.severity);
+                found = true;
+            }
+        }
+    }
+    try testing.expect(found);
 }
 
 test "findPackageForModulePath deterministically selects nested package over outer package root_dir" {

@@ -20,9 +20,9 @@ pub fn transcodeRoot(allocator: Allocator, source_program: *const Program.Result
 /// Re-encode the same checked root value for the destination slot representation.
 pub fn transcodeValueSlot(allocator: Allocator, source_program: *const Program.Result, source_slot: Program.StaticDataValue, source_exports: []const static_data.StaticDataExport, source_symbol: SymbolId, target_program: *const Program.Result, target_slot: lir.LIR.StaticDataId) Allocator.Error![]static_data.StaticDataExport {
     const target = target_program.static_data_values.items[@intFromEnum(target_slot)];
-    const source_identity = source_slot.compile_time_root orelse invariant("source slot lacks checked root authority");
-    const target_identity = target.compile_time_root orelse invariant("target slot lacks checked root authority");
-    if (!std.meta.eql(source_identity.module, target_identity.module) or source_identity.root != target_identity.root or std.meta.activeTag(source_identity.role) != std.meta.activeTag(target_identity.role)) invariant("paired slots do not name the same checked root role");
+    const source_identity = source_slot.compile_time_root orelse invariant("source slot lacks compile-time producer authority");
+    const target_identity = target.compile_time_root orelse invariant("target slot lacks compile-time producer authority");
+    if (!std.meta.eql(source_identity.module, target_identity.module) or !source_identity.root.eql(target_identity.root) or std.meta.activeTag(source_identity.role) != std.meta.activeTag(target_identity.role)) invariant("paired slots do not name the same producer role");
     return transcodePlans(allocator, source_program, .{ .plan = source_slot.compile_time_root.?.role.value.plan, .layout_idx = source_slot.layout_idx }, source_exports, source_symbol, target_program, .{ .plan = target.compile_time_root.?.role.value.plan, .layout_idx = target.layout_idx }, target_slot);
 }
 
@@ -40,9 +40,9 @@ fn transcodePlans(allocator: Allocator, source_program: *const Program.Result, s
 /// Re-encode failure status and message using the paired slots' explicit fields.
 pub fn transcodeFailure(allocator: Allocator, source_program: *const Program.Result, source_slot: Program.StaticDataValue, source_exports: []const static_data.StaticDataExport, source_symbol: SymbolId, target_program: *const Program.Result, target_slot: lir.LIR.StaticDataId) Allocator.Error![]static_data.StaticDataExport {
     const target = target_program.static_data_values.items[@intFromEnum(target_slot)];
-    const source_identity = source_slot.compile_time_root orelse invariant("source slot lacks checked root authority");
-    const target_identity = target.compile_time_root orelse invariant("target slot lacks checked root authority");
-    if (!std.meta.eql(source_identity.module, target_identity.module) or source_identity.root != target_identity.root or std.meta.activeTag(source_identity.role) != std.meta.activeTag(target_identity.role)) invariant("paired slots do not name the same checked root role");
+    const source_identity = source_slot.compile_time_root orelse invariant("source slot lacks compile-time producer authority");
+    const target_identity = target.compile_time_root orelse invariant("target slot lacks compile-time producer authority");
+    if (!std.meta.eql(source_identity.module, target_identity.module) or !source_identity.root.eql(target_identity.root) or std.meta.activeTag(source_identity.role) != std.meta.activeTag(target_identity.role)) invariant("paired slots do not name the same producer role");
     const source_fields = source_slot.compile_time_root.?.role.failure_message;
     const target_fields = target.compile_time_root.?.role.failure_message;
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -139,7 +139,7 @@ const Builder = struct {
     fn reserveAllocation(self: *Builder, key: AllocationKey, byte_count: usize, alignment_: u32, rc: bool, count: ?usize) Allocator.Error!struct { dest: Destination, fresh: bool } {
         if (self.allocations.get(key)) |dest| return .{ .dest = dest, .fresh = false };
         const offset = std.mem.alignForward(usize, (if (rc) @as(usize, 2) else 1) * self.word(), alignment_);
-        const name = try std.fmt.allocPrint(self.allocator, "roc__ctfe_{d}_{d}", .{ @intFromEnum(self.slot), self.nodes.items.len });
+        const name = try Program.staticDataNodeSymbolName(self.allocator, @intFromEnum(self.slot), @intCast(self.nodes.items.len));
         const symbol = try self.addNode(name, offset + byte_count, @intCast(@max(alignment_, self.word())));
         const dest = Destination{ .symbol = symbol, .offset = offset };
         if (rc) self.writeWord(.{ .symbol = symbol, .offset = offset - 2 * self.word() }, count orelse 0);
@@ -152,14 +152,34 @@ const Builder = struct {
         try self.relocate(job.dest, allocation.dest);
         if (allocation.fresh) try self.enqueue(sp, sl, tp, tl, src, allocation.dest, .value, .value);
     }
+    /// Each program lays out a recursive type for itself, choosing where its
+    /// values sit behind a box, so one value may be boxed in the source and
+    /// stored inline in the target, or the reverse. Returns false when
+    /// neither side boxes it.
+    fn recursionBoxed(self: *Builder, job: Job, source_boxed: bool, source_inner: layout.Idx, target_boxed: bool, target_inner: layout.Idx) Allocator.Error!bool {
+        if (!source_boxed and !target_boxed) return false;
+        const src = if (source_boxed) self.pointer(job.source) else job.source;
+        const sl = if (source_boxed) source_inner else job.source_layout;
+        if (!target_boxed) {
+            try self.enqueue(job.source_plan, sl, job.plan, job.layout_idx, src, job.dest, .value, .value);
+            return true;
+        }
+        const allocation = try self.reserveAllocation(.{ .source = src, .plan = job.plan, .layout_idx = target_inner, .count = 1, .kind = .value }, self.size(target_inner), self.alignment(target_inner), self.program.layouts.layoutContainsRefcounted(self.program.layouts.getLayout(target_inner)), null);
+        try self.relocate(job.dest, allocation.dest);
+        if (allocation.fresh) try self.enqueue(job.source_plan, sl, job.plan, target_inner, src, allocation.dest, .value, .value);
+        return true;
+    }
     fn visit(self: *Builder, job: Job) Allocator.Error!void {
         const source_physical = self.source_program.layouts.getLayout(job.source_layout);
         const physical = self.program.layouts.getLayout(job.layout_idx);
-        if (job.source_storage != job.storage) invariant("paired capture storage differs");
-        if (job.storage == .recursive_box) return self.boxed(job, job.source_plan, source_physical.getIdx(), job.plan, physical.getIdx());
         const source_plan = self.source_program.const_plans.items[@intFromEnum(job.source_plan)];
         const plan = self.program.const_plans.items[@intFromEnum(job.plan)];
         if (std.meta.activeTag(source_plan) != std.meta.activeTag(plan)) invariant("paired canonical const plan shapes differ");
+        // An explicit `Box` is part of the value; any other box breaks a
+        // recursive type's cycle in that program's layout.
+        const source_boxed = job.source_storage == .recursive_box or (source_physical.tag == .box and source_plan != .box);
+        const target_boxed = job.storage == .recursive_box or (physical.tag == .box and plan != .box);
+        if (try self.recursionBoxed(job, source_boxed, if (source_physical.tag == .box) source_physical.getIdx() else job.source_layout, target_boxed, if (physical.tag == .box) physical.getIdx() else job.layout_idx)) return;
         switch (plan) {
             .pending, .layout_only => invariant("incomplete paired const plan"),
             .zst => {},
@@ -180,13 +200,11 @@ const Builder = struct {
                 .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .tag_union, .ptr, .erased_box => invariant("invalid box layout"),
             },
             .tuple, .record => |children_| {
-                if (physical.tag == .box) return self.boxed(job, job.source_plan, source_physical.getIdx(), job.plan, physical.getIdx());
                 if (physical.tag == .box_of_zst) return;
                 const source_children = if (source_plan == .tuple) source_plan.tuple else source_plan.record;
                 try self.children(source_children, job.source_layout, children_, job.layout_idx, job.source, job.dest, false);
             },
             .tag_union => |variants| {
-                if (physical.tag == .box) return self.boxed(job, job.source_plan, source_physical.getIdx(), job.plan, physical.getIdx());
                 const disc = self.discriminant(job.source_layout, job.source);
                 const source_variant = for (source_plan.tag_union) |variant| {
                     if (variant.discriminant == disc) break variant;
@@ -200,7 +218,6 @@ const Builder = struct {
                 invariant("target tag absent from plan");
             },
             .fn_value => |set_id| {
-                if (physical.tag == .box) return self.boxed(job, job.source_plan, source_physical.getIdx(), job.plan, physical.getIdx());
                 const disc = self.discriminant(job.source_layout, job.source);
                 const source_set = self.source_program.fn_sets.items[@intFromEnum(source_plan.fn_value)];
                 const source_variant = for (source_set.variants) |variant| {
@@ -583,7 +600,7 @@ fn failureSlot(allocator: Allocator, program: *Program.Result, root: @import("ch
     const idx = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
     const data = program.layouts.getLayout(idx).getStruct().idx;
     const id: lir.LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
-    try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = idx, .compile_time_root = .{ .module = .{ .bytes = @splat(0) }, .root = root, .const_locator = null, .role = .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(data, 0), .message_offset = program.layouts.getStructFieldOffsetByOriginalIndex(data, 1) } } } });
+    try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = idx, .compile_time_root = .{ .module = .{ .bytes = @splat(0) }, .root = .{ .checked = root }, .const_locator = null, .role = .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(data, 0), .message_offset = program.layouts.getStructFieldOffsetByOriginalIndex(data, 1) } } } });
     return id;
 }
 
@@ -755,7 +772,7 @@ test "frozen root transcode re-points a boxed slot at its payload across pointer
         allocator,
         &source,
         source_slot_id,
-        testRoot(source_plan, source_tag),
+        testRoot(source_plan, source_tag).shape(),
         .{ .ptr = value_bytes.ptr },
         .{},
         source_box,
@@ -803,7 +820,7 @@ fn boxedValueSlot(
         .layout_idx = box_idx,
         .compile_time_root = .{
             .module = .{},
-            .root = root,
+            .root = .{ .checked = root },
             .const_locator = null,
             .role = .{ .value = .{ .failure_slot = failure_slot, .plan = plan } },
         },

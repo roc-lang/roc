@@ -793,12 +793,12 @@ const ImportContext = struct {
         for (exports) |def_idx| {
             const def = module_env.store.getDef(def_idx);
             // Check if this definition is a function by looking at its expression
-            const expr = module_env.store.getExpr(def.expr);
+            const expr = module_env.store.getSourceExpr(def.expr);
             const expr_tag = std.meta.activeTag(expr);
             const is_function = expr_tag == .e_lambda or expr_tag == .e_closure;
             if (is_function) {
                 // Get the name from the pattern
-                const pattern = module_env.store.getPattern(def.pattern);
+                const pattern = module_env.store.getSourcePattern(def.pattern);
                 if (pattern == .assign) {
                     const ident_idx = pattern.assign.ident;
                     const name = module_env.common.idents.getText(ident_idx);

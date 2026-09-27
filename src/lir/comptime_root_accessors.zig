@@ -101,7 +101,7 @@ fn testRebuild(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqua
         .layout_idx = failure_layout,
         .compile_time_root = .{
             .module = .{},
-            .root = undefined, // Accessor reconstruction reads slot roles, not checked-root identity.
+            .root = .{ .checked = @enumFromInt(1) },
             .const_locator = null,
             .role = .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = failed_offset, .message_offset = message_offset } },
         },
@@ -112,7 +112,7 @@ fn testRebuild(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqua
         .layout_idx = list_layout,
         .compile_time_root = .{
             .module = .{},
-            .root = undefined, // Accessor reconstruction reads slot roles, not checked-root identity.
+            .root = .{ .checked = @enumFromInt(1) },
             .const_locator = null,
             .role = .{ .value = .{ .failure_slot = failure_slot, .plan = list_plan } },
         },
@@ -130,7 +130,7 @@ fn testRebuild(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqua
         .ret_layout = list_layout,
     }, .none);
     program.static_data_values.items[@intFromEnum(value_slot)].accessor = accessor;
-    try @import("comptime_value_guards.zig").insert(allocator, &program);
+    try @import("comptime_value_guards.zig").insert(allocator, &program, null);
     var failure_record = [_]u8{0} ** 32;
     failure_record[failed_offset] = 1;
     const descriptor = [_]u8{0} ** 24;

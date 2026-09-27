@@ -7016,37 +7016,31 @@ test "check type - composed body preserves shared tagged callback errors" {
     try test_env.assertNoErrors();
 }
 
-test "check type - wrapped try overlap reports the wrapper in either source order" {
-    for ([_]struct { source: []const u8, wrapper_line: u32 }{
-        .{
-            .source =
-            \\run = |save| {
-            \\    _ = save({})?
-            \\    _ = save({}) ? PersistFailed
-            \\    Ok({})
-            \\}
-            \\use = run(|_| Err(PersistFailed(Foo)))
-            ,
-            .wrapper_line = 3,
-        },
-        .{
-            .source =
-            \\run = |save| {
-            \\    _ = save({}) ? PersistFailed
-            \\    _ = save({})?
-            \\    Ok({})
-            \\}
-            \\use = run(|_| Err(PersistFailed(Foo)))
-            ,
-            .wrapper_line = 2,
-        },
-    }) |case| {
-        var test_env = try TestEnv.init("Test", case.source);
+test "check type - wrapped try overlap reports the conflicting tag at the value in either source order" {
+    // The callback's `PersistFailed(Foo)` meets `run`'s own `PersistFailed`
+    // wrapper in `use`'s type, which is where the conflict is reported.
+    for ([_][]const u8{
+        \\run = |save| {
+        \\    _ = save({})?
+        \\    _ = save({}) ? PersistFailed
+        \\    Ok({})
+        \\}
+        \\use = run(|_| Err(PersistFailed(Foo)))
+        ,
+        \\run = |save| {
+        \\    _ = save({}) ? PersistFailed
+        \\    _ = save({})?
+        \\    Ok({})
+        \\}
+        \\use = run(|_| Err(PersistFailed(Foo)))
+        ,
+    }) |source| {
+        var test_env = try TestEnv.init("Test", source);
         defer test_env.deinit();
-        try test_env.assertOneTypeErrorHighlightsWithin("Type Mismatch", .{
-            .line = case.wrapper_line,
-            .start_column = 9,
-            .end_column = 33,
+        try test_env.assertOneTypeErrorHighlightsWithin("Conflicting Tag", .{
+            .line = 6,
+            .start_column = 1,
+            .end_column = 4,
         });
     }
 }
@@ -7064,7 +7058,7 @@ test "check type - issue 11470 rejects wrapper overlap after instantiation" {
         \\}
         \\use = show(|_| Err(Wrapped(NotFound)))
     ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
+    try checkTypesModule(source, .fail_first, "Conflicting Tag");
 }
 
 test "check type - issue 11470 rejects incompatible shared tag payloads" {
@@ -7184,6 +7178,23 @@ test "check type - polarity - try may not flow an unlisted error into the annota
         \\
         \\
     );
+}
+
+test "check type - polarity - a rejected try keeps the function's result type" {
+    // The rejected `?` owns its diagnostic and becomes a runtime error. The
+    // result it would have flowed into is shared with the body and every
+    // caller, so it keeps the type the body gives it.
+    const source =
+        \\run : ({} -> Try(I64, [WrongArity])) -> Try(I64, _)
+        \\run = |fn| {
+        \\    n = fn({})?
+        \\    if n > 0 Ok(n) else Err(NotAFunction)
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+    try test_env.assertDefTypeOptions("run", "({} -> Try(I64, [WrongArity])) -> Try(I64, [NotAFunction])", .{ .allow_type_errors = true });
 }
 
 // record extension in type annotations //

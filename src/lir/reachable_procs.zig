@@ -207,6 +207,11 @@ const Pass = struct {
             // having no reader in this program.
             if (root.value_slot) |slot| try self.markStaticData(slot);
         }
+        for (self.result.literal_roots.items) |root| {
+            try self.markProc(root.proc);
+            try self.markConstPlan(root.plan);
+            try self.markStaticData(root.value_slot);
+        }
         for (self.result.requested_layouts.items) |request| {
             try self.markConstPlan(request.plan);
             if (request.initializer) |initializer| try self.markProc(initializer);
@@ -653,6 +658,10 @@ const Pass = struct {
             root.proc = self.remapProc(root.proc);
             if (root.value_slot) |slot| root.value_slot = self.remapStaticData(slot);
         }
+        for (self.result.literal_roots.items) |*root| {
+            root.proc = self.remapProc(root.proc);
+            root.value_slot = self.remapStaticData(root.value_slot);
+        }
     }
 
     fn remapStaticDataInitializers(self: *Pass) void {
@@ -668,6 +677,43 @@ const Pass = struct {
                     root.role.value.failure_slot = self.remapStaticData(root.role.value.failure_slot);
                 }
             }
+        }
+    }
+
+    /// Compaction renumbers slots, and a kept node's old owner may be gone
+    /// while a kept value still points into its data, so every kept node is
+    /// renamed after the first kept value that reaches it: `roc__d{slot}_{k}`
+    /// in the order a walk from each value in export order finds them.
+    fn renameFrozenNodes(allocator: Allocator, compact: []LirProgram.StaticDataExport) Allocator.Error!void {
+        const named = try allocator.alloc(bool, compact.len);
+        defer allocator.free(named);
+        for (compact, named) |item, *is_named| is_named.* = item.value_id != null;
+        var pending = std.ArrayList(usize).empty;
+        defer pending.deinit(allocator);
+        for (compact, 0..) |root, root_index| {
+            const slot = root.value_id orelse continue;
+            var next: u32 = 1;
+            pending.clearRetainingCapacity();
+            try pending.append(allocator, root_index);
+            var cursor: usize = 0;
+            while (cursor < pending.items.len) : (cursor += 1) {
+                for (compact[pending.items[cursor]].relocations) |relocation| {
+                    const target: usize = switch (relocation.target) {
+                        .data_symbol => |id| @intFromEnum(id),
+                        .named => continue,
+                    };
+                    if (named[target]) continue;
+                    named[target] = true;
+                    const name = try LirProgram.staticDataNodeSymbolName(allocator, @intFromEnum(slot), next);
+                    next += 1;
+                    allocator.free(compact[target].symbol_name);
+                    compact[target].symbol_name = name;
+                    try pending.append(allocator, target);
+                }
+            }
+        }
+        for (named) |is_named| {
+            if (!is_named) reachableProcInvariant("retained frozen data is reachable from no retained value");
         }
     }
 
@@ -737,6 +783,7 @@ const Pass = struct {
             compact[initialized].relocations = relocations;
             initialized += 1;
         }
+        try renameFrozenNodes(data.allocator, compact);
         for (compact) |item| {
             for (@constCast(item.relocations)) |*relocation| {
                 if (relocation.target == .data_symbol)
@@ -869,6 +916,9 @@ const Pass = struct {
         }
         for (self.result.const_roots.items) |root| {
             if (@intFromEnum(root.proc) >= proc_count) reachableProcInvariant("const root proc exceeds compact proc_specs len");
+        }
+        for (self.result.literal_roots.items) |root| {
+            if (@intFromEnum(root.proc) >= proc_count) reachableProcInvariant("literal root proc exceeds compact proc_specs len");
         }
         for (self.result.requested_layouts.items) |request| {
             if (request.initializer) |initializer| {
@@ -1378,7 +1428,9 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
     try std.testing.expectEqual(@as(u32, 1), @intFromEnum(result.root_procs.items[0]));
     try std.testing.expectEqual(@as(usize, 2), frozen.exports.len);
     try std.testing.expectEqual(@as(u32, 0), @intFromEnum(frozen.exports[0].value_id.?));
-    try std.testing.expectEqualStrings("roc__static_const_value_0", frozen.exports[0].symbol_name);
+    try std.testing.expectEqualStrings("roc__d0", frozen.exports[0].symbol_name);
+    // The retained value's node is renamed after its new slot.
+    try std.testing.expectEqualStrings("roc__d0_1", frozen.exports[1].symbol_name);
     try std.testing.expectEqual(@as(u32, 1), @intFromEnum(frozen.exports[0].relocations[0].target.data_symbol));
     try std.testing.expectEqualStrings(frozen.exports[1].symbol_name, frozen.exports[0].relocations[0].target_symbol_name);
     try std.testing.expectEqual(@as(u32, 0), @intFromEnum(frozen.exports[1].relocations[0].procedure.?));

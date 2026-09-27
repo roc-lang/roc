@@ -1602,18 +1602,19 @@ pub const Store = struct {
     /// Poison a failed unification at its two queried occurrences.
     ///
     /// Successful unification always merges whole equivalence classes. Error
-    /// recovery is intentionally occurrence-directed: `a_var` can be a checked
-    /// expression or pattern occurrence already connected to a shared binding.
-    /// If it is not the class's checked representative, poisoning that exact
-    /// occurrence must not make the binding—or an incidental storage child of
-    /// the occurrence—erroneous. Re-root and flatten the remaining class at its
-    /// checked representative, isolate `a_var` as a rank-zero singleton, then
-    /// rank-merge it with b's error class. If `a_var` is the checked
-    /// representative, the mismatch belongs to the class itself and the whole
-    /// class is merged into the error class.
+    /// recovery is intentionally occurrence-directed: either operand can be a
+    /// checked expression or pattern occurrence already connected to a shared
+    /// binding, such as a lookup of a lambda parameter. If an operand is not
+    /// its class's checked representative, poisoning that exact occurrence
+    /// must not make the binding—or an incidental storage child of the
+    /// occurrence—erroneous: the remaining class is re-rooted and flattened at
+    /// its checked representative and keeps its content, and the occurrence
+    /// joins the error class as a rank-zero singleton. An operand that is its
+    /// class's checked representative owns the mismatch, so its whole class
+    /// joins the error class.
     pub fn poisonOnMismatch(self: *Self, a_var: Var, b_var: Var) Allocator.Error!void {
         var a = self.resolveStorageRoot(a_var);
-        const b = self.resolveStorageRoot(b_var);
+        var b = self.resolveStorageRoot(b_var);
         // Poisoning replaces the content, not the rejection history: a class
         // whose dispatch check was already rejected stays rejected.
         const err_desc = Desc{
@@ -1627,34 +1628,22 @@ pub const Store = struct {
             return;
         }
 
-        try self.setDesc(b.desc_idx, err_desc);
+        if (b_var == b.meta.checked_var) {
+            try self.setDesc(b.desc_idx, err_desc);
+        } else {
+            try self.detachOccurrence(b, b_var);
+            const err_desc_idx = try self.appendClass(err_desc, b_var);
+            try self.setSlot(Self.varToSlotIdx(b_var), .{ .root = err_desc_idx });
+            b = .{
+                .storage_var = b_var,
+                .desc_idx = err_desc_idx,
+                .desc = err_desc,
+                .meta = .{ .checked_var = b_var },
+            };
+        }
+
         if (a_var != a.meta.checked_var) {
-            std.debug.assert(!self.savepoint_active);
-
-            var class_members: std.ArrayListUnmanaged(Var) = .empty;
-            defer class_members.deinit(self.gpa);
-            try class_members.ensureTotalCapacity(self.gpa, @intCast(self.len()));
-            var raw_var: u32 = 0;
-            while (raw_var < self.len()) : (raw_var += 1) {
-                const candidate: Var = @enumFromInt(raw_var);
-                if (self.resolveStorageRoot(candidate).storage_var == a.storage_var) {
-                    class_members.appendAssumeCapacity(candidate);
-                }
-            }
-
-            const checked_var = a.meta.checked_var;
-            try self.setSlot(Self.varToSlotIdx(checked_var), .{ .root = a.desc_idx });
-            const remaining_class_rank: u8 = if (class_members.items.len > 2) 1 else 0;
-            try self.setUnionRank(checked_var, remaining_class_rank);
-            for (class_members.items) |member| {
-                if (member == checked_var or member == a_var) continue;
-                try self.setUnionRank(member, 0);
-                try self.setSlot(Self.varToSlotIdx(member), .{ .redirect = checked_var });
-            }
-
-            // `a_var` has no remaining storage children after the exact class
-            // flatten above, so its singleton structural rank is zero.
-            try self.setUnionRank(a_var, 0);
+            try self.detachOccurrence(a, a_var);
             try self.setSlot(Self.varToSlotIdx(a_var), .{ .root = b.desc_idx });
             a = .{
                 .storage_var = a_var,
@@ -1665,6 +1654,41 @@ pub const Store = struct {
         }
 
         try self.linkStorageRoots(a, b, b.desc_idx, b.meta.checked_var);
+    }
+
+    /// Detach `occurrence`, a member of `class` other than its checked
+    /// representative, from the class. The remaining members are re-rooted and
+    /// flattened at the checked representative and keep the class descriptor.
+    /// `occurrence` is left as a rank-zero storage root whose slot the caller
+    /// assigns.
+    fn detachOccurrence(self: *Self, class: ResolvedStorageRoot, occurrence: Var) Allocator.Error!void {
+        std.debug.assert(!self.savepoint_active);
+        const checked_var = class.meta.checked_var;
+        std.debug.assert(occurrence != checked_var);
+
+        var class_members: std.ArrayListUnmanaged(Var) = .empty;
+        defer class_members.deinit(self.gpa);
+        try class_members.ensureTotalCapacity(self.gpa, @intCast(self.len()));
+        var raw_var: u32 = 0;
+        while (raw_var < self.len()) : (raw_var += 1) {
+            const candidate: Var = @enumFromInt(raw_var);
+            if (self.resolveStorageRoot(candidate).storage_var == class.storage_var) {
+                class_members.appendAssumeCapacity(candidate);
+            }
+        }
+
+        try self.setSlot(Self.varToSlotIdx(checked_var), .{ .root = class.desc_idx });
+        const remaining_class_rank: u8 = if (class_members.items.len > 2) 1 else 0;
+        try self.setUnionRank(checked_var, remaining_class_rank);
+        for (class_members.items) |member| {
+            if (member == checked_var or member == occurrence) continue;
+            try self.setUnionRank(member, 0);
+            try self.setSlot(Self.varToSlotIdx(member), .{ .redirect = checked_var });
+        }
+
+        // `occurrence` has no remaining storage children after the exact class
+        // flatten above, so its singleton structural rank is zero.
+        try self.setUnionRank(occurrence, 0);
     }
 
     // test helpers //
@@ -2190,6 +2214,57 @@ test "mismatch poisoning detaches an occurrence from its shared binding" {
     try std.testing.expectEqual(mismatched_pattern, store.resolveVar(mismatched_pattern).var_);
     const error_storage = store.resolveStorageRoot(checked_occurrence);
     try std.testing.expectEqual(@as(u8, 1), store.getUnionRank(error_storage.storage_var));
+}
+
+test "mismatch poisoning detaches a second-operand occurrence from its shared binding" {
+    const gpa = std.testing.allocator;
+
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const expected_bool = try store.fresh();
+    const shared_binding = try store.fresh();
+    const lookup_occurrence = try store.freshRedirect(shared_binding);
+    const incidental_storage_child = try store.freshRedirect(lookup_occurrence);
+
+    try store.poisonOnMismatch(expected_bool, lookup_occurrence);
+
+    const shared = store.resolveVar(shared_binding);
+    try std.testing.expectEqual(shared_binding, shared.var_);
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, shared.desc.content);
+    try std.testing.expectEqual(shared_binding, store.resolveVar(incidental_storage_child).var_);
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, store.resolveVar(incidental_storage_child).desc.content);
+
+    for ([_]Var{ expected_bool, lookup_occurrence }) |var_| {
+        const resolved = store.resolveVar(var_);
+        try std.testing.expectEqual(lookup_occurrence, resolved.var_);
+        try std.testing.expectEqual(Content.err, resolved.desc.content);
+    }
+}
+
+test "mismatch poisoning detaches both operand occurrences from their shared bindings" {
+    const gpa = std.testing.allocator;
+
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const first_binding = try store.fresh();
+    const first_occurrence = try store.freshRedirect(first_binding);
+    const second_binding = try store.fresh();
+    const second_occurrence = try store.freshRedirect(second_binding);
+
+    try store.poisonOnMismatch(first_occurrence, second_occurrence);
+
+    for ([_]Var{ first_binding, second_binding }) |binding| {
+        const resolved = store.resolveVar(binding);
+        try std.testing.expectEqual(binding, resolved.var_);
+        try std.testing.expectEqual(Content{ .flex = Flex.init() }, resolved.desc.content);
+    }
+    for ([_]Var{ first_occurrence, second_occurrence }) |occurrence| {
+        const resolved = store.resolveVar(occurrence);
+        try std.testing.expectEqual(second_occurrence, resolved.var_);
+        try std.testing.expectEqual(Content.err, resolved.desc.content);
+    }
 }
 
 test "mismatch poisoning a non-storage-root checked representative poisons its whole class" {

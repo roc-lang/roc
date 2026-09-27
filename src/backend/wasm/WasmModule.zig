@@ -3131,7 +3131,7 @@ pub fn exportGlobalSymbols(self: *Self) Allocator.Error!void {
         if (sym.kind != .function or sym.isUndefined() or sym.isLocal()) continue;
         if ((sym.flags & WasmLinking.SymFlag.VISIBILITY_HIDDEN) != 0) continue;
         const name = sym.name orelse continue;
-        // Skip roc-internal symbols (roc__proc_*, roc__num_*); entrypoints use
+        // Skip roc-internal symbols (roc__p*, roc__num_*); entrypoints use
         // the literal provides symbols and are exported like any host export.
         if (std.mem.startsWith(u8, name, "roc__")) continue;
         // Avoid duplicate exports.
@@ -7444,7 +7444,7 @@ test "addStaticDataExports defines forward data symbols used by code relocations
     defer module.deinit();
 
     _ = try module.addDataSegment(&.{ 0xaa, 0xbb, 0xcc }, 1);
-    const symbol = try module.addUndefinedDataSymbol("roc__static_value_0");
+    const symbol = try module.addUndefinedDataSymbol("roc__d0");
 
     try module.code_bytes.append(allocator, Op.i32_const);
     try appendPaddedI32(allocator, &module.code_bytes, 0);
@@ -7456,7 +7456,7 @@ test "addStaticDataExports defines forward data symbols used by code relocations
     } });
 
     const exports = [_]StaticDataExport{.{
-        .symbol_name = "roc__static_value_0",
+        .symbol_name = "roc__d0",
         .bytes = &.{ 9, 8, 7, 6 },
         .alignment = 4,
         .is_global = false,
@@ -7468,7 +7468,7 @@ test "addStaticDataExports defines forward data symbols used by code relocations
     const sym = module.linking.symbol_table.items[symbol.raw()];
     try std.testing.expect(!sym.isUndefined());
     try std.testing.expectEqual(WasmLinking.SymKind.data, sym.kind);
-    try std.testing.expectEqualStrings("roc__static_value_0", sym.name.?);
+    try std.testing.expectEqualStrings("roc__d0", sym.name.?);
     try std.testing.expectEqual(@as(u32, 0), sym.data_offset);
     try std.testing.expectEqual(@as(u32, 4), sym.data_size);
 
@@ -7482,10 +7482,10 @@ test "mergeModuleForObject resolves undefined static data symbols" {
     var app = Self.init(allocator);
     defer app.deinit();
 
-    const symbol = try app.addUndefinedDataSymbol("roc__static_value_0");
+    const symbol = try app.addUndefinedDataSymbol("roc__d0");
 
     const exports = [_]StaticDataExport{.{
-        .symbol_name = "roc__static_value_0",
+        .symbol_name = "roc__d0",
         .bytes = &.{ 9, 8, 7, 6 },
         .alignment = 4,
         .is_global = false,
@@ -7501,7 +7501,7 @@ test "mergeModuleForObject resolves undefined static data symbols" {
     const sym = app.linking.symbol_table.items[symbol.raw()];
     try std.testing.expect(!sym.isUndefined());
     try std.testing.expectEqual(WasmLinking.SymKind.data, sym.kind);
-    try std.testing.expectEqualStrings("roc__static_value_0", sym.name.?);
+    try std.testing.expectEqualStrings("roc__d0", sym.name.?);
     try std.testing.expectEqual(@as(u32, 0), sym.data_offset);
     try std.testing.expectEqual(@as(u32, 4), sym.data_size);
     try app.verifyNoLinkObjectContract();

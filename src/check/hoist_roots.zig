@@ -78,6 +78,20 @@ pub const SelectedHoistedRoot = struct {
     validation_owner_expr: ?CIR.Expr.Idx = null,
 };
 
+/// A local function binding the checker promoted to a procedure of its own.
+///
+/// Its lambda uses nothing from the function body that declares it: every
+/// captured name is itself a promoted local function, and the lambda refers to
+/// no type variable or type declaration of an enclosing function. Such a
+/// function is a top-level procedure written inside another function, so
+/// checked publication gives it its own procedure template and every use
+/// references that procedure.
+pub const PromotedLocalProcedure = struct {
+    pattern: CIR.Pattern.Idx,
+    /// The binding's lambda (`e_lambda`) or closure (`e_closure`) expression.
+    expr: CIR.Expr.Idx,
+};
+
 /// Clones a hoisted-root body into the caller's allocator when needed.
 pub fn cloneBody(_: Allocator, body: Body) Allocator.Error!Body {
     return switch (body) {

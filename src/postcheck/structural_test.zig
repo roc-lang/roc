@@ -411,7 +411,7 @@ test "Monotype generated-private selection cannot become ordinary or reopen fini
     const dispatch_instantiation = sourceSliceBetween(
         lower_source,
         "fn instantiateCallableDispatchPlanCallNodeFromCallerAtNode(",
-        "fn relateFormalToOperand(",
+        "fn instantiateTargetFromPlanNode(",
     );
     try expectContains(dispatch_instantiation, "callable_plan: CallableDispatchPlan");
     try expectContains(dispatch_instantiation, "try relateRequestComponent(self.graph, fn_graph.args[index], dispatcher_node)");
@@ -1553,6 +1553,9 @@ test "boxy representation queries have one definition on the plan" {
         "repSubtreeContainsRep",
         "repSubtreeContainsRepInner",
         "structuralWrapperBackingRep",
+        "structureBackingRep",
+        "bindCallWrappedStructure",
+        "structureChildCallRep",
         "descriptorArgumentIdentityRep",
         "dictionaryArgumentIdentityRep",
         "workerChildCanMatchUnwrappedCallRep",

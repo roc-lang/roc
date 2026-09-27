@@ -228,7 +228,6 @@ UNDECLARED TYPE - fuzz_crash_028.md:95:10:95:16
 UNDECLARED TYPE - fuzz_crash_028.md:95:21:95:27
 VAR NAME MISSING `$` - fuzz_crash_028.md:98:6:98:12
 NAME NOT IN SCOPE - fuzz_crash_028.md:99:9:99:13
-UNRECOGNIZED SYNTAX - fuzz_crash_028.md:103:2:103:5
 NAME NOT IN SCOPE - fuzz_crash_028.md:107:1:107:3
 NAME NOT IN SCOPE - fuzz_crash_028.md:116:1:116:3
 NAME NOT IN SCOPE - fuzz_crash_028.md:119:11:119:15
@@ -265,6 +264,9 @@ DECLARATION HAS NO VALUE - fuzz_crash_028.md:95:1:95:34
 TOO FEW ARGS - fuzz_crash_028.md:104:2:106:3
 REFERENCE HAS NO VALUE - fuzz_crash_028.md:115:3:115:10
 TYPE MISMATCH - fuzz_crash_028.md:133:5:133:12
+TYPE MISMATCH - fuzz_crash_028.md:133:5:133:18
+TYPE MISMATCH - fuzz_crash_028.md:133:5:133:25
+TYPE MISMATCH - fuzz_crash_028.md:133:5:133:31
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:141:1:141:7
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:144:1:144:13
 MISSING METHOD - fuzz_crash_028.md:133:5:133:12
@@ -1747,16 +1749,6 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(source-region (file "fuzz_crash_028.md") (start 99 9) (end 99 13) (annotation error) (line-text "\texpect blah == 1"))))
 	(report
 		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 103 2) (end 103 5))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "fuzz_crash_028.md") (start 103 2) (end 103 5) (annotation error) (line-text "\t..."))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
 		(title "Name Not In Scope")
 		(region (start 107 1) (end 107 3))
 		(headline
@@ -2314,6 +2306,132 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(reflow "may return early with a type that doesn't match the function body."))
 		(document
 			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 12) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
+			(line-break)
+			(reflow "On error, this")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "returns an")
+			(reflow " ")
+			(annotated code "Err")
+			(reflow ", so this function must return a")
+			(reflow " ")
+			(annotated code "Try")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(reflow "But its body evaluates to:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Blue]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "The error types from all")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "operators and the function body must be compatible, since any of them could be the actual return value.")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 133 5) (end 133 18))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "may return early with a type that doesn't match the function body."))
+		(document
+			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 18) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
+			(line-break)
+			(reflow "On error, this")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "returns an")
+			(reflow " ")
+			(annotated code "Err")
+			(reflow ", so this function must return a")
+			(reflow " ")
+			(annotated code "Try")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(reflow "But its body evaluates to:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Blue]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "The error types from all")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "operators and the function body must be compatible, since any of them could be the actual return value.")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 133 5) (end 133 25))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "may return early with a type that doesn't match the function body."))
+		(document
+			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 25) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
+			(line-break)
+			(reflow "On error, this")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "returns an")
+			(reflow " ")
+			(annotated code "Err")
+			(reflow ", so this function must return a")
+			(reflow " ")
+			(annotated code "Try")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(reflow "But its body evaluates to:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Blue]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "The error types from all")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "operators and the function body must be compatible, since any of them could be the actual return value.")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 133 5) (end 133 31))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "may return early with a type that doesn't match the function body."))
+		(document
+			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 31) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
 			(line-break)
 			(reflow "On error, this")
 			(reflow " ")
@@ -3207,7 +3325,204 @@ expect {
 				(ty-malformed))))
 	(d-let
 		(p-assign (ident "ma"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-let
+					(p-assign (ident "world"))
+					(e-string
+						(e-literal (string "d"))))
+				(s-var
+					(p-var-assign (ident "number"))
+					(e-num (value "123")))
+				(s-expect
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(s-let
+					(p-assign (ident "tag"))
+					(e-tag (name "Blue")))
+				(s-return
+					(e-lookup-local
+						(p-assign (ident "tag"))))
+				(s-expr
+					(e-runtime-error (tag "expr_syntax_error")))
+				(s-expr
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(s-expr
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(s-expr
+					(e-run-low-level (op "crash")
+						(args
+							(e-string
+								(e-literal (string "Unrnt"))))))
+				(s-let
+					(p-assign (ident "tag_"))
+					(e-tag (name "Ok")
+						(args
+							(e-lookup-local
+								(p-var-assign (ident "number"))))))
+				(s-let
+					(p-assign (ident "i"))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_0"))
+							(e-lookup-local
+								(p-assign (ident "world"))))
+						(e-interpolation (constraint-fn-var 1399) (dispatcher-var 280)
+							(first
+								(e-literal (string "H, ")))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_0")))
+								(e-literal (string ""))))))
+				(s-let
+					(p-assign (ident "t"))
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(s-for
+					(p-assign (ident "n"))
+					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(s-let
+					(p-assign (ident "rd"))
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(s-let
+					(p-assign (ident "tuple"))
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(s-let
+					(p-assign (ident "mle"))
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(s-let
+					(p-assign (ident "b"))
+					(e-if
+						(if-branches
+							(if-branch
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 1589)
+									(receiver
+										(e-runtime-error (tag "erroneous_value_expr")))
+									(args
+										(e-dispatch-call (method "times") (constraint-fn-var 1586)
+											(receiver
+												(e-num (value "5")))
+											(args
+												(e-num (value "5"))))))
+								(e-nominal-external
+									(builtin)
+									(e-tag (name "True")))))
+						(if-else
+							(e-if
+								(if-branches
+									(if-branch
+										(e-if
+											(if-branches
+												(if-branch
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 1622)
+														(receiver
+															(e-dispatch-call (method "plus") (constraint-fn-var 1612)
+																(receiver
+																	(e-num (value "13")))
+																(args
+																	(e-num (value "2")))))
+														(args
+															(e-num (value "5"))))
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 1649)
+														(receiver
+															(e-dispatch-call (method "minus") (constraint-fn-var 1639)
+																(receiver
+																	(e-num (value "10")))
+																(args
+																	(e-num (value "1")))))
+														(args
+															(e-num (value "16"))))))
+											(if-else
+												(e-nominal-external
+													(builtin)
+													(e-tag (name "False")))))
+										(e-nominal-external
+											(builtin)
+											(e-tag (name "True")))))
+								(if-else
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 1686)
+										(receiver
+											(e-num (value "12")))
+										(args
+											(e-dispatch-call (method "div_by") (constraint-fn-var 1683)
+												(receiver
+													(e-num (value "3")))
+												(args
+													(e-num (value "5")))))))))))
+				(s-let
+					(p-assign (ident "le"))
+					(e-match
+						(match
+							(cond
+								(e-field-access
+									(receiver
+										(e-match
+											(match
+												(cond
+													(e-dispatch-call (method "ned") (constraint-fn-var 1761)
+														(receiver
+															(e-match
+																(match
+																	(cond
+																		(e-dispatch-call (method "od") (constraint-fn-var 1724)
+																			(receiver
+																				(e-runtime-error (tag "erroneous_value_expr")))
+																			(args)))
+																	(branches
+																		(branch
+																			(patterns
+																				(pattern (degenerate false)
+																					(p-nominal-external (builtin)
+																						(p-applied-tag))))
+																			(value
+																				(e-runtime-error (tag "erroneous_value_expr"))))
+																		(branch
+																			(patterns
+																				(pattern (degenerate false)
+																					(p-nominal-external (builtin)
+																						(p-applied-tag))))
+																			(value
+																				(e-return
+																					(e-runtime-error (tag "erroneous_value_expr")))))))))
+														(args)))
+												(branches
+													(branch
+														(patterns
+															(pattern (degenerate false)
+																(p-nominal-external (builtin)
+																	(p-applied-tag))))
+														(value
+															(e-lookup-local
+																(p-assign (ident "#ok")))))
+													(branch
+														(patterns
+															(pattern (degenerate false)
+																(p-nominal-external (builtin)
+																	(p-applied-tag))))
+														(value
+															(e-return
+																(e-runtime-error (tag "erroneous_value_expr")))))))))
+									(segments
+										(segment (name "recd") (mode "required")))))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
+									(value
+										(e-lookup-local
+											(p-assign (ident "#ok")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
+									(value
+										(e-return
+											(e-runtime-error (tag "erroneous_value_expr")))))))))
+				(e-runtime-error (tag "erroneous_value_expr")))))
 	(d-let
 		(p-assign (ident "y"))
 		(e-anno-only)
@@ -3273,7 +3588,7 @@ expect {
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "[Blue, Red, ..], _arg -> Error"))
 		(patt (type "Error -> Error"))
-		(patt (type "_arg -> Error"))
+		(patt (type "_arg -> [Blue]"))
 		(patt (type "{}"))
 		(patt (type "{}"))
 		(patt (type "Error")))
@@ -3301,7 +3616,7 @@ expect {
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "[Blue, Red, ..], _arg -> Error"))
 		(expr (type "Error -> Error"))
-		(expr (type "_arg -> Error"))
+		(expr (type "_arg -> [Blue]"))
 		(expr (type "{}"))
 		(expr (type "{}"))
 		(expr (type "Error"))))

@@ -162,6 +162,9 @@ pub const Evaluator = struct {
     abort_record: ?Abort,
     /// Value carried by `error.Returned`.
     return_value: Value,
+    /// The type `return_value` was produced at; the function's result type
+    /// may list its tags in a wider row.
+    return_type: Type.TypeId,
     /// Value carried by `error.Broke`.
     break_value: Value,
     /// Values carried by `error.Continued`.
@@ -196,6 +199,7 @@ pub const Evaluator = struct {
             .unsupported = null,
             .abort_record = null,
             .return_value = .unit,
+            .return_type = undefined,
             .break_value = .unit,
             .continue_values = &.{},
             // Written by every jump before the error.Jumped unwind that reads it.
@@ -247,7 +251,7 @@ pub const Evaluator = struct {
 
     fn readComptimeValue(self: *Evaluator, root: Common.ComptimeValueRoot) EvalError!Value {
         for (self.inputs.comptime_producers) |producer| {
-            if (producer.root.root != root.root or !std.meta.eql(producer.root.module, root.module)) continue;
+            if (!producer.root.root.eql(root.root) or !std.meta.eql(producer.root.module, root.module)) continue;
             const outcome = try self.runProducer(producer.root_index);
             return switch (outcome) {
                 .value => |value| value,
@@ -260,12 +264,14 @@ pub const Evaluator = struct {
     fn runRootBody(self: *Evaluator, root_index: usize) Error!RunOutcome {
         const saved_abort = self.abort_record;
         const saved_return = self.return_value;
+        const saved_return_type = self.return_type;
         const saved_break = self.break_value;
         const saved_continue = self.continue_values;
         const saved_jump_values = self.jump_values;
         defer {
             self.abort_record = saved_abort;
             self.return_value = saved_return;
+            self.return_type = saved_return_type;
             self.break_value = saved_break;
             self.continue_values = saved_continue;
             self.jump_values = saved_jump_values;
@@ -288,7 +294,7 @@ pub const Evaluator = struct {
         defer frame.deinit();
 
         const value = self.evalExpr(&frame, body) catch |err| switch (err) {
-            error.Returned => self.return_value,
+            error.Returned => try self.convertValue(self.return_value, self.return_type, fn_.ret),
             error.Aborted => return RunOutcome{ .aborted = self.abort_record.? },
             error.OutOfMemory => return error.OutOfMemory,
             error.Unsupported => return error.Unsupported,
@@ -480,6 +486,7 @@ pub const Evaluator = struct {
             },
             .return_ => |value_expr| {
                 self.return_value = try self.evalExpr(frame, value_expr);
+                self.return_type = self.exprType(value_expr);
                 return error.Returned;
             },
             .uninitialized => return .uninitialized,
@@ -507,6 +514,10 @@ pub const Evaluator = struct {
             .expect_err => |expect_err| {
                 const msg = try self.evalExpr(frame, expect_err.msg);
                 return self.raiseAbort(.expect_err, msg.str);
+            },
+            .literal_rejected => |rejected| {
+                const msg = try self.evalExpr(frame, rejected.msg);
+                return self.crashAbort(msg.str);
             },
         }
     }
@@ -769,7 +780,7 @@ pub const Evaluator = struct {
         }
 
         return self.evalExpr(&frame, body) catch |err| switch (err) {
-            error.Returned => self.return_value,
+            error.Returned => try self.convertValue(self.return_value, self.return_type, fn_.ret),
             error.OutOfMemory,
             error.Unsupported,
             error.Aborted,
@@ -854,6 +865,7 @@ pub const Evaluator = struct {
             },
             .return_ => |expr_id| {
                 self.return_value = try self.evalExpr(frame, expr_id);
+                self.return_type = self.exprType(expr_id);
                 return error.Returned;
             },
             .crash => |sid| return self.crashAbort(self.program.stringLiteralText(sid)),
@@ -968,6 +980,83 @@ pub const Evaluator = struct {
     fn rebuildErr(self: *Evaluator, result_ty: Type.TypeId, payloads: []const Value) EvalError!Value {
         const err_index = self.tagIndexByText(result_ty, "Err") orelse return self.unsupported_("enclosing Err tag not found");
         return .{ .tag = .{ .discriminant = @intCast(err_index), .payloads = payloads } };
+    }
+
+    /// A value moving between two types whose tag rows differ, as an error
+    /// payload does when `?` returns it at the enclosing function's wider
+    /// error row: a tag's discriminant indexes its own type's row, so each
+    /// tag moves to the same-named tag of the target row, through payloads,
+    /// fields, items, elements and boxes.
+    fn convertValue(self: *Evaluator, value: Value, from: Type.TypeId, to: Type.TypeId) Error!Value {
+        if (from == to) return value;
+        const from_content = self.structural(from);
+        const to_content = self.structural(to);
+        switch (value) {
+            .tag => |tag| {
+                if (from_content != .tag_union or to_content != .tag_union) return self.unsup("tag value converted between non-tag-union types");
+                const from_tags = self.program.types.tagSpan(from_content.tag_union);
+                const to_tags = self.program.types.tagSpan(to_content.tag_union);
+                const source_tag = GuardedList.at(from_tags, tag.discriminant);
+                const target_index = for (0..to_tags.len) |i| {
+                    if (self.program.names.tagLabelTextEql(GuardedList.at(to_tags, i).name, source_tag.name)) break i;
+                } else return self.unsup("converted tag absent from the target row");
+                const from_tys = self.program.types.span(source_tag.payloads);
+                const to_tys = self.program.types.span(GuardedList.at(to_tags, target_index).payloads);
+                if (from_tys.len != tag.payloads.len or to_tys.len != tag.payloads.len) return self.unsup("converted tag payload arity");
+                const payloads = self.alloc().alloc(Value, tag.payloads.len) catch return error.OutOfMemory;
+                for (tag.payloads, payloads, 0..) |payload, *out, i| {
+                    out.* = try self.convertValue(payload, GuardedList.at(from_tys, i), GuardedList.at(to_tys, i));
+                }
+                return .{ .tag = .{ .discriminant = @intCast(target_index), .payloads = payloads } };
+            },
+            .record, .tuple => |items| {
+                const from_tys, const to_tys = switch (from_content) {
+                    .record => |fields| blk: {
+                        if (to_content != .record) return self.unsup("record value converted to a non-record type");
+                        const from_fields = self.program.types.fieldSpan(fields);
+                        const to_fields = self.program.types.fieldSpan(to_content.record);
+                        if (from_fields.len != items.len or to_fields.len != items.len) return self.unsup("converted record field count");
+                        const f = self.alloc().alloc(Type.TypeId, items.len) catch return error.OutOfMemory;
+                        const t = self.alloc().alloc(Type.TypeId, items.len) catch return error.OutOfMemory;
+                        for (0..items.len) |i| {
+                            f[i] = GuardedList.at(from_fields, i).ty;
+                            t[i] = GuardedList.at(to_fields, i).ty;
+                        }
+                        break :blk .{ f, t };
+                    },
+                    .tuple => |elems| blk: {
+                        if (to_content != .tuple) return self.unsup("tuple value converted to a non-tuple type");
+                        const from_elems = self.program.types.span(elems);
+                        const to_elems = self.program.types.span(to_content.tuple);
+                        if (from_elems.len != items.len or to_elems.len != items.len) return self.unsup("converted tuple arity");
+                        const f = self.alloc().alloc(Type.TypeId, items.len) catch return error.OutOfMemory;
+                        const t = self.alloc().alloc(Type.TypeId, items.len) catch return error.OutOfMemory;
+                        for (0..items.len) |i| {
+                            f[i] = GuardedList.at(from_elems, i);
+                            t[i] = GuardedList.at(to_elems, i);
+                        }
+                        break :blk .{ f, t };
+                    },
+                    .primitive, .named, .capture_record, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst => return self.unsup("aggregate value converted from a non-aggregate type"),
+                };
+                const out = self.alloc().alloc(Value, items.len) catch return error.OutOfMemory;
+                for (items, out, from_tys, to_tys) |item, *dest, f, t| dest.* = try self.convertValue(item, f, t);
+                return if (value == .record) .{ .record = out } else .{ .tuple = out };
+            },
+            .list => |elems| {
+                if (from_content != .list or to_content != .list) return self.unsup("list value converted between non-list types");
+                const out = self.alloc().alloc(Value, elems.len) catch return error.OutOfMemory;
+                for (elems, out) |elem, *dest| dest.* = try self.convertValue(elem, from_content.list, to_content.list);
+                return .{ .list = out };
+            },
+            .box => |inner| {
+                if (from_content != .box or to_content != .box) return self.unsup("box value converted between non-box types");
+                const out = self.alloc().create(Value) catch return error.OutOfMemory;
+                out.* = try self.convertValue(inner.*, from_content.box, to_content.box);
+                return .{ .box = out };
+            },
+            .unit, .int, .float32, .float64, .dec, .bool_, .str, .capture_record, .callable, .erased_fn, .uninitialized => return value,
+        }
     }
 
     fn evalTryRecordSequence(self: *Evaluator, frame: *Frame, result_ty: Type.TypeId, seq: Ast.TryRecordSequence) EvalError!Value {
@@ -1353,7 +1442,6 @@ pub const Evaluator = struct {
             .num_acos => self.numFloatMath1(args, arg_types, .acos),
             .num_atan => self.numFloatMath1(args, arg_types, .atan),
             .num_log => self.numFloatMath1(args, arg_types, .log),
-            .num_round => self.numRoundLike(args, arg_types, .round),
             .num_floor => self.numRoundLike(args, arg_types, .floor),
             .num_ceiling => self.numRoundLike(args, arg_types, .ceiling),
 
@@ -1528,6 +1616,34 @@ pub const Evaluator = struct {
             .f32_from_str,
             .f64_from_str,
             => self.evalFromStr(op, args, result_ty),
+
+            .u8_from_str_prefix,
+            .u8_from_utf8_prefix,
+            .i8_from_str_prefix,
+            .i8_from_utf8_prefix,
+            .u16_from_str_prefix,
+            .u16_from_utf8_prefix,
+            .i16_from_str_prefix,
+            .i16_from_utf8_prefix,
+            .u32_from_str_prefix,
+            .u32_from_utf8_prefix,
+            .i32_from_str_prefix,
+            .i32_from_utf8_prefix,
+            .u64_from_str_prefix,
+            .u64_from_utf8_prefix,
+            .i64_from_str_prefix,
+            .i64_from_utf8_prefix,
+            .u128_from_str_prefix,
+            .u128_from_utf8_prefix,
+            .i128_from_str_prefix,
+            .i128_from_utf8_prefix,
+            .dec_from_str_prefix,
+            .dec_from_utf8_prefix,
+            .f32_from_str_prefix,
+            .f32_from_utf8_prefix,
+            .f64_from_str_prefix,
+            .f64_from_utf8_prefix,
+            => self.evalFromStrPrefix(op, args, result_ty),
 
             .compare => self.evalCompareOp(args, arg_types, result_ty),
             .dict_pseudo_seed => self.canonicalInt(self.primitiveOf(result_ty) orelse .u64, 0),
@@ -2135,25 +2251,20 @@ pub const Evaluator = struct {
         }
     }
 
-    const RoundOp = enum { round, floor, ceiling };
+    const RoundOp = enum { floor, ceiling };
 
     fn numRoundLike(self: *Evaluator, args: []const Value, arg_types: []const Type.TypeId, op: RoundOp) EvalError!Value {
         const prim = self.primitiveOf(arg_types[0]) orelse return self.unsupported_("round operand without primitive type");
         switch (prim) {
             .f32 => return .{ .float32 = switch (op) {
-                .round => @round(args[0].float32),
                 .floor => @floor(args[0].float32),
                 .ceiling => @ceil(args[0].float32),
             } },
             .f64 => return .{ .float64 = switch (op) {
-                .round => @round(args[0].float64),
                 .floor => @floor(args[0].float64),
                 .ceiling => @ceil(args[0].float64),
             } },
-            .dec => switch (op) {
-                .round => return .{ .dec = decRound(args[0].dec) },
-                .floor, .ceiling => return self.unsupported_("dec floor or ceiling op"),
-            },
+            .dec => return self.unsupported_("dec floor or ceiling op"),
             .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return self.unsupported_("integer round op"),
         }
     }
@@ -2394,6 +2505,50 @@ pub const Evaluator = struct {
             .dec => parseDecResult(source),
         };
         return self.buildResultTag(result_ty, outcome.ok, outcome.payload);
+    }
+
+    /// Parse the longest numeric prefix of a `Str` or `List(U8)`. The result is
+    /// the raw `{ err : U8, rest : Str | List(U8), value : T }` record. Parsing
+    /// is delegated to the same builtins the runtime wrappers use, so the
+    /// grammar and the error codes (0 Ok, 1 NotANumber, 2 OutOfRange) match;
+    /// on error `rest` is empty.
+    fn evalFromStrPrefix(self: *Evaluator, op: base.LowLevel, args: []const Value, result_ty: Type.TypeId) EvalError!Value {
+        const spec = base.numeric_conversion.getNumericPrefixParseSpec(op) orelse return self.unsupported_("numeric prefix parse spec missing");
+        const bytes: []const u8 = switch (spec.source) {
+            .str => args[0].str,
+            .utf8 => blk: {
+                const elems = args[0].list;
+                const buf = self.alloc().alloc(u8, elems.len) catch return error.OutOfMemory;
+                for (elems, 0..) |e, i| buf[i] = @truncate(@as(u128, @bitCast(e.int)));
+                break :blk buf;
+            },
+        };
+        const outcome: PrefixParseOutcome = switch (spec.parse) {
+            .int => |int| switch (int.width_bytes) {
+                1 => if (int.signed) parseIntPrefixResult(i8, bytes) else parseIntPrefixResult(u8, bytes),
+                2 => if (int.signed) parseIntPrefixResult(i16, bytes) else parseIntPrefixResult(u16, bytes),
+                4 => if (int.signed) parseIntPrefixResult(i32, bytes) else parseIntPrefixResult(u32, bytes),
+                8 => if (int.signed) parseIntPrefixResult(i64, bytes) else parseIntPrefixResult(u64, bytes),
+                16 => if (int.signed) parseIntPrefixResult(i128, bytes) else parseIntPrefixResult(u128, bytes),
+                else => return self.unsupported_("unexpected integer parse width"),
+            },
+            .float => |float| switch (float.width_bytes) {
+                4 => parseFloatPrefixResult(f32, bytes),
+                8 => parseFloatPrefixResult(f64, bytes),
+                else => return self.unsupported_("unexpected float parse width"),
+            },
+            .dec => parseDecPrefixResult(bytes),
+        };
+        const rest_start: usize = if (outcome.err == 0) outcome.consumed else bytes.len;
+        const rest: Value = switch (spec.source) {
+            .str => .{ .str = args[0].str[rest_start..] },
+            .utf8 => .{ .list = args[0].list[rest_start..] },
+        };
+        return self.buildNamedRecord(result_ty, &.{
+            .{ .name = "err", .value = self.canonicalInt(.u8, outcome.err) },
+            .{ .name = "rest", .value = rest },
+            .{ .name = "value", .value = outcome.value },
+        });
     }
 
     /// Build a `Result` tag union: `Ok payload` when `ok`, otherwise the `Err`
@@ -3133,6 +3288,23 @@ fn parseDecResult(source: []const u8) ParseOutcome {
     return .{ .ok = r.errorcode == 0, .payload = .{ .dec = r.value } };
 }
 
+const PrefixParseOutcome = struct { err: u8, consumed: usize, value: Value };
+
+fn parseIntPrefixResult(comptime T: type, bytes: []const u8) PrefixParseOutcome {
+    const r = builtins.num.parseIntPrefix(T, bytes);
+    return .{ .err = r.errorcode, .consumed = @intCast(r.consumed), .value = makeInt(T, r.value) };
+}
+
+fn parseFloatPrefixResult(comptime F: type, bytes: []const u8) PrefixParseOutcome {
+    const r = builtins.num.parseFloatPrefix(F, bytes);
+    return .{ .err = r.errorcode, .consumed = @intCast(r.consumed), .value = if (F == f32) .{ .float32 = r.value } else .{ .float64 = r.value } };
+}
+
+fn parseDecPrefixResult(bytes: []const u8) PrefixParseOutcome {
+    const r = builtins.dec.parsePrefix(bytes);
+    return .{ .err = r.errorcode, .consumed = @intCast(r.consumed), .value = .{ .dec = r.value } };
+}
+
 fn allocAligned(allocator: std.mem.Allocator, len: usize, alignment: usize) ?[*]u8 {
     const effective = if (len == 0) 1 else len;
     return switch (alignment) {
@@ -3285,19 +3457,6 @@ fn signedI128(comptime T: type, x: T) i128 {
     };
 }
 
-/// Round a Dec fixed-point value half-away-from-zero, matching `RocDec.round`.
-fn decRound(num: i128) i128 {
-    const one = RocDec.one_point_zero_i128;
-    const whole = @divTrunc(num, one);
-    const truncated = whole *% one;
-    const fract = num - truncated;
-    const abs_fract = if (fract < 0) -fract else fract;
-    if (abs_fract >= @divTrunc(one, 2)) {
-        return truncated + (if (num < 0) -one else one);
-    }
-    return truncated;
-}
-
 fn caselessAsciiEqual(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) return false;
     for (a, b) |x, y| {
@@ -3445,7 +3604,7 @@ test "oracle demands declared roots once without executing representation witnes
     const policy = try program.addExpr(.{ .ty = bool_ty, .data = .{ .inline_expects_enabled = {} } });
     const witness = try program.addExpr(.{ .ty = bool_ty, .data = .@"unreachable" });
     const producer_index = program.rootCount();
-    const root: Common.ComptimeValueRoot = .{ .module = .{}, .root = @enumFromInt(91), .const_locator = null };
+    const root: Common.ComptimeValueRoot = .{ .module = .{}, .root = .{ .checked = @enumFromInt(91) }, .const_locator = null };
     // Neither checked identity nor descriptor-table ordinal is a producer index.
     _ = try program.addComptimeValueRoot(.{ .module = .{ .bytes = @splat(1) }, .root = root.root, .const_locator = null });
     const producer_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = policy }, .ret = bool_ty });

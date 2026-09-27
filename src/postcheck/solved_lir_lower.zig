@@ -157,6 +157,9 @@ pub const RootManifest = struct {
     layout_requests: bool = true,
     /// Whether this consumer emits the producer's runtime value schemas.
     runtime_schema_requests: bool = true,
+    /// Whether this consumer lowers the producer's literal roots. Only a
+    /// consumer that evaluates compile-time roots runs them.
+    literal_roots: bool = true,
 };
 
 /// Configuration for direct solved-to-LIR lowering.
@@ -494,6 +497,13 @@ const RootEntry = struct {
     request_index: u32,
 };
 
+/// A literal root this consumer lowers, at its producer position.
+const LiteralRootEntry = struct {
+    fn_id: Type.FnId,
+    module: check.CheckedModule.ModuleId,
+    site: Common.LiteralRejectionSite,
+};
+
 const LayoutRequest = struct {
     checked_type: check.CheckedModule.CheckedTypeId,
     ty: Type.TypeId,
@@ -508,12 +518,12 @@ const StaticInitializerRequest = struct {
 
 const ComptimeValueRequest = struct {
     module: check.CheckedModule.ModuleId,
-    root: check.CheckedModule.ComptimeRootId,
+    root: LIR.ComptimeProducer,
     ty: Type.TypeId,
     layout_idx: layout.Idx,
 };
 
-/// An evaluated root's checked identity together with the concrete
+/// An evaluated root's producer identity together with the concrete
 /// representation it is demanded at. Stage-local type ids are not identity:
 /// two of them can denote one concrete type, and one layout can serve
 /// distinct types, so neither is what decides whether two demands are the
@@ -521,7 +531,7 @@ const ComptimeValueRequest = struct {
 /// representation equivalence confirms it.
 const ComptimeRootKey = struct {
     module: check.CheckedModule.ModuleId,
-    root: check.CheckedModule.ComptimeRootId,
+    root: LIR.ComptimeProducer,
     ty: check.CanonicalNames.TypeDigest,
 };
 
@@ -691,6 +701,12 @@ const Lowerer = struct {
     result: LirProgram.Result,
     runtime_schemas: RuntimeSchemaStore,
     type_map: collections.DenseMap(SolvedType.TypeVarId, Type.TypeId),
+    /// For each Solved backing record of a nominal that declares padding, that
+    /// nominal. See `collectPaddedBackingOwners`.
+    padded_backing_owners: collections.DenseMap(SolvedType.TypeVarId, SolvedType.TypeVarId),
+    /// For each lowered padded backing record, its lowered nominal, whose
+    /// declared layout the backing takes.
+    padded_backing_nominals: collections.DenseMap(Type.TypeId, Type.TypeId),
     fn_specs: std.ArrayList(FnSpec),
     fn_entries: std.ArrayList(FnEntry),
     fn_spec_map: std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage),
@@ -743,9 +759,14 @@ const Lowerer = struct {
     own_captures: std.ArrayList(SolvedType.Capture),
     own_capture_spans: []?CaptureSpanId,
     roots: std.ArrayList(RootEntry),
+    literal_roots: std.ArrayList(LiteralRootEntry),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
     type_layouts: collections.DenseMap(Type.TypeId, layout.Idx),
+    /// Recursive-graph digest the layout commit settled for each type whose
+    /// node was local to its graph. A layout graph reuses a cached child only
+    /// through this digest, so the child stays visible to recursion analysis.
+    type_layout_digests: collections.DenseMap(Type.TypeId, layout.GraphDigest),
     named_layout_index: std.HashMap(NamedRepresentationKey, std.ArrayList(Type.TypeId), NamedRepresentationKeyContext, std.hash_map.default_max_load_percentage),
     layout_owner_types: collections.DenseMap(Type.TypeId, Type.TypeId),
     const_plan_map: collections.DenseMap(Type.TypeId, LirProgram.ConstPlanId),
@@ -939,6 +960,10 @@ const Lowerer = struct {
         errdefer recursive_value_capture_ids.deinit();
         try Lowerer.collectRecursiveValueLocals(&solved.lifted, &recursive_value_locals, &recursive_value_capture_ids);
 
+        var padded_backing_owners = collections.DenseMap(SolvedType.TypeVarId, SolvedType.TypeVarId).init(allocator);
+        errdefer padded_backing_owners.deinit();
+        try collectPaddedBackingOwners(solved.types.view(), &padded_backing_owners);
+
         const workspace_count = if (options.post_check_executor) |executor| executor.worker_count else 0;
         const worker_workspaces = try allocator.alloc(?FnBodyWorkspace, workspace_count);
         errdefer allocator.free(worker_workspaces);
@@ -953,6 +978,8 @@ const Lowerer = struct {
             .result = try LirProgram.Result.init(allocator, target_usize),
             .runtime_schemas = RuntimeSchemaStore.init(allocator),
             .type_map = collections.DenseMap(SolvedType.TypeVarId, Type.TypeId).init(allocator),
+            .padded_backing_owners = padded_backing_owners,
+            .padded_backing_nominals = collections.DenseMap(Type.TypeId, Type.TypeId).init(allocator),
             .fn_specs = .empty,
             .fn_entries = .empty,
             .fn_spec_map = std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
@@ -989,9 +1016,11 @@ const Lowerer = struct {
             .own_captures = .empty,
             .own_capture_spans = own_capture_spans,
             .roots = .empty,
+            .literal_roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
             .type_layouts = collections.DenseMap(Type.TypeId, layout.Idx).init(allocator),
+            .type_layout_digests = collections.DenseMap(Type.TypeId, layout.GraphDigest).init(allocator),
             .named_layout_index = std.HashMap(NamedRepresentationKey, std.ArrayList(Type.TypeId), NamedRepresentationKeyContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
             .layout_owner_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(allocator),
             .const_plan_map = collections.DenseMap(Type.TypeId, LirProgram.ConstPlanId).init(allocator),
@@ -1120,9 +1149,11 @@ const Lowerer = struct {
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
         self.type_layouts.deinit();
+        self.type_layout_digests.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
+        self.literal_roots.deinit(self.allocator);
         self.allocator.free(self.own_capture_spans);
         self.own_captures.deinit(self.allocator);
         self.recursive_slot_types.deinit();
@@ -1140,6 +1171,8 @@ const Lowerer = struct {
         self.fn_entries.deinit(self.allocator);
         self.fn_specs.deinit(self.allocator);
         self.type_map.deinit();
+        self.padded_backing_owners.deinit();
+        self.padded_backing_nominals.deinit();
         self.types.deinit();
         self.runtime_schemas.deinit();
         self.result.deinit();
@@ -1180,9 +1213,11 @@ const Lowerer = struct {
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
         self.type_layouts.deinit();
+        self.type_layout_digests.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
+        self.literal_roots.deinit(self.allocator);
         self.allocator.free(self.own_capture_spans);
         self.own_captures.deinit(self.allocator);
         self.recursive_slot_types.deinit();
@@ -1200,6 +1235,8 @@ const Lowerer = struct {
         self.fn_entries.deinit(self.allocator);
         self.fn_specs.deinit(self.allocator);
         self.type_map.deinit();
+        self.padded_backing_owners.deinit();
+        self.padded_backing_nominals.deinit();
         self.types.deinit();
         self.result = undefined;
         self.runtime_schemas = RuntimeSchemaStore.init(self.allocator);
@@ -1262,6 +1299,17 @@ const Lowerer = struct {
                 });
             }
         }
+        if (self.lowersLiteralRoots()) {
+            const produced_literal_roots = self.solved.lifted.literalRootsView();
+            try self.literal_roots.ensureTotalCapacity(self.allocator, produced_literal_roots.len);
+            for (produced_literal_roots) |root| {
+                self.literal_roots.appendAssumeCapacity(.{
+                    .fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite),
+                    .module = root.module,
+                    .site = root.site,
+                });
+            }
+        }
         // The compile-time roots' closure lowers first, so that a procedure
         // the evaluator runs is known as such when the object cache is
         // asked for it: the evaluator takes hits only under its own rules
@@ -1270,6 +1318,7 @@ const Lowerer = struct {
             if (!rootRunsAtCompileTime(root.request)) continue;
             _ = try self.markReachableFn(root.fn_id);
         }
+        for (self.literal_roots.items) |root| _ = try self.markReachableFn(root.fn_id);
         try self.lowerReachableFns();
         self.comptime_phase = false;
         for (self.roots.items) |root| {
@@ -1292,6 +1341,12 @@ const Lowerer = struct {
     fn lowersRuntimeSchemaRequests(self: *const Lowerer) bool {
         const manifest = self.root_manifest orelse return true;
         return manifest.runtime_schema_requests;
+    }
+
+    /// Whether this consumer lowers the producer's literal roots.
+    fn lowersLiteralRoots(self: *const Lowerer) bool {
+        const manifest = self.root_manifest orelse return true;
+        return manifest.literal_roots;
     }
 
     fn lowerLayoutRequests(self: *Lowerer) Common.LowerError!void {
@@ -1918,6 +1973,10 @@ const Lowerer = struct {
                         try self.add(.{ .ty = ty });
                         if (l.recursive_value_locals.contains(id)) {
                             try self.add(.{ .ty = try l.boxedRecursiveSlotTypeOfType(ty) });
+                            // Binding the local also names its slot at the
+                            // runtime backing; see `rememberRecursiveSlotLocalForType`.
+                            const runtime_ty = l.runtimeBackingType(ty);
+                            if (runtime_ty != ty) try self.add(.{ .ty = try l.recursiveSlotTypeOfType(runtime_ty) });
                         }
                     },
                     .ty => |ty| {
@@ -2083,6 +2142,7 @@ const Lowerer = struct {
                 },
                 .return_ => |ret| try self.add(.{ .expr = ret.value }),
                 .expect_err => |expect_err| try self.add(.{ .expr = expect_err.msg }),
+                .literal_rejected => |rejected| try self.add(.{ .expr = rejected.msg }),
                 .unit,
                 .@"unreachable",
                 .int_lit,
@@ -3158,6 +3218,7 @@ const Lowerer = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => null,
         };
@@ -3392,6 +3453,14 @@ const Lowerer = struct {
         if (self.worker_callback) {
             self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared type");
         }
+        // A padded backing is lowered through its nominal, which records the
+        // backing's layout owner before anything can lay the backing out.
+        if (self.padded_backing_owners.get(root)) |owner| {
+            if (!self.type_map.contains(self.solved.types.root(owner))) {
+                _ = try self.lowerType(owner);
+                return self.type_map.get(root) orelse Common.invariant("padded nominal lowering did not lower its backing");
+            }
+        }
 
         const content = self.solved.types.get(root);
         if (content == .func) {
@@ -3409,7 +3478,42 @@ const Lowerer = struct {
         const reserved = try self.types.add(.zst);
         try self.type_map.put(root, reserved);
         self.types.set(reserved, try self.lowerTypeContent(content));
+        if (content == .named and content.named.backing != null) {
+            const backing_root = self.solved.types.root(content.named.backing.?.ty);
+            if (self.padded_backing_owners.get(backing_root)) |owner| {
+                if (self.solved.types.root(owner) == root) {
+                    try self.padded_backing_nominals.put(self.type_map.get(backing_root).?, reserved);
+                }
+            }
+        }
         return reserved;
+    }
+
+    /// Records the nominal owning each Solved backing record whose nominal
+    /// declares padding. Such a backing is the same type as every record value
+    /// constructing that nominal, so it takes the nominal's declared layout
+    /// rather than the structural one; recording the owner up front makes that
+    /// independent of the order in which types are lowered and laid out. The
+    /// nominals sharing one backing are instances of one declaration and so
+    /// share its declared order; the lowest-numbered one is the owner.
+    fn collectPaddedBackingOwners(
+        types: SolvedType.Store.View,
+        owners: *collections.DenseMap(SolvedType.TypeVarId, SolvedType.TypeVarId),
+    ) Common.LowerError!void {
+        for (types.vars, 0..) |content, index| {
+            if (content != .named) continue;
+            const named = content.named;
+            if (named.kind == .alias or named.declared_order.len == 0) continue;
+            const backing = named.backing orelse continue;
+            const backing_root = types.root(backing.ty);
+            if (types.get(backing_root) != .record) continue;
+            const has_padding = for (types.declaredFieldSpan(named.declared_order)) |entry| {
+                if (entry == .padding) break true;
+            } else false;
+            if (!has_padding) continue;
+            const entry = try owners.getOrPut(backing_root);
+            if (!entry.found_existing) entry.value_ptr.* = @enumFromInt(@as(u32, @intCast(index)));
+        }
     }
 
     fn lowerTypeContent(self: *Lowerer, content: SolvedType.Content) Common.LowerError!Type.Content {
@@ -3698,6 +3802,23 @@ const Lowerer = struct {
                         null,
                 });
             }
+        }
+
+        // A literal root's position is its id, and its reads and its
+        // evaluation meet in one slot.
+        for (self.literal_roots.items, 0..) |root, index| {
+            const entry = self.fn_entries.items[@intFromEnum(root.fn_id)];
+            const ret_layout = try self.layoutOfType(entry.ret);
+            const id: Common.LiteralRootId = @enumFromInt(@as(u32, @intCast(index)));
+            try self.result.literal_roots.append(self.allocator, .{
+                .module = root.module,
+                .id = id,
+                .site = root.site,
+                .proc = try self.markReachableFn(root.fn_id),
+                .ret_layout = ret_layout,
+                .plan = try self.constPlanOfType(entry.ret),
+                .value_slot = try self.comptimeValueSlot(.{ .module = root.module, .root = .{ .literal = id }, .const_locator = null }, entry.ret, ret_layout),
+            });
         }
 
         for (self.layout_requests.items) |request| {
@@ -4734,7 +4855,7 @@ const Lowerer = struct {
         // places read it, and the evaluation's slot demand is raised from one
         // place. A program lowered after evaluation reads its slots directly.
         if (!is_static_initializer and self.completed_scalar_values == null) {
-            const accessor = try self.comptimeRootAccessor(where, id, layout_idx);
+            const accessor = try self.comptimeRootAccessor(where, id, root, ty, layout_idx);
             return try self.result.store.addCFStmt(.{ .assign_call = .{
                 .target = target,
                 .proc = accessor,
@@ -4749,9 +4870,9 @@ const Lowerer = struct {
         } }, where.source());
     }
 
-    /// The procedure that reads compile-time value slot `id`, created on
-    /// its first use.
-    fn comptimeRootAccessor(self: *Lowerer, where: LowerSite, id: LIR.StaticDataId, layout_idx: layout.Idx) Common.LowerError!LIR.LirProcSpecId {
+    /// The procedure that reads compile-time value slot `id`, which holds
+    /// `root` at `ty`, created on its first use.
+    fn comptimeRootAccessor(self: *Lowerer, where: LowerSite, id: LIR.StaticDataId, root: Common.ComptimeValueRoot, ty: Type.TypeId, layout_idx: layout.Idx) Common.LowerError!LIR.LirProcSpecId {
         if (self.result.static_data_values.items[@intFromEnum(id)].accessor) |accessor| return accessor;
         const store = &self.result.store;
         const value = try self.addLocalForLayout(layout_idx);
@@ -4772,7 +4893,7 @@ const Lowerer = struct {
         const frame_locals = try store.addLocalSpan(&[_]LIR.LocalId{value});
         const accessor = try store.addProcSpec(.{
             .name = lirSymbol(self.symbols.fresh()),
-            .identity = try self.comptimeRootAccessorIdentity(id, layout_idx),
+            .identity = try self.comptimeRootAccessorIdentity(root, ty, layout_idx),
             .args = LIR.LocalSpan.empty(),
             .frame_locals = frame_locals,
             .body = read,
@@ -4784,15 +4905,35 @@ const Lowerer = struct {
         return accessor;
     }
 
-    fn comptimeRootAccessorIdentity(self: *Lowerer, id: LIR.StaticDataId, layout_idx: layout.Idx) std.mem.Allocator.Error!LIR.ProcIdentity {
+    /// An accessor is emitted and carried in object-cache packs like any
+    /// procedure, and a spliced procedure takes the place of the program's
+    /// own procedure with its identity, so the identity names what the
+    /// accessor returns in every program: the root's module by content key,
+    /// the root within that module, and the representation the slot commits,
+    /// by a digest no program's numbering enters.
+    fn comptimeRootAccessorIdentity(self: *Lowerer, root: Common.ComptimeValueRoot, ty: Type.TypeId, layout_idx: layout.Idx) std.mem.Allocator.Error!LIR.ProcIdentity {
         var digests = try layout.Digests.init(self.allocator, &self.result.layouts);
         defer digests.deinit();
+        const representation = try self.types.contentDigest(&self.solved.lifted.names, ty, .{ .context = self, .identity = callableTargetIdentity });
         var hasher = base.TypeDigestHasher.init();
-        hasher.update("roc.proc.comptime-root-accessor.v1");
+        hasher.update("roc.proc.comptime-root-accessor.v2");
+        hasher.update(&root.module.bytes);
+        // A literal root's id is program-local; the literal's checked
+        // expression names it within its module.
+        const tag: u8, const index: u32 = switch (root.root) {
+            .checked => |checked_root| .{ 0, @intFromEnum(checked_root) },
+            .literal => |literal| .{ 1, self.literal_roots.items[@intFromEnum(literal)].site.checked_expr },
+        };
+        hasher.update(&[_]u8{ tag, @truncate(index), @truncate(index >> 8), @truncate(index >> 16), @truncate(index >> 24) });
+        hasher.update(&representation.bytes);
         hasher.update(&try digests.get(layout_idx));
-        const slot: u32 = @intFromEnum(id);
-        hasher.update(&[_]u8{ @truncate(slot), @truncate(slot >> 8), @truncate(slot >> 16), @truncate(slot >> 24) });
         return .{ .bytes = hasher.finalResult() };
+    }
+
+    /// The content identity of the specialization a callable variant targets.
+    fn callableTargetIdentity(context: *anyopaque, target: Type.FnId) std.mem.Allocator.Error!proc_identity.Identity {
+        const self: *Lowerer = @ptrCast(@alignCast(context));
+        return (try self.specIdentity(self.fn_specs.items[@intFromEnum(target)])).bytes;
     }
 
     fn lowerStaticDataCandidateInto(
@@ -4953,6 +5094,14 @@ const Lowerer = struct {
                 } }, where.source());
                 break :blk try self.lowerExprInto(where, message, expect_err.msg, expect_err_stmt);
             },
+            .literal_rejected => |rejected| blk: {
+                const message = try self.addTemp(try self.lowerExprTy(rejected.msg));
+                const crash_stmt = try self.result.store.addCFStmt(.{ .crash = .{
+                    .msg = .{ .local = message },
+                    .literal_rejection = rejected.site,
+                } }, where.source());
+                break :blk try self.lowerExprInto(where, message, rejected.msg, crash_stmt);
+            },
             .expect => |child| if (self.inline_expects == .omit)
                 try self.assignZst(where, target, next)
             else
@@ -5044,6 +5193,7 @@ const Lowerer = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => try self.lowerExprInto(where, target, expr_id, next),
         };
@@ -11720,6 +11870,7 @@ const Lowerer = struct {
         }
         if (try self.knownLayoutForEquivalentNamedType(ty)) |existing| {
             try self.rememberLayoutForType(ty, existing.layout_idx);
+            if (self.type_layout_digests.get(existing.ty)) |digest| try self.type_layout_digests.put(ty, digest);
             try self.layout_owner_types.put(ty, existing.ty);
             return existing.layout_idx;
         }
@@ -11762,6 +11913,13 @@ const Lowerer = struct {
             const mapped_node = local_nodes.get(local_ty) orelse
                 Common.invariant("local layout node key had no mapped node");
             try self.rememberLayoutForType(local_ty, commit.value_layouts[@intFromEnum(mapped_node)]);
+            if (commit.digests[@intFromEnum(mapped_node)]) |digest| {
+                if (self.type_layout_digests.get(local_ty)) |existing| {
+                    if (!std.mem.eql(u8, &existing, &digest)) Common.invariant("type layout digest changed across layout commits");
+                } else {
+                    try self.type_layout_digests.put(local_ty, digest);
+                }
+            }
         }
         return self.knownLayoutForType(ty) orelse commit.value_layouts[@intFromEnum(node)];
     }
@@ -11772,13 +11930,8 @@ const Lowerer = struct {
         local_nodes: *collections.DenseMap(Type.TypeId, layout.GraphNodeId),
 
         fn inputForType(self: *LayoutGraphBuilder, ty: Type.TypeId) Common.LowerError!layout.GraphInput {
-            if (self.lowerer.knownLayoutForType(ty)) |layout_idx| return layout.committedGraphInput(layout_idx);
-            if (try self.lowerer.knownLayoutForEquivalentNamedType(ty)) |layout_idx| {
-                try self.lowerer.rememberLayoutForType(ty, layout_idx.layout_idx);
-                try self.lowerer.layout_owner_types.put(ty, layout_idx.ty);
-                return layout.committedGraphInput(layout_idx.layout_idx);
-            }
             if (self.local_nodes.get(ty)) |node| return layout.localGraphInput(node);
+            if (self.lowerer.padded_backing_nominals.get(ty)) |nominal| return self.inputForType(nominal);
 
             switch (self.lowerer.types.get(ty)) {
                 .primitive => |primitive| return layout.committedGraphInput(Common.primitiveLayout(primitive)),
@@ -11788,6 +11941,21 @@ const Lowerer = struct {
                     if (builtinOwnerLayout(owner)) |layout_idx| return layout.committedGraphInput(layout_idx);
                 },
                 .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_fn => {},
+            }
+
+            // Reuse an already committed child only together with the digest
+            // its node settled to. A store-interned layout ref would be an opaque
+            // leaf to commitGraph's analysis, hiding recursive paths and
+            // changing boxing for an unrolled copy of a committed recursive
+            // node; the committed leaf digests exactly like a re-expansion.
+            // A type committed without a digest resolved to a store-interned
+            // layout ref, which expanding again reproduces directly.
+            if (self.lowerer.knownLayoutForType(ty)) |layout_idx| {
+                if (self.lowerer.type_layout_digests.get(ty)) |digest| {
+                    const node = try self.graph.addCommitted(self.lowerer.allocator, layout_idx, digest);
+                    try self.local_nodes.put(ty, node);
+                    return layout.localGraphInput(node);
+                }
             }
 
             switch (self.lowerer.types.get(ty)) {
@@ -12455,6 +12623,8 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
     errdefer if_branches.deinit(allocator);
     var roots = try clonedLiftedProgramList(Lifted.Root, "roots", allocator, view.roots);
     errdefer roots.deinit(allocator);
+    var literal_roots = try clonedLiftedProgramList(Lifted.LiteralRoot, "literal_roots", allocator, view.literal_roots);
+    errdefer literal_roots.deinit(allocator);
     var layout_requests = try clonedLiftedProgramList(Lifted.LayoutRequest, "layout_requests", allocator, view.layout_requests);
     errdefer layout_requests.deinit(allocator);
     var comptime_value_reads = try clonedLiftedProgramList(Common.ComptimeValueRoot, "comptime_value_reads", allocator, view.comptime_value_reads);
@@ -12517,6 +12687,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .next_lift_capture_id = program.next_lift_capture_id,
         .proc_debug_names = proc_debug_names,
         .roots = roots,
+        .literal_roots = literal_roots,
         .layout_requests = layout_requests,
         .comptime_value_reads = comptime_value_reads,
         .runtime_schema_requests = runtime_schema_requests,
@@ -12924,7 +13095,7 @@ test "frozen solved clone preserves producer IDs and releases partial allocation
     try source.expr_tys.append(allocator, ty);
     try source.pat_tys.append(allocator, ty);
     try source.fn_tys.append(allocator, ty);
-    const root: Common.ComptimeValueRoot = .{ .module = .{}, .root = @enumFromInt(91), .const_locator = null };
+    const root: Common.ComptimeValueRoot = .{ .module = .{}, .root = .{ .checked = @enumFromInt(91) }, .const_locator = null };
     const root_id = try source.lifted.addComptimeValueRoot(root);
     var cloned = try cloneSolvedProgram(allocator, &source);
     defer cloned.deinit();
@@ -12957,10 +13128,10 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
     var source_consumed = false;
     defer if (!source_consumed) solved.deinit();
     const roots = [_]Common.ComptimeValueRoot{
-        .{ .module = .{}, .root = @enumFromInt(91), .const_locator = null },
+        .{ .module = .{}, .root = .{ .checked = @enumFromInt(91) }, .const_locator = null },
         .{
             .module = .{ .bytes = @splat(1) },
-            .root = @enumFromInt(91),
+            .root = .{ .checked = @enumFromInt(91) },
             .const_locator = .{
                 .artifact = .{ .bytes = @splat(1) },
                 .owner = .{ .hoisted_expr = .{ .module_idx = 7, .expr = @enumFromInt(31) } },
@@ -12982,7 +13153,19 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
             .body = .{ .roc = body },
             .ret = bool_ty,
         });
-        try solved.lifted.addRoot(.{ .fn_id = fn_id, .request = undefined, .owner = .first });
+        try solved.lifted.addRoot(.{
+            .fn_id = fn_id,
+            .request = .{
+                .order = @intCast(index),
+                .module_idx = 0,
+                .kind = .dev_expr,
+                .source = undefined, // Neither solving nor lowering reads a root's checked source.
+                .checked_type = undefined, // Neither solving nor lowering reads a root's checked type.
+                .abi = .roc,
+                .exposure = .private,
+            },
+            .owner = .first,
+        });
     }
     solved.lifted.next_symbol = 2;
     const field = try solved.lifted.names.internRecordFieldLabel("field");
@@ -13234,6 +13417,54 @@ test "layout lowering keeps opted-in nominal record declaration order" {
     try std.testing.expectEqual(@as(u32, 4), lowerer.result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
     try std.testing.expectEqual(@as(u32, 0), lowerer.result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
     try std.testing.expectEqual(@as(u32, 8), lowerer.result.layouts.getStructSize(struct_idx));
+}
+
+test "a padded nominal's backing record takes the nominal's layout even when lowered first" {
+    const allocator = std.testing.allocator;
+
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+
+    const module_identity = try solved.lifted.names.internModuleIdentity(&([_]u8{0x7A} ** 32));
+    const padded_name = try solved.lifted.names.internTypeName("Padded");
+    const a_name = try solved.lifted.names.internRecordFieldLabel("a");
+    const z_name = try solved.lifted.names.internRecordFieldLabel("z");
+
+    const u32_ty = try solved.types.add(.{ .primitive = .u32 });
+    const padding_ty = try solved.types.add(.{ .primitive = .u32 });
+    const backing_fields = try solved.types.addFields(&.{
+        .{ .name = a_name, .ty = u32_ty, .default = null },
+        .{ .name = z_name, .ty = u32_ty, .default = null },
+    });
+    const backing = try solved.types.add(.{ .record = backing_fields });
+    const declared_order = try solved.types.addDeclaredFields(&.{
+        .{ .named = z_name },
+        .{ .padding = padding_ty },
+        .{ .named = a_name },
+    });
+    const padded = try solved.types.add(.{
+        .named = .{
+            .named_type = .{ .module = .{}, .ty = undefined },
+            .def = .{ .module = module_identity, .type_name = padded_name },
+            .kind = .nominal,
+            .args = .empty(),
+            .backing = .{ .ty = backing, .use = .inspectable },
+            .declared_order = declared_order,
+        },
+    });
+
+    var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+    defer lowerer.deinit();
+
+    // A record value constructing the nominal reaches lowering before the
+    // nominal itself does; its layout is still the declared one.
+    const backing_layout = try lowerer.layoutOfType(try lowerer.lowerType(backing));
+    const padded_layout = try lowerer.layoutOfType(try lowerer.lowerType(padded));
+    try std.testing.expectEqual(padded_layout, backing_layout);
+    const struct_idx = lowerer.result.layouts.getLayout(padded_layout).getStruct().idx;
+    try std.testing.expectEqual(@as(u32, 12), lowerer.result.layouts.getStructSize(struct_idx));
+    try std.testing.expectEqual(@as(u32, 0), lowerer.result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
+    try std.testing.expectEqual(@as(u32, 8), lowerer.result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
 }
 
 test "sparse local layout nodes commit in type id order" {
@@ -13597,5 +13828,41 @@ test "typed boundaries from empty rows are terminal even with matching layouts" 
         const next = try lowerer.result.store.addCFStmt(.{ .ret = .{ .value = target } }, test_site.scaffold());
         const boundary = try lowerer.assignTypedBoundary(test_site, target, target_ty, source, empty, next);
         try std.testing.expect(lowerer.result.store.getCFStmt(boundary) == .runtime_error);
+    }
+}
+
+test "layout lowering preserves recursive slots across cached children (issue 11693)" {
+    const allocator = std.testing.allocator;
+    for ([_]bool{ false, true }) |unrolled_first| {
+        var solved = emptySolvedProgramForTest(allocator);
+        defer solved.deinit();
+        const first = try solved.lifted.names.internRecordFieldLabel("first");
+        const second = try solved.lifted.names.internRecordFieldLabel("second");
+        const end = try solved.lifted.names.internTagLabel("End");
+        const more = try solved.lifted.names.internTagLabel("More");
+        var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+        defer lowerer.deinit();
+
+        const record = try lowerer.types.add(.zst);
+        const tags = try lowerer.types.addTags(&.{
+            .{ .name = end, .checked_name = end, .payloads = .empty() },
+            .{ .name = more, .checked_name = more, .payloads = try lowerer.types.addSpan(&.{record}) },
+        });
+        const union_ty = try lowerer.types.add(.{ .tag_union = tags });
+        const fields = try lowerer.types.addFields(&.{
+            .{ .name = first, .ty = union_ty, .default = null },
+            .{ .name = second, .ty = union_ty, .default = null },
+        });
+        lowerer.types.set(record, .{ .record = fields });
+        const unrolled = try lowerer.types.add(.{ .record = fields });
+
+        const first_layout = try lowerer.layoutOfType(if (unrolled_first) unrolled else record);
+        const second_layout = try lowerer.layoutOfType(if (unrolled_first) record else unrolled);
+        try std.testing.expectEqual(first_layout, second_layout);
+        const info = lowerer.result.layouts.getStructInfo(lowerer.result.layouts.getLayout(first_layout));
+        try std.testing.expectEqual(@as(usize, 2), info.fields.len);
+        for (0..info.fields.len) |i| {
+            try std.testing.expectEqual(layout.LayoutTag.box, lowerer.result.layouts.getLayout(info.fields.get(i).layout).tag);
+        }
     }
 }

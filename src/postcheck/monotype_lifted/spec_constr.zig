@@ -1541,6 +1541,7 @@ const Pass = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => blk: {
                 if (std.debug.runtime_safety) {
@@ -1914,6 +1915,7 @@ const Pass = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => {},
         }
@@ -2215,6 +2217,7 @@ const Pass = struct {
             => |child| try self.markArgUsesInExpr(fn_id, child, changed),
             .return_ => |ret| try self.markArgUsesInExpr(fn_id, ret.value, changed),
             .expect_err => |expect_err| try self.markArgUsesInExpr(fn_id, expect_err.msg, changed),
+            .literal_rejected => |rejected| try self.markArgUsesInExpr(fn_id, rejected.msg, changed),
             .comptime_branch_taken => |taken| try self.markArgUsesInExpr(fn_id, taken.body, changed),
             .let_ => |let_| {
                 try self.markArgUsesInExpr(fn_id, let_.value, changed);
@@ -2414,6 +2417,7 @@ const Pass = struct {
             => |child| try self.collectCallPatternsInExpr(owner, child),
             .return_ => |ret| try self.collectCallPatternsInExpr(owner, ret.value),
             .expect_err => |expect_err| try self.collectCallPatternsInExpr(owner, expect_err.msg),
+            .literal_rejected => |rejected| try self.collectCallPatternsInExpr(owner, rejected.msg),
             .comptime_branch_taken => |taken| try self.collectCallPatternsInExpr(owner, taken.body),
             .let_ => |let_| {
                 try self.collectCallPatternsInExpr(owner, let_.value);
@@ -3362,6 +3366,7 @@ const Pass = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => .disproven,
         };
@@ -3904,6 +3909,7 @@ const Pass = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => return try self.cloneExprFresh(expr_id, renames),
         }
@@ -4083,6 +4089,7 @@ const Pass = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => return null,
         };
@@ -4380,6 +4387,7 @@ const Pass = struct {
             => |child| try self.rewriteCallsInExpr(child, done),
             .return_ => |ret| try self.rewriteCallsInExpr(ret.value, done),
             .expect_err => |expect_err| try self.rewriteCallsInExpr(expect_err.msg, done),
+            .literal_rejected => |rejected| try self.rewriteCallsInExpr(rejected.msg, done),
             .comptime_branch_taken => |taken| try self.rewriteCallsInExpr(taken.body, done),
             .let_ => |let_| {
                 try self.rewriteCallsInExpr(let_.value, done);
@@ -4787,6 +4795,7 @@ const Pass = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => null,
         };
@@ -5512,6 +5521,7 @@ const Cloner = struct {
             => |child| try self.collectCallPatternsInExpr(owner, child),
             .return_ => |ret| try self.collectCallPatternsInExpr(owner, ret.value),
             .expect_err => |expect_err| try self.collectCallPatternsInExpr(owner, expect_err.msg),
+            .literal_rejected => |rejected| try self.collectCallPatternsInExpr(owner, rejected.msg),
             .comptime_branch_taken => |taken| try self.collectCallPatternsInExpr(owner, taken.body),
             .let_ => |let_| try self.collectCallPatternsInLet(owner, let_.bind, let_.value, let_.rest, false),
             .lambda,
@@ -6232,6 +6242,7 @@ const Cloner = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => return .{ .expr = try self.cloneExprPlain(expr_id) },
         }
@@ -6338,6 +6349,7 @@ const Cloner = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => try self.cloneExprValueInto(expr_id, bindings),
         };
@@ -6441,6 +6453,7 @@ const Cloner = struct {
             .crash,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => false,
         };
@@ -6573,6 +6586,7 @@ const Cloner = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => false,
         };
@@ -6692,6 +6706,7 @@ const Cloner = struct {
                 .comptime_branch_taken,
                 .dbg,
                 .expect_err,
+                .literal_rejected,
                 .expect,
                 => {},
             }
@@ -6860,6 +6875,10 @@ const Cloner = struct {
                 .region = expect_err.region,
             } },
             .expect => |child| .{ .expect = try self.cloneExpr(child) },
+            .literal_rejected => |rejected| .{ .literal_rejected = .{
+                .msg = try self.cloneExpr(rejected.msg),
+                .site = rejected.site,
+            } },
         };
         if (plainExprCanReuse(expr.data) and
             std.meta.eql(expr.data, data) and
@@ -6965,6 +6984,7 @@ const Cloner = struct {
             .comptime_branch_taken,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => true,
             .@"unreachable",
@@ -7561,6 +7581,7 @@ const Cloner = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             .typed_boundary,
             => unreachable,
@@ -7708,6 +7729,7 @@ const Cloner = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             .typed_boundary,
             => unreachable,
@@ -7957,6 +7979,7 @@ const Cloner = struct {
                     .comptime_exhaustiveness_failed,
                     .dbg,
                     .expect_err,
+                    .literal_rejected,
                     .expect,
                     => {},
                 }
@@ -8041,6 +8064,7 @@ const Cloner = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => {
                 const branch = try self.cloneExprValue(branch_body);
@@ -8126,6 +8150,7 @@ const Cloner = struct {
             .comptime_branch_taken,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => null,
         };
@@ -9382,23 +9407,23 @@ const Cloner = struct {
         branches_span: Ast.Span(Ast.Branch),
         bindings: *BindingChain,
     ) Common.LowerError!?Value {
-        return self.selectKnownMatchValue(scrutinee, branches_span, false, bindings);
+        return self.selectKnownMatchValue(scrutinee, branches_span, bindings);
     }
 
     /// Collapse a match whose scrutinee is a known constructor to the selected
-    /// branch's body. `decline_on_no_match` distinguishes the two callers: the
-    /// direct known-match collapse proves exhaustiveness for a non-empty branch
-    /// set, so a miss there is an invariant; case-of-case distribution instead
-    /// *offers* a value that a branch may not structurally cover (an opaque tag
-    /// payload the selection cannot verify), so it declines and leaves the
-    /// match materialized. An empty branch set is absurd elimination. A symbolic
+    /// branch's body. A value no branch matches leaves the match
+    /// materialized: case-of-case distribution *offers* a value a branch may
+    /// not structurally cover (an opaque tag payload the selection cannot
+    /// verify), and a match checking could not prove exhaustive has no branch
+    /// for some constructors, so the match's own failure path (its
+    /// compile-time site's exhaustiveness failure, or a runtime error) is
+    /// what that value reaches. An empty branch set is absurd elimination. A symbolic
     /// structural value does not prove reachability because an eager child may
     /// itself be an impossible expression, so that match must also remain.
     fn selectKnownMatchValue(
         self: *Cloner,
         scrutinee: Value,
         branches_span: Ast.Span(Ast.Branch),
-        decline_on_no_match: bool,
         bindings: *BindingChain,
     ) Common.LowerError!?Value {
         if (scrutinee == .expr) return null;
@@ -9429,8 +9454,7 @@ const Cloner = struct {
             self.subst.restore(change_start);
             return body;
         }
-        if (decline_on_no_match) return null;
-        Common.invariant("known constructor match had no matching branch");
+        return null;
     }
 
     fn bindPatToMatchValue(
@@ -9843,6 +9867,7 @@ const Cloner = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => null,
         };
@@ -10100,6 +10125,7 @@ const Cloner = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => return null,
         };
@@ -10227,6 +10253,7 @@ const Cloner = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             .typed_boundary,
             => unreachable,
@@ -10304,7 +10331,7 @@ const Cloner = struct {
         outer_branches_span: Ast.Span(Ast.Branch),
         bindings: *BindingChain,
     ) Common.LowerError!?Value {
-        if (try self.selectKnownMatchValue(inner_value, outer_branches_span, true, bindings)) |value| return value;
+        if (try self.selectKnownMatchValue(inner_value, outer_branches_span, bindings)) |value| return value;
         return switch (inner_value) {
             .expr => |expr| try self.cloneCaseOfCaseValue(ty, expr, outer_branches_span),
             .runtime_anchor, .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => null,
@@ -12332,6 +12359,7 @@ const BodyLocalScope = struct {
             => |child| try self.walkExpr(child),
             .return_ => |ret| try self.walkExpr(ret.value),
             .expect_err => |expect_err| try self.walkExpr(expect_err.msg),
+            .literal_rejected => |rejected| try self.walkExpr(rejected.msg),
             .comptime_branch_taken => |taken| try self.walkExpr(taken.body),
             .let_ => |let_| {
                 try self.walkExpr(let_.value);
@@ -12570,6 +12598,7 @@ const BodySizeCounter = struct {
             => |child| self.countExpr(child),
             .return_ => |ret| self.countExpr(ret.value),
             .expect_err => |expect_err| self.countExpr(expect_err.msg),
+            .literal_rejected => |rejected| self.countExpr(rejected.msg),
             .comptime_branch_taken => |taken| self.countExpr(taken.body),
             .let_ => |let_| {
                 self.countExpr(let_.value);
@@ -12769,6 +12798,7 @@ fn collectAllFnUsesInExpr(
         => |child| collectAllFnUsesInExpr(program, child, owner, uses),
         .return_ => |ret| collectAllFnUsesInExpr(program, ret.value, owner, uses),
         .expect_err => |expect_err| collectAllFnUsesInExpr(program, expect_err.msg, owner, uses),
+        .literal_rejected => |rejected| collectAllFnUsesInExpr(program, rejected.msg, owner, uses),
         .comptime_branch_taken => |taken| collectAllFnUsesInExpr(program, taken.body, owner, uses),
         .let_ => |let_| {
             collectAllFnUsesInExpr(program, let_.value, owner, uses);
@@ -13012,6 +13042,7 @@ fn tailSelfCallSummary(program: *const Ast.Program, expr_id: Ast.ExprId, target:
         .comptime_exhaustiveness_failed,
         .dbg,
         .expect_err,
+        .literal_rejected,
         .expect,
         => if (exprCallsFn(program, expr_id, target)) .{ .valid = false } else .{},
     };
@@ -13049,6 +13080,7 @@ fn exprContainsIteratorProducer(program: *const Ast.Program, expr_id: Ast.ExprId
         .nominal, .dbg, .expect => |child| exprContainsIteratorProducer(program, child),
         .return_ => |ret| exprContainsIteratorProducer(program, ret.value),
         .expect_err => |expect_err| exprContainsIteratorProducer(program, expect_err.msg),
+        .literal_rejected => |rejected| exprContainsIteratorProducer(program, rejected.msg),
         .comptime_branch_taken => |taken| exprContainsIteratorProducer(program, taken.body),
         .let_ => |let_| exprContainsIteratorProducer(program, let_.value) or
             exprContainsIteratorProducer(program, let_.rest),
@@ -13165,6 +13197,7 @@ fn exprCallsFn(program: *const Ast.Program, expr_id: Ast.ExprId, fn_id: Ast.FnId
         .nominal, .dbg, .expect => |child| exprCallsFn(program, child, fn_id),
         .return_ => |ret| exprCallsFn(program, ret.value, fn_id),
         .expect_err => |expect_err| exprCallsFn(program, expect_err.msg, fn_id),
+        .literal_rejected => |rejected| exprCallsFn(program, rejected.msg, fn_id),
         .comptime_branch_taken => |taken| exprCallsFn(program, taken.body, fn_id),
         .let_ => |let_| exprCallsFn(program, let_.value, fn_id) or exprCallsFn(program, let_.rest, fn_id),
         .lambda, .def_ref, .fn_def => Common.invariant("pre-lift function expression reached recursive-call scan"),
@@ -13300,6 +13333,7 @@ fn exprContainsReturn(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
         .expect,
         => |child| exprContainsReturn(program, child),
         .expect_err => |expect_err| exprContainsReturn(program, expect_err.msg),
+        .literal_rejected => |rejected| exprContainsReturn(program, rejected.msg),
         .comptime_branch_taken => |taken| exprContainsReturn(program, taken.body),
         .let_ => |let_| exprContainsReturn(program, let_.value) or exprContainsReturn(program, let_.rest),
         .call_value => |call| exprContainsReturn(program, call.callee) or exprSpanContainsReturn(program, call.args),
@@ -13443,6 +13477,7 @@ fn exprReferencesLocal(program: *const Ast.Program, expr_id: Ast.ExprId, local: 
         .expect,
         => |child| exprReferencesLocal(program, child, local),
         .expect_err => |expect_err| exprReferencesLocal(program, expect_err.msg, local),
+        .literal_rejected => |rejected| exprReferencesLocal(program, rejected.msg, local),
         .comptime_branch_taken => |taken| exprReferencesLocal(program, taken.body, local),
         .let_ => |let_| exprReferencesLocal(program, let_.value, local) or exprReferencesLocal(program, let_.rest, local),
         .call_value => |call| exprReferencesLocal(program, call.callee, local) or exprSpanReferencesLocal(program, call.args, local),
@@ -13596,6 +13631,7 @@ fn exprContainsFreeLoopControl(program: *const Ast.Program, expr_id: Ast.ExprId,
         .expect,
         => |child| exprContainsFreeLoopControl(program, child, loop_depth),
         .expect_err => |expect_err| exprContainsFreeLoopControl(program, expect_err.msg, loop_depth),
+        .literal_rejected => |rejected| exprContainsFreeLoopControl(program, rejected.msg, loop_depth),
         .comptime_branch_taken => |taken| exprContainsFreeLoopControl(program, taken.body, loop_depth),
         .let_ => |let_| exprContainsFreeLoopControl(program, let_.value, loop_depth) or exprContainsFreeLoopControl(program, let_.rest, loop_depth),
         .call_value => |call| exprContainsFreeLoopControl(program, call.callee, loop_depth) or exprSpanContainsFreeLoopControl(program, call.args, loop_depth),
@@ -13745,6 +13781,7 @@ fn collectTupleLocalDemandInExpr(
         => |child| collectTupleLocalDemandInExpr(program, local, child, used),
         .return_ => |ret| collectTupleLocalDemandInExpr(program, local, ret.value, used),
         .expect_err => |expect_err| collectTupleLocalDemandInExpr(program, local, expect_err.msg, used),
+        .literal_rejected => |rejected| collectTupleLocalDemandInExpr(program, local, rejected.msg, used),
         .comptime_branch_taken => |taken| collectTupleLocalDemandInExpr(program, local, taken.body, used),
         .let_ => |let_| collectTupleLocalDemandInExpr(program, local, let_.value, used) and
             collectTupleLocalDemandInExpr(program, local, let_.rest, used),
@@ -13926,6 +13963,7 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
         => |child| localUseCountInExpr(program, local, child),
         .return_ => |ret| localUseCountInExpr(program, local, ret.value),
         .expect_err => |expect_err| localUseCountInExpr(program, local, expect_err.msg),
+        .literal_rejected => |rejected| localUseCountInExpr(program, local, rejected.msg),
         .comptime_branch_taken => |taken| localUseCountInExpr(program, local, taken.body),
         .let_ => |let_| localUseCountInExpr(program, local, let_.value) + localUseCountInExpr(program, local, let_.rest),
         .lambda,
@@ -14592,7 +14630,7 @@ test "compile-time root reads remain opaque through specialization and cloning" 
     const initializer = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&.{item}) } });
     const root: Common.ComptimeValueRoot = .{
         .module = .{},
-        .root = @enumFromInt(1),
+        .root = .{ .checked = @enumFromInt(1) },
         .const_locator = .{
             .artifact = .{},
             .owner = .{ .hoisted_expr = .{ .module_idx = 0, .expr = @enumFromInt(1) } },
@@ -16641,7 +16679,7 @@ test "substitution resolves equivalent named types with distinct checked provena
     try std.testing.expectEqual(replacement, program.getExpr(boundary.value).data.local);
 }
 
-test "known match fold aborts on undecidable branches and trips the invariant when every branch is excluded" {
+test "known match fold aborts on undecidable branches and keeps the match when every branch is excluded" {
     const allocator = std.testing.allocator;
     var program = emptyLiftedProgramForTest(allocator);
     defer program.deinit();
@@ -16683,31 +16721,12 @@ test "known match fold aborts on undecidable branches and trips the invariant wh
     });
     try std.testing.expect((try cloner.simplifyKnownMatchValue(foo_value, folding_branches, &bindings)) != null);
 
-    // Every branch a definite no-match violates checker exhaustiveness. In
-    // Debug, the invariant panics; probe that abort from a fork on POSIX.
-    if (comptime @import("builtin").mode == .Debug and @import("builtin").os.tag != .windows) {
-        const excluded_branches = try program.addBranchSpan(&.{
-            .{ .pat = bar_pat, .body = body },
-        });
-        const pid = std.c.fork();
-        try std.testing.expect(pid >= 0);
-        if (pid == 0) {
-            const dev_null = std.c.open("/dev/null", .{ .ACCMODE = .WRONLY });
-            if (dev_null >= 0) {
-                _ = std.c.dup2(dev_null, 2);
-                _ = std.c.close(dev_null);
-            }
-            _ = cloner.simplifyKnownMatchValue(foo_value, excluded_branches, &bindings) catch std.c._exit(2);
-            // Reaching this line means the invariant did not fire.
-            std.c._exit(0);
-        }
-        var status: c_int = 0;
-        _ = std.c.waitpid(pid, &status, 0);
-        const raw_status: u32 = @bitCast(status);
-        const failed = std.posix.W.IFSIGNALED(raw_status) or
-            (std.posix.W.IFEXITED(raw_status) and std.posix.W.EXITSTATUS(raw_status) != 0);
-        try std.testing.expect(failed);
-    }
+    // A value no branch matches leaves the match in place: a match checking
+    // could not prove exhaustive fails through its own failure path.
+    const excluded_branches = try program.addBranchSpan(&.{
+        .{ .pat = bar_pat, .body = body },
+    });
+    try std.testing.expectEqual(@as(?Value, null), try cloner.simplifyKnownMatchValue(foo_value, excluded_branches, &bindings));
 }
 
 test "known match fold preserves absurd elimination of a structural product" {

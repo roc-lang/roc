@@ -86,7 +86,7 @@ pub fn literalSymbolName(allocator: Allocator, bytes: []const u8, alignment: u32
     hasher.update(&alignment_bytes);
     hasher.update(bytes);
     const digest = hasher.finalResult();
-    return std.fmt.allocPrint(allocator, "roc__static_str_{s}", .{&std.fmt.bytesToHex(digest[0..16].*, .lower)});
+    return std.fmt.allocPrint(allocator, lir.Program.content_data_symbol_prefix ++ "{s}", .{&std.fmt.bytesToHex(digest[0..16].*, .lower)});
 }
 
 /// Build readonly data exports from the exact LIR procedure backing demand.

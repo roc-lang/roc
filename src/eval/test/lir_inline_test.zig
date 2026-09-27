@@ -2911,18 +2911,20 @@ test "alias-heavy generic specialization count does not exceed backing types" {
 }
 
 test "nested function specializations keep equal types at different sites distinct" {
+    // Each lambda captures its enclosing function's `n`, so it stays a nested
+    // function of that function.
     const allocator = std.testing.allocator;
     const source =
         \\first : U64 -> U64
         \\first = |n| {
-        \\    id = |x| x
-        \\    id(n)
+        \\    add_n = |x| x + n
+        \\    add_n(n)
         \\}
         \\
         \\second : U64 -> U64
         \\second = |n| {
-        \\    id = |x| x
-        \\    id(n)
+        \\    add_n = |x| x + n
+        \\    add_n(n)
         \\}
         \\
         \\main : { first : U64, second : U64 }
@@ -2950,12 +2952,13 @@ test "nested function specializations keep equal types at different sites distin
 }
 
 test "one nested function site specializes at multiple closed function types" {
+    // The lambda captures `value`, so it stays a nested function of `choose`.
     const allocator = std.testing.allocator;
     const source =
         \\choose : a -> a
         \\choose = |value| {
-        \\    id = |x| x
-        \\    id(value)
+        \\    get = |{}| value
+        \\    get({})
         \\}
         \\
         \\main : { n : U64, s : Str }
@@ -7974,6 +7977,32 @@ test "iterdiff: stream per-element effects agree across inline modes" {
     );
 }
 
+test "iterdiff: Stream.custom advance effects agree across inline modes" {
+    // A custom effectful source runs its advance exactly once per pull, and
+    // `map` effects interleave per element; every lowering must reproduce the
+    // same ordered trace, including the final `NoMore` advance.
+    try expectSameObservationsAcrossInlineModes(
+        \\up_to_three! : I64 => Try((I64, I64), [NoMore])
+        \\up_to_three! = |n| {
+        \\    dbg n
+        \\    if n < 3 { Ok((n, n + 1)) } else { Err(NoMore) }
+        \\}
+        \\
+        \\main : () => List(I64)
+        \\main = || {
+        \\    stream =
+        \\        Stream.custom(0.I64, Unknown, up_to_three!)
+        \\            .map(|n| {
+        \\                dbg n * 2
+        \\                n * 2
+        \\            })
+        \\    result = Stream.collect!(stream)
+        \\    dbg result
+        \\    result
+        \\}
+    );
+}
+
 // Pre-existing divergence: a bounded prefix (`take_first`) of an infinite custom
 // iterator (`Iter.custom`, the Fibonacci unfold below) diverges between the two
 // lowerings, and the seed+step representation does NOT fix it: the divergence is
@@ -8367,6 +8396,103 @@ test "dispatch evidence boundary validator accepts a published artifact" {
     try std.testing.expect(resources.checked_artifact.validateDispatchEvidence() == null);
 }
 
+test "literal conversion ownership includes nested codec evidence" {
+    const allocator = std.testing.allocator;
+    const prefix =
+        \\Fmt := {}.{
+        \\    parse_record_start = |_, s| Ok(Uncounted(s))
+        \\    parse_record_field = |_, _, s| Ok(Done(s))
+        \\    parse_record_after_field = |_, s| Ok(Continue(s))
+        \\    skip_record_field = |_, s| Ok(s)
+        \\}
+        \\
+    ;
+    inline for (.{
+        .{ "from_quote", "Str", "BadQuotedBytes", "\"\"" },
+        .{ "from_numeral", "Numeral", "InvalidNumeral", "0" },
+    }) |conversion| {
+        const source = prefix ++ "\n" ++
+            "Sql(row) := {}.{\n" ++
+            "    " ++ conversion[0] ++ " : " ++ conversion[1] ++ " -> Try(Sql(row), [" ++ conversion[2] ++ "(Str)])\n" ++
+            "        where [row.parser_for : Fmt -> ({} -> Try({ value : row, rest : {} }, _))]\n" ++
+            "    " ++ conversion[0] ++ " = |_| Ok(Sql.({}))\n" ++
+            "}\n" ++
+            "query : Sql(row) -> [Nope, Yes(row)]\n" ++
+            "query = |_| Nope\n" ++
+            "run : {} -> [Nope, Yes({})]\n" ++
+            "run = |_| query(" ++ conversion[3] ++ ")\n" ++
+            "main = run({})\n";
+        var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(
+            allocator,
+            .module,
+            source,
+            &.{},
+            try sharedPrePublishedBuiltin(),
+        );
+        defer helpers.cleanupParseAndCanonical(allocator, resources);
+        const artifact = &resources.checked_artifact;
+        try std.testing.expectEqual(@as(usize, 0), resources.checker.problems.problems.items.len);
+        try std.testing.expect(artifact.validateDispatchEvidence() == null);
+        var dependent_conversions: usize = 0;
+        for (artifact.checked_bodies.stored_exprs.items) |expr| {
+            const plan_id = switch (expr.data) {
+                .numeral => |numeral| numeral.plan orelse continue,
+                .str_from_quote => |quote| quote.plan orelse continue,
+                .pending,
+                .str_segment,
+                .str,
+                .bytes_literal,
+                .lookup_local,
+                .lookup_external,
+                .lookup_required,
+                .list,
+                .empty_list,
+                .tuple,
+                .match_,
+                .if_,
+                .call,
+                .record,
+                .empty_record,
+                .block,
+                .tag,
+                .nominal,
+                .zero_argument_tag,
+                .closure,
+                .lambda,
+                .binop,
+                .unary_minus,
+                .unary_not,
+                .field_access,
+                .dispatch_call,
+                .interpolation,
+                .structural_eq,
+                .structural_hash,
+                .method_eq,
+                .type_dispatch_call,
+                .tuple_access,
+                .runtime_error,
+                .crash,
+                .dbg,
+                .expect_err,
+                .expect,
+                .ellipsis,
+                .anno_only,
+                .break_,
+                .return_,
+                .for_,
+                .hosted_lambda,
+                .run_low_level,
+                => continue,
+            };
+            const plan = artifact.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+            try std.testing.expect(plan.resolution == .direct_parametric);
+            try std.testing.expect(artifact.checked_bodies.literalConversionRoot(expr.id) == null);
+            dependent_conversions += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 1), dependent_conversions);
+    }
+}
+
 test "custom literal field default gets an ordinary conversion root" {
     const allocator = std.testing.allocator;
     const source =
@@ -8404,8 +8530,8 @@ test "custom literal field default gets an ordinary conversion root" {
     var numeral_roots: usize = 0;
     var quote_roots: usize = 0;
     for (resources.checked_artifact.checked_bodies.default_exprs.items) |entry| {
-        const conversion = resources.checked_artifact.compile_time_roots.lookupNumeralRootByExpr(entry.checked_expr) orelse
-            return error.TestUnexpectedResult;
+        const conversion = resources.checked_artifact.compile_time_roots.root(resources.checked_artifact.checked_bodies.literalConversionRoot(entry.checked_expr) orelse
+            return error.TestUnexpectedResult);
         switch (conversion.kind) {
             .numeral_conversion => numeral_roots += 1,
             .quote_conversion => quote_roots += 1,
@@ -8414,6 +8540,67 @@ test "custom literal field default gets an ordinary conversion root" {
     }
     try std.testing.expectEqual(@as(usize, 1), numeral_roots);
     try std.testing.expectEqual(@as(usize, 1), quote_roots);
+
+    // A root link cannot outlive its proof of independence. Pin validation
+    // here as well as checking that both kinds of closed literal retain roots.
+    const artifact = &resources.checked_artifact;
+    try std.testing.expect(artifact.validateDispatchEvidence() == null);
+    const expr_id = artifact.checked_bodies.default_exprs.items[0].checked_expr;
+    const plan_id = switch (artifact.checked_bodies.expr(expr_id).data) {
+        .numeral => |numeral| numeral.plan.?,
+        .str_from_quote => |quote| quote.plan.?,
+        .pending,
+        .str_segment,
+        .str,
+        .bytes_literal,
+        .lookup_local,
+        .lookup_external,
+        .lookup_required,
+        .list,
+        .empty_list,
+        .tuple,
+        .match_,
+        .if_,
+        .call,
+        .record,
+        .empty_record,
+        .block,
+        .tag,
+        .nominal,
+        .zero_argument_tag,
+        .closure,
+        .lambda,
+        .binop,
+        .unary_minus,
+        .unary_not,
+        .field_access,
+        .dispatch_call,
+        .interpolation,
+        .structural_eq,
+        .structural_hash,
+        .method_eq,
+        .type_dispatch_call,
+        .tuple_access,
+        .runtime_error,
+        .crash,
+        .dbg,
+        .expect_err,
+        .expect,
+        .ellipsis,
+        .anno_only,
+        .break_,
+        .return_,
+        .for_,
+        .hosted_lambda,
+        .run_low_level,
+        => unreachable,
+    };
+    const plan = &artifact.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+    const saved = plan.resolution;
+    defer plan.resolution = saved;
+    plan.resolution = .{ .direct_parametric = saved.direct_closed };
+    const failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.literal_conversion_root_invalid, failure.kind);
 }
 
 test "dispatch evidence boundary validator rejects malformed specialization interface metadata" {

@@ -124,5 +124,5 @@ test "row union - a repeated tag with a different payload count is rejected" {
     ;
     var env = try TestEnv.init("Test", source);
     defer env.deinit();
-    try env.assertHasTypeError("Type Mismatch");
+    try env.assertHasTypeError("Conflicting Tag");
 }

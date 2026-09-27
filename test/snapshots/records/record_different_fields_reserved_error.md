@@ -30,6 +30,7 @@ UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:6:5:6:8
 UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:6:19:6:20
 UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:7:5:7:7
 UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:7:19:7:20
+MISSING METHOD - record_different_fields_reserved_error.md:2:9:2:22
 DECLARATION HAS NO VALUE - record_different_fields_reserved_error.md:3:5:3:12
 MISSING METHOD - record_different_fields_reserved_error.md:4:13:4:29
 MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:23
@@ -415,6 +416,30 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:23
 			(line-break)
 			(source-region (file "record_different_fields_reserved_error.md") (start 7 19) (end 7 20) (annotation error) (line-text "    or: Bool.false,"))))
 	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 2 9) (end 2 22))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "from_quote")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "record_different_fields_reserved_error.md") (start 2 9) (end 2 22) (annotation error) (line-text "    if: \"conditional\","))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "from_quote")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{}")
+			(annotation-end)))
+	(report
 		(severity warning)
 		(title "Declaration Has No Value")
 		(region (start 3 5) (end 3 12))
@@ -539,41 +564,47 @@ EndOfFile,
 ~~~clojure
 (e-block
 	(s-expr
-		(e-runtime-error (tag "if_condition_not_canonicalized")))
+		(e-if
+			(if-branches
+				(if-branch
+					(e-runtime-error (tag "expr_syntax_error"))
+					(e-runtime-error (tag "erroneous_value_expr"))))
+			(if-else
+				(e-empty_record))))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-let
 		(p-assign (ident "when"))
 		(e-anno-only))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expect
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expr
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expr
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr
-		(e-runtime-error (tag "nested_value_not_found")))
-	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expr
 		(e-runtime-error (tag "nested_value_not_found")))
-	(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-expr
+		(e-runtime-error (tag "expr_syntax_error")))
+	(s-expr
+		(e-runtime-error (tag "expr_syntax_error")))
+	(s-expr
+		(e-runtime-error (tag "nested_value_not_found")))
+	(e-runtime-error (tag "expr_syntax_error")))
 ~~~
 # TYPES
 ~~~clojure

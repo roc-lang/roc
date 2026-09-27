@@ -130,6 +130,8 @@ pub const TargetConfig = struct {
     checked_module_state: CheckedModuleState = .complete,
     /// The compilation session supplies evaluated root slots for these reads.
     comptime_value_reads: bool = false,
+    /// The compilation session evaluates the program's literal roots.
+    literal_roots: bool = false,
     inline_mode: InlineMode = .none,
     /// Direct-call inlining scope for SpecConstr's value-aware clones.
     /// Optimized builds use `.all_calls`; dev builds use `.iterator_fusion`
@@ -893,6 +895,64 @@ pub const Observers = struct {
     }
 };
 
+/// Serves closed specializations from the object cache.
+pub const SpecCacheLookup = postcheck.Common.SpecCacheLookup;
+
+/// The settings a program's Solved stage is prepared under: the inlining
+/// and SpecConstr decisions made before any consumer lowers LIR. Consumers
+/// share one Solved program only when they share these.
+pub const SolvedPolicy = struct {
+    inline_mode: InlineMode,
+    spec_constr_clone_inlining: SpecConstrCloneInlining,
+    keep_specialization_procs: bool,
+
+    pub fn fromTarget(target: TargetConfig) SolvedPolicy {
+        var policy: SolvedPolicy = undefined;
+        inline for (@typeInfo(SolvedPolicy).@"struct".fields) |field| {
+            @field(policy, field.name) = @field(target, field.name);
+        }
+        return policy;
+    }
+
+    pub fn applyTo(self: SolvedPolicy, target: *TargetConfig) void {
+        inline for (@typeInfo(SolvedPolicy).@"struct".fields) |field| {
+            @field(target, field.name) = @field(self, field.name);
+        }
+    }
+};
+
+/// The settings one consumer's LIR generation, procedure passes and ARC run
+/// under. A consumer continuing a shared Solved program brings its own.
+pub const LirPolicy = struct {
+    consume_dead_boxes: bool,
+    list_in_place_map: bool,
+    proc_debug_names: bool,
+    spec_cache: ?postcheck.Common.SpecCacheLookup,
+    comptime_closure_hits: bool,
+    keep_specialization_procs: bool,
+    promote_loop_appends: bool,
+    fuse_tag_cases: bool,
+    scalarize_joins: bool,
+    reuse_boxes: bool,
+    layout_request_const_plans: bool,
+    tag_reachability: bool,
+    prove_ranges: bool,
+
+    pub fn fromTarget(target: TargetConfig) LirPolicy {
+        var policy: LirPolicy = undefined;
+        inline for (@typeInfo(LirPolicy).@"struct".fields) |field| {
+            @field(policy, field.name) = @field(target, field.name);
+        }
+        return policy;
+    }
+
+    fn applyTo(self: LirPolicy, target: *TargetConfig) void {
+        inline for (@typeInfo(LirPolicy).@"struct".fields) |field| {
+            @field(target, field.name) = @field(self, field.name);
+        }
+    }
+};
+
 /// One consumer continuation of a prepared solved program. Everything not
 /// named here is the producer's captured decision and cannot be changed by a
 /// consumer: preparation already lowered specializations under it.
@@ -910,16 +970,17 @@ pub const Consumer = struct {
     /// identities can resolve against its complete representation tables.
     frozen_materializer: ?FrozenMaterializer = null,
     observers: Observers = .{},
+    /// This consumer's own LIR-stage settings, when they differ from the
+    /// ones the shared program was prepared under.
+    lir_policy: ?LirPolicy = null,
 };
 
-/// Materializes completed values into a program's frozen static data and
-/// applies evaluation outcomes to the guards inserted around them.
+/// Materializes completed values into a program's frozen static data. Guard
+/// insertion reads each value's outcome from that image, so only reads of a
+/// failed value are guarded.
 pub const FrozenMaterializer = struct {
     context: *anyopaque,
     materialize: *const fn (Allocator, *anyopaque, *LirProgram.Result) Allocator.Error!LirProgram.FrozenStaticData,
-    /// Apply evaluation outcomes after guard insertion. Successful values
-    /// bypass their guards; failed values retain the emitted failure path.
-    complete_guards: *const fn (*anyopaque, *LirProgram.Result) Allocator.Error!void,
 };
 
 /// Materialized Lambda Mono program type, re-exported for harnesses that
@@ -1000,6 +1061,7 @@ pub fn retainRuntimeRoots(lowered: *LoweredProgram, root_indices: []const u32) A
     procs = .empty;
     metadata = .empty;
     result.const_roots.clearRetainingCapacity();
+    result.literal_roots.clearRetainingCapacity();
     try completeComptimeValueSlots(lowered);
 }
 
@@ -1010,7 +1072,7 @@ pub fn retainRuntimeRoots(lowered: *LoweredProgram, root_indices: []const u32) A
 /// reaches each compile-time value through a slot the evaluation has since
 /// filled, and its own roots are the program's roots already.
 pub fn adoptCompletedComptimeValues(lowered: *LoweredProgram) Allocator.Error!void {
-    if (lowered.lir_result.const_roots.items.len != 0) checkedPipelineInvariant("runtime consumer lowered a compile-time root");
+    if (lowered.lir_result.const_roots.items.len != 0 or lowered.lir_result.literal_roots.items.len != 0) checkedPipelineInvariant("runtime consumer lowered a compile-time root");
     if (lowered.frozen_static_data == null) checkedPipelineInvariant("runtime consumer has no completed compile-time values to adopt");
     try completeComptimeValueSlots(lowered);
 }
@@ -1020,7 +1082,7 @@ pub fn adoptCompletedComptimeValues(lowered: *LoweredProgram) Allocator.Error!vo
 /// rerunning compaction here would repeat work after ARC and cannot discover
 /// any new procedure edge.
 pub fn adoptReachableCompletedComptimeValues(lowered: *LoweredProgram) Allocator.Error!void {
-    if (lowered.lir_result.const_roots.items.len != 0) checkedPipelineInvariant("runtime consumer lowered a compile-time root");
+    if (lowered.lir_result.const_roots.items.len != 0 or lowered.lir_result.literal_roots.items.len != 0) checkedPipelineInvariant("runtime consumer lowered a compile-time root");
     if (lowered.frozen_static_data == null) checkedPipelineInvariant("runtime consumer has no completed compile-time values to adopt");
     const result = &lowered.lir_result;
     result.comptime_value_guards.clearRetainingCapacity();
@@ -1247,6 +1309,7 @@ pub fn prepareCheckedModulesMonotype(
                 .post_check_executor = target.post_check_executor,
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
+                .literal_roots = target.literal_roots,
                 .target_usize = target.target_usize,
                 .inline_expects = if (target.comptime_value_reads) .shared else switch (target.inline_expects) {
                     .run => .run,
@@ -1388,6 +1451,11 @@ pub const PreparedSolved = struct {
         return self.program.lifted.comptimeValueReadsView();
     }
 
+    /// How many literal roots the producer registered.
+    pub fn literalRootCount(self: *const PreparedSolved) usize {
+        return self.program.lifted.literalRootsView().len;
+    }
+
     /// Release the retained solved program and its owned continuation metadata.
     pub fn deinit(self: *PreparedSolved) void {
         self.program.deinit();
@@ -1431,7 +1499,7 @@ pub fn lowerConsumerToLir(prepared: *PreparedSolved, consumer: Consumer) LowerRe
     else
         null;
     errdefer if (frozen) |*data| data.deinit();
-    return finishLoweredOutput(prepared.allocator, consumerRootCount(prepared.*, consumer), generated.target, &generated.output, &frozen, consumer.frozen_materializer);
+    return finishLoweredOutput(prepared.allocator, consumerRootCount(prepared.*, consumer), generated.target, &generated.output, &frozen);
 }
 
 /// Lower the producer program's last consumer, and release the producer as
@@ -1457,7 +1525,7 @@ pub fn lowerFinalConsumerToLir(prepared: PreparedSolved, consumer: Consumer) Low
     errdefer if (frozen) |*data| data.deinit();
     owned_live = false;
     owned.deinit();
-    return finishLoweredOutput(allocator, root_count, target, &generated.output, &frozen, consumer.frozen_materializer);
+    return finishLoweredOutput(allocator, root_count, target, &generated.output, &frozen);
 }
 
 /// How many roots this consumer lowers: its own share, or the producer's
@@ -1480,6 +1548,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
     target.inline_expects = consumer.inline_expects;
     target.completed_scalar_values = consumer.completed_scalar_values;
     consumer.observers.applyTo(&target);
+    if (consumer.lir_policy) |policy| policy.applyTo(&target);
     if (!prepared.target.comptime_value_reads and consumer.inline_expects != prepared.target.inline_expects) {
         checkedPipelineInvariant("changing expect mode requires shared Monotype lowering");
     }
@@ -1560,7 +1629,6 @@ fn finishLoweredOutput(
     target: TargetConfig,
     lowered: anytype,
     frozen: *?LirProgram.FrozenStaticData,
-    frozen_materializer: ?FrozenMaterializer,
 ) LowerResourceError!LoweredProgram {
     verifyArithmeticBoundary(&lowered.lir_result.store, false);
     var lir_passes_timing_scope = PipelineTimingScope.begin(target.timing, .lir_passes);
@@ -1657,10 +1725,7 @@ fn finishLoweredOutput(
     // is the placement ARC produced.
     _ = try ImmortalLocals.elide(allocator, &lowered.lir_result.store);
 
-    try @import("comptime_value_guards.zig").insert(allocator, &lowered.lir_result);
-    if (frozen_materializer) |materializer| {
-        try materializer.complete_guards(materializer.context, &lowered.lir_result);
-    }
+    try @import("comptime_value_guards.zig").insert(allocator, &lowered.lir_result, if (frozen.*) |*data| data else null);
 
     try LirDump.run(&lowered.lir_result);
     if (SpecCensus.enabled()) try SpecCensus.runLir(allocator, &lowered.lir_result);
@@ -1732,7 +1797,7 @@ fn lowerBoxyCheckedModulesToLir(
     boxy_lower_timing_scope.end();
 
     var frozen: ?LirProgram.FrozenStaticData = null;
-    return finishLoweredOutput(allocator, roots.requests.len, target, &lowered, &frozen, null);
+    return finishLoweredOutput(allocator, roots.requests.len, target, &lowered, &frozen);
 }
 
 fn verifyArithmeticBoundary(store: *const core.LirStore, before_prover: bool) void {
@@ -1775,7 +1840,8 @@ fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Alloca
 /// A platform module publishes its bindings when its checked artifact is
 /// published, so a module still being checked has none to bind against and
 /// this reads nothing into their absence.
-fn requireHostedProceduresBound(
+/// A complete program binds every hosted procedure its modules declare.
+pub fn requireHostedProceduresBound(
     modules: CheckedModuleSet,
     target: TargetConfig,
 ) HostedBindingError!void {

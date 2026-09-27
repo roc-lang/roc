@@ -1177,4 +1177,236 @@ pub const tests = [_]TestCase{
         .returned,
         0,
     ),
+    moduleTestWithLiveAllocations(
+        "Stream.custom: construction is lazy and runs no advance",
+        \\counter! : U64 => Try((U64, U64), [NoMore])
+        \\counter! = |n| {
+        \\    dbg n
+        \\    Ok((n, n + 1))
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    _stream = Stream.custom(0, Unknown, counter!)
+        \\    dbg "built"
+        \\    {}
+        \\}
+    ,
+        &.{dbg("\"built\"")},
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream.custom: each pull advances exactly once from the updated state",
+        \\counter! : U64 => Try((U64, U64), [NoMore])
+        \\counter! = |n| {
+        \\    dbg n
+        \\    Ok((n * 10, n + 1))
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    stream = Stream.custom(1, Unknown, counter!)
+        \\    first = match Stream.next!(stream) {
+        \\        One({ item, rest }) => {
+        \\            dbg "pulled"
+        \\            match Stream.next!(rest) {
+        \\                One(second) => [item, second.item]
+        \\                _ => []
+        \\            }
+        \\        }
+        \\        _ => []
+        \\    }
+        \\    expect first == [10, 20]
+        \\    {}
+        \\}
+    ,
+        &.{ dbg("1"), dbg("\"pulled\""), dbg("2") },
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream.custom: empty source terminates after one advance",
+        \\none! : U64 => Try((U64, U64), [NoMore])
+        \\none! = |n| {
+        \\    dbg n
+        \\    Err(NoMore)
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    items = Stream.collect!(Stream.custom(7, Unknown, none!))
+        \\    expect items == []
+        \\    {}
+        \\}
+    ,
+        &.{dbg("7")},
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream.custom: finite source with known length collects every item then terminates",
+        \\up_to_three! : U64 => Try((U64, U64), [NoMore])
+        \\up_to_three! = |n| {
+        \\    dbg n
+        \\    if n < 3 { Ok((n, n + 1)) } else { Err(NoMore) }
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    stream = Stream.custom(0, Known(3), up_to_three!)
+        \\    expect Stream.size_hint(stream) == Known(3)
+        \\    items = Stream.collect!(stream)
+        \\    expect items == [0, 1, 2]
+        \\    {}
+        \\}
+    ,
+        &.{ dbg("0"), dbg("1"), dbg("2"), dbg("3") },
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream.custom: an undercounted Known hint degrades to Unknown and still collects every item",
+        \\count! : U64 => Try((U64, U64), [NoMore])
+        \\count! = |n| if n < 4 { Ok((n, n + 1)) } else { Err(NoMore) }
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    stream = Stream.custom(0, Known(1), count!)
+        \\    match Stream.next!(stream) {
+        \\        One({ rest, .. }) => {
+        \\            expect Stream.size_hint(rest) == Known(0)
+        \\            match Stream.next!(rest) {
+        \\                One({ rest: after, .. }) => {
+        \\                    expect Stream.size_hint(after) == Unknown
+        \\                }
+        \\                _ => {
+        \\                    crash "expected a second item"
+        \\                }
+        \\            }
+        \\        }
+        \\        _ => {
+        \\            crash "expected an item"
+        \\        }
+        \\    }
+        \\    expect Stream.collect!(Stream.custom(0, Known(0), count!)) == [0, 1, 2, 3]
+        \\    expect Stream.collect!(Stream.custom(0, Known(2), count!)) == [0, 1, 2, 3]
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream.custom: size hint counts down per pull and Unknown stays Unknown",
+        \\count! : U64 => Try((U64, U64), [NoMore])
+        \\count! = |n| if n < 3 { Ok((n, n + 1)) } else { Err(NoMore) }
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    known = Stream.custom(0, Known(3), count!)
+        \\    match Stream.next!(known) {
+        \\        One({ rest, .. }) => {
+        \\            expect Stream.size_hint(rest) == Known(2)
+        \\        }
+        \\        _ => {
+        \\            crash "expected an item"
+        \\        }
+        \\    }
+        \\    unknown = Stream.custom(0, Unknown, count!)
+        \\    match Stream.next!(unknown) {
+        \\        One({ rest, .. }) => {
+        \\            expect Stream.size_hint(rest) == Unknown
+        \\        }
+        \\        _ => {
+        \\            crash "expected an item"
+        \\        }
+        \\    }
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream.custom: map composes lazily in per-element pull order",
+        \\up_to_two! : U64 => Try((U64, U64), [NoMore])
+        \\up_to_two! = |n| {
+        \\    dbg n
+        \\    if n < 2 { Ok((n, n + 1)) } else { Err(NoMore) }
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    mapped = Stream.custom(0, Unknown, up_to_two!).map(|x| {
+        \\        dbg x * 10
+        \\        x * 10
+        \\    })
+        \\    dbg "mapped"
+        \\    items = Stream.collect!(mapped)
+        \\    expect items == [0, 10]
+        \\    {}
+        \\}
+    ,
+        &.{ dbg("\"mapped\""), dbg("0"), dbg("0"), dbg("1"), dbg("10"), dbg("2") },
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream.custom: early termination of an infinite source stops advancing and releases state",
+        \\forever! : Str => Try((Str, Str), [NoMore])
+        \\forever! = |s| {
+        \\    dbg Str.count_utf8_bytes(s)
+        \\    Ok((s, Str.concat(s, "!")))
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    stream = Stream.custom("a heap string definitely long enough to allocate outside small-string storage", Unknown, forever!)
+        \\    match Stream.next!(stream) {
+        \\        One({ rest, .. }) => {
+        \\            match Stream.next!(rest) {
+        \\                One(_) => {}
+        \\                _ => {
+        \\                    crash "expected a second item"
+        \\                }
+        \\            }
+        \\        }
+        \\        _ => {
+        \\            crash "expected an item"
+        \\        }
+        \\    }
+        \\    {}
+        \\}
+    ,
+        &.{ dbg("77"), dbg("78") },
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream.custom: error item with terminal state drops the resource",
+        \\Source : [Open(Str), Finished]
+        \\
+        \\read! : Source => Try((Try(U64, [ReadErr(Str)]), Source), [NoMore])
+        \\read! = |source| match source {
+        \\    Open(handle) => {
+        \\        dbg "read"
+        \\        Ok((Err(ReadErr(handle)), Finished))
+        \\    }
+        \\    Finished => Err(NoMore)
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    items = Stream.collect!(Stream.custom(Open("a heap handle definitely long enough to allocate outside small-string storage"), Unknown, read!))
+        \\    expect List.len(items) == 1
+        \\    {}
+        \\}
+    ,
+        &.{dbg("\"read\"")},
+        .returned,
+        0,
+    ),
 };

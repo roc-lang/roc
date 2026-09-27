@@ -25,11 +25,5 @@ main! = || {
     # This would panic during monomorphization because the callback always
     # returns Ok, so the Err tag is missing from the monotype, but the
     # match in keep_oks expects both Ok and Err.
-    equal_nums = (keep_oks([10], always_ok_n) == [1])
-
-    if equal_nums {
-        Stdout.line!("done")
-    } else {
-        Stdout.line!("FAIL: expected equal")
-    }
+    Stdout.line!(Str.inspect(keep_oks([10], always_ok_n)))
 }

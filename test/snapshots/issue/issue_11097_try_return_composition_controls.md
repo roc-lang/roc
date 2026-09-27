@@ -614,7 +614,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-dispatch-call (method "map_err") (constraint-fn-var 1032)
+								(e-dispatch-call (method "map_err") (constraint-fn-var 1033)
 									(receiver
 										(e-call (constraint-fn-var 1030)
 											(e-lookup-local
@@ -665,7 +665,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 1119)
+								(e-call (constraint-fn-var 1120)
 									(e-lookup-local
 										(p-assign (ident "save")))
 									(e-string
@@ -697,7 +697,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 1163)
+								(e-call (constraint-fn-var 1164)
 									(e-lookup-local
 										(p-assign (ident "save")))
 									(e-string

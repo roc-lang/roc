@@ -96,6 +96,9 @@ failed_region: ?base.Region = null,
 failed_loc: ?base.SourceLoc = null,
 /// Published producer origins, indexed by the emitted LIR statement.
 failure_origins: []const ?lir.LIR.ComptimeFailureOrigin = &.{},
+/// The LIR statement whose failure-region hook ran last: the failing
+/// statement once the run fails.
+failed_stmt: ?lir.LIR.CFStmtId = null,
 slot_demand: ?SlotDemand = null,
 operational_error: ?FinalizeError = null,
 timing_io: ?std.Io = null,
@@ -143,6 +146,7 @@ pub fn resetForRun(self: *CompileTimeHost) void {
     self.comptime_failed_site = null;
     self.failed_region = null;
     self.failed_loc = null;
+    self.failed_stmt = null;
     self.operational_error = null;
     self.suspended_ns = 0;
     _ = self.arena.reset(.free_all);
@@ -292,6 +296,7 @@ pub fn rocComptimeExhaustivenessFailed(site_raw: u32) callconv(.c) void {
 /// names the declaring module).
 pub fn rocComptimeFailureRegion(start_offset: u32, end_offset: u32, file: u32, line: u32, column: u32, stmt: u32) callconv(.c) void {
     const self = enteredHost();
+    self.failed_stmt = @enumFromInt(stmt);
     if (stmt < self.failure_origins.len) {
         if (self.failure_origins[stmt]) |origin| {
             self.failed_region = origin.region;
@@ -446,6 +451,7 @@ fn rocExpectFailed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c
     const loc = self.failed_loc;
     self.failed_region = null;
     self.failed_loc = null;
+    self.failed_stmt = null;
     self.appendExpectFailedEvent(bytes[0..len], region, loc);
 }
 

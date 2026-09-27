@@ -25,6 +25,10 @@ const collections = @import("collections");
 
 const checked = check.CheckedModule;
 const CheckedPipeline = @import("checked_pipeline.zig");
+const core = @import("lir_core");
+const LIR = core.LIR;
+const LirStore = core.LirStore;
+const BodyClone = @import("body_clone.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -294,4 +298,44 @@ test "closed export types bind a nominal backing's formal parameters to its argu
     try std.testing.expect(try checkedTypeIsClosed(allocator, types, wrap_unit));
     try std.testing.expect(!try checkedTypeIsClosed(allocator, types, wrap_free));
     try std.testing.expect(!try checkedTypeIsClosed(allocator, types, backing));
+}
+
+/// Which procedures convert a specialized custom literal when they run, by
+/// procedure id: a crash carrying a literal's rejection site is the `Err` arm
+/// of that conversion. A program that evaluated its literal roots at compile
+/// time reads their completed values instead, so only a program lowered
+/// without evaluating them runs one. An object-cache entry must not carry
+/// such a procedure: a program served by it would skip the compile-time
+/// evaluation, and the diagnostics, of every literal root its own lowering
+/// registers. Caller owns the result.
+pub fn literalConvertingProcs(allocator: Allocator, store: *const LirStore) Allocator.Error![]bool {
+    const converts = try allocator.alloc(bool, store.procSpecCount());
+    errdefer allocator.free(converts);
+    @memset(converts, false);
+    const seen = try allocator.alloc(bool, store.cfStmtCount());
+    defer allocator.free(seen);
+    var visited = std.ArrayList(LIR.CFStmtId).empty;
+    defer visited.deinit(allocator);
+    var work = std.ArrayList(LIR.CFStmtId).empty;
+    defer work.deinit(allocator);
+    @memset(seen, false);
+    for (converts, 0..) |*result, index| {
+        for (visited.items) |stmt_id| seen[@intFromEnum(stmt_id)] = false;
+        visited.clearRetainingCapacity();
+        work.clearRetainingCapacity();
+        const body = store.getProcSpec(@enumFromInt(index)).body orelse continue;
+        try work.append(allocator, body);
+        while (work.pop()) |stmt_id| {
+            if (seen[@intFromEnum(stmt_id)]) continue;
+            seen[@intFromEnum(stmt_id)] = true;
+            try visited.append(allocator, stmt_id);
+            const stmt = store.getCFStmt(stmt_id);
+            if (stmt == .crash and stmt.crash.literal_rejection != null) {
+                result.* = true;
+                break;
+            }
+            try BodyClone.appendSuccessorsWithAllocator(store, &work, stmt_id, allocator);
+        }
+    }
+    return converts;
 }

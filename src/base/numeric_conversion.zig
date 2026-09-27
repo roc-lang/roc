@@ -125,8 +125,18 @@ pub fn getConversionSpec(op: LowLevel) ?Conversion {
     return conversion_by_op[@intFromEnum(op)];
 }
 
-/// A number to text, or text to a number.
-pub const StringDirection = enum { to_str, from_str };
+/// A number to text, text to a number, or the longest numeric prefix of text
+/// (as a `Str` or as UTF-8 bytes) to a number plus the unparsed rest.
+pub const StringDirection = enum { to_str, from_str, from_str_prefix, from_utf8_prefix };
+
+fn directionAffix(comptime direction: StringDirection) []const u8 {
+    return switch (direction) {
+        .to_str => "_to_str",
+        .from_str => "_from_str",
+        .from_str_prefix => "_from_str_prefix",
+        .from_utf8_prefix => "_from_utf8_prefix",
+    };
+}
 
 /// A conversion between a number type and its decimal text.
 pub const StringConversion = struct {
@@ -157,12 +167,38 @@ pub const NumericParseSpec = union(enum) {
 pub fn getNumericParseSpec(op: LowLevel) ?NumericParseSpec {
     const conversion = getStringConversionSpec(op) orelse return null;
     if (conversion.direction != .from_str) return null;
-    return switch (conversion.num.class()) {
+    return parseSpecFor(conversion.num);
+}
+
+/// Where a prefix-parsing op reads its text from.
+pub const PrefixParseSource = enum { str, utf8 };
+
+/// What a `*_from_str_prefix` / `*_from_utf8_prefix` op needs: its number
+/// type's parse spec and the kind of value it reads (and returns as `rest`).
+pub const NumericPrefixParseSpec = struct {
+    parse: NumericParseSpec,
+    source: PrefixParseSource,
+};
+
+/// Look up what a `*_from_str_prefix` / `*_from_utf8_prefix` op needs. Returns
+/// null for any other op.
+pub fn getNumericPrefixParseSpec(op: LowLevel) ?NumericPrefixParseSpec {
+    const conversion = getStringConversionSpec(op) orelse return null;
+    const source: PrefixParseSource = switch (conversion.direction) {
+        .from_str_prefix => .str,
+        .from_utf8_prefix => .utf8,
+        .to_str, .from_str => return null,
+    };
+    return .{ .parse = parseSpecFor(conversion.num), .source = source };
+}
+
+fn parseSpecFor(num: NumType) NumericParseSpec {
+    return switch (num.class()) {
         .int => .{ .int = .{
-            .width_bytes = @intCast(conversion.num.bytes()),
-            .signed = conversion.num.isSigned(),
+            .width_bytes = @intCast(num.bytes()),
+            .signed = num.isSigned(),
         } },
-        .float => .{ .float = .{ .width_bytes = @intCast(conversion.num.bytes()) } },
+        .float => .{ .float = .{ .width_bytes = @intCast(num.bytes()) } },
         .dec => .dec,
     };
 }
@@ -210,10 +246,7 @@ fn rebuildName(comptime conversion: Conversion) []const u8 {
 fn stringConversionFromName(name: []const u8) ?StringConversion {
     inline for (@typeInfo(StringDirection).@"enum".fields) |field| {
         const direction: StringDirection = @enumFromInt(field.value);
-        const affix = switch (direction) {
-            .to_str => "_to_str",
-            .from_str => "_from_str",
-        };
+        const affix = directionAffix(direction);
         if (std.mem.endsWith(u8, name, affix)) {
             const num = numTypeFromName(name[0 .. name.len - affix.len]) orelse return null;
             return .{ .num = num, .direction = direction };
@@ -225,10 +258,7 @@ fn stringConversionFromName(name: []const u8) ?StringConversion {
 /// Rebuild a name from its number type and direction, inverting
 /// `stringConversionFromName`.
 fn rebuildStringName(comptime conversion: StringConversion) []const u8 {
-    return @tagName(conversion.num) ++ switch (conversion.direction) {
-        .to_str => "_to_str",
-        .from_str => "_from_str",
-    };
+    return @tagName(conversion.num) ++ directionAffix(conversion.direction);
 }
 
 /// Every op's `Conversion`, indexed by enum value; null where the op is not a
@@ -350,6 +380,19 @@ test "getStringConversionSpec reads the number type and the direction" {
         StringConversion{ .num = .u128, .direction = .from_str },
         getStringConversionSpec(.u128_from_str).?,
     );
+}
+
+test "prefix parse ops classify by number type and source" {
+    try std.testing.expectEqual(
+        StringConversion{ .num = .i16, .direction = .from_str_prefix },
+        getStringConversionSpec(.i16_from_str_prefix).?,
+    );
+    try std.testing.expectEqual(
+        NumericPrefixParseSpec{ .parse = .{ .int = .{ .width_bytes = 16, .signed = false } }, .source = .utf8 },
+        getNumericPrefixParseSpec(.u128_from_utf8_prefix).?,
+    );
+    try std.testing.expectEqual(@as(?NumericParseSpec, null), getNumericParseSpec(.dec_from_str_prefix));
+    try std.testing.expectEqual(@as(?NumericPrefixParseSpec, null), getNumericPrefixParseSpec(.dec_from_str));
 }
 
 test "a number and its text are separate classifications" {

@@ -3367,6 +3367,167 @@ pub const tests = [_]TestCase{
         .expected = .{ .problem_and_crash = {} },
     },
     .{
+        // repro for https://github.com/roc-lang/roc/issues/11502
+        // A rejected relation poisons only the use it rejected. Lowering
+        // `check` instantiates every parameter's type, so the parameter read
+        // by the rejected use must keep its declared type; the use itself
+        // becomes the runtime error.
+        .name = "issue 11502: rejected equality leaves its operand parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    Ref :: { value : Str }.{
+        \\        is_eq : Ref, Ref -> Bool
+        \\        is_eq = |left, right| left.value == right.value
+        \\    }
+        \\
+        \\    check : Ref, Str -> Bool
+        \\    check = |a, b| a == b
+        \\}
+        \\
+        \\main = M.check({ value: "x" }, "x")
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected method call argument leaves its parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    Ref :: { value : Str }.{
+        \\        same : Ref, Ref -> Bool
+        \\        same = |left, right| left.value == right.value
+        \\    }
+        \\
+        \\    check : Ref, Str -> Bool
+        \\    check = |a, b| a.same(b)
+        \\}
+        \\
+        \\main = M.check({ value: "x" }, "x")
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected arithmetic operand leaves its parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    check : I64, Str -> I64
+        \\    check = |n, s| n + s
+        \\}
+        \\
+        \\main = M.check(1, "x")
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected if condition leaves its parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    check : Str, I64 -> I64
+        \\    check = |s, n| if s n else 2
+        \\}
+        \\
+        \\main = M.check("x", 1)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected match guard leaves its parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    check : Str, I64 -> I64
+        \\    check = |s, n| match n {
+        \\        _ if s => 1
+        \\        _ => 2
+        \\    }
+        \\}
+        \\
+        \\main = M.check("x", 1)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected list element leaves its parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    check : Str -> List(Bool)
+        \\    check = |s| [Bool.True, s]
+        \\}
+        \\
+        \\main = M.check("x").len()
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: body rejected by its annotation leaves the returned parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    check : Str -> Bool
+        \\    check = |s| s
+        \\}
+        \\
+        \\main = M.check("x")
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected derived equality argument leaves the captured parameter's type intact",
+        .source_kind = .module,
+        .source =
+        \\M :: [].{
+        \\    check : Str -> Bool
+        \\    check = |b| {
+        \\        f = |a| a.is_eq(b)
+        \\        f({ v: "x" })
+        \\    }
+        \\}
+        \\
+        \\main = M.check("x")
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected use of a top-level value leaves the value's type intact",
+        .source_kind = .module,
+        .source =
+        \\flag : Str
+        \\flag = "x"
+        \\
+        \\check : I64 -> I64
+        \\check = |n| if flag n else 2
+        \\
+        \\main = check(1)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11502: rejected use of an imported value becomes a runtime error",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Flag",
+            .source =
+            \\Flag := [].{
+            \\    flag : Str
+            \\    flag = "x"
+            \\}
+            ,
+        }},
+        .source =
+        \\import Flag
+        \\
+        \\check : I64 -> I64
+        \\check = |n| if Flag.flag n else 2
+        \\
+        \\main = check(1)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
         // repro for https://github.com/roc-lang/roc/issues/11489
         // An unannotated function whose local recursive helper appends a
         // freshly appended inner list to an outer accumulator in two match
@@ -3506,5 +3667,274 @@ pub const tests = [_]TestCase{
         \\main = run({})
         ,
         .expected = .{ .inspect_str = "7" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11668
+        // The literal's target `Sql({ n : Str })` is fixed by a later field
+        // access in the same monomorphic body.
+        .name = "issue 11668: from_quote literal whose target record is fixed by a later use",
+        .source_kind = .module,
+        .source =
+        \\Sql(a) := { text : Str }.{
+        \\    from_quote : Str -> Try(Sql(a), [BadQuotedBytes(Str)])
+        \\    from_quote = |raw| Ok(Sql.{ text: raw })
+        \\}
+        \\
+        \\query : Sql(a) -> Try(a, [X])
+        \\query = |_| Err(X)
+        \\
+        \\run : {} -> Try(Str, [X])
+        \\run = |_| {
+        \\    row = query("select 1")?
+        \\    Ok(row.n)
+        \\}
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "Err(X)" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11674
+        // `from_quote`'s `where` clause asks for a derived `I32.parser_for`;
+        // the literal inside `run` converts at `Sql(I32)`.
+        .name = "issue 11674: from_quote literal whose where clause needs a derived parser_for",
+        .source_kind = .module,
+        .source =
+        \\Sql(a) := { text : Str }.{
+        \\    from_quote : Str -> Try(Sql(a), [BadQuotedBytes(Str)])
+        \\        where [a.parser_for : Fmt -> (U8 -> Try({ value : a, rest : U8 }, [Bad]))]
+        \\    from_quote = |raw| Ok(Sql.{ text: raw })
+        \\}
+        \\
+        \\Fmt := [Default].{
+        \\    parse_i32 : Fmt, U8 -> Try({ value : I32, rest : U8 }, [Bad])
+        \\    parse_i32 = |_, state| Ok({ value: 0, rest: state })
+        \\}
+        \\
+        \\query : Sql(a) -> Try(List(a), [X])
+        \\query = |_| Ok([])
+        \\
+        \\run : {} -> Try(List(I32), [X])
+        \\run = |_| query("select 1")
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "Ok([])" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11669
+        // `from_quote` calls a derived `I32.parser_for` whose error row is the
+        // `where` clause's open `err`, which includes the parser's `Bad`.
+        .name = "issue 11669: from_quote calling a derived parser_for with an open error row",
+        .source_kind = .module,
+        .source =
+        \\Sql(a) := { text : Str }.{
+        \\    from_quote : Str -> Try(Sql(a), [BadQuotedBytes(Str)])
+        \\        where [a.parser_for : Fmt -> (U8 -> Try({ value : a, rest : U8 }, err))]
+        \\    from_quote = |raw| {
+        \\        A : a
+        \\        _ = A.parser_for(Fmt.Default)
+        \\        Ok(Sql.{ text: raw })
+        \\    }
+        \\}
+        \\
+        \\Fmt := [Default].{
+        \\    parse_i32 : Fmt, U8 -> Try({ value : I32, rest : U8 }, [Bad])
+        \\    parse_i32 = |_, state| Ok({ value: 0, rest: state })
+        \\}
+        \\
+        \\sql : Sql(I32)
+        \\sql = "select 1"
+        \\
+        \\main = sql.text
+        ,
+        .expected = .{ .inspect_str = "\"select 1\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11725
+        // `from_quote`'s `where` clause asks for a derived `parser_for` of a
+        // record row that the caller returns inside a tag union
+        // (`[Nope, Yes(row)]`); `run` converts a `from_quote` literal there.
+        // Expected: the program checks cleanly and `main` evaluates to `Nope`.
+        .name = "issue 11725: from_quote where clause derived parser_for of record row returned in tag union",
+        .source_kind = .module,
+        .source =
+        \\Fmt := {}.{
+        \\    parse_record_start = |_, s| Ok(Uncounted(s))
+        \\    parse_record_field = |_, _, s| Ok(Done(s))
+        \\    parse_record_after_field = |_, s| Ok(Continue(s))
+        \\    skip_record_field = |_, s| Ok(s)
+        \\}
+        \\
+        \\Sql(row) := {}.{
+        \\    from_quote : Str -> Try(Sql(row), [BadQuotedBytes(Str)])
+        \\        where [row.parser_for : Fmt -> ({} -> Try({ value : row, rest : {} }, _))]
+        \\    from_quote = |_| Ok(Sql.({}))
+        \\}
+        \\
+        \\query : Sql(row) -> [Nope, Yes(row)]
+        \\query = |_| Nope
+        \\
+        \\run : {} -> [Nope, Yes({})]
+        \\run = |_| query("")
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "Nope" },
+    },
+    .{
+        .name = "issue 11725: from_numeral retains nested parser_for evidence",
+        .source_kind = .module,
+        .source =
+        \\Fmt := {}.{
+        \\    parse_record_start = |_, s| Ok(Uncounted(s))
+        \\    parse_record_field = |_, _, s| Ok(Done(s))
+        \\    parse_record_after_field = |_, s| Ok(Continue(s))
+        \\    skip_record_field = |_, s| Ok(s)
+        \\}
+        \\
+        \\Sql(row) := {}.{
+        \\    from_numeral : Numeral -> Try(Sql(row), [InvalidNumeral(Str)])
+        \\        where [row.parser_for : Fmt -> ({} -> Try({ value : row, rest : {} }, _))]
+        \\    from_numeral = |_| Ok(Sql.({}))
+        \\}
+        \\
+        \\query : Sql(row) -> [Nope, Yes(row)]
+        \\query = |_| Nope
+        \\
+        \\run : {} -> [Nope, Yes({})]
+        \\run = |_| query(0)
+        \\
+        \\main = run({})
+        ,
+        .expected = .{ .inspect_str = "Nope" },
+    },
+    .{
+        .name = "issue 11725: dependent from_quote rejection in an untaken branch is eager",
+        .source_kind = .module,
+        .source =
+        \\Fmt := {}.{
+        \\    parse_record_start = |_, s| Ok(Uncounted(s))
+        \\    parse_record_field = |_, _, s| Ok(Done(s))
+        \\    parse_record_after_field = |_, s| Ok(Continue(s))
+        \\    skip_record_field = |_, s| Ok(s)
+        \\}
+        \\
+        \\Sql(row) := {}.{
+        \\    from_quote : Str -> Try(Sql(row), [BadQuotedBytes(Str)])
+        \\        where [row.parser_for : Fmt -> ({} -> Try({ value : row, rest : {} }, _))]
+        \\    from_quote = |_| Err(BadQuotedBytes("rejected"))
+        \\}
+        \\
+        \\query : Sql(row) -> [Nope, Yes(row)]
+        \\query = |_| Nope
+        \\
+        \\run : {} -> [Nope, Yes({})]
+        \\run = |_| if False query("") else Nope
+        \\
+        \\main = run({})
+        ,
+        .expected = .problem,
+    },
+    .{
+        .name = "issue 11725: uninstantiated from_quote evidence has no conversion root",
+        .source_kind = .module,
+        .source =
+        \\Fmt := {}.{
+        \\    parse_record_start = |_, s| Ok(Uncounted(s))
+        \\    parse_record_field = |_, _, s| Ok(Done(s))
+        \\    parse_record_after_field = |_, s| Ok(Continue(s))
+        \\    skip_record_field = |_, s| Ok(s)
+        \\}
+        \\
+        \\Sql(row) := {}.{
+        \\    from_quote : Str -> Try(Sql(row), [BadQuotedBytes(Str)])
+        \\        where [row.parser_for : Fmt -> ({} -> Try({ value : row, rest : {} }, _))]
+        \\    from_quote = |_| Err(BadQuotedBytes("rejected"))
+        \\}
+        \\
+        \\query : Sql(row) -> [Nope, Yes(row)]
+        \\query = |_| Nope
+        \\
+        \\run : {} -> [Nope, Yes({})]
+        \\run = |_| query("")
+        \\
+        \\main = 0.I64
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
+        .name = "issue 11725: from_quote codec evidence follows distinct row specializations",
+        .source_kind = .module,
+        .source =
+        \\Fmt := {}.{
+        \\    parse_record_start = |_, s| Ok(Uncounted(s))
+        \\    parse_record_field = |_, _, s| Ok(Done(s))
+        \\    parse_record_after_field = |_, s| Ok(Continue(s))
+        \\    skip_record_field = |_, s| Ok(s)
+        \\}
+        \\
+        \\Sql(row) := {}.{
+        \\    from_quote : Str -> Try(Sql(row), [BadQuotedBytes(Str)])
+        \\        where [row.parser_for : Fmt -> ({} -> Try({ value : row, rest : {} }, _))]
+        \\    from_quote = |_| Ok(Sql.({}))
+        \\}
+        \\
+        \\query : Sql(row) -> [Nope, Yes(row)]
+        \\query = |_| Nope
+        \\
+        \\run : {} -> [Nope, Yes(row)]
+        \\    where [row.parser_for : Fmt -> ({} -> Try({ value : row, rest : {} }, _))]
+        \\run = |_| query("")
+        \\
+        \\Row := {}.{
+        \\    parser_for : Fmt -> ({} -> Try({ value : Row, rest : {} }, [Bad]))
+        \\    parser_for = |_| |s| Ok({ value: Row.({}), rest: s })
+        \\}
+        \\
+        \\as_record : [Nope, Yes({})]
+        \\as_record = run({})
+        \\as_nominal : [Nope, Yes(Row)]
+        \\as_nominal = run({})
+        \\main = (as_record, as_nominal)
+        ,
+        .expected = .{ .inspect_str = "(Nope, Nope)" },
+    },
+    .{
+        // A `?` whose closed error row the enclosing annotated result rejects
+        // is a checked error that crashes when reached. The function keeps its
+        // body's result type, so a caller that widens the error row still
+        // specializes it, and the rejected return never flows a value.
+        .name = "rejected try suffix on a nominal payload function crashes at runtime",
+        .source_kind = .module,
+        .source =
+        \\Holder := [H({} -> Try(I64, [WrongArity, TypeMismatch]))].{
+        \\    run : Holder -> Try(I64, _)
+        \\    run = |h|
+        \\        match h {
+        \\            H(fn) => {
+        \\                n = fn({})?
+        \\                if n > 0 Ok(n) else Err(NotAFunction)
+        \\            }
+        \\        }
+        \\}
+        \\
+        \\main = Holder.run(H(|_| Err(WrongArity))) == Err(WrongArity)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "rejected try suffix on a function parameter crashes at runtime",
+        .source_kind = .module,
+        .source =
+        \\run : ({} -> Try(I64, [WrongArity, TypeMismatch])) -> Try(I64, _)
+        \\run = |fn| {
+        \\    n = fn({})?
+        \\    if n > 0 Ok(n) else Err(NotAFunction)
+        \\}
+        \\
+        \\main = run(|_| Err(WrongArity)) == Err(WrongArity)
+        ,
+        .expected = .{ .problem_and_crash = {} },
     },
 };

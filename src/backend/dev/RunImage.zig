@@ -698,12 +698,12 @@ test "writeToSharedMemory serializes only executable image sections" {
         .{ .ordinal = 1, .code_offset = 3 },
     };
     const code_symbol_inputs = [_]CodeSymbolInput{
-        .{ .name = "roc__proc_2a", .code_offset = 3 },
+        .{ .name = "roc__p2a", .code_offset = 3 },
     };
     var symbols: @import("SymbolTable.zig").Table = .{};
     defer symbols.deinit(scratch);
-    const alloc_symbol = try symbols.intern(scratch, @import("builtins").shim_symbols.roc_alloc);
-    const answer_symbol = try symbols.intern(scratch, "roc__answer");
+    const alloc_symbol = try symbols.intern(scratch, @import("builtins").shim_symbols.roc_alloc, .shared);
+    const answer_symbol = try symbols.intern(scratch, "roc__answer", .shared);
     const relocations = [_]Relocation{
         .{ .linked_function = .{ .offset = 1, .symbol = alloc_symbol } },
         .{ .linked_data = .{ .offset = 2, .symbol = answer_symbol, .kind = .rel32 } },
@@ -718,13 +718,13 @@ test "writeToSharedMemory serializes only executable image sections" {
         },
         .{
             .offset = @sizeOf(usize),
-            .target_symbol_name = "roc__proc_2a",
+            .target_symbol_name = "roc__p2a",
             .kind = .function_pointer,
         },
     };
     const data_exports = [_]StaticDataExport{
         .{
-            .symbol_name = "roc__static",
+            .symbol_name = "roc__d0",
             .bytes = &data_bytes,
             .symbol_offset = 1,
             .alignment = 8,
@@ -777,7 +777,7 @@ test "writeToSharedMemory serializes only executable image sections" {
     try std.testing.expectEqual(@as(u64, 3), view.entrypoints[1].code_offset);
 
     try std.testing.expectEqual(@as(usize, code_symbol_inputs.len), view.code_symbols.len);
-    try std.testing.expectEqualStrings("roc__proc_2a", try view.codeSymbolName(view.code_symbols[0]));
+    try std.testing.expectEqualStrings("roc__p2a", try view.codeSymbolName(view.code_symbols[0]));
     try std.testing.expectEqual(@as(u64, 3), view.code_symbols[0].code_offset);
 
     try std.testing.expectEqual(@as(usize, relocations.len), view.relocations.len);
@@ -791,7 +791,7 @@ test "writeToSharedMemory serializes only executable image sections" {
     try std.testing.expectEqualSlices(u8, &data_bytes, view.data[0..data_bytes.len]);
     try std.testing.expectEqualSlices(u8, &target_data_bytes, view.data[data_bytes.len..][0..target_data_bytes.len]);
     try std.testing.expectEqual(@as(usize, data_exports.len), view.data_symbols.len);
-    try std.testing.expectEqualStrings("roc__static", try view.dataSymbolName(view.data_symbols[0]));
+    try std.testing.expectEqualStrings("roc__d0", try view.dataSymbolName(view.data_symbols[0]));
     try std.testing.expectEqual(@as(u64, 0), view.data_symbols[0].data_offset);
     try std.testing.expectEqual(@as(u64, data_bytes.len), view.data_symbols[0].len);
     try std.testing.expectEqual(@as(u64, 1), view.data_symbols[0].symbol_offset);
@@ -808,9 +808,9 @@ test "writeToSharedMemory serializes only executable image sections" {
     try std.testing.expectEqual(StaticDataTargetKind.function_pointer, try view.data_relocations[1].targetKind());
     try std.testing.expectEqual(@as(u64, @sizeOf(usize)), view.data_relocations[1].data_offset);
     try std.testing.expectEqual(@as(i64, 0), view.data_relocations[1].addend);
-    try std.testing.expectEqualStrings("roc__proc_2a", try view.symbolName(view.data_relocations[1].symbol));
+    try std.testing.expectEqualStrings("roc__p2a", try view.symbolName(view.data_relocations[1].symbol));
     // Relocations reuse declaration byte ranges, including forward data references.
     try std.testing.expectEqual(view.data_symbols[1].name, view.data_relocations[0].symbol);
     try std.testing.expectEqual(view.code_symbols[0].name, view.data_relocations[1].symbol);
-    try std.testing.expectEqual(@as(usize, "roc_alloc".len + "roc__answer".len + "roc__proc_2a".len + "roc__static".len + "roc__target".len), view.symbol_names.len);
+    try std.testing.expectEqual(@as(usize, "roc_alloc".len + "roc__answer".len + "roc__p2a".len + "roc__d0".len + "roc__target".len), view.symbol_names.len);
 }

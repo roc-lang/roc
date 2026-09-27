@@ -217,15 +217,10 @@ pub const Tag = enum {
     diag_invalid_top_level_statement,
     diag_invalid_associated_statement,
     diag_expr_not_canonicalized,
-    diag_invalid_string_interpolation,
+    diag_expr_syntax_error,
     diag_unreachable_string_pattern_capture,
     diag_pattern_arg_invalid,
     diag_pattern_not_canonicalized,
-    diag_can_lambda_not_implemented,
-    diag_lambda_body_not_canonicalized,
-    diag_if_condition_not_canonicalized,
-    diag_if_then_not_canonicalized,
-    diag_if_else_not_canonicalized,
     diag_malformed_type_annotation,
     diag_malformed_where_clause,
     diag_where_clause_not_allowed_in_type_decl,
@@ -253,7 +248,6 @@ pub const Tag = enum {
     diag_undeclared_type_var,
     diag_type_alias_but_needed_nominal,
     diag_type_alias_redeclared,
-    diag_tuple_elem_not_canonicalized,
     diag_file_import_not_found,
     diag_file_import_io_error,
     diag_file_import_absolute_path,
@@ -280,8 +274,6 @@ pub const Tag = enum {
     diag_duplicate_tag,
     diag_crash_expects_string,
     diag_f64_pattern_literal,
-    diag_unused_type_var_name,
-    diag_type_var_marked_unused,
     diag_type_var_starting_with_dollar,
     diag_underscore_in_type_declaration,
     diagnostic_exposed_but_not_implemented,
@@ -413,7 +405,6 @@ pub const Payload = extern union {
     pattern_str_interpolation: PatternStrInterpolation,
     pattern_frac_f32: PatternFracF32,
     pattern_frac_f64: PatternFracF64,
-    pattern_malformed: PatternMalformed,
 
     // === Type annotation payloads ===
     ty_apply: TyApply,
@@ -440,6 +431,7 @@ pub const Payload = extern union {
     def: Def,
     lambda_capture: LambdaCapture,
     annotation: Annotation,
+    malformed: Malformed,
     // === Diagnostic payloads (typed variants) ===
     diag_empty: DiagEmpty,
     diag_single_ident: DiagSingleIdent,
@@ -1065,11 +1057,6 @@ pub const Payload = extern union {
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
-    pub const PatternMalformed = extern struct {
-        diagnostic: u32,
-        _padding: [12]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-    };
-
     // --- Type annotations ---
 
     pub const TyApply = extern struct {
@@ -1182,6 +1169,17 @@ pub const Payload = extern union {
     pub const WhereMalformed = extern struct {
         diagnostic: u32,
         _padding: [12]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    };
+
+    /// A `.malformed` node, which may be a statement, expression, pattern, or
+    /// type annotation. When it replaced a source node in place,
+    /// `source_node_plus_one` is one more than that node's position in the
+    /// store's `replaced_source_nodes`; zero means the node was malformed in
+    /// source or settles a deferred import reference.
+    pub const Malformed = extern struct {
+        diagnostic: u32,
+        source_node_plus_one: u32 = 0,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     /// where_alias: a where alias applied to a type variable in a where clause

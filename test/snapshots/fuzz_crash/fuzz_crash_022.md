@@ -34,7 +34,6 @@ EXPECTED TUPLE SEPARATOR - fuzz_crash_022.md:8:9:8:10
 EXPECTED TUPLE SEPARATOR - fuzz_crash_022.md:9:1:9:1
 UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_022.md:9:1:9:1
 MALFORMED TYPE - fuzz_crash_022.md:1:19:1:27
-INVALID IF CONDITION - :0:0:0:0
 UNUSED VARIABLE - fuzz_crash_022.md:6:12:6:14
 DECLARATION HAS NO VALUE - fuzz_crash_022.md:1:16:1:27
 DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
@@ -509,21 +508,6 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 			(reflow "This type annotation is malformed or contains invalid syntax."))
 		(document
 			(source-region (file "fuzz_crash_022.md") (start 1 19) (end 1 27) (annotation error) (line-text "app [main!] { |f: platform \"c\" }"))))
-	(report
-		(severity runtime_error)
-		(title "Invalid If Condition")
-		(headline
-			(reflow "The condition in this ")
-			(annotated keyword "if")
-			(reflow " expression could not be processed."))
-		(document
-			(reflow "The condition must be a valid expression that evaluates to a ")
-			(annotated keyword "Bool")
-			(reflow " value (")
-			(annotated keyword "Bool.true")
-			(reflow " or ")
-			(annotated keyword "Bool.false")
-			(reflow ").")))
 	(report
 		(severity warning)
 		(title "Unused Variable")

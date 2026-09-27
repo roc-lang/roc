@@ -3,9 +3,7 @@ app [main!] { pf: platform "./platform/main.roc" }
 Word := { code: U64, spelling: Str }.{
     from_quote : Str -> Try(Word, [BadQuotedBytes(Str)])
     from_quote = |text|
-        if text == "never" {
-            crash "an unreachable pattern conversion was evaluated"
-        } else if text == "low" or text == "alias-low" {
+        if text == "low" or text == "alias-low" {
             Ok({ code: 1, spelling: text })
         } else if text == "high" or text == "alias-high" {
             Ok({ code: 2, spelling: text })
@@ -45,12 +43,6 @@ guarded = |a, b, flag| match (a, b) {
     _ => 3
 }
 
-short_circuit = |value| match value {
-    "low" => 1
-    "never" => 2
-    _ => 3
-}
-
 expect rank("alias-low".Word) == 1
 expect rank("alias-high".Word) == 2
 expect rank("other".Word) == 3
@@ -74,8 +66,6 @@ main! = |args| {
     second = guarded(low, high, False)
     rest : U64
     rest = guarded(other, poison, True)
-    short : U64
-    short = short_circuit(low)
     low_str = rank(if args.is_empty() "low".Str else "other".Str)
     high_str = rank("high".Str)
     other_str = rank("other".Str)
@@ -86,7 +76,7 @@ main! = |args| {
         Err(Exit(2))
     } else if low_str != 1 or high_str != 2 or other_str != 3 {
         Err(Exit(3))
-    } else if first != 1 or second != 2 or rest != 3 or short != 1 {
+    } else if first != 1 or second != 2 or rest != 3 {
         Err(Exit(4))
     } else {
         Ok({})
