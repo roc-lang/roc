@@ -4283,11 +4283,19 @@ Every live literal-origin record leaves checking with one explicit resolution:
   the conversion without looking up or instantiating a method. Monotype
   materializes the value directly.
 - `custom_dispatch` means checking selected and typechecked one concrete custom
-  conversion callable. `CheckedModule` construction retains its
-  dispatcher and callable types and gives the literal exactly one
-  `numeral_conversion`/`quote_conversion` root, linked from the checked
-  literal data (`conversion_root`). That root is the single source of the
-  literal's value: its body lowers through ordinary dispatch-call lowering,
+  conversion callable. This does not prove independence from its lexical
+  scheme: a concrete receiver's nested codec evidence may still be supplied by
+  that scheme. `CheckedModule` construction retains the dispatcher and callable
+  types, resolves dispatch evidence once, and uses the finalized `direct_closed`
+  classification to give independent conversions exactly one
+  `numeral_conversion`/`quote_conversion` root, linked from the checked literal
+  data (`conversion_root`). Root wrappers are appended after this decision,
+  with their single conversion reference recorded directly; evidence resolution
+  and source-body collection are not repeated. A dependent conversion keeps no
+  standalone root and follows the specialization-owned hoisting path below,
+  with its enclosing evidence intact. The checked boundary validates that every
+  standalone conversion root references a closed dispatch. That root is the
+  single source of the literal's value: its body lowers through ordinary dispatch-call lowering,
   and every use restores the root's stored payload, or, while its module is
   still finalizing, reads the root's declared compile-time value. A root no
   evaluation requests (its type holds a callable, so the root is
@@ -9746,7 +9754,9 @@ code. The LIR hosted proc retains its exact checked hosted ABI. A boxy call
 site adapts internal boxy arguments into that ABI, calls the hosted proc, and
 adapts the result back to the internal boxy representation when needed. It must
 not change the hosted symbol signature and must not ask the host to provide
-hidden descriptors.
+hidden descriptors. When used as a Roc callable value, a hosted worker retains
+its planned descriptor captures like any other erased callable. Those captures
+belong to the private Roc callable and never cross the hosted ABI.
 
 `RocBox(RocUnknown)` at the host boundary is opaque unless Roc already has
 explicit descriptor data on the Roc side. The host ABI passes only the Roc box
@@ -10428,6 +10438,11 @@ keys include the checked signature identity, method scope, adapter reachability,
 and complete input constraint. They consume no nested dispatch evidence.
 Expansion uses detached inputs; replay creates fresh open cells and preserves
 the input's sharing, so independent calls never share new quantified variables.
+Construction of a checked procedure's method signature is itself an immutable
+snapshot, keyed by its checked signature and method scope before any request
+relation is applied. Different constraint inputs instantiate fresh cells from
+that snapshot rather than re-expanding the same nominal declarations. Local
+method signatures remain context-owned and are not shared through this cache.
 
 Interface summaries are immutable constraints over explicit input roots. They
 preserve unresolved variables and their defaults, row tails, variable and

@@ -7690,11 +7690,6 @@ const Builder = struct {
 
     fn materializeWorkerErasedCaptures(self: *Builder) Allocator.Error!void {
         for (self.plan.workers.items, 0..) |worker, worker_index| {
-            if (self.workerResolvesToHosted(worker.source)) {
-                self.plan.workers.items[worker_index].erased_captures = .{};
-                continue;
-            }
-
             var pending = std.ArrayList(ErasedCapture).empty;
             defer pending.deinit(self.allocator);
 

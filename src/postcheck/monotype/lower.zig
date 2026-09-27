@@ -18384,7 +18384,7 @@ const ActiveConstBindingScope = struct {
 const InterfaceReplayStatus = enum { expanding, expanded, ready };
 
 const InterfaceReplayAddress = struct {
-    kind: enum { procedure, method_contract, local_method_contract } = .procedure,
+    kind: enum { procedure, method_signature, method_contract, local_method_contract } = .procedure,
     family: DraftTemplateFamilyAddress,
     evidence_digest: [32]u8,
     input_digest: [32]u8,
@@ -44346,7 +44346,50 @@ const BodyContext = struct {
         // Relate an independent copy, so unrelated caller state cannot enter
         // the retained result. Open variables remain fresh on each replay.
         const detached = (try input.instantiate(self.graph))[0];
-        const target_node = if (target.instantiation) |instantiation| blk: {
+        const target_node = try self.instantiateEvidenceTargetSignature(target, address.family);
+        try self.relateEvidenceTargetRootToRequest(root_view, root_fn_ty, target_node, detached, reachability);
+        if (use_summaries) {
+            const constraints = try InterfaceConstraints.capture(self.graph, scratch.allocator(), &.{detached});
+            const summary: InterfaceSummary = if (try (try constraints.identityInto(self.graph, scratch.allocator())).eql(request, self.typeStore(), self.nameStore()))
+                .unchanged
+            else
+                .{ .constraints = constraints };
+            _ = try self.insertInterfaceSummary(.{
+                .address = address,
+                .evidence = evidence,
+                .request = request,
+                .summary = summary,
+            });
+        }
+        try self.graph.unify(detached, constraint_node);
+    }
+
+    /// A checked procedure signature is independent of the request it will
+    /// constrain. Snapshot its construction once, then instantiate fresh open
+    /// cells for each relation, preserving independent callable evidence.
+    fn instantiateEvidenceTargetSignature(
+        self: *BodyContext,
+        target: *const SpecEvidenceTarget,
+        family: DraftTemplateFamilyAddress,
+    ) Allocator.Error!NodeId {
+        const cacheable = target.target.kind == .procedure and self.draft.interface_replay.use_finished_summaries;
+        const address: InterfaceReplayAddress = .{
+            .kind = .method_signature,
+            .family = family,
+            .evidence_digest = @splat(0),
+            .input_digest = @splat(0),
+        };
+        const evidence: StoredConstFnEvidence = .{ .nodes = &.{}, .frames = &.{}, .head = null };
+        const request: InterfaceConstraints.Identity = .{ .bytes = &.{}, .leaves = &.{} };
+        if (cacheable) {
+            if (try self.findInterfaceSummary(address, evidence, request)) |summary| {
+                return switch (summary) {
+                    .constraints => |constraints| (try constraints.instantiate(self.graph))[0],
+                    .unchanged => Common.invariant("checked method signature snapshot had no root"),
+                };
+            }
+        }
+        const node = if (target.instantiation) |instantiation| blk: {
             var instantiation_ctx = try BodyContext.initWithMethodScope(
                 self.allocator,
                 self.builder,
@@ -44368,21 +44411,17 @@ const BodyContext = struct {
             defer target_ctx.deinit();
             break :blk try target_ctx.instNode(lookup.target.callable_ty);
         };
-        try self.relateEvidenceTargetRootToRequest(root_view, root_fn_ty, target_node, detached, reachability);
-        if (use_summaries) {
-            const constraints = try InterfaceConstraints.capture(self.graph, scratch.allocator(), &.{detached});
-            const summary: InterfaceSummary = if (try (try constraints.identityInto(self.graph, scratch.allocator())).eql(request, self.typeStore(), self.nameStore()))
-                .unchanged
-            else
-                .{ .constraints = constraints };
+        if (cacheable) {
+            var scratch = std.heap.ArenaAllocator.init(self.allocator);
+            defer scratch.deinit();
             _ = try self.insertInterfaceSummary(.{
                 .address = address,
                 .evidence = evidence,
                 .request = request,
-                .summary = summary,
+                .summary = .{ .constraints = try InterfaceConstraints.capture(self.graph, scratch.allocator(), &.{node}) },
             });
         }
-        try self.graph.unify(detached, constraint_node);
+        return node;
     }
 
     /// Relate a checked structural codec's callable to the scheme constraint
@@ -44549,7 +44588,7 @@ const BodyContext = struct {
         if (selectCallableContract(.{ .target = target }, dependent.callable_contract)) |contract| {
             return switch (contract) {
                 .target => |selected| selected.nested,
-                else => Common.invariant("callable target contract selected non-callable evidence"),
+                .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => Common.invariant("callable target contract selected non-callable evidence"),
             };
         }
         return self.dependentCallableNestedEvidenceChecked(dependent, target) catch

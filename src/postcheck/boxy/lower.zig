@@ -33823,6 +33823,7 @@ const ProcBodyBuilder = struct {
         local: LIR.LocalId,
         bind_slot: bool,
     ) Allocator.Error!void {
+        try self.ensureDescriptorLocals();
         const desc_index = @intFromEnum(desc);
         if (desc_index >= self.descriptor_locals.len or desc_index >= self.descriptor_slot_reps.len) {
             boxyLowerInvariant("boxy descriptor binding exceeded descriptor table");
