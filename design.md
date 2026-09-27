@@ -6652,6 +6652,21 @@ the two spellings cannot drift. Elsewhere `..` remains the rigid
 `#others` it always was, and a named extension (`..others`) is always a
 rigid.
 
+`roc fmt` deletes exactly such a `..` (`src/fmt/open_rows.zig`), since the
+checker already reports it as a Redundant Open Tag Union. The formatter sees
+only the parse AST, so it answers each question the checker answers from a
+resolved declaration over EVERY declaration the spelling could reach (every
+same-named type declaration in the file, the `Builtin` type of that name, any
+import that could introduce it) and deletes only on a unanimous answer. It
+also keeps the `..` wherever the file alone cannot rule out a different
+meaning: a value binding (where `..` opts into a quantified row) and any
+other body that is not a lambda, a platform's `provides` definition, and an
+annotation-only definition outside an app (which may be hosted). So the
+formatter may keep a `..` the checker reports, and never deletes one it does
+not; `src/check/test/redundant_open_fmt_test.zig` runs both on the same
+sources to hold that. A change to where the checker opens a row is a change
+to that walk too.
+
 The VALUE row above is the pre-polarity behaviour of an inferred value
 (`x = Boom`) extended to annotated ones: the value's body is bounded by the
 audit, and a later annotated use listing fewer tags than the shared row has
