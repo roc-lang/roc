@@ -3860,8 +3860,9 @@ Dependency conjunctions are sparse, append-only shared nodes: an expression
 with no pending dependency allocates nothing, and forwarding one dependency
 does not copy a set or allocate a node. Conjunction children precede parents,
 so finalization evaluates each node once in append order without recursion or
-another CIR traversal. Semantic eligibility remains independent of whether a
-condition is selected as an independent root or covered by an enclosing root.
+another CIR traversal. Eligibility for compile-time condition warnings remains
+independent of whether a condition is selected as an independent root or covered
+by an enclosing root.
 
 Hoisted roots use the same compile-time constant rules as ordinary top-level
 constants. A failure produced while evaluating a hoisted root is a checking-time
