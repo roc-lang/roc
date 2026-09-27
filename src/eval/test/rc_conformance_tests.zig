@@ -184,6 +184,45 @@ const cases = [_]Case{
         ,
     },
     .{
+        .name = "numeric prefix parsers return the rest as a slice of a shared input",
+        .source =
+        \\{
+        \\    shared = Str.concat("42,", "a numeric prefix followed by text long enough to allocate")
+        \\    holder = [shared, shared]
+        \\    shared_bytes = Str.to_utf8(shared)
+        \\    bytes_holder = [shared_bytes, shared_bytes]
+        \\    Str.count_utf8_bytes(U8.from_str_prefix(shared).ok_or({ value: 0, rest: "" }).rest)
+        \\        + List.len(U8.from_utf8_prefix(shared_bytes).ok_or({ value: 0, rest: [] }).rest)
+        \\        + Str.count_utf8_bytes(I8.from_str_prefix(shared).ok_or({ value: 0, rest: "" }).rest)
+        \\        + List.len(I8.from_utf8_prefix(shared_bytes).ok_or({ value: 0, rest: [] }).rest)
+        \\        + Str.count_utf8_bytes(U16.from_str_prefix(shared).ok_or({ value: 0, rest: "" }).rest)
+        \\        + List.len(U16.from_utf8_prefix(shared_bytes).ok_or({ value: 0, rest: [] }).rest)
+        \\        + Str.count_utf8_bytes(I16.from_str_prefix(shared).ok_or({ value: 0, rest: "" }).rest)
+        \\        + List.len(I16.from_utf8_prefix(shared_bytes).ok_or({ value: 0, rest: [] }).rest)
+        \\        + Str.count_utf8_bytes(U32.from_str_prefix(shared).ok_or({ value: 0, rest: "" }).rest)
+        \\        + List.len(U32.from_utf8_prefix(shared_bytes).ok_or({ value: 0, rest: [] }).rest)
+        \\        + Str.count_utf8_bytes(I32.from_str_prefix(shared).ok_or({ value: 0, rest: "" }).rest)
+        \\        + List.len(I32.from_utf8_prefix(shared_bytes).ok_or({ value: 0, rest: [] }).rest)
+        \\        + Str.count_utf8_bytes(U64.from_str_prefix(shared).ok_or({ value: 0, rest: "" }).rest)
+        \\        + List.len(U64.from_utf8_prefix(shared_bytes).ok_or({ value: 0, rest: [] }).rest)
+        \\        + Str.count_utf8_bytes(I64.from_str_prefix(shared).ok_or({ value: 0, rest: "" }).rest)
+        \\        + List.len(I64.from_utf8_prefix(shared_bytes).ok_or({ value: 0, rest: [] }).rest)
+        \\        + Str.count_utf8_bytes(U128.from_str_prefix(shared).ok_or({ value: 0, rest: "" }).rest)
+        \\        + List.len(U128.from_utf8_prefix(shared_bytes).ok_or({ value: 0, rest: [] }).rest)
+        \\        + Str.count_utf8_bytes(I128.from_str_prefix(shared).ok_or({ value: 0, rest: "" }).rest)
+        \\        + List.len(I128.from_utf8_prefix(shared_bytes).ok_or({ value: 0, rest: [] }).rest)
+        \\        + Str.count_utf8_bytes(Dec.from_str_prefix(shared).ok_or({ value: 0, rest: "" }).rest)
+        \\        + List.len(Dec.from_utf8_prefix(shared_bytes).ok_or({ value: 0, rest: [] }).rest)
+        \\        + Str.count_utf8_bytes(F32.from_str_prefix(shared).ok_or({ value: 0, rest: "" }).rest)
+        \\        + List.len(F32.from_utf8_prefix(shared_bytes).ok_or({ value: 0, rest: [] }).rest)
+        \\        + Str.count_utf8_bytes(F64.from_str_prefix(shared).ok_or({ value: 0, rest: "" }).rest)
+        \\        + List.len(F64.from_utf8_prefix(shared_bytes).ok_or({ value: 0, rest: [] }).rest)
+        \\        + List.len(holder)
+        \\        + List.len(bytes_holder)
+        \\}
+        ,
+    },
+    .{
         .name = "numeric to_str allocates a fresh string",
         .source =
         \\{

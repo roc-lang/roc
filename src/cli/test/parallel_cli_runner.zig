@@ -908,6 +908,25 @@ else
 
 const issue_11217_size_expected_stdout = if (builtin.os.tag == .windows) "ok\r\n" else "ok\n";
 const issue_11351_expected_stdout = "[]\n0\n{ a: [], b: Err([]) }\n[]\n";
+const issue_11578_expected_stdout =
+    \\("x", U, 3)
+    \\(U, "x")
+    \\("x", {}, 3)
+    \\("x", (U, U))
+    \\{ a: "x", u: U }
+    \\[U, U]
+    \\[{ n: "x", u: U }]
+    \\Ok((U, {}))
+    \\Pair(U, "x")
+    \\("x", meters!)
+    \\[meters!]
+    \\("x", <opaque>)
+    \\{ a: "x", sec: <opaque> }
+    \\("x", { a: 1, b: "x" })
+    \\Box(U)
+    \\Box(("x", meters!))
+    \\
+;
 const issue_11351_size_expected_stdout = if (builtin.os.tag == .windows)
     "[]\r\n0\r\n{ a: [], b: Err([]) }\r\n[]\r\n"
 else
@@ -960,6 +979,15 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11351 Boxy unbound type variables use their sealed default (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11351.roc", .stdout_exact = issue_11351_expected_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11351 Boxy unbound type variables use their sealed default (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/issue_11351.roc", .stdout_exact = issue_11351_expected_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11351 Boxy unbound type variables use their sealed default (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no" }, .roc_file = "test/echo/issue_11351.roc", .stdout_exact = issue_11351_size_expected_stdout } } },
+    // repro for https://github.com/roc-lang/roc/issues/11578
+    //
+    // `Str.inspect` must render every part of a value under `--specialize=no`
+    // exactly as it does when specialized: zero-sized values, scalar nominals
+    // with a custom `to_inspect`, opaque types, padded nominal records, and
+    // boxes.
+    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11578 Boxy inspects zero-sized and nominal parts of values (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11578_boxy_inspect.roc", .stdout_exact = issue_11578_expected_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11578 Boxy inspects zero-sized and nominal parts of values (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/issue_11578_boxy_inspect.roc", .stdout_exact = issue_11578_expected_stdout } } },
+
     // repro for https://github.com/roc-lang/roc/issues/11558
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11558 Boxy inspects nominals with type parameters through their custom to_inspect (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11558_generic_nominal_inspect.roc", .stdout_exact = "Wrap(\"hi\")\nDict.from_list([])\nDict.from_list([(\"a\", 1)])\nSet.from_list([])\nSet.from_list([2])\nOk(\"nested\")\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11558 Boxy inspects nominals with type parameters through their custom to_inspect (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/issue_11558_generic_nominal_inspect.roc", .stdout_exact = "Wrap(\"hi\")\nDict.from_list([])\nDict.from_list([(\"a\", 1)])\nSet.from_list([])\nSet.from_list([2])\nOk(\"nested\")\n" } } },

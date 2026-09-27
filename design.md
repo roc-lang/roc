@@ -13398,6 +13398,44 @@ not by a backend. Their contents are serialized into LirImage when any reachable
 LIR statement references them. A backend may cache lowered helper code for a
 descriptor, dictionary, or adapter, but it must not change that data's meaning.
 
+A `BoxyTypeDesc` records the source-language shape of the value it describes
+(`BoxyDescShape`): primitive, record, tuple, tag union, list, box, erased
+storage, callable, or compiler-internal storage. Consumers that render or
+match source-language structure, such as inspection, dispatch on that shape.
+The payload layout only locates bytes, because layout erases structure: a
+zero-sized record, tuple, and single-tag union all share the `zst` layout.
+
+`nested_descs` holds exactly one descriptor per child position: struct field
+`i` (by original field index) is position `i`, and a list's item or a box's
+payload is position 0. Zero-sized and scalar children have positions too,
+because a child's descriptor is the only runtime record of its source-language
+identity: its tag names, its record or tuple structure, a nominal `to_inspect`
+method, or its opacity. Every producer (static, worker-instantiated, template,
+constructed-aggregate, adapter-specialized, erased-capture, and generated
+evidence descriptors) and every consumer uses these positions; no consumer
+locates a child descriptor by testing sibling layouts. Tag variants likewise
+carry a descriptor for every payload, keyed by payload index. A record
+descriptor names every position in `field_names`. A declared nominal's unnamed
+padding field is named `padding_field`, which inspection skips and which
+corresponds only to the padding field at the same position of another
+descriptor.
+
+Whether a child's value also carries a runtime descriptor for its memory
+operations is a separate question, answered by its storage layout. Memory
+walkers follow a child descriptor only for storage that needs one, and lowering
+attaches runtime descriptor locals only to such values. A child whose storage
+carries no runtime descriptor has a statically known identity, so lowering
+references its static descriptor directly instead of materializing a local.
+
+Once lowering has produced every descriptor,
+`LirProgram.Result.classifyBoxyDescClosures` records each static descriptor's
+`closure`: `closed` when every reachable reference is static, `captures` when
+reachable references read only the materialization's captured descriptor
+locals, and `context` otherwise. The runtime uses a closed descriptor in place
+and never copies it. It instantiates a capture-bound template once per distinct
+set of captured descriptors, memoized in the `DescMaterializationCache` shared
+by the interpreter and the machine-code Boxy ABI.
+
 Boxy tag and field names belong to `LirStore.boxy_names`, separate from literal
 backings. Lowering interns each spelling through the shared serial string
 interner and assigns its dense `BoxyNameId` once. Variant metadata, tag
