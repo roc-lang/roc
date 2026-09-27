@@ -1791,7 +1791,7 @@ pub fn pushRuntimeErrorExpr(self: *Self, comptime RetIdx: type, reason: CIR.Diag
 /// Replaces an existing expression with a runtime error and records the diagnostic.
 pub fn replaceExprWithRuntimeError(self: *Self, expr_idx: CIR.Expr.Idx, reason: CIR.Diagnostic) std.mem.Allocator.Error!void {
     const diag_idx = try self.addDiagnostic(reason);
-    self.store.setExprRuntimeError(expr_idx, diag_idx);
+    try self.store.setExprRuntimeError(expr_idx, diag_idx);
     self.debugAssertArraysInSync();
 }
 

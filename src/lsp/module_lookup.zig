@@ -160,7 +160,7 @@ pub fn findDefinitionByModuleMember(module_env: *ModuleEnv, module_name: []const
     // Search through all_statements
     const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
     for (statements_slice) |stmt_idx| {
-        const stmt = module_env.store.getStatement(stmt_idx);
+        const stmt = module_env.store.getSourceStatement(stmt_idx);
         const parts = getStatementParts(stmt);
 
         if (parts.pattern) |pattern_idx| {
@@ -184,7 +184,7 @@ pub fn findDefinitionByModuleMember(module_env: *ModuleEnv, module_name: []const
 pub fn findTypeDeclarationByModuleMember(module_env: *ModuleEnv, module_name: []const u8, name: []const u8) ?CIR.Statement.Idx {
     const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
     for (statements_slice) |stmt_idx| {
-        const header_idx: ?CIR.TypeHeader.Idx = switch (module_env.store.getStatement(stmt_idx)) {
+        const header_idx: ?CIR.TypeHeader.Idx = switch (module_env.store.getSourceStatement(stmt_idx)) {
             .s_alias_decl => |alias| alias.header,
             .s_nominal_decl => |nominal| nominal.header,
             .s_decl,
@@ -263,7 +263,7 @@ pub fn findDefOwningPattern(module_env: *ModuleEnv, target_pattern: CIR.Pattern.
 pub fn findStatementOwningPattern(module_env: *ModuleEnv, target_pattern: CIR.Pattern.Idx) ?struct { stmt: CIR.Statement, idx: CIR.Statement.Idx } {
     const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
     for (statements_slice) |stmt_idx| {
-        const stmt = module_env.store.getStatement(stmt_idx);
+        const stmt = module_env.store.getSourceStatement(stmt_idx);
         const pattern_idx_opt = getDeclarationPattern(stmt);
         if (pattern_idx_opt) |pat_idx| {
             if (pat_idx == target_pattern) return .{ .stmt = stmt, .idx = stmt_idx };
@@ -300,7 +300,7 @@ pub fn findDefinitionsWithPrefix(
     // Search through all_statements
     const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
     for (statements_slice) |stmt_idx| {
-        const stmt = module_env.store.getStatement(stmt_idx);
+        const stmt = module_env.store.getSourceStatement(stmt_idx);
         const parts = getStatementParts(stmt);
 
         if (parts.pattern) |pattern_idx| {
@@ -522,7 +522,7 @@ pub fn findBindingByName(module_env: *ModuleEnv, name: []const u8, offset: u32) 
     // Then check statements, but only those defined before the offset
     const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
     for (statements_slice) |stmt_idx| {
-        const stmt = module_env.store.getStatement(stmt_idx);
+        const stmt = module_env.store.getSourceStatement(stmt_idx);
         const parts = getStatementParts(stmt);
 
         if (parts.pattern) |pattern_idx| {
@@ -588,7 +588,7 @@ pub const DefinitionIterator = struct {
             const stmt_idx = self.statements_slice[self.statements_index];
             self.statements_index += 1;
 
-            const stmt = self.module_env.store.getStatement(stmt_idx);
+            const stmt = self.module_env.store.getSourceStatement(stmt_idx);
             const parts = getStatementParts(stmt);
 
             if (parts.pattern) |pattern_idx| {
