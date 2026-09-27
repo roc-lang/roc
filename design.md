@@ -579,10 +579,10 @@ checked runtime error. It follows each template's explicit procedure
 references, constant references, and closed dispatch targets to a fixpoint,
 reads an imported template's answer from the importing CheckedModule's view of
 that module's `checked_error_templates` list, and never requests a compile-time
-root whose entry wrapper is in the list. An expect is the exception: when only a
-callee or a referenced constant reaches the checked error, the expect still runs
-and its crash is a failed test, which is not a second report of the checked
-error. A CheckedModule whose bodies and imports contain no checked runtime error
+root whose entry wrapper is in the list. This includes expect roots: a checked
+error in a callee or referenced constant blocks execution and counts as a
+compiler-error test result, with the original checking diagnostic reported once.
+A CheckedModule whose bodies and imports contain no checked runtime error
 records an empty list and does no traversal. It must never become a module,
 package, or program flag. A checked module or checked program may contain
 user-facing diagnostics and still produce hoisted roots for every independent
@@ -3670,7 +3670,10 @@ successful compile-time root requests. The presence of diagnostics is not an
 module-level root-selection failure.
 
 `roc test` counts each diagnostic-blocked top-level expect from the existing
-compile-time root table and the body diagnostic recorded with it.
+compile-time root table and the recorded checked-error reachability of its body
+and referenced procedures and constants. A type error inside a called function,
+including an inline expect condition, blocks the calling expect just like a
+type error in that expect's own body; it never becomes a runtime test failure.
 `runtime_entrypoint` root requests intentionally exclude these expects; their
 absence is not a test inventory. Blocked expects produce one compiler-error test result each, even
 when several diagnostics belong to one expect or one diagnostic blocks several

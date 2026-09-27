@@ -240,7 +240,9 @@ pub const Constants = struct {
     /// 109: Every source node replaced by a runtime error, patterns included,
     ///      stays readable through the node store's `replaced_source_nodes`,
     ///      named by the `.malformed` payload.
-    pub const CACHE_VERSION = 109;
+    /// 110: Expect roots reaching checked errors are ineligible for execution,
+    ///      including errors in referenced procedures and constants.
+    pub const CACHE_VERSION = 110;
 };
 
 /// Configuration for the Roc cache system.

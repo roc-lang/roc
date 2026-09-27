@@ -27510,8 +27510,8 @@ fn excludeErroneousCompileTimeRootRequests(bodies: *const CheckedBodyStore, root
 
 /// A compile-time root whose evaluation can call into code checking replaced
 /// with a runtime error would report that already-reported problem a second
-/// time as a compile-time crash, so it is not requested. An expect is the
-/// exception: its crash is a failed test, not a second report. Reachability
+/// time as a compile-time crash, so it is not requested. This includes expect
+/// roots, which are counted as compiler errors without execution. Reachability
 /// follows each procedure template's explicit procedure references, constant
 /// references, and closed dispatch targets, local and imported. The result is
 /// recorded per template so importing modules consume it directly; a module
@@ -27590,9 +27590,6 @@ const CheckedErrorReachability = struct {
         self.templates.checked_error_templates = try published.toOwnedSlice(allocator);
 
         for (roots) |*root| {
-            // An expect that crashes is a failed test rather than a second
-            // report of the checked error, so it stays executable.
-            if (root.kind == .expect) continue;
             if (!compileTimeRootRequestIsEligible(root.*)) continue;
             const wrapper = self.entry_wrappers.lookupByRoot(root.id) orelse continue;
             if (reaches[@intFromEnum(wrapper.template.template)]) root.request_eligibility = .ineligible;
@@ -32712,8 +32709,8 @@ pub const CheckedModuleArtifact = struct {
     /// Whether a compile-time root's evaluation can reach code checking
     /// reported and replaced with a runtime error, in its own body or through
     /// the procedures and constants it references. Such a root is never
-    /// requested unless it is an expect whose own body is free of checking
-    /// errors; that expect runs, and its crash is a failed test.
+    /// requested. An expect that reaches a checked error is counted as a
+    /// compiler error without running its replacement crash.
     pub fn compileTimeRootReachesCheckedError(self: *const CheckedModuleArtifact, root: CompileTimeRoot) bool {
         if (self.checked_bodies.exprContainsDiagnosticError(root.expr)) return true;
         const wrapper = self.entry_wrappers.lookupByRoot(root.id) orelse return false;
