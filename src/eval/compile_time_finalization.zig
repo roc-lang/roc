@@ -372,7 +372,6 @@ pub const ProgramSession = struct {
         var scalar_values = try lir.CheckedPipeline.CompletedScalarValues.init(allocator, &source.lir_result, host_frozen);
         defer scalar_values.deinit(allocator);
         var frozen_context = RuntimeFrozenMaterializer{ .source = source };
-        defer frozen_context.successful_roots.deinit(allocator);
         owned_live = false;
         var lowered = try lir.CheckedPipeline.lowerFinalConsumerToLir(owned, .{
             .roots = consumer_roots,
@@ -382,7 +381,6 @@ pub const ProgramSession = struct {
             .frozen_materializer = .{
                 .context = &frozen_context,
                 .materialize = RuntimeFrozenMaterializer.materialize,
-                .complete_guards = RuntimeFrozenMaterializer.completeGuards,
             },
             .observers = lir.CheckedPipeline.Observers.fromTarget(target),
             .lir_policy = lir.CheckedPipeline.LirPolicy.fromTarget(target),
@@ -400,13 +398,7 @@ pub const ProgramSession = struct {
 };
 
 const RuntimeFrozenMaterializer = struct {
-    const SuccessfulRoot = struct {
-        module: checked.ModuleId,
-        root: lir.LIR.ComptimeProducer,
-    };
-
     source: *const lir.CheckedPipeline.LoweredProgram,
-    successful_roots: std.ArrayList(SuccessfulRoot) = .empty,
 
     fn materialize(
         allocator: Allocator,
@@ -414,19 +406,7 @@ const RuntimeFrozenMaterializer = struct {
         target: *LirProgram.Result,
     ) Allocator.Error!LirProgram.FrozenStaticData {
         const self: *RuntimeFrozenMaterializer = @ptrCast(@alignCast(context));
-        return transcodeCompletedSlots(allocator, self.source, target, &self.successful_roots);
-    }
-
-    fn completeGuards(context: *anyopaque, target: *LirProgram.Result) Allocator.Error!void {
-        const self: *RuntimeFrozenMaterializer = @ptrCast(@alignCast(context));
-        for (self.successful_roots.items) |successful| {
-            for (target.static_data_values.items, 0..) |value, index| {
-                const root = value.compile_time_root orelse continue;
-                if (root.role != .value or !std.meta.eql(root.module, successful.module) or !root.root.eql(successful.root)) continue;
-                try lir.ComptimeValueGuards.completeSuccessfulSlot(target, @enumFromInt(index));
-                break;
-            } else finalizationInvariant("successful completed root was removed before guard completion");
-        }
+        return transcodeCompletedSlots(allocator, self.source, target);
     }
 };
 
@@ -436,7 +416,6 @@ fn transcodeCompletedSlots(
     allocator: Allocator,
     source: *const lir.CheckedPipeline.LoweredProgram,
     target: *LirProgram.Result,
-    successful_roots: *std.ArrayList(RuntimeFrozenMaterializer.SuccessfulRoot),
 ) Allocator.Error!LirProgram.FrozenStaticData {
     const frozen = source.frozen_static_data orelse finalizationInvariant("host program omitted its completed frozen values");
     var exports = std.ArrayList(static_data_exports.StaticDataExport).empty;
@@ -463,17 +442,24 @@ fn transcodeCompletedSlots(
         if (entry.found_existing) finalizationInvariant("checked root has ambiguous source value slots");
         entry.value_ptr.* = ordinal;
     }
+    const source_symbols = try allocator.alloc(?static_data_exports.StaticDataSymbolId, source.lir_result.static_data_values.items.len);
+    defer allocator.free(source_symbols);
+    @memset(source_symbols, null);
+    for (frozen.exports, 0..) |item, symbol| {
+        const slot = item.value_id orelse continue;
+        source_symbols[@intFromEnum(slot)] = @enumFromInt(symbol);
+    }
     for (target.static_data_values.items, 0..) |target_entry, index| {
         const target_root = target_entry.compile_time_root orelse continue;
         const target_slot: lir.LIR.StaticDataId = @enumFromInt(index);
         const ordinal = source_slots.get(.{ .module = target_root.module, .root = target_root.root, .role = std.meta.activeTag(target_root.role) }) orelse
             finalizationInvariant("target slot has no corresponding host root");
         const source_entry = source.lir_result.static_data_values.items[ordinal];
-        const source_symbol = frozenSlotSymbol(frozen.exports, @enumFromInt(ordinal));
+        const source_symbol = frozenSlotSymbol(source_symbols, @enumFromInt(ordinal));
         const failed = if (target_root.role == .value) block: {
             const failure_slot = source_entry.compile_time_root.?.role.value.failure_slot;
             const failure_entry = source.lir_result.static_data_values.items[@intFromEnum(failure_slot)];
-            const failure_symbol = frozenSlotSymbol(frozen.exports, failure_slot);
+            const failure_symbol = frozenSlotSymbol(source_symbols, failure_slot);
             const failure_export = frozen.exports[@intFromEnum(failure_symbol)];
             const offset = failure_entry.compile_time_root.?.role.failure_message.failed_offset;
             break :block failure_export.bytes[failure_export.symbol_offset + offset] != 0;
@@ -489,17 +475,12 @@ fn transcodeCompletedSlots(
             return err;
         };
         allocator.free(converted);
-        if (target_root.role == .value and !failed) try successful_roots.append(allocator, .{
-            .module = target_root.module,
-            .root = target_root.root,
-        });
     }
     return .{ .allocator = allocator, .exports = try exports.toOwnedSlice(allocator) };
 }
 
-fn frozenSlotSymbol(exports: []const static_data_exports.StaticDataExport, slot: lir.LIR.StaticDataId) static_data_exports.StaticDataSymbolId {
-    for (exports, 0..) |item, index| if (item.value_id == slot) return @enumFromInt(index);
-    finalizationInvariant("completed frozen graph omitted a declared slot");
+fn frozenSlotSymbol(symbols: []const ?static_data_exports.StaticDataSymbolId, slot: lir.LIR.StaticDataId) static_data_exports.StaticDataSymbolId {
+    return symbols[@intFromEnum(slot)] orelse finalizationInvariant("completed frozen graph omitted a declared slot");
 }
 
 /// Failed values have no representation to convert. Their explicit guard
@@ -4946,7 +4927,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     const int_addend_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = addend_int, .value = .{ .i64_literal = .{ .value = 345, .layout_idx = .u64 } }, .next = float_input_stmt } }, .test_fixture);
     const consumer_body = try result.store.addCFStmt(.{ .assign_literal = .{ .target = input_int, .value = .{ .i64_literal = .{ .value = 12000, .layout_idx = .u64 } }, .next = int_addend_stmt } }, .test_fixture);
     const consumer_proc = try result.store.addProcSpec(.{ .name = .fromRaw(1), .identity = lir.LIR.ProcIdentity.forTest(2), .args = .empty(), .frame_locals = try result.store.addLocalSpan(&.{ consumer_local, live_int, live_float, expected_int, expected_float, equal_int, equal_float, input_int, addend_int, input_float, addend_float }), .body = consumer_body, .ret_layout = .str }, .none);
-    try lir.ComptimeValueGuards.insert(allocator, result);
+    try lir.ComptimeValueGuards.insert(allocator, result, null);
 
     const failure_size = result.layouts.layoutSize(result.layouts.getLayout(failure_layout));
     const zeros = try allocator.alloc(u8, failure_size);

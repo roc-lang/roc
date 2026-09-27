@@ -975,14 +975,12 @@ pub const Consumer = struct {
     lir_policy: ?LirPolicy = null,
 };
 
-/// Materializes completed values into a program's frozen static data and
-/// applies evaluation outcomes to the guards inserted around them.
+/// Materializes completed values into a program's frozen static data. Guard
+/// insertion reads each value's outcome from that image, so only reads of a
+/// failed value are guarded.
 pub const FrozenMaterializer = struct {
     context: *anyopaque,
     materialize: *const fn (Allocator, *anyopaque, *LirProgram.Result) Allocator.Error!LirProgram.FrozenStaticData,
-    /// Apply evaluation outcomes after guard insertion. Successful values
-    /// bypass their guards; failed values retain the emitted failure path.
-    complete_guards: *const fn (*anyopaque, *LirProgram.Result) Allocator.Error!void,
 };
 
 /// Materialized Lambda Mono program type, re-exported for harnesses that
@@ -1501,7 +1499,7 @@ pub fn lowerConsumerToLir(prepared: *PreparedSolved, consumer: Consumer) LowerRe
     else
         null;
     errdefer if (frozen) |*data| data.deinit();
-    return finishLoweredOutput(prepared.allocator, consumerRootCount(prepared.*, consumer), generated.target, &generated.output, &frozen, consumer.frozen_materializer);
+    return finishLoweredOutput(prepared.allocator, consumerRootCount(prepared.*, consumer), generated.target, &generated.output, &frozen);
 }
 
 /// Lower the producer program's last consumer, and release the producer as
@@ -1527,7 +1525,7 @@ pub fn lowerFinalConsumerToLir(prepared: PreparedSolved, consumer: Consumer) Low
     errdefer if (frozen) |*data| data.deinit();
     owned_live = false;
     owned.deinit();
-    return finishLoweredOutput(allocator, root_count, target, &generated.output, &frozen, consumer.frozen_materializer);
+    return finishLoweredOutput(allocator, root_count, target, &generated.output, &frozen);
 }
 
 /// How many roots this consumer lowers: its own share, or the producer's
@@ -1631,7 +1629,6 @@ fn finishLoweredOutput(
     target: TargetConfig,
     lowered: anytype,
     frozen: *?LirProgram.FrozenStaticData,
-    frozen_materializer: ?FrozenMaterializer,
 ) LowerResourceError!LoweredProgram {
     verifyArithmeticBoundary(&lowered.lir_result.store, false);
     var lir_passes_timing_scope = PipelineTimingScope.begin(target.timing, .lir_passes);
@@ -1728,10 +1725,7 @@ fn finishLoweredOutput(
     // is the placement ARC produced.
     _ = try ImmortalLocals.elide(allocator, &lowered.lir_result.store);
 
-    try @import("comptime_value_guards.zig").insert(allocator, &lowered.lir_result);
-    if (frozen_materializer) |materializer| {
-        try materializer.complete_guards(materializer.context, &lowered.lir_result);
-    }
+    try @import("comptime_value_guards.zig").insert(allocator, &lowered.lir_result, if (frozen.*) |*data| data else null);
 
     try LirDump.run(&lowered.lir_result);
     if (SpecCensus.enabled()) try SpecCensus.runLir(allocator, &lowered.lir_result);
@@ -1803,7 +1797,7 @@ fn lowerBoxyCheckedModulesToLir(
     boxy_lower_timing_scope.end();
 
     var frozen: ?LirProgram.FrozenStaticData = null;
-    return finishLoweredOutput(allocator, roots.requests.len, target, &lowered, &frozen, null);
+    return finishLoweredOutput(allocator, roots.requests.len, target, &lowered, &frozen);
 }
 
 fn verifyArithmeticBoundary(store: *const core.LirStore, before_prover: bool) void {

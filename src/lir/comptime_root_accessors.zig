@@ -130,7 +130,7 @@ fn testRebuild(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqua
         .ret_layout = list_layout,
     }, .none);
     program.static_data_values.items[@intFromEnum(value_slot)].accessor = accessor;
-    try @import("comptime_value_guards.zig").insert(allocator, &program);
+    try @import("comptime_value_guards.zig").insert(allocator, &program, null);
     var failure_record = [_]u8{0} ** 32;
     failure_record[failed_offset] = 1;
     const descriptor = [_]u8{0} ** 24;

@@ -1079,9 +1079,12 @@ consumer still owns its complete, uncompacted LIR representation tables. The
 resulting frozen graph participates in the consumer's one reachability pass:
 its explicit function relocations retain exactly the callable procedures that
 the completed values contain, and those procedures join the ordinary runtime
-roots supplied to ARC. Successful evaluation evidence removes its value guards
-after guard construction; failed values keep their ordinary runtime failure
-paths. A root that stops at a checked root's value guard is a propagated
+roots supplied to ARC. Guard insertion runs after that pass and reads each
+read value's outcome from the failure record in the compacted frozen graph: a
+read of a successful value is never guarded, and a read of a failed value keeps
+its ordinary runtime failure path. Worker preparation may create slots that
+lowering never reads, so no step may assume a slot present at transcoding
+survives reachability. A root that stops at a checked root's value guard is a propagated
 failure: it records the failure it read and is not reported again, because the
 failing root already reported it in the module that owns it. A literal root
 belongs to no checked module, so nothing retains its failure between
