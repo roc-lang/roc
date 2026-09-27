@@ -5141,15 +5141,12 @@ const Builder = struct {
                 .{ .source_type = source_type, .kind = .empty_tag_union }
             else blk: {
                 var rep = try self.dynamicRepresentation(source_type, flex.constraints, .flex);
-                // A literal's numeric default applies only if nothing resolves
-                // it: when a scheme quantifies the variable, each instantiation
-                // supplies its type through the descriptor the scheme's uses
-                // pass, so only an unquantified one seals to that default.
-                const seals = if (flex.numeric_default_phase != null)
-                    !self.quantified_variables.contains(source_type)
-                else
-                    !self.flexConstraintsRequireScheme(source_type, flex.constraints);
-                if (!self.host_mode and seals) {
+                // A default applies only if nothing resolves the variable:
+                // when a scheme quantifies it, each instantiation supplies its
+                // type and dictionaries through the scheme's uses, so only an
+                // unquantified one seals to its default, and its dispatches
+                // then resolve against that default.
+                if (!self.host_mode and !self.quantified_variables.contains(source_type)) {
                     rep.sealed_default = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
                     try self.plan.representations.append(self.allocator, .{
                         .source_type = source_type,
@@ -5601,20 +5598,6 @@ const Builder = struct {
         for (static_dispatch.structural_method_kinds) |entry| {
             if (entry.kind != .equality) continue;
             if (std.mem.eql(u8, names.methodNameText(constraint.fn_name), entry.method_name)) return true;
-        }
-        return false;
-    }
-
-    /// Whether the bare flex variable carries any checked constraint a
-    /// quantifying scheme would have to own. The ownerless structural-equality
-    /// placeholder does not count.
-    fn flexConstraintsRequireScheme(
-        self: *Builder,
-        source_type: CheckedTypeIdentity,
-        constraints: []const checked.CheckedStaticDispatchConstraint,
-    ) bool {
-        for (constraints) |constraint| {
-            if (!self.constraintIsOwnerlessStructuralEquality(source_type, constraint)) return true;
         }
         return false;
     }
@@ -6608,15 +6591,18 @@ const Builder = struct {
                 .num_literal = constraint.numeralInfo(),
             });
         }
+        // Analyzing a constraint's signature appends the requirements of the
+        // variables it mentions, which belong to those variables' own spans.
+        const span = Span{
+            .start = start,
+            .len = @intCast(self.plan.dictionaries.items.len - start),
+        };
         const view = self.moduleForId(source_type.module);
         for (constraints) |constraint| {
             if (self.constraintIsOwnerlessStructuralEquality(source_type, constraint)) continue;
             _ = try self.analyzeType(view, constraint.fn_ty);
         }
-        return .{
-            .start = start,
-            .len = @intCast(self.plan.dictionaries.items.len - start),
-        };
+        return span;
     }
 
     fn internDictionaryMethodSlot(
@@ -6990,9 +6976,20 @@ const Builder = struct {
         }.lessThan);
         var edges = std.ArrayList(WorkerEdge).empty;
         defer edges.deinit(self.allocator);
-        for (self.plan.nested_callable_uses.items) |use| try edges.append(self.allocator, .{ .caller = use.caller, .callee = use.worker });
-        for (self.plan.callable_uses.items) |use| try edges.append(self.allocator, .{ .caller = use.caller, .callee = use.worker });
-        for (self.plan.direct_calls.items) |call| try edges.append(self.allocator, .{ .caller = call.caller, .callee = call.worker });
+        var edge_substitutions = std.ArrayList(?SchemeCallSubstitution).empty;
+        defer edge_substitutions.deinit(self.allocator);
+        for (self.plan.nested_callable_uses.items) |use| {
+            try edges.append(self.allocator, .{ .caller = use.caller, .callee = use.worker });
+            try edge_substitutions.append(self.allocator, self.useSchemeSubstitution(use.worker, use.use));
+        }
+        for (self.plan.callable_uses.items) |use| {
+            try edges.append(self.allocator, .{ .caller = use.caller, .callee = use.worker });
+            try edge_substitutions.append(self.allocator, self.useSchemeSubstitution(use.worker, use.use));
+        }
+        for (self.plan.direct_calls.items) |call| {
+            try edges.append(self.allocator, .{ .caller = call.caller, .callee = call.worker });
+            try edge_substitutions.append(self.allocator, self.directCallSchemeSubstitution(call));
+        }
 
         var scopes = try self.computeWorkerScopeChains(edges.items);
         defer scopes.deinit(self.allocator);
@@ -7037,16 +7034,64 @@ const Builder = struct {
             }
         }
 
+        // A use instantiates each callee scheme variable with a type the
+        // caller supplies. A variable of that type which the caller's own
+        // scheme or an enclosing local scope quantifies is described by the
+        // caller's frame; one reached only through a constraint signature
+        // appears in no type the caller's body mentions, so the substitution is
+        // the only place it is named. The images depend only on the edge, so
+        // they are computed once.
+        var image_arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer image_arena.deinit();
+        const image_allocator = image_arena.allocator();
+        const edge_images = try image_allocator.alloc(std.AutoHashMapUnmanaged(TypeRepId, []const TypeRepId), edges.items.len);
+        var image_leaves = WorkerDescriptorLeaves{ .set = collections.DenseMap(TypeRepId, void).init(self.allocator) };
+        defer image_leaves.deinit(self.allocator);
+        var caller_images = std.ArrayList(TypeRepId).empty;
+        defer caller_images.deinit(self.allocator);
+        for (edges.items, edge_substitutions.items, edge_images) |edge, substitution, *images| {
+            images.* = .empty;
+            const sub = substitution orelse continue;
+            for (sub.scheme_vars, sub.site_types) |variable, site_type| {
+                if (sub.site_view.checked_types.payload(site_type) == .err) continue;
+                const scheme_rep = self.plan.repForSourceType(typeRef(sub.callee_view, variable)) orelse continue;
+                const site_rep = self.plan.repForSourceType(typeRef(sub.site_view, site_type)) orelse
+                    boxyPlanInvariant("callable use substitution type was not analyzed");
+                seen.clearRetainingCapacity();
+                image_leaves.set.clearRetainingCapacity();
+                image_leaves.order.clearRetainingCapacity();
+                try self.collectDescriptorLeaves(site_rep, &image_leaves, &seen);
+                caller_images.clearRetainingCapacity();
+                for (image_leaves.order.items) |image_leaf| {
+                    if (!own_scheme[@intFromEnum(edge.caller)].contains(image_leaf) and
+                        scopes.owner.get(image_leaf) == null) continue;
+                    if (!scopes.allows(edge.caller, image_leaf)) continue;
+                    try caller_images.append(self.allocator, image_leaf);
+                }
+                if (caller_images.items.len == 0) continue;
+                const entry = try images.getOrPut(image_allocator, scheme_rep);
+                entry.value_ptr.* = if (entry.found_existing)
+                    try std.mem.concat(image_allocator, TypeRepId, &.{ entry.value_ptr.*, caller_images.items })
+                else
+                    try image_allocator.dupe(TypeRepId, caller_images.items);
+            }
+        }
+
         var changed = true;
         while (changed) {
             changed = false;
-            for (edges.items) |edge| {
+            for (edges.items, edge_images) |edge, images| {
                 if (edge.caller == edge.callee) continue;
                 const callee = @intFromEnum(edge.callee);
                 const caller = &needs[@intFromEnum(edge.caller)];
                 for ([_][]const TypeRepId{ signature[callee].order.items, needs[callee].order.items }) |leaves| {
                     for (leaves) |leaf| {
-                        if (own_scheme[callee].contains(leaf)) continue;
+                        if (own_scheme[callee].contains(leaf)) {
+                            for (images.get(leaf) orelse &.{}) |image_leaf| {
+                                if (try caller.add(self.allocator, image_leaf)) changed = true;
+                            }
+                            continue;
+                        }
                         if (!scopes.allows(edge.caller, leaf)) continue;
                         if (try caller.add(self.allocator, leaf)) changed = true;
                     }
@@ -11526,7 +11571,24 @@ const Builder = struct {
                 };
             }
         }
+        if (owner == null and self.repSealsUninhabited(source_rep)) {
+            switch (static_dispatch.unpinnedDispatchResolution(self.structuralKindForRequirement(requirement, requirement_view))) {
+                .structural => {},
+                .unreachable_value => return .{
+                    .requirement_type = requirement.fn_ty,
+                    .callable_type = requirement.fn_ty,
+                    .resolution = .unreachable_value,
+                },
+            }
+        }
         return try self.structuralDictionaryMethodEvidence(source_rep, requirement, requirement_view);
+    }
+
+    /// Whether an unquantified variable seals to the empty tag union, so no
+    /// value of its type exists and its dispatches follow the unpinned rule.
+    fn repSealsUninhabited(self: *const Builder, rep: TypeRepresentation) bool {
+        const sealed = rep.sealed_default orelse return false;
+        return self.plan.representations.items[@intFromEnum(sealed)].kind == .empty_tag_union;
     }
 
     const StaticDictionaryMethodInstantiation = struct {
@@ -11731,17 +11793,9 @@ const Builder = struct {
         requirement_view: ModuleView,
     ) ?static_dispatch.StructuralKind {
         const canonical_names = requirement_view.canonical_names orelse return null;
-        if (canonical_names.lookupMethodName("is_eq")) |method| {
-            if (method == requirement.fn_name) return .equality;
-        }
-        if (canonical_names.lookupMethodName("to_hash")) |method| {
-            if (method == requirement.fn_name) return .hash;
-        }
-        if (canonical_names.lookupMethodName("parser_for")) |method| {
-            if (method == requirement.fn_name) return .parser;
-        }
-        if (canonical_names.lookupMethodName("encoder_for")) |method| {
-            if (method == requirement.fn_name) return .encoder;
+        for (static_dispatch.structural_method_kinds) |entry| {
+            const method = canonical_names.lookupMethodName(entry.method_name) orelse continue;
+            if (method == requirement.fn_name) return entry.kind;
         }
         return null;
     }
@@ -13723,6 +13777,10 @@ const Builder = struct {
             .promoted_proc => {},
             .decl => |decl| {
                 if (view.checked_bodies.expr(decl.expr).data == .runtime_error) return;
+                // A scheme alias binds no runtime value: each typed use
+                // instantiates its target, so the declaration's own generalized
+                // right-hand side is never lowered.
+                if (patternIsSchemeAlias(view, decl.pattern)) return;
                 try self.analyzePatternTypes(view, decl.pattern);
                 try self.analyzeExprTypes(view, decl.expr);
             },
@@ -13771,6 +13829,13 @@ const Builder = struct {
             },
             .return_ => |ret| try self.analyzeExprTypes(view, ret.expr),
         }
+    }
+
+    fn patternIsSchemeAlias(view: ModuleView, pattern_id: checked.CheckedPatternId) bool {
+        return switch (view.checked_bodies.pattern(pattern_id).data) {
+            .assign => |binder| view.checked_bodies.patternBinder(binder).is_scheme_alias,
+            .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => false,
+        };
     }
 
     fn analyzePatternTypes(self: *Builder, view: ModuleView, pattern_id: checked.CheckedPatternId) Allocator.Error!void {

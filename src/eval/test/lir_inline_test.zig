@@ -8392,6 +8392,103 @@ test "dispatch evidence boundary validator accepts a published artifact" {
     try std.testing.expect(resources.checked_artifact.validateDispatchEvidence() == null);
 }
 
+test "literal conversion ownership includes nested codec evidence" {
+    const allocator = std.testing.allocator;
+    const prefix =
+        \\Fmt := {}.{
+        \\    parse_record_start = |_, s| Ok(Uncounted(s))
+        \\    parse_record_field = |_, _, s| Ok(Done(s))
+        \\    parse_record_after_field = |_, s| Ok(Continue(s))
+        \\    skip_record_field = |_, s| Ok(s)
+        \\}
+        \\
+    ;
+    inline for (.{
+        .{ "from_quote", "Str", "BadQuotedBytes", "\"\"" },
+        .{ "from_numeral", "Numeral", "InvalidNumeral", "0" },
+    }) |conversion| {
+        const source = prefix ++ "\n" ++
+            "Sql(row) := {}.{\n" ++
+            "    " ++ conversion[0] ++ " : " ++ conversion[1] ++ " -> Try(Sql(row), [" ++ conversion[2] ++ "(Str)])\n" ++
+            "        where [row.parser_for : Fmt -> ({} -> Try({ value : row, rest : {} }, _))]\n" ++
+            "    " ++ conversion[0] ++ " = |_| Ok(Sql.({}))\n" ++
+            "}\n" ++
+            "query : Sql(row) -> [Nope, Yes(row)]\n" ++
+            "query = |_| Nope\n" ++
+            "run : {} -> [Nope, Yes({})]\n" ++
+            "run = |_| query(" ++ conversion[3] ++ ")\n" ++
+            "main = run({})\n";
+        var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(
+            allocator,
+            .module,
+            source,
+            &.{},
+            try sharedPrePublishedBuiltin(),
+        );
+        defer helpers.cleanupParseAndCanonical(allocator, resources);
+        const artifact = &resources.checked_artifact;
+        try std.testing.expectEqual(@as(usize, 0), resources.checker.problems.problems.items.len);
+        try std.testing.expect(artifact.validateDispatchEvidence() == null);
+        var dependent_conversions: usize = 0;
+        for (artifact.checked_bodies.stored_exprs.items) |expr| {
+            const plan_id = switch (expr.data) {
+                .numeral => |numeral| numeral.plan orelse continue,
+                .str_from_quote => |quote| quote.plan orelse continue,
+                .pending,
+                .str_segment,
+                .str,
+                .bytes_literal,
+                .lookup_local,
+                .lookup_external,
+                .lookup_required,
+                .list,
+                .empty_list,
+                .tuple,
+                .match_,
+                .if_,
+                .call,
+                .record,
+                .empty_record,
+                .block,
+                .tag,
+                .nominal,
+                .zero_argument_tag,
+                .closure,
+                .lambda,
+                .binop,
+                .unary_minus,
+                .unary_not,
+                .field_access,
+                .dispatch_call,
+                .interpolation,
+                .structural_eq,
+                .structural_hash,
+                .method_eq,
+                .type_dispatch_call,
+                .tuple_access,
+                .runtime_error,
+                .crash,
+                .dbg,
+                .expect_err,
+                .expect,
+                .ellipsis,
+                .anno_only,
+                .break_,
+                .return_,
+                .for_,
+                .hosted_lambda,
+                .run_low_level,
+                => continue,
+            };
+            const plan = artifact.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+            try std.testing.expect(plan.resolution == .direct_parametric);
+            try std.testing.expect(artifact.checked_bodies.literalConversionRoot(expr.id) == null);
+            dependent_conversions += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 1), dependent_conversions);
+    }
+}
+
 test "custom literal field default gets an ordinary conversion root" {
     const allocator = std.testing.allocator;
     const source =
@@ -8439,6 +8536,67 @@ test "custom literal field default gets an ordinary conversion root" {
     }
     try std.testing.expectEqual(@as(usize, 1), numeral_roots);
     try std.testing.expectEqual(@as(usize, 1), quote_roots);
+
+    // A root link cannot outlive its proof of independence. Pin validation
+    // here as well as checking that both kinds of closed literal retain roots.
+    const artifact = &resources.checked_artifact;
+    try std.testing.expect(artifact.validateDispatchEvidence() == null);
+    const expr_id = artifact.checked_bodies.default_exprs.items[0].checked_expr;
+    const plan_id = switch (artifact.checked_bodies.expr(expr_id).data) {
+        .numeral => |numeral| numeral.plan.?,
+        .str_from_quote => |quote| quote.plan.?,
+        .pending,
+        .str_segment,
+        .str,
+        .bytes_literal,
+        .lookup_local,
+        .lookup_external,
+        .lookup_required,
+        .list,
+        .empty_list,
+        .tuple,
+        .match_,
+        .if_,
+        .call,
+        .record,
+        .empty_record,
+        .block,
+        .tag,
+        .nominal,
+        .zero_argument_tag,
+        .closure,
+        .lambda,
+        .binop,
+        .unary_minus,
+        .unary_not,
+        .field_access,
+        .dispatch_call,
+        .interpolation,
+        .structural_eq,
+        .structural_hash,
+        .method_eq,
+        .type_dispatch_call,
+        .tuple_access,
+        .runtime_error,
+        .crash,
+        .dbg,
+        .expect_err,
+        .expect,
+        .ellipsis,
+        .anno_only,
+        .break_,
+        .return_,
+        .for_,
+        .hosted_lambda,
+        .run_low_level,
+        => unreachable,
+    };
+    const plan = &artifact.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+    const saved = plan.resolution;
+    defer plan.resolution = saved;
+    plan.resolution = .{ .direct_parametric = saved.direct_closed };
+    const failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.literal_conversion_root_invalid, failure.kind);
 }
 
 test "dispatch evidence boundary validator rejects malformed specialization interface metadata" {

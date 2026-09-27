@@ -7180,6 +7180,23 @@ test "check type - polarity - try may not flow an unlisted error into the annota
     );
 }
 
+test "check type - polarity - a rejected try keeps the function's result type" {
+    // The rejected `?` owns its diagnostic and becomes a runtime error. The
+    // result it would have flowed into is shared with the body and every
+    // caller, so it keeps the type the body gives it.
+    const source =
+        \\run : ({} -> Try(I64, [WrongArity])) -> Try(I64, _)
+        \\run = |fn| {
+        \\    n = fn({})?
+        \\    if n > 0 Ok(n) else Err(NotAFunction)
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+    try test_env.assertDefTypeOptions("run", "({} -> Try(I64, [WrongArity])) -> Try(I64, [NotAFunction])", .{ .allow_type_errors = true });
+}
+
 // record extension in type annotations //
 
 test "check type - record extension - basic open record annotation" {

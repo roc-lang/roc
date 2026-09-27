@@ -405,7 +405,6 @@ pub const Payload = extern union {
     pattern_str_interpolation: PatternStrInterpolation,
     pattern_frac_f32: PatternFracF32,
     pattern_frac_f64: PatternFracF64,
-    pattern_malformed: PatternMalformed,
 
     // === Type annotation payloads ===
     ty_apply: TyApply,
@@ -432,6 +431,7 @@ pub const Payload = extern union {
     def: Def,
     lambda_capture: LambdaCapture,
     annotation: Annotation,
+    malformed: Malformed,
     // === Diagnostic payloads (typed variants) ===
     diag_empty: DiagEmpty,
     diag_single_ident: DiagSingleIdent,
@@ -1057,11 +1057,6 @@ pub const Payload = extern union {
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
-    pub const PatternMalformed = extern struct {
-        diagnostic: u32,
-        _padding: [12]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-    };
-
     // --- Type annotations ---
 
     pub const TyApply = extern struct {
@@ -1174,6 +1169,17 @@ pub const Payload = extern union {
     pub const WhereMalformed = extern struct {
         diagnostic: u32,
         _padding: [12]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    };
+
+    /// A `.malformed` node, which may be a statement, expression, pattern, or
+    /// type annotation. When it replaced a source node in place,
+    /// `source_node_plus_one` is one more than that node's position in the
+    /// store's `replaced_source_nodes`; zero means the node was malformed in
+    /// source or settles a deferred import reference.
+    pub const Malformed = extern struct {
+        diagnostic: u32,
+        source_node_plus_one: u32 = 0,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     /// where_alias: a where alias applied to a type variable in a where clause

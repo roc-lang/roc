@@ -45,7 +45,10 @@ test "cross-module - check type - monomorphic function fails" {
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
-    try test_env_b.assertOneTypeError("Type Mismatch");
+    // The result and the argument are independent mistakes. Rejecting the
+    // result poisons only this call's occurrence, not the instantiated
+    // callee, so the argument is still checked against `Str`.
+    try test_env_b.assertTypeErrorTitles(&.{ "Type Mismatch", "Type Mismatch" });
 }
 
 test "cross-module - check type - polymorphic function passes" {

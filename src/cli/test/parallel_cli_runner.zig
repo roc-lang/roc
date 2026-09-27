@@ -908,6 +908,25 @@ else
 
 const issue_11217_size_expected_stdout = if (builtin.os.tag == .windows) "ok\r\n" else "ok\n";
 const issue_11351_expected_stdout = "[]\n0\n{ a: [], b: Err([]) }\n[]\n";
+const issue_11578_expected_stdout =
+    \\("x", U, 3)
+    \\(U, "x")
+    \\("x", {}, 3)
+    \\("x", (U, U))
+    \\{ a: "x", u: U }
+    \\[U, U]
+    \\[{ n: "x", u: U }]
+    \\Ok((U, {}))
+    \\Pair(U, "x")
+    \\("x", meters!)
+    \\[meters!]
+    \\("x", <opaque>)
+    \\{ a: "x", sec: <opaque> }
+    \\("x", { a: 1, b: "x" })
+    \\Box(U)
+    \\Box(("x", meters!))
+    \\
+;
 const issue_11351_size_expected_stdout = if (builtin.os.tag == .windows)
     "[]\r\n0\r\n{ a: [], b: Err([]) }\r\n[]\r\n"
 else
@@ -960,6 +979,15 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11351 Boxy unbound type variables use their sealed default (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11351.roc", .stdout_exact = issue_11351_expected_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11351 Boxy unbound type variables use their sealed default (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/issue_11351.roc", .stdout_exact = issue_11351_expected_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11351 Boxy unbound type variables use their sealed default (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no" }, .roc_file = "test/echo/issue_11351.roc", .stdout_exact = issue_11351_size_expected_stdout } } },
+    // repro for https://github.com/roc-lang/roc/issues/11578
+    //
+    // `Str.inspect` must render every part of a value under `--specialize=no`
+    // exactly as it does when specialized: zero-sized values, scalar nominals
+    // with a custom `to_inspect`, opaque types, padded nominal records, and
+    // boxes.
+    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11578 Boxy inspects zero-sized and nominal parts of values (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11578_boxy_inspect.roc", .stdout_exact = issue_11578_expected_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11578 Boxy inspects zero-sized and nominal parts of values (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/issue_11578_boxy_inspect.roc", .stdout_exact = issue_11578_expected_stdout } } },
+
     // repro for https://github.com/roc-lang/roc/issues/11558
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11558 Boxy inspects nominals with type parameters through their custom to_inspect (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11558_generic_nominal_inspect.roc", .stdout_exact = "Wrap(\"hi\")\nDict.from_list([])\nDict.from_list([(\"a\", 1)])\nSet.from_list([])\nSet.from_list([2])\nOk(\"nested\")\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11558 Boxy inspects nominals with type parameters through their custom to_inspect (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/issue_11558_generic_nominal_inspect.roc", .stdout_exact = "Wrap(\"hi\")\nDict.from_list([])\nDict.from_list([(\"a\", 1)])\nSet.from_list([])\nSet.from_list([2])\nOk(\"nested\")\n" } } },
@@ -993,6 +1021,8 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11558 Boxy callable result widened into the caller's error row (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/issue_11558_callable_result_row.roc", .stdout_exact = "done\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11558 Boxy record field inspected through its nominal's custom to_inspect (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11558_record_field_custom_inspect.roc", .stdout_exact = "{ color: Color::Red, count: 42 }\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11558 Boxy record field inspected through its nominal's custom to_inspect (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/issue_11558_record_field_custom_inspect.roc", .stdout_exact = "{ color: Color::Red, count: 42 }\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11576 Boxy inspects records holding nominals with type parameters (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11576_record_generic_nominal_inspect.roc", .stdout_exact = "{ l: [Wrap(\"x\")], w: Wrap(\"x\") }\n{ value: Wrap(\"x\") }\n{ d: Dict.from_list([(\"one\", 1)]), s: Set.from_list([1, 2]) }\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11576 Boxy inspects records holding nominals with type parameters (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/issue_11576_record_generic_nominal_inspect.roc", .stdout_exact = "{ l: [Wrap(\"x\")], w: Wrap(\"x\") }\n{ value: Wrap(\"x\") }\n{ d: Dict.from_list([(\"one\", 1)]), s: Set.from_list([1, 2]) }\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11558 Boxy numeric literals in generic bodies take the instantiated type (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11558_generic_numeral_literals.roc", .stdout_exact = "5 5\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11558 Boxy numeric literals in generic bodies take the instantiated type (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/issue_11558_generic_numeral_literals.roc", .stdout_exact = "5 5\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11558 Boxy Json encodes nested lists, records and tuples (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11558_json_encode_shapes.roc", .stdout_exact = "[\"x\"]\n[[\"a\",\"b\"],[]]\n[[[\"deep\"]]]\n[[1.0,2.0],[3.0]]\n{\"n\":3.0,\"names\":[\"x\",\"y\"]}\n[{\"a\":[1.0,2.0]}]\n{\"grid\":[[\"a\"],[\"b\",\"c\"]]}\n[[\"x\"],[[\"y\"]]]\n" } } },
@@ -1210,6 +1240,10 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10301: borrowed chunk sublists run on dev backend", .backend = .dev, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_10301_borrowed_sublist.roc", .stdin = "abcdefghijklmnopABCDEFGHIJKLMNOP\n", .stdout_exact = "2832\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10301: borrowed chunk sublists run on speed backend", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/issue_10301_borrowed_sublist.roc", .stdin = "abcdefghijklmnopABCDEFGHIJKLMNOP\n", .stdout_exact = "2832\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10370: optimized record-held effects preserve source order", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/Issue10370EffectOrder.roc", .stdout_exact = "0 begin 1\n1 middle\n2 after\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "a rejected method-call argument leaves the argument's and the method's types intact", .body = .{ .command = .{ .args = &.{ "test", "--no-cache", "--no-color" }, .roc_file = "test/cli/MethodCallArgumentMismatch.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "wrong type" }, .{ .stream = .stderr, .text = "1 passed" }, .{ .stream = .stderr, .text = "1 failed" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test runs an expect that calls a definition whose error row its annotation omits (Issue11561ClosedErrorRow)", .body = .{ .command = .{ .args = &.{ "test", "--no-cache", "--no-color" }, .roc_file = "test/cli/Issue11561ClosedErrorRow.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "1 failed" }, .{ .stream = .stderr, .text = "type mismatch" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test runs an expect that calls a definition whose error row its annotation omits (ParserChildErrorOutsideAnnotation)", .body = .{ .command = .{ .args = &.{ "test", "--no-cache", "--no-color" }, .roc_file = "test/cli/ParserChildErrorOutsideAnnotation.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "1 failed" }, .{ .stream = .stderr, .text = "type mismatch" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check evaluates the literal conversions of code only an expect reaches", .body = .{ .command = .{ .args = &.{ "check", "--no-cache", "--no-color" }, .roc_file = "test/postcheck/issue_11292_generalized_string_pattern/expect_only.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "invalid string" }, .{ .stream = .stderr, .text = "expect_only.roc:12:5" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10648: roc check reports missing method on OsStr", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10648_osstr_missing_method/app.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "to_str" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "SIGSEGV" }, .{ .stream = .stderr, .text = "panic" } } } } },
     // https://github.com/roc-lang/roc/issues/11709: an imported module whose
     // expressions did not parse reports each syntax error once, and the
@@ -1955,6 +1989,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test round-trips JSON records with many optional fields", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/JsonOptionalRecordRoundTrip.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test derives JSON codecs for ?: optional record fields", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/JsonOptionalFieldKinds.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test shares one generated parser contract between a nominal's own and nested derivations", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/JsonNestedNominalContract.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test composes format-generic custom parser errors (issue 11728)", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/JsonGenericCustomParser.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (7) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test covers JSON string escaping", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/JsonStringEscapes.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test covers JSON integer edge cases", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/JsonEncodeEdgeCases.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "boxy roc test preserves generated JSON codec descriptors across function boundaries", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/JsonU8RoundTrip.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
@@ -2355,6 +2390,12 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test issue 9392 numeric utility expects are deterministic with no cache", .body = .{ .custom = .issue_9392_deterministic_no_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10987: optimized affine-cipher expects pass on every run", .backend = .speed, .timeout_ms = 600_000, .body = .{ .custom = .issue_10987_optimized_affine_cipher } },
     .{ .id = 0, .suite = .subcommands, .name = "hosted try question widening rejects a non-included error row", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/fx-open/hosted_try_question_not_included.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "FallibleReject.roc" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "[ROC CRASHED]" } } } } },
+    // Repro for https://github.com/roc-lang/roc/issues/11726: the from_quote
+    // implementation rejects the "bad" literal, and the accepted "good" literal
+    // then allocates (repeat(10)) enough to reuse the freed region. The
+    // diagnostic for the rejected literal must still quote the real error
+    // message, never freed or reused memory.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11726: rejected from_quote message survives a later accepted literal's allocation", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/issue_11726_from_quote_freed_message.roc", .exit = .{ .code = 1 }, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "The from_quote implementation for this string literal's type rejected it." }, .{ .stream = .stderr, .text = "this message is long enough to live on the heap" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "[ROC CRASHED]" } } } } },
     // Repro for https://github.com/roc-lang/roc/issues/11392: this fixture has an
     // imported type error and a rejected private import of pf.Stdout. The latter
     // leaves the executable root without a checked artifact. `build` must report
@@ -6330,10 +6371,10 @@ fn customNativeBuildPackHits(
     // rebuild goes through the entries that forward to cached procedures.
     // The third reaches module functions whose results are constants, so
     // its cached entries carry the constants they point at. The fourth
-    // reaches module functions from compile-time roots, which the evaluator
-    // runs as code it generates itself, never as cached entries; the app is
-    // edited between its builds, since only an app checked again evaluates
-    // its roots again.
+    // reaches module functions from compile-time roots, so the evaluator
+    // splices their entries into its own image; the app is edited between
+    // its builds, since only an app checked again evaluates its roots
+    // again.
     var comptime_app: []const u8 = undefined;
     if (stageEditableApp(io, allocator, env, timer, .{
         .dir_name = "pack_comptime",
@@ -6347,7 +6388,7 @@ fn customNativeBuildPackHits(
         .{ .roc_file = "test/cli/pack_values/PackValues.roc", .prefix = "values" },
         .{ .roc_file = "test/cli/pack_constants/PackConstants.roc", .prefix = "constants" },
         .{ .roc_file = "test/cli/pack_literal_roots/PackLiteralRoots.roc", .prefix = "literal_roots" },
-        .{ .roc_file = comptime_app, .prefix = "comptime", .expect = .{ .edit_between_builds = true } },
+        .{ .roc_file = comptime_app, .prefix = "comptime", .expect = .{ .edit_between_builds = true, .evaluator_artifacts = true } },
     };
     for (store_apps) |app| {
         if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app.roc_file, warm_dir, app.prefix, app.expect)) |failure| return failure;
@@ -6479,11 +6520,10 @@ fn customIssue11673CallableCache(
     }
     const apps = [_]struct { path: []const u8, prefix: []const u8, expect: StoreExpectations }{
         .{ .path = "test/cli/issue_11673_callable_cache/main.roc", .prefix = "main", .expect = .{ .uncached_baseline = true, .stdout = "differs\na\n", .pack_hit_proc = "Eq.same" } },
-        // This caller order calls Eq.same only while checking evaluates
-        // `boundary("a", Eq.same)`. Compile-time evaluation lowers every
-        // procedure it runs itself, so no build consumes the sibling's pack
-        // for it, and every build still behaves the same.
-        .{ .path = "test/cli/issue_11673_callable_cache/reversed.roc", .prefix = "reversed", .expect = .{ .uncached_baseline = true, .stdout = "a\ndiffers\n", .cache_hit_build = .none } },
+        // This caller order evaluates Eq.same while checking. Its first
+        // cached build consumes the sibling's object pack; the next reuses
+        // the checked constant and no longer needs that procedure.
+        .{ .path = "test/cli/issue_11673_callable_cache/reversed.roc", .prefix = "reversed", .expect = .{ .uncached_baseline = true, .stdout = "a\ndiffers\n", .cache_hit_build = .first_cached, .pack_hit_proc = "Eq.same" } },
     };
     for (apps) |app| {
         if (storeBuildsBehaveIdentically(io, allocator, &trace_env, timer, timeout_ms, app.path, env.dirs.work_dir, app.prefix, app.expect)) |failure| return failure;
@@ -6629,13 +6669,13 @@ const StoreExpectations = struct {
     /// Append a comment to the app between the builds, so the second build
     /// checks it again instead of reusing its cached checked artifact.
     edit_between_builds: bool = false,
+    /// The compile-time evaluator spliced at least one entry.
+    evaluator_artifacts: bool = false,
     /// Run an uncached build before populating the store.
     uncached_baseline: bool = false,
     /// Which cached build must consume an object pack. Later checked-cache
-    /// hits can already contain evaluated constants and need no procedure,
-    /// and a program whose only use of a cached procedure is compile-time
-    /// evaluation, which never reads the object cache, consumes none.
-    cache_hit_build: enum { first_cached, last, none } = .last,
+    /// hits can already contain evaluated constants and need no procedure.
+    cache_hit_build: enum { first_cached, last } = .last,
     /// Require a hit for this procedure's census key, not just an aggregate hit.
     /// The case must enable ROC_SPEC_CENSUS and ROC_PACK_TRACE.
     pack_hit_proc: ?[]const u8 = null,
@@ -6658,6 +6698,7 @@ fn storeBuildsBehaveIdentically(
     expect: StoreExpectations,
 ) ?TestResult {
     const hits_marker = "pack hits: ";
+    const evaluator_marker = "evaluator artifacts: ";
     var stats_env = CaseEnv{
         .dirs = env.dirs,
         .env_map = env.env_map.clone(allocator) catch |err|
@@ -6693,7 +6734,6 @@ fn storeBuildsBehaveIdentically(
         const require_hits = switch (expect.cache_hit_build) {
             .first_cached => index == @intFromBool(expect.uncached_baseline),
             .last => last,
-            .none => false,
         };
         if (require_hits) {
             const at = std.mem.find(u8, built.stderr, hits_marker) orelse
@@ -6701,6 +6741,11 @@ fn storeBuildsBehaveIdentically(
             if (countAfterMarker(built.stderr[at + hits_marker.len ..]) == 0) return failureFromRun(allocator, timer, built, "expected object-cache consumer reported no pack hits");
             if (expect.pack_hit_proc) |procedure| {
                 if (!hasNamedPackHit(built.stderr, procedure)) return failureFromRun(allocator, timer, built, "expected procedure's specialization key had no object-cache hit");
+            }
+            if (expect.evaluator_artifacts) {
+                const evaluator_at = std.mem.find(u8, built.stderr, evaluator_marker) orelse
+                    return failureFromRun(allocator, timer, built, "build with the object cache did not report evaluator artifacts");
+                if (countAfterMarker(built.stderr[evaluator_at + evaluator_marker.len ..]) == 0) return failureFromRun(allocator, timer, built, "the compile-time evaluator spliced no object-cache entry");
             }
         }
         const exe_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse

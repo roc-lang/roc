@@ -370,6 +370,7 @@ pub const Interpreter = struct {
     boxy_tables: BoxyTables,
     runtime_boxy_type_descs: std.ArrayList(*const LirProgram.BoxyTypeDesc) = .empty,
     runtime_boxy_desc_ids: std.AutoHashMapUnmanaged(usize, u32) = .empty,
+    desc_materializations: boxy_runtime.DescMaterializationCache = .empty,
     adapter_desc_specializations: std.AutoHashMapUnmanaged(boxy_runtime.AdapterDescMergeKey, *const LirProgram.BoxyTypeDesc) = .empty,
     runtime_boxy_desc_refs: std.ArrayList(LirProgram.BoxyDescRef) = .empty,
     runtime_boxy_tag_variants: std.ArrayList(LirProgram.BoxyTagVariant) = .empty,
@@ -835,6 +836,7 @@ pub const Interpreter = struct {
             .boxy_tables = boxy_tables,
             .runtime_boxy_type_descs = .empty,
             .runtime_boxy_desc_ids = .empty,
+            .desc_materializations = .empty,
             .adapter_desc_specializations = .empty,
             .runtime_boxy_desc_refs = .empty,
             .runtime_boxy_tag_variants = .empty,
@@ -848,6 +850,7 @@ pub const Interpreter = struct {
                 .boxy_tables = boxy_tables,
                 .runtime_boxy_type_descs = undefined,
                 .runtime_boxy_desc_ids = undefined,
+                .desc_materializations = undefined,
                 .adapter_desc_specializations = undefined,
                 .runtime_boxy_desc_refs = undefined,
                 .runtime_boxy_tag_variants = undefined,
@@ -876,6 +879,7 @@ pub const Interpreter = struct {
         self.runtime_boxy_desc_refs.deinit(self.allocator);
         self.runtime_boxy_type_descs.deinit(self.allocator);
         self.runtime_boxy_desc_ids.deinit(self.allocator);
+        self.desc_materializations.deinit(self.allocator);
         self.adapter_desc_specializations.deinit(self.allocator);
         self.roc_env.deinit();
         self.allocator.destroy(self.roc_env);
@@ -1099,6 +1103,7 @@ pub const Interpreter = struct {
         self.roc_env.active_interpreter = self;
         self.boxy_runtime.runtime_boxy_type_descs = &self.runtime_boxy_type_descs;
         self.boxy_runtime.runtime_boxy_desc_ids = &self.runtime_boxy_desc_ids;
+        self.boxy_runtime.desc_materializations = &self.desc_materializations;
         self.boxy_runtime.adapter_desc_specializations = &self.adapter_desc_specializations;
         self.boxy_runtime.runtime_boxy_desc_refs = &self.runtime_boxy_desc_refs;
         self.boxy_runtime.runtime_boxy_tag_variants = &self.runtime_boxy_tag_variants;
@@ -1169,6 +1174,25 @@ pub const Interpreter = struct {
                 .{},
             );
             return self.interp.resolveBoxyDescRef(frame, desc_ref);
+        }
+
+        /// The ids and descriptors of the captured locals `captures` names.
+        pub fn captureDescs(
+            self: BoxyFrameHooks,
+            captures: LIR.LocalSpan,
+            ids: []u32,
+            descs: []?*const LirProgram.BoxyTypeDesc,
+        ) Error!void {
+            const frame = self.frame orelse return self.interp.invariantFailedError(
+                "LIR/interpreter invariant violated: boxy descriptor captures were read without a frame",
+                .{},
+            );
+            const locals = self.interp.store.getLocalSpan(captures);
+            for (ids, descs, 0..) |*id, *desc, index| {
+                const local = GuardedList.at(locals, index);
+                id.* = @intFromEnum(local);
+                desc.* = try self.interp.resolveBoxyDescRef(frame, .{ .local = local });
+            }
         }
 
         pub fn resolveDictRef(self: BoxyFrameHooks, dict_ref: LIR.BoxyDictRef) Error!*const LirProgram.BoxyDict {

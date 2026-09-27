@@ -281,7 +281,7 @@ Builtin :: [].{
 						} else {
 							Err(Json.invalid_json)
 						}
-					}
+				}
 			}
 
 			parse_trailing_commas : Str -> Try(a, [InvalidJson(Str), ..errs])
@@ -298,7 +298,7 @@ Builtin :: [].{
 						} else {
 							Err(Json.invalid_json)
 						}
-					}
+				}
 			}
 
 			parser_camel : () -> (Str -> Try(a, [InvalidJson(Str), ..errs]))
@@ -317,7 +317,7 @@ Builtin :: [].{
 							} else {
 								Err(Json.invalid_json)
 							}
-						}
+					}
 				}
 			}
 
@@ -523,7 +523,7 @@ Builtin :: [].{
 							Ok(split) => Ok({ mantissa: split.before, exponent: split.after })
 							Err(NotFound) => Err(NotFound)
 						}
-					}
+				}
 
 			dec_from_json_exponent_parts : Str, Str -> Try(Dec, [BadNumStr])
 			dec_from_json_exponent_parts = |mantissa, exponent_text| {
@@ -3224,7 +3224,7 @@ Builtin :: [].{
 								One({ item, rest }) => One({ item: transform(item), rest: Iter.map(rest, transform) })
 							},
 					)
-				}
+			}
 
 		## Returns an iterator that pairs each item with its position among the
 		## items this iterator yields. The first yielded item gets index `0`, and
@@ -3251,7 +3251,7 @@ Builtin :: [].{
 							} else {
 								Skip({ rest: Iter.keep_if(rest, predicate) })
 							}
-						},
+					},
 			)
 
 		drop_if : Iter(a), (a -> Bool) -> Iter(a)
@@ -3268,7 +3268,7 @@ Builtin :: [].{
 							} else {
 								One({ item, rest: Iter.drop_if(rest, predicate) })
 							}
-						},
+					},
 			)
 
 		fold : Iter(a), acc, (acc, a -> acc) -> acc
@@ -3417,7 +3417,7 @@ Builtin :: [].{
 								}
 							},
 					)
-				}
+			}
 
 		## Returns an iterator that skips the first `n` items of this iterator.
 		## If the source has `n` or fewer items, the result is empty.
@@ -3451,9 +3451,9 @@ Builtin :: [].{
 									} else {
 										Skip({ rest: Iter.drop_first(rest, n - 1) })
 									}
-								},
+							},
 					)
-				}
+			}
 
 		## Returns an iterator that yields the first item and then every `n`th item
 		## after it, skipping the `n - 1` items in between. A step of `0` yields an
@@ -5174,7 +5174,7 @@ Builtin :: [].{
 
 				Err(ListWasEmpty) =>
 					Err(ListWasEmpty)
-				}
+			}
 
 		## Find the maximum item in a list, or `Err(ListWasEmpty)` if the list is empty.
 		## Works for any type that implements `max`.
@@ -5193,7 +5193,7 @@ Builtin :: [].{
 
 				Err(ListWasEmpty) =>
 					Err(ListWasEmpty)
-				}
+			}
 
 		## Build an encoder for a list using a format that provides a list encoding method.
 		encoder_for : encoding -> (List(item), state -> Try(state, err))
@@ -6273,7 +6273,7 @@ Builtin :: [].{
 						Try.Ok(new_value) => HashMap(dict_insert_absent_data(data, missing, key, new_value))
 						Try.Err(Missing) => dict
 					}
-				}
+			}
 		}
 	}
 
@@ -22989,7 +22989,7 @@ from_numeral_with = |numeral, parse|
 				Ok(num) => Ok(num)
 				Err(_) => Err(InvalidNumeral("invalid numeric literal"))
 			}
-		}
+	}
 
 numeral_to_str : Num.Numeral -> Try(Str, [InvalidNumeral(Str)])
 numeral_to_str = |numeral|
@@ -23430,7 +23430,7 @@ dec_from_digits = |digits, parse| {
 					}
 				}
 			}
-		}
+	}
 }
 
 digits_to_str : List(U8) -> Try(Str, [OutOfRange])
@@ -23724,7 +23724,7 @@ unsigned_div_ceil_try = |zero, one, a, b|
 			} else {
 				Ok(quotient + one)
 			}
-		}
+	}
 
 signed_div_ceil_try : item, item, item, item, item, item -> Try(item, [DivByZero, Overflow])
 	where [
@@ -23764,7 +23764,7 @@ signed_div_ceil_try = |lowest, zero, one, neg_one, a, b|
 			} else {
 				Ok(quotient)
 			}
-		}
+	}
 
 list_append_if_ok : List(a), Try(a, err) -> List(a)
 list_append_if_ok = |list, maybe_item|
@@ -23852,7 +23852,7 @@ signed_times_saturated_rescaled = |lowest, highest, zero, neg_one, a, b|
 			} else {
 				highest
 			}
-		}
+	}
 
 integer_is_even : item, item, item -> Bool
 	where [item.is_eq : item, item -> Bool, item.rem_by : item, item -> item]
@@ -24198,7 +24198,7 @@ iter_step_by = |src, (stride, pending)|
 						} else {
 							Skip({ rest: iter_step_by(rest, (stride, pending - 1)) })
 						}
-					}
+				}
 			},
 	)
 

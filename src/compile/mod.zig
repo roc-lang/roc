@@ -216,6 +216,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11525_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11526_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11527_test.zig"));
+    std.testing.refAllDecls(@import("test/optimized_literal_roots_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11528_test.zig"));
     std.testing.refAllDecls(@import("test/consumer_manifest_test.zig"));
     std.testing.refAllDecls(@import("test/package_effect_boundary_test.zig"));
@@ -234,4 +235,5 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/dbg_runtime_error_test.zig"));
     std.testing.refAllDecls(@import("test/numeral_literal_pattern_derived_is_eq_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11560_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11305_test.zig"));
 }
