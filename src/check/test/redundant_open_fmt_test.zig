@@ -17,7 +17,7 @@ const Relation = enum {
     formatter_subset,
 };
 
-fn expectFormatterMatchesChecker(source: []const u8, relation: Relation) !void {
+fn expectFormatterMatchesChecker(source: []const u8, relation: Relation) TestEnv.TestEnvError!void {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 

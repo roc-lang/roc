@@ -8,7 +8,7 @@ const fmt = @import("fmt.zig");
 
 /// Format `input` and compare it with `expected`, whose lines are indented
 /// with four spaces per level where the formatter writes a tab.
-fn expectFormatsTo(input: []const u8, expected: []const u8) !void {
+fn expectFormatsTo(input: []const u8, expected: []const u8) (fmt.FormatTestError || error{TestExpectedEqual})!void {
     const result = try fmt.moduleFmtsStable(std.testing.allocator, input, false);
     defer std.testing.allocator.free(result);
 
@@ -28,7 +28,7 @@ fn expectFormatsTo(input: []const u8, expected: []const u8) !void {
     try std.testing.expectEqualStrings(tabbed.items, result);
 }
 
-fn expectUnchanged(input: []const u8) !void {
+fn expectUnchanged(input: []const u8) (fmt.FormatTestError || error{TestExpectedEqual})!void {
     try expectFormatsTo(input, input);
 }
 
