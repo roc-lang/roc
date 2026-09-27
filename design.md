@@ -3858,6 +3858,21 @@ specializes exactly like a top-level procedure. Hoisting treats a lookup of it
 as known, so a top-level-equivalent call through a local helper is selected
 as a hoisted root. Lexically context-dependent local procedures are unchanged.
 
+A local procedure candidate is not proof of compile-time availability before
+that greatest fixpoint settles. Conditional diagnostics retain any pending
+promotion dependency from the expression summary and emit only after the same
+promotion result used by root pruning is final. Recursive self references and
+references to an enclosing in-flight local function record the same dependencies
+before their type-checking paths return. Immutable binding summaries,
+including destructured bindings, preserve these dependencies at later lookups.
+Dependency conjunctions are sparse, append-only shared nodes: an expression
+with no pending dependency allocates nothing, and forwarding one dependency
+does not copy a set or allocate a node. Conjunction children precede parents,
+so finalization evaluates each node once in append order without recursion or
+another CIR traversal. Eligibility for compile-time condition warnings remains
+independent of whether a condition is selected as an independent root or covered
+by an enclosing root.
+
 Hoisted roots use the same compile-time constant rules as ordinary top-level
 constants. A failure produced while evaluating a hoisted root is a checking-time
 failure reported at the hoisted expression's original source region. If Roc ever

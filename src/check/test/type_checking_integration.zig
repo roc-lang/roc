@@ -5528,6 +5528,22 @@ test "check type - match guard depending on pattern binder does not warn" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Bool -> Str");
 }
 
+// Repro for https://github.com/roc-lang/roc/issues/11731
+// The if condition calls a closure that captures `hay`, a runtime parameter.
+// The condition therefore depends on runtime input and must NOT produce an
+// "Unconditional Condition" warning.
+test "check type - issue 11731 - if condition calling closure capturing runtime value does not warn" {
+    const source =
+        \\choose : Str -> Str
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains(hay, n)
+        \\    if contains("99") { hay } else { "free" }
+        \\}
+    ;
+
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Str");
+}
+
 // dbg //
 
 test "check type - dbg" {
