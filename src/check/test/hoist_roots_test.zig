@@ -1683,3 +1683,294 @@ test "hoist roots are not selected for dict pseudo-seed dependent values" {
     try test_env.assertNoErrors();
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
+
+test "issue 11731 - unit closure preserves runtime dependency" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |{}| Str.contains(hay, "99")
+        \\    if contains({}) { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - match scrutinee preserves runtime dependency" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains(hay, n)
+        \\    match contains("99") {
+        \\        True => hay
+        \\        False => "free"
+        \\    }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - match guard preserves runtime dependency" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains(hay, n)
+        \\    match hay {
+        \\        _ if contains("99") => "full"
+        \\        _ => "free"
+        \\    }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - binding aliases preserves runtime dependency" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains(hay, n)
+        \\    found = contains("99")
+        \\    alias = found
+        \\    if alias { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - destructured binding preserves runtime dependency" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains(hay, n)
+        \\    (found, extra) = (contains("99"), "free")
+        \\    if found { hay } else { extra }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - transitive helper preserves runtime dependency" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains(hay, n)
+        \\    helper = |n| contains(n)
+        \\    if helper("99") { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - recursive helper preserves runtime dependency" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    helper = |n| if n == 0.U8 { Str.contains(hay, "99") } else { helper(n - 1) }
+        \\    if helper(2.U8) { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - combined helpers preserves runtime dependency" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains(hay, n)
+        \\    closed = |n| Str.contains("999", n)
+        \\    if (contains("99"), closed("99")) == (True, True) { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "issue 11731 - closed helper still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains("999", n)
+        \\    if contains("99") { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - closed helper binding aliases still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains("999", n)
+        \\    found = contains("99")
+        \\    alias = found
+        \\    if alias { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+}
+
+test "issue 11731 - closed helper destructure still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains("999", n)
+        \\    (found, extra) = (contains("99"), "free")
+        \\    if found { hay } else { extra }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+}
+
+test "issue 11731 - closed recursive helper still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    helper = |n| if n == 0.U8 { True } else { helper(n - 1) }
+        \\    if helper(2.U8) { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - closed helper match scrutinee still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains("999", n)
+        \\    match contains("99") {
+        \\        True => hay
+        \\        False => "free"
+        \\    }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - closed helper guard still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains("999", n)
+        \\    match hay {
+        \\        _ if contains("99") => "full"
+        \\        _ => "free"
+        \\    }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+}
+
+test "issue 11731 - subsumed condition still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains("999", n)
+        \\    result = if contains("99") { "full" } else { "free" }
+        \\    Str.concat(result, hay)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_if));
+}
+
+test "issue 11731 - suppressed branch condition still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains("999", n)
+        \\    if hay == "runtime" {
+        \\        if contains("99") { hay } else { "free" }
+        \\    } else { hay }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+}
+
+test "issue 11731 - combined closed helpers still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    first = |n| Str.contains("999", n)
+        \\    second = |n| Str.contains("111", n)
+        \\    if (first("99"), second("11")) == (True, True) { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+}
+
+test "issue 11731 - independent conditions keep their own promotion proof" {
+    const source =
+        \\choose = |hay| {
+        \\    runtime = |n| Str.contains(hay, n)
+        \\    closed = |n| Str.contains("999", n)
+        \\    first = if runtime("99") { hay } else { "free" }
+        \\    if closed("99") { first } else { hay }
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+    const warning = test_env.checker.problems.problems.items[0].comptime_condition;
+    try std.testing.expectEqualStrings("closed(\"99\")", source[warning.region.start.offset..warning.region.end.offset]);
+}
+
+test "issue 11731 - repeated binding dependencies share proof storage" {
+    const gpa = std.testing.allocator;
+    var small_proof_count: usize = 0;
+    for ([_]usize{ 1, 128 }) |alias_count| {
+        var source: std.ArrayList(u8) = .empty;
+        defer source.deinit(gpa);
+        try source.appendSlice(gpa,
+            \\choose = |hay| {
+            \\    runtime = |n| Str.contains(hay, n)
+            \\    closed = |n| Str.contains("999", n)
+            \\    v0 = (runtime("99"), closed("99")) == (True, True)
+            \\
+        );
+        for (0..alias_count) |i| {
+            const line = try std.fmt.allocPrint(gpa, "    v{d} = (v{d}, v{d}) == (True, True)\n", .{ i + 1, i, i });
+            defer gpa.free(line);
+            try source.appendSlice(gpa, line);
+        }
+        const ending = try std.fmt.allocPrint(gpa, "    if v{d} {{ hay }} else {{ \"free\" }}\n}}", .{alias_count});
+        defer gpa.free(ending);
+        try source.appendSlice(gpa, ending);
+        var test_env = try TestEnv.init("Test", source.items);
+        defer test_env.deinit();
+
+        try test_env.assertNoErrors();
+        const proof_count = test_env.checker.hoist_promotion_dependencies.items.len;
+        if (alias_count == 1) {
+            small_proof_count = proof_count;
+            try std.testing.expect(small_proof_count > 0);
+        } else {
+            try std.testing.expectEqual(small_proof_count, proof_count);
+        }
+    }
+}

@@ -759,6 +759,11 @@ compile_time_executable_roots: std.ArrayListUnmanaged(struct {
 /// statement checking record a local binding candidate without storing a result
 /// on the checked expression itself.
 last_hoist_result: ?CompletedHoistResult,
+/// Sparse conjunctions of pending procedure-promotion facts. Children always
+/// precede parents, and summaries share IDs rather than copying dependency sets.
+hoist_promotion_dependencies: std.ArrayListUnmanaged(HoistPromotionDependency),
+/// Only conditions whose eligibility depends on promotion wait for finalization.
+pending_comptime_conditions: std.ArrayListUnmanaged(PendingComptimeCondition),
 /// True when canonicalization already recorded diagnostics before type checking.
 /// In that case, we avoid adding "erroneous value" diagnostics during checking
 /// to prevent cascading errors from malformed nodes.
@@ -1867,6 +1872,7 @@ const HoistFrame = struct {
     binding_pattern: ?CIR.Pattern.Idx,
     candidate_start: usize,
     deferred_dependency_start: usize,
+    promotion_dependency: ?HoistPromotionDependencyId = null,
     has_runtime_dependency: bool = false,
     has_contextual_dependency: bool = false,
     has_observable_effect: bool = false,
@@ -1879,6 +1885,7 @@ const HoistFrame = struct {
 };
 
 const CompletedHoistResult = struct {
+    promotion_dependency: ?HoistPromotionDependencyId,
     expr: CIR.Expr.Idx,
     eligible: bool,
     top_level_equivalent: bool,
@@ -1904,19 +1911,42 @@ const LocalProcedureOuterRef = struct {
     referenced: CIR.Pattern.Idx,
 };
 
+const HoistPromotionDependencyId = enum(u32) { _ };
+
+const HoistPromotionDependency = struct {
+    proof: union(enum) {
+        procedure: CIR.Pattern.Idx,
+        both: struct { left: HoistPromotionDependencyId, right: HoistPromotionDependencyId },
+    },
+    available: bool = false,
+};
+
+const PendingComptimeCondition = struct {
+    expr: CIR.Expr.Idx,
+    kind: @FieldType(problem.ComptimeCondition, "kind"),
+    dependency: HoistPromotionDependencyId,
+};
+
 const LocalProcedureCandidate = struct {
     /// The binding's lambda or closure expression.
     expr: CIR.Expr.Idx,
     /// The lambda refers to a type variable or a type declaration of an
     /// enclosing function, so it cannot become a procedure of its own.
     contextual: bool = false,
+    /// Allocated only when a lookup relies on this candidate's promotion.
+    dependency: ?HoistPromotionDependencyId = null,
 };
 
-const HoistKnownValue = union(enum) {
-    binding_rhs: CIR.Expr.Idx,
-    pattern_extraction: HoistPatternExtraction,
-    selected_root: u32,
-    unavailable_runtime,
+const HoistKnownValue = struct {
+    value: Value,
+    promotion_dependency: ?HoistPromotionDependencyId = null,
+
+    const Value = union(enum) {
+        binding_rhs: CIR.Expr.Idx,
+        pattern_extraction: HoistPatternExtraction,
+        selected_root: u32,
+        unavailable_runtime,
+    };
 };
 
 const HoistKnownUpdate = struct {
@@ -2097,7 +2127,7 @@ const HoistSelectionTransaction = struct {
         if (self.checker.hoist_selected_bindings.get(pattern) != null) return true;
         if (self.staged_bindings.get(pattern) != null) return true;
         const known = self.checker.hoist_known_values.get(pattern) orelse return false;
-        return switch (known) {
+        return switch (known.value) {
             .binding_rhs => |expr| {
                 if (self.checker.hoistExprInvalidated(expr)) return false;
                 const root_index = try self.stageExprRoot(expr, pattern);
@@ -2363,7 +2393,7 @@ const HoistSelectionTransaction = struct {
                 std.debug.panic("check invariant violated: hoist-known value disappeared before selected-root commit", .{});
             };
             self.checker.deinitHoistKnownValue(value.*);
-            value.* = .{ .selected_root = update.root_index };
+            value.value = .{ .selected_root = update.root_index };
         }
 
         self.staged_roots.clearRetainingCapacity();
@@ -2991,6 +3021,8 @@ fn initAssumePrepared(
         .executable_root_defs = .empty,
         .compile_time_executable_roots = .empty,
         .last_hoist_result = null,
+        .hoist_promotion_dependencies = .empty,
+        .pending_comptime_conditions = .empty,
         .has_can_diagnostics = if (cir.store.scratch) |scratch| scratch.diagnostics.top() > 0 else false,
         .instantiation_dispatchers = .empty,
         .ambiguity_candidates = .empty,
@@ -3108,6 +3140,8 @@ pub fn deinit(self: *Self) void {
     self.erroneous_value_patterns.deinit(self.gpa);
     self.rejected_default_exprs.deinit(self.gpa);
     self.accepted_nominal_constructor_backings.deinit(self.gpa);
+    self.hoist_promotion_dependencies.deinit(self.gpa);
+    self.pending_comptime_conditions.deinit(self.gpa);
     self.hoist_frames.deinit(self.gpa);
     self.hoist_expr_candidates.deinit(self.gpa);
     self.hoist_deferred_roots.deinit(self.gpa);
@@ -3443,6 +3477,16 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
     if (does_fx) frame.has_observable_effect = true;
 
     const semantically_eligible = frame.eligible();
+    // Allocate before committing selected roots, preserving finish's atomicity
+    // on allocation failure. Ineligible parents do not need a proof.
+    const parent_dependency = if (frame_index != 0 and semantically_eligible and
+        self.hoist_frames.items[frame_index - 1].eligible())
+        try self.combineHoistPromotionDependencies(
+            self.hoist_frames.items[frame_index - 1].promotion_dependency,
+            frame.promotion_dependency,
+        )
+    else
+        null;
     const top_level_equivalent = semantically_eligible and !frame.has_contextual_dependency;
     const can_be_root = top_level_equivalent and self.exprCanBeHoistedRoot(expr);
     const can_cover_children = top_level_equivalent and self.exprCanCoverHoistedChildren(expr);
@@ -3543,6 +3587,7 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
     }
 
     const completed = CompletedHoistResult{
+        .promotion_dependency = frame.promotion_dependency,
         .expr = expr,
         .eligible = semantically_eligible,
         .top_level_equivalent = top_level_equivalent,
@@ -3553,6 +3598,7 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
 
     if (frame_index != 0) {
         const parent = &self.hoist_frames.items[frame_index - 1];
+        parent.promotion_dependency = parent_dependency;
         if (!completed.eligible) {
             parent.has_runtime_dependency = true;
         } else if (can_be_root and !frame.binding_rhs and selection_allowed) {
@@ -3592,6 +3638,18 @@ fn warnIfComptimeConditionalExpr(
     const completed = self.last_hoist_result orelse return;
     if (completed.expr != expr or !completed.top_level_equivalent) return;
 
+    if (completed.promotion_dependency) |dependency| {
+        try self.pending_comptime_conditions.append(self.gpa, .{
+            .expr = expr,
+            .kind = kind,
+            .dependency = dependency,
+        });
+        return;
+    }
+    try self.emitComptimeCondition(expr, kind);
+}
+
+fn emitComptimeCondition(self: *Self, expr: CIR.Expr.Idx, kind: @FieldType(problem.ComptimeCondition, "kind")) Allocator.Error!void {
     self.var_set.clearRetainingCapacity();
     if (try self.varContainsError(ModuleEnv.varFrom(expr), &self.var_set)) return;
 
@@ -3599,6 +3657,62 @@ fn warnIfComptimeConditionalExpr(
         .kind = kind,
         .region = self.cir.store.getExprRegion(expr),
     } });
+}
+
+/// A shared conjunction is allocated only when two distinct pending facts meet.
+/// Passing through an expression or repeatedly reading one helper allocates nothing.
+fn combineHoistPromotionDependencies(
+    self: *Self,
+    left: ?HoistPromotionDependencyId,
+    right: ?HoistPromotionDependencyId,
+) Allocator.Error!?HoistPromotionDependencyId {
+    const a = left orelse return right;
+    const b = right orelse return left;
+    if (a == b) return a;
+    const id: HoistPromotionDependencyId = @enumFromInt(self.hoist_promotion_dependencies.items.len);
+    try self.hoist_promotion_dependencies.append(self.gpa, .{ .proof = .{ .both = .{ .left = a, .right = b } } });
+    return id;
+}
+
+fn addHoistPromotionDependency(self: *Self, dependency: ?HoistPromotionDependencyId) Allocator.Error!void {
+    if (self.hoist_frames.items.len == 0 or dependency == null) return;
+    const frame = &self.hoist_frames.items[self.hoist_frames.items.len - 1];
+    if (!frame.eligible()) return;
+    frame.promotion_dependency = try self.combineHoistPromotionDependencies(frame.promotion_dependency, dependency);
+}
+
+fn noteHoistProcedureDependency(self: *Self, pattern: CIR.Pattern.Idx, candidate: *LocalProcedureCandidate) Allocator.Error!void {
+    if (self.hoist_frames.items.len == 0) return;
+    if (!self.hoist_frames.items[self.hoist_frames.items.len - 1].eligible()) return;
+    if (candidate.dependency == null) {
+        const id: HoistPromotionDependencyId = @enumFromInt(self.hoist_promotion_dependencies.items.len);
+        try self.hoist_promotion_dependencies.append(self.gpa, .{ .proof = .{ .procedure = pattern } });
+        candidate.dependency = id;
+    }
+    try self.addHoistPromotionDependency(candidate.dependency);
+}
+
+fn finalizeComptimeConditions(self: *Self) Allocator.Error!void {
+    if (self.pending_comptime_conditions.items.len == 0) return;
+    // Promotion and root pruning already finalized this authoritative set.
+    // Append order is topological, so shared proofs are evaluated once without
+    // recursion, per-condition syntax walks, or a second promotion solver.
+    for (self.hoist_promotion_dependencies.items, 0..) |*dependency, index| {
+        dependency.available = switch (dependency.proof) {
+            .procedure => |pattern| self.promoted_local_procedure_patterns.contains(pattern),
+            .both => |both| blk: {
+                std.debug.assert(@intFromEnum(both.left) < index and @intFromEnum(both.right) < index);
+                break :blk self.hoist_promotion_dependencies.items[@intFromEnum(both.left)].available and
+                    self.hoist_promotion_dependencies.items[@intFromEnum(both.right)].available;
+            },
+        };
+    }
+    for (self.pending_comptime_conditions.items) |pending| {
+        if (!self.hoist_promotion_dependencies.items[@intFromEnum(pending.dependency)].available) continue;
+        if (self.hoistExprInvalidated(pending.expr)) continue;
+        try self.emitComptimeCondition(pending.expr, pending.kind);
+    }
+    self.pending_comptime_conditions.clearRetainingCapacity();
 }
 
 fn recordHoistBindingCandidate(
@@ -3628,7 +3742,7 @@ fn recordHoistBindingCandidate(
     }
     entry.value_ptr.* = expr;
 
-    self.recordHoistKnownValue(pattern, .{ .binding_rhs = expr }) catch |err| {
+    self.recordHoistKnownValue(pattern, .{ .binding_rhs = expr }, completed.promotion_dependency) catch |err| {
         if (had_existing) {
             entry.value_ptr.* = previous_expr;
         } else {
@@ -3672,7 +3786,7 @@ fn recordHoistPatternProvenance(
         .frac_f32_literal,
         .frac_f64_literal,
         .str_literal,
-        => try self.recordHoistPatternExtractionProvenanceHelp(pattern, expr, pattern, .deferred),
+        => try self.recordHoistPatternExtractionProvenanceHelp(pattern, expr, pattern, .deferred, completed.promotion_dependency),
         .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     }
 }
@@ -3871,50 +3985,51 @@ fn recordHoistPatternExtractionProvenanceHelp(
     base_expr: CIR.Expr.Idx,
     scrutinee_pattern: CIR.Pattern.Idx,
     selection: HoistPatternExtractionSelection,
+    promotion_dependency: ?HoistPromotionDependencyId,
 ) Allocator.Error!void {
     switch (self.cir.store.getPattern(pattern)) {
         .assign, .var_assign => {
-            try self.recordHoistPatternExtractionProvenance(pattern, base_expr, scrutinee_pattern);
+            try self.recordHoistPatternExtractionProvenance(pattern, base_expr, scrutinee_pattern, promotion_dependency);
             if (selection == .immediate) {
                 _ = try self.ensureHoistedBindingRoot(pattern);
             }
         },
         .as => |as_pattern| {
-            try self.recordHoistPatternExtractionProvenance(pattern, base_expr, scrutinee_pattern);
+            try self.recordHoistPatternExtractionProvenance(pattern, base_expr, scrutinee_pattern, promotion_dependency);
             if (selection == .immediate) {
                 _ = try self.ensureHoistedBindingRoot(pattern);
             }
-            try self.recordHoistPatternExtractionProvenanceHelp(as_pattern.pattern, base_expr, scrutinee_pattern, selection);
+            try self.recordHoistPatternExtractionProvenanceHelp(as_pattern.pattern, base_expr, scrutinee_pattern, selection, promotion_dependency);
         },
         .tuple => |tuple| {
             for (self.cir.store.slicePatterns(tuple.patterns)) |elem_pattern| {
-                try self.recordHoistPatternExtractionProvenanceHelp(elem_pattern, base_expr, scrutinee_pattern, selection);
+                try self.recordHoistPatternExtractionProvenanceHelp(elem_pattern, base_expr, scrutinee_pattern, selection, promotion_dependency);
             }
         },
         .record_destructure => |destructure| {
             for (self.cir.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
                 const destruct = self.cir.store.getRecordDestruct(destruct_idx);
-                try self.recordHoistPatternExtractionProvenanceHelp(destruct.kind.toPatternIdx(), base_expr, scrutinee_pattern, selection);
+                try self.recordHoistPatternExtractionProvenanceHelp(destruct.kind.toPatternIdx(), base_expr, scrutinee_pattern, selection, promotion_dependency);
             }
         },
         .applied_tag => |tag| {
             for (self.cir.store.slicePatterns(tag.args)) |arg_pattern| {
-                try self.recordHoistPatternExtractionProvenanceHelp(arg_pattern, base_expr, scrutinee_pattern, selection);
+                try self.recordHoistPatternExtractionProvenanceHelp(arg_pattern, base_expr, scrutinee_pattern, selection, promotion_dependency);
             }
         },
         .nominal => |nominal| {
-            try self.recordHoistPatternExtractionProvenanceHelp(nominal.backing_pattern, base_expr, scrutinee_pattern, selection);
+            try self.recordHoistPatternExtractionProvenanceHelp(nominal.backing_pattern, base_expr, scrutinee_pattern, selection, promotion_dependency);
         },
         .nominal_external => |nominal| {
-            try self.recordHoistPatternExtractionProvenanceHelp(nominal.backing_pattern, base_expr, scrutinee_pattern, selection);
+            try self.recordHoistPatternExtractionProvenanceHelp(nominal.backing_pattern, base_expr, scrutinee_pattern, selection, promotion_dependency);
         },
         .list => |list| {
             for (self.cir.store.slicePatterns(list.patterns)) |elem_pattern| {
-                try self.recordHoistPatternExtractionProvenanceHelp(elem_pattern, base_expr, scrutinee_pattern, selection);
+                try self.recordHoistPatternExtractionProvenanceHelp(elem_pattern, base_expr, scrutinee_pattern, selection, promotion_dependency);
             }
             if (list.rest_info) |rest_info| {
                 if (rest_info.pattern) |rest_pattern| {
-                    try self.recordHoistPatternExtractionProvenanceHelp(rest_pattern, base_expr, scrutinee_pattern, selection);
+                    try self.recordHoistPatternExtractionProvenanceHelp(rest_pattern, base_expr, scrutinee_pattern, selection, promotion_dependency);
                 }
             }
         },
@@ -3923,7 +4038,7 @@ fn recordHoistPatternExtractionProvenanceHelp(
             while (step_offset < str.steps.span.len) : (step_offset += 1) {
                 const step = self.cir.store.getStrPatternStep(str.steps, step_offset);
                 if (step.capture) |capture| {
-                    try self.recordHoistPatternExtractionProvenanceHelp(capture, base_expr, scrutinee_pattern, selection);
+                    try self.recordHoistPatternExtractionProvenanceHelp(capture, base_expr, scrutinee_pattern, selection, promotion_dependency);
                 }
             }
         },
@@ -3946,12 +4061,13 @@ fn recordHoistPatternExtractionProvenance(
     pattern: CIR.Pattern.Idx,
     base_expr: CIR.Expr.Idx,
     scrutinee_pattern: CIR.Pattern.Idx,
+    promotion_dependency: ?HoistPromotionDependencyId,
 ) Allocator.Error!void {
     try self.recordHoistKnownValue(pattern, .{ .pattern_extraction = .{
         .base_expr = base_expr,
         .scrutinee_pattern = scrutinee_pattern,
         .result_pattern = pattern,
-    } });
+    } }, promotion_dependency);
 }
 
 fn recordHoistContextualPatternBindings(
@@ -4102,7 +4218,7 @@ fn endHoistLexicalScope(self: *Self, scope: HoistLexicalScope) void {
 }
 
 fn deinitHoistKnownValue(_: *Self, value: HoistKnownValue) void {
-    switch (value) {
+    switch (value.value) {
         .pattern_extraction,
         .binding_rhs,
         .selected_root,
@@ -4111,7 +4227,8 @@ fn deinitHoistKnownValue(_: *Self, value: HoistKnownValue) void {
     }
 }
 
-fn recordHoistKnownValue(self: *Self, pattern: CIR.Pattern.Idx, value: HoistKnownValue) Allocator.Error!void {
+fn recordHoistKnownValue(self: *Self, pattern: CIR.Pattern.Idx, payload: HoistKnownValue.Value, promotion_dependency: ?HoistPromotionDependencyId) Allocator.Error!void {
+    const value = HoistKnownValue{ .value = payload, .promotion_dependency = promotion_dependency };
     const entry = self.hoist_known_values.getOrPut(self.gpa, pattern) catch |err| {
         self.deinitHoistKnownValue(value);
         return err;
@@ -4131,7 +4248,7 @@ fn recordHoistKnownValue(self: *Self, pattern: CIR.Pattern.Idx, value: HoistKnow
 fn markHoistKnownValueUnavailable(self: *Self, pattern: CIR.Pattern.Idx) void {
     if (self.hoist_known_values.getPtr(pattern)) |value| {
         self.deinitHoistKnownValue(value.*);
-        value.* = .unavailable_runtime;
+        value.* = .{ .value = .unavailable_runtime };
     }
 }
 
@@ -4156,7 +4273,7 @@ fn ensureHoistedBindingRoot(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Err
 
 fn hoistKnownBindingAvailable(self: *Self, pattern: CIR.Pattern.Idx) bool {
     const known = self.hoist_known_values.get(pattern) orelse return false;
-    return switch (known) {
+    return switch (known.value) {
         .binding_rhs => |expr| !self.hoistExprInvalidated(expr),
         .pattern_extraction => |extraction| !self.hoistExprInvalidated(extraction.base_expr),
         .selected_root => |root_index| !self.selectedHoistedRootInvalidated(root_index),
@@ -4594,6 +4711,8 @@ const HoistSelectionTestState = struct {
         checker.hoist_invalidated_exprs = .{};
         checker.selected_hoisted_roots = .empty;
         checker.last_hoist_result = null;
+        checker.hoist_promotion_dependencies = .empty;
+        checker.pending_comptime_conditions = .empty;
         return .{
             .checker = checker,
             .allocator = allocator,
@@ -4601,6 +4720,8 @@ const HoistSelectionTestState = struct {
     }
 
     fn deinit(self: *HoistSelectionTestState) void {
+        self.checker.hoist_promotion_dependencies.deinit(self.allocator);
+        self.checker.pending_comptime_conditions.deinit(self.allocator);
         self.checker.hoist_frames.deinit(self.allocator);
         self.checker.hoist_expr_candidates.deinit(self.allocator);
         self.checker.hoist_deferred_roots.deinit(self.allocator);
@@ -4786,7 +4907,7 @@ test "hoist frame finish is atomic when child flush precedes deferred dependency
         defer guard.deinit();
         try state.checker.hoist_expr_candidates.append(std.testing.allocator, child_expr);
         try state.checker.hoist_deferred_roots.append(std.testing.allocator, .{ .binding = dependency_pattern });
-        try state.checker.recordHoistKnownValue(dependency_pattern, .{ .binding_rhs = child_expr });
+        try state.checker.recordHoistKnownValue(dependency_pattern, .{ .binding_rhs = child_expr }, null);
         state.checker.markCurrentHoistRuntimeDependency();
 
         var failing_allocator = std.testing.FailingAllocator.init(std.testing.allocator, .{
@@ -4809,7 +4930,7 @@ test "hoist frame finish is atomic when child flush precedes deferred dependency
                 try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_selected_exprs.count());
                 try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_selected_bindings.count());
                 const known = state.checker.hoist_known_values.get(dependency_pattern) orelse return error.ExpectedKnownHoistDependency;
-                switch (known) {
+                switch (known.value) {
                     .binding_rhs => |expr| try std.testing.expectEqual(child_expr, expr),
                     .pattern_extraction,
                     .selected_root,
@@ -4919,7 +5040,7 @@ test "hoist lexical scope removes branch-local candidates and known values" {
     const scope = state.checker.beginHoistLexicalScope();
     try state.checker.hoist_binding_candidates.put(std.testing.allocator, pattern, expr);
     try state.checker.hoist_binding_scope_patterns.append(std.testing.allocator, pattern);
-    try state.checker.recordHoistKnownValue(pattern, .{ .binding_rhs = expr });
+    try state.checker.recordHoistKnownValue(pattern, .{ .binding_rhs = expr }, null);
 
     try std.testing.expect(state.checker.hoist_binding_candidates.contains(pattern));
     try std.testing.expect(state.checker.hoist_known_values.contains(pattern));
@@ -4944,7 +5065,7 @@ test "hoist known value insertion leaves no state when map allocation fails" {
     });
     state.checker.gpa = failing_allocator.allocator();
 
-    try std.testing.expectError(error.OutOfMemory, state.checker.recordHoistKnownValue(pattern, .{ .binding_rhs = expr }));
+    try std.testing.expectError(error.OutOfMemory, state.checker.recordHoistKnownValue(pattern, .{ .binding_rhs = expr }, null));
     try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_known_values.count());
     try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_known_value_scope_patterns.items.len);
 }
@@ -4963,7 +5084,7 @@ test "hoist known value insertion rolls back map when scope tracking allocation 
     });
     state.checker.gpa = failing_allocator.allocator();
 
-    try std.testing.expectError(error.OutOfMemory, state.checker.recordHoistKnownValue(pattern, .{ .binding_rhs = expr }));
+    try std.testing.expectError(error.OutOfMemory, state.checker.recordHoistKnownValue(pattern, .{ .binding_rhs = expr }, null));
     try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_known_values.count());
     try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_known_value_scope_patterns.items.len);
 }
@@ -9810,6 +9931,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.finalizeLiteralDispatchResolutions();
     try self.finalizeTopLevelDemandDependencies(&env);
     try self.finalizeExpectEffectSlots();
+    try self.finalizeComptimeConditions();
 
     try self.verifyPredeclaredSchemeUsesRecorded();
     try self.finalizeBindingSchemeNodes();
@@ -14440,6 +14562,12 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.closeWeakValueImplicitOpenExts(&env);
 
     try self.finalizeExpectEffectSlots();
+    // Expression checking suppresses root selection, but constant-condition
+    // warnings still need the same finalized procedure-availability proof.
+    if (self.pending_comptime_conditions.items.len != 0) {
+        try self.finalizePromotedLocalProcedures();
+        try self.finalizeComptimeConditions();
+    }
 
     try self.verifyPredeclaredSchemeUsesRecorded();
     try self.finalizeBindingSchemeNodes();
@@ -14653,7 +14781,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         const def_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def.pattern));
         _ = try self.checkDestructureExhaustiveness(def.pattern, def.expr, expr_var, env, def_region);
         if (self.cir.store.getPattern(def.pattern) != .assign) {
-            try self.recordHoistPatternExtractionProvenanceHelp(def.pattern, def.expr, def.pattern, .immediate);
+            try self.recordHoistPatternExtractionProvenanceHelp(def.pattern, def.expr, def.pattern, .immediate, null);
         }
     }
 
@@ -22375,16 +22503,18 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             try self.noteLocalLookupForLocalProcedures(lookup.pattern_idx);
             const compile_time_known_binding = known: {
                 if (self.patternIsTopLevel(lookup.pattern_idx)) break :known true;
-                // A local function that can become a procedure of its own is
-                // as available at compile time as a top-level function.
-                // Post-solve pruning keeps a root that depends on it only
-                // when it was promoted.
-                if (self.local_procedure_candidates.get(lookup.pattern_idx)) |candidate| {
-                    if (!candidate.contextual) break :known true;
+                // Availability is provisional until the recorded outer-reference
+                // graph settles. Roots and diagnostics consume the same final
+                // promotion result; a candidate alone is not warning evidence.
+                if (self.local_procedure_candidates.getPtr(lookup.pattern_idx)) |candidate| {
+                    if (!candidate.contextual) {
+                        try self.noteHoistProcedureDependency(lookup.pattern_idx, candidate);
+                        break :known true;
+                    }
                 }
                 if (expected.hoist_position == .suppressed) {
                     if (self.hoist_known_values.get(lookup.pattern_idx)) |known_value| {
-                        switch (known_value) {
+                        switch (known_value.value) {
                             .pattern_extraction => {
                                 if (try self.ensureHoistedBindingRoot(lookup.pattern_idx)) break :known true;
                             },
@@ -22404,6 +22534,8 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             };
             if (!compile_time_known_binding) {
                 self.markCurrentHoistRuntimeDependency();
+            } else if (self.hoist_known_values.get(lookup.pattern_idx)) |known| {
+                try self.addHoistPromotionDependency(known.promotion_dependency);
             }
 
             const resolved_pat = self.types.resolveVar(pat_var);
