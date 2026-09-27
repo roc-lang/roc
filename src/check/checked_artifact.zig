@@ -10439,8 +10439,9 @@ pub const CheckedNumeralData = struct {
     /// a non-builtin type (or is still polymorphic at publication).
     plan: ?StaticDispatchPlanId,
     /// The `numeral_conversion` compile-time root that evaluates this
-    /// literal's conversion, when checking selected one concrete custom
-    /// conversion. Every use of the literal consumes that root's value.
+    /// literal's conversion, when the finalized dispatch is independent of
+    /// specialization. Every use consumes that root's value; dependent
+    /// conversions are hoisted within their owning specialization instead.
     conversion_root: ?ComptimeRootId = null,
 };
 
@@ -10450,8 +10451,9 @@ pub const CheckedQuoteData = struct {
     plan: ?StaticDispatchPlanId,
     literal: CheckedStringLiteralId,
     /// The `quote_conversion` compile-time root that evaluates this literal's
-    /// conversion, when checking selected one concrete custom conversion.
-    /// Every use of the literal consumes that root's value.
+    /// conversion, when the finalized dispatch is independent of specialization.
+    /// Every use consumes that root's value; dependent conversions are hoisted
+    /// within their owning specialization instead.
     conversion_root: ?ComptimeRootId = null,
 };
 
@@ -21825,15 +21827,15 @@ pub const CheckedProcedureTemplateTable = struct {
         owner_artifact: canonical.ArtifactRef,
         checked_types: *CheckedTypeStore,
         entry_wrappers: *EntryWrapperTable,
-        compile_time_roots: *const CompileTimeRootTable,
+        roots: []const CompileTimeRoot,
     ) Allocator.Error!void {
         // Every selected root produces exactly one entry wrapper and template.
-        try self.templates.ensureTotalCapacityPrecise(allocator, self.templates.items.len + compile_time_roots.roots.len);
-        try entry_wrappers.wrappers.ensureTotalCapacityPrecise(allocator, entry_wrappers.wrappers.items.len + compile_time_roots.roots.len);
+        try self.templates.ensureTotalCapacityPrecise(allocator, self.templates.items.len + roots.len);
+        try entry_wrappers.wrappers.ensureTotalCapacityPrecise(allocator, entry_wrappers.wrappers.items.len + roots.len);
 
         const module_name = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
 
-        for (compile_time_roots.roots) |root| {
+        for (roots) |root| {
             const checked_fn_root = try checked_types.appendSyntheticFunctionRoot(
                 allocator,
                 .pure,
@@ -24522,6 +24524,106 @@ fn directEvidenceIsClosed(
     return true;
 }
 
+/// Literal roots have no lexical evidence parameters. Publish them only after
+/// the ordinary dispatch pass has proved the complete conversion closed. A
+/// concrete receiver alone does not prove this: nested codec requirements can
+/// still belong to the enclosing scheme. Those literals stay in that scheme
+/// and are hoisted by its specialization.
+fn publishLiteralConversionRoots(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    owner_artifact: canonical.ArtifactRef,
+    checked_types: *CheckedTypePublication,
+    bodies: *CheckedBodyStore,
+    plans: *static_dispatch.StaticDispatchPlanTable,
+    roots: *CompileTimeRootTable,
+    wrappers: *EntryWrapperTable,
+    templates: *CheckedProcedureTemplateTable,
+) Allocator.Error!void {
+    const first_root = roots.roots.len;
+    var root_list = std.ArrayList(CompileTimeRoot).empty;
+    defer root_list.deinit(allocator);
+
+    for (module.moduleEnvConst().store.literalDispatchPlans()) |literal| {
+        switch (literal.dispatchResolution()) {
+            .builtin_direct, .specialization_dispatch, .checked_error => continue,
+            .custom_dispatch => {},
+            .unresolved => checkedArtifactInvariant("unresolved literal reached root publication", .{}),
+        }
+        const expr_id = bodies.exprIdAtRawNode(literal.node_idx) orelse
+            bodies.numeralConversionExprAtRawNode(literal.node_idx) orelse continue;
+        const data = &bodies.stored_exprs.items[@intFromEnum(expr_id)].data;
+        const plan_id, const conversion_root = switch (data.*) {
+            .numeral => |*numeral| .{ numeral.plan.?, &numeral.conversion_root },
+            .str_from_quote => |*quote| .{ quote.plan.?, &quote.conversion_root },
+            else => continue, // Diagnostic recovery retired the conversion.
+        };
+        const plan = plans.plans[@intFromEnum(plan_id)];
+        switch (plan.resolution) {
+            .direct_closed => {},
+            .direct_parametric, .evidence_dependent, .checked_error, .@"unreachable" => continue,
+            .direct_pending, .structural => checkedArtifactInvariant("literal conversion had no finalized callable dispatch", .{}),
+        }
+        if (conversion_root.* != null) checkedArtifactInvariant("literal received a second conversion root", .{});
+        const result_ty = checkedFunctionPayload(&checked_types.store, plan.callable_ty, "literal conversion root").ret;
+        conversion_root.* = @enumFromInt(@as(u32, @intCast(first_root + root_list.items.len)));
+        try CompileTimeRootTable.appendCompileTimeRoot(&root_list, allocator, .{
+            .module_idx = module.moduleIndex(),
+            .kind = if (literal.dispatchKind() == .numeral) .numeral_conversion else .quote_conversion,
+            .source = .{ .expr = @enumFromInt(literal.node_idx) },
+            .pattern = null,
+            .expr = expr_id,
+            .checked_type = result_ty,
+            .payload = .pending,
+        });
+    }
+    if (root_list.items.len == 0) return;
+    roots.roots = try allocator.realloc(roots.roots, first_root + root_list.items.len);
+    const added = roots.roots[first_root..];
+    @memcpy(added, root_list.items);
+    for (added, first_root..) |*root, index| root.id = @enumFromInt(@as(u32, @intCast(index)));
+    try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, added);
+    excludeErroneousCompileTimeRootRequests(bodies, added);
+
+    const first_template = templates.templates.items.len;
+    try templates.appendEntryWrappersForRoots(allocator, module, names, owner_artifact, &checked_types.store, wrappers, added);
+
+    // These generated bodies contain exactly one already-resolved conversion,
+    // whose operand is literal data. Append its explicit references directly;
+    // no source-body traversal or second evidence-resolution pass is needed.
+    const first_ref = plans.template_refs.len;
+    plans.template_refs = try allocator.realloc(plans.template_refs, first_ref + added.len);
+    templates.dispatch_ref_scopes = try allocator.realloc(templates.dispatch_ref_scopes, first_ref + added.len);
+    templates.dispatch_relation_kinds = try allocator.realloc(templates.dispatch_relation_kinds, first_ref + added.len);
+    const first_relation = templates.specialization_interface_relations.len;
+    templates.specialization_interface_relations = try allocator.realloc(templates.specialization_interface_relations, first_relation + added.len);
+    const root_evidence = try allocator.realloc(@constCast(plans.template_root_evidence), templates.templates.items.len);
+    plans.template_root_evidence = root_evidence;
+    for (added, templates.templates.items[first_template..], 0..) |root, *template, i| {
+        const plan_id = switch (bodies.expr(root.expr).data) {
+            .numeral => |numeral| numeral.plan.?,
+            .str_from_quote => |quote| quote.plan.?,
+            else => unreachable,
+        };
+        const ref_index = first_ref + i;
+        plans.template_refs[ref_index] = plan_id;
+        templates.dispatch_ref_scopes[ref_index] = .root;
+        templates.dispatch_relation_kinds[ref_index] = .conversion;
+        template.static_dispatch_plans = .{ .start = @intCast(ref_index), .len = 1 };
+        templates.specialization_interface_relations[first_relation + i] = .{
+            .scope = .root,
+            .data = .{ .procedure = .{
+                .fn_ty = template.checked_fn_root,
+                .body_ret_ty = root.checked_type,
+                .owns_scope = true,
+            } },
+        };
+        template.specialization_interface_relations = .{ .start = @intCast(first_relation + i), .len = 1 };
+        root_evidence[first_template + i] = .{};
+    }
+}
+
 fn checkedDispatchPlanNeedsRelation(
     plans: *const static_dispatch.StaticDispatchPlanTable,
     plan: static_dispatch.StaticDispatchCallPlan,
@@ -27157,9 +27259,8 @@ pub const CompileTimeRootTable = struct {
         // Fields"): every construction site that omits a defaulted field
         // lowers the declaring module's archived checked expression at the
         // site's monotype—per-specialization materialization. A default
-        // whose literal needs a custom `from_numeral`/`from_quote`
-        // conversion still gets an ORDINARY conversion root below, so the
-        // conversion's compile-time `Err` reporting is unchanged.
+        // whose literal needs a closed custom conversion gets its ordinary
+        // conversion root after dispatch evidence is finalized.
         const module_env = module.moduleEnvConst();
 
         for (explicit_roots) |explicit| {
@@ -27257,76 +27358,6 @@ pub const CompileTimeRootTable = struct {
                 .pattern = checked_root.pattern,
                 .expr = checked_root.expr,
                 .checked_type = checked_root.checked_type,
-                .payload = .pending,
-            });
-        }
-
-        for (module_env.store.literalDispatchPlans()) |numeral_plan| {
-            if (numeral_plan.dispatchKind() != .numeral) continue;
-            switch (numeral_plan.dispatchResolution()) {
-                .builtin_direct, .specialization_dispatch, .checked_error => continue,
-                .custom_dispatch => {},
-                .unresolved => checkedArtifactInvariant(
-                    "unresolved numeral dispatch reached compile-time root publication",
-                    .{},
-                ),
-            }
-            const checked_expr = checked_bodies.exprIdAtRawNode(numeral_plan.node_idx) orelse
-                checked_bodies.numeralConversionExprAtRawNode(numeral_plan.node_idx) orelse
-                continue;
-            if (checked_bodies.expr(checked_expr).data != .numeral) continue;
-            const fn_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(numeral_plan.fn_var));
-            const fn_payload = checked_types.store.payload(fn_ty);
-            if (fn_payload != .function) {
-                checkedArtifactInvariant("from_numeral dispatch plan type was not a function", .{});
-            }
-            const try_ty = fn_payload.function.ret;
-            const expr_idx: CIR.Expr.Idx = @enumFromInt(numeral_plan.node_idx);
-            const numeral_data = &checked_bodies.stored_exprs.items[@intFromEnum(checked_expr)].data.numeral;
-            if (numeral_data.conversion_root != null) checkedArtifactInvariant("literal received a second conversion root", .{});
-            numeral_data.conversion_root = nextCompileTimeRootId(roots.items);
-            try appendCompileTimeRoot(&roots, allocator, .{
-                .module_idx = module.moduleIndex(),
-                .kind = .numeral_conversion,
-                .source = .{ .expr = expr_idx },
-                .pattern = null,
-                .expr = checked_expr,
-                .checked_type = try_ty,
-                .payload = .pending,
-            });
-        }
-
-        for (module_env.store.literalDispatchPlans()) |quote_plan| {
-            if (quote_plan.dispatchKind() != .quote) continue;
-            switch (quote_plan.dispatchResolution()) {
-                .builtin_direct, .specialization_dispatch, .checked_error => continue,
-                .custom_dispatch => {},
-                .unresolved => checkedArtifactInvariant(
-                    "unresolved quote dispatch reached compile-time root publication",
-                    .{},
-                ),
-            }
-            const checked_expr = checked_bodies.exprIdAtRawNode(quote_plan.node_idx) orelse
-                checked_bodies.numeralConversionExprAtRawNode(quote_plan.node_idx) orelse
-                continue;
-            if (checked_bodies.expr(checked_expr).data != .str_from_quote) continue;
-            const fn_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(quote_plan.fn_var));
-            const fn_payload = checked_types.store.payload(fn_ty);
-            if (fn_payload != .function) {
-                checkedArtifactInvariant("from_quote dispatch plan type was not a function", .{});
-            }
-            const try_ty = fn_payload.function.ret;
-            const expr_idx: CIR.Expr.Idx = @enumFromInt(quote_plan.node_idx);
-            const quote_data = &checked_bodies.stored_exprs.items[@intFromEnum(checked_expr)].data.str_from_quote;
-            if (quote_data.conversion_root != null) checkedArtifactInvariant("literal received a second conversion root", .{});
-            quote_data.conversion_root = nextCompileTimeRootId(roots.items);
-            try appendCompileTimeRoot(&roots, allocator, .{
-                .module_idx = module.moduleIndex(),
-                .kind = .quote_conversion,
-                .source = .{ .expr = expr_idx },
-                .pattern = null,
-                .expr = checked_expr,
-                .checked_type = try_ty,
                 .payload = .pending,
             });
         }
@@ -32566,6 +32597,7 @@ pub const DispatchEvidenceFailure = struct {
         evidence_param_path_diverges_from_checked_type,
         evidence_param_callable_type_out_of_bounds,
         template_root_evidence_out_of_bounds,
+        literal_conversion_root_invalid,
     };
 
     kind: Kind,
@@ -33135,7 +33167,9 @@ pub const CheckedModuleArtifact = struct {
     // adapted (design.md "Result-Row Widening Adapter").
     // Version 102 preserves solver-independent deferred evaluation diagnostics.
     // Version 103 persists the checked root index for immutable composition.
-    const serialized_layout_version: u32 = 103;
+    // Version 104 gives standalone literal roots only to conversions whose
+    // complete checked dispatch contract is specialization-independent.
+    const serialized_layout_version: u32 = 104;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -33622,6 +33656,20 @@ pub const CheckedModuleArtifact = struct {
             else
                 null;
             if (expr_failure) |failure| return failure;
+            if (self.checked_bodies.literalConversionRoot(expr.id)) |root_id| {
+                const plan_id = switch (expr.data) {
+                    .numeral => |numeral| numeral.plan,
+                    .str_from_quote => |quote| quote.plan,
+                    else => unreachable,
+                };
+                const valid = if (plan_id) |id| blk: {
+                    if (@intFromEnum(root_id) >= self.compile_time_roots.roots.len) break :blk false;
+                    const root = self.compile_time_roots.root(root_id);
+                    break :blk root.expr == expr.id and root.literalConversionKind() != null and
+                        table.plans[@intFromEnum(id)].resolution == .direct_closed;
+                } else false;
+                if (!valid) return .{ .kind = .literal_conversion_root_invalid, .expr = expr.id };
+            }
         }
 
         for (self.checked_bodies.stored_statements.items, 0..) |statement, i| {
@@ -36998,7 +37046,7 @@ pub fn publishFromTypedModule(
         owner_artifact,
         checked_types,
         &entry_wrappers,
-        &compile_time_roots,
+        compile_time_roots.roots,
     );
 
     var checked_const_store = ConstStore.init(allocator);
@@ -37154,6 +37202,18 @@ pub fn publishFromTypedModule(
         &checked_procedure_templates,
         &template_iterator_refs,
     );
+    try publishLiteralConversionRoots(
+        allocator,
+        module,
+        &canonical_names,
+        owner_artifact,
+        &checked_type_publication,
+        checked_bodies,
+        &static_dispatch_plans,
+        &compile_time_roots,
+        &entry_wrappers,
+        &checked_procedure_templates,
+    );
     try classifyTemplateDispatchPlanRefs(
         allocator,
         &static_dispatch_plans,
@@ -37214,7 +37274,7 @@ pub fn publishFromTypedModule(
         &callable_eval_templates,
         &hoisted_constants,
         &const_templates,
-        template_root_evidence,
+        static_dispatch_plans.template_root_evidence,
         inputs.explicit_roots,
         inputs.validation,
     );
@@ -37774,7 +37834,7 @@ fn expectProvidedExportKind(
         owner_artifact,
         checked_types,
         &entry_wrappers,
-        &compile_time_roots,
+        compile_time_roots.roots,
     );
 
     var callable_eval_templates = CallableEvalTemplateTable{};
@@ -39913,8 +39973,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x55, 0xF3, 0x96, 0x56, 0xD4, 0x62, 0x21, 0x1D, 0x04, 0x9C, 0xE2, 0x23, 0x95, 0x2D, 0x80, 0xB4,
-        0x25, 0xEA, 0x1E, 0x63, 0xD9, 0x15, 0x71, 0x6E, 0xA8, 0xCC, 0xCD, 0xC5, 0xAA, 0x2C, 0xAA, 0x5B,
+        0x12, 0x9F, 0xFC, 0xA5, 0x37, 0xE2, 0xC5, 0xAB, 0x55, 0xBE, 0xAF, 0x41, 0xDE, 0x52, 0x67, 0x3C,
+        0x93, 0xFB, 0x45, 0x9E, 0xE7, 0x7E, 0x52, 0x86, 0x61, 0x54, 0x57, 0x96, 0x44, 0x6C, 0xB7, 0x55,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
