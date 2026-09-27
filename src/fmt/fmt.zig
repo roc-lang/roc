@@ -16,6 +16,8 @@ const AST = parse.AST;
 const SafeList = collections.SafeList;
 
 const tokenize = parse.tokenize;
+const OpenRows = @import("open_rows.zig").OpenRows;
+const StatementScope = @import("open_rows.zig").StatementScope;
 
 /// Errors that can occur while formatting an already-parsed AST.
 pub const FormatAstError = Allocator.Error || std.Io.Writer.Error;
@@ -411,6 +413,28 @@ pub fn formatAstWithOptions(ast: AST, writer: *std.Io.Writer, options: Options) 
     return formatIRNode(ast, writer, options, Formatter.formatFile);
 }
 
+/// The `..` token of every anonymous tag-union extension that formatting the
+/// file drops as redundant, in source order. Caller owns the returned slice.
+pub fn redundantOpenExtensions(gpa: std.mem.Allocator, ast: AST) FormatAstError![]Token.Idx {
+    var discard_buf: [256]u8 = undefined;
+    var discard = std.Io.Writer.Discarding.init(&discard_buf);
+    var fmt = try Formatter.init(ast, &discard.writer, .{});
+    defer fmt.deinit();
+    var open_rows = try OpenRows.init(gpa, &fmt.ast);
+    defer open_rows.deinit();
+    try fmt.formatFileWithOpenRows(&open_rows);
+
+    var dropped = std.ArrayList(Token.Idx).empty;
+    errdefer dropped.deinit(gpa);
+    for (0..ast.store.nodeCount()) |node_index| {
+        const anno_idx: AST.TypeAnno.Idx = @enumFromInt(node_index);
+        if (!open_rows.isRedundant(anno_idx)) continue;
+        try dropped.append(gpa, ast.store.getTypeAnno(anno_idx).tag_union.ext.open);
+    }
+    std.mem.sort(Token.Idx, dropped.items, {}, std.sort.asc(Token.Idx));
+    return dropped.toOwnedSlice(gpa);
+}
+
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a header.
 /// Only returns an error if the underlying writer returns an error.
 pub fn formatHeader(ast: AST, writer: *std.Io.Writer) FormatAstError!void {
@@ -463,6 +487,10 @@ const Formatter = struct {
     options: Options,
     /// Set while formatting a header whose version pin is out of date.
     roc_version_upgrade: ?RocVersionUpgrade = null,
+    /// Which anonymous `..` tag-union extensions are dropped as redundant. Set
+    /// only while formatting a whole file: whether a `..` is redundant depends
+    /// on the declarations, imports and header around it.
+    open_rows: ?*OpenRows = null,
     curr_indent: u32 = 0,
     flags: FormatFlags = .no_debug,
     // This starts true since beginning of file is considered a newline.
@@ -496,6 +524,14 @@ const Formatter = struct {
     /// Emits a string containing the well-formed source of a Roc parse IR (AST).
     /// The resulting string is owned by the caller.
     pub fn formatFile(fmt: *Formatter) FormatAstError!void {
+        var open_rows = try OpenRows.init(fmt.ast.gpa, &fmt.ast);
+        defer open_rows.deinit();
+        try fmt.formatFileWithOpenRows(&open_rows);
+    }
+
+    fn formatFileWithOpenRows(fmt: *Formatter, open_rows: *OpenRows) FormatAstError!void {
+        fmt.open_rows = open_rows;
+        defer fmt.open_rows = null;
         fmt.ast.store.emptyScratch();
         const file = fmt.ast.store.getFile();
         const header = fmt.ast.store.getHeader(file.header);
@@ -512,6 +548,7 @@ const Formatter = struct {
         }
         try fmt.formatHeader(file.header);
         const statement_slice = fmt.ast.store.statementSlice(file.statements);
+        try fmt.markRedundantOpenRows(statement_slice, .file);
         var prev_def_info: ?DefInfo = null;
         for (statement_slice) |s| {
             const region = fmt.nodeRegion(@intFromEnum(s));
@@ -802,6 +839,7 @@ const Formatter = struct {
                     if (assoc.statements.span.len > 0) {
                         fmt.curr_indent += 1;
                         const statements = fmt.ast.store.statementSlice(assoc.statements);
+                        try fmt.markRedundantOpenRows(statements, .associated);
                         for (statements) |stmt_idx| {
                             const stmt_region = fmt.nodeRegion(@intFromEnum(stmt_idx));
                             try fmt.flushCommentsBeforeDiscard(stmt_region.start);
@@ -3225,10 +3263,18 @@ const Formatter = struct {
         return fmt.ast.store.nodes.items.items(.region)[idx];
     }
 
+    /// Mark the redundant `..` in one statement list's type annotations before
+    /// they are formatted.
+    fn markRedundantOpenRows(fmt: *Formatter, statements: []const AST.Statement.Idx, scope: StatementScope) Allocator.Error!void {
+        const open_rows = fmt.open_rows orelse return;
+        try open_rows.markStatements(statements, scope);
+    }
+
     fn formatBlock(fmt: *Formatter, block: AST.Block) FormatAstError!void {
         if (block.statements.span.len > 0) {
             fmt.curr_indent += 1;
             try fmt.push('{');
+            try fmt.markRedundantOpenRows(fmt.ast.store.statementSlice(block.statements), .block);
             for (fmt.ast.store.statementSlice(block.statements), 0..) |s, i| {
                 const region = fmt.nodeRegion(@intFromEnum(s));
                 try fmt.flushCommentsBeforeDiscard(region.start);
@@ -3434,7 +3480,9 @@ const Formatter = struct {
             },
             .tag_union => |t| {
                 const tags = fmt.ast.store.typeAnnoSlice(t.tags);
-                const is_open = t.ext != .closed;
+                // An anonymous `..` that means what its absence means is dropped.
+                const drops_open = if (fmt.open_rows) |open_rows| open_rows.isRedundant(anno) else false;
+                const is_open = t.ext != .closed and !drops_open;
                 const tag_multiline = fmt.ast.store.getCollectionLayout(anno) == .expanded or
                     fmt.nodesWillBeMultiline(AST.TypeAnno.Idx, tags) or fmt.regionHasInteriorComment(region);
                 const tag_indent = fmt.curr_indent;
@@ -3461,6 +3509,10 @@ const Formatter = struct {
                         } else if (i < (tags.len - 1) or is_open) {
                             try fmt.pushAll(", ");
                         }
+                    }
+                    // A dropped `..` keeps the comments written before it.
+                    if (drops_open and tag_multiline and fmt.hasCommentBefore(t.ext.open)) {
+                        try fmt.flushCommentsBeforeDiscard(t.ext.open);
                     }
                     // Handle open tag unions.
                     if (is_open) {
@@ -3492,7 +3544,11 @@ const Formatter = struct {
                         }
                     }
                     if (tag_multiline) {
-                        try fmt.flushCommentsBeforeDiscard(region.end - 1);
+                        // Past a dropped `..` only a comment is carried over;
+                        // the line break the `..` ended is not.
+                        if (!drops_open or fmt.hasCommentBefore(region.end - 1)) {
+                            try fmt.flushCommentsBeforeDiscard(region.end - 1);
+                        }
                         fmt.curr_indent -= 1;
                         try fmt.ensureNewline();
                         try fmt.pushIndent();
