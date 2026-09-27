@@ -22447,6 +22447,47 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 }
             }
 
+            // Record value availability before recursive type-checking paths
+            // return. Self references and references to an enclosing in-flight
+            // local function participate in promotion just like finished uses.
+            try self.noteLocalLookupForLocalProcedures(lookup.pattern_idx);
+            const compile_time_known_binding = known: {
+                if (self.patternIsTopLevel(lookup.pattern_idx)) break :known true;
+                // Availability is provisional until the recorded outer-reference
+                // graph settles. Roots and diagnostics consume the same final
+                // promotion result; a candidate alone is not warning evidence.
+                if (self.local_procedure_candidates.getPtr(lookup.pattern_idx)) |candidate| {
+                    if (!candidate.contextual) {
+                        try self.noteHoistProcedureDependency(lookup.pattern_idx, candidate);
+                        break :known true;
+                    }
+                }
+                if (expected.hoist_position == .suppressed) {
+                    if (self.hoist_known_values.get(lookup.pattern_idx)) |known_value| {
+                        switch (known_value.value) {
+                            .pattern_extraction => {
+                                if (try self.ensureHoistedBindingRoot(lookup.pattern_idx)) break :known true;
+                            },
+                            .binding_rhs,
+                            .selected_root,
+                            .unavailable_runtime,
+                            => {},
+                        }
+                    }
+                }
+                if (self.shouldDeferHoistedBindingSelection() and self.hoistKnownBindingAvailable(lookup.pattern_idx)) {
+                    try self.hoist_deferred_roots.append(self.gpa, .{ .binding = lookup.pattern_idx });
+                    break :known true;
+                }
+                if (try self.ensureHoistedBindingRoot(lookup.pattern_idx)) break :known true;
+                break :known self.markHoistContextualDependencyForLookup(lookup.pattern_idx);
+            };
+            if (!compile_time_known_binding) {
+                self.markCurrentHoistRuntimeDependency();
+            } else if (self.hoist_known_values.get(lookup.pattern_idx)) |known| {
+                try self.addHoistPromotionDependency(known.promotion_dependency);
+            }
+
             // Local block-def recursion. If this lookup targets a local `s_decl`
             // function whose body is currently being checked, it's a recursive
             // reference (to the def itself, or to an enclosing in-flight def).
@@ -22498,44 +22539,6 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                     pat_var,
                 );
                 break :blk;
-            }
-
-            try self.noteLocalLookupForLocalProcedures(lookup.pattern_idx);
-            const compile_time_known_binding = known: {
-                if (self.patternIsTopLevel(lookup.pattern_idx)) break :known true;
-                // Availability is provisional until the recorded outer-reference
-                // graph settles. Roots and diagnostics consume the same final
-                // promotion result; a candidate alone is not warning evidence.
-                if (self.local_procedure_candidates.getPtr(lookup.pattern_idx)) |candidate| {
-                    if (!candidate.contextual) {
-                        try self.noteHoistProcedureDependency(lookup.pattern_idx, candidate);
-                        break :known true;
-                    }
-                }
-                if (expected.hoist_position == .suppressed) {
-                    if (self.hoist_known_values.get(lookup.pattern_idx)) |known_value| {
-                        switch (known_value.value) {
-                            .pattern_extraction => {
-                                if (try self.ensureHoistedBindingRoot(lookup.pattern_idx)) break :known true;
-                            },
-                            .binding_rhs,
-                            .selected_root,
-                            .unavailable_runtime,
-                            => {},
-                        }
-                    }
-                }
-                if (self.shouldDeferHoistedBindingSelection() and self.hoistKnownBindingAvailable(lookup.pattern_idx)) {
-                    try self.hoist_deferred_roots.append(self.gpa, .{ .binding = lookup.pattern_idx });
-                    break :known true;
-                }
-                if (try self.ensureHoistedBindingRoot(lookup.pattern_idx)) break :known true;
-                break :known self.markHoistContextualDependencyForLookup(lookup.pattern_idx);
-            };
-            if (!compile_time_known_binding) {
-                self.markCurrentHoistRuntimeDependency();
-            } else if (self.hoist_known_values.get(lookup.pattern_idx)) |known| {
-                try self.addHoistPromotionDependency(known.promotion_dependency);
             }
 
             const resolved_pat = self.types.resolveVar(pat_var);

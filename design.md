@@ -3852,7 +3852,9 @@ as a hoisted root. Lexically context-dependent local procedures are unchanged.
 A local procedure candidate is not proof of compile-time availability before
 that greatest fixpoint settles. Conditional diagnostics retain any pending
 promotion dependency from the expression summary and emit only after the same
-promotion result used by root pruning is final. Immutable binding summaries,
+promotion result used by root pruning is final. Recursive self references and
+references to an enclosing in-flight local function record the same dependencies
+before their type-checking paths return. Immutable binding summaries,
 including destructured bindings, preserve these dependencies at later lookups.
 Dependency conjunctions are sparse, append-only shared nodes: an expression
 with no pending dependency allocates nothing, and forwarding one dependency

@@ -1974,3 +1974,83 @@ test "issue 11731 - repeated binding dependencies share proof storage" {
         }
     }
 }
+
+test "issue 11731 - recursive condition inside captured helper does not warn" {
+    inline for (.{ "", "    helper : U8 -> Bool\n" }) |annotation| {
+        var test_env = try TestEnv.init("Test",
+            \\choose = |hay| {
+            \\
+        ++ annotation ++
+            \\    helper = |n| {
+            \\        if n == 0.U8 { Str.contains(hay, "99") } else {
+            \\            if helper(0.U8) { True } else { False }
+            \\        }
+            \\    }
+            \\    if helper(1.U8) { hay } else { "free" }
+            \\}
+        );
+        defer test_env.deinit();
+
+        try test_env.assertNoErrors();
+        try std.testing.expectEqual(@as(usize, 0), test_env.checker.promotedLocalProcedures().len);
+        try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+    }
+}
+
+test "issue 11731 - nested helper records reference to enclosing captured helper" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    outer = |n| {
+        \\        inner = |m| outer(m)
+        \\        if n == 0.U8 { Str.contains(hay, "99") } else {
+        \\            if inner(0.U8) { True } else { False }
+        \\        }
+        \\    }
+        \\    if outer(1.U8) { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.promotedLocalProcedures().len);
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - recursive condition inside closed helper still warns" {
+    inline for (.{ "", "    helper : U8 -> Bool\n" }) |annotation| {
+        var test_env = try TestEnv.init("Test",
+            \\choose = |hay| {
+            \\
+        ++ annotation ++
+            \\    helper = |n| {
+            \\        if n == 0.U8 { True } else {
+            \\            if helper(0.U8) { True } else { False }
+            \\        }
+            \\    }
+            \\    if helper(1.U8) { hay } else { "free" }
+            \\}
+        );
+        defer test_env.deinit();
+
+        try test_env.assertTypeErrorTitles(&.{ "Unconditional Condition", "Unconditional Condition" });
+        try std.testing.expectEqual(@as(usize, 1), test_env.checker.promotedLocalProcedures().len);
+    }
+}
+
+test "issue 11731 - nested closed helpers retain recursive promotion" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    outer = |n| {
+        \\        inner = |m| outer(m)
+        \\        if n == 0.U8 { True } else {
+        \\            if inner(0.U8) { True } else { False }
+        \\        }
+        \\    }
+        \\    if outer(1.U8) { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{ "Unconditional Condition", "Unconditional Condition" });
+    try std.testing.expectEqual(@as(usize, 2), test_env.checker.promotedLocalProcedures().len);
+}
