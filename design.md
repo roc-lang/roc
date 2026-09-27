@@ -925,6 +925,15 @@ The initial reservation pass records exactly its module/root identities and
 reserved root functions; lowering uses that declaration table to select slot reads.
 Unrequested callable bindings retain their ordinary checked body computation.
 
+Deferred literal-root diagnostics own their originating rejection and crash
+message bytes for the entire finalization session. Recording a failure copies
+its message before the native host or interpreter invocation is destroyed.
+The failure table stores offsets into a lazily allocated byte buffer, so growth
+cannot invalidate earlier records. Propagated failures retain their explicit
+producer identities instead of copying messages again. Reporting borrows the
+owned bytes only while consuming them; finalization releases the buffer after
+all embedded and standalone diagnostics have been recorded.
+
 Every shared compile-time value slot names an explicit failure-record slot with
 separate internal `failed: U8` (zero means success, one means failure) and
 `message: Str` fields. Empty crash messages remain
