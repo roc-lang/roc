@@ -4287,8 +4287,11 @@ Every live literal-origin record leaves checking with one explicit resolution:
   dispatcher and callable types and gives the literal exactly one
   `numeral_conversion`/`quote_conversion` root, linked from the checked
   literal data (`conversion_root`). That root is the single source of the
-  literal's value: its body lowers through ordinary dispatch-call lowering,
-  and every use restores the root's stored payload, or, while its module is
+  literal's value: its body lowers through ordinary dispatch-call lowering
+  and unwraps the result once. Its checked result type, shared value slot,
+  and stored constant all describe the validated `Ok` payload. `Err` lowers
+  to a `literal_rejected` terminal carrying the literal's source site.
+  Every use restores the root's stored payload, or, while its module is
   still finalizing, reads the root's declared compile-time value. A root no
   evaluation requests (its type holds a callable, so the root is
   specialization-owned) is hoisted per program instead, as a literal root
@@ -17325,6 +17328,17 @@ return storage, and execution state; the result is stored before the suspended
 read resumes. Completed producers never run again. Re-entering an active
 producer reports an actual cyclic compile-time value dependency through the
 ordinary compile-time crash path. No execution is probed, abandoned, or retried.
+
+Slot publication uses session-local reverse links indexed by the existing
+lowering-module and producer IDs. Every representation-specific slot belongs
+to its producer's list; a consumer's optional materialization slot is not a
+complete inventory. Demand and publication share that association. Guard
+insertion records each slot's guards and their procedure owners, so successful
+completion touches only the affected guards and invalidates each owner's native
+code. Frozen exports retain a direct slot-to-export index. None of these
+execution indexes is serialized as checked semantic evidence. Interpreter
+forks share the session's append-only frozen-callable registry; resuming after
+nested demand refreshes the borrowed slice, without rescanning completed images.
 
 All declared roots are still requested for diagnostics. Session execution is
 serial and nested demands execute on the same thread; lowering and specialization

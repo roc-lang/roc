@@ -42238,15 +42238,18 @@ const BodyContext = struct {
     }
 
     /// A literal-conversion root evaluates its literal's checked conversion
-    /// call to the call's `Try` result. Finalization reports `Err` as the
-    /// literal's own diagnostic and stores the `Ok` payload for every use.
+    /// call and validates it once. Its declared result and shared slot hold
+    /// the `Ok` payload; `Err` terminates with the literal's own rejection.
     fn lowerLiteralConversionRootBody(
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
         ret_cell: DraftTypeCell,
     ) Allocator.Error!DraftExprId {
         const plan = self.literalConversionPlan(expr_id);
-        return try self.lowerDispatchExprAtType(self.literalConversionTryType(plan), plan, ret_cell);
+        const try_ty = self.literalConversionTryType(plan);
+        const try_node = try self.instNode(try_ty);
+        const value = try self.lowerDispatchExprAtType(try_ty, plan, DraftTypeCell.fromGraphNode(try_node));
+        return try self.unwrapLiteralConversionAtNode(value, try_node, try ret_cell.toGraphNode(self.graph), self.literalRejectionSite(expr_id));
     }
 
     /// Lower one use of a literal whose conversion checking selected, as that
@@ -42270,15 +42273,13 @@ const BodyContext = struct {
             .pending => {},
             .fn_value, .discarded, .expect => Common.invariant("literal conversion root stored a non-constant payload"),
         }
+        if (self.builder.comptimeValueReadDeclared(self.view, root_id)) {
+            return try self.declaredComptimeValueRead(self.view, root_id, DraftTypeCell.fromGraphNode(request_node), null);
+        }
         const plan = self.literalConversionPlan(expr_id);
         const try_ty = self.literalConversionTryType(plan);
         const try_node = try self.instNode(try_ty);
-        const try_cell = DraftTypeCell.fromGraphNode(try_node);
-        const declared = self.builder.comptimeValueReadDeclared(self.view, root_id);
-        const try_value = if (declared)
-            try self.declaredComptimeValueRead(self.view, root_id, try_cell, null)
-        else
-            try self.lowerDispatchExprAtType(try_ty, plan, try_cell);
+        const try_value = try self.lowerDispatchExprAtType(try_ty, plan, DraftTypeCell.fromGraphNode(try_node));
         const site = self.literalRejectionSite(expr_id);
         const expected_kind: Common.LiteralRejectionKind = switch (kind) {
             .numeral => .numeral,
@@ -42289,7 +42290,7 @@ const BodyContext = struct {
         // A conversion root no evaluation requested (its type holds a
         // callable, so the checker left it specialization-owned) is still
         // hoisted, as a literal root of this program.
-        if (declared or !self.builder.literal_roots) return value;
+        if (!self.builder.literal_roots) return value;
         return try self.literalRootRead(expr_id, site, value, request_node);
     }
 

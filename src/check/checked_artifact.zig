@@ -27053,8 +27053,8 @@ pub const CompileTimeRootKind = enum {
     expect,
     /// A `from_numeral` conversion of a numeric literal whose target is a
     /// non-builtin nominal type. The root body evaluates the dispatch call's
-    /// `Try` result; finalization unwraps `Ok` into the stored constant and
-    /// reports `Err(InvalidNumeral(..))` as a checking problem.
+    /// `Try` result and returns its validated `Ok` payload. `Err` becomes a
+    /// literal rejection terminal, reported as a checking problem.
     numeral_conversion,
     /// A `from_quote` conversion of a string literal whose target is a
     /// non-builtin nominal type; works exactly like `numeral_conversion` with
@@ -27273,12 +27273,6 @@ pub const CompileTimeRootTable = struct {
                 checked_bodies.numeralConversionExprAtRawNode(numeral_plan.node_idx) orelse
                 continue;
             if (checked_bodies.expr(checked_expr).data != .numeral) continue;
-            const fn_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(numeral_plan.fn_var));
-            const fn_payload = checked_types.store.payload(fn_ty);
-            if (fn_payload != .function) {
-                checkedArtifactInvariant("from_numeral dispatch plan type was not a function", .{});
-            }
-            const try_ty = fn_payload.function.ret;
             const expr_idx: CIR.Expr.Idx = @enumFromInt(numeral_plan.node_idx);
             const numeral_data = &checked_bodies.stored_exprs.items[@intFromEnum(checked_expr)].data.numeral;
             if (numeral_data.conversion_root != null) checkedArtifactInvariant("literal received a second conversion root", .{});
@@ -27289,7 +27283,7 @@ pub const CompileTimeRootTable = struct {
                 .source = .{ .expr = expr_idx },
                 .pattern = null,
                 .expr = checked_expr,
-                .checked_type = try_ty,
+                .checked_type = checked_bodies.expr(checked_expr).ty,
                 .payload = .pending,
             });
         }
@@ -27308,12 +27302,6 @@ pub const CompileTimeRootTable = struct {
                 checked_bodies.numeralConversionExprAtRawNode(quote_plan.node_idx) orelse
                 continue;
             if (checked_bodies.expr(checked_expr).data != .str_from_quote) continue;
-            const fn_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(quote_plan.fn_var));
-            const fn_payload = checked_types.store.payload(fn_ty);
-            if (fn_payload != .function) {
-                checkedArtifactInvariant("from_quote dispatch plan type was not a function", .{});
-            }
-            const try_ty = fn_payload.function.ret;
             const expr_idx: CIR.Expr.Idx = @enumFromInt(quote_plan.node_idx);
             const quote_data = &checked_bodies.stored_exprs.items[@intFromEnum(checked_expr)].data.str_from_quote;
             if (quote_data.conversion_root != null) checkedArtifactInvariant("literal received a second conversion root", .{});
@@ -27324,7 +27312,7 @@ pub const CompileTimeRootTable = struct {
                 .source = .{ .expr = expr_idx },
                 .pattern = null,
                 .expr = checked_expr,
-                .checked_type = try_ty,
+                .checked_type = checked_bodies.expr(checked_expr).ty,
                 .payload = .pending,
             });
         }
@@ -33133,7 +33121,8 @@ pub const CheckedModuleArtifact = struct {
     // adapted (design.md "Result-Row Widening Adapter").
     // Version 102 preserves solver-independent deferred evaluation diagnostics.
     // Version 103 persists the checked root index for immutable composition.
-    const serialized_layout_version: u32 = 103;
+    // Version 104 declares literal-conversion roots at their validated payload type.
+    const serialized_layout_version: u32 = 104;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -39911,8 +39900,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x55, 0xF3, 0x96, 0x56, 0xD4, 0x62, 0x21, 0x1D, 0x04, 0x9C, 0xE2, 0x23, 0x95, 0x2D, 0x80, 0xB4,
-        0x25, 0xEA, 0x1E, 0x63, 0xD9, 0x15, 0x71, 0x6E, 0xA8, 0xCC, 0xCD, 0xC5, 0xAA, 0x2C, 0xAA, 0x5B,
+        0x12, 0x9F, 0xFC, 0xA5, 0x37, 0xE2, 0xC5, 0xAB, 0x55, 0xBE, 0xAF, 0x41, 0xDE, 0x52, 0x67, 0x3C,
+        0x93, 0xFB, 0x45, 0x9E, 0xE7, 0x7E, 0x52, 0x86, 0x61, 0x54, 0x57, 0x96, 0x44, 0x6C, 0xB7, 0x55,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

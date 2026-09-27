@@ -1086,6 +1086,7 @@ pub fn adoptReachableCompletedComptimeValues(lowered: *LoweredProgram) Allocator
     if (lowered.frozen_static_data == null) checkedPipelineInvariant("runtime consumer has no completed compile-time values to adopt");
     const result = &lowered.lir_result;
     result.comptime_value_guards.clearRetainingCapacity();
+    for (result.static_data_values.items) |*value| value.first_comptime_guard = null;
     for (lowered.frozen_static_data.?.exports) |item| {
         if (item.value_id) |id| result.static_data_values.items[@intFromEnum(id)].initializer = null;
     }
@@ -1100,6 +1101,7 @@ pub fn adoptReachableCompletedComptimeValues(lowered: *LoweredProgram) Allocator
 fn completeComptimeValueSlots(lowered: *LoweredProgram) Allocator.Error!void {
     const result = &lowered.lir_result;
     result.comptime_value_guards.clearRetainingCapacity();
+    for (result.static_data_values.items) |*value| value.first_comptime_guard = null;
     if (lowered.frozen_static_data) |*frozen| {
         for (frozen.exports) |item| {
             if (item.value_id) |id| result.static_data_values.items[@intFromEnum(id)].initializer = null;
