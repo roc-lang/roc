@@ -12998,7 +12998,7 @@ supplied to the materialization.
 
 A runtime adapter rewrites bytes through descriptors, and descriptors do not
 describe a callable's erased-call convention. A value holding a callable in its
-record fields, tuple elements, tag payloads, or alias and nominal backings
+record fields, tuple items, tag payloads, or alias and nominal backings
 therefore crosses a boundary structurally in lowering, which wraps each
 callable in a callable adapter; only a shared nominal backing template, whose
 callables are stated over the nominal's formals and so share one convention

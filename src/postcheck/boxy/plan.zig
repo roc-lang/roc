@@ -6786,41 +6786,60 @@ const Builder = struct {
             }
         }
 
+        // A use instantiates each callee scheme variable with a type the
+        // caller supplies. A variable of that type which the caller's own
+        // scheme or an enclosing local scope quantifies is described by the
+        // caller's frame; one reached only through a constraint signature
+        // appears in no type the caller's body mentions, so the substitution is
+        // the only place it is named. The images depend only on the edge, so
+        // they are computed once.
+        var image_arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer image_arena.deinit();
+        const image_allocator = image_arena.allocator();
+        const edge_images = try image_allocator.alloc(std.AutoHashMapUnmanaged(TypeRepId, []const TypeRepId), edges.items.len);
         var image_leaves = WorkerDescriptorLeaves{ .set = collections.DenseMap(TypeRepId, void).init(self.allocator) };
         defer image_leaves.deinit(self.allocator);
+        var caller_images = std.ArrayList(TypeRepId).empty;
+        defer caller_images.deinit(self.allocator);
+        for (edges.items, edge_substitutions.items, edge_images) |edge, substitution, *images| {
+            images.* = .empty;
+            const sub = substitution orelse continue;
+            for (sub.scheme_vars, sub.site_types) |variable, site_type| {
+                if (sub.site_view.checked_types.payload(site_type) == .err) continue;
+                const scheme_rep = self.plan.repForSourceType(typeRef(sub.callee_view, variable)) orelse continue;
+                const site_rep = self.plan.repForSourceType(typeRef(sub.site_view, site_type)) orelse
+                    boxyPlanInvariant("callable use substitution type was not analyzed");
+                seen.clearRetainingCapacity();
+                image_leaves.set.clearRetainingCapacity();
+                image_leaves.order.clearRetainingCapacity();
+                try self.collectDescriptorLeaves(site_rep, &image_leaves, &seen);
+                caller_images.clearRetainingCapacity();
+                for (image_leaves.order.items) |image_leaf| {
+                    if (!own_scheme[@intFromEnum(edge.caller)].contains(image_leaf) and
+                        scopes.owner.get(image_leaf) == null) continue;
+                    if (!scopes.allows(edge.caller, image_leaf)) continue;
+                    try caller_images.append(self.allocator, image_leaf);
+                }
+                if (caller_images.items.len == 0) continue;
+                const entry = try images.getOrPut(image_allocator, scheme_rep);
+                entry.value_ptr.* = if (entry.found_existing)
+                    try std.mem.concat(image_allocator, TypeRepId, &.{ entry.value_ptr.*, caller_images.items })
+                else
+                    try image_allocator.dupe(TypeRepId, caller_images.items);
+            }
+        }
+
         var changed = true;
         while (changed) {
             changed = false;
-            for (edges.items, edge_substitutions.items) |edge, substitution| {
+            for (edges.items, edge_images) |edge, images| {
                 if (edge.caller == edge.callee) continue;
                 const callee = @intFromEnum(edge.callee);
                 const caller = &needs[@intFromEnum(edge.caller)];
                 for ([_][]const TypeRepId{ signature[callee].order.items, needs[callee].order.items }) |leaves| {
                     for (leaves) |leaf| {
                         if (own_scheme[callee].contains(leaf)) {
-                            // The use instantiates the callee's scheme
-                            // variable with a type the caller supplies. A
-                            // variable the caller's own scheme or an enclosing
-                            // local scope quantifies is described by the
-                            // caller's frame; when it is reached only through
-                            // a constraint signature it appears in no type the
-                            // caller's body mentions, so the substitution is
-                            // the only place it is named.
-                            const sub = substitution orelse continue;
-                            seen.clearRetainingCapacity();
-                            image_leaves.set.clearRetainingCapacity();
-                            image_leaves.order.clearRetainingCapacity();
-                            for (sub.scheme_vars, sub.site_types) |variable, site_type| {
-                                if (self.plan.repForSourceType(typeRef(sub.callee_view, variable)) != leaf) continue;
-                                if (sub.site_view.checked_types.payload(site_type) == .err) continue;
-                                const site_rep = self.plan.repForSourceType(typeRef(sub.site_view, site_type)) orelse
-                                    boxyPlanInvariant("callable use substitution type was not analyzed");
-                                try self.collectDescriptorLeaves(site_rep, &image_leaves, &seen);
-                            }
-                            for (image_leaves.order.items) |image_leaf| {
-                                if (!own_scheme[@intFromEnum(edge.caller)].contains(image_leaf) and
-                                    scopes.owner.get(image_leaf) == null) continue;
-                                if (!scopes.allows(edge.caller, image_leaf)) continue;
+                            for (images.get(leaf) orelse &.{}) |image_leaf| {
                                 if (try caller.add(self.allocator, image_leaf)) changed = true;
                             }
                             continue;

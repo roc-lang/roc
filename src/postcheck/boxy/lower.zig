@@ -1264,6 +1264,9 @@ const ProcedureBuilder = struct {
     erased_worker_procs: []?LIR.LirProcSpecId,
     hosted_external_procs: []?LIR.LirProcSpecId,
     type_desc_ids: []?LIR.BoxyTypeDescId,
+    /// Per representation, whether an erased callable sits in its structure;
+    /// see `ProcBodyBuilder.repHoldsCallableInStructure`.
+    rep_holds_callable: []?bool,
     generated_evidence_desc_ids: [4]?LIR.BoxyTypeDescId,
     static_dict_cache: std.ArrayList(StaticDictCacheEntry),
     inspect_method_slot_cache: std.ArrayList(InspectMethodSlotCacheEntry),
@@ -1369,6 +1372,7 @@ const ProcedureBuilder = struct {
             .erased_worker_procs = &.{},
             .hosted_external_procs = &.{},
             .type_desc_ids = &.{},
+            .rep_holds_callable = &.{},
             .generated_evidence_desc_ids = .{ null, null, null, null },
             .static_dict_cache = .empty,
             .inspect_method_slot_cache = .empty,
@@ -1395,6 +1399,7 @@ const ProcedureBuilder = struct {
         self.static_dict_cache.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
         self.allocator.free(self.type_desc_ids);
+        self.allocator.free(self.rep_holds_callable);
         self.allocator.free(self.hosted_external_procs);
         self.allocator.free(self.erased_worker_procs);
         self.allocator.free(self.worker_procs);
@@ -19922,16 +19927,27 @@ const ProcBodyBuilder = struct {
     }
 
     /// Whether an erased callable sits inside this representation's record
-    /// fields, tuple elements, tag payloads, or alias and nominal backings.
-    /// Callables inside list elements and box payloads are behind their
+    /// fields, tuple items, tag payloads, or alias and nominal backings.
+    /// Callables inside list items and box payloads are behind their
     /// container's own allocation and are not structure of this value. A
     /// shared nominal backing template states its callables over the
     /// nominal's formals, so every instantiation shares their erased-call
     /// convention and only the formals' descriptors differ.
     fn repHoldsCallableInStructure(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!bool {
+        if (self.parent.rep_holds_callable.len == 0) {
+            self.parent.rep_holds_callable = try self.parent.allocator.alloc(?bool, self.parent.plan.representations.items.len);
+            @memset(self.parent.rep_holds_callable, null);
+        }
+        const rep_index = @intFromEnum(rep_id);
+        if (rep_index >= self.parent.rep_holds_callable.len) {
+            boxyLowerInvariant("boxy callable-structure query referenced a representation outside its cache");
+        }
+        if (self.parent.rep_holds_callable[rep_index]) |known| return known;
         var visited = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
         defer visited.deinit();
-        return try self.repHoldsCallableInStructureVisited(rep_id, &visited);
+        const holds = try self.repHoldsCallableInStructureVisited(rep_id, &visited);
+        self.parent.rep_holds_callable[rep_index] = holds;
+        return holds;
     }
 
     fn repHoldsCallableInStructureVisited(
