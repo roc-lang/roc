@@ -64,7 +64,18 @@ const Lowered = struct {
     }
 };
 
-fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std.testing.TmpDir, source: []const u8) !Lowered {
+const LowerBothPathsError = std.mem.Allocator.Error ||
+    std.Io.Dir.CreateDirPathError ||
+    std.Io.Dir.WriteFileError ||
+    std.Io.Dir.RealPathFileAllocError ||
+    eval.BuiltinModules.InitError ||
+    std.Thread.SpawnError ||
+    Coordinator.AppDiscoveryError ||
+    @import("../coordinator.zig").CoordinatorError ||
+    lir.CheckedPipeline.LowerResourceError ||
+    error{TestUnexpectedResult};
+
+fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std.testing.TmpDir, source: []const u8) LowerBothPathsError!Lowered {
     const io = std.testing.io;
     try tmp_dir.dir.createDirPath(io, ".roc_echo_platform");
     for (platform_files) |file| try tmp_dir.dir.writeFile(io, .{ .sub_path = file.path, .data = file.source });

@@ -1193,14 +1193,17 @@ test "identical frozen nodes merge to a fixed point and roots keep their symbols
     // Two roots, each with a backing whose one pointer names an inner node;
     // the inner nodes are identical, so after they merge the backings are.
     const owned = try cloneStaticData(allocator, &.{
-        .{ .symbol_name = "root_a", .value_id = @enumFromInt(0), .bytes = &.{ 0, 0, 0, 0, 0, 0, 0, 0 }, .alignment = 8, .is_exported = false, .relocations = &relocation_to.at(1, "backing_a") },
+        .{ .symbol_name = "root_a", .bytes = &.{ 0, 0, 0, 0, 0, 0, 0, 0 }, .alignment = 8, .is_exported = false, .relocations = &relocation_to.at(1, "backing_a") },
         .{ .symbol_name = "backing_a", .bytes = &.{ 0, 0, 0, 0, 0, 0, 0, 0 }, .alignment = 8, .is_exported = false, .relocations = &relocation_to.at(2, "inner_a") },
         .{ .symbol_name = "inner_a", .bytes = "same", .alignment = 1, .is_exported = false },
-        .{ .symbol_name = "root_b", .value_id = @enumFromInt(1), .bytes = &.{ 0, 0, 0, 0, 0, 0, 0, 0 }, .alignment = 8, .is_exported = false, .relocations = &relocation_to.at(4, "backing_b") },
+        .{ .symbol_name = "root_b", .bytes = &.{ 0, 0, 0, 0, 0, 0, 0, 0 }, .alignment = 8, .is_exported = false, .relocations = &relocation_to.at(4, "backing_b") },
         .{ .symbol_name = "backing_b", .bytes = &.{ 0, 0, 0, 0, 0, 0, 0, 0 }, .alignment = 8, .is_exported = false, .relocations = &relocation_to.at(5, "inner_b") },
         .{ .symbol_name = "inner_b", .bytes = "same", .alignment = 1, .is_exported = false },
         .{ .symbol_name = "other", .bytes = "else", .alignment = 1, .is_exported = false },
     });
+    // The fixture's slot table names its roots; value IDs are slot indices.
+    const root_symbols = [_]usize{ 0, 3 };
+    for (root_symbols, 0..) |symbol, slot| owned[symbol].value_id = @enumFromInt(slot);
     const merged = try mergeIdenticalNodes(allocator, owned);
     defer deinitStaticData(allocator, merged);
     try std.testing.expectEqual(@as(usize, 5), merged.len);
@@ -1220,7 +1223,7 @@ test "identical frozen nodes merge to a fixed point and roots keep their symbols
 test "frozen nodes with different contents or different targets stay separate" {
     const allocator = std.testing.allocator;
     const owned = try cloneStaticData(allocator, &.{
-        .{ .symbol_name = "root", .value_id = @enumFromInt(0), .bytes = "same", .alignment = 1, .is_exported = false },
+        .{ .symbol_name = "root", .bytes = "same", .alignment = 1, .is_exported = false },
         .{ .symbol_name = "same_as_root", .bytes = "same", .alignment = 1, .is_exported = false },
         .{ .symbol_name = "points_a", .bytes = &.{ 0, 0, 0, 0, 0, 0, 0, 0 }, .alignment = 8, .is_exported = false, .relocations = &.{.{ .offset = 0, .target_symbol_name = "a", .target = .{ .data_symbol = @enumFromInt(4) } }} },
         .{ .symbol_name = "points_b", .bytes = &.{ 0, 0, 0, 0, 0, 0, 0, 0 }, .alignment = 8, .is_exported = false, .relocations = &.{.{ .offset = 0, .target_symbol_name = "b", .target = .{ .data_symbol = @enumFromInt(5) } }} },
@@ -1228,6 +1231,9 @@ test "frozen nodes with different contents or different targets stay separate" {
         .{ .symbol_name = "b", .bytes = "b", .alignment = 1, .is_exported = false },
         .{ .symbol_name = "wider", .bytes = "a", .alignment = 2, .is_exported = false },
     });
+    // The fixture's slot table names its roots; value IDs are slot indices.
+    const root_symbols = [_]usize{0};
+    for (root_symbols, 0..) |symbol, slot| owned[symbol].value_id = @enumFromInt(slot);
     const merged = try mergeIdenticalNodes(allocator, owned);
     defer deinitStaticData(allocator, merged);
     // A root never merges, even with a node of the same bytes; nodes whose
