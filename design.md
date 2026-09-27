@@ -13265,8 +13265,10 @@ expression and pattern types it analyzes for that body: each unsealed type
 variable those types reach, and each one a callable the body creates or calls
 needs beyond its own scheme variables, unless the signature or checked evidence
 already supplies it. A use instantiates the callee's scheme variables it needs
-with the types its checked substitution names, and the body requires every
-variable of those types that its own scheme or an enclosing local scope
+with the types its checked substitution names. A scheme variable the callee's
+signature names is described by the use's own argument and result values; for
+each one it needs beyond its signature, the body requires every variable of its
+substituted type that the body's own scheme or an enclosing local scope
 quantifies. A variable reached only through a dispatch constraint's signature,
 such as the callback type `c` in `a.map : a, (c -> d) -> b`, appears in no type
 the body mentions, so the substitution is the only place it is named. A

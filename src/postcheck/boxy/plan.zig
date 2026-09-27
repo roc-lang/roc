@@ -7087,6 +7087,10 @@ const Builder = struct {
                 for ([_][]const TypeRepId{ signature[callee].order.items, needs[callee].order.items }) |leaves| {
                     for (leaves) |leaf| {
                         if (own_scheme[callee].contains(leaf)) {
+                            // A scheme variable the callee's signature names
+                            // is described by the use's own argument and
+                            // result values.
+                            if (signature[callee].set.contains(leaf)) continue;
                             for (images.get(leaf) orelse &.{}) |image_leaf| {
                                 if (try caller.add(self.allocator, image_leaf)) changed = true;
                             }
