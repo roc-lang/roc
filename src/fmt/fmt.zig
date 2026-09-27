@@ -2202,7 +2202,8 @@ const Formatter = struct {
                     }
                     try fmt.formatExprDiscard(branch.body);
                 }
-                fmt.curr_indent -= 1;
+                // Multiline arms can increase curr_indent beyond the branch level.
+                fmt.curr_indent = branch_indent - 1;
                 try fmt.newline();
                 try fmt.pushIndent();
                 try fmt.push('}');
@@ -4664,6 +4665,37 @@ test "package platform dependency preserves inline source order" {
     const result = try moduleFmtsStable(std.testing.allocator, input, false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings(input, result);
+}
+
+test "issue 11713: match closing brace aligns after a multiline final arm" {
+    // Repro for https://github.com/roc-lang/roc/issues/11713
+    const inputs = [_][]const u8{
+        "f = |x| {\n" ++
+            "\tmatch x {\n" ++
+            "\t\tOk(v) => v\n" ++
+            "\t\tErr(e) =>\n" ++
+            "\t\t\tmatch e {\n" ++
+            "\t\t\t\tA => 1\n" ++
+            "\t\t\t\tB => 2\n" ++
+            "\t\t\t}\n" ++
+            "\t}\n" ++
+            "}\n" ++
+            "\n" ++
+            "expect f(Ok(3)) == 3\n",
+        "f = |x| match x {\n" ++
+            "\tOk(v) => v\n" ++
+            "\tErr(e) =>\n" ++
+            "\t\tmatch e {\n" ++
+            "\t\t\tA => 1\n" ++
+            "\t\t\tB => 2\n" ++
+            "\t\t}\n" ++
+            "}\n",
+    };
+    for (inputs) |input| {
+        const result = try moduleFmtsStable(std.testing.allocator, input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(input, result);
+    }
 }
 
 test "issue 10431: wrapped declaration has no trailing whitespace" {
