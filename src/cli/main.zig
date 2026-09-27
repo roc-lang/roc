@@ -71,7 +71,7 @@ const watch_mod = if (builtin.target.cpu.arch == .wasm32) struct {
     pub const WatchEvent = struct { path: []const u8 };
     pub const WatchCallbackWithContext = *const fn (context: ?*anyopaque, event: WatchEvent) void;
     pub const Watcher = struct {
-        pub fn initAllFiles(
+        pub fn initInputs(
             _: std.mem.Allocator,
             _: std.Io,
             _: []const []const u8,
@@ -86,6 +86,15 @@ const watch_mod = if (builtin.target.cpu.arch == .wasm32) struct {
         }
 
         pub fn deinit(_: *Watcher) void {}
+        pub fn takeInputChange(_: *Watcher, _: usize) bool {
+            return false;
+        }
+        pub fn takeCoverageChange(_: *Watcher) bool {
+            return false;
+        }
+        pub fn hasBackendFailed(_: *Watcher) bool {
+            return false;
+        }
     };
 } else @import("watch");
 
@@ -14084,10 +14093,9 @@ const WatchSnapshotError = Allocator.Error;
 const WatchCollectInputSetError = WatchCollectPathsError || WatchSnapshotError;
 const WatchWriteInputsError = WatchCollectInputSetError || std.Io.Dir.WriteFileError;
 const WatchReadInputsError = WatchCollectPathsError || WatchSnapshotError || error{ WatchInputsMissing, WatchInputsReadFailed, WatchInputsMalformed };
-const WatchDirectoryError = Allocator.Error;
 const WatcherStartError = std.Thread.SpawnError || error{ AlreadyStarted, UnsupportedWatchMode, WatchBackendFailed };
-const WatchRefreshError = WatchSnapshotError || WatchDirectoryError || WatcherStartError;
-const WatchChangeError = WatchSnapshotError;
+const WatchRefreshError = WatchSnapshotError || WatcherStartError;
+const WatchChangeError = WatchRefreshError;
 const WatchInputsPathError = Allocator.Error || std.Io.Dir.CreateDirPathError;
 const WatchSpawnChildError = Allocator.Error || std.process.SpawnError || std.Thread.SpawnError;
 const CliOutputWriteError = error{WriteFailed};
@@ -14800,54 +14808,6 @@ fn watchSnapshotChanged(a: []const WatchSnapshotEntry, b: []const WatchSnapshotE
     return false;
 }
 
-fn existingDirectory(ctx: *CliCtx, path: []const u8) bool {
-    var dir = std.Io.Dir.openDirAbsolute(ctx.io.std_io, path, .{}) catch return false;
-    dir.close(ctx.io.std_io);
-    return true;
-}
-
-fn nearestExistingAncestor(ctx: *CliCtx, path: []const u8) WatchDirectoryError![]const u8 {
-    var candidate = try ctx.gpa.dupe(u8, std.fs.path.dirname(path) orelse path);
-    errdefer ctx.gpa.free(candidate);
-
-    while (!existingDirectory(ctx, candidate)) {
-        const parent = std.fs.path.dirname(candidate) orelse break;
-        if (parent.len == candidate.len) break;
-
-        const parent_copy = try ctx.gpa.dupe(u8, parent);
-        ctx.gpa.free(candidate);
-        candidate = parent_copy;
-    }
-
-    return candidate;
-}
-
-fn collectWatchDirectories(ctx: *CliCtx, paths: []const []const u8) WatchDirectoryError![]const []const u8 {
-    var dirs = std.ArrayList([]const u8).empty;
-    errdefer {
-        for (dirs.items) |dir| ctx.gpa.free(dir);
-        dirs.deinit(ctx.gpa);
-    }
-
-    var seen: std.StringHashMapUnmanaged(void) = .{};
-    defer seen.deinit(ctx.gpa);
-
-    for (paths) |path| {
-        const dir = try nearestExistingAncestor(ctx, path);
-        errdefer ctx.gpa.free(dir);
-
-        if (seen.contains(dir)) {
-            ctx.gpa.free(dir);
-            continue;
-        }
-
-        try seen.put(ctx.gpa, dir, {});
-        try dirs.append(ctx.gpa, dir);
-    }
-
-    return dirs.toOwnedSlice(ctx.gpa);
-}
-
 fn refreshWatchState(
     ctx: *CliCtx,
     state: *WatchState,
@@ -14857,13 +14817,10 @@ fn refreshWatchState(
     var owned_input_set = new_input_set;
     errdefer owned_input_set.deinit(ctx);
 
-    const watch_dirs = try collectWatchDirectories(ctx, owned_input_set.inputs);
-    defer freeOwnedPathSlice(ctx.gpa, watch_dirs);
-
     var new_watcher: ?*watch_mod.Watcher = null;
-    if (watch_dirs.len > 0) {
-        new_watcher = try watch_mod.Watcher.initAllFiles(ctx.gpa, ctx.io.std_io, watch_dirs, signal, watchCallback);
-        errdefer if (new_watcher) |watcher| watcher.deinit();
+    errdefer if (new_watcher) |watcher| watcher.deinit();
+    if (owned_input_set.inputs.len > 0) {
+        new_watcher = try watch_mod.Watcher.initInputs(ctx.gpa, ctx.io.std_io, owned_input_set.inputs, signal, watchCallback);
         new_watcher.?.start() catch |err| switch (err) {
             error.WatchBackendFailed => {
                 ctx.io.stderr().writeAll("Error: failed to start filesystem watching for source inputs.\n") catch {};
@@ -14914,7 +14871,34 @@ fn consumeDebouncedWatchChange(ctx: *CliCtx, signal: *WatchEventSignal, state: *
     if (!signal.dirty.swap(false, .seq_cst)) return false;
     std.Io.sleep(ctx.io.std_io, std.Io.Duration.fromMilliseconds(watch_debounce_ms), .awake) catch {};
     _ = signal.dirty.swap(false, .seq_cst);
-    return try watchStateHasByteChanges(ctx, state);
+    const watcher = state.watcher orelse return false;
+    if (watcher.hasBackendFailed()) return error.WatchBackendFailed;
+    if (watcher.takeCoverageChange()) {
+        // Coverage must advance even if creating a directory did not yet change
+        // an input's bytes. Keep the old baseline through registration so edits
+        // during the handoff are detected by refreshWatchState's snapshot check.
+        const input_set = blk: {
+            const paths = try ctx.gpa.alloc([]const u8, state.inputs.len);
+            errdefer ctx.gpa.free(paths);
+            var copied: usize = 0;
+            errdefer for (paths[0..copied]) |path| ctx.gpa.free(path);
+            for (state.inputs, 0..) |path, i| {
+                paths[i] = try ctx.gpa.dupe(u8, path);
+                copied += 1;
+            }
+            const snapshot = try ctx.gpa.dupe(WatchSnapshotEntry, state.snapshot);
+            break :blk WatchInputSet{ .inputs = paths, .snapshot = snapshot };
+        };
+        return refreshWatchState(ctx, state, signal, input_set);
+    }
+    var changed = false;
+    for (state.inputs, state.snapshot, 0..) |path, *entry, index| {
+        if (!watcher.takeInputChange(index)) continue;
+        const current = try readWatchFileState(ctx, path);
+        changed = changed or !entry.state.eql(current);
+        entry.state = current;
+    }
+    return changed;
 }
 
 fn waitForWatchChange(ctx: *CliCtx, signal: *WatchEventSignal, state: *WatchState) WatchChangeError!void {
@@ -20135,6 +20119,64 @@ test "watch byte change advances snapshot before rebuild completes" {
 
     try testing.expect(try watchStateHasByteChanges(&ctx, &state));
     try testing.expect(!try watchStateHasByteChanges(&ctx, &state));
+}
+
+test "watch exact inputs recover missing directories and atomic replacement" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(allocator, arena.allocator(), &io_state, .check);
+    ctx.initIo();
+    defer ctx.deinit();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(root);
+    const input = try std.fs.path.join(allocator, &.{ root, "generated/deep/data.txt" });
+    defer allocator.free(input);
+    var signal = WatchEventSignal{};
+    var state = WatchState{};
+    defer state.deinit(&ctx);
+    try testing.expect(!try refreshWatchState(&ctx, &state, &signal, try collectWatchInputSet(&ctx, null, &.{input})));
+
+    // Directory creation must advance coverage without requiring byte changes.
+    for ([_][]const u8{ "generated", "generated/deep" }) |relative| {
+        try tmp.dir.createDirPath(testing.io, relative);
+        const directory = try std.fs.path.join(allocator, &.{ root, relative });
+        defer allocator.free(directory);
+        const start = std.Io.Clock.now(.awake, testing.io);
+        while (true) {
+            try testing.expect(!try consumeDebouncedWatchChange(&ctx, &signal, &state));
+            if (state.watcher.?.input_plan.?.nodes.get(directory)) |node| {
+                if (node.kind == .directory) break;
+            }
+            try testing.expect(start.durationTo(std.Io.Clock.now(.awake, testing.io)).toMilliseconds() < 5000);
+            std.Thread.yield() catch {};
+        }
+    }
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "generated/deep/data.txt", .data = "first" });
+    try expectWatchChangeForTest(&ctx, &signal, &state);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "replacement", .data = "second" });
+    try tmp.dir.rename("replacement", tmp.dir, "generated/deep/data.txt", testing.io);
+    try expectWatchChangeForTest(&ctx, &signal, &state);
+
+    // Moving an ancestor removes the logical input even though its inode lives.
+    try tmp.dir.rename("generated", tmp.dir, "moved", testing.io);
+    try expectWatchChangeForTest(&ctx, &signal, &state);
+    // Moving a populated tree into place must discover the file immediately.
+    try tmp.dir.rename("moved", tmp.dir, "generated", testing.io);
+    try expectWatchChangeForTest(&ctx, &signal, &state);
+}
+
+fn expectWatchChangeForTest(ctx: *CliCtx, signal: *WatchEventSignal, state: *WatchState) !void {
+    const start = std.Io.Clock.now(.awake, ctx.io.std_io);
+    while (!try consumeDebouncedWatchChange(ctx, signal, state)) {
+        try std.testing.expect(start.durationTo(std.Io.Clock.now(.awake, ctx.io.std_io)).toMilliseconds() < 5000);
+        std.Thread.yield() catch {};
+    }
 }
 
 test "appendWindowsQuotedArg" {
