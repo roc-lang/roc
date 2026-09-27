@@ -2826,16 +2826,22 @@ fn testPublicationSlots(allocator: Allocator) (Allocator.Error || error{TestExpe
     var keys = [_]checked.ModuleId{ .{}, .{} };
     keys[1].bytes[0] = 1;
     try result.setLoweringModules(&keys);
+    const first_module = result.loweringModuleId(keys[0]).?;
+    const second_module = result.loweringModuleId(keys[1]).?;
+    const literal_id: lir.LIR.LiteralRootId = @enumFromInt(result.literal_roots.items.len);
     // Only the literal table's length is used to allocate its dense index.
     try result.literal_roots.append(allocator, undefined);
     const producers = [_]lir.LIR.ComptimeProducer{
         .{ .checked = @enumFromInt(7) },
         .{ .checked = @enumFromInt(7) },
         .{ .checked = @enumFromInt(7) },
-        .{ .literal = @enumFromInt(0) },
+        .{ .literal = literal_id },
     };
     const modules = [_]usize{ 0, 1, 0, 1 };
-    for (producers, modules) |producer, module| {
+    // The append loop fills every slot ID before the assertions read them.
+    var slots: [producers.len]lir.LIR.StaticDataId = undefined;
+    for (producers, modules, &slots) |producer, module, *slot| {
+        slot.* = @enumFromInt(result.static_data_values.items.len);
         try result.static_data_values.append(allocator, .{
             .initializer = null,
             .layout_idx = .u8,
@@ -2843,21 +2849,22 @@ fn testPublicationSlots(allocator: Allocator) (Allocator.Error || error{TestExpe
                 .module = keys[module],
                 .root = producer,
                 .const_locator = null,
-                .role = .{ .value = .{ .failure_slot = @enumFromInt(0), .plan = @enumFromInt(0) } },
+                // Reverse links consume only module and producer identity, never the role.
+                .role = undefined,
             },
         });
     }
     var publication = try PublicationSlots.init(allocator, &result);
     defer publication.deinit(allocator);
     const slot = lir.LIR.StaticDataId;
-    try std.testing.expectEqual(@as(?slot, @enumFromInt(2)), publication.first(@enumFromInt(0), producers[0]));
-    try std.testing.expectEqual(@as(?slot, @enumFromInt(0)), publication.next[2]);
-    try std.testing.expectEqual(@as(?slot, null), publication.next[0]);
-    try std.testing.expectEqual(@as(?slot, @enumFromInt(1)), publication.first(@enumFromInt(1), producers[1]));
-    try std.testing.expectEqual(@as(?slot, null), publication.next[1]);
-    try std.testing.expectEqual(@as(?slot, @enumFromInt(3)), publication.first(@enumFromInt(1), producers[3]));
-    try std.testing.expectEqual(@as(?slot, null), publication.first(@enumFromInt(0), .{ .checked = @enumFromInt(6) }));
-    try std.testing.expectEqual(@as(?slot, null), publication.first(@enumFromInt(0), .{ .checked = @enumFromInt(8) }));
+    try std.testing.expectEqual(@as(?slot, slots[2]), publication.first(first_module, producers[0]));
+    try std.testing.expectEqual(@as(?slot, slots[0]), publication.next[@intFromEnum(slots[2])]);
+    try std.testing.expectEqual(@as(?slot, null), publication.next[@intFromEnum(slots[0])]);
+    try std.testing.expectEqual(@as(?slot, slots[1]), publication.first(second_module, producers[1]));
+    try std.testing.expectEqual(@as(?slot, null), publication.next[@intFromEnum(slots[1])]);
+    try std.testing.expectEqual(@as(?slot, slots[3]), publication.first(second_module, producers[3]));
+    try std.testing.expectEqual(@as(?slot, null), publication.first(first_module, .{ .checked = @enumFromInt(6) }));
+    try std.testing.expectEqual(@as(?slot, null), publication.first(first_module, .{ .checked = @enumFromInt(8) }));
 }
 
 /// Shared immutable-slot publication owner for native and interpreter sessions.
@@ -4812,7 +4819,9 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     };
     defer lowered.deinit();
     const result = &lowered.lir_result;
-    try result.setLoweringModules(&.{.{}});
+    const module_key: checked.ModuleId = .{};
+    try result.setLoweringModules(&.{module_key});
+    const module_id = result.loweringModuleId(module_key).?;
     var checked_roots = std.ArrayList(checked.CompileTimeRoot).empty;
     defer checked_roots.deinit(allocator);
     const root_id: checked.ComptimeRootId = @enumFromInt(checked_roots.items.len);
@@ -4826,7 +4835,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     try result.static_data_values.append(allocator, .{
         .initializer = null,
         .layout_idx = failure_layout,
-        .compile_time_root = .{ .module = .{}, .root = .{ .checked = root_id }, .const_locator = null, .role = .{ .failure_message = .{
+        .compile_time_root = .{ .module = module_key, .root = .{ .checked = root_id }, .const_locator = null, .role = .{ .failure_message = .{
             .failed_field = 0,
             .message_field = 1,
             .failed_offset = failed_offset,
@@ -4839,7 +4848,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     try result.static_data_values.append(allocator, .{
         .initializer = null,
         .layout_idx = .str,
-        .compile_time_root = .{ .module = .{}, .root = .{ .checked = root_id }, .const_locator = null, .role = .{ .value = .{ .failure_slot = failure_slot, .plan = value_plan } } },
+        .compile_time_root = .{ .module = module_key, .root = .{ .checked = root_id }, .const_locator = null, .role = .{ .value = .{ .failure_slot = failure_slot, .plan = value_plan } } },
     });
     const text = "a dependent root borrows this frozen string after its producer is dropped";
     const source_local = try result.store.addLocal(.{ .layout_idx = .str });
@@ -4917,6 +4926,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
             owner: *InterpreterProgram,
             lowered: *lir.CheckedPipeline.LoweredProgram,
             proc: lir.LIR.LirProcSpecId,
+            module_id: lir.LIR.LoweringModuleId,
             root_id: checked.ComptimeRootId,
             value_plan: LirProgram.ConstPlanId,
             failure: ?[]const u8,
@@ -4931,25 +4941,25 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
                 const child = try self.owner.fork(self.lowered);
                 defer child.deinit();
                 if (self.failure) |message| {
-                    child.slotEnvironment().publishFailureOrigin(self.lowered, @enumFromInt(0), .{ .checked = self.root_id }, .{
+                    child.slotEnvironment().publishFailureOrigin(self.lowered, self.module_id, .{ .checked = self.root_id }, .{
                         .loc = .{ .file = 0, .line = 7, .column = 3 },
                         .region = base.Region.from_raw_offsets(40, 51),
                     });
-                    try child.slotEnvironment().publishFailure(self.lowered, @enumFromInt(0), .{ .checked = self.root_id }, message, .{ .resolve = InterpreterProgram.resolveFunction });
+                    try child.slotEnvironment().publishFailure(self.lowered, self.module_id, .{ .checked = self.root_id }, message, .{ .resolve = InterpreterProgram.resolveFunction });
                 } else {
                     const value = child.interpreter.eval(.{ .proc_id = self.proc, .ret_layout = .str }) catch |err| switch (err) {
                         error.OutOfMemory => return error.OutOfMemory,
                         else => unreachable,
                     };
                     defer child.interpreter.dropValue(value.value, .str);
-                    try child.publishRoot(self.lowered, @enumFromInt(0), .{ .checked = self.root_id }, .{
+                    try child.publishRoot(self.lowered, self.module_id, .{ .checked = self.root_id }, .{
                         .ret_layout = .str,
                         .plan = self.value_plan,
                     }, value.value);
                 }
             }
         };
-        var demand = Demand{ .owner = owner, .lowered = &lowered, .proc = source_proc, .root_id = root_id, .value_plan = value_plan, .failure = failure_message, .cycle = cycle };
+        var demand = Demand{ .owner = owner, .lowered = &lowered, .proc = source_proc, .module_id = module_id, .root_id = root_id, .value_plan = value_plan, .failure = failure_message, .cycle = cycle };
         owner.slot_demand = .{ .context = &demand, .ensure = Demand.ensure };
         const consumer = try owner.fork(&lowered);
         defer consumer.deinit();
@@ -4970,11 +4980,11 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
         }
         try std.testing.expectEqual(@as(usize, 1), demand.evaluations);
         if (failure_message == null and comptime backend.host_lir_codegen_available)
-            try testNativeSlotDemand(&lowered, &owner.slots, source_proc, consumer_proc, text, root_id, value_plan);
+            try testNativeSlotDemand(&lowered, &owner.slots, source_proc, consumer_proc, text, module_id, root_id, value_plan);
         return;
     }
     if (failure_message) |message| {
-        try owner.slots.publishFailure(&lowered, @enumFromInt(0), .{ .checked = root_id }, message, .{ .resolve = InterpreterProgram.resolveFunction });
+        try owner.slots.publishFailure(&lowered, module_id, .{ .checked = root_id }, message, .{ .resolve = InterpreterProgram.resolveFunction });
         const bytes: [*]const u8 = @ptrFromInt(addresses[0]);
         try std.testing.expectEqual(@as(u8, 1), bytes[failed_offset]);
         const stored: *const builtins.str.RocStr = @ptrCast(@alignCast(bytes + message_offset));
@@ -4983,7 +4993,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
         try std.testing.expectEqualStrings(message, owner.interpreter.getCrashMessage().?);
     } else {
         const value = try owner.interpreter.eval(.{ .proc_id = source_proc, .ret_layout = .str });
-        try owner.publishRoot(&lowered, @enumFromInt(0), .{ .checked = root_id }, .{
+        try owner.publishRoot(&lowered, module_id, .{ .checked = root_id }, .{
             .ret_layout = .str,
             .plan = value_plan,
         }, value.value);
@@ -4997,7 +5007,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     }
 }
 
-fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *StaticSlotEnvironment, producer: lir.LIR.LirProcSpecId, consumer: lir.LIR.LirProcSpecId, text: []const u8, root_id: checked.ComptimeRootId, value_plan: LirProgram.ConstPlanId) (FinalizeError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *StaticSlotEnvironment, producer: lir.LIR.LirProcSpecId, consumer: lir.LIR.LirProcSpecId, text: []const u8, module_id: lir.LIR.LoweringModuleId, root_id: checked.ComptimeRootId, value_plan: LirProgram.ConstPlanId) (FinalizeError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     if (comptime !backend.host_lir_codegen_available) return;
     const allocator = std.testing.allocator;
     var strings = try backend.StaticStringData.build(allocator, &lowered.lir_result.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
@@ -5025,6 +5035,7 @@ fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *St
         slots: *StaticSlotEnvironment,
         source_offset: usize,
         producer: lir.LIR.LirProcSpecId,
+        module_id: lir.LIR.LoweringModuleId,
         root_id: checked.ComptimeRootId,
         value_plan: LirProgram.ConstPlanId,
         evaluations: usize = 0,
@@ -5042,13 +5053,13 @@ fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *St
             builtins.in_process_host.leave(entered);
             boundary.deinit();
             if (child.termination != .returned) return error.Unexpected;
-            try self.slots.publishRoot(self.lowered, @enumFromInt(0), .{ .checked = self.root_id }, .{
+            try self.slots.publishRoot(self.lowered, self.module_id, .{ .checked = self.root_id }, .{
                 .ret_layout = .str,
                 .plan = self.value_plan,
             }, .{ .ptr = &bytes }, .{}, .{ .resolve = InterpreterProgram.resolveFunction });
         }
     };
-    var demand = Demand{ .executable = &executable, .lowered = lowered, .slots = slots, .source_offset = source_entry.offset, .producer = producer, .root_id = root_id, .value_plan = value_plan };
+    var demand = Demand{ .executable = &executable, .lowered = lowered, .slots = slots, .source_offset = source_entry.offset, .producer = producer, .module_id = module_id, .root_id = root_id, .value_plan = value_plan };
     var host = CompileTimeHost.init(allocator);
     defer host.deinit();
     host.slot_demand = .{ .context = &demand, .ensure = Demand.ensure };

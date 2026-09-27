@@ -17329,15 +17329,14 @@ read resumes. Completed producers never run again. Re-entering an active
 producer reports an actual cyclic compile-time value dependency through the
 ordinary compile-time crash path. No execution is probed, abandoned, or retried.
 
-Slot publication uses session-local reverse links indexed by the existing
-lowering-module and producer IDs. Every representation-specific slot belongs
+Writing completed slot values uses session-local reverse links indexed by the
+existing lowering-module and producer IDs. Every representation-specific slot belongs
 to its producer's list; a consumer's optional materialization slot is not a
-complete inventory. Demand and publication share that association. Guard
-insertion records each slot's guards and their procedure owners, so successful
+complete inventory. Demand and completed slot writes share that association.
+Guard insertion records each slot's guards and their procedure owners, so successful
 completion touches only the affected guards and invalidates each owner's native
 code. Frozen exports retain a direct slot-to-export index. None of these
-execution indexes is serialized as checked semantic evidence. Interpreter
-forks share the session's append-only frozen-callable registry; resuming after
+execution indexes is serialized in `CheckedModule`. Interpreter forks share the session's append-only frozen-callable registry; resuming after
 nested demand refreshes the borrowed slice, without rescanning completed images.
 
 All declared roots are still requested for diagnostics. Session execution is
