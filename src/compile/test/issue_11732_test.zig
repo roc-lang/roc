@@ -39,7 +39,7 @@ fn inspectRuntimeResult(lowered: *const lir.CheckedPipeline.LoweredProgram) Lowe
     };
 }
 
-fn runApp(lowered: *const lir.CheckedPipeline.LoweredProgram) !void {
+fn runApp(lowered: *const lir.CheckedPipeline.LoweredProgram) (eval.LirInterpreter.Error || eval.RuntimeHostEnv.LeakError || error{TestExpectedEqual})!void {
     var host = eval.RuntimeHostEnv.init(std.testing.allocator);
     defer host.deinit();
     const program = &lowered.lir_result;
