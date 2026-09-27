@@ -17096,7 +17096,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [28]
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [28]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Interface summary hits", .count = diagnostics.specialization.interface_summary_hits },
@@ -17125,6 +17125,8 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]p
         .{ .name = "Nested lookup probes", .count = body.nested_lookup_probes },
         .{ .name = "Draft commit lookup steps", .count = body.draft_commit_lookup_steps },
         .{ .name = "Direct call request reuses", .count = body.direct_call_request_reuses },
+        .{ .name = "Early template requests offered", .count = body.early_template_requests_offered },
+        .{ .name = "Early template requests reserved", .count = body.early_template_requests_reserved },
     };
 }
 

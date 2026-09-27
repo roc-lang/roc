@@ -56,6 +56,21 @@ pub const LaneState = struct {
     }
 };
 
+/// Completion id reserved for wake notices; no task may use it.
+pub const wake_completion_id = std.math.maxInt(usize);
+
+/// Lets a running task wake the session owner blocked in
+/// `Session.receiveOrWake`, so it can act on something the task published
+/// before the task completes. Executors that run tasks inline leave it inert.
+pub const Wake = struct {
+    context: ?*anyopaque = null,
+    wakeFn: ?*const fn (*anyopaque) void = null,
+
+    pub fn signal(self: Wake) void {
+        if (self.wakeFn) |wake_fn| wake_fn(self.context.?);
+    }
+};
+
 /// Exclusive execution lane and its persistent and task-scoped allocators.
 pub const Worker = struct {
     id: usize,
@@ -70,6 +85,7 @@ pub const Worker = struct {
     /// here survive synchronous batch boundaries and are destroyed with the
     /// worker pool.
     lane_state: *LaneState,
+    wake: Wake = .{},
 };
 
 /// Type-erased work item whose context remains caller-owned through completion.
@@ -165,10 +181,20 @@ pub const Session = struct {
         self.outstanding += 1;
     }
 
-    /// Receive the next completion in arrival order.
+    /// Receive the next completion in arrival order, skipping wake notices.
     pub fn receive(self: *Session) Completion {
+        while (true) {
+            if (self.receiveOrWake()) |completion| return completion;
+        }
+    }
+
+    /// Receive the next completion, or null when a running task woke the
+    /// session through `Worker.wake`. A task's wake notices always arrive
+    /// before its completion.
+    pub fn receiveOrWake(self: *Session) ?Completion {
         std.debug.assert(!self.ended and self.outstanding > 0);
         const completion = self.executor.receiveFn(self.executor.context);
+        if (completion.id == wake_completion_id) return null;
         self.outstanding -= 1;
         return completion;
     }

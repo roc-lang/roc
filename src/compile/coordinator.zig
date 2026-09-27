@@ -3272,9 +3272,14 @@ pub const Coordinator = struct {
         }
         const result = self.result_channel.recv() orelse
             @panic("post-check result channel closed while a session was active");
-        _ = self.inflight.fetchSub(1, .monotonic);
         return switch (result) {
-            .post_check => |completion| completion,
+            .post_check => |completion| blk: {
+                // A wake notice is not a task result and was never counted.
+                if (completion.id != post_check_executor.wake_completion_id) {
+                    _ = self.inflight.fetchSub(1, .monotonic);
+                }
+                break :blk completion;
+            },
             .parsed,
             .canonicalized,
             .canonicalized_cached,
@@ -3284,6 +3289,17 @@ pub const Coordinator = struct {
             .worker_oom,
             => unreachable,
         };
+    }
+
+    /// Called on a worker thread by a running post-check task. A wake that
+    /// cannot be queued only delays the session owner until the next result.
+    fn wakePostCheckSession(context: *anyopaque) void {
+        const self: *Coordinator = @ptrCast(@alignCast(context));
+        self.result_channel.send(.{ .post_check = .{
+            .id = post_check_executor.wake_completion_id,
+            .worker_id = 0,
+            .value = null,
+        } }) catch {};
     }
 
     fn endPostCheckSession(context: *anyopaque) void {
@@ -6294,6 +6310,7 @@ pub const Coordinator = struct {
                         .allocator = worker_allocs.taskAllocators().module,
                         .scratch = worker_allocs.taskAllocators().scratch,
                         .lane_state = &worker_allocs.post_check_lane_state,
+                        .wake = .{ .context = self, .wakeFn = wakePostCheckSession },
                     }),
                 } };
                 worker_allocs.resetArena();
