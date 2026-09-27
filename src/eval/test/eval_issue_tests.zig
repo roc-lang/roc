@@ -266,6 +266,54 @@ const issue11377GenericNominalCollectionSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "issue 11737: independent calls select different nested method targets",
+        .source_kind = .module,
+        .source =
+        \\Runner :: {}.{
+        \\    run = |_, body| body({}).repeat(3)
+        \\}
+        \\demo = |runner| (runner.run(|{}| "a"), runner.run(|{}| [1.U64]))
+        \\main = demo(Runner.{})
+        ,
+        .expected = .{ .inspect_str = "(\"aaa\", [[1], [1], [1]])" },
+    },
+    .{
+        .name = "issue 11737: independent nominal calls preserve nested evidence and distinct results",
+        .source_kind = .module,
+        .source =
+        \\Db(deps) :: { deps : deps }.{
+        \\    run = |db, body| {
+        \\        fetch = db.deps.fetch
+        \\        repeated = fetch({}).repeat(3)
+        \\        (repeated, body({}))
+        \\    }
+        \\}
+        \\demo = |db| (db.run(|{}| "a"), db.run(|{}| 42.U64))
+        \\forward = |db| demo(db)
+        \\main = forward(Db.{ deps: { fetch: |{}| "x" } })
+        ,
+        .expected = .{ .inspect_str = "((\"xxx\", \"a\"), (\"xxx\", 42))" },
+    },
+    .{
+        .name = "issue 11737: stored generic function retains independent callable contracts",
+        .source_kind = .module,
+        .source =
+        \\Db(deps) :: { deps : deps }.{
+        \\    run = |db, body| {
+        \\        fetch = db.deps.fetch
+        \\        (fetch({}).concat("y"), body({}))
+        \\    }
+        \\}
+        \\demo = |db| (db.run(|{}| "a"), db.run(|{}| "b"))
+        \\saved = { invoke: demo }
+        \\main = {
+        \\    invoke = saved.invoke
+        \\    invoke(Db.{ deps: { fetch: |{}| "x" } })
+        \\}
+        ,
+        .expected = .{ .inspect_str = "((\"xy\", \"a\"), (\"xy\", \"b\"))" },
+    },
+    .{
         .name = "issue 11661: closure relaxation preserves previous loop list",
         .source_kind = .module,
         .source =

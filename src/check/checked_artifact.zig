@@ -18141,9 +18141,11 @@ const EvidencePass = struct {
 
     evidence_nodes: std.ArrayList(static_dispatch.EvidenceNode),
     evidence_refs: std.ArrayList(static_dispatch.CheckedEvidence),
+    callable_contract_buckets: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(artifact_serialize.Span)) = .{},
     site_evidence: std.ArrayList(static_dispatch.SiteEvidenceEntry),
     evidence_params_pool: std.ArrayList(static_dispatch.EvidenceParamRecord),
     evidence_param_paths: std.ArrayList(static_dispatch.EvidencePathStep),
+    evidence_param_callables: std.ArrayList(CheckedTypeId),
     scheme_vars_pool: std.ArrayList(CheckedTypeId),
     site_substitutions: std.ArrayList(CheckedTypeId),
     /// Solver variables of the scheme whose params are being appended, in
@@ -18233,6 +18235,7 @@ const EvidencePass = struct {
             .site_evidence = .empty,
             .evidence_params_pool = .empty,
             .evidence_param_paths = .empty,
+            .evidence_param_callables = .empty,
             .scheme_vars_pool = .empty,
             .site_substitutions = .empty,
             .enum_scratch = .{},
@@ -18264,9 +18267,13 @@ const EvidencePass = struct {
         self.site_seen.deinit();
         self.evidence_nodes.deinit(self.allocator);
         self.evidence_refs.deinit(self.allocator);
+        var contract_buckets = self.callable_contract_buckets.valueIterator();
+        while (contract_buckets.next()) |bucket| bucket.deinit(self.allocator);
+        self.callable_contract_buckets.deinit(self.allocator);
         self.site_evidence.deinit(self.allocator);
         self.evidence_params_pool.deinit(self.allocator);
         self.evidence_param_paths.deinit(self.allocator);
+        self.evidence_param_callables.deinit(self.allocator);
         self.scheme_vars_pool.deinit(self.allocator);
         self.site_substitutions.deinit(self.allocator);
         self.scheme_var_scratch.deinit(self.allocator);
@@ -18322,6 +18329,7 @@ const EvidencePass = struct {
         }
         self.templates.evidence_params_pool = try self.evidence_params_pool.toOwnedSlice(self.allocator);
         self.templates.evidence_param_paths = try self.evidence_param_paths.toOwnedSlice(self.allocator);
+        self.templates.evidence_param_callables = try self.evidence_param_callables.toOwnedSlice(self.allocator);
         self.templates.scheme_vars_pool = try self.scheme_vars_pool.toOwnedSlice(self.allocator);
 
         for (self.templates.templates.items, 0..) |*template, template_index| {
@@ -18992,7 +19000,10 @@ const EvidencePass = struct {
         defer params.deinit(self.allocator);
         try dispatch_evidence.enumerateEvidenceParamsWithRequirements(self.allocator, self.types, root, explicit.items, &self.enum_scratch, &params);
         const arena = self.enumerated_path_arena.allocator();
-        for (params.items) |*param| param.path = try arena.dupe(static_dispatch.EvidencePathStep, param.path);
+        for (params.items) |*param| {
+            param.path = try arena.dupe(static_dispatch.EvidencePathStep, param.path);
+            param.callable_contracts = try arena.dupe(types.StaticDispatchConstraint, param.callable_contracts);
+        }
         const identity_vars = try self.identity_writer.identityVarsFromScheme(root, relation_roots.items);
         errdefer self.allocator.free(identity_vars);
         const schema = SchemeSchema{
@@ -19079,7 +19090,13 @@ const EvidencePass = struct {
                 }
                 try self.evidence_param_paths.append(self.allocator, converted);
             }
+            const contract_start: u32 = @intCast(self.evidence_param_callables.items.len);
+            for (param.callable_contracts) |contract| {
+                try self.evidence_param_callables.append(self.allocator, self.checked_types.rootForSourceVar(self.module, contract.fn_var) orelse
+                    checkedArtifactInvariant("callable contract type was not published", .{}));
+            }
             try self.evidence_params_pool.append(self.allocator, .{
+                .callable_contracts = .{ .start = contract_start, .len = @intCast(param.callable_contracts.len) },
                 .method = try self.names.internMethodIdent(idents, param.constraint.fn_name),
                 .dispatcher_ty = self.checked_types.rootForSourceVar(self.module, param.dispatcher_var) orelse
                     checkedArtifactInvariant("checked evidence parameter dispatcher type was not published", .{}),
@@ -19138,7 +19155,7 @@ const EvidencePass = struct {
     /// nested evidence comes from.
     const CallableRelation = enum {
         exact,
-        independent_synthesize,
+        independent_per_use,
         independent_reuse_slot_nested,
     };
 
@@ -19154,12 +19171,14 @@ const EvidencePass = struct {
     ) Allocator.Error!?struct {
         index: static_dispatch.EvidenceChainIndex,
         callable_relation: CallableRelation,
+        callable_contract: ?u32 = null,
     } {
         for (chain, 0..) |params, depth| {
             if (try self.paramIndexFor(params, dispatcher_root, method, constraint_fn_var)) |match| {
                 return .{
                     .index = .{ .depth = @intCast(depth), .index = @intCast(match.index) },
                     .callable_relation = match.callable_relation,
+                    .callable_contract = match.callable_contract,
                 };
             }
         }
@@ -19235,6 +19254,7 @@ const EvidencePass = struct {
     ) Allocator.Error!?struct {
         index: u32,
         callable_relation: CallableRelation,
+        callable_contract: ?u32 = null,
     } {
         const idents = self.module.identStoreConst();
         const constraint_fn_root = if (constraint_fn_var) |fn_var|
@@ -19250,7 +19270,16 @@ const EvidencePass = struct {
             if (try self.names.internMethodIdent(idents, param.constraint.fn_name) != method) continue;
             if (same_method_fallback == null) same_method_fallback = @intCast(k);
             if (constraint_fn_root) |fn_root| {
-                if (self.types.resolveVar(param.constraint.fn_var).var_ != fn_root) continue;
+                if (self.types.resolveVar(param.constraint.fn_var).var_ != fn_root) {
+                    for (param.callable_contracts, 0..) |contract, contract_index| {
+                        if (self.types.resolveVar(contract.fn_var).var_ == fn_root) return .{
+                            .index = @intCast(k),
+                            .callable_relation = .independent_per_use,
+                            .callable_contract = @intCast(contract_index),
+                        };
+                    }
+                    continue;
+                }
             }
             return .{ .index = @intCast(k), .callable_relation = .exact };
         }
@@ -19268,11 +19297,11 @@ const EvidencePass = struct {
     /// signature's own variable (`Instantiator.share_leaves`). Otherwise the
     /// plan synthesizes nested evidence from its own callable.
     fn fallbackCallableRelation(self: *EvidencePass, candidate: EvidenceParam, constraint_fn_var: ?Var) CallableRelation {
-        const fn_var = constraint_fn_var orelse return .independent_synthesize;
+        const fn_var = constraint_fn_var orelse return .independent_per_use;
         const fn_root = self.types.resolveVar(fn_var).var_;
         const record_idx = self.where_method_use_by_fn_var.get(@intFromEnum(fn_var)) orelse
             self.where_method_use_by_fn_root.get(fn_root) orelse
-            return .independent_synthesize;
+            return .independent_per_use;
         const module_env = self.module.moduleEnvConst();
         const record = module_env.scheme_uses.items.items[record_idx];
         if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
@@ -19288,7 +19317,7 @@ const EvidencePass = struct {
             checkedArtifactInvariant("where-method-use callable copy did not resolve to its body constraint", .{});
         }
         if (self.types.resolveVar(candidate.constraint.fn_var).var_ == signature_root) return .independent_reuse_slot_nested;
-        return .independent_synthesize;
+        return .independent_per_use;
     }
 
     fn resolvePlan(self: *EvidencePass, plan_id: static_dispatch.StaticDispatchPlanId, chain: []const []const EvidenceParam, commit_unpinned: bool) Allocator.Error!void {
@@ -19523,10 +19552,16 @@ const EvidencePass = struct {
     ) Allocator.Error!?static_dispatch.CheckedCallResolution {
         if (try self.chainParamIndex(chain, dispatcher_root, method, constraint_fn_var)) |match| {
             const independent_callable = match.callable_relation != .exact;
+            const owner = chain[match.index.depth][match.index.index].published_index orelse
+                checkedArtifactInvariant("forwarded evidence owner was not published", .{});
+            const schema = self.templates.evidence_params_pool[owner];
             return .{ .evidence_dependent = .{
+                .scheme_param = if (match.callable_contract != null or
+                    (schema.runtime_dictionary and schema.source != .scheme_callable)) owner else null,
                 .index = match.index,
                 .independent_callable = independent_callable,
                 .reuse_slot_nested_evidence = match.callable_relation == .independent_reuse_slot_nested,
+                .callable_contract = match.callable_contract,
             } };
         }
 
@@ -19989,7 +20024,77 @@ const EvidencePass = struct {
         // sides of the relation independently.
         const fresh_fn: ?Var = self.pairForResolved(pairs, fn_root) orelse
             if (param.source == .scheme_requirement) param.constraint.fn_var else null;
-        return try self.evidenceForVar(param, fresh_dispatcher, fresh_fn, commit_unpinned);
+        var evidence = (try self.evidenceForVar(param, fresh_dispatcher, fresh_fn, commit_unpinned)) orelse return null;
+        if (param.callable_contracts.len != 0) {
+            // A non-structural method on one settled receiver has one target.
+            // Its schema proves when every independent callable can derive its
+            // own nested evidence. Preserve any exact per-call rejection even
+            // on that path, using the same rejection authority as resolveObligation.
+            if (!self.evidenceNeedsCallableContract(evidence) and self.structuralKindForMethodIdent(param.constraint.fn_name) == null) {
+                var rejected = false;
+                for (param.callable_contracts) |constraint| {
+                    const root = self.types.resolveVar(constraint.fn_var).var_;
+                    const fresh = self.pairForResolved(pairs, root) orelse continue;
+                    if (self.types.varStaticDispatchRejected(fresh)) {
+                        rejected = true;
+                        break;
+                    }
+                }
+                if (!rejected) return evidence;
+            }
+            var contracts = std.ArrayListUnmanaged(static_dispatch.CheckedEvidence).empty;
+            defer contracts.deinit(self.allocator);
+            for (param.callable_contracts) |constraint| {
+                var contract_param = param;
+                contract_param.constraint = constraint;
+                contract_param.callable_contracts = &.{};
+                const contract = (try self.evidenceForRecordParam(pairs, contract_param, commit_unpinned)) orelse return null;
+                try contracts.append(self.allocator, contract);
+            }
+            var needs_contract = self.evidenceNeedsCallableContract(evidence);
+            for (contracts.items) |contract| needs_contract = needs_contract or self.evidenceNeedsCallableContract(contract);
+            if (needs_contract) evidence.callable_contracts = try self.internCallableContracts(contracts.items);
+        }
+        return evidence;
+    }
+
+    /// Callable-only target schemas need no per-use payload. Forwarded,
+    /// structural, rejected and unreachable entries retain their exact proof.
+    fn evidenceNeedsCallableContract(self: *EvidencePass, evidence: static_dispatch.CheckedEvidence) bool {
+        return switch (evidence.resolution) {
+            .direct => |id| switch (self.evidence_nodes.items[@intFromEnum(id)].target.kind) {
+                .procedure => switch (self.procedureEvidenceSchema(self.evidence_nodes.items[@intFromEnum(id)].target)) {
+                    .none, .from_callable => false,
+                    .from_target, .requires_record => true,
+                },
+                .local_proc, .structural => true,
+            },
+            .constraint, .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => true,
+        };
+    }
+
+    /// Intern only sparse side vectors. Children have already been interned,
+    /// so their spans are canonical and equality needs no recursive traversal.
+    fn internCallableContracts(self: *EvidencePass, entries: []const static_dispatch.CheckedEvidence) Allocator.Error!artifact_serialize.Span {
+        var hasher = std.hash.Wyhash.init(0);
+        for (entries) |entry| std.hash.autoHash(&hasher, entry);
+        const bucket = try self.callable_contract_buckets.getOrPut(self.allocator, hasher.final());
+        if (!bucket.found_existing) bucket.value_ptr.* = .empty;
+        for (bucket.value_ptr.items) |span| {
+            if (span.len != entries.len) continue;
+            const existing = self.evidence_refs.items[span.start..][0..span.len];
+            var equal = true;
+            for (existing, entries) |left, right| {
+                if (!std.meta.eql(left, right)) {
+                    equal = false;
+                    break;
+                }
+            }
+            if (equal) return span;
+        }
+        const span = try self.appendEvidenceRefs(entries);
+        try bucket.value_ptr.append(self.allocator, span);
+        return span;
     }
 
     /// Resolve one obligation of an instantiated scheme: the fresh dispatcher
@@ -20023,6 +20128,7 @@ const EvidencePass = struct {
                     .index = dependent.index,
                     .independent_callable = dependent.independent_callable,
                     .reuse_slot_nested_evidence = dependent.reuse_slot_nested_evidence,
+                    .callable_contract = dependent.callable_contract,
                 } },
                 .structural => |kind| blk: {
                     const callable_var = fresh_fn_var orelse param.constraint.fn_var;
@@ -21573,6 +21679,7 @@ pub const CheckedProcedureTemplateTable = struct {
     evidence_params_pool: []static_dispatch.EvidenceParamRecord = &.{},
     /// Flat pool backing each evidence param's `path` span.
     evidence_param_paths: []static_dispatch.EvidencePathStep = &.{},
+    evidence_param_callables: []CheckedTypeId = &.{},
     /// Flat pool backing template and scope `scheme_vars` ranges.
     scheme_vars_pool: []CheckedTypeId = &.{},
     /// Scope of each `StaticDispatchPlanTable.dispatch_relation_refs` entry.
@@ -21598,6 +21705,7 @@ pub const CheckedProcedureTemplateTable = struct {
         promoted: SerializedSlice(PromotedProcedureTemplateEntry) = .{},
         evidence_params_pool: SerializedSlice(static_dispatch.EvidenceParamRecord) = .{},
         evidence_param_paths: SerializedSlice(static_dispatch.EvidencePathStep) = .{},
+        evidence_param_callables: SerializedSlice(CheckedTypeId) = .{},
         scheme_vars_pool: SerializedSlice(CheckedTypeId) = .{},
         dispatch_ref_scopes: SerializedSlice(DispatchScope) = .{},
         dispatch_relation_kinds: SerializedSlice(DispatchRelationKind) = .{},
@@ -21910,6 +22018,7 @@ pub const CheckedProcedureTemplateTable = struct {
         self.templates.deinit(allocator);
         allocator.free(self.evidence_params_pool);
         allocator.free(self.evidence_param_paths);
+        allocator.free(self.evidence_param_callables);
         allocator.free(self.scheme_vars_pool);
         allocator.free(self.dispatch_ref_scopes);
         allocator.free(self.dispatch_relation_kinds);
@@ -24505,18 +24614,28 @@ fn directEvidenceIsClosed(
         },
         .resolved => |span| plans.evidence_refs[span.start .. span.start + span.len],
     };
-    for (nested) |evidence| switch (evidence.resolution) {
-        .direct => |child| if (!directEvidenceIsClosed(plans, child, states)) {
-            states[raw_node] = .parametric;
-            return false;
-        },
-        .constraint, .from_callable, .from_scheme => {
-            states[raw_node] = .parametric;
-            return false;
-        },
-        .structural, .checked_error, .unreachable_value => {},
-    };
+    if (!directEvidenceRefsAreClosed(plans, nested, states)) {
+        states[raw_node] = .parametric;
+        return false;
+    }
     states[raw_node] = .closed;
+    return true;
+}
+
+fn directEvidenceRefsAreClosed(
+    plans: *const static_dispatch.StaticDispatchPlanTable,
+    refs: []const static_dispatch.CheckedEvidence,
+    states: []DirectEvidenceClosure,
+) bool {
+    for (refs) |evidence| {
+        switch (evidence.resolution) {
+            .direct => |child| if (!directEvidenceIsClosed(plans, child, states)) return false,
+            .constraint, .from_callable, .from_scheme => return false,
+            .structural, .checked_error, .unreachable_value => {},
+        }
+        const contracts = plans.evidence_refs[evidence.callable_contracts.start..][0..evidence.callable_contracts.len];
+        if (!directEvidenceRefsAreClosed(plans, contracts, states)) return false;
+    }
     return true;
 }
 
@@ -32527,6 +32646,7 @@ pub const DispatchEvidenceFailure = struct {
         generated_codec_call_evidence_invalid,
         generated_codec_call_nested_derivation_invalid,
         dependent_nested_reuse_without_independent_callable,
+        callable_contract_out_of_bounds,
         evidence_node_nested_refs_out_of_bounds,
         evidence_ref_node_out_of_bounds,
         evidence_scheme_param_invalid,
@@ -32866,8 +32986,8 @@ pub const CheckedModuleArtifact = struct {
             // record-unset label pool one more. Ordered debug entries and their
             // byte pool add two explicit relocation pointers, and the
             // checked-error template list one more. Loop mutation plans add one.
-            // Promoted local procedure templates add one.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 231);
+            // Promoted local procedure templates and callable contract types add one each.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 232);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -33657,7 +33777,8 @@ pub const CheckedModuleArtifact = struct {
                     }
                     if (dependent.scheme_param) |param_index| {
                         const pool = self.checked_procedure_templates.evidence_params_pool;
-                        if (param_index >= pool.len or pool[param_index].source != .scheme_requirement or pool[param_index].method != plan.method)
+                        if (param_index >= pool.len or pool[param_index].method != plan.method or
+                            (if (dependent.callable_contract) |contract| contract >= pool[param_index].callable_contracts.len else (!pool[param_index].runtime_dictionary or pool[param_index].source == .scheme_callable)))
                             return .{ .kind = .evidence_scheme_param_invalid, .index = @intCast(i) };
                     }
                 },
@@ -33869,6 +33990,11 @@ pub const CheckedModuleArtifact = struct {
             }
         }
         for (table.evidence_refs, 0..) |ref, i| {
+            // Side contracts are emitted before their owner; this also proves
+            // that recursive contract traversal cannot encounter a cycle.
+            if (ref.callable_contracts.len != 0 and @as(u64, ref.callable_contracts.start) + ref.callable_contracts.len > i) {
+                return .{ .kind = .callable_contract_out_of_bounds, .index = @intCast(i) };
+            }
             switch (ref.resolution) {
                 .direct => |node| if (@intFromEnum(node) >= table.evidence_nodes.len) {
                     return .{ .kind = .evidence_ref_node_out_of_bounds, .index = @intCast(i) };
@@ -33882,7 +34008,8 @@ pub const CheckedModuleArtifact = struct {
                     }
                     if (constraint.scheme_param) |param_index| {
                         const pool = self.checked_procedure_templates.evidence_params_pool;
-                        if (param_index >= pool.len or pool[param_index].source != .scheme_requirement)
+                        if (param_index >= pool.len or
+                            (if (constraint.callable_contract) |contract| contract >= pool[param_index].callable_contracts.len else (!pool[param_index].runtime_dictionary or pool[param_index].source == .scheme_callable)))
                             return .{ .kind = .evidence_scheme_param_invalid, .index = @intCast(i) };
                     }
                 },
@@ -34117,7 +34244,13 @@ pub const CheckedModuleArtifact = struct {
                 },
             }
         }
+        for (templates.evidence_param_callables, 0..) |callable, i| {
+            if (@intFromEnum(callable) >= self.checked_types.payloads.items.len)
+                return .{ .kind = .callable_contract_out_of_bounds, .index = @intCast(i) };
+        }
         for (templates.evidence_params_pool, 0..) |param, i| {
+            if (@as(u64, param.callable_contracts.start) + param.callable_contracts.len > templates.evidence_param_callables.len)
+                return .{ .kind = .callable_contract_out_of_bounds, .index = @intCast(i) };
             if (@as(u64, param.path.start) + param.path.len > templates.evidence_param_paths.len) {
                 return .{ .kind = .evidence_param_path_out_of_bounds, .index = @intCast(i), .method = param.method };
             }
@@ -39972,6 +40105,11 @@ test "closed direct evidence excludes specialization-dependent nested recipes" {
     try std.testing.expect(directEvidenceIsClosed(&plans, evidence_3, &states));
     try std.testing.expect(!directEvidenceIsClosed(&plans, evidence_4, &states));
     try std.testing.expect(!directEvidenceIsClosed(&plans, evidence_5, &states));
+
+    // A concrete primary target does not close a forwarded side contract.
+    refs[1].callable_contracts = .{ .start = 0, .len = 1 };
+    states[3] = .unknown;
+    try std.testing.expect(!directEvidenceIsClosed(&plans, evidence_3, &states));
 }
 
 test "template dispatch classification separates direct calls from graph relations" {
@@ -40612,4 +40750,30 @@ test "pairing type columns borrow frozen storage until written" {
     try paired.replaceTypeRootPayload(allocator, root, .err);
     try std.testing.expect(paired.payload(root) == .err);
     try std.testing.expect(frozen.payload(root) == .empty_record);
+}
+
+test "issue 11737: identical callable contract vectors share their checked storage" {
+    const allocator = std.testing.allocator;
+    var pass: EvidencePass = undefined;
+    pass.allocator = allocator;
+    pass.evidence_refs = .empty;
+    pass.callable_contract_buckets = .{};
+    defer pass.evidence_refs.deinit(allocator);
+    defer {
+        var buckets = pass.callable_contract_buckets.valueIterator();
+        while (buckets.next()) |bucket| bucket.deinit(allocator);
+        pass.callable_contract_buckets.deinit(allocator);
+    }
+    const contract = [_]static_dispatch.CheckedEvidence{.{
+        .dispatcher_ty = @enumFromInt(1),
+        .runtime_dictionary = false,
+        .resolution = .unreachable_value,
+    }};
+    const first = try pass.internCallableContracts(&contract);
+    const repeated = try pass.internCallableContracts(&contract);
+    try std.testing.expectEqual(first, repeated);
+    try std.testing.expectEqual(@as(usize, 1), pass.evidence_refs.items.len);
+    var different = contract;
+    different[0].resolution = .checked_error;
+    try std.testing.expect(!std.meta.eql(first, try pass.internCallableContracts(&different)));
 }

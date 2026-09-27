@@ -17680,14 +17680,14 @@ const ProcBodyBuilder = struct {
         }
         const use = self.parent.plan.callableUsePlan(use_ref, self.worker_layout.worker) orelse
             boxyLowerInvariant("checked procedure lookup reached boxy lowering without a callable use plan");
-        const source = self.parent.plan.workers.items[@intFromEnum(use.worker)].source;
+        const worker = self.parent.plan.workers.items[@intFromEnum(use.worker)];
         const hidden_desc_args = self.parent.plan.directCallHiddenDescriptorArgSlice(use.hidden_desc_args);
         const hidden_dict_args = self.parent.plan.directCallHiddenDictionaryArgSlice(use.hidden_dict_args);
         return try self.lowerWorkerValueWithCallDictionaryArgsInto(
             target,
-            use.callable_ty,
+            worker.checked_type,
             call_type,
-            source,
+            worker.source,
             null,
             self.parent.plan.storedCallableCaptureSourceSlice(use.stored_capture_sources),
             hidden_desc_args,
