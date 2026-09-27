@@ -42,9 +42,11 @@ closure_arg = |xs| {
 # EXPECTED
 TRAILING `?` - try_suffix_return_mismatch.md:9:10:9:11
 TYPE MISMATCH - try_suffix_return_mismatch.md:8:6:8:15
+TYPE MISMATCH - try_suffix_return_mismatch.md:9:2:9:11
 TYPE MISMATCH - try_suffix_return_mismatch.md:14:6:14:15
 TYPE MISMATCH - try_suffix_return_mismatch.md:20:7:20:18
 TYPE MISMATCH - try_suffix_return_mismatch.md:30:8:30:18
+TYPE MISMATCH - try_suffix_return_mismatch.md:29:2:29:2
 # PROBLEMS
 ~~~clojure
 (reports
@@ -141,6 +143,81 @@ TYPE MISMATCH - try_suffix_return_mismatch.md:30:8:30:18
 			(reflow "may return early with a type that doesn't match the function body."))
 		(document
 			(source-region (file "try_suffix_return_mismatch.md") (start 8 6) (end 8 15) (annotation error) (line-text "\tt = parse(s)?"))
+			(line-break)
+			(reflow "If this")
+			(reflow " ")
+			(annotated code "Try")
+			(reflow " ")
+			(reflow "is an")
+			(reflow " ")
+			(annotated code "Err")
+			(reflow ",")
+			(reflow " ")
+			(reflow "then the")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "after it immediately returns an")
+			(reflow " ")
+			(annotated code "Err")
+			(reflow " ")
+			(reflow "whose payload has this type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[BadInput]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "Returning an")
+			(reflow " ")
+			(annotated code "Err")
+			(reflow " ")
+			(reflow "with that type only works if the function itself returns a")
+			(reflow " ")
+			(annotated code "Try")
+			(reflow " ")
+			(reflow "with a compatible error type, but this function's return type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "The function body ends with a")
+			(reflow " ")
+			(annotated code "?")
+			(reflow ":")
+			(line-break)
+			(line-break)
+			(source-region (file "try_suffix_return_mismatch.md") (start 9 10) (end 9 11) (annotation error) (line-text "\tparse(t)?"))
+			(line-break)
+			(reflow "That")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "unwraps the")
+			(reflow " ")
+			(annotated code "Try")
+			(reflow " ")
+			(reflow "the body would otherwise return. Removing it may fix this.")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 9 2) (end 9 11))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "may return early with a type that doesn't match the function body."))
+		(document
+			(source-region (file "try_suffix_return_mismatch.md") (start 9 2) (end 9 11) (annotation error) (line-text "\tparse(t)?"))
 			(line-break)
 			(reflow "If this")
 			(reflow " ")
@@ -392,7 +469,46 @@ TYPE MISMATCH - try_suffix_return_mismatch.md:30:8:30:18
 			(reflow " ")
 			(annotated code "?")
 			(reflow " ")
-			(reflow "operators and the function body must be compatible, since any of them could be the actual return value."))))
+			(reflow "operators and the function body must be compatible, since any of them could be the actual return value.")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 29 2) (end 32 4))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(reflow "first")
+			(reflow " ")
+			(reflow "argument being passed to this function has the wrong type."))
+		(document
+			(source-underlines
+				(display (file "try_suffix_return_mismatch.md") (start 29 2) (end 32 4) (annotation dim) (line-text "\tys.map_try(|l| {\n\t\t_x = l.first()?\n\t\t{}\n\t})"))
+				(underline (start 29 13) (end 32 3) (annotation error)))
+			(line-break)
+			(reflow "This argument has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(U64) -> {}")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But")
+			(reflow " ")
+			(annotated code "map_try")
+			(reflow " ")
+			(reflow "needs the")
+			(reflow " ")
+			(reflow "first")
+			(reflow " ")
+			(reflow "argument to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(U64) -> Try(b, err)")
+			(annotation-end))))
 ~~~
 # TOKENS
 ~~~zig
@@ -609,13 +725,140 @@ closure_arg = |xs| {
 						(ty-tag-name (name "BadInput")))))))
 	(d-let
 		(p-assign (ident "ends_with_try"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "s")))
+			(e-block
+				(s-let
+					(p-assign (ident "t"))
+					(e-match
+						(match
+							(cond
+								(e-call (constraint-fn-var 431)
+									(e-lookup-local
+										(p-assign (ident "parse")))
+									(e-lookup-local
+										(p-assign (ident "s")))))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
+									(value
+										(e-lookup-local
+											(p-assign (ident "#ok")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
+									(value
+										(e-return
+											(e-runtime-error (tag "erroneous_value_expr")))))))))
+				(e-match
+					(match
+						(cond
+							(e-call (constraint-fn-var 471)
+								(e-lookup-local
+									(p-assign (ident "parse")))
+								(e-lookup-local
+									(p-assign (ident "t")))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-nominal-external (builtin)
+											(p-applied-tag))))
+								(value
+									(e-lookup-local
+										(p-assign (ident "#ok")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-nominal-external (builtin)
+											(p-applied-tag))))
+								(value
+									(e-return
+										(e-runtime-error (tag "erroneous_value_expr")))))))))))
 	(d-let
 		(p-assign (ident "not_a_try"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "s")))
+			(e-block
+				(s-let
+					(p-assign (ident "t"))
+					(e-match
+						(match
+							(cond
+								(e-call (constraint-fn-var 511)
+									(e-lookup-local
+										(p-assign (ident "parse")))
+									(e-lookup-local
+										(p-assign (ident "s")))))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
+									(value
+										(e-lookup-local
+											(p-assign (ident "#ok")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
+									(value
+										(e-return
+											(e-runtime-error (tag "erroneous_value_expr")))))))))
+				(e-call (constraint-fn-var 559)
+					(e-lookup-external
+						(builtin))
+					(e-lookup-local
+						(p-assign (ident "t")))
+					(e-string
+						(e-literal (string "!")))))))
 	(d-let
 		(p-assign (ident "dispatched"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "xs")))
+			(e-block
+				(s-let
+					(p-assign (ident "_x"))
+					(e-match
+						(match
+							(cond
+								(e-dispatch-call (method "first") (constraint-fn-var 560)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "xs"))))
+									(args)))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
+									(value
+										(e-lookup-local
+											(p-assign (ident "#ok")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
+									(value
+										(e-return
+											(e-runtime-error (tag "erroneous_value_expr")))))))))
+				(e-call (constraint-fn-var 605)
+					(e-lookup-external
+						(builtin))
+					(e-lookup-local
+						(p-assign (ident "xs")))))))
 	(d-let
 		(p-assign (ident "closure_arg"))
 		(e-runtime-error (tag "erroneous_value_expr"))))
@@ -625,14 +868,14 @@ closure_arg = |xs| {
 (inferred-types
 	(defs
 		(patt (type "Str -> Try(Str, [BadInput])"))
-		(patt (type "Str -> Error"))
-		(patt (type "Str -> Error"))
-		(patt (type "List(item) -> Error"))
+		(patt (type "Str -> Str"))
+		(patt (type "Str -> Str"))
+		(patt (type "List(item) -> U64"))
 		(patt (type "List(List(U64)) -> Error")))
 	(expressions
 		(expr (type "Str -> Try(Str, [BadInput])"))
-		(expr (type "Str -> Error"))
-		(expr (type "Str -> Error"))
-		(expr (type "List(item) -> Error"))
+		(expr (type "Str -> Str"))
+		(expr (type "Str -> Str"))
+		(expr (type "List(item) -> U64"))
 		(expr (type "List(List(U64)) -> Error"))))
 ~~~

@@ -1013,32 +1013,39 @@ whose state updates are lost to the enclosing continuation.
 Compile-time evaluation is a function of the checked program alone. Every
 command that finalizes checking evaluates the same roots, every checked
 module's compile-time requests plus the platform entrypoints of the
-program's root module, taken from its checked `runtime_requests`, under one fixed
-configuration (`compileTimeTarget`): the host's width, expects run, literal
-roots on, and the dev Solved policy (`.wrappers` inlining and
-iterator-fusion SpecConstr). Nothing a command asks of its runtime program
-reaches that evaluation, and the evaluator reads no object-cache entries.
-`roc check` and `roc build` therefore report the same compile-time errors
-and complete bit-identical values: a build cannot report an error that
-checking did not.
+program's root module, taken from its checked `runtime_requests`, and the
+`test_expect` requests of every module `roc test` would run (the root
+package and the packages it reaches through filesystem paths), with every
+literal conversion those roots reach hoisted, at the host's width, with
+expects run (`compileTimeTarget`). Its Solved policy is that of the program
+being built, so evaluation runs inside that program's one specialization;
+with no runtime program, as in `roc check`, it is dev's. Inlining and
+SpecConstr preserve meaning, so the policy changes how evaluation's code is
+built, never what it computes. Every command also gives evaluation the same
+object cache (`CompileTimeObjectCache`): the host's dev-policy packs, whose
+procedures run expects. The evaluator's program takes a hit for a procedure
+it runs (under `comptime_closure_hits`) only when the entry names that
+procedure's own identity, and splices its cached code in place of compiling
+it; a cache entry is the procedure its key names, so the cache too changes
+only what evaluation compiles. `roc check` and `roc build` therefore
+evaluate the same roots to the same values and report the same compile-time
+errors: a build cannot report an error in the program that checking did not,
+and `--opt` never moves a computation between compile time and runtime. A
+dev build for the host reads the same packs for its runtime program and
+shares them with evaluation.
 
 Monotype lowering, lifting, SpecConstr, lambda solving, and inline analysis
 run once for that evaluation over the union of its roots, and the frozen
-Solved program they produce is one immutable producer identity domain. A
-runtime consumer whose `SolvedPolicy` is the evaluation's continues that
-program and borrows it: none copies it, none reruns any of those stages, and
-callable correspondence compares ids from one producer domain, never ids
-allocated by separate solver runs. A consumer continuing it chooses its
-target width, the explicitly shared expect consumer mode, its LIR policy, and
-the completed compile-time values it reads as literals. Any other runtime
-consumer (an optimized build, the interpreter, or Boxy) specializes the
-checked modules itself under its own policy once evaluation has completed,
-and reads every compile-time value from the modules' `ConstStore`s. Solved
-programs built under different inlining and SpecConstr policies specialize
-one function into differently shaped members, because their lambda sets
-differ, so no member identity in one names a member of the other; the
-stores name each value independently of any Solved program. The producer
-program is released after its last consumer.
+Solved program they produce is one immutable producer identity domain. An
+LSS runtime consumer continues that program and borrows it: none copies it,
+none reruns any of those stages, and callable correspondence compares ids
+from one producer domain, never ids allocated by separate solver runs. A
+consumer continuing it chooses its target width, the explicitly shared
+expect consumer mode, its LIR policy, and the completed compile-time values
+it reads as literals. A Boxy runtime program has no Monotype stage to share,
+so it lowers the checked modules itself and reads every compile-time value
+from the modules' `ConstStore`s. The producer program is released after its
+last consumer.
 
 Each consumer names its share of the producer program in an explicit root
 manifest, applied before LIR demand discovery. A manifest names producer root
@@ -1072,9 +1079,12 @@ consumer still owns its complete, uncompacted LIR representation tables. The
 resulting frozen graph participates in the consumer's one reachability pass:
 its explicit function relocations retain exactly the callable procedures that
 the completed values contain, and those procedures join the ordinary runtime
-roots supplied to ARC. Successful evaluation evidence removes its value guards
-after guard construction; failed values keep their ordinary runtime failure
-paths. A root that stops at a checked root's value guard is a propagated
+roots supplied to ARC. Guard insertion runs after that pass and reads each
+read value's outcome from the failure record in the compacted frozen graph: a
+read of a successful value is never guarded, and a read of a failed value keeps
+its ordinary runtime failure path. Worker preparation may create slots that
+lowering never reads, so no step may assume a slot present at transcoding
+survives reachability. A root that stops at a checked root's value guard is a propagated
 failure: it records the failure it read and is not reported again, because the
 failing root already reported it in the module that owns it. A literal root
 belongs to no checked module, so nothing retains its failure between
@@ -2188,16 +2198,24 @@ occurrence's current representative. The commit-probe API fixes the
 non-poisoning behavior for every relation it runs, and ordinary poisoning
 unification asserts that no savepoint is active.
 
-A failed unification is different from a successful class union. Its first
-operand can be one checked occurrence already connected to a shared binding;
-error recovery must poison that exact occurrence without making the binding or
-an incidental storage child of the occurrence erroneous. When the queried
-variable is not the checked representative, `poisonOnMismatch` enumerates its
-class explicitly, re-roots and flattens the remainder at the checked
-representative, isolates the queried occurrence as a rank-zero singleton, and
-rank-merges that singleton with the second operand's error class. When the
-queried variable is the checked representative, the mismatch belongs to the
-class itself and the whole class is rank-merged into the error class. This rule
+A failed unification is different from a successful class union. Either
+operand can be one checked occurrence already connected to a shared binding: a
+lookup of a monomorphic local, such as a lambda parameter, joins the binding's
+class without becoming its checked representative. Error recovery must poison
+that exact occurrence without making the binding or an incidental storage child
+of the occurrence erroneous, because post-check lowering instantiates every
+binding of a function it lowers. The rejected use becomes erroneous instead,
+whatever its consumer: an `if` condition, a guard, an operator, or a body
+checked against its annotation. The checker records every value lookup that
+reads its target's type, local or not, and after checking replaces each one
+whose own occurrence is erroneous with an explicit runtime error, as it does for
+every use of an erroneous binding. `poisonOnMismatch` applies one rule to each
+operand. When the queried variable is not its class's checked representative,
+it enumerates the class explicitly, re-roots and flattens the remainder at the
+checked representative, where the remainder keeps its content, and isolates the
+queried occurrence as a rank-zero singleton that joins the error class. When
+the queried variable is the checked representative, the mismatch belongs to the
+class itself and the whole class joins the error class. This rule
 makes error recovery independent of union-tree shape and path-compression
 history; it never guesses which variables are source occurrences from their
 storage parents. Error recovery must use this explicit operation rather than
@@ -2226,6 +2244,9 @@ the diagnostic itself, and marks only the consuming expression erroneous. The
 producer keeps the type it was solved to, so a rejected relation neither
 cascades into unrelated uses of that producer nor leaves an `.err` on a binding
 whose value post-check lowering must still instantiate.
+A derived structural `is_eq` or `to_hash` relates the dispatcher, its operands,
+and its result the same way: a rejected relation rejects the dispatch and is
+reported once per dispatcher and method, like any other dispatch failure.
 An expression statement is such a consumer of its expression's value: the
 `{}` demand is owned by the statement, and a call's result class is its
 callee's return slot, which a monomorphic callee shares with every other use.
@@ -6590,8 +6611,13 @@ extension the annotation's generation minted (`Check.implicit_open_exts`,
 sliced per annotation by `annotation_implicit_open_exts`), and reports a Type
 Mismatch in the annotation context for any that resolved to a row carrying
 tags—showing the row the body produced against the union the annotation
-wrote—marking that extension erroneous (diagnostic recovery, like every
-other reported problem).
+wrote. The recovery is the one every annotation mismatch gets: the
+definition's body (a function's body, or the right-hand side) becomes a
+runtime error, and the row keeps exactly what solving gave it. The row is
+not poisoned: other definitions call this one and its uses have already
+related to the row, or will, so an erroneous type there would leave code
+nothing lowers, such as an `expect` calling the definition, which then fails
+at the retired body like any test reaching a checked error.
 
 That pass is a single READ of a mutable variable, and a definition can still
 widen its own row afterwards through a generated codec its body introduced: a
@@ -6600,7 +6626,8 @@ derived parser or encoder is often validated only once
 in the module has run, and its validation adds error tags to the codec's error
 row (Derived Parser Required-Field Error Composition). Every extension the
 post-body pass cleared is therefore kept, stamped with the source region of its
-binding's right-hand side (`Check.LateImplicitOpenExtAudit.owner_rhs`). Each
+binding's right-hand side (`Check.LateImplicitOpenExtAudit.owner_rhs`) and
+that right-hand side itself (`owner_expr`), which a report retires. Each
 codec validation records, with the region of the expression that introduced
 the codec relation, exactly which tags it requires in which error row
 (`Check.codec_row_demands`): `MissingRequiredField(Str)`, a nested custom
@@ -6659,6 +6686,21 @@ flex, or the rigid deferral marker where the annotation defers per use), so
 the two spellings cannot drift. Elsewhere `..` remains the rigid
 `#others` it always was, and a named extension (`..others`) is always a
 rigid.
+
+`roc fmt` deletes exactly such a `..` (`src/fmt/open_rows.zig`), since the
+checker already reports it as a Redundant Open Tag Union. The formatter sees
+only the parse AST, so it answers each question the checker answers from a
+resolved declaration over EVERY declaration the spelling could reach (every
+same-named type declaration in the file, the `Builtin` type of that name, any
+import that could introduce it) and deletes only on a unanimous answer. It
+also keeps the `..` wherever the file alone cannot rule out a different
+meaning: a value binding (where `..` opts into a quantified row) and any
+other body that is not a lambda, a platform's `provides` definition, and an
+annotation-only definition outside an app (which may be hosted). So the
+formatter may keep a `..` the checker reports, and never deletes one it does
+not; `src/check/test/redundant_open_fmt_test.zig` runs both on the same
+sources to hold that. A change to where the checker opens a row is a change
+to that walk too.
 
 The VALUE row above is the pre-polarity behaviour of an inferred value
 (`x = Boom`) extended to annotated ones: the value's body is bounded by the
@@ -7204,6 +7246,13 @@ closed-to-open rejection; composition does not widen a condition type. The
 checker records distinct checked types for the propagated value and the
 function return; post-check lowering consumes its existing explicit return
 boundary and must not reconstruct or widen either type.
+
+A rejected return contribution—a `?`, an ordinary `return`, or the body
+itself—owns its diagnostic and poisons only its own expression, which becomes
+a runtime error. The function's result is shared with its body, its other
+contributions, and every caller, so it keeps the type those give it; a caller
+may still widen it, and the rejected return, lowered as a terminated block,
+flows no value across the return boundary.
 
 Monotype dispatches on the checked return context: a `try_suffix` return lowers
 its value at the source's checked type and retains the active specialization's
@@ -9457,20 +9506,25 @@ applies in `lowerCheckedTypeVariable`: its numeric default when it carries a
 numeric default phase, otherwise its row default (`{}` or `[]`), otherwise the
 empty tag union. Planning records that sealed representation as explicit
 `sealed_default` data on the flex representation, so lowering reads it rather
-than re-deriving a default from the checked type. A literal's numeric default
-applies only when nothing resolves the variable, so a numeric-literal variable
-that a scheme quantifies has no sealed default: every instantiation supplies its
-type through the descriptor the scheme's uses pass, exactly as for any other
-quantified variable. A flex variable carrying
-static-dispatch constraints that a quantifying scheme would have to own has no
-sealed default, because each of those needs a dictionary only a quantifying
-scheme can supply; reaching it without a bound descriptor, like reaching an
-unbound rigid variable, is a lowering invariant violation. The derived `is_eq`
+than re-deriving a default from the checked type. A default applies only when
+nothing resolves the variable, so a variable that a scheme quantifies has no
+sealed default, whether or not it carries a numeric default phase or
+static-dispatch constraints: every instantiation supplies its type, and its
+dictionaries, through the descriptor and dictionary arguments the scheme's uses
+pass, including when a worker is planned at a concrete instantiation and its
+body's variables take their representations from that instantiation. Reaching a
+quantified variable without a bound descriptor, like reaching an unbound rigid
+variable, is a lowering invariant violation. An unquantified variable carrying
+static-dispatch constraints seals like any other, and each of its dispatches
+resolves against its default: through the default owner for a numeric default,
+and otherwise by the unpinned-dispatch rule (`unpinnedDispatchResolution`) the
+checker applies to a dispatcher no edge can pin, under which equality and
+hashing of the vacuous shape stay structural and every other dispatch is
+unreachable. The derived `is_eq`
 equality placeholder Check leaves on an undetermined variable inside values
-compared with structural equality is not such a constraint: it discharges by
+compared with structural equality needs no dictionary: it discharges by
 comparing structurally with no owner (the same carve-out Check's ambiguity
-judgment applies), so planning seals the variable exactly like an unconstrained
-one and records no dictionary for it. A quantified variable's `is_eq` erased
+judgment applies), so planning records no dictionary for it. A quantified variable's `is_eq` erased
 requirement is owned instead—the scheme forwards it as compiler-derived structural
 evidence—so it keeps its dictionary requirement.
 
@@ -11763,7 +11817,12 @@ leaf counts as proven uninhabited when its recorded final default is: the
 checker left it unconstrained, requests are seeded before a body is lowered,
 so nothing inside the body can bind it to anything but that default, and an
 interface replay may close the same cell to that default at any moment, so
-evidence read before and after such a replay must agree. If compile-time
+evidence read before and after such a replay must agree. A component proven
+uninhabited resolves by the unpinned-dispatch rule
+(`unpinnedDispatchResolution`), the same one the checker applies to a
+dispatcher no edge can pin, before any structural derivation is attempted: a
+derived map needs a payload selection only checking can make, and no value
+exists to map. If compile-time
 evaluation stores that function inside another value before the
 callable is concrete, `ConstStore` retains the same symbolic entry in the
 function's evidence vector, including inside nested evidence trees. Pool offsets are not
@@ -13007,6 +13066,17 @@ representation itself maps to the descriptor being built. Descriptor template
 capture sets include both spans, so every local an inspect span names is
 supplied to the materialization.
 
+A runtime adapter rewrites bytes through descriptors, and descriptors do not
+describe a callable's erased-call convention. A value holding a callable in its
+record fields, tuple items, tag payloads, or alias and nominal backings
+therefore crosses a boundary structurally in lowering, which wraps each
+callable in a callable adapter; only a shared nominal backing template, whose
+callables are stated over the nominal's formals and so share one convention
+across instantiations, may cross inside a runtime adapter. A still-undetermined
+record field is stored as its presence slot; where checking made the field
+required on the other side of a boundary, the value is the slot's `Present`
+payload, converted like any other value.
+
 Every non-identity representation boundary also has a planned adapter request.
 After layouts are committed, the adapter builder resolves each request to an
 interned `BoxyAdapter`. The adapter records source and target layouts, source and
@@ -13165,7 +13235,13 @@ that use. Planning determines the descriptors a body requires from the checked
 expression and pattern types it analyzes for that body: each unsealed type
 variable those types reach, and each one a callable the body creates or calls
 needs beyond its own scheme variables, unless the signature or checked evidence
-already supplies it. A variable a generalized local scope quantifies belongs to
+already supplies it. A use instantiates the callee's scheme variables it needs
+with the types its checked substitution names, and the body requires every
+variable of those types that its own scheme or an enclosing local scope
+quantifies. A variable reached only through a dispatch constraint's signature,
+such as the callback type `c` in `a.map : a, (c -> d) -> b`, appears in no type
+the body mentions, so the substitution is the only place it is named. A
+variable a generalized local scope quantifies belongs to
 the outermost scope listing it and is required only by that scope and the
 bodies it encloses. Descriptors required only by the callable body are captured from
 those planned use-site arguments; descriptors represented structurally in the
@@ -17245,8 +17321,8 @@ are zero-sized; its source template or layout alone cannot identify which member
 was evaluated. Solved LIR lowering records `FrozenCallableContext` alongside the frozen
 Monotype function and generated worker identity. Transcoding consumes that
 complete identity and requires one exact target member. These identities are
-positions in one Solved program, which is why a runtime consumer with another
-Solved policy reads the constant stores instead of transcoding.
+positions in one Solved program, which is why every LSS runtime consumer
+continues evaluation's Solved program rather than preparing its own.
 
 Shared compile-time execution completes slots on demand. Each declared
 value and failure slot carries its producer's exact checked module and root ID.

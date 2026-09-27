@@ -164,7 +164,7 @@ from_method = thing.f(10)
 			(ty-lookup (name "I64") (builtin))))
 	(d-let
 		(p-assign (ident "from_method"))
-		(e-dispatch-call (method "f") (constraint-fn-var 334)
+		(e-dispatch-call (method "f") (constraint-fn-var 335)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "thing"))))
