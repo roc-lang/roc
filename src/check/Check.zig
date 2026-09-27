@@ -589,6 +589,11 @@ exhaustiveness_context: ExhaustivenessContext.Context = .{},
 /// Tracks all local lookup exprs so erroneous bindings can be poisoned explicitly
 /// after type checking has finished.
 value_lookup_tracking: std.ArrayListUnmanaged(ValueLookupEntry),
+/// Tracks every external, associated, and platform-required lookup expr that
+/// instantiates its target's type. A consumer that rejects such a use poisons
+/// only the use's own occurrence, which must then become an explicit runtime
+/// error after type checking has finished.
+nonlocal_value_lookups: std.ArrayListUnmanaged(CIR.Expr.Idx),
 /// Tracks expressions whose checked type contains an error, even if annotation
 /// preservation later gives their raw expr var a non-error type.
 erroneous_value_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
@@ -2949,6 +2954,7 @@ fn initAssumePrepared(
         .binding_scheme_nodes = binding_scheme_nodes,
         .synthetic_binding_schemes = synthetic_binding_schemes,
         .value_lookup_tracking = .empty,
+        .nonlocal_value_lookups = .empty,
         .erroneous_value_exprs = .empty,
         .erroneous_pattern_statements = .empty,
         .call_operand_type_error_exprs = try initNodeSlots(bool, gpa, node_count, false),
@@ -3088,6 +3094,7 @@ pub fn deinit(self: *Self) void {
     self.hole_shared_schemes.deinit(self.gpa);
     self.predeclared_local_annotations.deinit(self.gpa);
     self.value_lookup_tracking.deinit(self.gpa);
+    self.nonlocal_value_lookups.deinit(self.gpa);
     self.erroneous_value_exprs.deinit(self.gpa);
     self.erroneous_pattern_statements.deinit(self.gpa);
     self.call_operand_type_error_exprs.deinit(self.gpa);
@@ -22429,6 +22436,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 } else if (target_is_def and hostedDeclarationIsNotEffectful(ext_ref.other_cir, target_def)) {
                     try self.markNonEffectfulHostedDeclarationUse(expr_idx, expr_var);
                 } else {
+                    try self.nonlocal_value_lookups.append(self.gpa, expr_idx);
                     const ext_instantiated_var = try self.instantiateImportedBindingVar(
                         ext_ref.local_var,
                         env,
@@ -22456,6 +22464,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             const requires_items = self.cir.requires_types.items.items;
             const idx = req.requires_idx.toU32();
             if (idx < requires_items.len) {
+                try self.nonlocal_value_lookups.append(self.gpa, expr_idx);
                 const required_type = requires_items[idx];
                 const type_var = ModuleEnv.varFrom(required_type.type_anno);
                 const instantiated_var = try self.instantiateVar(
@@ -22683,8 +22692,8 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 // result and its own contributions; that composition relates
                 // the body below. Without one the body simply is the result.
                 if (!self.returnFrameHasTrySuffix()) {
-                    const body_result = try self.unifyInContext(expected_func.ret, body_var, env, anno_context);
-                    try self.refineAnnotatedBodyMismatch(body_result, lambda.body);
+                    const body_result = try self.relateResultValue(expected_func.ret, lambda.body, env, anno_context);
+                    self.refinePlatformRequirementReturnContext(body_result);
                 }
                 break :blk lambda_body_does_fx;
             } else blk: {
@@ -27976,6 +27985,7 @@ fn checkResolvedAssociatedTarget(
         return;
     }
 
+    try self.nonlocal_value_lookups.append(self.gpa, expr_idx);
     const target_var = try self.methodTypeVarFromOriginalEnv(
         target_env,
         is_this_module,
@@ -28468,15 +28478,20 @@ fn poisonRecursiveNonFunctionProcessingDef(
 }
 
 fn poisonErroneousValueUses(self: *Self) Allocator.Error!void {
+    // Mismatch poisoning is the only way a use's own occurrence becomes
+    // erroneous, and it always reports a type problem, so a module without
+    // problems has no occurrence to retire.
+    const occurrences_may_be_poisoned = self.problems.problems.items.len != 0;
     for (self.value_lookup_tracking.items) |entry| {
+        if (self.cir.store.getExpr(entry.expr_idx) == .e_runtime_error) continue;
+
         const pattern_var = ModuleEnv.varFrom(entry.pattern_idx);
         if (!self.erroneous_value_patterns.contains(entry.pattern_idx) and
             self.types.resolveVar(pattern_var).desc.content != .err)
         {
+            if (occurrences_may_be_poisoned) try self.retireErroneousLookupOccurrence(entry.expr_idx);
             continue;
         }
-
-        if (self.cir.store.getExpr(entry.expr_idx) == .e_runtime_error) continue;
 
         const ident = self.getPatternIdent(entry.pattern_idx) orelse continue;
         const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_use = .{
@@ -28485,6 +28500,22 @@ fn poisonErroneousValueUses(self: *Self) Allocator.Error!void {
         } });
         try self.replaceExprWithRuntimeError(entry.expr_idx, diagnostic_idx);
     }
+    if (!occurrences_may_be_poisoned) return;
+    for (self.nonlocal_value_lookups.items) |expr_idx| {
+        try self.retireErroneousLookupOccurrence(expr_idx);
+    }
+}
+
+/// A consumer that rejected a lookup poisoned only that use's own occurrence
+/// (`Store.poisonOnMismatch`), so the referenced binding keeps its type and the
+/// use alone becomes the runtime error.
+fn retireErroneousLookupOccurrence(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
+    if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) return;
+    if (self.types.resolveVar(ModuleEnv.varFrom(expr_idx)).desc.content != .err) return;
+    const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+        .region = self.cir.store.getExprRegion(expr_idx),
+    } });
+    try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
 }
 
 fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
@@ -33186,13 +33217,32 @@ fn checkReturnRelation(
     ctx: problem.Context,
     env: *Env,
 ) std.mem.Allocator.Error!void {
-    const result = try self.unifyInContext(expected, ModuleEnv.varFrom(actual_expr), env, ctx);
-    if (result.isProblem()) {
-        std.debug.assert(result == .problem);
-        const result_expr = self.resultValueExpr(actual_expr);
-        self.problems.problems.items[@intFromEnum(result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
-        try self.erroneous_value_exprs.put(self.gpa, result_expr, {});
-    }
+    _ = try self.relateResultValue(expected, actual_expr, env, ctx);
+}
+
+/// Relate an expected result to the value `actual_expr` produces. A mismatch is
+/// reported at, and replaces with a runtime error, the expression that produced
+/// the value (`resultValueExpr`), and poisons the relation's operands exactly as
+/// a poisoning unification would. The producing expression is located before
+/// poisoning: poisoning detaches a block's own occurrence from the class it
+/// shares with its final expression, which is the fact the walk reads.
+fn relateResultValue(
+    self: *Self,
+    expected: Var,
+    actual_expr: CIR.Expr.Idx,
+    env: *Env,
+    ctx: problem.Context,
+) std.mem.Allocator.Error!unifier.Result {
+    const actual = ModuleEnv.varFrom(actual_expr);
+    const result = try self.runUnify(expected, actual, env, unifyOptionsForContext(ctx, .write_no_report));
+    if (!result.isProblem()) return result;
+    const result_expr = self.resultValueExpr(actual_expr);
+    const problem_idx = try self.appendTypeMismatch(expected, actual, ctx);
+    self.problems.problems.items[@intFromEnum(problem_idx)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
+    self.types.assertNoSavepointActive();
+    try self.types.poisonOnMismatch(expected, actual);
+    try self.erroneous_value_exprs.put(self.gpa, result_expr, {});
+    return .{ .problem = problem_idx };
 }
 
 /// The expression that produces `expr_idx`'s value. A block whose type is its
@@ -33446,15 +33496,22 @@ fn returnFrameHasTrySuffix(self: *const Self) bool {
 /// produced the body's value.
 fn refineAnnotatedBodyMismatch(self: *Self, body_result: unifier.Result, body: CIR.Expr.Idx) std.mem.Allocator.Error!void {
     if (!body_result.isProblem()) return;
+    self.refinePlatformRequirementReturnContext(body_result);
+    const result_expr = self.resultValueExpr(body);
+    self.problems.problems.items[@intFromEnum(body_result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
+    try self.erroneous_value_exprs.put(self.gpa, result_expr, {});
+}
+
+/// A rejected annotated-body relation against a platform requirement reports
+/// the requirement's return, not the whole requirement.
+fn refinePlatformRequirementReturnContext(self: *Self, body_result: unifier.Result) void {
+    if (!body_result.isProblem()) return;
     std.debug.assert(body_result == .problem);
     const mismatch = &self.problems.problems.items[@intFromEnum(body_result.problem)].type_mismatch;
     if (mismatch.context == .platform_requirement) {
         const requirement_context = mismatch.context.platform_requirement;
         mismatch.context = .{ .platform_requirement_return = requirement_context };
     }
-    const result_expr = self.resultValueExpr(body);
-    mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
-    try self.erroneous_value_exprs.put(self.gpa, result_expr, {});
 }
 
 /// Record a rejected body relation against the expression that produced the
@@ -33520,8 +33577,8 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
     // below report against that settled body.
     if (frame.expected_result) |annotated_result| {
         if (self.tryArgsFromVar(annotated_result) == null) {
-            const body_result = try self.unifyInContext(annotated_result, frame.body_result, env, anno_context);
-            try self.refineAnnotatedBodyMismatch(body_result, lambda_body);
+            const body_result = try self.relateResultValue(annotated_result, lambda_body, env, anno_context);
+            self.refinePlatformRequirementReturnContext(body_result);
         }
     }
 
@@ -35738,6 +35795,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 constraint.fn_var,
                                 env,
                                 region,
+                                failure_expr,
                             );
                             continue;
                         }
@@ -35760,6 +35818,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 constraint.fn_var,
                                 env,
                                 region,
+                                failure_expr,
                             );
                             continue;
                         }
@@ -36055,6 +36114,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     constraint.fn_var,
                                     env,
                                     region,
+                                    failure_expr,
                                 );
                             } else {
                                 try self.reportEqualityError(
@@ -36084,6 +36144,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     constraint.fn_var,
                                     env,
                                     region,
+                                    failure_expr,
                                 );
                             } else {
                                 try self.reportConstraintError(
@@ -36334,6 +36395,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 constraint.fn_var,
                                 env,
                                 self.getRegionAt(deferred_constraint.var_),
+                                failure_expr,
                             );
                         } else {
                             // Some component doesn't support is_eq (e.g., contains a function)
@@ -36355,6 +36417,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 constraint.fn_var,
                                 env,
                                 self.getRegionAt(deferred_constraint.var_),
+                                failure_expr,
                             );
                         } else {
                             // Some component doesn't support to_hash (e.g., contains a function)
@@ -40614,6 +40677,7 @@ fn satisfyDerivedIsEqConstraint(
     constraint_fn_var: Var,
     env: *Env,
     region: Region,
+    failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
     const resolved_constraint = self.types.resolveVar(constraint_fn_var);
     const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
@@ -40636,16 +40700,46 @@ fn satisfyDerivedIsEqConstraint(
         return;
     }
 
-    // Read both arg vars before unifying: the first unify can append fresh
-    // vars and reallocate the backing array, dangling the `args` slice.
+    // Read both arg vars and the return before unifying: the first unify can
+    // append fresh vars and reallocate the backing array, dangling the `args`
+    // slice.
     const arg0 = args[0];
     const arg1 = args[1];
-    _ = try self.unify(dispatcher_var, arg0, env);
-    _ = try self.unify(dispatcher_var, arg1, env);
-    _ = try self.unify(try self.freshBool(env, region), resolved_func.ret, env);
+    const ret = resolved_func.ret;
+    const arg0_related = try self.relateDerivedDispatchOperand(dispatcher_var, constraint, env, failure_expr, dispatcher_var, arg0, true);
+    const arg1_related = try self.relateDerivedDispatchOperand(dispatcher_var, constraint, env, failure_expr, dispatcher_var, arg1, arg0_related);
+    const ret_related = try self.relateDerivedDispatchOperand(dispatcher_var, constraint, env, failure_expr, try self.freshBool(env, region), ret, arg0_related and arg1_related);
+    if (!(arg0_related and arg1_related and ret_related)) return;
     if (!self.rewriteDerivedIsEqMethodCallAsStructuralEq(constraint)) {
         try self.markStaticDispatchRejected(constraint);
     }
+}
+
+/// Relate one operand or the result of a derived structural dispatch. They are
+/// independently solved producers, so a mismatch rejects the dispatch instead
+/// of poisoning them, and is reported once per dispatcher/method pair like any
+/// other dispatch failure. Every relation still runs after a mismatch, so the
+/// dispatch's result keeps its type; only the first mismatch reports, which
+/// `report_mismatch` selects. Returns whether this relation was accepted.
+fn relateDerivedDispatchOperand(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    failure_expr: ?CIR.Expr.Idx,
+    expected: Var,
+    actual: Var,
+    report_mismatch: bool,
+) Allocator.Error!bool {
+    const result = try self.runUnify(expected, actual, env, .{ .on_mismatch = .write_no_report });
+    if (!result.isProblem()) return true;
+    if (!report_mismatch) return false;
+    if (!try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, failure_expr)) {
+        _ = try self.appendTypeMismatch(expected, actual, .none);
+        try self.poisonConstraintFailure(dispatcher_var, constraint, env, failure_expr);
+        try self.markStaticDispatchRejected(constraint);
+    }
+    return false;
 }
 
 /// Satisfy a derived `to_hash` constraint for an anonymous structural type.
@@ -40660,6 +40754,7 @@ fn satisfyDerivedToHashConstraint(
     constraint_fn_var: Var,
     env: *Env,
     region: Region,
+    failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
     const resolved_constraint = self.types.resolveVar(constraint_fn_var);
     const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
@@ -40687,9 +40782,10 @@ fn satisfyDerivedToHashConstraint(
     const self_arg = args[0];
     const hasher_arg = args[1];
     const ret = resolved_func.ret;
-    _ = try self.unify(dispatcher_var, self_arg, env);
+    const self_related = try self.relateDerivedDispatchOperand(dispatcher_var, constraint, env, failure_expr, dispatcher_var, self_arg, true);
     // The Hasher argument is threaded through unchanged to the return type.
-    _ = try self.unify(hasher_arg, ret, env);
+    const hasher_related = try self.relateDerivedDispatchOperand(dispatcher_var, constraint, env, failure_expr, hasher_arg, ret, self_related);
+    if (!(self_related and hasher_related)) return;
     if (!self.rewriteDerivedMethodCallAsStructuralHash(constraint)) {
         try self.markStaticDispatchRejected(constraint);
     }

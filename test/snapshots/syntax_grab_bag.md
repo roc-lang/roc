@@ -2227,7 +2227,27 @@ expect {
 					(e-num (value "5"))))))
 	(d-let
 		(p-assign (ident "add_one"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-lambda
+			(args
+				(p-assign (ident "num")))
+			(e-block
+				(s-let
+					(p-assign (ident "other"))
+					(e-num (value "1")))
+				(e-if
+					(if-branches
+						(if-branch
+							(e-runtime-error (tag "erroneous_value_expr"))
+							(e-block
+								(s-dbg
+									(e-runtime-error (tag "erroneous_value_expr")))
+								(e-num (value "0")))))
+					(if-else
+						(e-block
+							(s-dbg
+								(e-num (value "123")))
+							(e-lookup-local
+								(p-assign (ident "other"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
