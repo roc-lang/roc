@@ -499,6 +499,7 @@ pub const KeyTag = enum(u8) {
     padding,
 };
 
+/// Append a key node's one-byte tag.
 pub fn appendKeyTag(buf: *std.ArrayList(u8), allocator: Allocator, tag: KeyTag) Allocator.Error!void {
     try buf.append(allocator, @intFromEnum(tag));
 }
@@ -2317,20 +2318,22 @@ const KeyEncodingReader = struct {
     tags: std.ArrayList(KeyTag) = .empty,
     allocator: Allocator,
 
-    fn byte(self: *KeyEncodingReader) !u8 {
+    const Error = Allocator.Error || error{TestUnexpectedResult};
+
+    fn byte(self: *KeyEncodingReader) Error!u8 {
         if (self.pos >= self.bytes.len) return error.TestUnexpectedResult;
         self.pos += 1;
         return self.bytes[self.pos - 1];
     }
 
-    fn tag(self: *KeyEncodingReader) !KeyTag {
+    fn tag(self: *KeyEncodingReader) Error!KeyTag {
         const raw = try self.byte();
         const value = std.enums.fromInt(KeyTag, raw) orelse return error.TestUnexpectedResult;
         try self.tags.append(self.allocator, value);
         return value;
     }
 
-    fn varint(self: *KeyEncodingReader) !u32 {
+    fn varint(self: *KeyEncodingReader) Error!u32 {
         var value: u32 = 0;
         var shift: u5 = 0;
         while (true) {
@@ -2341,16 +2344,16 @@ const KeyEncodingReader = struct {
         }
     }
 
-    fn skip(self: *KeyEncodingReader, len: usize) !void {
+    fn skip(self: *KeyEncodingReader, len: usize) Error!void {
         if (self.pos + len > self.bytes.len) return error.TestUnexpectedResult;
         self.pos += len;
     }
 
-    fn lengthPrefixed(self: *KeyEncodingReader) !void {
+    fn lengthPrefixed(self: *KeyEncodingReader) Error!void {
         try self.skip(try self.varint());
     }
 
-    fn boolean(self: *KeyEncodingReader) !bool {
+    fn boolean(self: *KeyEncodingReader) Error!bool {
         return switch (try self.byte()) {
             0 => false,
             1 => true,
@@ -2358,7 +2361,7 @@ const KeyEncodingReader = struct {
         };
     }
 
-    fn namedSource(self: *KeyEncodingReader) !void {
+    fn namedSource(self: *KeyEncodingReader) Error!void {
         try self.lengthPrefixed();
         if (try self.boolean()) {
             _ = try self.varint();
@@ -2367,7 +2370,7 @@ const KeyEncodingReader = struct {
         }
     }
 
-    fn node(self: *KeyEncodingReader) anyerror!void {
+    fn node(self: *KeyEncodingReader) Error!void {
         switch (try self.tag()) {
             .child_key => try self.skip(32),
             .cycle, .identity_var_ref, .identity_var_anchor, .err_var, .opaque_root => _ = try self.varint(),
@@ -2408,7 +2411,32 @@ const KeyEncodingReader = struct {
                             },
                             .presence_optional_field => {},
                             .presence_variable => try self.node(),
-                            else => return error.TestUnexpectedResult,
+                            .opaque_root,
+                            .err_var,
+                            .flex,
+                            .rigid,
+                            .defaulted_empty_tag_union,
+                            .identity_var_anchor,
+                            .identity_var_ref,
+                            .cycle,
+                            .err,
+                            .presence_required,
+                            .presence_optional,
+                            .presence_defaulted,
+                            .alias,
+                            .nominal,
+                            .empty_record,
+                            .empty_tag_union,
+                            .tuple,
+                            .fn_pure,
+                            .fn_effectful,
+                            .record,
+                            .tag_union,
+                            .canonical_type_scheme,
+                            .child_key,
+                            .named,
+                            .padding,
+                            => return error.TestUnexpectedResult,
                         },
                     }
                     try self.node();

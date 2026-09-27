@@ -6017,6 +6017,17 @@ In optimizing inline modes it performs call-pattern discovery, creates workers
 whose arguments are the parts the callee immediately observes, normalizes
 function bodies, and projects unused loop results.
 
+SpecConstr compares types, and keys workers and call patterns, by the
+representation digest: the full stored-content digest without a named type's
+checked re-entry reference (`named_type.ty`). Monotype may hold several ids for
+one type whose nominals point at different checked occurrences, and which
+occurrence a body's type carries depends on the route that produced it, such as
+an interface summary replay versus an expansion, and so on scheduling and on the
+worker count. That reference must never change a SpecConstr decision. Backings
+remain part of the comparison: two equal types whose nominal backings differ are
+distinct representations, and a value that replaces a use site of the other
+representation keeps the site's type through an explicit `typed_boundary`.
+
 `.none` mode runs only the pass's bounded, demand-directed iterator-fusion
 clone. It clones only function bodies containing a checker-stamped iterator
 producer, and within those bodies it decomposes only loop state whose type owns
