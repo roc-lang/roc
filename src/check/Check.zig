@@ -37415,23 +37415,25 @@ fn varDeriveComponentObligations(
             // The boolean walk already rejected these; nothing to delegate.
             .fn_pure, .fn_effectful, .fn_unbound => return,
             .empty_record, .empty_tag_union => return,
+            // Deriving a component obligation appends type variables, so each
+            // component is read by index rather than through a held slice.
             .record => |record| {
-                const fields_slice = self.types.getRecordFieldsSlice(record.fields);
-                for (fields_slice.items(.presence)) |presence| {
+                for (0..record.fields.count) |offset| {
+                    const presence = self.types.getRecordFieldAt(record.fields, @intCast(offset)).presence;
                     try self.varDeriveComponentObligations(presence.typeVar(), derivation, visited, env, parent_constraint, admit_rigids);
                 }
             },
             .tuple => |tuple| {
-                const elems = self.types.sliceVars(tuple.elems);
-                for (elems) |elem_var| {
+                for (0..tuple.elems.count) |offset| {
+                    const elem_var = self.types.getVarAt(tuple.elems, @intCast(offset));
                     try self.varDeriveComponentObligations(elem_var, derivation, visited, env, parent_constraint, admit_rigids);
                 }
             },
             .tag_union => |tag_union| {
-                const tags_slice = self.types.getTagsSlice(tag_union.tags);
-                for (tags_slice.items(.args)) |tag_args| {
-                    const args = self.types.sliceVars(tag_args);
-                    for (args) |arg_var| {
+                for (0..tag_union.tags.count) |tag_offset| {
+                    const tag_args = self.types.getTagAt(tag_union.tags, @intCast(tag_offset)).args;
+                    for (0..tag_args.count) |offset| {
+                        const arg_var = self.types.getVarAt(tag_args, @intCast(offset));
                         try self.varDeriveComponentObligations(arg_var, derivation, visited, env, parent_constraint, admit_rigids);
                     }
                 }
@@ -37446,7 +37448,9 @@ fn varDeriveComponentObligations(
                     return;
                 }
                 if (self.nominalIsBoxType(nominal)) return;
-                for (self.types.sliceNominalArgs(nominal)) |arg_var| {
+                const nominal_args = types_mod.Store.getNominalArgsRange(nominal);
+                for (0..nominal_args.count) |offset| {
+                    const arg_var = self.types.getVarAt(nominal_args, @intCast(offset));
                     try self.varDeriveComponentObligations(arg_var, derivation, visited, env, parent_constraint, admit_rigids);
                 }
                 const template = self.nominalDeclBackingTemplate(nominal) orelse return;

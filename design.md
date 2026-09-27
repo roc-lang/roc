@@ -12896,7 +12896,15 @@ A formal position holds its value in the worker representation of the owning
 nominal's actual argument. Tag-union and declared-aggregate boundary adapters
 therefore resolve a formal-typed payload or field to that actual before
 choosing its target descriptor, rather than preserving the source value's
-storage as they do for a bare type parameter. A worker argument's root
+storage as they do for a bare type parameter. Two uses of one declaration share
+its backing template, so a position inside it names neither side's storage:
+when the uses bind some formal to actuals that store differently (a target
+actual that is a bare type parameter excepted), a call-boundary adapter's
+target descriptor is the target's whole backing described under the target's
+own actuals, and the runtime conversion rewrites every position that formal
+reaches (`Dict(U64, List(Str))` passed as `Dict(U64, List(x))` rebuilds each
+value list with boxed items). Uses whose actuals agree keep the direct
+transfer. A worker argument's root
 descriptor may be rebuilt from the worker's own descriptors for the nominal's
 arguments. Reading a field through a nominal receiver takes the record's
 descriptor from the receiver's own descriptor.
@@ -13299,7 +13307,48 @@ a template is an invariant failure. A template slot also carries, after the
 worker's hidden descriptors, the requirement-side descriptors and the frame's
 own type variables that its method adapter needs; the adapter binds them
 (requirement descriptors only where the requirement side is lowered) and
-describes representations naming them through those bindings.
+describes representations naming them through those bindings. The slot's own
+adapter descriptors (the argument and invocation descriptors the runtime uses
+to call it) name the same frame descriptors at every position that describes a
+requirement the frame supplies, including positions nested inside a compound
+requirement argument; the runtime resolves them when it copies the template. A
+dictionary whose own representation names a frame descriptor is a template even
+when all of its methods are structural, and its structural slots describe their
+operand through the frame. The requirement descriptors come from the checked
+substitution of the call that passes the dictionary, which a method call reads
+from the evidence node its plan selected, exactly as an ordinary call reads it
+from its instantiated lookup.
+
+A static dictionary method selected from the dictionary's own type, with no
+checked evidence edge, is called at an explicit instantiation: the selected
+target's declared argument and result types, with the constrained variable's
+positions replaced by the dictionary's type and a requirement variable by the
+type the calling edge instantiated it to (a scheme variable that is a whole
+argument or the result of the callee takes the call's type there). The
+instantiation, not the target's generic declared callable, supplies the method
+worker's hidden descriptors and its nested dictionaries, so a generic target
+such as `List.is_eq` reached for `List(Str)` receives `Str`'s dictionary. A
+dictionary's method evidence entries are one contiguous span even when planning
+one of them plans a nested dictionary first.
+
+Derived `is_eq` and `to_hash` compare and hash each component with that
+component type's own method, exactly as a direct comparison would, which is
+the rule checking enforces when it derives them. Planning walks each derived
+root (a structural equality or hash expression, an unresolved dispatch allowed
+to derive, or a structural dictionary slot) and records a decision for every
+list, nominal, and type-variable component: a `List` or a nominal declaring its
+own method calls that method's worker, planned as a synthesized call at the
+component's checked type and the derivation's own second argument and result
+types; a type variable calls through the scheme requirement checking gave its
+enclosing worker; a nominal whose method is derived expands. Decisions are keyed
+by the derived frame, which is none when the derived type names no type
+variable (so every frame shares its static decisions) and otherwise the worker
+lowering it, and lowering reads them, never re-deciding. A structural slot
+whose derivation calls a method is a worker procedure; in a template it also
+receives the building frame's descriptors and dictionaries for the type
+variables its operand names, and its operand's own descriptor, like a worker
+argument's. Components inside a generic nominal's backing that read the
+nominal's formals keep comparing by descriptor.
 
 Boxy box/unbox/adapt operations are explicit LIR statements or explicit helper
 calls selected by the lowerer:
