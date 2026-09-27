@@ -636,8 +636,6 @@ pub const BodyDiagnostics = struct {
     spec_job_shards_committed: u64 = 0,
     caller_owned_template_bodies_lowered: u64 = 0,
     eager_iterator_template_bodies_lowered: u64 = 0,
-    early_template_requests_offered: u64 = 0,
-    early_template_requests_reserved: u64 = 0,
     deferred_template_reuses: u64 = 0,
     deferred_template_bodies_lowered: u64 = 0,
     lowered_template_bodies_discarded: u64 = 0,
@@ -3288,81 +3286,10 @@ const PreparedSpecJob = struct {
 };
 
 /// Caller-owned task storage. Executor callbacks write only their own element.
-/// A callee request that a running specialization job offered while its
-/// complete interface was already resolved, so ordered commit can reserve the
-/// callee and hand it to a free lane before the requesting job finishes
-/// (design.md "Early callee reservation"). Its types live in a private store
-/// so the coordinator never reads the worker's live store.
-const EarlyTemplateRequest = struct {
-    allocator: Allocator,
-    template_ref: names.ProcTemplate,
-    method_scope: checked.ModuleId,
-    source_fn_ty: checked.CheckedTypeId,
-    source_fn_key: names.TypeDigest,
-    /// Retained in the requesting lane's evidence arena for the whole run.
-    evidence: []const SpecEvidence,
-    signature_relation: Ast.SignatureRelation,
-    widened_result_row: bool,
-    types: Type.Store,
-    names: names.NameStore,
-    fn_ty: Type.TypeId,
-    subst: []SealedSubstSlot,
-    codec_contract: ?SealedCodecContractContext,
-
-    fn destroy(self: *EarlyTemplateRequest) void {
-        const allocator = self.allocator;
-        allocator.free(self.subst);
-        self.names.deinit();
-        self.types.deinit();
-        allocator.destroy(self);
-    }
-};
-
-/// Early callee requests one task has offered and the coordinator has not
-/// yet reserved. The task appends; the coordinator takes.
-const EarlyTemplateRequests = struct {
-    mutex: std.atomic.Mutex = .unlocked,
-    /// The offering lane's thread-safe allocator; owns `items` and requests.
-    allocator: ?Allocator = null,
-    items: std.ArrayList(*EarlyTemplateRequest) = .empty,
-    wake: base.post_check_task_executor.Wake = .{},
-
-    fn lock(self: *EarlyTemplateRequests) void {
-        while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
-    }
-
-    fn offer(self: *EarlyTemplateRequests, request: *EarlyTemplateRequest) Allocator.Error!void {
-        {
-            self.lock();
-            defer self.mutex.unlock();
-            try self.items.append(self.allocator.?, request);
-        }
-        self.wake.signal();
-    }
-
-    /// Move every offered request into `out`, in offer order.
-    fn take(self: *EarlyTemplateRequests, allocator: Allocator, out: *std.ArrayList(*EarlyTemplateRequest)) Allocator.Error!void {
-        self.lock();
-        defer self.mutex.unlock();
-        try out.appendSlice(allocator, self.items.items);
-        self.items.clearRetainingCapacity();
-    }
-
-    fn deinit(self: *EarlyTemplateRequests) void {
-        for (self.items.items) |request| request.destroy();
-        if (self.allocator) |allocator| self.items.deinit(allocator);
-        self.* = .{};
-    }
-};
-
 const SpecJobTaskContext = struct {
     inputs: SpecJobWorkerInputs,
     snapshot: WorkerInputs.Snapshot,
     prepared: PreparedSpecJob,
-    early: EarlyTemplateRequests = .{},
-    /// This slot holds a job the coordinator itself completes at its
-    /// acceptance turn; no lane runs it.
-    coordinator_job: bool = false,
     shard: ?CompletedSpecJobShard = null,
     failed: bool = false,
     completed: bool = false,
@@ -3710,8 +3637,6 @@ const Builder = struct {
     timing: ?*Timing,
     /// Marks callbacks that must leave coordinator-owned stores unchanged.
     spec_job_parallel_callback: bool = false,
-    /// Where a parallel specialization job offers resolved callee requests.
-    early_template_requests: ?*EarlyTemplateRequests = null,
     /// Set while a coordinator-domain scope is open; see
     /// `ProgramTypeDestination`.
     force_program_type_destination: bool = false,
@@ -6449,7 +6374,6 @@ const Builder = struct {
                 const context = &contexts[accepted % capacity];
                 if (context.shard) |*shard| shard.deinit();
                 context.shard = null;
-                context.early.deinit();
             }
         }
         if (self.timing) |timing| {
@@ -6457,7 +6381,6 @@ const Builder = struct {
             timing.parallel.peak_worker_lanes_available = @max(timing.parallel.peak_worker_lanes_available, @as(u64, @intCast(executor.worker_count)));
         }
         while (self.pending_spec_jobs.len != 0 or accepted < submitted) {
-            if (accepted < submitted) try self.reserveEarlyTemplateRequests(&contexts[accepted % capacity]);
             if (running < executor.worker_count and submitted - accepted < capacity and
                 self.pending_spec_jobs.len != 0)
             {
@@ -6470,29 +6393,15 @@ const Builder = struct {
                 if (self.spec_store.recordStatus(job.spec) == .ready or try self.specJobCompletesOnCoordinator(view, template, job)) {
                     // Coordinator-only entries still wait their exact acceptance
                     // turn, but need not wait for any later worker task.
-                    _ = self.pending_spec_jobs.pop();
                     if (accepted == submitted) {
+                        _ = self.pending_spec_jobs.pop();
                         try self.executePendingSpecJob(job);
                         continue;
                     }
-                    // Hold its turn in the window so later jobs still reach
-                    // free lanes while earlier shards are outstanding.
-                    const context = &contexts[submitted % capacity];
-                    context.early.deinit();
-                    context.* = .{
-                        .snapshot = undefined,
-                        .inputs = undefined,
-                        .prepared = .{ .job = job, .view = view, .method_scope = self.moduleForId(job.method_scope), .template = template },
-                        .coordinator_job = true,
-                        .completed = true,
-                    };
-                    submitted += 1;
-                    continue;
                 } else {
                     const slot = submitted % capacity;
                     const context = &contexts[slot];
                     const snapshot = try self.captureSpecJobInputs();
-                    context.early.deinit();
                     context.* = .{
                         .snapshot = snapshot,
                         .inputs = .{
@@ -6532,12 +6441,7 @@ const Builder = struct {
                 const context = &contexts[accepted % capacity];
                 var commit_scope = ParallelCoordinatorTimingScope.begin(self.timing);
                 defer commit_scope.end();
-                if (context.coordinator_job) {
-                    try self.executePendingSpecJob(context.prepared.job);
-                } else {
-                    try self.acceptCompletedSpecJob(context);
-                }
-                context.early.deinit();
+                try self.acceptCompletedSpecJob(context);
                 accepted += 1;
                 continue;
             }
@@ -6545,8 +6449,7 @@ const Builder = struct {
             const completion = blk: {
                 var wait_scope = ProcedureTimingScope.begin(self.timing, .parallel_wait);
                 defer wait_scope.end();
-                // A wake means the head-of-line job offered a callee.
-                break :blk session.receiveOrWake() orelse continue;
+                break :blk session.receive();
             };
             running -= 1;
             self.receiveSpecJobCompletion(contexts, completion, accepted, submitted);
@@ -6571,86 +6474,6 @@ const Builder = struct {
         }
         self.recordParallelWorkerWork(contexts[completion.id..][0..1]);
         self.recordRetainedSpecShardPeak(contexts, accepted, submitted);
-    }
-
-    /// Reserve the callees the head-of-line job has offered so far
-    /// (design.md "Early callee reservation"). Only the job next in acceptance
-    /// order reserves early, so each reservation lands where that job's ordered
-    /// commit would otherwise make it, and that commit then finds it.
-    fn reserveEarlyTemplateRequests(self: *Builder, context: *SpecJobTaskContext) Allocator.Error!void {
-        var taken = std.ArrayList(*EarlyTemplateRequest).empty;
-        defer taken.deinit(self.allocator);
-        try context.early.take(self.allocator, &taken);
-        if (taken.items.len == 0) return;
-        var next: usize = 0;
-        defer for (taken.items[next..]) |request| request.destroy();
-        // A job that a preceding shard already completed is discarded at
-        // acceptance, so it requests nothing.
-        const discarded = self.spec_store.recordStatus(context.prepared.job.spec) == .ready;
-        while (next < taken.items.len) {
-            const request = taken.items[next];
-            if (!discarded) try self.reserveEarlyTemplateRequest(request);
-            request.destroy();
-            next += 1;
-        }
-    }
-
-    fn reserveEarlyTemplateRequest(self: *Builder, request: *EarlyTemplateRequest) Allocator.Error!void {
-        var roots = std.ArrayList(Type.TypeId).empty;
-        defer roots.deinit(self.allocator);
-        try roots.append(self.allocator, request.fn_ty);
-        for (request.subst) |slot| switch (slot) {
-            .ty => |ty| try roots.append(self.allocator, ty),
-            .checked_error => {},
-        };
-        if (request.codec_contract) |contract| {
-            try roots.append(self.allocator, contract.constructor_ty);
-            try roots.append(self.allocator, contract.shape_ty);
-        }
-        var relocation = Type.Store.TypeRelocation.init(
-            self.allocator,
-            &request.types,
-            &request.names,
-            &self.program.types,
-            &self.program.names,
-        );
-        defer relocation.deinit();
-        var imported = try self.program.types.importTypes(&self.program.names, &request.types, &request.names, &relocation, roots.items);
-        defer imported.deinit();
-        const subst = try self.evidence_arena.allocator().alloc(SealedSubstSlot, request.subst.len);
-        var root_index: usize = 1;
-        for (request.subst, subst) |slot, *committed| {
-            committed.* = switch (slot) {
-                .ty => blk: {
-                    const ty = imported.roots[root_index];
-                    root_index += 1;
-                    break :blk .{ .ty = ty };
-                },
-                .checked_error => .checked_error,
-            };
-        }
-        const codec_contract: ?SealedCodecContractContext = if (request.codec_contract) |contract| .{
-            .anchor = contract.anchor,
-            .constructor_ty = imported.roots[root_index],
-            .shape_ty = imported.roots[root_index + 1],
-        } else null;
-        _ = try self.lowerTemplateWithMono(
-            request.template_ref,
-            self.moduleForId(request.method_scope),
-            request.source_fn_ty,
-            request.source_fn_key,
-            imported.roots[0],
-            request.evidence,
-            subst,
-            request.signature_relation,
-            .already_counted,
-            null,
-            null,
-            .queued,
-            codec_contract,
-            request.widened_result_row,
-        );
-        self.countCoordinatorBodyDiagnostic("early_template_requests_reserved");
     }
 
     fn acceptCompletedSpecJob(self: *Builder, context: *SpecJobTaskContext) Allocator.Error!void {
@@ -6739,10 +6562,6 @@ const Builder = struct {
         builder.current_region = context.inputs.current_region;
         builder.spec_job_parallel_callback = true;
         defer builder.spec_job_parallel_callback = false;
-        context.early.allocator = worker.allocator;
-        context.early.wake = executor_worker.wake;
-        builder.early_template_requests = &context.early;
-        defer builder.early_template_requests = null;
         var shard = builder.lowerPendingSpecJobToShard(
             worker,
             &lane.commit_domain,
@@ -6948,9 +6767,6 @@ const Builder = struct {
         const buffers = &self.spec_job_task_buffers;
         if (buffers.contexts.len == 0) {
             buffers.contexts = try self.allocator.alloc(SpecJobTaskContext, capacity);
-            // Contexts are otherwise written whole at submission; offered
-            // callee lists must be empty before a slot's first reuse check.
-            for (buffers.contexts) |*context| context.early = .{};
         } else if (buffers.contexts.len != capacity) {
             Common.compilerBug("Monotype specialization task buffer capacity changed");
         }
@@ -7779,16 +7595,12 @@ const Builder = struct {
             );
         }
         if (!local_context_dependent) {
-            // A request resolved before its interface is replayed can be
-            // reserved while the replay runs; replay resolves the others.
-            var offered = try self.offerEarlyTemplateRequest(source_ctx, spec_index, template);
             // A deferred body lowers in its own specialization, so only an
             // open interface needs the template's relations replayed here.
             if (!templateInterfaceIsClosed(view, &template)) {
                 try body_ctx.instantiateTemplateDispatchRelations(template, null);
                 try body_ctx.applyCheckedTemplateInterfaceRelations(template, root_node);
             }
-            if (!offered) offered = try self.offerEarlyTemplateRequest(source_ctx, spec_index, template);
             return .{ .local = .{ .draft = fn_id } };
         }
         try body_ctx.instantiateTemplateDispatchRelations(template, null);
@@ -7840,113 +7652,6 @@ const Builder = struct {
         source_ctx.draft.template_specs.items[spec_index].demand_end =
             @intCast(source_ctx.draft.runtime_value_demands.items.len);
         return .{ .local = .{ .draft = fn_id } };
-    }
-
-    /// Offer a deferred callee request whose whole interface is already
-    /// resolved (design.md "Early callee reservation"). Returns whether it was
-    /// offered. Requests the caller can still lower eagerly or whose
-    /// representation it can still choose (iterator interfaces,
-    /// generated-private backings), and recursive edges into the active root,
-    /// stay with ordinary commit.
-    fn offerEarlyTemplateRequest(
-        self: *Builder,
-        source_ctx: *BodyContext,
-        spec_index: usize,
-        template: checked.CheckedProcedureTemplate,
-    ) Allocator.Error!bool {
-        const channel = self.early_template_requests orelse return false;
-        if (template.target == .hosted) return false;
-        const spec = source_ctx.draft.template_specs.items[spec_index];
-        if (spec.state != .deferred or spec.local_context_dependent or spec.requires_local) return false;
-        const graph = source_ctx.graph;
-        if (graph.types.hasSpeculativeConstruction()) return false;
-        if (self.active_template_root) |active_root| {
-            const family = DraftTemplateFamilyAddress.init(spec.template_ref, spec.method_scope, spec.source_fn_key);
-            if (active_root.graph == graph and active_root.family.sameRecursiveCallable(family)) return false;
-        }
-        const request_fn_node = spec.request_fn_node;
-        if (!try graph.typeIsResolved(request_fn_node)) return false;
-        // An iterator result can still be lowered eagerly into this caller, and
-        // the caller still decides iterator argument representations.
-        if (try graph.containsIteratorInterface(request_fn_node)) return false;
-        if (try graph.containsGeneratedPrivate(request_fn_node)) return false;
-        for (spec.subst) |slot| switch (slot) {
-            .node => |node| if (!try graph.typeIsResolved(node)) return false,
-            .checked_error => {},
-        };
-        if (spec.codec_contract) |contract| {
-            if (!try graph.typeIsResolved(contract.constructor_node)) return false;
-            if (!try graph.typeIsResolved(contract.shape_node)) return false;
-        }
-
-        var roots = std.ArrayList(Type.TypeId).empty;
-        defer roots.deinit(self.allocator);
-        try roots.append(self.allocator, try source_ctx.activeTypeFromNode(request_fn_node));
-        for (spec.subst) |slot| switch (slot) {
-            .node => |node| try roots.append(self.allocator, try source_ctx.activeTypeFromNode(node)),
-            .checked_error => {},
-        };
-        if (spec.codec_contract) |contract| {
-            try roots.append(self.allocator, try source_ctx.activeTypeFromNode(contract.constructor_node));
-            try roots.append(self.allocator, try source_ctx.activeTypeFromNode(contract.shape_node));
-        }
-
-        const allocator = channel.allocator.?;
-        const request = try allocator.create(EarlyTemplateRequest);
-        request.* = .{
-            .allocator = allocator,
-            .template_ref = spec.template_ref,
-            .method_scope = spec.method_scope,
-            .source_fn_ty = spec.source_fn_ty,
-            .source_fn_key = spec.source_fn_key,
-            .evidence = spec.evidence,
-            .signature_relation = source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation,
-            .widened_result_row = spec.widened_result_row,
-            .types = Type.Store.init(allocator),
-            .names = names.NameStore.init(allocator),
-            .fn_ty = undefined,
-            .subst = &.{},
-            .codec_contract = null,
-        };
-        var offered = false;
-        defer if (!offered) request.destroy();
-        var relocation = Type.Store.TypeRelocation.init(
-            allocator,
-            graph.types,
-            graph.name_store,
-            &request.types,
-            &request.names,
-        );
-        defer relocation.deinit();
-        var imported = try request.types.importTypes(&request.names, graph.types, graph.name_store, &relocation, roots.items);
-        defer imported.deinit();
-        // Separately committed copies of a recursive type are equal but need
-        // not share one id, so a recursive request keeps its caller's commit.
-        if (try typesReachCycle(self.allocator, &request.types, imported.roots)) return false;
-        request.fn_ty = imported.roots[0];
-        request.subst = try allocator.alloc(SealedSubstSlot, spec.subst.len);
-        var root_index: usize = 1;
-        for (spec.subst, request.subst) |slot, *sealed| {
-            sealed.* = switch (slot) {
-                .node => blk: {
-                    const ty = imported.roots[root_index];
-                    root_index += 1;
-                    break :blk .{ .ty = ty };
-                },
-                .checked_error => .checked_error,
-            };
-        }
-        if (spec.codec_contract) |contract| {
-            request.codec_contract = .{
-                .anchor = contract.anchor,
-                .constructor_ty = imported.roots[root_index],
-                .shape_ty = imported.roots[root_index + 1],
-            };
-        }
-        try channel.offer(request);
-        offered = true;
-        self.countBodyDiagnostic("early_template_requests_offered");
-        return true;
     }
 
     /// Lower one already-registered context-free specialization into the
@@ -63970,83 +63675,4 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     const recursive_items = program.types.span(program.types.get(restored_recursive).tuple);
     try std.testing.expectEqual(restored_recursive, GuardedList.at(recursive_items, 0));
     try std.testing.expectEqual(@as(usize, 4), program.types.typeCount());
-}
-
-/// Whether any type reachable from `roots` reaches itself.
-fn typesReachCycle(allocator: Allocator, types: *const Type.Store, roots: []const Type.TypeId) Allocator.Error!bool {
-    const Frame = struct { ty: Type.TypeId, children_start: usize, next: usize };
-    var finished = collections.DenseMap(Type.TypeId, void).init(allocator);
-    defer finished.deinit();
-    var on_path = collections.DenseMap(Type.TypeId, void).init(allocator);
-    defer on_path.deinit();
-    var frames = std.ArrayList(Frame).empty;
-    defer frames.deinit(allocator);
-    var children = std.ArrayList(Type.TypeId).empty;
-    defer children.deinit(allocator);
-    for (roots) |root| {
-        if (finished.contains(root)) continue;
-        try on_path.put(root, {});
-        try frames.append(allocator, .{ .ty = root, .children_start = children.items.len, .next = children.items.len });
-        try appendTypeChildren(allocator, types, root, &children);
-        while (frames.items.len != 0) {
-            const frame = &frames.items[frames.items.len - 1];
-            if (frame.next == children.items.len) {
-                _ = on_path.remove(frame.ty);
-                try finished.put(frame.ty, {});
-                children.items.len = frame.children_start;
-                frames.items.len -= 1;
-                continue;
-            }
-            const child = children.items[frame.next];
-            frame.next += 1;
-            if (on_path.contains(child)) return true;
-            if (finished.contains(child)) continue;
-            try on_path.put(child, {});
-            const start = children.items.len;
-            try frames.append(allocator, .{ .ty = child, .children_start = start, .next = start });
-            try appendTypeChildren(allocator, types, child, &children);
-        }
-    }
-    return false;
-}
-
-fn appendTypeChildren(allocator: Allocator, types: *const Type.Store, ty: Type.TypeId, out: *std.ArrayList(Type.TypeId)) Allocator.Error!void {
-    switch (types.get(ty)) {
-        .primitive, .erased, .zst => {},
-        .list, .box => |elem| try out.append(allocator, elem),
-        .tuple => |items| {
-            const span = types.span(items);
-            for (0..span.len) |index| try out.append(allocator, GuardedList.at(span, index));
-        },
-        .func => |func| {
-            const args = types.span(func.args);
-            for (0..args.len) |index| try out.append(allocator, GuardedList.at(args, index));
-            try out.append(allocator, func.ret);
-        },
-        .record => |fields| {
-            const span = types.fieldSpan(fields);
-            for (0..span.len) |index| {
-                const field = GuardedList.at(span, index);
-                try out.append(allocator, field.ty);
-                if (field.value_ty) |value_ty| try out.append(allocator, value_ty);
-            }
-        },
-        .tag_union => |tags| {
-            const span = types.tagSpan(tags);
-            for (0..span.len) |index| {
-                const payloads = types.span(GuardedList.at(span, index).payloads);
-                for (0..payloads.len) |payload| try out.append(allocator, GuardedList.at(payloads, payload));
-            }
-        },
-        .named => |named| {
-            const args = types.span(named.args);
-            for (0..args.len) |index| try out.append(allocator, GuardedList.at(args, index));
-            if (named.backing) |backing| try out.append(allocator, backing.ty);
-            const declared = types.declaredFieldSpan(named.declared_order);
-            for (0..declared.len) |index| switch (GuardedList.at(declared, index)) {
-                .named => {},
-                .padding => |padding| try out.append(allocator, padding),
-            };
-        },
-    }
 }

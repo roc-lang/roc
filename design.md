@@ -10171,22 +10171,6 @@ shards strictly in request order and immediately makes discovered requests
 available to free lanes. Running and completed-but-unaccepted tasks share the
 same bounded window. Each immutable lane suffix is absorbed even when its body
 is discarded after an earlier shard committed its reservation, preserving cumulative lane ids.
-Early callee reservation: a specialization job's callee requests normally
-become jobs only when its shard is accepted, so a chain of long bodies (each
-lowering the next) ran one link at a time. A running job therefore offers a
-deferred, context-free callee request as soon as that request's function type,
-substitution and codec contract are fully resolved, copying their types into
-a private store. The coordinator reserves offered requests only for the job
-next in acceptance order, exactly as that job's ordered commit would: the
-reservation queues the callee's body for a free lane, and the commit later
-finds it in the specialization index. Requests whose representation the caller
-can still decide (iterator results that may lower eagerly into the caller,
-generated-private backings) and recursive edges into the running root are left
-to the commit. A request that later changes path only leaves an unused
-reservation, which reachability-driven lowering never emits. Jobs the
-coordinator completes itself (cached, hosted, and widening-adapter bodies) hold
-their acceptance slot in the window instead of blocking dispatch of later jobs.
-
 The pending FIFO is a reusable geometrically growing ring. Dispatch consumes
 its head without moving the undispatched suffix; ordered acceptance never
 compacts that suffix. Queue capacity follows the peak outstanding work, not
