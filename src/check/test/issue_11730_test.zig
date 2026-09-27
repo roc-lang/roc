@@ -83,7 +83,7 @@ test "issue 11730: consuming helper cannot exclude a required parser error" {
         \\}
     );
     defer env.deinit();
-    try std.testing.expect(try env.typeProblemCount() > 0);
+    try env.assertOneTypeError("Non Exhaustive Match");
 }
 
 test "issue 11730: decoder annotation cannot exclude its required-field error" {
@@ -92,7 +92,7 @@ test "issue 11730: decoder annotation cannot exclude its required-field error" {
         \\
     ++ decoder);
     defer env.deinit();
-    try std.testing.expect(try env.typeProblemCount() > 0);
+    try env.assertOneTypeError("Type Mismatch");
 }
 
 test "issue 11730: nested local record demands survive success projection" {
