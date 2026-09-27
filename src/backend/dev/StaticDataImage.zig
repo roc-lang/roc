@@ -229,7 +229,7 @@ test "static data image resolves function relocations explicitly" {
     var root_bytes = [_]u8{0} ** @sizeOf(usize);
     const root_relocations = [_]StaticDataRelocation{.{
         .offset = 0,
-        .target_symbol_name = "roc__proc_1",
+        .target_symbol_name = "roc__p1",
         .kind = .function_pointer,
         .callable_capture_offset = 16,
         .procedure = @enumFromInt(1),
@@ -245,7 +245,7 @@ test "static data image resolves function relocations explicitly" {
     defer image.deinit();
     const Resolver = struct {
         fn resolve(_: ?*anyopaque, relocation: StaticDataRelocation) ?usize {
-            if (!std.mem.eql(u8, relocation.target_symbol_name, "roc__proc_1")) return null;
+            if (!std.mem.eql(u8, relocation.target_symbol_name, "roc__p1")) return null;
             if (relocation.callable_capture_offset != 16) return null;
             if (@intFromEnum(relocation.procedure orelse return null) != 1) return null;
             return 0x1234;

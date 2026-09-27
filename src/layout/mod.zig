@@ -78,6 +78,8 @@ pub const Store = @import("store.zig").Store;
 pub const Graph = @import("graph.zig").Graph;
 pub const GraphNode = @import("graph.zig").Node;
 pub const GraphNodeId = @import("graph.zig").NodeId;
+/// Recursive-graph digest settled for a committed layout graph node.
+pub const GraphDigest = @import("graph.zig").Digest;
 pub const GraphRef = @import("graph.zig").Ref;
 /// Input edge into a layout graph node.
 pub const GraphInput = GraphRef;

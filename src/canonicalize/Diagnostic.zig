@@ -143,7 +143,9 @@ pub const Diagnostic = union(enum) {
     range_op_chained: struct {
         region: Region,
     },
-    invalid_string_interpolation: struct {
+    /// This expression was replaced by a runtime error because it did not
+    /// parse; the parser reports the syntax error itself.
+    expr_syntax_error: struct {
         region: Region,
     },
     unreachable_string_pattern_capture: struct {
@@ -153,21 +155,6 @@ pub const Diagnostic = union(enum) {
         region: Region,
     },
     pattern_not_canonicalized: struct {
-        region: Region,
-    },
-    can_lambda_not_implemented: struct {
-        region: Region,
-    },
-    lambda_body_not_canonicalized: struct {
-        region: Region,
-    },
-    if_condition_not_canonicalized: struct {
-        region: Region,
-    },
-    if_then_not_canonicalized: struct {
-        region: Region,
-    },
-    if_else_not_canonicalized: struct {
         region: Region,
     },
     if_expr_without_else: struct {
@@ -243,9 +230,6 @@ pub const Diagnostic = union(enum) {
         name: Ident.Idx,
         original_region: Region,
         redeclared_region: Region,
-    },
-    tuple_elem_not_canonicalized: struct {
-        region: Region,
     },
     file_import_not_found: struct {
         path: StringLiteral.Idx,
@@ -435,16 +419,6 @@ pub const Diagnostic = union(enum) {
         declared: DeclaredTypeKind,
         region: Region,
     },
-    unused_type_var_name: struct {
-        name: Ident.Idx,
-        suggested_name: Ident.Idx,
-        region: Region,
-    },
-    type_var_marked_unused: struct {
-        name: Ident.Idx,
-        suggested_name: Ident.Idx,
-        region: Region,
-    },
     type_var_starting_with_dollar: struct {
         name: Ident.Idx,
         suggested_name: Ident.Idx,
@@ -517,15 +491,10 @@ pub const Diagnostic = union(enum) {
             .invalid_top_level_statement => |d| d.region,
             .invalid_associated_statement => |d| d.region,
             .expr_not_canonicalized => |d| d.region,
-            .invalid_string_interpolation => |d| d.region,
+            .expr_syntax_error => |d| d.region,
             .unreachable_string_pattern_capture => |d| d.region,
             .pattern_arg_invalid => |d| d.region,
             .pattern_not_canonicalized => |d| d.region,
-            .can_lambda_not_implemented => |d| d.region,
-            .lambda_body_not_canonicalized => |d| d.region,
-            .if_condition_not_canonicalized => |d| d.region,
-            .if_then_not_canonicalized => |d| d.region,
-            .if_else_not_canonicalized => |d| d.region,
             .if_expr_without_else => |d| d.region,
             .malformed_type_annotation => |d| d.region,
             .malformed_where_clause => |d| d.region,
@@ -542,7 +511,6 @@ pub const Diagnostic = union(enum) {
             .shadowing_warning => |d| d.region,
             .binding_name_does_not_match_mutability => |d| d.region,
             .type_redeclared => |d| d.redeclared_region,
-            .tuple_elem_not_canonicalized => |d| d.region,
             .file_import_not_found => |d| d.region,
             .file_import_io_error => |d| d.region,
             .file_import_absolute_path => |d| d.region,
@@ -585,8 +553,6 @@ pub const Diagnostic = union(enum) {
             .duplicate_tag => |d| d.duplicate_region,
             .empty_tuple => |d| d.region,
             .f64_pattern_literal => |d| d.region,
-            .unused_type_var_name => |d| d.region,
-            .type_var_marked_unused => |d| d.region,
             .type_var_starting_with_dollar => |d| d.region,
             .underscore_in_type_declaration => |d| d.region,
             .break_outside_loop => |d| d.region,
@@ -936,13 +902,6 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText(", ");
         try report.document.addBinaryOperator("==");
         try report.document.addReflowingText(".");
-        return report;
-    }
-
-    /// Build a report for "invalid string interpolation" diagnostic
-    pub fn buildInvalidStringInterpolationReport(allocator: Allocator) Allocator.Error!Report {
-        var report = try Report.init(allocator, "Invalid Interpolation", "This string interpolation is not valid.", .runtime_error);
-        try report.document.addReflowingText("String interpolation should use the format: \"text ${expression} more text\"");
         return report;
     }
 

@@ -191,6 +191,7 @@ fn movedMonoView(source: *const Mono.Program, moved: *const Ast.Program) Mono.Pr
         .string_literals = moved_view.string_literals,
         .proc_debug_names = moved.proc_debug_names.view(),
         .roots = source_view.roots,
+        .literal_roots = source_view.literal_roots,
         .layout_requests = source_view.layout_requests,
         .comptime_value_reads = source_view.comptime_value_reads,
         .runtime_schema_requests = moved_view.runtime_schema_requests,
@@ -484,6 +485,19 @@ const Lifter = struct {
             });
         }
 
+        // Literal roots keep their positions, which are their ids.
+        for (self.source.literal_roots) |root| {
+            const raw = @intFromEnum(root.def);
+            if (raw >= self.def_map.len) Common.invariant("Monotype literal root references a missing definition");
+            const fn_id = self.def_map[raw] orelse
+                Common.invariant("Monotype literal root definition was not lifted");
+            try self.output.addLiteralRoot(.{
+                .fn_id = fn_id,
+                .module = root.module,
+                .site = root.site,
+            });
+        }
+
         for (self.source.layout_requests) |request| {
             const fn_id = if (request.def) |def| blk: {
                 const raw = @intFromEnum(def);
@@ -678,6 +692,7 @@ const Lifter = struct {
             => |child| try self.rewriteExpr(child),
             .return_ => |ret| try self.rewriteExpr(ret.value),
             .expect_err => |expect_err| try self.rewriteExpr(expect_err.msg),
+            .literal_rejected => |rejected| try self.rewriteExpr(rejected.msg),
             .comptime_branch_taken => |taken| try self.rewriteExpr(taken.body),
             .let_ => |let_| {
                 try self.rewriteExpr(let_.value);
@@ -1364,6 +1379,7 @@ const CaptureSet = struct {
             => |child| try self.collectExpr(child, bound),
             .return_ => |ret| try self.collectExpr(ret.value, bound),
             .expect_err => |expect_err| try self.collectExpr(expect_err.msg, bound),
+            .literal_rejected => |rejected| try self.collectExpr(rejected.msg, bound),
             .comptime_branch_taken => |taken| try self.collectExpr(taken.body, bound),
             .let_ => |let_| {
                 try self.collectExpr(let_.value, bound);
@@ -2209,6 +2225,7 @@ const CaptureGraphBuilder = struct {
             => |child| try self.collectExpr(child, node),
             .return_ => |ret| try self.collectExpr(ret.value, node),
             .expect_err => |expect_err| try self.collectExpr(expect_err.msg, node),
+            .literal_rejected => |rejected| try self.collectExpr(rejected.msg, node),
             .comptime_branch_taken => |taken| try self.collectExpr(taken.body, node),
             .let_ => |let_| {
                 try self.collectExpr(let_.value, node);
@@ -2383,7 +2400,7 @@ test "lift owns transferred tables across every allocation failure" {
     const initializer = try source.addExpr(.{ .ty = ty, .data = .{ .str_lit = literal } });
     const descriptor: Common.ComptimeValueRoot = .{
         .module = std.mem.zeroes(checked.ModuleId),
-        .root = @enumFromInt(3),
+        .root = .{ .checked = @enumFromInt(3) },
         .const_locator = null,
     };
     const root = try source.addComptimeValueRoot(descriptor);
@@ -2426,7 +2443,7 @@ test "lift transfers compile-time descriptors without changing their domain" {
     const initializer = try mono.addExpr(.{ .ty = ty, .data = .unit });
     const descriptor: Common.ComptimeValueRoot = .{
         .module = std.mem.zeroes(checked.ModuleId),
-        .root = @enumFromInt(3),
+        .root = .{ .checked = @enumFromInt(3) },
         .const_locator = null,
     };
     const root = try mono.addComptimeValueRoot(descriptor);

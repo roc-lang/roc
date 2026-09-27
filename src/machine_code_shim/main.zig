@@ -1144,7 +1144,7 @@ test "data relocations patch data pointers" {
 test "function-pointer data relocations patch generated Roc code pointers" {
     var code = [_]u8{ 0, 0, 0, 0 };
     var data = [_]u8{0} ** @sizeOf(usize);
-    const proc_name = "roc__proc_2a";
+    const proc_name = "roc__p2a";
     const code_symbols = [_]RunImage.CodeSymbol{
         .{
             .name = .{ .offset = 0, .len = proc_name.len },

@@ -2911,18 +2911,20 @@ test "alias-heavy generic specialization count does not exceed backing types" {
 }
 
 test "nested function specializations keep equal types at different sites distinct" {
+    // Each lambda captures its enclosing function's `n`, so it stays a nested
+    // function of that function.
     const allocator = std.testing.allocator;
     const source =
         \\first : U64 -> U64
         \\first = |n| {
-        \\    id = |x| x
-        \\    id(n)
+        \\    add_n = |x| x + n
+        \\    add_n(n)
         \\}
         \\
         \\second : U64 -> U64
         \\second = |n| {
-        \\    id = |x| x
-        \\    id(n)
+        \\    add_n = |x| x + n
+        \\    add_n(n)
         \\}
         \\
         \\main : { first : U64, second : U64 }
@@ -2950,12 +2952,13 @@ test "nested function specializations keep equal types at different sites distin
 }
 
 test "one nested function site specializes at multiple closed function types" {
+    // The lambda captures `value`, so it stays a nested function of `choose`.
     const allocator = std.testing.allocator;
     const source =
         \\choose : a -> a
         \\choose = |value| {
-        \\    id = |x| x
-        \\    id(value)
+        \\    get = |{}| value
+        \\    get({})
         \\}
         \\
         \\main : { n : U64, s : Str }
@@ -8430,8 +8433,8 @@ test "custom literal field default gets an ordinary conversion root" {
     var numeral_roots: usize = 0;
     var quote_roots: usize = 0;
     for (resources.checked_artifact.checked_bodies.default_exprs.items) |entry| {
-        const conversion = resources.checked_artifact.compile_time_roots.lookupNumeralRootByExpr(entry.checked_expr) orelse
-            return error.TestUnexpectedResult;
+        const conversion = resources.checked_artifact.compile_time_roots.root(resources.checked_artifact.checked_bodies.literalConversionRoot(entry.checked_expr) orelse
+            return error.TestUnexpectedResult);
         switch (conversion.kind) {
             .numeral_conversion => numeral_roots += 1,
             .quote_conversion => quote_roots += 1,

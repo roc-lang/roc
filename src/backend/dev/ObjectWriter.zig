@@ -57,7 +57,7 @@ pub fn generateObjectFileWithDebug(
     var table: SymbolTable.Table = .{};
     defer table.deinit(allocator);
     for (symbols, 0..) |symbol, ordinal| {
-        const id = try table.intern(allocator, symbol.name);
+        const id = try table.internEmitted(allocator, symbol.name);
         std.debug.assert(@intFromEnum(id) == ordinal);
     }
     var indexed = try std.ArrayList(IndexedRelocation).initCapacity(allocator, relocations.len);
@@ -689,7 +689,7 @@ fn expectReadonlyObjectDataForTarget(target: RocTarget, required: []const u8, fo
     const rodata = required;
     const symbols = [_]Symbol{
         .{
-            .name = "roc__static_string",
+            .name = "roc__hstring",
             .section = .rodata,
             .offset = 0,
             .size = rodata.len,
@@ -963,7 +963,7 @@ test "indexed object relocations preserve targets through format symbol ordering
     var table: SymbolTable.Table = .{};
     defer table.deinit(allocator);
     var ids: [symbols.len]SymbolTable.Id = undefined;
-    for (symbols, &ids) |symbol, *id| id.* = try table.intern(allocator, symbol.name);
+    for (symbols, &ids) |symbol, *id| id.* = try table.internEmitted(allocator, symbol.name);
     const data_relocations = [_]IndexedDataRelocation{
         .{ .offset = 0, .symbol = ids[2], .addend = 3 },
         .{ .offset = 24, .symbol = ids[0] },

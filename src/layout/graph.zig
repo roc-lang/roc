@@ -67,9 +67,24 @@ pub const RefSpan = extern struct {
     }
 };
 
+/// Structural identity of a graph node as computed by the store's recursive
+/// graph analysis. Equal digests describe the same (possibly infinite) runtime
+/// representation.
+pub const Digest = [32]u8;
+
+/// An already committed layout together with the digest its node carried when
+/// it was committed. Unlike a bare canonical ref, this leaf stays transparent
+/// to recursion analysis: an unrolled copy of a recursive node that points at
+/// it digests exactly as if the committed subgraph had been expanded again.
+pub const Committed = struct {
+    idx: Idx,
+    digest: u32,
+};
+
 /// Temporary node shape used before interning into the canonical layout store.
 pub const Node = union(enum) {
     pending: void,
+    committed: Committed,
     nominal: Ref,
     box: Ref,
     list: Ref,
@@ -84,9 +99,11 @@ pub const Graph = struct {
     nodes: std.ArrayListUnmanaged(Node) = .empty,
     fields: std.ArrayListUnmanaged(Field) = .empty,
     refs: std.ArrayListUnmanaged(Ref) = .empty,
+    digests: std.ArrayListUnmanaged(Digest) = .empty,
 
     /// Release all graph storage.
     pub fn deinit(self: *Graph, allocator: std.mem.Allocator) void {
+        self.digests.deinit(allocator);
         self.nodes.deinit(allocator);
         self.fields.deinit(allocator);
         self.refs.deinit(allocator);
@@ -110,6 +127,21 @@ pub const Graph = struct {
         const id: NodeId = @enumFromInt(self.nodes.items.len);
         try self.nodes.append(allocator, .pending);
         return id;
+    }
+
+    /// Add a leaf node for an already committed layout whose graph digest was
+    /// recorded by the commit that produced it.
+    pub fn addCommitted(self: *Graph, allocator: std.mem.Allocator, idx: Idx, digest: Digest) Allocator.Error!NodeId {
+        const digest_index: u32 = @intCast(self.digests.items.len);
+        try self.digests.append(allocator, digest);
+        const id: NodeId = @enumFromInt(self.nodes.items.len);
+        try self.nodes.append(allocator, .{ .committed = .{ .idx = idx, .digest = digest_index } });
+        return id;
+    }
+
+    /// Digest recorded for a committed leaf node.
+    pub fn committedDigest(self: *const Graph, committed: Committed) Digest {
+        return self.digests.items[committed.digest];
     }
 
     /// Fill in a previously reserved node.

@@ -2801,7 +2801,7 @@ test "relocatable call stabilizes memory args before clobbering base param regis
 
     var symbols: SymbolTable.Table = .{};
     defer symbols.deinit(std.testing.allocator);
-    const symbol = try symbols.intern(std.testing.allocator, "roc_test_target");
+    const symbol = try symbols.intern(std.testing.allocator, "roc_test_target", .shared);
     try builder.callRelocatable(symbol, &owner);
 
     // Without stabilization, the first argument would emit `mov rdi, [rdi]`

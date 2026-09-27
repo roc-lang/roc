@@ -9,6 +9,7 @@ const ParsedDecimal = struct {
     negative: bool,
     had_decimal_point: bool,
     mantissa_end: usize,
+    token_len: usize,
     coefficient_digits: usize,
     fractional_digits: usize,
     leading_zero_digits: usize,
@@ -24,21 +25,26 @@ const ParsedDecimal = struct {
     }
 };
 
-/// Parse decimal syntax into exact coefficient-and-scale facts.
-/// Underscores are accepted only between decimal digits.
-fn scan(bytes: []const u8) ?ParsedDecimal {
-    if (bytes.len == 0) return null;
+/// Which decimal token grammar a scan recognizes.
+pub const Grammar = enum {
+    /// `sign? D (_? D)* (e sign? D (_? D)*)?`: no decimal point.
+    int,
+    /// `sign? (D+ | D+ . D* | . D+) (e sign? D (_? D)*)?`, with `_` between digits.
+    dec,
+};
 
+/// Scan the longest prefix of `bytes` that is a token of `grammar`, returning
+/// its exact coefficient-and-scale facts, or null when no prefix matches.
+/// Underscores are accepted only between decimal digits. The token never ends
+/// on a dangling sign, `_`, `e`, or exponent sign: an exponent that is not
+/// followed by a digit is not part of the token.
+fn scanPrefix(bytes: []const u8, comptime grammar: Grammar) ?ParsedDecimal {
     var index: usize = 0;
-    const negative = bytes[index] == '-';
-    if (bytes[index] == '-' or bytes[index] == '+') {
-        index += 1;
-        if (index == bytes.len) return null;
-    }
+    const negative = index < bytes.len and bytes[index] == '-';
+    if (index < bytes.len and (bytes[index] == '-' or bytes[index] == '+')) index += 1;
 
     var had_decimal_point = false;
     var saw_digit = false;
-    var previous_was_digit = false;
     var coefficient_digits: usize = 0;
     var fractional_digits: usize = 0;
     var leading_zero_digits: usize = 0;
@@ -47,13 +53,12 @@ fn scan(bytes: []const u8) ?ParsedDecimal {
     var coefficient: u128 = 0;
     var coefficient_overflow = false;
 
-    while (index < bytes.len) : (index += 1) {
+    mantissa: while (index < bytes.len) : (index += 1) {
         const byte = bytes[index];
         switch (byte) {
             '0'...'9' => {
                 const digit = byte - '0';
                 saw_digit = true;
-                previous_was_digit = true;
                 coefficient_digits += 1;
                 if (had_decimal_point) fractional_digits += 1;
 
@@ -75,63 +80,62 @@ fn scan(bytes: []const u8) ?ParsedDecimal {
                 }
             },
             '_' => {
-                if (!previous_was_digit or index + 1 == bytes.len or !isDigit(bytes[index + 1])) return null;
-                previous_was_digit = false;
+                if (index == 0 or !isDigit(bytes[index - 1]) or index + 1 == bytes.len or !isDigit(bytes[index + 1])) break :mantissa;
             },
             '.' => {
-                if (had_decimal_point or (!previous_was_digit and saw_digit)) return null;
+                if (grammar == .int or had_decimal_point) break :mantissa;
                 had_decimal_point = true;
-                previous_was_digit = false;
             },
-            'e', 'E' => break,
-            else => return null,
+            else => break :mantissa,
         }
     }
 
-    if (!saw_digit or (index > 0 and bytes[index - 1] == '_')) return null;
+    if (!saw_digit) return null;
     const mantissa_end = index;
 
     var exponent_negative = false;
     var exponent_magnitude: u64 = 0;
     var exponent_overflow = false;
-    if (index < bytes.len) {
-        index += 1;
-        if (index == bytes.len) return null;
-        if (bytes[index] == '-' or bytes[index] == '+') {
-            exponent_negative = bytes[index] == '-';
-            index += 1;
-            if (index == bytes.len) return null;
+    if (index < bytes.len and (bytes[index] == 'e' or bytes[index] == 'E')) exponent: {
+        var cursor = index + 1;
+        var candidate_negative = false;
+        if (cursor < bytes.len and (bytes[cursor] == '+' or bytes[cursor] == '-')) {
+            candidate_negative = bytes[cursor] == '-';
+            cursor += 1;
         }
+        if (cursor == bytes.len or !isDigit(bytes[cursor])) break :exponent;
 
-        var exponent_saw_digit = false;
-        previous_was_digit = false;
-        while (index < bytes.len) : (index += 1) {
-            const byte = bytes[index];
+        var magnitude: u64 = 0;
+        var overflow = false;
+        while (cursor < bytes.len) : (cursor += 1) {
+            const byte = bytes[cursor];
             if (isDigit(byte)) {
                 const digit = byte - '0';
-                exponent_saw_digit = true;
-                previous_was_digit = true;
-                if (!exponent_overflow) {
-                    if (exponent_magnitude > (std.math.maxInt(u64) - @as(u64, digit)) / 10) {
-                        exponent_overflow = true;
+                if (!overflow) {
+                    if (magnitude > (std.math.maxInt(u64) - @as(u64, digit)) / 10) {
+                        overflow = true;
                     } else {
-                        exponent_magnitude = exponent_magnitude * 10 + digit;
+                        magnitude = magnitude * 10 + digit;
                     }
                 }
-            } else if (byte == '_') {
-                if (!previous_was_digit or index + 1 == bytes.len or !isDigit(bytes[index + 1])) return null;
-                previous_was_digit = false;
+            } else if (byte == '_' and isDigit(bytes[cursor - 1]) and cursor + 1 < bytes.len and isDigit(bytes[cursor + 1])) {
+                continue;
             } else {
-                return null;
+                break;
             }
         }
-        if (!exponent_saw_digit or !previous_was_digit) return null;
+
+        exponent_negative = candidate_negative;
+        exponent_magnitude = magnitude;
+        exponent_overflow = overflow;
+        index = cursor;
     }
 
     return .{
         .negative = negative,
         .had_decimal_point = had_decimal_point,
         .mantissa_end = mantissa_end,
+        .token_len = index,
         .coefficient_digits = coefficient_digits,
         .fractional_digits = fractional_digits,
         .leading_zero_digits = leading_zero_digits,
@@ -142,6 +146,21 @@ fn scan(bytes: []const u8) ?ParsedDecimal {
         .exponent_magnitude = exponent_magnitude,
         .exponent_overflow = exponent_overflow,
     };
+}
+
+/// Parse decimal syntax into exact coefficient-and-scale facts. The whole of
+/// `bytes` must be a single token of `grammar`.
+fn scan(bytes: []const u8, comptime grammar: Grammar) ?ParsedDecimal {
+    const parsed = scanPrefix(bytes, grammar) orelse return null;
+    if (parsed.token_len != bytes.len) return null;
+    return parsed;
+}
+
+/// Length of the longest prefix of `bytes` that is a token of `grammar`, or 0.
+/// The match depends only on syntax, never on whether the value is in range.
+pub fn prefixLen(bytes: []const u8, comptime grammar: Grammar) usize {
+    const parsed = scanPrefix(bytes, grammar) orelse return 0;
+    return parsed.token_len;
 }
 
 fn isDigit(byte: u8) bool {
@@ -186,12 +205,12 @@ fn positiveExponent(parsed: ParsedDecimal) ?usize {
     return @intCast(parsed.exponent_magnitude);
 }
 
-/// Parse an exact integer. Decimal points and negative effective exponents are
-/// rejected, matching Roc numeric-literal integer conversion semantics.
+/// Parse an exact integer. The whole of `bytes` must be one `.int` token, so
+/// decimal points are rejected; a negative exponent is accepted only when the
+/// value stays an exact integer (`1e-0`), matching Roc integer conversion.
 pub fn parseInt(comptime T: type, bytes: []const u8) ?T {
     const info = @typeInfo(T).int;
-    const parsed = scan(bytes) orelse return null;
-    if (parsed.had_decimal_point) return null;
+    const parsed = scan(bytes, .int) orelse return null;
 
     const zeros = positiveExponent(parsed) orelse {
         if (!parsed.exponent_negative and parsed.isZero()) return 0;
@@ -241,7 +260,7 @@ fn scaledMagnitude(comptime limit: u128, bytes: []const u8, parsed: ParsedDecima
 /// Parse a decimal value into a signed i128 scaled by `10^decimal_places`.
 /// Values are accepted only when the scaled result is exact and in range.
 pub fn parseScaledI128(bytes: []const u8, comptime decimal_places: u8) ?i128 {
-    const parsed = scan(bytes) orelse return null;
+    const parsed = scan(bytes, .dec) orelse return null;
     const positive_limit: u128 = @intCast(std.math.maxInt(i128));
     const magnitude = if (parsed.negative)
         scaledMagnitude(positive_limit + 1, bytes, parsed, decimal_places) orelse return null

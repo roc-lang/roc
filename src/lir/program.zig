@@ -299,10 +299,62 @@ pub const BoxyAdapter = struct {
     produces_owned_result: bool,
 };
 
+/// Source-language shape of the value a boxy descriptor describes. Inspection
+/// dispatches on this instead of on the payload layout, which erases
+/// structure: a zero-sized record, tuple, and single-tag union all share the
+/// `zst` layout.
+pub const BoxyDescShape = enum {
+    /// Built-in scalar or `Str`, whose payload layout decodes the value.
+    primitive,
+    /// Record; `field_names` and `nested_descs` have one entry per field.
+    record,
+    /// Tuple; `nested_descs` has one entry per element.
+    tuple,
+    /// Tag union; `tag_variants` describes every variant.
+    tag_union,
+    /// List; `nested_descs` holds exactly the item descriptor.
+    list,
+    /// Box; `nested_descs` holds exactly the payload descriptor.
+    box,
+    /// Erased storage whose value is described by its boxed allocation.
+    erased,
+    /// Callable value.
+    function,
+    /// Compiler-internal storage with no source-language shape, such as an
+    /// erased callable's capture struct.
+    internal,
+
+    /// Shape of a descriptor that describes only a value's storage: a scalar
+    /// is a primitive, and any other storage is internal, which inspection
+    /// never renders.
+    pub fn forStorage(storage: layout.Layout) BoxyDescShape {
+        return if (storage.tag == .scalar) .primitive else .internal;
+    }
+};
+
+/// Which runtime context a static boxy descriptor's reachable references read.
+/// Ordered from least to most context-dependent.
+pub const BoxyDescClosure = enum(u8) {
+    /// Every reachable reference is static, so the runtime uses the
+    /// descriptor in place without instantiating it.
+    closed,
+    /// Reachable references read only the materialization's captured
+    /// descriptor locals, so one instantiation serves every materialization
+    /// with the same captured descriptors.
+    captures,
+    /// Some reachable reference reads other runtime context.
+    context,
+};
+
 /// Runtime data for representation and structural operations on a boxy value.
 pub const BoxyTypeDesc = struct {
     payload_layout: layout.Idx,
     contains_refcounted: bool,
+    shape: BoxyDescShape,
+    /// One descriptor per child position, including zero-sized and scalar
+    /// children: struct field `i` (by original field index) is entry `i`, and
+    /// a list's item or a box's payload is entry 0. Consumers index this
+    /// directly by position.
     nested_descs: BoxySpan = .{},
     tag_variants: BoxySpan = .{},
     tag_ext_desc: ?BoxyDescRef = null,
@@ -329,6 +381,9 @@ pub const BoxyTypeDesc = struct {
     /// worker parameter, instantiated at this descriptor's type arguments.
     inspect_arg_descs: BoxySpan = .{},
     debug_checked_type: ?checked.CheckedTypeId = null,
+    /// Set for static descriptors once lowering has produced every descriptor;
+    /// a descriptor built at runtime reads runtime context.
+    closure: BoxyDescClosure = .context,
 };
 
 /// Adapter metadata for one dictionary method slot.
@@ -431,6 +486,36 @@ pub const ConstRootPlan = struct {
     /// when a consumer asked for the value to be materialized. Null when no
     /// consumer of this program reads the value.
     value_slot: ?LIR.StaticDataId = null,
+
+    pub fn shape(self: ConstRootPlan) RootShape {
+        return .{ .ret_layout = self.ret_layout, .plan = self.plan };
+    }
+};
+
+/// The representation an evaluated root's value is frozen from.
+pub const RootShape = struct {
+    ret_layout: layout.Idx,
+    plan: ConstPlanId,
+};
+
+/// One literal root: a custom literal's conversion, at the concrete type one
+/// specialization gives it, evaluated at compile time. Its procedure returns
+/// the converted value and crashes at the literal's rejection when the
+/// conversion returns `Err`.
+pub const LiteralRootPlan = struct {
+    /// Checked module that owns the literal.
+    module: checked.ModuleId,
+    id: LIR.LiteralRootId,
+    site: LIR.LiteralRejectionSite,
+    proc: LIR.LirProcSpecId,
+    ret_layout: layout.Idx,
+    plan: ConstPlanId,
+    /// Every consumer that reads a literal root reads it from this slot.
+    value_slot: LIR.StaticDataId,
+
+    pub fn shape(self: LiteralRootPlan) RootShape {
+        return .{ .ret_layout = self.ret_layout, .plan = self.plan };
+    }
 };
 
 /// One exact LIR value construction that is frozen as readonly target data.
@@ -449,7 +534,7 @@ pub const StaticDataValue = struct {
     /// evidence; materialization must consume the completed root value.
     compile_time_root: ?struct {
         module: checked.ModuleId,
-        root: checked.ComptimeRootId,
+        root: LIR.ComptimeProducer,
         const_locator: ?checked.ConstLocator,
         role: union(enum) {
             value: struct { failure_slot: LIR.StaticDataId, plan: ConstPlanId },
@@ -474,9 +559,24 @@ pub const ComptimeValueGuard = struct {
     value_slot: LIR.StaticDataId,
 };
 
-/// Deterministic symbol name for an internal static-data value.
+/// Prefix of a datum named by content, the same in every program:
+/// `roc__h{hash}`, for a string literal's backing or a constant an
+/// object-cache pack carries.
+pub const content_data_symbol_prefix = "roc__h";
+
+/// Symbol of the value in static-data slot `id`: `roc__d{id}`. The naming
+/// scheme is in design.md, "Object Symbol Names".
 pub fn staticDataSymbolName(allocator: Allocator, id: LIR.StaticDataId) Allocator.Error![]u8 {
-    return try std.fmt.allocPrint(allocator, "roc__static_const_value_{d}", .{@intFromEnum(id)});
+    return try std.fmt.allocPrint(allocator, "roc__d{d}", .{@intFromEnum(id)});
+}
+
+/// Symbol of the `index`th further node (from 1) of the value owner `owner`
+/// holds: `roc__d{owner}_{index}`. An owner below the program's static-data
+/// slot count is that slot; see design.md, "Object Symbol Names", for the
+/// owners past it.
+pub fn staticDataNodeSymbolName(allocator: Allocator, owner: u32, index: u32) Allocator.Error![]u8 {
+    std.debug.assert(index != 0);
+    return try std.fmt.allocPrint(allocator, "roc__d{d}_{d}", .{ owner, index });
 }
 
 /// Complete LIR program and side data consumed by ARC, backends, and eval.
@@ -526,6 +626,7 @@ pub const Result = struct {
     boxy_erased_arg_desc_params: std.ArrayList(LIR.ErasedArgDescParam),
     const_plans: std.ArrayList(ConstPlan),
     const_roots: std.ArrayList(ConstRootPlan),
+    literal_roots: std.ArrayList(LiteralRootPlan),
     static_data_values: std.ArrayList(StaticDataValue),
     comptime_value_guards: std.ArrayList(ComptimeValueGuard),
     comptime_sites: std.ArrayList(LIR.ComptimeSite),
@@ -569,6 +670,7 @@ pub const Result = struct {
             .boxy_erased_arg_desc_params = .empty,
             .const_plans = .empty,
             .const_roots = .empty,
+            .literal_roots = .empty,
             .static_data_values = .empty,
             .comptime_value_guards = .empty,
             .comptime_sites = .empty,
@@ -591,6 +693,7 @@ pub const Result = struct {
         self.comptime_value_guards.deinit(allocator);
         deinitConstPlans(allocator, self.const_plans.items);
         self.const_roots.deinit(allocator);
+        self.literal_roots.deinit(allocator);
         self.const_plans.deinit(allocator);
         deinitFnSets(allocator, self.fn_sets.items);
         deinitErasedFns(allocator, self.erased_fns.items);
@@ -694,6 +797,114 @@ pub const Result = struct {
     pub fn findExpectSite(self: *const Result, loc: base.SourceLoc, region: base.Region) ?LIR.ExpectSiteId {
         return self.expect_site_ids.get(ExpectSiteKey.init(loc, region));
     }
+
+    /// Classify every static Boxy descriptor by the runtime context its
+    /// reachable references read. Runs once, after lowering has produced
+    /// every descriptor.
+    pub fn classifyBoxyDescClosures(self: *Result, allocator: std.mem.Allocator) std.mem.Allocator.Error!void {
+        const descs = self.boxy_type_descs.items;
+        if (descs.len == 0) return;
+
+        // Reverse edges (child -> parents) in compressed rows, so a class
+        // propagates from each descriptor to everything that reaches it.
+        const edge_starts = try allocator.alloc(u32, descs.len + 1);
+        defer allocator.free(edge_starts);
+        @memset(edge_starts, 0);
+        for (descs) |desc| {
+            var refs = self.boxyDescRefIterator(desc);
+            while (refs.next()) |ref| switch (ref) {
+                .static => |child| edge_starts[@intFromEnum(child) + 1] += 1,
+                .local, .runtime, .dict_method_arg, .dict_method_hidden => {},
+            };
+        }
+        for (1..edge_starts.len) |index| edge_starts[index] += edge_starts[index - 1];
+        const parents = try allocator.alloc(u32, edge_starts[descs.len]);
+        defer allocator.free(parents);
+        const fill = try allocator.dupe(u32, edge_starts[0..descs.len]);
+        defer allocator.free(fill);
+
+        var worklist = std.ArrayList(u32).empty;
+        defer worklist.deinit(allocator);
+        for (descs, 0..) |*desc, desc_index| {
+            var class: BoxyDescClosure = .closed;
+            var refs = self.boxyDescRefIterator(desc.*);
+            while (refs.next()) |ref| switch (ref) {
+                .static => |child| {
+                    parents[fill[@intFromEnum(child)]] = @intCast(desc_index);
+                    fill[@intFromEnum(child)] += 1;
+                },
+                .local => class = @enumFromInt(@max(@intFromEnum(class), @intFromEnum(BoxyDescClosure.captures))),
+                .runtime, .dict_method_arg, .dict_method_hidden => class = .context,
+            };
+            desc.closure = class;
+            if (class != .closed) try worklist.append(allocator, @intCast(desc_index));
+        }
+
+        while (worklist.pop()) |child| {
+            const class = descs[child].closure;
+            for (parents[edge_starts[child]..edge_starts[child + 1]]) |parent| {
+                if (@intFromEnum(descs[parent].closure) >= @intFromEnum(class)) continue;
+                descs[parent].closure = class;
+                try worklist.append(allocator, parent);
+            }
+        }
+    }
+
+    /// Every descriptor reference `desc` holds directly.
+    fn boxyDescRefIterator(self: *const Result, desc: BoxyTypeDesc) BoxyDescRefIterator {
+        return .{ .result = self, .desc = desc };
+    }
+
+    const BoxyDescRefIterator = struct {
+        result: *const Result,
+        desc: BoxyTypeDesc,
+        section: u8 = 0,
+        index: u32 = 0,
+        variant: u32 = 0,
+
+        fn next(self: *BoxyDescRefIterator) ?BoxyDescRef {
+            const r = self.result;
+            while (true) {
+                switch (self.section) {
+                    0 => if (spanRef(r.boxy_desc_refs.items, self.desc.nested_descs, &self.index)) |ref| return ref,
+                    1 => if (spanRef(r.boxy_desc_refs.items, self.desc.inspect_hidden_descs, &self.index)) |ref| return ref,
+                    2 => if (spanRef(r.boxy_desc_refs.items, self.desc.inspect_arg_descs, &self.index)) |ref| return ref,
+                    3 => if (self.index == 0) {
+                        self.index = 1;
+                        if (self.desc.tag_ext_desc) |ref| return ref;
+                    },
+                    4 => while (self.variant < self.desc.tag_variants.len) {
+                        const variant = r.boxy_tag_variants.items[self.desc.tag_variants.start + self.variant];
+                        if (self.index < variant.payload_descs.len) {
+                            self.index += 1;
+                            return r.boxy_tag_payload_descs.items[variant.payload_descs.start + self.index - 1].desc;
+                        }
+                        self.variant += 1;
+                        self.index = 0;
+                    },
+                    5, 6 => {
+                        const plan = if (self.section == 5) self.desc.copy_plan else self.desc.drop_plan;
+                        while (self.index < plan.len) {
+                            self.index += 1;
+                            switch (r.boxy_payload_steps.items[plan.start + self.index - 1]) {
+                                .dynamic => |step| return step.desc,
+                                .concrete => {},
+                            }
+                        }
+                    },
+                    else => return null,
+                }
+                self.section += 1;
+                self.index = 0;
+            }
+        }
+
+        fn spanRef(refs: []const BoxyDescRef, span: BoxySpan, index: *u32) ?BoxyDescRef {
+            if (index.* >= span.len) return null;
+            index.* += 1;
+            return refs[span.start + index.* - 1];
+        }
+    };
 
     /// Discard the lowering-only source lookup once every statement has its
     /// dense id. Runtime consumers need only `expect_sites`.
@@ -828,6 +1039,7 @@ test "boxy side tables initialize empty and use flat pools" {
     try result.boxy_type_descs.append(allocator, .{
         .payload_layout = .zst,
         .contains_refcounted = true,
+        .shape = .internal,
         .nested_descs = desc_refs,
         .copy_plan = copy_plan,
         .drop_plan = drop_plan,

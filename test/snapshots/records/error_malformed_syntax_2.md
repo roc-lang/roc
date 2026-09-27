@@ -107,7 +107,7 @@ EndOfFile,
 		(p-assign (ident "age"))
 		(e-anno-only))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-let
 		(p-assign (ident "name"))
 		(e-string

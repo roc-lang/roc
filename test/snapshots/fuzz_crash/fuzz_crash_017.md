@@ -10,7 +10,6 @@ foo = "hello ${namF
 ~~~
 # EXPECTED
 EXPECTED INTERPOLATION END - fuzz_crash_017.md:2:7:2:8
-UNRECOGNIZED SYNTAX - fuzz_crash_017.md:2:7:2:20
 # PROBLEMS
 ~~~clojure
 (reports
@@ -41,17 +40,7 @@ UNRECOGNIZED SYNTAX - fuzz_crash_017.md:2:7:2:20
 			(text " here.")
 			(line-break)
 			(line-break)
-			(source-region (file "fuzz_crash_017.md") (start 2 7) (end 2 8) (annotation error) (line-text "foo = \"hello ${namF"))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 2 7) (end 2 20))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "fuzz_crash_017.md") (start 2 7) (end 2 20) (annotation error) (line-text "foo = \"hello ${namF"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo."))))
+			(source-region (file "fuzz_crash_017.md") (start 2 7) (end 2 8) (annotation error) (line-text "foo = \"hello ${namF")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -87,7 +76,7 @@ foo =
 			(e-literal (string "luc"))))
 	(d-let
 		(p-assign (ident "foo"))
-		(e-runtime-error (tag "expr_not_canonicalized"))))
+		(e-runtime-error (tag "expr_syntax_error"))))
 ~~~
 # TYPES
 ~~~clojure

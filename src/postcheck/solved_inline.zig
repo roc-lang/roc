@@ -419,6 +419,7 @@ const InlineAnalyzer = struct {
             => |child| self.exprReadsOnlyArgs(child, args),
             .return_ => |ret| self.exprReadsOnlyArgs(ret.value, args),
             .expect_err => |expect_err| self.exprReadsOnlyArgs(expect_err.msg, args),
+            .literal_rejected => |rejected| self.exprReadsOnlyArgs(rejected.msg, args),
             .comptime_branch_taken => |taken| self.exprReadsOnlyArgs(taken.body, args),
             .call_value => |call| self.exprReadsOnlyArgs(call.callee, args) and self.exprSpanReadsOnlyArgs(call.args, args),
             .call_proc => |call| !call.is_cold and
@@ -551,6 +552,7 @@ const InlineAnalyzer = struct {
             .expect,
             .return_,
             .expect_err,
+            .literal_rejected,
             .comptime_branch_taken,
             .call_value,
             .field_access,
@@ -653,6 +655,7 @@ const InlineAnalyzer = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => false,
         };
@@ -710,6 +713,7 @@ const InlineAnalyzer = struct {
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
+            .literal_rejected,
             .expect,
             => false,
         };
@@ -765,6 +769,7 @@ const InlineAnalyzer = struct {
             => |child| try self.visitBodyCallees(child, loop_depth),
             .return_ => false,
             .expect_err => |expect_err| try self.visitBodyCallees(expect_err.msg, loop_depth),
+            .literal_rejected => |rejected| try self.visitBodyCallees(rejected.msg, loop_depth),
             .comptime_branch_taken => |taken| try self.visitBodyCallees(taken.body, loop_depth),
             .let_ => |let_| {
                 if (!try self.visitBodyCallees(let_.value, loop_depth)) return false;

@@ -303,6 +303,10 @@ type_decl_statements: std.ArrayListUnmanaged(CIR.Statement.Idx) = .empty,
 type_decl_invalid: std.ArrayListUnmanaged(bool) = .empty,
 /// Directed references from one local type declaration to another.
 type_decl_dependencies: std.ArrayListUnmanaged(TypeDeclDependency) = .empty,
+/// Whether every local type declaration's validity is final: invalid
+/// declarations are poisoned, so an annotation generated from here on
+/// resolves each reference to one as the error type.
+type_decl_validity_final: bool = false,
 /// scratch vars used to build up intermediate lists, used for various things
 scratch_vars: base.Scratch(Var),
 /// scratch (parameter name, instantiated flex copy) pairs for the default
@@ -705,6 +709,35 @@ hoist_invalidated_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
 /// Sparse roots selected during checking. Publication consumes this slice and
 /// turns the entries into checked compile-time roots.
 selected_hoisted_roots: std.ArrayListUnmanaged(hoist_roots.SelectedHoistedRoot),
+/// Local function bindings whose right-hand side is a lambda or closure,
+/// keyed by binding pattern: the candidates for promotion to procedures of
+/// their own (`hoist_roots.PromotedLocalProcedure`). Checking marks a
+/// candidate contextual when its lambda refers to a type variable or a type
+/// declaration of an enclosing function.
+local_procedure_candidates: std.AutoArrayHashMapUnmanaged(CIR.Pattern.Idx, LocalProcedureCandidate),
+/// Binding patterns of the candidates whose declarations are being checked,
+/// innermost last.
+local_procedure_candidate_stack: std.ArrayListUnmanaged(CIR.Pattern.Idx),
+/// The candidate-stack depth at which each rigid type variable was introduced
+/// by an annotation. A rigid-variable lookup from a deeper candidate names a
+/// type variable of an enclosing function.
+rigid_var_candidate_depths: std.AutoHashMapUnmanaged(CIR.TypeAnno.Idx, u32),
+/// Module-level type declarations; a type declaration outside this set is
+/// declared inside a function body.
+module_type_decls: std.AutoHashMapUnmanaged(CIR.Statement.Idx, void),
+/// The candidate-stack depth at which each pattern checked inside a
+/// candidate was bound. A pattern checked outside every candidate has no
+/// entry, which is depth zero.
+local_pattern_candidate_depths: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32),
+/// Local names a candidate's lambda refers to that are bound outside it. A
+/// candidate is promoted only when each of these is a top-level binding or a
+/// promoted candidate itself.
+local_procedure_outer_refs: std.ArrayListUnmanaged(LocalProcedureOuterRef),
+/// Local function bindings promoted to procedures after solving, in
+/// declaration order. Publication consumes this slice.
+promoted_local_procedures: std.ArrayListUnmanaged(hoist_roots.PromotedLocalProcedure),
+/// Binding patterns of `promoted_local_procedures`.
+promoted_local_procedure_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Top-level defs whose zero-arg function result will be observed as an
 /// executable/eval root. Ordinary thunks may stay polymorphic; these roots may
 /// not leave static-dispatch obligations in their immediate result.
@@ -1861,6 +1894,19 @@ const HoistDeferredRoot = union(enum) {
     pattern_validation: HoistDeferredPatternValidation,
 };
 
+const LocalProcedureOuterRef = struct {
+    candidate: CIR.Pattern.Idx,
+    referenced: CIR.Pattern.Idx,
+};
+
+const LocalProcedureCandidate = struct {
+    /// The binding's lambda or closure expression.
+    expr: CIR.Expr.Idx,
+    /// The lambda refers to a type variable or a type declaration of an
+    /// enclosing function, so it cannot become a procedure of its own.
+    contextual: bool = false,
+};
+
 const HoistKnownValue = union(enum) {
     binding_rhs: CIR.Expr.Idx,
     pattern_extraction: HoistPatternExtraction,
@@ -2928,6 +2974,14 @@ fn initAssumePrepared(
         .hoist_selected_pattern_validations = .{},
         .hoist_invalidated_exprs = .{},
         .selected_hoisted_roots = .empty,
+        .local_procedure_candidates = .{},
+        .local_procedure_candidate_stack = .empty,
+        .rigid_var_candidate_depths = .{},
+        .module_type_decls = .{},
+        .local_pattern_candidate_depths = .{},
+        .local_procedure_outer_refs = .empty,
+        .promoted_local_procedures = .empty,
+        .promoted_local_procedure_patterns = .{},
         .executable_root_defs = .empty,
         .compile_time_executable_roots = .empty,
         .last_hoist_result = null,
@@ -3068,6 +3122,14 @@ pub fn deinit(self: *Self) void {
         hoist_roots.deinitSelectedRoot(self.gpa, root);
     }
     self.selected_hoisted_roots.deinit(self.gpa);
+    self.local_procedure_candidates.deinit(self.gpa);
+    self.local_procedure_candidate_stack.deinit(self.gpa);
+    self.rigid_var_candidate_depths.deinit(self.gpa);
+    self.module_type_decls.deinit(self.gpa);
+    self.local_pattern_candidate_depths.deinit(self.gpa);
+    self.local_procedure_outer_refs.deinit(self.gpa);
+    self.promoted_local_procedures.deinit(self.gpa);
+    self.promoted_local_procedure_patterns.deinit(self.gpa);
     self.executable_root_defs.deinit(self.gpa);
     self.compile_time_executable_roots.deinit(self.gpa);
     self.env_pool.deinit();
@@ -3191,6 +3253,105 @@ pub fn deinit(self: *Self) void {
 /// Returns the hoisted roots selected while checking this module.
 pub fn selectedHoistedRoots(self: *const Self) []const hoist_roots.SelectedHoistedRoot {
     return self.selected_hoisted_roots.items;
+}
+
+/// Returns the local function bindings this module promoted to procedures.
+pub fn promotedLocalProcedures(self: *const Self) []const hoist_roots.PromotedLocalProcedure {
+    return self.promoted_local_procedures.items;
+}
+
+/// Mark every candidate on the stack from `depth` inward contextual: its
+/// lambda refers to something declared outside it by an enclosing function.
+fn markLocalProcedureCandidatesContextualFrom(self: *Self, depth: usize) void {
+    for (self.local_procedure_candidate_stack.items[@min(depth, self.local_procedure_candidate_stack.items.len)..]) |pattern| {
+        if (self.local_procedure_candidates.getPtr(pattern)) |candidate| candidate.contextual = true;
+    }
+}
+
+/// Record the candidate depth at which an annotation introduces a rigid type
+/// variable. An annotation generated more than once keeps its first depth,
+/// which is the depth of the declaration that owns it.
+fn recordRigidVarCandidateDepth(self: *Self, anno_idx: CIR.TypeAnno.Idx) Allocator.Error!void {
+    const entry = try self.rigid_var_candidate_depths.getOrPut(self.gpa, anno_idx);
+    if (!entry.found_existing) entry.value_ptr.* = @intCast(self.local_procedure_candidate_stack.items.len);
+}
+
+/// Record the candidate depth at which a pattern is bound.
+fn recordPatternCandidateDepth(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Error!void {
+    const depth = self.local_procedure_candidate_stack.items.len;
+    if (depth == 0) return;
+    try self.local_pattern_candidate_depths.put(self.gpa, pattern, @intCast(depth));
+}
+
+/// A lookup of a local name bound at a shallower candidate depth is an outer
+/// reference of every deeper candidate.
+fn noteLocalLookupForLocalProcedures(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Error!void {
+    const stack = self.local_procedure_candidate_stack.items;
+    if (stack.len == 0) return;
+    if (self.patternIsTopLevel(pattern)) return;
+    const depth = self.local_pattern_candidate_depths.get(pattern) orelse 0;
+    if (depth >= stack.len) return;
+    for (stack[depth..]) |candidate| {
+        try self.local_procedure_outer_refs.append(self.gpa, .{ .candidate = candidate, .referenced = pattern });
+    }
+}
+
+/// A lookup of a rigid type variable introduced at a shallower candidate
+/// depth names a type variable of a function enclosing the deeper candidates.
+fn noteRigidVarLookupForLocalProcedures(self: *Self, rigid_var: CIR.TypeAnno.Idx) void {
+    if (self.local_procedure_candidate_stack.items.len == 0) return;
+    const depth = self.rigid_var_candidate_depths.get(rigid_var) orelse 0;
+    self.markLocalProcedureCandidatesContextualFrom(depth);
+}
+
+/// A reference to a type declared inside a function body makes every
+/// candidate being checked contextual: such a type, and any method it
+/// declares, belongs to the function body that declares it.
+fn noteTypeDeclReferenceForLocalProcedures(self: *Self, decl_idx: CIR.Statement.Idx) Allocator.Error!void {
+    if (self.local_procedure_candidate_stack.items.len == 0) return;
+    if (self.module_type_decls.count() == 0) {
+        for (self.cir.store.sliceStatements(self.cir.type_decls)) |module_decl| {
+            try self.module_type_decls.put(self.gpa, module_decl, {});
+        }
+    }
+    if (self.module_type_decls.contains(decl_idx)) return;
+    self.markLocalProcedureCandidatesContextualFrom(0);
+}
+
+/// Decide which local function candidates become procedures of their own. A
+/// candidate qualifies when it is not contextual, checked without error, and
+/// every local name it refers to from outside its lambda is itself a
+/// qualifying candidate; that rule is a greatest fixpoint, so recursive and
+/// mutually recursive local functions qualify together.
+fn finalizePromotedLocalProcedures(self: *Self) Allocator.Error!void {
+    self.promoted_local_procedures.clearRetainingCapacity();
+    self.promoted_local_procedure_patterns.clearRetainingCapacity();
+
+    for (self.local_procedure_candidates.keys(), self.local_procedure_candidates.values()) |pattern, candidate| {
+        if (candidate.contextual) continue;
+        if (self.erroneous_value_patterns.contains(pattern)) continue;
+        if (self.erroneous_value_exprs.contains(candidate.expr)) continue;
+        if (self.hoistExprInvalidated(candidate.expr)) continue;
+        const expr = self.cir.store.getExpr(candidate.expr);
+        if (expr != .e_lambda and expr != .e_closure) continue;
+        try self.promoted_local_procedure_patterns.put(self.gpa, pattern, {});
+    }
+
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (self.local_procedure_outer_refs.items) |outer| {
+            if (!self.promoted_local_procedure_patterns.contains(outer.candidate)) continue;
+            if (self.promoted_local_procedure_patterns.contains(outer.referenced)) continue;
+            _ = self.promoted_local_procedure_patterns.remove(outer.candidate);
+            changed = true;
+        }
+    }
+
+    for (self.local_procedure_candidates.keys(), self.local_procedure_candidates.values()) |pattern, candidate| {
+        if (!self.promoted_local_procedure_patterns.contains(pattern)) continue;
+        try self.promoted_local_procedures.append(self.gpa, .{ .pattern = pattern, .expr = candidate.expr });
+    }
 }
 
 /// Whether a selected root materializes a top-level binding.
@@ -4043,7 +4204,7 @@ fn replaceExprWithRuntimeError(
     diagnostic_idx: CIR.Diagnostic.Idx,
 ) Allocator.Error!void {
     try self.invalidateExprSubtreeMetadata(expr_idx);
-    self.cir.store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+    try self.cir.store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
 }
 
 fn invalidateExprSubtreeMetadata(self: *Self, root: CIR.Expr.Idx) Allocator.Error!void {
@@ -4145,7 +4306,7 @@ fn retirePatternMetadata(self: *Self, pattern_idx: CIR.Pattern.Idx, diagnostic: 
             }
         },
         .num_literal, .num_from_numeral_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal => {
-            if (diagnostic) |diag| self.cir.store.replacePatternWithRuntimeError(pattern_idx, diag);
+            if (diagnostic) |diag| try self.cir.store.replacePatternWithRuntimeError(pattern_idx, diag);
         },
         .assign, .var_assign, .underscore, .runtime_error => {},
         .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
@@ -6291,6 +6452,7 @@ fn poisonInvalidTypeDeclarations(self: *Self, poisoned: []bool) std.mem.Allocato
 fn finalizeTypeDeclarationValidity(self: *Self) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
+    defer self.type_decl_validity_final = true;
 
     const decl_count = self.type_decl_statements.items.len;
     if (decl_count == 0) return;
@@ -6984,7 +7146,7 @@ fn resolvePendingTupleAccesses(
         // independently used bindings. Retire the access without poisoning
         // either solved class. No solver work observes the batched retirement.
         try self.invalidateExprSubtreeMetadataWithScratch(expr, &work);
-        self.cir.store.replaceExprWithRuntimeError(expr, diagnostic);
+        try self.cir.store.replaceExprWithRuntimeError(expr, diagnostic);
     }
     // Tuple-access roots cannot own omitted record fields; their discarded
     // descendants were marked above, so one compaction retires the whole batch.
@@ -9436,17 +9598,16 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         const stmt_var = ModuleEnv.varFrom(stmt_idx);
 
         switch (stmt) {
-            .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => {
+            .s_alias_decl, .s_nominal_decl => {
                 _ = try self.ensureTypeDeclGenerated(stmt_idx, &env);
             },
             .s_runtime_error => {
                 try self.setVarRank(stmt_var, &env);
                 try self.markErroneous(stmt_var);
             },
-            .s_type_anno => |type_anno| {
-                try self.setVarRank(stmt_var, &env);
-                try self.generateStandaloneTypeAnno(stmt_var, type_anno, &env);
-            },
+            // Annotation-context declarations; generated below, once
+            // declaration validity is final.
+            .s_where_alias_decl, .s_type_anno => {},
             .s_decl,
             .s_var,
             .s_var_uninitialized,
@@ -9472,6 +9633,45 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // With every declaration generated, validate nominal declaration
     // recursion before any value checking consumes the declarations.
     try self.finalizeTypeDeclarationValidity();
+
+    // Where aliases and standalone annotations are annotations, not type
+    // declarations: no type declaration can reference them, and every type
+    // they reference must already have its final validity, so a reference to
+    // an invalid declaration is the error type rather than an application of
+    // a declaration the checked module omits.
+    for (0..self.cir.all_statements.span.len) |stmt_offset| {
+        const stmt_idx = self.cir.store.statementAt(self.cir.all_statements, stmt_offset);
+        switch (self.cir.store.getStatement(stmt_idx)) {
+            .s_where_alias_decl => {
+                _ = try self.ensureTypeDeclGenerated(stmt_idx, &env);
+            },
+            .s_type_anno => |type_anno| {
+                const stmt_var = ModuleEnv.varFrom(stmt_idx);
+                try self.setVarRank(stmt_var, &env);
+                try self.generateStandaloneTypeAnno(stmt_var, type_anno, &env);
+            },
+            .s_alias_decl,
+            .s_nominal_decl,
+            .s_runtime_error,
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_type_var_alias,
+            => {},
+        }
+    }
 
     // Next, capture all top level defs
     // This is used to support out-of-order defs
@@ -9786,6 +9986,8 @@ fn debugAssertNominalDeclTableComplete(self: *const Self) void {
 }
 
 fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
+    try self.finalizePromotedLocalProcedures();
+
     const root_count = self.selected_hoisted_roots.items.len;
     const keep_roots = try self.gpa.alloc(bool, root_count);
     defer self.gpa.free(keep_roots);
@@ -10155,10 +10357,13 @@ const HoistedCallableState = enum {
 const HoistedDependencyContext = struct {
     bindings: std.ArrayListUnmanaged(HoistedDependencyBinding) = .empty,
     callable_stability: std.AutoHashMapUnmanaged(HoistedCallableKey, HoistedCallableState) = .{},
+    /// Stability of promoted local procedures, keyed by their lambda.
+    local_procedure_stability: std.AutoHashMapUnmanaged(CIR.Expr.Idx, HoistedCallableState) = .{},
 
     fn deinit(self: *@This(), allocator: Allocator) void {
         self.bindings.deinit(allocator);
         self.callable_stability.deinit(allocator);
+        self.local_procedure_stability.deinit(allocator);
     }
 
     fn mark(self: *const @This()) usize {
@@ -10267,6 +10472,7 @@ fn hoistedRootBindingIsKept(
     keep_oracle: *const HoistedRootKeepOracle,
 ) bool {
     return self.patternIsTopLevel(pattern) or
+        self.promoted_local_procedure_patterns.contains(pattern) or
         context.contains(pattern) or
         (keep_oracle.selectedPatternIsKept(pattern) orelse false);
 }
@@ -10387,8 +10593,43 @@ fn hoistedRootCalleeAllowsStoredConst(
     callee: CIR.Expr.Idx,
     context: *HoistedDependencyContext,
 ) Allocator.Error!bool {
+    if (self.hoistedPromotedLocalProcedureForExpr(self.cir, callee)) |lambda| {
+        return try self.hoistedLocalProcedureAllowsStoredConst(lambda, context);
+    }
     const callable_def = self.hoistedCallableDefForExpr(self.cir, callee) orelse return true;
     return try self.hoistedCallableDefAllowsStoredConst(callable_def, context);
+}
+
+/// The lambda of the promoted local procedure a callee expression of this
+/// module names, if it names one.
+fn hoistedPromotedLocalProcedureForExpr(self: *Self, module: *const ModuleEnv, callee: CIR.Expr.Idx) ?CIR.Expr.Idx {
+    if (module != self.cir) return null;
+    const expr = module.store.getExpr(callee);
+    if (expr != .e_lookup_local) return null;
+    const pattern = expr.e_lookup_local.pattern_idx;
+    if (!self.promoted_local_procedure_patterns.contains(pattern)) return null;
+    const candidate = self.local_procedure_candidates.get(pattern) orelse
+        hoistSelectionInvariant("promoted local procedure had no candidate record");
+    return candidate.expr;
+}
+
+/// A promoted local procedure's body is held to the same stability rule as a
+/// top-level callee's.
+fn hoistedLocalProcedureAllowsStoredConst(
+    self: *Self,
+    lambda: CIR.Expr.Idx,
+    context: *HoistedDependencyContext,
+) Allocator.Error!bool {
+    if (context.local_procedure_stability.get(lambda)) |state| {
+        return switch (state) {
+            .stable, .visiting => true,
+            .unstable => false,
+        };
+    }
+    try context.local_procedure_stability.put(self.gpa, lambda, .visiting);
+    const stable = try self.hoistedExprAllowsStoredConst(self.cir, lambda, context);
+    context.local_procedure_stability.getPtr(lambda).?.* = if (stable) .stable else .unstable;
+    return stable;
 }
 
 fn hoistedCallableDefAllowsStoredConst(
@@ -10507,6 +10748,9 @@ fn hoistedCalleeAllowsStoredConstInModule(
     callee: CIR.Expr.Idx,
     context: *HoistedDependencyContext,
 ) Allocator.Error!bool {
+    if (self.hoistedPromotedLocalProcedureForExpr(module, callee)) |lambda| {
+        return try self.hoistedLocalProcedureAllowsStoredConst(lambda, context);
+    }
     const callable_def = self.hoistedCallableDefForExpr(module, callee) orelse return true;
     return try self.hoistedCallableDefAllowsStoredConst(callable_def, context);
 }
@@ -11404,7 +11648,7 @@ fn replaceRejectedPatternStatement(
         try self.markHoistInvalidatedExprChildren(work.items[next], &work);
     }
     self.retireInvalidatedRecordDefaults(null);
-    self.cir.store.replaceStatementWithRuntimeError(stmt_idx, diagnostic);
+    try self.cir.store.replaceStatementWithRuntimeError(stmt_idx, diagnostic);
 }
 
 fn literalDispatchPlanMatchesConstraint(
@@ -16017,6 +16261,7 @@ fn ensureTypeDeclGenerated(
     decl_idx: CIR.Statement.Idx,
     env: *Env,
 ) std.mem.Allocator.Error!bool {
+    try self.noteTypeDeclReferenceForLocalProcedures(decl_idx);
     switch (self.typeDeclGenerationState(decl_idx)) {
         .generated => return true,
         .generating => return switch (self.cir.store.getStatement(decl_idx)) {
@@ -16258,6 +16503,9 @@ fn generateWhereAliasDecl(
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // Its constraint signatures must see invalid declarations already poisoned.
+    std.debug.assert(self.type_decl_validity_final);
+
     // A never-filled forward placeholder (see `generateAliasDecl`): there is
     // no receiver to generate; poison the decl var so every reference
     // resolves to `.err` and is suppressed.
@@ -16394,6 +16642,9 @@ fn generateStandaloneTypeAnno(
 ) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    // The annotation must see invalid declarations already poisoned.
+    std.debug.assert(self.type_decl_validity_final);
 
     // Reset seen type annos
     self.seen_annos.unsetAll();
@@ -18271,6 +18522,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
     switch (anno) {
         .rigid_var => |rigid| {
+            try self.recordRigidVarCandidateDepth(anno_idx);
             if (ctx == .type_decl) {
                 if (self.type_decl_rigid_vars.get(rigid.name)) |decl_var| {
                     _ = try self.unify(anno_var, decl_var, env);
@@ -18358,6 +18610,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             }
         },
         .rigid_var_lookup => |rigid_lookup| {
+            self.noteRigidVarLookupForLocalProcedures(rigid_lookup.ref);
             _ = try self.unify(anno_var, ModuleEnv.varFrom(rigid_lookup.ref), env);
         },
         .underscore => {
@@ -19811,6 +20064,7 @@ fn checkPatternHelp(
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    try self.recordPatternCandidateDepth(pattern_idx);
     const pattern = self.cir.store.getPattern(pattern_idx);
     const pattern_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(pattern_idx));
     const pattern_var = switch (comptime out_var) {
@@ -20008,6 +20262,7 @@ fn checkPatternHelp(
         },
         // nominal //
         .nominal => |nominal| {
+            try self.noteTypeDeclReferenceForLocalProcedures(nominal.nominal_type_decl);
             // Check the backing pattern first
             const actual_backing_var = try self.checkPatternHelp(nominal.backing_pattern, ctx, env, out_var, valid);
 
@@ -21784,6 +22039,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
         },
         // nominal //
         .e_nominal => |nominal| {
+            try self.noteTypeDeclReferenceForLocalProcedures(nominal.nominal_type_decl);
             const prepared = try self.prepareNominalTypeUsage(
                 expr_var,
                 ModuleEnv.varFrom(nominal.nominal_type_decl),
@@ -22087,8 +22343,16 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 break :blk;
             }
 
+            try self.noteLocalLookupForLocalProcedures(lookup.pattern_idx);
             const compile_time_known_binding = known: {
                 if (self.patternIsTopLevel(lookup.pattern_idx)) break :known true;
+                // A local function that can become a procedure of its own is
+                // as available at compile time as a top-level function.
+                // Post-solve pruning keeps a root that depends on it only
+                // when it was promoted.
+                if (self.local_procedure_candidates.get(lookup.pattern_idx)) |candidate| {
+                    if (!candidate.contextual) break :known true;
+                }
                 if (expected.hoist_position == .suppressed) {
                     if (self.hoist_known_values.get(lookup.pattern_idx)) |known_value| {
                         switch (known_value) {
@@ -23155,6 +23419,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             }
             const did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, arg_expr_idxs);
 
+            try self.noteTypeDeclReferenceForLocalProcedures(method_call.type_dispatch_stmt);
             if (!did_err) {
                 const dispatcher_var = self.typeDispatchOwnerVar(method_call.type_dispatch_stmt);
                 const constraint_fn_var = try self.mkTypeMethodCallConstraint(
@@ -23181,6 +23446,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             }
         },
         .e_type_dispatch_call => |method_call| {
+            try self.noteTypeDeclReferenceForLocalProcedures(method_call.type_dispatch_stmt);
             const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
             for (arg_expr_idxs) |arg_expr_idx| {
                 self.checking_call_arg = true;
@@ -24342,6 +24608,25 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
                 const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
 
+                // A local function binding is a candidate for promotion to a
+                // procedure of its own. It stays on the candidate stack while
+                // its annotation and lambda are checked, so references they
+                // make to an enclosing function's type variables or type
+                // declarations mark it contextual.
+                const decl_rhs = self.cir.store.getExpr(decl_stmt.expr);
+                const is_local_procedure_candidate = self.cir.store.getPattern(decl_stmt.pattern) == .assign and
+                    (decl_rhs == .e_lambda or decl_rhs == .e_closure);
+                if (is_local_procedure_candidate) {
+                    const candidate = try self.local_procedure_candidates.getOrPut(self.gpa, decl_stmt.pattern);
+                    if (!candidate.found_existing) candidate.value_ptr.* = .{ .expr = decl_stmt.expr };
+                }
+                // The binding pattern belongs to the enclosing scope; the
+                // candidate is pushed once it is bound.
+                var local_procedure_candidate_pushed = false;
+                defer if (local_procedure_candidate_pushed) {
+                    _ = self.local_procedure_candidate_stack.pop();
+                };
+
                 const decl_is_fn = isFunctionDef(&self.cir.store, self.cir.store.getExpr(decl_stmt.expr));
 
                 // An annotated local function's scheme is pre-declared from
@@ -24416,6 +24701,10 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     });
                 }
 
+                if (is_local_procedure_candidate) {
+                    try self.local_procedure_candidate_stack.append(self.gpa, decl_stmt.pattern);
+                    local_procedure_candidate_pushed = true;
+                }
                 self.checking_binding_rhs = true;
                 self.checking_binding_rhs_pattern = decl_stmt.pattern;
                 // The frame's pattern var owns the scheme, so requirement
@@ -24730,16 +25019,19 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 statement_blocks_later_hoists = self.checkedExprBlocksLaterHoists(expr.expr, expr_does_fx);
                 const expr_var: Var = ModuleEnv.varFrom(expr.expr);
 
-                // Statements must evaluate to {}. Add a constraint to unify with empty record.
-                // If unification fails, we get a nice type mismatch error explaining that
-                // statement expressions must return {}.
+                // Statements must evaluate to {}. The statement only consults its
+                // expression's value, whose solved class is shared with the
+                // producer (a call's result is its callee's return slot), so a
+                // rejection owns the diagnostic and retires the expression and
+                // the statement without poisoning that class.
                 const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, stmt_region);
-                const statement_result = try self.unifyInContext(empty_rec, expr_var, env, .statement_value);
+                const statement_result = try self.unifyOwnedRelation(empty_rec, expr_var, env, .statement_value, .construction);
                 if (statement_result.isProblem()) {
                     try self.erroneous_value_exprs.put(self.gpa, expr.expr, {});
+                    try self.markErroneous(stmt_var);
+                } else {
+                    _ = try self.unify(stmt_var, expr_var, env);
                 }
-
-                _ = try self.unify(stmt_var, expr_var, env);
                 if (self.exprIsAllCrashConditional(expr.expr)) {
                     diverges = true;
                     warn_unreachable = true;
@@ -27536,6 +27828,7 @@ fn checkLocalAssociatedLookup(
     region: Region,
     env: *Env,
 ) Allocator.Error!void {
+    try self.noteTypeDeclReferenceForLocalProcedures(@enumFromInt(lookup.type_node_idx));
     try self.checkAssociatedLookupFromOwnerVar(
         expr_idx,
         expr_var,
@@ -31494,6 +31787,22 @@ fn schemeCandidateIsUnresolvedGeneratedCodec(
         !self.schemeCodecReceiverHasOpenOuterRow(candidate.receiver_var);
 }
 
+/// Whether a later use of a scheme can still change what `var_` denotes: a
+/// type variable can be substituted, and an anonymous record or tag union can
+/// be lifted into a nominal whose backing it matches. A nominal, a tuple, or
+/// a function type keeps its identity; its own variables are reached
+/// separately.
+fn laterUseCanRefine(self: *Self, var_: Var) bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .flex, .rigid => true,
+        .structure => |flat| switch (flat) {
+            .record, .empty_record, .tag_union, .empty_tag_union => true,
+            .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => false,
+        },
+        .alias, .field_presence, .err => false,
+    };
+}
+
 /// Move every still-open dispatch relation owned by this generalization
 /// boundary into its explicit scheme. Ordinary relations need the side table
 /// while their receiver belongs to an outer rank. A generated codec relation
@@ -31543,10 +31852,12 @@ fn captureSchemeDispatchRequirements(
             const scheme_codec = candidate.deferred_generated_codec or final_codec or unresolved_codec;
             const needs_explicit_requirement = if (scheme_codec) blk: {
                 // A generated codec on a structural receiver does not live on
-                // that receiver's descriptor. Preserve it explicitly when any
-                // part of the receiver escapes through this scheme. That shared
-                // component is exactly where a later use can refine the shape
-                // before final validation.
+                // that receiver's descriptor. Preserve it explicitly when a
+                // part of the receiver that a later use can still refine
+                // escapes through this scheme. That shared component is
+                // exactly where a later use can refine the shape before final
+                // validation. A shared component nothing can refine is final
+                // here, so its evidence resolves at the requiring site.
                 if (!interface_reachable_collected) {
                     self.var_set.clearRetainingCapacity();
                     try self.collectReachableVars(root.interface, &self.var_set);
@@ -31562,7 +31873,8 @@ fn captureSchemeDispatchRequirements(
                     self.var_set.keyIterator();
                 while (reachable_iter.next()) |reachable_var| {
                     const other = if (iterate_receiver) &self.var_set else &final_codec_receiver_vars;
-                    if (other.contains(reachable_var.*)) break :blk true;
+                    if (!other.contains(reachable_var.*)) continue;
+                    if (self.laterUseCanRefine(reachable_var.*)) break :blk true;
                 }
                 break :blk false;
             } else blk: {
@@ -37103,23 +37415,25 @@ fn varDeriveComponentObligations(
             // The boolean walk already rejected these; nothing to delegate.
             .fn_pure, .fn_effectful, .fn_unbound => return,
             .empty_record, .empty_tag_union => return,
+            // Deriving a component obligation appends type variables, so each
+            // component is read by index rather than through a held slice.
             .record => |record| {
-                const fields_slice = self.types.getRecordFieldsSlice(record.fields);
-                for (fields_slice.items(.presence)) |presence| {
+                for (0..record.fields.count) |offset| {
+                    const presence = self.types.getRecordFieldAt(record.fields, @intCast(offset)).presence;
                     try self.varDeriveComponentObligations(presence.typeVar(), derivation, visited, env, parent_constraint, admit_rigids);
                 }
             },
             .tuple => |tuple| {
-                const elems = self.types.sliceVars(tuple.elems);
-                for (elems) |elem_var| {
+                for (0..tuple.elems.count) |offset| {
+                    const elem_var = self.types.getVarAt(tuple.elems, @intCast(offset));
                     try self.varDeriveComponentObligations(elem_var, derivation, visited, env, parent_constraint, admit_rigids);
                 }
             },
             .tag_union => |tag_union| {
-                const tags_slice = self.types.getTagsSlice(tag_union.tags);
-                for (tags_slice.items(.args)) |tag_args| {
-                    const args = self.types.sliceVars(tag_args);
-                    for (args) |arg_var| {
+                for (0..tag_union.tags.count) |tag_offset| {
+                    const tag_args = self.types.getTagAt(tag_union.tags, @intCast(tag_offset)).args;
+                    for (0..tag_args.count) |offset| {
+                        const arg_var = self.types.getVarAt(tag_args, @intCast(offset));
                         try self.varDeriveComponentObligations(arg_var, derivation, visited, env, parent_constraint, admit_rigids);
                     }
                 }
@@ -37134,7 +37448,9 @@ fn varDeriveComponentObligations(
                     return;
                 }
                 if (self.nominalIsBoxType(nominal)) return;
-                for (self.types.sliceNominalArgs(nominal)) |arg_var| {
+                const nominal_args = types_mod.Store.getNominalArgsRange(nominal);
+                for (0..nominal_args.count) |offset| {
+                    const arg_var = self.types.getVarAt(nominal_args, @intCast(offset));
                     try self.varDeriveComponentObligations(arg_var, derivation, visited, env, parent_constraint, admit_rigids);
                 }
                 const template = self.nominalDeclBackingTemplate(nominal) orelse return;

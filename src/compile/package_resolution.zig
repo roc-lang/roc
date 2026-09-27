@@ -429,6 +429,7 @@ const Edge = struct {
         reserved_version,
         ambiguous_version,
         unresolvable_local,
+        absolute_path,
     };
 };
 
@@ -726,6 +727,22 @@ pub const Resolver = struct {
                             try result.missing_compiler_owned.append(self.arena(), platform);
                         }
                     }
+                    continue;
+                }
+
+                // A header must name its platform by a relative path or a URL.
+                // Absolute local paths tie the dependency graph to one
+                // machine's directory layout. The rule applies to the header's
+                // declared spelling, so a `--replace-dep` source (which is
+                // canonicalized to an absolute path) is not subject to it.
+                if (dep.is_platform and std.fs.path.isAbsolute(dep.spec)) {
+                    try result.edges.append(self.arena(), .{
+                        .parent = item.group,
+                        .alias = dep.alias,
+                        .spec = dep.spec,
+                        .is_platform = dep.is_platform,
+                        .target = .{ .invalid = .absolute_path },
+                    });
                     continue;
                 }
 
@@ -1371,6 +1388,12 @@ pub const Resolver = struct {
                             "Invalid Package Dependency",
                             "{s} depends on this local path, which could not be resolved to an existing file:\n\n    {s}\n\n" ++
                                 "--replace-dep matches local dependencies by their resolved file, so every local dependency in the graph must exist.",
+                            .{ owner, edge.spec },
+                        ),
+                        .absolute_path => try self.addDiagnostic(
+                            "Absolute Platform Path",
+                            "{s} declares this platform with an absolute path:\n\n    {s}\n\n" ++
+                                "Absolute paths are not allowed for platform specifications. Use a relative path like ../path/to/platform or a URL.",
                             .{ owner, edge.spec },
                         ),
                     }
@@ -4178,6 +4201,42 @@ test "replace-dep: platform consistency is validated against effective sources" 
     var resolved = try resolver.resolve("/app/main.roc");
     defer resolved.deinit();
     try std.testing.expectEqual(@as(usize, 3), resolved.packages.len);
+}
+
+test "a platform declared with an absolute path is rejected" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    try registry.locals.put("/work/platform/main.roc", .{ .kind = .platform });
+    try registry.locals.put("/app/main.roc", .{ .kind = .app, .deps = &.{
+        .{ .alias = "pf", .spec = "/work/platform/main.roc", .is_platform = true },
+    } });
+
+    try testExpectResolutionFails(&registry, "/app/main.roc", .{}, "Absolute Platform Path");
+}
+
+test "replace-dep: a relative platform declaration resolves while local sources are canonicalized" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    try registry.locals.put("/app/platform/main.roc", .{ .kind = .platform });
+    try registry.locals.put("/app/main.roc", .{ .kind = .app, .deps = &.{
+        .{ .alias = "pf", .spec = "platform/main.roc", .is_platform = true },
+        .{ .alias = "ascii", .spec = test_ascii_url, .is_platform = false },
+    } });
+    try registry.urls.put(test_ascii_url, .{});
+    try registry.locals.put("/work/roc-ascii/main.roc", .{});
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+        .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" },
+    }));
+    defer resolver.deinit();
+    var resolved = try resolver.resolve("/app/main.roc");
+    defer resolved.deinit();
+    const selected = resolved.packages[resolved.selected_platform_index.?];
+    try std.testing.expectEqual(HeaderKind.platform, selected.kind);
 }
 
 test "replace-dep: local and versionless sources match by canonical path and exact URL" {

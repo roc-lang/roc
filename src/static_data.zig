@@ -948,6 +948,16 @@ pub const BuildOptions = struct {
     include_requested_exports: bool = false,
 };
 
+/// Symbol of requested layout `index`'s value when `include_requested_exports`
+/// materializes it: owner `index` past the program's static-data slots.
+pub fn requestedValueSymbolName(allocator: Allocator, lowered: *const lir.CheckedPipeline.LoweredProgram, index: usize) Allocator.Error![]u8 {
+    return try lir.Program.staticDataSymbolName(allocator, @enumFromInt(requestedOwner(lowered, index)));
+}
+
+fn requestedOwner(lowered: *const lir.CheckedPipeline.LoweredProgram, index: usize) u32 {
+    return @intCast(lowered.lir_result.static_data_values.items.len + index);
+}
+
 /// Build readonly data symbols for internal LIR values and optional provided constants.
 pub fn buildStaticData(
     allocator: Allocator,
@@ -1056,7 +1066,12 @@ const StaticDataBuilder = struct {
     nodes: std.ArrayList(StaticDataExport),
     initializer_machine: StaticInitializerMachine,
     frozen_allocations: collections.DenseMap(SymbolicAllocationId, PointerTarget),
-    local_symbol_ordinal: u32,
+    /// The value whose allocations are being frozen, which names them: a
+    /// static-data slot, or past the slots a requested value and then a
+    /// provided value (design.md, "Object Symbol Names").
+    owner: u32,
+    /// Index of the owner's next frozen allocation; its value is node 0.
+    owner_node: u32,
     procedure_names: collections.DenseMap(lir.LIR.LirProcSpecId, []u8),
     helper_names: std.AutoHashMap(layout.RcHelperKey, []u8),
     include_provided_exports: bool,
@@ -1079,7 +1094,8 @@ const StaticDataBuilder = struct {
             .nodes = .empty,
             .initializer_machine = try StaticInitializerMachine.init(allocator, lowered, target_usize),
             .frozen_allocations = collections.DenseMap(SymbolicAllocationId, PointerTarget).init(allocator),
-            .local_symbol_ordinal = 0,
+            .owner = 0,
+            .owner_node = 1,
             .procedure_names = .init(allocator),
             .helper_names = .init(allocator),
             .include_provided_exports = options.include_provided_exports,
@@ -1122,7 +1138,8 @@ const StaticDataBuilder = struct {
             const initializer = request.initializer orelse continue;
             if (request.const_locator == null) continue;
 
-            const symbol_name = try std.fmt.allocPrint(self.allocator, "roc__requested_const_value_{d}", .{index});
+            self.beginOwner(requestedOwner(self.lowered, index));
+            const symbol_name = try requestedValueSymbolName(self.allocator, self.lowered, index);
             errdefer self.allocator.free(symbol_name);
             const value = try self.initializer_machine.evaluateProc(initializer);
             if (value.layout_idx != request.layout_idx) {
@@ -1143,11 +1160,12 @@ const StaticDataBuilder = struct {
     }
 
     fn buildProvidedExports(self: *StaticDataBuilder) MaterializationError!void {
-        for (self.root.module.provided_exports.exports) |provided| {
+        for (self.root.module.provided_exports.exports, 0..) |provided, provided_index| {
             const data = switch (provided) {
                 .data => |data| data,
                 .procedure => continue,
             };
+            self.beginOwner(self.providedOwner(provided_index));
 
             const request = self.requestedLayout(data.const_ref);
             const initializer = request.initializer orelse
@@ -1200,6 +1218,7 @@ const StaticDataBuilder = struct {
             }
 
             const initialized = try self.initializer_machine.evaluateStatic(static_data_id);
+            self.beginOwner(@intCast(index));
             const materialized = try self.freezeValue(initialized);
             errdefer self.deinitMaterialized(materialized);
 
@@ -1213,6 +1232,17 @@ const StaticDataBuilder = struct {
                 .relocations = materialized.relocations,
             });
         }
+    }
+
+    /// Name the allocations frozen from here on after `owner`.
+    fn beginOwner(self: *StaticDataBuilder, owner: u32) void {
+        self.owner = owner;
+        self.owner_node = 1;
+    }
+
+    /// Owner number of provided export `index`: past every requested layout.
+    fn providedOwner(self: *const StaticDataBuilder, index: usize) u32 {
+        return @intCast(self.lowered.lir_result.static_data_values.items.len + self.lowered.lir_result.requested_layouts.items.len + index);
     }
 
     fn requestedLayout(self: *StaticDataBuilder, const_locator: CheckedModule.ConstLocator) lir.Program.RequestedLayout {
@@ -1326,10 +1356,10 @@ const StaticDataBuilder = struct {
         // Reserve the symbol before following its relocations. This makes the
         // target-memory graph capable of representing recursive allocation
         // cycles without reconstructing or breaking them.
-        const symbol_name = try std.fmt.allocPrint(self.allocator, "roc__static_{s}const_{d}", .{ if (self.lowered.frozen_static_data != null) @as([]const u8, "overlay_") else "", self.local_symbol_ordinal });
+        const symbol_name = try lir.Program.staticDataNodeSymbolName(self.allocator, self.owner, self.owner_node);
         var node_appended = false;
         errdefer if (!node_appended) self.allocator.free(symbol_name);
-        self.local_symbol_ordinal += 1;
+        self.owner_node += 1;
         const data_offset = staticDataPtrOffset(self.word_size, allocation.alignment, allocation.contains_refcounted);
         const bytes = try self.allocator.alloc(u8, data_offset + allocation.payload.bytes.len);
         errdefer if (!node_appended) self.allocator.free(bytes);

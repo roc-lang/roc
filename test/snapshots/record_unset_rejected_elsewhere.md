@@ -12,7 +12,6 @@ y = { a: _ + 1 }
 # EXPECTED
 UNEXPECTED EXPRESSION SYNTAX - record_unset_rejected_elsewhere.md:1:5:1:6
 UNEXPECTED EXPRESSION SYNTAX - record_unset_rejected_elsewhere.md:3:10:3:11
-UNRECOGNIZED SYNTAX - record_unset_rejected_elsewhere.md:1:5:1:6
 # PROBLEMS
 ~~~clojure
 (reports
@@ -63,17 +62,7 @@ UNRECOGNIZED SYNTAX - record_unset_rejected_elsewhere.md:1:5:1:6
 			(text " here.")
 			(line-break)
 			(line-break)
-			(source-region (file "record_unset_rejected_elsewhere.md") (start 3 10) (end 3 11) (annotation error) (line-text "y = { a: _ + 1 }"))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 1 5) (end 1 6))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "record_unset_rejected_elsewhere.md") (start 1 5) (end 1 6) (annotation error) (line-text "x = _"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo."))))
+			(source-region (file "record_unset_rejected_elsewhere.md") (start 3 10) (end 3 11) (annotation error) (line-text "y = { a: _ + 1 }")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -108,19 +97,18 @@ y = { a:  + 1 }
 (can-ir
 	(d-let
 		(p-assign (ident "x"))
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(d-let
 		(p-assign (ident "y"))
-		(e-record
-			(fields))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt (type "Error"))
-		(patt (type "{}")))
+		(patt (type "{ a: Error }")))
 	(expressions
 		(expr (type "Error"))
-		(expr (type "{}"))))
+		(expr (type "{ a: Error }"))))
 ~~~

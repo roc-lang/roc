@@ -38,16 +38,7 @@ fn jsonEscape(allocator: std.mem.Allocator, source: []const u8) std.mem.Allocato
 
 /// Get the path to the test platform for creating valid Roc files
 fn platformPath(allocator: std.mem.Allocator) integration_spec.SpecError![]u8 {
-    // Resolve from repo root to ensure absolute path
-    const repo_root = try std.Io.Dir.cwd().realPathFileAlloc(test_env.io, ".", allocator);
-    defer allocator.free(repo_root);
-    const path = try std.fs.path.join(allocator, &.{ repo_root, "test", "str", "platform", "main.roc" });
-    // Convert backslashes to forward slashes for cross-platform Roc source compatibility
-    // Roc interprets backslashes as escape sequences in string literals
-    for (path) |*c| {
-        if (c.* == '\\') c.* = '/';
-    }
-    return path;
+    return allocator.dupe(u8, test_env.tmp_dir_platform_path);
 }
 
 /// Check whether a JSON items array contains a completion item with the given label.
@@ -3375,7 +3366,7 @@ pub fn completionHandlerReturnsLambdaParameters() integration_spec.SpecError!voi
     // add = |first, second| first + second
     // Cursor position should be inside the lambda body
     const open_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [add] {{ pf: platform \"{s}\" }}\\n\\nadd = |first, second| first + second"}}}}}}
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [add] {{ pf: platform \"{s}\" }}\n\nadd = |first, second| first + second"}}}}}}
     , .{ file_uri, platform_path });
     defer allocator.free(open_body);
     const open_msg = try frame(allocator, open_body);

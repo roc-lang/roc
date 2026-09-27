@@ -101,7 +101,7 @@ fn testRebuild(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqua
         .layout_idx = failure_layout,
         .compile_time_root = .{
             .module = .{},
-            .root = undefined, // Accessor reconstruction reads slot roles, not checked-root identity.
+            .root = .{ .checked = @enumFromInt(1) },
             .const_locator = null,
             .role = .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = failed_offset, .message_offset = message_offset } },
         },
@@ -112,7 +112,7 @@ fn testRebuild(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqua
         .layout_idx = list_layout,
         .compile_time_root = .{
             .module = .{},
-            .root = undefined, // Accessor reconstruction reads slot roles, not checked-root identity.
+            .root = .{ .checked = @enumFromInt(1) },
             .const_locator = null,
             .role = .{ .value = .{ .failure_slot = failure_slot, .plan = list_plan } },
         },
