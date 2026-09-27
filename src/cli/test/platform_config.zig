@@ -104,6 +104,10 @@ const fx_open_tests = [_]SimpleTestSpec{
         .description = "Regression test: a ?-composed error row includes a repeated or self-referential tail (issue 11621)",
     },
     .{
+        .roc_file = "test/fx-open/issue_11723_dead_literal_read_after_question.roc",
+        .description = "Regression test: an optimized runtime program that never reads a completed compile-time literal still builds (issue 11723)",
+    },
+    .{
         .roc_file = "test/fx-open/issue_10270_named_map_err_closure.roc",
         .description = "Regression test: named closure using map_err compiles when its result is propagated with ? (issue 10270)",
     },

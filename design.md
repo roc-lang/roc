@@ -1013,32 +1013,39 @@ whose state updates are lost to the enclosing continuation.
 Compile-time evaluation is a function of the checked program alone. Every
 command that finalizes checking evaluates the same roots, every checked
 module's compile-time requests plus the platform entrypoints of the
-program's root module, taken from its checked `runtime_requests`, under one fixed
-configuration (`compileTimeTarget`): the host's width, expects run, literal
-roots on, and the dev Solved policy (`.wrappers` inlining and
-iterator-fusion SpecConstr). Nothing a command asks of its runtime program
-reaches that evaluation, and the evaluator reads no object-cache entries.
-`roc check` and `roc build` therefore report the same compile-time errors
-and complete bit-identical values: a build cannot report an error that
-checking did not.
+program's root module, taken from its checked `runtime_requests`, and the
+`test_expect` requests of every module `roc test` would run (the root
+package and the packages it reaches through filesystem paths), with every
+literal conversion those roots reach hoisted, at the host's width, with
+expects run (`compileTimeTarget`). Its Solved policy is that of the program
+being built, so evaluation runs inside that program's one specialization;
+with no runtime program, as in `roc check`, it is dev's. Inlining and
+SpecConstr preserve meaning, so the policy changes how evaluation's code is
+built, never what it computes. Every command also gives evaluation the same
+object cache (`CompileTimeObjectCache`): the host's dev-policy packs, whose
+procedures run expects. The evaluator's program takes a hit for a procedure
+it runs (under `comptime_closure_hits`) only when the entry names that
+procedure's own identity, and splices its cached code in place of compiling
+it; a cache entry is the procedure its key names, so the cache too changes
+only what evaluation compiles. `roc check` and `roc build` therefore
+evaluate the same roots to the same values and report the same compile-time
+errors: a build cannot report an error in the program that checking did not,
+and `--opt` never moves a computation between compile time and runtime. A
+dev build for the host reads the same packs for its runtime program and
+shares them with evaluation.
 
 Monotype lowering, lifting, SpecConstr, lambda solving, and inline analysis
 run once for that evaluation over the union of its roots, and the frozen
-Solved program they produce is one immutable producer identity domain. A
-runtime consumer whose `SolvedPolicy` is the evaluation's continues that
-program and borrows it: none copies it, none reruns any of those stages, and
-callable correspondence compares ids from one producer domain, never ids
-allocated by separate solver runs. A consumer continuing it chooses its
-target width, the explicitly shared expect consumer mode, its LIR policy, and
-the completed compile-time values it reads as literals. Any other runtime
-consumer (an optimized build, the interpreter, or Boxy) specializes the
-checked modules itself under its own policy once evaluation has completed,
-and reads every compile-time value from the modules' `ConstStore`s. Solved
-programs built under different inlining and SpecConstr policies specialize
-one function into differently shaped members, because their lambda sets
-differ, so no member identity in one names a member of the other; the
-stores name each value independently of any Solved program. The producer
-program is released after its last consumer.
+Solved program they produce is one immutable producer identity domain. An
+LSS runtime consumer continues that program and borrows it: none copies it,
+none reruns any of those stages, and callable correspondence compares ids
+from one producer domain, never ids allocated by separate solver runs. A
+consumer continuing it chooses its target width, the explicitly shared
+expect consumer mode, its LIR policy, and the completed compile-time values
+it reads as literals. A Boxy runtime program has no Monotype stage to share,
+so it lowers the checked modules itself and reads every compile-time value
+from the modules' `ConstStore`s. The producer program is released after its
+last consumer.
 
 Each consumer names its share of the producer program in an explicit root
 manifest, applied before LIR demand discovery. A manifest names producer root
@@ -1072,9 +1079,12 @@ consumer still owns its complete, uncompacted LIR representation tables. The
 resulting frozen graph participates in the consumer's one reachability pass:
 its explicit function relocations retain exactly the callable procedures that
 the completed values contain, and those procedures join the ordinary runtime
-roots supplied to ARC. Successful evaluation evidence removes its value guards
-after guard construction; failed values keep their ordinary runtime failure
-paths. A root that stops at a checked root's value guard is a propagated
+roots supplied to ARC. Guard insertion runs after that pass and reads each
+read value's outcome from the failure record in the compacted frozen graph: a
+read of a successful value is never guarded, and a read of a failed value keeps
+its ordinary runtime failure path. Worker preparation may create slots that
+lowering never reads, so no step may assume a slot present at transcoding
+survives reachability. A root that stops at a checked root's value guard is a propagated
 failure: it records the failure it read and is not reported again, because the
 failing root already reported it in the module that owns it. A literal root
 belongs to no checked module, so nothing retains its failure between
@@ -6593,8 +6603,13 @@ extension the annotation's generation minted (`Check.implicit_open_exts`,
 sliced per annotation by `annotation_implicit_open_exts`), and reports a Type
 Mismatch in the annotation context for any that resolved to a row carrying
 tags—showing the row the body produced against the union the annotation
-wrote—marking that extension erroneous (diagnostic recovery, like every
-other reported problem).
+wrote. The recovery is the one every annotation mismatch gets: the
+definition's body (a function's body, or the right-hand side) becomes a
+runtime error, and the row keeps exactly what solving gave it. The row is
+not poisoned: other definitions call this one and its uses have already
+related to the row, or will, so an erroneous type there would leave code
+nothing lowers, such as an `expect` calling the definition, which then fails
+at the retired body like any test reaching a checked error.
 
 That pass is a single READ of a mutable variable, and a definition can still
 widen its own row afterwards through a generated codec its body introduced: a
@@ -6603,7 +6618,8 @@ derived parser or encoder is often validated only once
 in the module has run, and its validation adds error tags to the codec's error
 row (Derived Parser Required-Field Error Composition). Every extension the
 post-body pass cleared is therefore kept, stamped with the source region of its
-binding's right-hand side (`Check.LateImplicitOpenExtAudit.owner_rhs`). Each
+binding's right-hand side (`Check.LateImplicitOpenExtAudit.owner_rhs`) and
+that right-hand side itself (`owner_expr`), which a report retires. Each
 codec validation records, with the region of the expression that introduced
 the codec relation, exactly which tags it requires in which error row
 (`Check.codec_row_demands`): `MissingRequiredField(Str)`, a nested custom
@@ -17290,8 +17306,8 @@ are zero-sized; its source template or layout alone cannot identify which member
 was evaluated. Solved LIR lowering records `FrozenCallableContext` alongside the frozen
 Monotype function and generated worker identity. Transcoding consumes that
 complete identity and requires one exact target member. These identities are
-positions in one Solved program, which is why a runtime consumer with another
-Solved policy reads the constant stores instead of transcoding.
+positions in one Solved program, which is why every LSS runtime consumer
+continues evaluation's Solved program rather than preparing its own.
 
 Shared compile-time execution completes slots on demand. Each declared
 value and failure slot carries its producer's exact checked module and root ID.
