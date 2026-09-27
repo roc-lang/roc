@@ -330,12 +330,17 @@ scratch_deferred_static_dispatch_constraints: base.Scratch(DeferredConstraintChe
 /// later definitions are checked, so validating them earlier would publish a
 /// derivation for a shape that is no longer the call's final type.
 final_codec_dispatch_constraints: std.ArrayListUnmanaged(FinalCodecDispatchConstraint) = .empty,
-final_codec_dispatch_constraint_fns: std.AutoHashMapUnmanaged(Var, void) = .empty,
+final_codec_dispatch_constraint_fns: std.AutoHashMapUnmanaged(Var, CodecConstraintPhase) = .empty,
 /// Generic generated-codec relations captured by their owning type scheme.
 /// Their definition-side worklist entries must retire without being treated as
 /// settled: each scheme instantiation copies and validates the exact relation.
 scheme_deferred_codec_constraint_fns: std.AutoHashMapUnmanaged(Var, void) = .empty,
 checking_final_codec_dispatch_constraints: bool = false,
+/// Boundary validation produces constraints once; the exact calls and live
+/// contract roots freeze only after the module's error rows have settled.
+constraining_boundary_codecs: bool = false,
+boundary_codec_derivations: std.ArrayListUnmanaged(BoundaryCodecDerivation) = .empty,
+boundary_codec_calls: std.ArrayListUnmanaged(ModuleEnv.GeneratedCodecCall) = .empty,
 /// Complete imported schemes, shared by ordinary lookups and method dispatch.
 /// Each source binding is copied once; each use freshly instantiates its type
 /// and explicit requirements. The append-only log owns speculative imports so
@@ -2454,6 +2459,16 @@ const FinalCodecDispatchConstraint = struct {
     failure_expr: StaticDispatchConstraint.Provenance.OptExprIdx,
 };
 
+const CodecConstraintPhase = enum { final, boundary };
+
+const BoundaryCodecDerivation = struct {
+    kind: ModuleEnv.GeneratedCodecDerivation.Kind,
+    roots: [7]Var,
+    calls_start: usize,
+    calls_len: usize,
+    region: Region,
+};
+
 const ReturnConstraint = struct {
     actual_expr: CIR.Expr.Idx,
     kind: ReturnConstraintKind,
@@ -3212,6 +3227,8 @@ pub fn deinit(self: *Self) void {
     self.scratch_static_dispatch_constraints.deinit();
     self.scratch_deferred_static_dispatch_constraints.deinit();
     self.final_codec_dispatch_constraints.deinit(self.gpa);
+    self.boundary_codec_derivations.deinit(self.gpa);
+    self.boundary_codec_calls.deinit(self.gpa);
     self.final_codec_dispatch_constraint_fns.deinit(self.gpa);
     self.scheme_deferred_codec_constraint_fns.deinit(self.gpa);
     self.scratch_default_param_vars.deinit();
@@ -28746,6 +28763,8 @@ const Probe = struct {
     waiting_predeclared_dispatch_uses_len: usize,
     generated_codec_derivations_len: usize,
     generated_codec_calls_len: usize,
+    boundary_codec_derivations_len: usize,
+    boundary_codec_calls_len: usize,
     codec_row_demands_len: usize,
     codec_row_demand_tags_len: usize,
     rejected_static_dispatches_len: usize,
@@ -28801,6 +28820,8 @@ const Probe = struct {
         self.check.waiting_predeclared_dispatch_uses.shrinkRetainingCapacity(self.waiting_predeclared_dispatch_uses_len);
         self.check.cir.generated_codec_derivations.items.shrinkRetainingCapacity(self.generated_codec_derivations_len);
         self.check.cir.generated_codec_calls.items.shrinkRetainingCapacity(self.generated_codec_calls_len);
+        self.check.boundary_codec_derivations.shrinkRetainingCapacity(self.boundary_codec_derivations_len);
+        self.check.boundary_codec_calls.shrinkRetainingCapacity(self.boundary_codec_calls_len);
         self.check.codec_row_demands.shrinkRetainingCapacity(self.codec_row_demands_len);
         self.check.codec_row_demand_tags.shrinkRetainingCapacity(self.codec_row_demand_tags_len);
         // The durable records drop here; the rejection markers they mirror live
@@ -28857,6 +28878,8 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const waiting_predeclared_dispatch_uses_len = self.waiting_predeclared_dispatch_uses.items.len;
     const generated_codec_derivations_len = self.cir.generated_codec_derivations.items.items.len;
     const generated_codec_calls_len = self.cir.generated_codec_calls.items.items.len;
+    const boundary_codec_derivations_len = self.boundary_codec_derivations.items.len;
+    const boundary_codec_calls_len = self.boundary_codec_calls.items.len;
     const codec_row_demands_len = self.codec_row_demands.items.len;
     const codec_row_demand_tags_len = self.codec_row_demand_tags.items.len;
     const rejected_static_dispatches_len = self.cir.rejected_static_dispatches.items.items.len;
@@ -28889,6 +28912,8 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .waiting_predeclared_dispatch_uses_len = waiting_predeclared_dispatch_uses_len,
         .generated_codec_derivations_len = generated_codec_derivations_len,
         .generated_codec_calls_len = generated_codec_calls_len,
+        .boundary_codec_derivations_len = boundary_codec_derivations_len,
+        .boundary_codec_calls_len = boundary_codec_calls_len,
         .codec_row_demands_len = codec_row_demands_len,
         .codec_row_demand_tags_len = codec_row_demand_tags_len,
         .rejected_static_dispatches_len = rejected_static_dispatches_len,
@@ -30449,6 +30474,7 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     // finalize unifies types, so a kind committed here is a fact every
     // consumer reads.
     try self.defaultLiteralFieldKinds(env);
+    try self.freezeBoundaryCodecDerivations(env);
 }
 
 /// The candidate universe `runLiteralDefaultingRounds` gathers from—the only
@@ -32002,11 +32028,54 @@ fn laterUseCanRefine(self: *Self, var_: Var) bool {
     };
 }
 
+fn refinableVarsIntersect(self: *Self, a: *const std.AutoHashMap(Var, void), b: *const std.AutoHashMap(Var, void)) bool {
+    const small = if (a.count() <= b.count()) a else b;
+    const large = if (a.count() <= b.count()) b else a;
+    var iter = small.keyIterator();
+    while (iter.next()) |var_| {
+        if (large.contains(var_.*) and self.laterUseCanRefine(var_.*)) return true;
+    }
+    return false;
+}
+
+/// A codec's output error row is a constraint result, not an input to shape
+/// selection. Settled local inputs can produce those constraints before the
+/// result generalizes, while the exact calls wait for final row settlement.
+fn codecInputsAreBoundaryLocal(
+    self: *Self,
+    constraint: StaticDispatchConstraint,
+    inputs: *std.AutoHashMap(Var, void),
+    interface: *const std.AutoHashMap(Var, void),
+    rank: Rank,
+) Allocator.Error!bool {
+    const factory = self.types.resolveVar(constraint.fn_var).desc.content.unwrapFunc() orelse return false;
+    for (self.types.sliceVars(factory.args)) |arg| try self.collectReachableVars(arg, inputs);
+    const runtime = self.types.resolveVar(factory.ret).desc.content.unwrapFunc() orelse return false;
+    for (self.types.sliceVars(runtime.args)) |arg| try self.collectReachableVars(arg, inputs);
+    if (self.refinableVarsIntersect(inputs, interface)) return false;
+
+    var iter = inputs.keyIterator();
+    while (iter.next()) |var_| {
+        const resolved = self.types.resolveVar(var_.*);
+        switch (resolved.desc.content) {
+            .flex, .rigid, .err => return false,
+            .structure => |flat| switch (flat) {
+                // Even a closed anonymous value can acquire nominal identity
+                // through an enclosing scope, including an empty record.
+                .record, .tag_union, .empty_record, .empty_tag_union => if (@intFromEnum(resolved.desc.rank) < @intFromEnum(rank)) return false,
+                .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => {},
+            },
+            .alias, .field_presence => {},
+        }
+    }
+    return true;
+}
+
 /// Move every still-open dispatch relation owned by this generalization
 /// boundary into its explicit scheme. Ordinary relations need the side table
 /// while their receiver belongs to an outer rank. A generated codec relation
-/// also needs it when any part of its structural receiver escapes, because the
-/// relation is validated independently after each instantiation settles.
+/// produces its constraints locally when its inputs are settled and local;
+/// otherwise its complete escaping relation belongs to the scheme.
 /// Captured and dropped candidates are removed immediately, so later
 /// boundaries never rescan completed sites; only rank-undecided candidates
 /// stay owned until the capture after generalization.
@@ -32014,6 +32083,7 @@ fn captureSchemeDispatchRequirements(
     self: *Self,
     roots: []const BoundaryRoot,
     env: *Env,
+    boundary_codecs: ?*std.ArrayList(FinalCodecDispatchConstraint),
 ) Allocator.Error!void {
     // Generalization boundaries are never speculative solver work. Keeping
     // this invariant explicit means probes only need to rewind append-only
@@ -32021,8 +32091,11 @@ fn captureSchemeDispatchRequirements(
     if (self.probe_depth != 0) {
         @panic("scheme requirements cannot be captured inside a solver probe");
     }
-    var final_codec_receiver_vars = std.AutoHashMap(Var, void).init(self.gpa);
-    defer final_codec_receiver_vars.deinit();
+    var codec_relation_vars = std.AutoHashMap(Var, void).init(self.gpa);
+    defer codec_relation_vars.deinit();
+    var interface_vars = std.AutoHashMap(Var, void).init(self.gpa);
+    defer interface_vars.deinit();
+    var interface_collected = false;
 
     const rank = env.rank();
     for (roots) |root| {
@@ -32036,7 +32109,6 @@ fn captureSchemeDispatchRequirements(
         // quantified one carries its own constraint.
         var undecided = std.ArrayListUnmanaged(u32).empty;
         errdefer undecided.deinit(self.gpa);
-        var interface_reachable_collected = false;
         for (owner_indices.items) |candidate_idx| {
             const candidate = self.scheme_requirement_candidates.items[candidate_idx];
             std.debug.assert(candidate.owner_root == root.owner);
@@ -32045,37 +32117,47 @@ fn captureSchemeDispatchRequirements(
             // needs an explicit entry is decided here and never reconstructed
             // at a later enclosing boundary.
             const receiver = self.types.resolveVar(candidate.receiver_var);
-            const final_codec = self.final_codec_dispatch_constraint_fns.contains(candidate.constraint.fn_var);
+            const codec_phase = self.final_codec_dispatch_constraint_fns.get(candidate.constraint.fn_var);
+            if (codec_phase == .boundary) continue;
+            const final_codec = codec_phase == .final;
             const unresolved_codec = !final_codec and
                 try self.schemeCandidateIsUnresolvedGeneratedCodec(candidate, env);
             const scheme_codec = candidate.deferred_generated_codec or final_codec or unresolved_codec;
             const needs_explicit_requirement = if (scheme_codec) blk: {
-                // A generated codec on a structural receiver does not live on
-                // that receiver's descriptor. Preserve it explicitly when a
-                // part of the receiver that a later use can still refine
-                // escapes through this scheme. That shared component is
-                // exactly where a later use can refine the shape before final
-                // validation. A shared component nothing can refine is final
-                // here, so its evidence resolves at the requiring site.
-                if (!interface_reachable_collected) {
-                    self.var_set.clearRetainingCapacity();
-                    try self.collectReachableVars(root.interface, &self.var_set);
-                    interface_reachable_collected = true;
+                // The whole group publishes together. A codec input reachable
+                // from another member is just as refinable as one in this
+                // owner's interface. Keep this traversal separate from the
+                // eligibility scratch, which may change between candidates.
+                if (!interface_collected) {
+                    for (roots) |boundary_root| {
+                        try self.collectReachableVars(boundary_root.interface, &interface_vars);
+                    }
+                    interface_collected = true;
                 }
-                final_codec_receiver_vars.clearRetainingCapacity();
-                try self.collectReachableVars(candidate.receiver_var, &final_codec_receiver_vars);
-
-                const iterate_receiver = final_codec_receiver_vars.count() <= self.var_set.count();
-                var reachable_iter = if (iterate_receiver)
-                    final_codec_receiver_vars.keyIterator()
-                else
-                    self.var_set.keyIterator();
-                while (reachable_iter.next()) |reachable_var| {
-                    const other = if (iterate_receiver) &self.var_set else &final_codec_receiver_vars;
-                    if (!other.contains(reachable_var.*)) continue;
-                    if (self.laterUseCanRefine(reachable_var.*)) break :blk true;
+                codec_relation_vars.clearRetainingCapacity();
+                try self.collectReachableVars(candidate.receiver_var, &codec_relation_vars);
+                if (boundary_codecs) |ready| {
+                    if (final_codec and try self.codecInputsAreBoundaryLocal(
+                        candidate.constraint,
+                        &codec_relation_vars,
+                        &interface_vars,
+                        rank,
+                    )) {
+                        try ready.append(self.gpa, .{
+                            .dispatcher_var = candidate.receiver_var,
+                            .constraint = candidate.constraint,
+                            .failure_expr = if (candidate.failure_expr) |expr| .from(@intFromEnum(expr)) else .none,
+                        });
+                        // The exact relation has transferred to this boundary;
+                        // duplicate candidates cannot schedule it again.
+                        self.final_codec_dispatch_constraint_fns.getPtr(candidate.constraint.fn_var).?.* = .boundary;
+                        break :blk false;
+                    }
                 }
-                break :blk false;
+                // Unsettled codec inputs need the complete relation, including
+                // an escaping error row after the success shape was erased.
+                try self.collectReachableVars(candidate.constraint.fn_var, &codec_relation_vars);
+                break :blk self.refinableVarsIntersect(&codec_relation_vars, &interface_vars);
             } else blk: {
                 if (receiver.desc.content != .flex) break :blk false;
                 if (receiver.desc.rank == .generalized) break :blk false;
@@ -32137,7 +32219,7 @@ fn captureEscapedSchemeDispatchRequirements(
     roots: []const BoundaryRoot,
     env: *Env,
 ) Allocator.Error!void {
-    try self.captureSchemeDispatchRequirements(roots, env);
+    try self.captureSchemeDispatchRequirements(roots, env, null);
     self.assertSchemeRequirementBoundaryQuiescent(roots);
 }
 
@@ -32194,11 +32276,13 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
     env: *Env,
 ) std.mem.Allocator.Error!void {
     const rank = env.rank();
+    var boundary_codecs = std.ArrayList(FinalCodecDispatchConstraint).empty;
+    defer boundary_codecs.deinit(self.gpa);
 
     // Generalization publishes a complete scheme: its root type plus every
     // unresolved method relation the definition owns. Capture those relations
     // even when this boundary has no literal candidates of its own.
-    try self.captureSchemeDispatchRequirements(roots, env);
+    try self.captureSchemeDispatchRequirements(roots, env, &boundary_codecs);
 
     // The candidate universe is the var pool entry this generalize call will
     // promote. (The global open-literal worklist is NOT usable here: a sub-def
@@ -32218,7 +32302,7 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
         break;
     }
     if (!has_candidate) {
-        try self.quiesceSchemeRequirementsAtBoundary(roots, env);
+        try self.quiesceSchemeRequirementsAtBoundary(roots, env, &boundary_codecs);
         return;
     }
 
@@ -32286,24 +32370,45 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
         .rank = rank,
         .pool_len = pool_vars.len,
     } });
-    try self.quiesceSchemeRequirementsAtBoundary(roots, env);
+    try self.quiesceSchemeRequirementsAtBoundary(roots, env, &boundary_codecs);
 }
 
 /// The boundary defaulting pass's shared epilogue: drive the grounded
-/// pending-requirement worklist to its exact fixpoint, then capture what it
-/// produced. Target selection inside that fixpoint can instantiate a method
-/// scheme that contributes a transitive requirement under this boundary's
-/// still-active owner; capturing after the fixpoint is the lifecycle
-/// counterpart to the capture before defaulting—no solver work follows on
-/// either exit path, so when this returns the owner holds only the
-/// rank-undecided candidates that the post-generalization capture decides.
+/// pending requirements and local codec constraints to quiescence. Target
+/// selection can contribute new requirements under this boundary's active
+/// owner, so each drain is followed by capture. A codec transfers out of the
+/// final queue once, and only rank-undecided candidates remain on return.
 fn quiesceSchemeRequirementsAtBoundary(
     self: *Self,
     roots: []const BoundaryRoot,
     env: *Env,
+    boundary_codecs: *std.ArrayList(FinalCodecDispatchConstraint),
 ) std.mem.Allocator.Error!void {
-    try self.checkGroundedSchemeRequirementsAtBoundary(env);
-    try self.captureSchemeDispatchRequirements(roots, env);
+    while (true) {
+        if (boundary_codecs.items.len != 0) {
+            const previous = self.constraining_boundary_codecs;
+            self.constraining_boundary_codecs = true;
+            defer self.constraining_boundary_codecs = previous;
+            while (boundary_codecs.pop()) |codec| {
+                const region = self.getRegionAt(codec.dispatcher_var);
+                const failure_expr: ?CIR.Expr.Idx = if (codec.failure_expr == .none) null else @enumFromInt(@intFromEnum(codec.failure_expr));
+                if (codec.constraint.fn_name.eql(self.cir.idents.parser_for)) {
+                    try self.satisfyImplicitParserConstraint(codec.dispatcher_var, codec.constraint, codec.constraint.fn_var, env, region, failure_expr);
+                } else {
+                    std.debug.assert(codec.constraint.fn_name.eql(self.cir.idents.encoder_for));
+                    try self.satisfyImplicitEncoderForConstraint(codec.dispatcher_var, codec.constraint, codec.constraint.fn_var, env, region, failure_expr);
+                }
+                _ = self.final_codec_dispatch_constraint_fns.remove(codec.constraint.fn_var);
+                try self.settled_static_dispatch_constraint_fns.put(self.gpa, codec.constraint.fn_var, {});
+                self.retireResolvedTypeSchemeRequirements();
+            }
+            try self.checkStaticDispatchConstraints(env, false);
+            try self.checkAllConstraints(env);
+        }
+        try self.checkGroundedSchemeRequirementsAtBoundary(env);
+        try self.captureSchemeDispatchRequirements(roots, env, boundary_codecs);
+        if (boundary_codecs.items.len == 0) break;
+    }
     self.assertSchemeRequirementBoundaryDecided(roots, env);
 }
 
@@ -35656,6 +35761,7 @@ fn deferGeneratedCodecConstraintToFinalization(
 
     const entry = try self.final_codec_dispatch_constraint_fns.getOrPut(self.gpa, constraint.fn_var);
     if (entry.found_existing) return true;
+    entry.value_ptr.* = .final;
     errdefer _ = self.final_codec_dispatch_constraint_fns.remove(constraint.fn_var);
 
     try self.final_codec_dispatch_constraints.append(self.gpa, .{
@@ -35675,6 +35781,7 @@ fn checkFinalGeneratedCodecConstraints(self: *Self, env: *Env) Allocator.Error!v
     defer self.checking_final_codec_dispatch_constraints = false;
 
     for (self.final_codec_dispatch_constraints.items) |pending| {
+        if (self.settled_static_dispatch_constraint_fns.contains(pending.constraint.fn_var)) continue;
         const range = try self.types.appendStaticDispatchConstraints(&.{pending.constraint});
         try self.enqueueDeferredDispatchConstraint(env, .{
             .var_ = pending.dispatcher_var,
@@ -41158,10 +41265,10 @@ fn satisfyImplicitEncoderForConstraint(
     }
 }
 
-/// Freeze a generated codec contract at the successful validation point.
-/// Checker vars remain mutable until finalization, while the collected method
-/// calls describe the types observed now; publishing live vars later could
-/// pair those calls with a different, subsequently unified shape.
+/// Freeze a generated codec contract at successful final validation. A local
+/// boundary instead retains its exact calls and roots until the error row
+/// settles: its input locality proof already fixed the shape and method choices.
+/// Probes journal those pending records just like ordinary derivation snapshots.
 fn recordGeneratedCodecDerivationSnapshot(
     self: *Self,
     kind: ModuleEnv.GeneratedCodecDerivation.Kind,
@@ -41185,6 +41292,18 @@ fn recordGeneratedCodecDerivationSnapshot(
         state_var,
         error_var,
     };
+    if (self.constraining_boundary_codecs) {
+        const calls_start = self.boundary_codec_calls.items.len;
+        try self.boundary_codec_calls.appendSlice(self.gpa, calls);
+        try self.boundary_codec_derivations.append(self.gpa, .{
+            .kind = kind,
+            .roots = fixed_vars,
+            .calls_start = calls_start,
+            .calls_len = calls.len,
+            .region = region,
+        });
+        return;
+    }
     var roots = std.ArrayList(Var).empty;
     defer roots.deinit(self.gpa);
     try roots.appendSlice(self.gpa, &fixed_vars);
@@ -41269,6 +41388,30 @@ fn recordGeneratedCodecDerivationSnapshot(
         copied_vars[6],
         copied_calls.items,
     );
+}
+
+/// Freeze already validated boundary contracts after all error-row relations
+/// have settled. No shape walk, method selection, or constraint replay occurs.
+fn freezeBoundaryCodecDerivations(self: *Self, env: *Env) Allocator.Error!void {
+    std.debug.assert(!self.constraining_boundary_codecs);
+    for (self.boundary_codec_derivations.items) |derivation| {
+        const roots = derivation.roots;
+        try self.recordGeneratedCodecDerivationSnapshot(
+            derivation.kind,
+            roots[0],
+            roots[1],
+            roots[2],
+            roots[3],
+            roots[4],
+            roots[5],
+            roots[6],
+            self.boundary_codec_calls.items[derivation.calls_start..][0..derivation.calls_len],
+            env,
+            derivation.region,
+        );
+    }
+    self.boundary_codec_derivations.clearRetainingCapacity();
+    self.boundary_codec_calls.clearRetainingCapacity();
 }
 
 /// Drain the final generated-codec worklist together with the scheme

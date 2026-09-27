@@ -7467,6 +7467,23 @@ issue #11470 wrapper-overlap integration tests.
 
 ### Derived Parser Tag-Row Closure
 
+Codec constraint production and codec contract freezing are separate events.
+Before generalizing a binding, checking must either produce its codec's type
+constraints or retain the unresolved relation in its scheme. An error row is
+part of that relation even when the parsed shape does not escape: mapping a
+parsed record to a string must not discard the record parser's error demands.
+
+A codec whose shape, encoding, and state are settled and local to the closing
+boundary is validated once at that boundary. None of their refinable components
+may escape through a member's interface or belong to an enclosing scope.
+Validation uses ordinary unification and retains the exact selected calls and
+contract roots. Their snapshot waits until final type settlement, so error-row
+widening does not require validating the shape again. Unsettled inputs retain
+their complete receiver/callable requirement when any refinable component of
+that relation escapes. Capturing an error-only dependency does not authorize
+closing an unfinished input row. Boundary work consumes only the boundary's
+explicitly owned candidates and reaches quiescence before generalization.
+
 A compiler-derived structural codec owns the exact set of tags it reads or
 constructs. An inferred tag row remains open while source expressions can add
 tags. Codec eligibility defers such a row, and only the final codec boundary,
@@ -7928,14 +7945,14 @@ depth bound and cannot exhaust the native stack at any depth. Rejection
 poisons only the cyclic relation and does not discard unrelated queued
 relations.
 
-A generalization boundary captures its owned
-requirements before literal defaulting, runs grounded copied requirements to
-that exact fixpoint, captures once more, and after generalization captures
-the candidates rank adjustment decided. The second capture consumes
-requirements created while selecting method targets in the worklist; capture
-itself creates no solver work, so returning from that sequence leaves the
-boundary owner quiescent except for rank-undecided candidates, which the
-post-generalization capture consumes.
+A generalization boundary captures its owned requirements before literal
+defaulting, then drains grounded copied requirements together with local codec
+constraint production to quiescence. Capture transfers a settled local codec
+to the boundary's private queue instead of creating an evidence parameter;
+validation can create further owned requirements, so capture follows each drain.
+Each exact codec relation transfers once. After generalization, capture consumes
+the candidates rank adjustment decided. The boundary owner is otherwise
+quiescent, and no shape is revalidated just to freeze its final contract.
 If an outer receiver grounds only during module finalization, after its
 definition's group-local deferred queue is gone, the durable TypeScheme
 relation is explicitly re-enqueued and the ordinary plus instantiated dispatch
@@ -7989,16 +8006,18 @@ a root type after such a requirement was silently discarded. A successfully
 validated generated-codec requirement is different: its current concrete shape
 can still change when a downstream use substitutes a nested generalized
 variable. A generated-codec receiver can also be structurally known while one
-of its components is still a scheme variable. When the receiver shares type
-variables with the owning binding's interface, capture records the same exact
-receiver and callable relation before generalization. What makes a shared
+of its components is still a scheme variable. When unresolved codec inputs
+prevent local constraint production, capture records the exact receiver and
+callable relation if any refinable component of that complete relation escapes
+through the closing group's interfaces. This includes a result error row when
+the success shape has been erased. What makes a shared
 component refinable is what a later use can do to it: a type variable can be
 substituted, and an anonymous record or tag union can be lifted into a
 nominal whose backing it matches. A shared component that is neither—a
 nominal such as `I32`, a tuple, or a function type, each of whose own
-variables are checked separately—is final at the requiring site, so its codec
-evidence resolves there and the owning scheme gains no evidence parameter for
-it. Only after the binding is
+variables are checked separately—does not by itself require per-use evidence.
+Settled local codec inputs produce their constraints before generalization and
+their retained contract freezes after final type settlement. Only after the binding is
 classified as a scheme does the definition-side worklist entry retire; every
 instantiation copies the structural receiver and validates the resulting codec
 independently. An unresolved outer record or tag extension is not a component
@@ -9254,6 +9273,12 @@ Other solved-graph mutations:
   deferred static-dispatch worklist. Retirement reads the explicit structural
   origin and checked scheme-use substitution produced by those operations;
   there is no rank rewrite, structural ownership probe, or graph restamp.
+- `codecInputsAreBoundaryLocal` / `quiesceSchemeRequirementsAtBoundary`—policy:
+  Derived Parser Tag-Row Closure (above). Exact owned codec relations with
+  settled local inputs move to boundary validation before generalization;
+  validation contributes only ordinary unification constraints. The selected
+  calls and live contract roots freeze at final type settlement without a
+  second validation. Unsettled inputs retain complete scheme requirements.
 - `closeConcreteRecursiveDispatch`—policy: Pending Dispatch Requirements In
   Type Schemes (above). A concrete repeated receiver/callable state with an
   exact ancestor target and callable-reachable evidence reuses that selected
