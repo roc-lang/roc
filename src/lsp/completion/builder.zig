@@ -588,7 +588,7 @@ pub const CompletionBuilder = struct {
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
-            const pattern = module_env.store.getPattern(def.pattern);
+            const pattern = module_env.store.getSourcePattern(def.pattern);
 
             const ident_idx = patternIdent(pattern) orelse continue;
 
@@ -638,7 +638,7 @@ pub const CompletionBuilder = struct {
             const stmt_parts = getStatementParts(stmt);
 
             if (stmt_parts.pattern) |pattern_idx| {
-                const pattern = module_env.store.getPattern(pattern_idx);
+                const pattern = module_env.store.getSourcePattern(pattern_idx);
 
                 const ident_idx = patternIdent(pattern) orelse continue;
 
@@ -709,7 +709,7 @@ pub const CompletionBuilder = struct {
 
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
-            const pattern = module_env.store.getPattern(def.pattern);
+            const pattern = module_env.store.getSourcePattern(def.pattern);
 
             const ident_idx = patternIdent(pattern) orelse continue;
 
@@ -733,7 +733,7 @@ pub const CompletionBuilder = struct {
             const stmt = module_env.store.getSourceStatement(stmt_idx);
             const pattern_idx = statementPattern(stmt) orelse continue;
 
-            const pattern = module_env.store.getPattern(pattern_idx);
+            const pattern = module_env.store.getSourcePattern(pattern_idx);
             const ident_idx = patternIdent(pattern) orelse continue;
 
             const name = module_env.getIdentText(ident_idx);
@@ -1072,7 +1072,7 @@ pub const CompletionBuilder = struct {
             self.logDebug("addMethodCompletions: checking {d} top-level defs", .{defs_slice.len});
             for (defs_slice) |def_idx| {
                 const def = module_env.store.getDef(def_idx);
-                const pattern = module_env.store.getPattern(def.pattern);
+                const pattern = module_env.store.getSourcePattern(def.pattern);
 
                 const ident_idx = patternIdent(pattern) orelse continue;
 
@@ -1095,7 +1095,7 @@ pub const CompletionBuilder = struct {
                 const stmt = module_env.store.getSourceStatement(stmt_idx);
                 const pattern_idx = statementPattern(stmt) orelse continue;
 
-                const pattern = module_env.store.getPattern(pattern_idx);
+                const pattern = module_env.store.getSourcePattern(pattern_idx);
                 const ident_idx = patternIdent(pattern) orelse continue;
 
                 const name = module_env.getIdentText(ident_idx);
@@ -1334,7 +1334,7 @@ pub const CompletionBuilder = struct {
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
-            const pattern = module_env.store.getPattern(def.pattern);
+            const pattern = module_env.store.getSourcePattern(def.pattern);
 
             const ident_idx = patternIdent(pattern) orelse continue;
 
@@ -1354,7 +1354,7 @@ pub const CompletionBuilder = struct {
             const stmt = module_env.store.getSourceStatement(stmt_idx);
             const pattern_idx = statementPattern(stmt) orelse continue;
 
-            const pattern = module_env.store.getPattern(pattern_idx);
+            const pattern = module_env.store.getSourcePattern(pattern_idx);
             const ident_idx = patternIdent(pattern) orelse continue;
 
             if (ident_idx.eql(qualified_ident)) {
@@ -1377,7 +1377,7 @@ pub const CompletionBuilder = struct {
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
-            const pattern = module_env.store.getPattern(def.pattern);
+            const pattern = module_env.store.getSourcePattern(def.pattern);
 
             const ident_idx = patternIdent(pattern) orelse continue;
 
@@ -1392,7 +1392,7 @@ pub const CompletionBuilder = struct {
             const stmt = module_env.store.getSourceStatement(stmt_idx);
             const pattern_idx = statementPattern(stmt) orelse continue;
 
-            const pattern = module_env.store.getPattern(pattern_idx);
+            const pattern = module_env.store.getSourcePattern(pattern_idx);
             const ident_idx = patternIdent(pattern) orelse continue;
 
             if (ident_idx.eql(qualified_ident)) {

@@ -3519,9 +3519,9 @@ pub const SyntaxChecker = struct {
 
     /// Produce the edits that rename the symbol at the given position.
     ///
-    /// Returns null when the document could not be built or the position maps
-    /// nowhere; a built document with nothing renameable at that position is
-    /// reported as a rejection instead, so the editor can say why.
+    /// Returns null when the document could not be built; a built document
+    /// with nothing renameable at that position is reported as a rejection
+    /// instead, so the editor can say why.
     pub fn getRenameEditsAtPosition(
         self: *SyntaxChecker,
         uri: []const u8,
@@ -3544,7 +3544,8 @@ pub const SyntaxChecker = struct {
         }
 
         const module_env = build.getModuleEnv() orelse return null;
-        const target_offset = pos.positionToOffset(module_env, line, character) orelse return null;
+        const target_offset = pos.positionToOffset(module_env, line, character) orelse
+            return RenameOutcome{ .rejected = .not_a_local_binding };
 
         const target = renameTargetAt(module_env, target_offset) orelse
             return RenameOutcome{ .rejected = .not_a_local_binding };
@@ -4290,7 +4291,7 @@ const RenameTarget = struct {
 /// refused rather than half-renamed.
 fn renameTargetAt(module_env: *ModuleEnv, offset: u32) ?RenameTarget {
     const pattern_idx = cir_queries.resolveSymbolAtOffset(module_env, offset) orelse return null;
-    return switch (module_env.store.getPattern(pattern_idx)) {
+    return switch (module_env.store.getSourcePattern(pattern_idx)) {
         .assign => |assign| .{ .pattern = pattern_idx, .ident = assign.ident },
         .var_assign => |assign| .{ .pattern = pattern_idx, .ident = assign.ident },
         .as,

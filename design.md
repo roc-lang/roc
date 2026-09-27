@@ -1951,17 +1951,6 @@ Existing read and declaration nodes retain their own occurrence data. Any toolin
 indexes over these explicit occurrences belong to the tooling snapshot and are not
 built or serialized by ordinary compilation.
 
-Replacing an expression or statement with a runtime error overwrites its node
-in place, so the checked tree no longer reaches the source subtree beneath it.
-The replacement retains the node it overwrote in `NodeStore.retired_source_nodes`,
-referenced from the runtime-error node's own payload; the subtree's children,
-regions, and type variables are untouched. Every checked-program consumer reads
-the runtime error through `getExpr`/`getStatement`. Source tooling (hover, goto
-definition, references, rename, completion) reads through
-`getSourceExpr`/`getSourceStatement`, which return the retained source node, so
-names inside erroneous code resolve exactly as they were canonicalized and
-checked. The table is empty for a module that checks without errors.
-
 The `$` prefix is a naming convention enforced only as a declaration-site
 warning. Canonicalization reports a mutable binder whose name lacks `$`, or an
 immutable binder whose name starts with `$`, when it identifies the source
@@ -3173,6 +3162,22 @@ Checked CIR is the last source-level representation. It owns:
 Checked CIR may contain source-level forms such as static-dispatch calls,
 method equality, type-dispatch calls, and source `for` loops because those are
 part of the checked source module.
+
+Rejected code is replaced in place with a runtime error node: an expression,
+statement, or literal pattern checking rejects, and a read of a `var` before it
+is initialized, which canonicalization rejects. Every later stage reads the
+crash and nothing of the rejected code. The node store keeps each node it
+replaces this way in `NodeStore.replaced_source_nodes`, and the runtime error
+names the node it replaced, so source-level tools read through the replacement
+to the code as written with `getSourceExpr`, `getSourceStatement`, and
+`getSourcePattern`. The kept node's children, regions, and type variables are
+the ones canonicalization and checking produced, so hover, completion,
+renaming a binding, listing its references, highlighting it, and going to its
+definition all see the occurrences inside rejected code. Compilation never
+reads the kept nodes, and a module without errors keeps none. A deferred
+import reference that resolves to nothing is settled as a runtime error without
+keeping anything, because the deferred node is a placeholder for the resolved
+form rather than source.
 
 Equality against a payload-free tag carries an explicit checked discriminant
 decision: the checked operation records the value operand and exact tag
