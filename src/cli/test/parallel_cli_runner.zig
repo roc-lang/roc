@@ -2385,6 +2385,12 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test issue 9392 numeric utility expects are deterministic with no cache", .body = .{ .custom = .issue_9392_deterministic_no_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10987: optimized affine-cipher expects pass on every run", .backend = .speed, .timeout_ms = 600_000, .body = .{ .custom = .issue_10987_optimized_affine_cipher } },
     .{ .id = 0, .suite = .subcommands, .name = "hosted try question widening rejects a non-included error row", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/fx-open/hosted_try_question_not_included.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "FallibleReject.roc" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "[ROC CRASHED]" } } } } },
+    // Repro for https://github.com/roc-lang/roc/issues/11726: the from_quote
+    // implementation rejects the "bad" literal, and the accepted "good" literal
+    // then allocates (repeat(10)) enough to reuse the freed region. The
+    // diagnostic for the rejected literal must still quote the real error
+    // message, never freed or reused memory.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11726: rejected from_quote message survives a later accepted literal's allocation", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/issue_11726_from_quote_freed_message.roc", .exit = .{ .code = 1 }, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "The from_quote implementation for this string literal's type rejected it." }, .{ .stream = .stderr, .text = "this message is long enough to live on the heap" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "[ROC CRASHED]" } } } } },
     // Repro for https://github.com/roc-lang/roc/issues/11392: this fixture has an
     // imported type error and a rejected private import of pf.Stdout. The latter
     // leaves the executable root without a checked artifact. `build` must report
