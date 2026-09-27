@@ -2286,6 +2286,15 @@ in the checked type store records source spelling and alias arguments. It is not
 a nominal type identity, and it is not the authoritative solved representative
 for a concrete structure.
 
+Public API extraction retains exposed aliases as named items and references.
+An unexposed alias owned by the package being compared contributes only its
+instantiated checked backing, memoized in the same per-item conversion as other
+checked types. Exposure is determined from the checked declaration owner and
+the package's public namespaces, including explicit platform root exposures.
+Private alias names never become public API identities. Nominal references
+remain named and must satisfy public-reference closure even when reached through
+a private alias; builtin and dependency reference identities are preserved.
+
 When unification relates an alias to a concrete structure, the checker must
 unify the concrete structure with the alias backing variable directly. It must
 not allocate a replacement alias, redirect the concrete structure to an alias
