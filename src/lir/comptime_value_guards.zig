@@ -280,8 +280,10 @@ fn testCompletedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error ||
     try program.const_plans.append(allocator, .scalar);
     // Slot pairs: 0/1 is a successful value, 2/3 a failed one.
     var value_slots: [2]LIR.StaticDataId = undefined; // Both entries are assigned below before use.
-    for (&value_slots) |*value_slot| {
+    var failure_slots: [2]LIR.StaticDataId = undefined; // Both entries are assigned below before use.
+    for (&value_slots, &failure_slots) |*value_slot, *failure_slot_out| {
         const failure_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+        failure_slot_out.* = failure_slot;
         try program.static_data_values.append(allocator, .{
             .initializer = null,
             .layout_idx = record_layout,
@@ -323,10 +325,10 @@ fn testCompletedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error ||
     const value_bytes = [_]u8{7};
     // The frozen image lists its exports in an order unrelated to slot order.
     var exports = [_]Program.StaticDataExport{
-        .{ .symbol_name = "failed_value", .value_id = @enumFromInt(3), .bytes = &value_bytes, .alignment = 1 },
-        .{ .symbol_name = "failed_record", .value_id = @enumFromInt(2), .bytes = &failed_record, .alignment = 8 },
-        .{ .symbol_name = "value", .value_id = @enumFromInt(1), .bytes = &value_bytes, .alignment = 1 },
-        .{ .symbol_name = "record", .value_id = @enumFromInt(0), .bytes = &succeeded_record, .alignment = 8 },
+        .{ .symbol_name = "failed_value", .value_id = value_slots[1], .bytes = &value_bytes, .alignment = 1 },
+        .{ .symbol_name = "failed_record", .value_id = failure_slots[1], .bytes = &failed_record, .alignment = 8 },
+        .{ .symbol_name = "value", .value_id = value_slots[0], .bytes = &value_bytes, .alignment = 1 },
+        .{ .symbol_name = "record", .value_id = failure_slots[0], .bytes = &succeeded_record, .alignment = 8 },
     };
     const frozen = Program.FrozenStaticData{ .allocator = allocator, .exports = &exports };
     try insert(allocator, &program, &frozen);
