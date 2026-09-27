@@ -2188,16 +2188,24 @@ occurrence's current representative. The commit-probe API fixes the
 non-poisoning behavior for every relation it runs, and ordinary poisoning
 unification asserts that no savepoint is active.
 
-A failed unification is different from a successful class union. Its first
-operand can be one checked occurrence already connected to a shared binding;
-error recovery must poison that exact occurrence without making the binding or
-an incidental storage child of the occurrence erroneous. When the queried
-variable is not the checked representative, `poisonOnMismatch` enumerates its
-class explicitly, re-roots and flattens the remainder at the checked
-representative, isolates the queried occurrence as a rank-zero singleton, and
-rank-merges that singleton with the second operand's error class. When the
-queried variable is the checked representative, the mismatch belongs to the
-class itself and the whole class is rank-merged into the error class. This rule
+A failed unification is different from a successful class union. Either
+operand can be one checked occurrence already connected to a shared binding: a
+lookup of a monomorphic local, such as a lambda parameter, shares the binding's
+class, and the binding's pattern variable is that class's checked
+representative. Error recovery must poison that exact occurrence without making
+the binding or an incidental storage child of the occurrence erroneous, because
+post-check lowering instantiates every binding of a function it lowers. The
+rejected use becomes erroneous instead, whatever its consumer: an `if`
+condition, a guard, an operator, or a body checked against its annotation. After
+checking, the checker records every value lookup, local or not, and replaces
+each one whose own occurrence is erroneous with an explicit runtime error, as it
+does for every use of an erroneous binding. `poisonOnMismatch` applies one rule to each operand. When the queried
+variable is not its class's checked representative, it enumerates the class
+explicitly, re-roots and flattens the remainder at the checked representative,
+where the remainder keeps its content, and isolates the queried occurrence as a
+rank-zero singleton that joins the error class. When the queried variable is
+the checked representative, the mismatch belongs to the class itself and the
+whole class joins the error class. This rule
 makes error recovery independent of union-tree shape and path-compression
 history; it never guesses which variables are source occurrences from their
 storage parents. Error recovery must use this explicit operation rather than
@@ -2226,6 +2234,9 @@ the diagnostic itself, and marks only the consuming expression erroneous. The
 producer keeps the type it was solved to, so a rejected relation neither
 cascades into unrelated uses of that producer nor leaves an `.err` on a binding
 whose value post-check lowering must still instantiate.
+A derived structural `is_eq` or `to_hash` relates the dispatcher, its operands,
+and its result the same way: a rejected relation rejects the dispatch and is
+reported once per dispatcher and method, like any other dispatch failure.
 An expression statement is such a consumer of its expression's value: the
 `{}` demand is owned by the statement, and a call's result class is its
 callee's return slot, which a monomorphic callee shares with every other use.
