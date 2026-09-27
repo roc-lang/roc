@@ -190,8 +190,6 @@ pub const LiteralRoot = struct {
     fn_id: FnId,
     module: check.CheckedModule.ModuleId,
     site: Common.LiteralRejectionSite,
-    /// See `Mono.LiteralRoot.identity`.
-    identity: names.TypeDigest,
 };
 
 /// Runtime layout requested for a checked data value.

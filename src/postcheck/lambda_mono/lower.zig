@@ -356,7 +356,6 @@ const Lowerer = struct {
                 .fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite),
                 .module = root.module,
                 .site = root.site,
-                .identity = root.identity,
             });
         }
 

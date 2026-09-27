@@ -100,8 +100,8 @@ test "an optimized runtime program reads a generic function's custom literal con
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    // `--opt=speed`'s Solved policy, which differs from compile-time
-    // evaluation's, so the runtime program is specialized separately.
+    // `--opt=speed`'s Solved policy: compile-time evaluation runs inside
+    // this build's own specialized program.
     const target: lir.CheckedPipeline.TargetConfig = .{
         .inline_mode = .wrappers,
         .spec_constr_clone_inlining = .all_calls,
@@ -112,7 +112,7 @@ test "an optimized runtime program reads a generic function's custom literal con
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
-    try std.testing.expect(session.runtime_prepared == null);
+    try std.testing.expect(session.runtime_prepared != null);
 
     var runtime = try session.takeRuntime(allocator, session.runtime_roots, target);
     defer runtime.deinit();

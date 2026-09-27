@@ -125,13 +125,9 @@ fn countStaticListReads(result: *const lir.Program.Result) usize {
 }
 
 test "issue 11527: a dev build does not rebuild a small uniform compile-time list constant at every use" {
-    // Dev's Solved policy is compile-time evaluation's, so the runtime
-    // consumer continues that Solved program.
     try expectConstantListNotRebuilt(.{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .iterator_fusion });
 }
 
 test "issue 11527: an optimized build does not rebuild a small uniform compile-time list constant at every use" {
-    // An optimized Solved policy differs from compile-time evaluation's, so
-    // the runtime consumer specializes the checked modules itself.
     try expectConstantListNotRebuilt(.{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .all_calls, .inline_expects = .omit });
 }

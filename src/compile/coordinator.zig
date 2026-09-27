@@ -10214,13 +10214,9 @@ test "shared CTFE and runtime requests specialize once across workers and target
             }
             try std.testing.expectEqual(@as(usize, 1), roots.items.len);
             var metrics = lir.CheckedPipeline.WorkMetrics{};
-            // Dev's Solved policy, which compile-time evaluation shares, so
-            // the runtime consumer continues the evaluation's Solved program.
             const target: lir.CheckedPipeline.TargetConfig = .{
                 .target_usize = width,
                 .inline_expects = consumer.inline_expects,
-                .inline_mode = .wrappers,
-                .spec_constr_clone_inlining = .iterator_fusion,
                 .work_metrics = &metrics,
                 .post_check_executor = coord.postCheckExecutor(),
             };

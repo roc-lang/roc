@@ -495,7 +495,6 @@ const Lifter = struct {
                 .fn_id = fn_id,
                 .module = root.module,
                 .site = root.site,
-                .identity = root.identity,
             });
         }
 

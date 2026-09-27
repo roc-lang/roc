@@ -1015,47 +1015,37 @@ command that finalizes checking evaluates the same roots, every checked
 module's compile-time requests plus the platform entrypoints of the
 program's root module, taken from its checked `runtime_requests`, and the
 `test_expect` requests of every module `roc test` would run (the root
-package and the packages it reaches through filesystem paths), under one fixed
-configuration (`compileTimeTarget`): the host's width, expects run, literal
-roots on, and the dev Solved policy (`.wrappers` inlining and
-iterator-fusion SpecConstr). Nothing a command asks of its runtime program
-reaches that evaluation. Every command also gives it the same object cache
-(`CompileTimeObjectCache`): the host's dev-policy packs, whose Solved policy
-is evaluation's own and whose procedures run expects, so the evaluator's
-program takes hits for the procedures it runs (under
-`comptime_closure_hits`) and splices their cached code in place of
-compiling it. A cache entry is the procedure its key names, so the cache
-changes only what evaluation compiles, never what it computes. `roc check`
-and `roc build` therefore report the same compile-time errors and complete
-bit-identical values: a build cannot report an error that checking did not.
-A dev build for the host reads the same packs for its runtime program and
+package and the packages it reaches through filesystem paths), with every
+literal conversion those roots reach hoisted, at the host's width, with
+expects run (`compileTimeTarget`). Its Solved policy is that of the program
+being built, so evaluation runs inside that program's one specialization;
+with no runtime program, as in `roc check`, it is dev's. Inlining and
+SpecConstr preserve meaning, so the policy changes how evaluation's code is
+built, never what it computes. Every command also gives evaluation the same
+object cache (`CompileTimeObjectCache`): the host's dev-policy packs, whose
+procedures run expects. The evaluator's program takes a hit for a procedure
+it runs (under `comptime_closure_hits`) only when the entry names that
+procedure's own identity, and splices its cached code in place of compiling
+it; a cache entry is the procedure its key names, so the cache too changes
+only what evaluation compiles. `roc check` and `roc build` therefore
+evaluate the same roots to the same values and report the same compile-time
+errors: a build cannot report an error in the program that checking did not,
+and `--opt` never moves a computation between compile time and runtime. A
+dev build for the host reads the same packs for its runtime program and
 shares them with evaluation.
 
 Monotype lowering, lifting, SpecConstr, lambda solving, and inline analysis
 run once for that evaluation over the union of its roots, and the frozen
-Solved program they produce is one immutable producer identity domain. A
-runtime consumer whose `SolvedPolicy` is the evaluation's continues that
-program and borrows it: none copies it, none reruns any of those stages, and
-callable correspondence compares ids from one producer domain, never ids
-allocated by separate solver runs. A consumer continuing it chooses its
-target width, the explicitly shared expect consumer mode, its LIR policy, and
-the completed compile-time values it reads as literals. Any other runtime
-consumer (an optimized build, the interpreter, or Boxy) specializes the
-checked modules itself under its own policy once evaluation has completed,
-and reads every checked root's value from the modules' `ConstStore`s. Solved
-programs built under different inlining and SpecConstr policies specialize
-one function into differently shaped members, because their lambda sets
-differ, so no member identity in one names a member of the other; the
-stores name each value independently of any Solved program. Literal roots
-belong to no module's store, so such a runtime program lowers its own
-literal roots and evaluates them at compile time itself before its runtime
-consumer reads their frozen values: `--opt` never moves a conversion to
-runtime. Compile-time evaluation already reported every literal, so this
-evaluation prints nothing and checks each conversion's outcome against the
-one evaluation recorded under the literal's content identity
-(`LiteralRootPlan.identity`, the literal and its concrete type), which every
-program lowered from the same checked modules shares. The producer program
-is released after its last consumer.
+Solved program they produce is one immutable producer identity domain. An
+LSS runtime consumer continues that program and borrows it: none copies it,
+none reruns any of those stages, and callable correspondence compares ids
+from one producer domain, never ids allocated by separate solver runs. A
+consumer continuing it chooses its target width, the explicitly shared
+expect consumer mode, its LIR policy, and the completed compile-time values
+it reads as literals. A Boxy runtime program has no Monotype stage to share,
+so it lowers the checked modules itself and reads every compile-time value
+from the modules' `ConstStore`s. The producer program is released after its
+last consumer.
 
 Each consumer names its share of the producer program in an explicit root
 manifest, applied before LIR demand discovery. A manifest names producer root
@@ -17152,8 +17142,8 @@ are zero-sized; its source template or layout alone cannot identify which member
 was evaluated. Solved LIR lowering records `FrozenCallableContext` alongside the frozen
 Monotype function and generated worker identity. Transcoding consumes that
 complete identity and requires one exact target member. These identities are
-positions in one Solved program, which is why a runtime consumer with another
-Solved policy reads the constant stores instead of transcoding.
+positions in one Solved program, which is why every LSS runtime consumer
+continues evaluation's Solved program rather than preparing its own.
 
 Shared compile-time execution completes slots on demand. Each declared
 value and failure slot carries its producer's exact checked module and root ID.

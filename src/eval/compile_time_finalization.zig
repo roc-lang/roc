@@ -49,21 +49,11 @@ pub const EventCallback = struct {
 /// Where the compile-time evaluator splices object-cache entries from.
 pub const SpliceSource = backend.dev.SpliceSource;
 
-/// How compile-time evaluation completed one literal conversion.
-pub const LiteralOutcome = struct {
-    failed: bool,
-    expect_failures: u32,
-};
-
-/// Every literal conversion compile-time evaluation completed, by
-/// `LiteralRootPlan.identity`.
-pub const LiteralOutcomes = std.AutoHashMapUnmanaged(check.CheckedNames.TypeDigest, LiteralOutcome);
-
 /// The object cache compile-time evaluation reads, the same way in every
-/// command: entries compiled for the host under the dev policy, whose Solved
-/// policy is evaluation's own and which run expects. The evaluator's program
-/// takes hits for the procedures it runs, under `comptime_closure_hits`, and
-/// splices their cached code.
+/// command: entries compiled for the host under the dev policy, which run
+/// expects. The evaluator's program takes a hit for a procedure it runs, under
+/// `comptime_closure_hits`, only when the entry names that procedure's own
+/// identity, and splices its cached code in place of compiling it.
 pub const CompileTimeObjectCache = struct {
     spec_cache: lir.CheckedPipeline.SpecCacheLookup,
     splice_source: SpliceSource,
@@ -101,12 +91,6 @@ pub const Options = struct {
     slow_root_period_ns: u64 = std.time.ns_per_s,
     timing: ?*Timing = null,
     object_cache: ?CompileTimeObjectCache = null,
-    /// Receives the outcome of every literal root this evaluation completes.
-    literal_outcomes_out: ?*LiteralOutcomes = null,
-    /// Set when a runtime program evaluates its own literal roots after
-    /// compile-time evaluation reported every literal: each outcome is
-    /// checked against that evaluation's instead of being reported again.
-    literal_outcomes_check: ?*const LiteralOutcomes = null,
     /// Where a compile-time failure is reported when the source it names
     /// belongs to a checked module this finalization does not complete: a
     /// literal in a module whose checking finished in an earlier compilation,
@@ -296,18 +280,11 @@ pub const ProgramSession = struct {
     /// The position of each runtime request in the specialized program's root
     /// plan.
     runtime_positions: []u32,
-    /// How compile-time evaluation completed each literal conversion.
-    literal_outcomes: LiteralOutcomes,
-    /// The options a runtime program evaluates its own literal roots under:
-    /// compile-time evaluation's, checking outcomes instead of reporting
-    /// them and printing nothing.
-    literal_evaluation_options: Options,
 
     pub fn deinit(self: *ProgramSession) void {
         if (self.host) |*host| host.deinit();
         if (self.runtime_prepared) |*prepared| prepared.deinit();
         self.allocator.free(self.runtime_positions);
-        self.literal_outcomes.deinit(self.allocator);
         self.allocator.free(self.modules.root.relation_modules);
         self.allocator.free(self.modules.imports);
         deinitRootRequests(self.allocator, self.runtime_roots);
@@ -353,57 +330,13 @@ pub const ProgramSession = struct {
                 owned.deinit();
                 return err;
             };
-            return continueRuntimeConsumer(allocator, owned, target, if (self.host) |*host| host else null, self.runtime_positions);
+            return self.continueRuntimeConsumer(allocator, owned, target);
         }
-        if (target.specialization_strategy == .boxy) {
-            return lir.CheckedPipeline.lowerCheckedModulesToLir(allocator, self.modules, roots, target);
-        }
-        return self.lowerOwnRuntimeProgram(allocator, roots, target);
-    }
-
-    /// A runtime consumer whose Solved policy differs from compile-time
-    /// evaluation's specializes the checked modules itself: Solved programs
-    /// built under different inlining and SpecConstr policies specialize one
-    /// function differently, so no frozen callable of one names a member of
-    /// the other. It reads every checked root's value from the modules'
-    /// constant stores. Its literal roots belong to this program alone, so it
-    /// evaluates them at compile time itself, as compile-time evaluation did,
-    /// and reads their frozen values exactly as a consumer continuing the
-    /// evaluation's program does. Compile-time evaluation already reported
-    /// every literal's outcome; this evaluation checks each one against that
-    /// instead of reporting it, and prints nothing.
-    fn lowerOwnRuntimeProgram(
-        self: *ProgramSession,
-        allocator: Allocator,
-        roots: lir.CheckedPipeline.RootRequestSet,
-        target: lir.CheckedPipeline.TargetConfig,
-    ) lir.CheckedPipeline.LowerResourceError!lir.CheckedPipeline.LoweredProgram {
-        var own_target = target;
-        own_target.literal_roots = true;
-        const monotype = try lir.CheckedPipeline.prepareCheckedModulesMonotype(allocator, self.modules, roots, own_target);
-        var prepared = try lir.CheckedPipeline.prepareMonotypeToSolved(monotype);
-        var prepared_owned = true;
-        errdefer if (prepared_owned) prepared.deinit();
-        const positions = try allocator.alloc(u32, roots.requests.len);
-        defer allocator.free(positions);
-        for (positions, 0..) |*position, ordinal| position.* = @intCast(ordinal);
-        if (prepared.literalRootCount() == 0) {
-            prepared_owned = false;
-            return continueRuntimeConsumer(allocator, prepared, target, null, positions);
-        }
-        var evaluation_options = self.literal_evaluation_options;
-        evaluation_options.literal_outcomes_check = &self.literal_outcomes;
-        var literal_host = lowerLiteralRootHost(&prepared, evaluation_options) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => finalizationInvariant("a runtime program's literal roots could not be lowered for evaluation"),
-        };
-        defer literal_host.deinit();
-        evaluateLoweredRoots(allocator, &.{}, self.modules, &literal_host, 0, evaluation_options) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => finalizationInvariant("a runtime program's literal roots could not be evaluated after compile-time evaluation completed them"),
-        };
-        prepared_owned = false;
-        return continueRuntimeConsumer(allocator, prepared, target, &literal_host, positions);
+        // A Boxy runtime program has no Monotype stage to share, and a
+        // compilation with no program roots specialized nothing: either
+        // lowers the checked modules itself, reading every compile-time value
+        // from the modules' constant stores.
+        return lir.CheckedPipeline.lowerCheckedModulesToLir(allocator, self.modules, roots, target);
     }
 
     /// Lower the runtime consumer's own share of the specialized program,
@@ -411,17 +344,16 @@ pub const ProgramSession = struct {
     /// from the completed evaluation. The specialized program has no consumer
     /// after this one, so lowering releases it.
     fn continueRuntimeConsumer(
+        self: *ProgramSession,
         allocator: Allocator,
         prepared: lir.CheckedPipeline.PreparedSolved,
         target: lir.CheckedPipeline.TargetConfig,
-        host: ?*lir.CheckedPipeline.LoweredProgram,
-        positions: []const u32,
     ) lir.CheckedPipeline.LowerResourceError!lir.CheckedPipeline.LoweredProgram {
         var owned = prepared;
         var owned_live = true;
         errdefer if (owned_live) owned.deinit();
-        const consumer_roots: lir.CheckedPipeline.ConsumerRoots = .{ .roots = positions, .literal_roots = false };
-        const source = host orelse {
+        const consumer_roots: lir.CheckedPipeline.ConsumerRoots = .{ .roots = self.runtime_positions, .literal_roots = false };
+        const source = if (self.host) |*host| host else {
             // Nothing was evaluated, so the program reads no compile-time
             // value slot.
             owned_live = false;
@@ -456,7 +388,7 @@ pub const ProgramSession = struct {
             .lir_policy = lir.CheckedPipeline.LirPolicy.fromTarget(target),
         });
         errdefer lowered.deinit();
-        if (lowered.lir_result.root_procs.items.len != positions.len)
+        if (lowered.lir_result.root_procs.items.len != self.runtime_positions.len)
             finalizationInvariant("runtime consumer lowering changed the requested root count");
         try lir.CheckedPipeline.adoptReachableCompletedComptimeValues(&lowered);
         // The host's procedures have no reader left: the runtime program has
@@ -614,21 +546,27 @@ fn deinitRootRequests(allocator: Allocator, roots: lir.CheckedPipeline.RootReque
     }
 }
 
-/// The one target compile-time evaluation lowers under. Nothing a command
-/// configures reaches it: every command that checks a program evaluates the
-/// same roots through the same code and so produces the same values and the
-/// same reports. Its Solved policy is the one dev builds use, so a dev
-/// build's runtime program continues the same Solved program.
-fn compileTimeTarget(options: Options) lir.CheckedPipeline.TargetConfig {
-    return .{
+/// The Solved policy compile-time evaluation specializes under when no
+/// runtime program shares its specialization, as in `roc check`: dev's.
+const check_solved_policy = lir.CheckedPipeline.SolvedPolicy.fromTarget(.{
+    .inline_mode = .wrappers,
+    .spec_constr_clone_inlining = .iterator_fusion,
+});
+
+/// The target compile-time evaluation lowers under. Its Solved policy is
+/// that of the program being built, so evaluation runs inside that program's
+/// one specialization; inlining and SpecConstr preserve meaning, so every
+/// command evaluates the same roots to the same values and reports. Every
+/// other setting is fixed: evaluation runs on the host, runs expects, and
+/// hoists every literal conversion.
+fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.SolvedPolicy) lir.CheckedPipeline.TargetConfig {
+    var target: lir.CheckedPipeline.TargetConfig = .{
         .target_usize = base.target.TargetUsize.native,
         .specialization_strategy = .lss,
         .checked_module_state = .checking_finalization,
         .comptime_value_reads = true,
         .literal_roots = true,
         .inline_expects = .run,
-        .inline_mode = .wrappers,
-        .spec_constr_clone_inlining = .iterator_fusion,
         // The rewrites that only speed up the produced program stay off,
         // as in dev builds: compile-time code runs once.
         .fuse_tag_cases = false,
@@ -641,6 +579,8 @@ fn compileTimeTarget(options: Options) lir.CheckedPipeline.TargetConfig {
         .post_check_executor = options.post_check_executor,
         .timing = if (options.timing) |timing| &timing.lowering else null,
     };
+    solved_policy.applyTo(&target);
+    return target;
 }
 
 /// Complete checked values in the caller's dependency order, using the
@@ -698,8 +638,6 @@ pub fn finalizeProgram(
 
     var host: ?lir.CheckedPipeline.LoweredProgram = null;
     errdefer if (host) |*program| program.deinit();
-    var literal_outcomes: LiteralOutcomes = .empty;
-    errdefer literal_outcomes.deinit(allocator);
     var runtime_prepared: ?lir.CheckedPipeline.PreparedSolved = null;
     errdefer if (runtime_prepared) |*prepared| prepared.deinit();
 
@@ -711,7 +649,10 @@ pub fn finalizeProgram(
         defer allocator.free(union_test_metadata);
         for (union_test_metadata) |*metadata| metadata.request_index += @intCast(compile_time_root_count);
         union_roots.test_plan_metadata = union_test_metadata;
-        var host_target = compileTimeTarget(options);
+        // An LSS runtime consumer continues this specialization, so it is
+        // made under the runtime's Solved policy.
+        const solved_policy = if (lss_runtime) lir.CheckedPipeline.SolvedPolicy.fromTarget(runtime_target.?) else check_solved_policy;
+        var host_target = compileTimeTarget(options, solved_policy);
         // Counting work observes the evaluation without shaping it.
         if (runtime_target) |target| host_target.work_metrics = target.work_metrics;
         var monotype = lir.CheckedPipeline.prepareCheckedModulesMonotype(allocator, lowering_modules, union_roots, host_target) catch |err| switch (err) {
@@ -720,11 +661,8 @@ pub fn finalizeProgram(
         };
         var monotype_owned = true;
         errdefer if (monotype_owned) monotype.deinit();
-        // A runtime consumer whose Solved policy is compile-time evaluation's
-        // continues the same Solved program; see `ProgramSession.takeRuntime`
-        // for every other one.
-        const shares_solved = lss_runtime and
-            std.meta.eql(lir.CheckedPipeline.SolvedPolicy.fromTarget(runtime_target.?), lir.CheckedPipeline.SolvedPolicy.fromTarget(host_target));
+        // An LSS runtime consumer continues this Solved program.
+        const shares_solved = lss_runtime;
         monotype_owned = false;
         var prepared = try lir.CheckedPipeline.prepareMonotypeToSolved(monotype);
         var prepared_owned = true;
@@ -769,7 +707,6 @@ pub fn finalizeProgram(
                 finalizationInvariant("compile-time consumer lowering changed the requested root count");
             var evaluation_options = options;
             evaluation_options.debug_events = &debug_events;
-            evaluation_options.literal_outcomes_out = &literal_outcomes;
             try evaluateLoweredRoots(allocator, modules, lowering_modules, &host.?, compile_time_root_count, evaluation_options);
         } else {
             for (modules) |entry| {
@@ -805,8 +742,6 @@ pub fn finalizeProgram(
         .host = host,
         .runtime_prepared = runtime_prepared,
         .runtime_positions = runtime_positions,
-        .literal_outcomes = literal_outcomes,
-        .literal_evaluation_options = literalEvaluationOptions(options),
     };
 }
 
@@ -864,43 +799,6 @@ fn evaluateLoweredRoots(
     native.codegen.static_strings = native.static_strings.view();
     try finalizeLoweredProgram(allocator, modules, host, compile_time_root_count, &native, options);
     host.frozen_static_data = try native.freezeCompleted();
-}
-
-/// Compile-time evaluation's options with every output and every reference to
-/// the finalization that has ended removed: a runtime program's own literal
-/// evaluation reports nothing, prints nothing and reads no object cache, whose
-/// packs belong to evaluation's Solved policy rather than this program's.
-fn literalEvaluationOptions(options: Options) Options {
-    var result = options;
-    result.stderr = null;
-    result.event_callback = null;
-    result.debug_events = null;
-    result.cached_debug_modules = &.{};
-    result.unfinalized_reports = null;
-    result.timing = null;
-    result.object_cache = null;
-    result.literal_outcomes_out = null;
-    result.literal_outcomes_check = null;
-    return result;
-}
-
-/// The compile-time consumer of a runtime program's literal roots: they alone,
-/// lowered for the machine that evaluates them. The runtime consumer later
-/// reads their completed values from this program.
-fn lowerLiteralRootHost(
-    prepared: *lir.CheckedPipeline.PreparedSolved,
-    options: Options,
-) lir.CheckedPipeline.LowerResourceError!lir.CheckedPipeline.LoweredProgram {
-    return lir.CheckedPipeline.lowerConsumerToLir(prepared, .{
-        .roots = .{
-            .roots = &.{},
-            .layout_requests = false,
-            .runtime_schema_requests = false,
-        },
-        .target_usize = base.target.TargetUsize.native,
-        .inline_expects = prepared.target.inline_expects,
-        .observers = .{ .post_check_executor = options.post_check_executor },
-    });
 }
 
 /// The compile-time consumer's materialization requests.
@@ -1154,20 +1052,7 @@ fn finalizeLoweredProgram(
             else => |operational| return operational,
         };
     }
-    for (literal_failures.records, literal_failures.embedded, literal_failures.expect_failures, literal_roots) |maybe_record, embedded, expect_failures, plan| {
-        const outcome: LiteralOutcome = .{ .failed = maybe_record != null, .expect_failures = expect_failures };
-        if (options.literal_outcomes_out) |outcomes| {
-            const recorded = try outcomes.getOrPut(allocator, plan.identity);
-            if (recorded.found_existing) finalizationInvariant("one program converted one literal at one type twice");
-            recorded.value_ptr.* = outcome;
-        }
-        if (options.literal_outcomes_check) |expected| {
-            const before = expected.get(plan.identity) orelse
-                finalizationInvariant("a runtime program converts a literal compile-time evaluation did not");
-            if (!std.meta.eql(before, outcome))
-                finalizationInvariant("a literal conversion completed differently in a runtime program than in compile-time evaluation");
-            continue;
-        }
+    for (literal_failures.records, literal_failures.embedded, literal_roots) |maybe_record, embedded, plan| {
         const entry = maybe_record orelse continue;
         if (embedded) continue;
         switch (entry.cause) {
@@ -2075,8 +1960,6 @@ fn evalInterpreterProgramRoots(
 const LiteralRootFailures = struct {
     records: []?Record,
     embedded: []bool,
-    /// Expects that failed inside each literal's conversion.
-    expect_failures: []u32,
 
     const Record = struct {
         failure: LiteralRootFailure,
@@ -2099,17 +1982,13 @@ const LiteralRootFailures = struct {
         errdefer allocator.free(records);
         @memset(records, null);
         const embedded = try allocator.alloc(bool, count);
-        errdefer allocator.free(embedded);
         @memset(embedded, false);
-        const expect_failures = try allocator.alloc(u32, count);
-        @memset(expect_failures, 0);
-        return .{ .records = records, .embedded = embedded, .expect_failures = expect_failures };
+        return .{ .records = records, .embedded = embedded };
     }
 
     fn deinit(self: *LiteralRootFailures, allocator: Allocator) void {
         allocator.free(self.records);
         allocator.free(self.embedded);
-        allocator.free(self.expect_failures);
     }
 
     fn record(self: *LiteralRootFailures, lir_result: *const lir.Program.Result, id: lir.LIR.LiteralRootId, failure: LiteralRootFailure) void {
@@ -2284,7 +2163,7 @@ fn evalInterpreterLiteralRoot(
     };
     for (program.host.debugMessages()) |message| try emitDebugMessage(allocator, options, false, message);
     for (interpreter.getExpectFailures()) |expect_failure| {
-        try noteLiteralRootExpectFailure(allocator, owners, options, lowered, plan, expect_failure.message, expect_failure.region, expect_failure.loc);
+        try reportLiteralRootExpectFailure(allocator, owners, lowered, plan, expect_failure.message, expect_failure.region, expect_failure.loc);
     }
     const failed = failure orelse return;
     recordLiteralRootFailure(owners, lowered, plan, failed);
@@ -2348,7 +2227,7 @@ fn evalDevLiteralRoot(
     };
     for (host.events.items) |event| switch (event) {
         .dbg => |message| try emitDebugMessage(allocator, options, false, message),
-        .expect_failed => |expect_failure| try noteLiteralRootExpectFailure(allocator, owners, options, lowered, plan, expect_failure.message, expect_failure.region, expect_failure.loc),
+        .expect_failed => |expect_failure| try reportLiteralRootExpectFailure(allocator, owners, lowered, plan, expect_failure.message, expect_failure.region, expect_failure.loc),
         .crashed => {},
     };
     const failed = failure orelse {
@@ -2399,23 +2278,6 @@ fn reportLiteralRootFailure(
             .origin = try comptimeFailureOrigin(store, site),
         } });
     }
-}
-
-fn noteLiteralRootExpectFailure(
-    allocator: Allocator,
-    owners: *const ModuleOwners,
-    options: Options,
-    lowered: *const lir.CheckedPipeline.LoweredProgram,
-    plan: LirProgram.LiteralRootPlan,
-    message: []const u8,
-    region: ?base.Region,
-    loc: ?base.SourceLoc,
-) FinalizeError!void {
-    const failures = owners.literal_failures orelse
-        finalizationInvariant("a literal root's expect failed in a finalization that records no literal root outcomes");
-    failures.expect_failures[@intFromEnum(plan.id)] += 1;
-    if (options.literal_outcomes_check != null) return;
-    try reportLiteralRootExpectFailure(allocator, owners, lowered, plan, message, region, loc);
 }
 
 fn reportLiteralRootExpectFailure(

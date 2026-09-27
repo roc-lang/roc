@@ -243,8 +243,8 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
 }
 
 /// The object cache every command's compile-time evaluation reads: the host's
-/// dev-policy packs. Their Solved policy is evaluation's own and they run
-/// expects, so the evaluator can run their code in place of compiling it.
+/// dev-policy packs, whose procedures run expects, so the evaluator can run
+/// their code in place of compiling it.
 const CompileTimeObjectCache = struct {
     allocator: Allocator,
     io: std.Io,
