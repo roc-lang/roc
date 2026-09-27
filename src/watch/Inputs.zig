@@ -27,8 +27,10 @@ const WindowsNameContext = struct {
     }
 };
 
+/// Failures while allocating or inspecting the explicit input path graph.
 pub const Error = Allocator.Error || error{WatchBackendFailed};
 
+/// A path entry whose identity and dependent inputs determine watch coverage.
 pub const Node = struct {
     inode: ?std.Io.File.INode = null,
     kind: std.Io.File.Kind = .unknown,

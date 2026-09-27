@@ -17937,7 +17937,7 @@ ancestor directory and filters events by the unresolved relative suffix. This
 keeps watch coverage for later directory creation without widening the logical
 watch set.
 
-Physical watch registration must also scale with explicit input paths, never
+Filesystem watch registration must also scale with explicit input paths, never
 with unrelated directory trees. The watch layer retains an indexed graph of
 the path entries needed to reach each input, including symlinks and their
 targets. Directory watches are nonrecursive. Existing ancestors guard path

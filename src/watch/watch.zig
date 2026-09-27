@@ -1886,7 +1886,7 @@ test "exact inputs bound registrations and route only explicit files" {
     try watcher.start();
     if (builtin.os.tag == .linux) {
         for (watcher.impl.watch_descriptors.items) |wd| {
-            try std.testing.expect(std.mem.indexOf(u8, wd.path, "unrelated") == null);
+            try std.testing.expect(std.mem.find(u8, wd.path, "unrelated") == null);
         }
     }
     // Deterministically verify routing independently of event scheduling.
@@ -1951,7 +1951,7 @@ test "exact inputs allocation failure releases partial plans" {
     const path = try std.fs.path.join(a, &.{ root, "missing/deep/asset" });
     defer a.free(path);
     const exercise = struct {
-        fn run(allocator: Allocator, input: []const u8) !void {
+        fn run(allocator: Allocator, input: []const u8) Inputs.Error!void {
             const cb = struct {
                 fn call(_: ?*anyopaque, _: WatchEvent) void {}
             }.call;
@@ -2013,7 +2013,7 @@ test "exact inputs observe hidden symlinks and writes through unwatched hard lin
     defer watcher.deinit();
     try watcher.start();
     for (watcher.impl.watch_descriptors.items) |wd| {
-        try std.testing.expect(std.mem.indexOf(u8, wd.path, "unrelated") == null);
+        try std.testing.expect(std.mem.find(u8, wd.path, "unrelated") == null);
     }
     try tmp.dir.writeFile(io, .{ .sub_path = "unrelated/alias", .data = "after" });
     try waitForEvents(&count, 1, 5000, io);
@@ -2598,7 +2598,7 @@ test "windows long path handling" {
 // This test creates a directory tree containing a `Main.roc` file next to
 // `.git`, `target`, and `.claude` trees (the build/cache/VCS trees named in the
 // issue) and asserts that the Linux backend registers watches only for
-// directories that could contain relevant program inputs — no watched
+// directories that could contain relevant program inputs—no watched
 // directory may be inside (or be) one of those unrelated trees.
 //
 // Currently the recursive Linux registration watches every subdirectory, so

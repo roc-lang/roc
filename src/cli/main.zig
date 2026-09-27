@@ -20171,7 +20171,7 @@ test "watch exact inputs recover missing directories and atomic replacement" {
     try expectWatchChangeForTest(&ctx, &signal, &state);
 }
 
-fn expectWatchChangeForTest(ctx: *CliCtx, signal: *WatchEventSignal, state: *WatchState) !void {
+fn expectWatchChangeForTest(ctx: *CliCtx, signal: *WatchEventSignal, state: *WatchState) (WatchChangeError || error{TestUnexpectedResult})!void {
     const start = std.Io.Clock.now(.awake, ctx.io.std_io);
     while (!try consumeDebouncedWatchChange(ctx, signal, state)) {
         try std.testing.expect(start.durationTo(std.Io.Clock.now(.awake, ctx.io.std_io)).toMilliseconds() < 5000);
