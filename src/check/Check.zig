@@ -33250,7 +33250,13 @@ fn checkReturnRelation(
     ctx: problem.Context,
     env: *Env,
 ) std.mem.Allocator.Error!void {
-    _ = try self.relateResultValue(expected, actual_expr, env, ctx);
+    const result = try self.unifyReturnContribution(expected, ModuleEnv.varFrom(actual_expr), env, ctx);
+    if (result.isProblem()) {
+        std.debug.assert(result == .problem);
+        const result_expr = self.resultValueExpr(actual_expr);
+        self.problems.problems.items[@intFromEnum(result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
+        try self.erroneous_value_exprs.put(self.gpa, result_expr, {});
+    }
 }
 
 /// Relate an expected result to the value `actual_expr` produces. A mismatch is
@@ -33276,6 +33282,16 @@ fn relateResultValue(
     try self.types.poisonOnMismatch(expected, actual);
     try self.erroneous_value_exprs.put(self.gpa, result_expr, {});
     return .{ .problem = problem_idx };
+}
+
+/// Relate one return contribution to the result it flows into. That result is
+/// shared with the function's body, every other contribution, and every
+/// caller, so a rejected contribution owns its diagnostic and poisons only its
+/// own expression; the result keeps the type its other contributions give it.
+fn unifyReturnContribution(self: *Self, expected: Var, actual: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
+    const result = try self.runUnify(expected, actual, env, unifyOptionsForContext(ctx, .write_no_report));
+    if (result.isAccepted()) return result;
+    return .{ .problem = try self.appendTypeMismatch(expected, actual, ctx) };
 }
 
 /// The expression that produces `expr_idx`'s value. A block whose type is its
@@ -33425,7 +33441,7 @@ fn tryReturnErrorTail(self: *Self, error_var: Var) Var {
 fn checkProjectedTryReturn(self: *Self, expected: Var, plan: TryReturnRows.Plan, row: Var, env: *Env, ctx: problem.Context) Allocator.Error!void {
     const region = self.cir.store.getExprRegion(plan.expr);
     const actual = try self.freshFromContent(try self.mkTryContent(plan.ok, row), env, region);
-    const result = try self.unifyInContext(expected, actual, env, ctx);
+    const result = try self.unifyReturnContribution(expected, actual, env, ctx);
     if (result.isProblem()) {
         self.problems.problems.items[@intFromEnum(result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(plan.expr);
         try self.erroneous_value_exprs.put(self.gpa, plan.expr, {});
@@ -33728,12 +33744,12 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
             continue;
         };
         try rows.plans.append(self.gpa, .{ .expr = constraint.actual_expr, .ok = actual.ok, .err = actual.err });
-        if ((try self.unifyInContext(composed.ok, actual.ok, env, constraint.kind.problemContext(body_tail_try))).isProblem()) {
+        if ((try self.unifyReturnContribution(composed.ok, actual.ok, env, constraint.kind.problemContext(body_tail_try))).isProblem()) {
             try self.erroneous_value_exprs.put(self.gpa, constraint.actual_expr, {});
         }
     }
     if (self.types.resolveVar(composed_var).var_ != self.types.resolveVar(frame.body_result).var_) {
-        const ok_result = try self.unifyInContext(composed.ok, body.ok, env, body_ctx);
+        const ok_result = try self.unifyReturnContribution(composed.ok, body.ok, env, body_ctx);
         try self.noteComposedBodyRelation(ok_result, lambda_body, frame.expected_result != null);
         try rows.plans.append(self.gpa, .{ .expr = lambda_body, .ok = body.ok, .err = body.err, .is_body = true });
     }
@@ -33812,7 +33828,7 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
                     // this source. Equating it with the whole row would
                     // push the result's heads backwards into the source.
                     if (self.types.resolveVar(tail).var_ == self.types.resolveVar(self.tryReturnErrorTail(composed.err)).var_) continue;
-                    if ((try self.unifyInContext(composed.err, tail, env, ctx)).isProblem()) {
+                    if ((try self.unifyReturnContribution(composed.err, tail, env, ctx)).isProblem()) {
                         try self.erroneous_value_exprs.put(self.gpa, plan.expr, {});
                     }
                     continue;
@@ -33827,7 +33843,7 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
             try self.checkProjectedTryReturn(composed_var, plan, projection.row, env, ctx);
         }
         tail = gathered.tail;
-        if ((try self.unifyInContext(self.tryReturnErrorTail(composed.err), tail, env, ctx)).isProblem()) {
+        if ((try self.unifyReturnContribution(self.tryReturnErrorTail(composed.err), tail, env, ctx)).isProblem()) {
             try self.erroneous_value_exprs.put(self.gpa, plan.expr, {});
         }
     }
@@ -34143,7 +34159,7 @@ fn collapseTryRowEdge(self: *Self, edge: DeferredTryRowEdge, env: *Env) Allocato
     {
         return;
     }
-    if ((try self.unifyInContext(edge.composed_err, edge.plan.err, env, edge.ctx)).isProblem()) {
+    if ((try self.unifyReturnContribution(edge.composed_err, edge.plan.err, env, edge.ctx)).isProblem()) {
         try self.erroneous_value_exprs.put(self.gpa, edge.plan.expr, {});
     }
 }
@@ -34212,7 +34228,7 @@ fn relateDeferredTryRowEdge(self: *Self, edge: DeferredTryRowEdge, env: *Env) Al
         .tail => |source_tail| {
             if (!source_tail.nested and !plan.is_body) {
                 if (self.types.resolveVar(plan.err).var_ == self.types.resolveVar(residual).var_) return;
-                if ((try self.unifyInContext(edge.composed_err, plan.err, env, edge.ctx)).isProblem()) {
+                if ((try self.unifyReturnContribution(edge.composed_err, plan.err, env, edge.ctx)).isProblem()) {
                     try self.erroneous_value_exprs.put(self.gpa, plan.expr, {});
                 }
                 return;
@@ -34237,7 +34253,7 @@ fn includeTryRowDirected(self: *Self, edge: DeferredTryRowEdge, env: *Env) Alloc
         const projection = try self.projectTryReturnRow(gathered.tail, env, self.cir.store.getExprRegion(plan.expr));
         try self.checkProjectedTryReturn(edge.composed, plan, projection.row, env, edge.ctx);
     }
-    if ((try self.unifyInContext(self.tryReturnErrorTail(edge.composed_err), gathered.tail, env, edge.ctx)).isProblem()) {
+    if ((try self.unifyReturnContribution(self.tryReturnErrorTail(edge.composed_err), gathered.tail, env, edge.ctx)).isProblem()) {
         try self.erroneous_value_exprs.put(self.gpa, plan.expr, {});
     }
 }
