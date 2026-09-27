@@ -1475,8 +1475,10 @@ pub const Evaluator = struct {
             .str_to_utf8,
             .str_from_utf8_lossy,
             .str_from_utf8_validated,
-            .str_from_utf16_short,
-            .str_from_utf32_short,
+            .str_from_utf16_le_short,
+            .str_from_utf16_be_short,
+            .str_from_utf32_le_short,
+            .str_from_utf32_be_short,
 
             .str_from_utf8,
             .str_split_on,
@@ -2446,8 +2448,10 @@ pub const Evaluator = struct {
             str_from_utf8,
             str_from_utf8_lossy,
             str_from_utf8_validated,
-            str_from_utf16_short,
-            str_from_utf32_short,
+            str_from_utf16_le_short,
+            str_from_utf16_be_short,
+            str_from_utf32_le_short,
+            str_from_utf32_be_short,
 
             str_is_eq_static_small,
             str_static_small_word_eq,
@@ -2515,8 +2519,10 @@ pub const Evaluator = struct {
                 for (elems, 0..) |elem, i| bytes[i] = readInt(u8, elem);
                 return .{ .str = bytes };
             },
-            .str_from_utf16_short => return try self.strFromWideUtfShort(u16, args[0]),
-            .str_from_utf32_short => return try self.strFromWideUtfShort(u32, args[0]),
+            .str_from_utf16_le_short => return try self.strFromWideUtfShort(builtins.str.fromUtf16LeShort, args[0]),
+            .str_from_utf16_be_short => return try self.strFromWideUtfShort(builtins.str.fromUtf16BeShort, args[0]),
+            .str_from_utf32_le_short => return try self.strFromWideUtfShort(builtins.str.fromUtf32LeShort, args[0]),
+            .str_from_utf32_be_short => return try self.strFromWideUtfShort(builtins.str.fromUtf32BeShort, args[0]),
             .str_from_utf8_lossy => {
                 const elems = args[0].list;
                 const buf = arena.alloc(u8, elems.len) catch return error.OutOfMemory;
@@ -2532,11 +2538,12 @@ pub const Evaluator = struct {
         }
     }
 
-    fn strFromWideUtfShort(self: *Evaluator, comptime Unit: type, input: Value) EvalError!Value {
-        const units = self.alloc().alloc(Unit, input.list.len) catch return error.OutOfMemory;
-        for (input.list, 0..) |value, i| units[i] = readInt(Unit, value);
-        const list = builtins.list.RocList{ .bytes = @ptrCast(units.ptr), .length = units.len, .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(units.len) };
-        const decoded = if (Unit == u16) builtins.str.fromUtf16Short(list, self.getOps()) else builtins.str.fromUtf32Short(list, self.getOps());
+    fn strFromWideUtfShort(self: *Evaluator, comptime decode: anytype, input: Value) EvalError!Value {
+        const bytes = self.alloc().alloc(u8, input.list.len) catch return error.OutOfMemory;
+        for (input.list, 0..) |value, i| bytes[i] = readInt(u8, value);
+        const list = builtins.list.RocList{ .bytes = bytes.ptr, .length = bytes.len, .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(bytes.len) };
+        const decoded = decode(list, self.getOps());
+        defer decoded.decref(self.getOps());
         return .{ .str = self.alloc().dupe(u8, decoded.asSlice()) catch return error.OutOfMemory };
     }
 

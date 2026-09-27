@@ -299,7 +299,7 @@ With multiple lines
 							(e-string))))
 				(field (name "e")
 					(e-call (constraint-fn-var 377)
-						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17459") (target-def "17459"))
+						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17675") (target-def "17675"))
 						(e-runtime-error (tag "erroneous_value_expr")))))))
 	(d-let
 		(p-assign (ident "x"))

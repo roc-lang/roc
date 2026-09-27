@@ -279,11 +279,17 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("str_from_utf8_validated")) |ident| {
         try low_level_map.put(ident, .str_from_utf8_validated);
     }
-    if (env.common.findIdent("str_from_utf16_short")) |ident| {
-        try low_level_map.put(ident, .str_from_utf16_short);
+    if (env.common.findIdent("str_from_utf16_le_short")) |ident| {
+        try low_level_map.put(ident, .str_from_utf16_le_short);
     }
-    if (env.common.findIdent("str_from_utf32_short")) |ident| {
-        try low_level_map.put(ident, .str_from_utf32_short);
+    if (env.common.findIdent("str_from_utf16_be_short")) |ident| {
+        try low_level_map.put(ident, .str_from_utf16_be_short);
+    }
+    if (env.common.findIdent("str_from_utf32_le_short")) |ident| {
+        try low_level_map.put(ident, .str_from_utf32_le_short);
+    }
+    if (env.common.findIdent("str_from_utf32_be_short")) |ident| {
+        try low_level_map.put(ident, .str_from_utf32_be_short);
     }
     if (env.common.findIdent("Builtin.Str.from_utf8_lossy")) |str_from_utf8_lossy_ident| {
         try low_level_map.put(str_from_utf8_lossy_ident, .str_from_utf8_lossy);

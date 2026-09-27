@@ -2226,11 +2226,11 @@ Builtin :: [].{
 			is_eq : Utf8Problem, Utf8Problem -> Bool
 		}
 
-		Utf16Problem := [UnpairedHighSurrogate, UnpairedLowSurrogate].{
+		Utf16Problem := [UnpairedHighSurrogate, UnpairedLowSurrogate, UnexpectedEndOfSequence].{
 			is_eq : Utf16Problem, Utf16Problem -> Bool
 		}
 
-		Utf32Problem := [CodePointTooLarge, SurrogateCodePoint].{
+		Utf32Problem := [CodePointTooLarge, SurrogateCodePoint, UnexpectedEndOfSequence].{
 			is_eq : Utf32Problem, Utf32Problem -> Bool
 		}
 
@@ -2741,69 +2741,137 @@ Builtin :: [].{
 		## ```
 		from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem : Str.Utf8Problem, index : U64 })])
 
-		## Decodes a list of UTF-16 code units into a string.
-		## Returns the first invalid code unit's zero-based index and problem.
-		## Input values are code units, independent of byte order. A leading BOM
-		## is preserved as U+FEFF; empty input returns `Ok("")`.
-		##
+		## Decodes little-endian UTF-16 bytes. Preserves U+FEFF, including at the start.
+		## Returns the first malformed sequence's zero-based byte offset and problem.
+		## A partial final code unit reports `UnexpectedEndOfSequence`; empty input succeeds.
 		## ```roc
-		## expect Str.from_utf16([82, 111, 99, 0xD83D, 0xDC26]) == Ok("Roc🐦")
-		## expect Str.from_utf16([]) == Ok("")
+		## expect Str.from_utf16_le([65, 0]) == Ok("A")
+		## expect Str.from_utf16_le([]) == Ok("")
 		## ```
-		from_utf16 : List(U16) -> Try(Str, [BadUtf16({ problem : Str.Utf16Problem, index : U64 })])
-		from_utf16 = |units| {
-			decoded = decode_utf16(units, False)
-			match decoded.status {
-				0 => Ok(decoded.string)
-				1 => Err(BadUtf16({ problem: UnpairedHighSurrogate, index: decoded.index }))
-				2 => Err(BadUtf16({ problem: UnpairedLowSurrogate, index: decoded.index }))
-				_ => crash "Invalid UTF-16 decoder status"
-			}
+		from_utf16_le : List(U8) -> Try(Str, [BadUtf16({ problem : Str.Utf16Problem, index : U64 })])
+		from_utf16_le = |bytes| utf16_result(decode_utf16(bytes, True, False), 0)
+
+		## Decodes little-endian UTF-16 bytes, preserving U+FEFF as text.
+		## Replaces each unpaired surrogate and any partial final code unit with U+FFFD.
+		## Empty input returns an empty string.
+		## ```roc
+		## expect Str.from_utf16_le_lossy([65, 0]) == "A"
+		## expect Str.from_utf16_le_lossy([65]) == "�"
+		## ```
+		from_utf16_le_lossy : List(U8) -> Str
+		from_utf16_le_lossy = |bytes| decode_utf16(bytes, True, True).string
+
+		## Decodes big-endian UTF-16 bytes. Preserves U+FEFF, including at the start.
+		## Returns the first malformed sequence's zero-based byte offset and problem.
+		## A partial final code unit reports `UnexpectedEndOfSequence`; empty input succeeds.
+		## ```roc
+		## expect Str.from_utf16_be([0, 65]) == Ok("A")
+		## expect Str.from_utf16_be([]) == Ok("")
+		## ```
+		from_utf16_be : List(U8) -> Try(Str, [BadUtf16({ problem : Str.Utf16Problem, index : U64 })])
+		from_utf16_be = |bytes| utf16_result(decode_utf16(bytes, False, False), 0)
+
+		## Decodes big-endian UTF-16 bytes, preserving U+FEFF as text.
+		## Replaces each unpaired surrogate and any partial final code unit with U+FFFD.
+		## Empty input returns an empty string.
+		## ```roc
+		## expect Str.from_utf16_be_lossy([0, 65]) == "A"
+		## expect Str.from_utf16_be_lossy([65]) == "�"
+		## ```
+		from_utf16_be_lossy : List(U8) -> Str
+		from_utf16_be_lossy = |bytes| decode_utf16(bytes, False, True).string
+
+		## Decodes UTF-16 bytes with a required leading byte order mark.
+		## Consumes exactly one marker; subsequent U+FEFF characters remain text.
+		## Missing, incomplete, or unrecognized markers return `MissingByteOrderMark`.
+		## Malformed payload indices are byte offsets in the original input, including the marker.
+		## ```roc
+		## expect Str.from_utf16_bom([255, 254]) == Ok("")
+		## expect Str.from_utf16_bom([]) == Err(MissingByteOrderMark)
+		## ```
+		from_utf16_bom : List(U8) -> Try(Str, [BadUtf16({ problem : Str.Utf16Problem, index : U64 }), MissingByteOrderMark])
+		from_utf16_bom = |bytes| {
+			little_endian = utf16_byte_order(bytes)?
+			utf16_result(decode_utf16(List.drop_first(bytes, 2), little_endian, False), 2)
 		}
 
-		## Decodes UTF-16, replacing each unpaired surrogate with U+FFFD.
-		## A high surrogate consumes a following unit only when it forms a valid pair.
-		## Input values are code units, independent of byte order. A leading BOM
-		## is preserved as U+FEFF; empty input returns an empty string.
-		##
+		## Requires and consumes a leading UTF-16 byte order mark, then decodes lossily.
+		## A missing marker is an error; malformed payload is replaced with U+FFFD.
 		## ```roc
-		## expect Str.from_utf16_lossy([82, 111, 99, 0xD83D, 0xDC26]) == "Roc🐦"
-		## expect Str.from_utf16_lossy([65, 0xD800, 66]) == "A�B"
+		## expect Str.from_utf16_bom_lossy([255, 254]) == Ok("")
+		## expect Str.from_utf16_bom_lossy([]) == Err(MissingByteOrderMark)
 		## ```
-		from_utf16_lossy : List(U16) -> Str
-		from_utf16_lossy = |units| decode_utf16(units, True).string
-
-		## Decodes a list of UTF-32 code units into a string.
-		## Returns the first invalid code unit's zero-based index and problem.
-		## Input values are code units, independent of byte order. A leading BOM
-		## is preserved as U+FEFF; empty input returns `Ok("")`.
-		##
-		## ```roc
-		## expect Str.from_utf32([82, 111, 99, 0x1F426]) == Ok("Roc🐦")
-		## expect Str.from_utf32([]) == Ok("")
-		## ```
-		from_utf32 : List(U32) -> Try(Str, [BadUtf32({ problem : Str.Utf32Problem, index : U64 })])
-		from_utf32 = |units| {
-			decoded = decode_utf32(units, False)
-			match decoded.status {
-				0 => Ok(decoded.string)
-				1 => Err(BadUtf32({ problem: CodePointTooLarge, index: decoded.index }))
-				2 => Err(BadUtf32({ problem: SurrogateCodePoint, index: decoded.index }))
-				_ => crash "Invalid UTF-32 decoder status"
-			}
+		from_utf16_bom_lossy : List(U8) -> Try(Str, [MissingByteOrderMark])
+		from_utf16_bom_lossy = |bytes| {
+			little_endian = utf16_byte_order(bytes)?
+			Ok(decode_utf16(List.drop_first(bytes, 2), little_endian, True).string)
 		}
 
-		## Decodes UTF-32, replacing each surrogate or value above U+10FFFF with U+FFFD.
-		## Surrogate pairs are not combined: each UTF-32 unit must be a scalar value.
-		## Input values are code units, independent of byte order. A leading BOM
-		## is preserved as U+FEFF; empty input returns an empty string.
-		##
+		## Decodes little-endian UTF-32 bytes. Preserves U+FEFF, including at the start.
+		## Returns the first malformed sequence's zero-based byte offset and problem.
+		## A partial final code unit reports `UnexpectedEndOfSequence`; empty input succeeds.
 		## ```roc
-		## expect Str.from_utf32_lossy([82, 111, 99, 0x1F426]) == "Roc🐦"
-		## expect Str.from_utf32_lossy([65, 0xD800, 66]) == "A�B"
+		## expect Str.from_utf32_le([65, 0, 0, 0]) == Ok("A")
+		## expect Str.from_utf32_le([]) == Ok("")
 		## ```
-		from_utf32_lossy : List(U32) -> Str
-		from_utf32_lossy = |units| decode_utf32(units, True).string
+		from_utf32_le : List(U8) -> Try(Str, [BadUtf32({ problem : Str.Utf32Problem, index : U64 })])
+		from_utf32_le = |bytes| utf32_result(decode_utf32(bytes, True, False), 0)
+
+		## Decodes little-endian UTF-32 bytes, preserving U+FEFF as text.
+		## Replaces each invalid scalar and any partial final code unit with U+FFFD.
+		## Empty input returns an empty string.
+		## ```roc
+		## expect Str.from_utf32_le_lossy([65, 0, 0, 0]) == "A"
+		## expect Str.from_utf32_le_lossy([65]) == "�"
+		## ```
+		from_utf32_le_lossy : List(U8) -> Str
+		from_utf32_le_lossy = |bytes| decode_utf32(bytes, True, True).string
+
+		## Decodes big-endian UTF-32 bytes. Preserves U+FEFF, including at the start.
+		## Returns the first malformed sequence's zero-based byte offset and problem.
+		## A partial final code unit reports `UnexpectedEndOfSequence`; empty input succeeds.
+		## ```roc
+		## expect Str.from_utf32_be([0, 0, 0, 65]) == Ok("A")
+		## expect Str.from_utf32_be([]) == Ok("")
+		## ```
+		from_utf32_be : List(U8) -> Try(Str, [BadUtf32({ problem : Str.Utf32Problem, index : U64 })])
+		from_utf32_be = |bytes| utf32_result(decode_utf32(bytes, False, False), 0)
+
+		## Decodes big-endian UTF-32 bytes, preserving U+FEFF as text.
+		## Replaces each invalid scalar and any partial final code unit with U+FFFD.
+		## Empty input returns an empty string.
+		## ```roc
+		## expect Str.from_utf32_be_lossy([0, 0, 0, 65]) == "A"
+		## expect Str.from_utf32_be_lossy([65]) == "�"
+		## ```
+		from_utf32_be_lossy : List(U8) -> Str
+		from_utf32_be_lossy = |bytes| decode_utf32(bytes, False, True).string
+
+		## Decodes UTF-32 bytes with a required leading byte order mark.
+		## Consumes exactly one marker; subsequent U+FEFF characters remain text.
+		## Missing, incomplete, or unrecognized markers return `MissingByteOrderMark`.
+		## Malformed payload indices are byte offsets in the original input, including the marker.
+		## ```roc
+		## expect Str.from_utf32_bom([255, 254, 0, 0]) == Ok("")
+		## expect Str.from_utf32_bom([]) == Err(MissingByteOrderMark)
+		## ```
+		from_utf32_bom : List(U8) -> Try(Str, [BadUtf32({ problem : Str.Utf32Problem, index : U64 }), MissingByteOrderMark])
+		from_utf32_bom = |bytes| {
+			little_endian = utf32_byte_order(bytes)?
+			utf32_result(decode_utf32(List.drop_first(bytes, 4), little_endian, False), 4)
+		}
+
+		## Requires and consumes a leading UTF-32 byte order mark, then decodes lossily.
+		## A missing marker is an error; malformed payload is replaced with U+FFFD.
+		## ```roc
+		## expect Str.from_utf32_bom_lossy([255, 254, 0, 0]) == Ok("")
+		## expect Str.from_utf32_bom_lossy([]) == Err(MissingByteOrderMark)
+		## ```
+		from_utf32_bom_lossy : List(U8) -> Try(Str, [MissingByteOrderMark])
+		from_utf32_bom_lossy = |bytes| {
+			little_endian = utf32_byte_order(bytes)?
+			Ok(decode_utf32(List.drop_first(bytes, 4), little_endian, True).string)
+		}
 
 		## Converts a string literal to a [Str].
 		##
@@ -24025,13 +24093,8 @@ simd_i64x2_load_16_unchecked : List(U8), U64 -> Num.I64x2
 
 simd_i64x2_store_16_unchecked : Num.I64x2, List(U8), U64 -> List(U8)
 
-# Wide UTF decoding runs in two passes over the borrowed units, both using the
-# same 16-unit SIMD ASCII chunks. Sizing validates and measures the exact UTF-8
-# length without allocating, so strict failures allocate nothing. Output of at
-# most `wide_utf_short_max_bytes` is built by a scalar primitive from a stack
-# buffer, so inline-sized results allocate nothing on 64-bit targets. Longer
-# output is encoded into one exact-capacity byte list. Status: 0 = success,
-# 1/2 = the corresponding Utf16Problem/Utf32Problem.
+# Wide UTF decoding borrows bytes and sizes before allocating. Status 0 is
+# success, 1/2 are invalid units, and 3 is an incomplete trailing code unit.
 wide_utf_short_max_bytes : U64
 wide_utf_short_max_bytes = 23
 
@@ -24047,138 +24110,249 @@ utf8_width = |code_point|
 		4
 	}
 
-utf16_ascii_chunk : List(U16), U64 -> Bool
-utf16_ascii_chunk = |units, index| {
-	a = simd_u16x8_load_units_unchecked(units, index)
-	b = simd_u16x8_load_units_unchecked(units, index + 8)
+utf16_result : { index : U64, status : U8, string : Str }, U64 -> Try(Str, [BadUtf16({ problem : Str.Utf16Problem, index : U64 })])
+utf16_result = |decoded, offset| {
+	match decoded.status {
+		0 => Ok(decoded.string)
+		1 => Err(BadUtf16({ problem: UnpairedHighSurrogate, index: decoded.index + offset }))
+		2 => Err(BadUtf16({ problem: UnpairedLowSurrogate, index: decoded.index + offset }))
+		3 => Err(BadUtf16({ problem: UnexpectedEndOfSequence, index: decoded.index + offset }))
+		_ => crash "Invalid UTF-16 decoder status"
+	}
+}
+
+utf16_byte_order : List(U8) -> Try(Bool, [MissingByteOrderMark])
+utf16_byte_order = |bytes| {
+	if List.len(bytes) < 2 {
+		return Err(MissingByteOrderMark)
+	}
+	if list_get_unsafe(bytes, 0) == 255 and list_get_unsafe(bytes, 1) == 254 {
+		Ok(True)
+	} else if list_get_unsafe(bytes, 0) == 254 and list_get_unsafe(bytes, 1) == 255 {
+		Ok(False)
+	} else {
+		Err(MissingByteOrderMark)
+	}
+}
+
+# Caller establishes that a full code unit is available.
+utf16_read : List(U8), U64, Bool -> U16
+utf16_read = |bytes, index, little_endian| {
+	unit = u16_from_le_bytes_unchecked(bytes, index)
+	if little_endian {
+		unit
+	} else {
+		unit.shl_wrap(8).bitwise_or(unit.shr_wrap(8))
+	}
+}
+
+utf16_load : List(U8), U64, Bool -> Num.U16x8
+utf16_load = |bytes, index, little_endian| {
+	lanes = simd_u16x8_load_16_unchecked(bytes, index)
+	if little_endian {
+		lanes
+	} else {
+		lanes.shl_wrap(8).bitwise_or(lanes.shr_wrap(8))
+	}
+}
+
+utf16_ascii_chunk : List(U8), U64, Bool -> Bool
+utf16_ascii_chunk = |bytes, index, little_endian| {
+	a = utf16_load(bytes, index, little_endian)
+	b = utf16_load(bytes, index + 16, little_endian)
 	a.bitwise_or(b).gt_lanes(Num.U16x8.splat(127)).to_bitmask() == 0
 }
 
-utf32_ascii_chunk : List(U32), U64 -> Bool
-utf32_ascii_chunk = |units, index| {
-	a = simd_u32x4_load_units_unchecked(units, index)
-	b = simd_u32x4_load_units_unchecked(units, index + 4)
-	c = simd_u32x4_load_units_unchecked(units, index + 8)
-	d = simd_u32x4_load_units_unchecked(units, index + 12)
+utf16_step : List(U8), U64, Bool -> { scalar : U64, bytes : U64, status : U8 }
+utf16_step = |bytes, index, little_endian| {
+	remaining = List.len(bytes) - index
+	if remaining < 2 {
+		return { scalar: 0xFFFD, bytes: remaining, status: 3 }
+	}
+	unit = utf16_read(bytes, index, little_endian)
+	if unit >= 0xD800 and unit <= 0xDBFF {
+		if remaining >= 4 {
+			low = utf16_read(bytes, index + 2, little_endian)
+			if low >= 0xDC00 and low <= 0xDFFF {
+				return { scalar: 0x10000 + (unit.to_u64() - 0xD800) * 1024 + (low.to_u64() - 0xDC00), bytes: 4, status: 0 }
+			}
+		}
+		{ scalar: 0xFFFD, bytes: 2, status: 1 }
+	} else if unit >= 0xDC00 and unit <= 0xDFFF {
+		{ scalar: 0xFFFD, bytes: 2, status: 2 }
+	} else {
+		{ scalar: unit.to_u64(), bytes: 2, status: 0 }
+	}
+}
+
+decode_utf16 : List(U8), Bool, Bool -> { index : U64, status : U8, string : Str }
+decode_utf16 = |bytes, little_endian, lossy| {
+	len = List.len(bytes)
+	var $size = 0.U64
+	var $index = 0.U64
+	while $index < len {
+		if len - $index >= 32 and utf16_read(bytes, $index, little_endian) <= 127 and utf16_ascii_chunk(bytes, $index, little_endian) {
+			$size = $size + 16
+			$index = $index + 32
+		} else {
+			step = utf16_step(bytes, $index, little_endian)
+			if step.status != 0 and !lossy {
+				return { index: $index, status: step.status, string: "" }
+			}
+			$size = $size + utf8_width(step.scalar)
+			$index = $index + step.bytes
+		}
+	}
+	if $size <= wide_utf_short_max_bytes {
+		string = if little_endian {
+			str_from_utf16_le_short(bytes)
+		} else {
+			str_from_utf16_be_short(bytes)
+		}
+		return { index: 0, status: 0, string }
+	}
+	var $out = u8_list_with_capacity($size)
+	$index = 0
+	while $index < len {
+		if len - $index >= 32 and utf16_read(bytes, $index, little_endian) <= 127 and utf16_ascii_chunk(bytes, $index, little_endian) {
+			a = utf16_load(bytes, $index, little_endian)
+			b = utf16_load(bytes, $index + 16, little_endian)
+			$out = a.narrow_to_u8x16_wrap(b).append_to($out)
+			$index = $index + 32
+		} else {
+			step = utf16_step(bytes, $index, little_endian)
+			$out = append_utf8_code_point($out, step.scalar)
+			$index = $index + step.bytes
+		}
+	}
+	{ index: 0, status: 0, string: str_from_utf8_validated($out) }
+}
+
+# Private: borrows bytes whose lossy output was sized to at most 23 bytes.
+str_from_utf16_le_short : List(U8) -> Str
+
+str_from_utf16_be_short : List(U8) -> Str
+
+utf32_result : { index : U64, status : U8, string : Str }, U64 -> Try(Str, [BadUtf32({ problem : Str.Utf32Problem, index : U64 })])
+utf32_result = |decoded, offset| {
+	match decoded.status {
+		0 => Ok(decoded.string)
+		1 => Err(BadUtf32({ problem: CodePointTooLarge, index: decoded.index + offset }))
+		2 => Err(BadUtf32({ problem: SurrogateCodePoint, index: decoded.index + offset }))
+		3 => Err(BadUtf32({ problem: UnexpectedEndOfSequence, index: decoded.index + offset }))
+		_ => crash "Invalid UTF-32 decoder status"
+	}
+}
+
+utf32_byte_order : List(U8) -> Try(Bool, [MissingByteOrderMark])
+utf32_byte_order = |bytes| {
+	if List.len(bytes) < 4 {
+		return Err(MissingByteOrderMark)
+	}
+	if list_get_unsafe(bytes, 0) == 255 and list_get_unsafe(bytes, 1) == 254 and list_get_unsafe(bytes, 2) == 0 and list_get_unsafe(bytes, 3) == 0 {
+		Ok(True)
+	} else if list_get_unsafe(bytes, 0) == 0 and list_get_unsafe(bytes, 1) == 0 and list_get_unsafe(bytes, 2) == 254 and list_get_unsafe(bytes, 3) == 255 {
+		Ok(False)
+	} else {
+		Err(MissingByteOrderMark)
+	}
+}
+
+# Caller establishes that a full code unit is available.
+utf32_read : List(U8), U64, Bool -> U32
+utf32_read = |bytes, index, little_endian| {
+	unit = u32_from_le_bytes_unchecked(bytes, index)
+	if little_endian {
+		unit
+	} else {
+		unit.shl_wrap(24).bitwise_or(unit.bitwise_and(0x0000FF00).shl_wrap(8)).bitwise_or(unit.shr_wrap(8).bitwise_and(0x0000FF00)).bitwise_or(unit.shr_wrap(24))
+	}
+}
+
+utf32_load : List(U8), U64, Bool -> Num.U32x4
+utf32_load = |bytes, index, little_endian| {
+	lanes = simd_u32x4_load_16_unchecked(bytes, index)
+	if little_endian {
+		lanes
+	} else {
+		lanes.shl_wrap(24).bitwise_or(lanes.bitwise_and(Num.U32x4.splat(0x0000FF00)).shl_wrap(8)).bitwise_or(lanes.shr_wrap(8).bitwise_and(Num.U32x4.splat(0x0000FF00))).bitwise_or(lanes.shr_wrap(24))
+	}
+}
+
+utf32_ascii_chunk : List(U8), U64, Bool -> Bool
+utf32_ascii_chunk = |bytes, index, little_endian| {
+	a = utf32_load(bytes, index, little_endian)
+	b = utf32_load(bytes, index + 16, little_endian)
+	c = utf32_load(bytes, index + 32, little_endian)
+	d = utf32_load(bytes, index + 48, little_endian)
 	a.bitwise_or(b).bitwise_or(c).bitwise_or(d).gt_lanes(Num.U32x4.splat(127)).to_bitmask() == 0
 }
 
-# One UTF-16 step from `index`: the scalar (U+FFFD for a problem), units
-# consumed, and problem status.
-utf16_step : List(U16), U64 -> { scalar : U64, units : U64, status : U8 }
-utf16_step = |units, index| {
-	unit = list_get_unsafe(units, index)
-	if unit >= 0xD800 and unit <= 0xDBFF {
-		if index + 1 < List.len(units) {
-			low = list_get_unsafe(units, index + 1)
-			if low >= 0xDC00 and low <= 0xDFFF {
-				return { scalar: 0x10000 + (unit.to_u64() - 0xD800) * 1024 + (low.to_u64() - 0xDC00), units: 2, status: 0 }
-			}
-		}
-		{ scalar: 0xFFFD, units: 1, status: 1 }
-	} else if unit >= 0xDC00 and unit <= 0xDFFF {
-		{ scalar: 0xFFFD, units: 1, status: 2 }
-	} else {
-		{ scalar: unit.to_u64(), units: 1, status: 0 }
+utf32_step : List(U8), U64, Bool -> { scalar : U64, bytes : U64, status : U8 }
+utf32_step = |bytes, index, little_endian| {
+	remaining = List.len(bytes) - index
+	if remaining < 4 {
+		return { scalar: 0xFFFD, bytes: remaining, status: 3 }
 	}
-}
-
-utf32_step : U32 -> { scalar : U64, status : U8 }
-utf32_step = |unit|
+	unit = utf32_read(bytes, index, little_endian)
 	if unit > 0x10FFFF {
-		{ scalar: 0xFFFD, status: 1 }
+		{ scalar: 0xFFFD, bytes: 4, status: 1 }
 	} else if unit >= 0xD800 and unit <= 0xDFFF {
-		{ scalar: 0xFFFD, status: 2 }
+		{ scalar: 0xFFFD, bytes: 4, status: 2 }
 	} else {
-		{ scalar: unit.to_u64(), status: 0 }
+		{ scalar: unit.to_u64(), bytes: 4, status: 0 }
 	}
-
-decode_utf16 : List(U16), Bool -> { index : U64, status : U8, string : Str }
-decode_utf16 = |units, lossy| {
-	len = List.len(units)
-	var $size = 0.U64
-	var $index = 0.U64
-	while $index < len {
-		if list_get_unsafe(units, $index) <= 127 and len - $index >= 16 and utf16_ascii_chunk(units, $index) {
-			$size = $size + 16
-			$index = $index + 16
-		} else {
-			step = utf16_step(units, $index)
-			if step.status != 0 and !lossy {
-				return { index: $index, status: step.status, string: "" }
-			}
-			$size = $size + utf8_width(step.scalar)
-			$index = $index + step.units
-		}
-	}
-	if $size <= wide_utf_short_max_bytes {
-		return { index: 0, status: 0, string: str_from_utf16_short(units) }
-	}
-	# Every appended byte is checked ASCII or an encoded scalar, so the
-	# validated constructor needs no further scan.
-	var $out = u8_list_with_capacity($size)
-	$index = 0
-	while $index < len {
-		unit = list_get_unsafe(units, $index)
-		if unit <= 127 and len - $index >= 16 and utf16_ascii_chunk(units, $index) {
-			a = simd_u16x8_load_units_unchecked(units, $index)
-			b = simd_u16x8_load_units_unchecked(units, $index + 8)
-			$out = a.narrow_to_u8x16_wrap(b).append_to($out)
-			$index = $index + 16
-		} else {
-			step = utf16_step(units, $index)
-			$out = append_utf8_code_point($out, step.scalar)
-			$index = $index + step.units
-		}
-	}
-	{ index: 0, status: 0, string: str_from_utf8_validated($out) }
 }
 
-decode_utf32 : List(U32), Bool -> { index : U64, status : U8, string : Str }
-decode_utf32 = |units, lossy| {
-	len = List.len(units)
+decode_utf32 : List(U8), Bool, Bool -> { index : U64, status : U8, string : Str }
+decode_utf32 = |bytes, little_endian, lossy| {
+	len = List.len(bytes)
 	var $size = 0.U64
 	var $index = 0.U64
 	while $index < len {
-		if list_get_unsafe(units, $index) <= 127 and len - $index >= 16 and utf32_ascii_chunk(units, $index) {
+		if len - $index >= 64 and utf32_read(bytes, $index, little_endian) <= 127 and utf32_ascii_chunk(bytes, $index, little_endian) {
 			$size = $size + 16
-			$index = $index + 16
+			$index = $index + 64
 		} else {
-			step = utf32_step(list_get_unsafe(units, $index))
+			step = utf32_step(bytes, $index, little_endian)
 			if step.status != 0 and !lossy {
 				return { index: $index, status: step.status, string: "" }
 			}
 			$size = $size + utf8_width(step.scalar)
-			$index = $index + 1
+			$index = $index + step.bytes
 		}
 	}
 	if $size <= wide_utf_short_max_bytes {
-		return { index: 0, status: 0, string: str_from_utf32_short(units) }
+		string = if little_endian {
+			str_from_utf32_le_short(bytes)
+		} else {
+			str_from_utf32_be_short(bytes)
+		}
+		return { index: 0, status: 0, string }
 	}
 	var $out = u8_list_with_capacity($size)
 	$index = 0
 	while $index < len {
-		unit = list_get_unsafe(units, $index)
-		if unit <= 127 and len - $index >= 16 and utf32_ascii_chunk(units, $index) {
-			a = simd_u32x4_load_units_unchecked(units, $index)
-			b = simd_u32x4_load_units_unchecked(units, $index + 4)
-			c = simd_u32x4_load_units_unchecked(units, $index + 8)
-			d = simd_u32x4_load_units_unchecked(units, $index + 12)
+		if len - $index >= 64 and utf32_read(bytes, $index, little_endian) <= 127 and utf32_ascii_chunk(bytes, $index, little_endian) {
+			a = utf32_load(bytes, $index, little_endian)
+			b = utf32_load(bytes, $index + 16, little_endian)
+			c = utf32_load(bytes, $index + 32, little_endian)
+			d = utf32_load(bytes, $index + 48, little_endian)
 			$out = a.narrow_to_u16x8_wrap(b).narrow_to_u8x16_wrap(c.narrow_to_u16x8_wrap(d)).append_to($out)
-			$index = $index + 16
+			$index = $index + 64
 		} else {
-			$out = append_utf8_code_point($out, utf32_step(unit).scalar)
-			$index = $index + 1
+			step = utf32_step(bytes, $index, little_endian)
+			$out = append_utf8_code_point($out, step.scalar)
+			$index = $index + step.bytes
 		}
 	}
 	{ index: 0, status: 0, string: str_from_utf8_validated($out) }
 }
 
-# Private: scalar lossy decode for output already sized to at most
-# `wide_utf_short_max_bytes`. Borrows the units.
-str_from_utf16_short : List(U16) -> Str
+# Private: borrows bytes whose lossy output was sized to at most 23 bytes.
+str_from_utf32_le_short : List(U8) -> Str
 
-str_from_utf32_short : List(U32) -> Str
+str_from_utf32_be_short : List(U8) -> Str
 
 # Private: the UTF decoders establish validity while producing these bytes.
 str_from_utf8_validated : List(U8) -> Str

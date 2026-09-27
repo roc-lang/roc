@@ -1750,75 +1750,125 @@ pub fn fromUtf8Validated(list: RocList, roc_ops: *RocOps) callconv(.c) RocStr {
 /// in Builtin.roc; on 32-bit targets output above the inline capacity allocates once.
 pub const WIDE_UTF_SHORT_MAX_BYTES = 23;
 
-/// Borrows wide UTF units whose lossy UTF-8 output the caller has already sized
-/// at most WIDE_UTF_SHORT_MAX_BYTES, and builds the string from a stack buffer,
-/// so inline-sized output never allocates. Scalar only: bulk decoding is Roc
-/// SIMD code in Builtin.roc.
-fn fromWideUtfShort(comptime Unit: type, list: RocList, roc_ops: *RocOps) RocStr {
+/// Borrows bytes whose lossy UTF-8 output was already sized to at most
+/// WIDE_UTF_SHORT_MAX_BYTES. Bulk decoding remains in checked Roc SIMD code.
+fn fromWideUtfShort(comptime Unit: type, comptime endian: std.builtin.Endian, list: RocList, roc_ops: *RocOps) RocStr {
     const len = list.len();
     if (len == 0) return RocStr.empty();
-    const units = @as([*]const Unit, @ptrCast(@alignCast(list.bytes)))[0..len];
+    const bytes = list.bytes.?[0..len];
+    const unit_width = @sizeOf(Unit);
     var buffer: [WIDE_UTF_SHORT_MAX_BYTES]u8 = undefined;
     var written: usize = 0;
     var index: usize = 0;
-    while (index < units.len) {
-        const unit = units[index];
-        index += 1;
+    while (index < bytes.len) {
         var scalar: u21 = UNICODE_REPLACEMENT;
-        if (Unit == u16) {
-            if (unit >= 0xd800 and unit <= 0xdbff) {
-                if (index < units.len and units[index] >= 0xdc00 and units[index] <= 0xdfff) {
-                    scalar = 0x10000 + ((@as(u21, unit) - 0xd800) << 10) + (units[index] - 0xdc00);
-                    index += 1;
+        if (bytes.len - index < unit_width) {
+            index = bytes.len;
+        } else {
+            const unit = std.mem.readInt(Unit, bytes[index..][0..unit_width], endian);
+            index += unit_width;
+            if (Unit == u16) {
+                if (unit >= 0xd800 and unit <= 0xdbff) {
+                    if (bytes.len - index >= unit_width) {
+                        const low = std.mem.readInt(Unit, bytes[index..][0..unit_width], endian);
+                        if (low >= 0xdc00 and low <= 0xdfff) {
+                            scalar = 0x10000 + ((@as(u21, unit) - 0xd800) << 10) + (low - 0xdc00);
+                            index += unit_width;
+                        }
+                    }
+                } else if (unit < 0xdc00 or unit > 0xdfff) {
+                    scalar = unit;
                 }
-            } else if (unit < 0xdc00 or unit > 0xdfff) {
-                scalar = unit;
+            } else if (unit <= 0x10ffff and (unit < 0xd800 or unit > 0xdfff)) {
+                scalar = @intCast(unit);
             }
-        } else if (unit <= 0x10ffff and (unit < 0xd800 or unit > 0xdfff)) {
-            scalar = @intCast(unit);
         }
         const width = unicode.utf8CodepointSequenceLength(scalar) catch unreachable;
-        if (buffer.len - written < width) {
-            roc_ops.crash("short wide UTF decode exceeded its sized output");
-            unreachable;
-        }
+        std.debug.assert(buffer.len - written >= width);
         written += unicode.utf8Encode(scalar, buffer[written..]) catch unreachable;
     }
     return RocStr.init(&buffer, written, roc_ops);
 }
 
-/// Lossy UTF-16 decode for output already sized to fit inline.
-pub fn fromUtf16Short(list: RocList, roc_ops: *RocOps) callconv(.c) RocStr {
-    return fromWideUtfShort(u16, list, roc_ops);
+/// Lossy fixed-order UTF-16 byte decode for output already sized to at most 23 bytes.
+pub fn fromUtf16LeShort(list: RocList, roc_ops: *RocOps) callconv(.c) RocStr {
+    return fromWideUtfShort(u16, .little, list, roc_ops);
 }
 
-/// Lossy UTF-32 decode for output already sized to fit inline.
-pub fn fromUtf32Short(list: RocList, roc_ops: *RocOps) callconv(.c) RocStr {
-    return fromWideUtfShort(u32, list, roc_ops);
+/// Lossy fixed-order UTF-16 byte decode for output already sized to at most 23 bytes.
+pub fn fromUtf16BeShort(list: RocList, roc_ops: *RocOps) callconv(.c) RocStr {
+    return fromWideUtfShort(u16, .big, list, roc_ops);
 }
 
-test "short wide UTF decoding: inline output, replacement, and pairs" {
+/// Lossy fixed-order UTF-32 byte decode for output already sized to at most 23 bytes.
+pub fn fromUtf32LeShort(list: RocList, roc_ops: *RocOps) callconv(.c) RocStr {
+    return fromWideUtfShort(u32, .little, list, roc_ops);
+}
+
+/// Lossy fixed-order UTF-32 byte decode for output already sized to at most 23 bytes.
+pub fn fromUtf32BeShort(list: RocList, roc_ops: *RocOps) callconv(.c) RocStr {
+    return fromWideUtfShort(u32, .big, list, roc_ops);
+}
+
+test "short wide UTF decoding: explicit byte order, replacements, and pairs" {
     var env = TestEnv.init(testing.allocator);
     defer env.deinit();
-    const Case16 = struct { units: []const u16, expected: []const u8 };
-    for ([_]Case16{
-        .{ .units = &.{}, .expected = "" },
-        .{ .units = &.{ 82, 111, 99, 0xd83d, 0xdc26 }, .expected = "Roc🐦" },
-        .{ .units = &.{ 65, 0xd800, 66 }, .expected = "A\u{fffd}B" },
-        .{ .units = &.{ 0xdc00, 0xd800 }, .expected = "\u{fffd}\u{fffd}" },
-        .{ .units = &.{0xfeff}, .expected = "\u{feff}" },
-    }) |case| {
-        const list = RocList{ .bytes = @ptrCast(@constCast(case.units.ptr)), .length = case.units.len, .capacity_or_alloc_ptr = RocList.encodeCapacity(case.units.len) };
-        const result = fromUtf16Short(list, env.getOps());
-        try testing.expect(result.isSmallStr());
-        try testing.expectEqualStrings(case.expected, result.asSlice());
+    const Case = struct { bytes: []const u8, expected: []const u8 };
+    inline for (.{ .{ u16, fromUtf16LeShort, fromUtf16BeShort }, .{ u32, fromUtf32LeShort, fromUtf32BeShort } }) |spec| {
+        const Unit = spec[0];
+        const cases = if (Unit == u16) [_]Case{
+            .{ .bytes = &.{}, .expected = "" },
+            .{ .bytes = &.{ 82, 0, 111, 0, 99, 0, 0x3d, 0xd8, 0x26, 0xdc }, .expected = "Roc🐦" },
+            .{ .bytes = &.{ 65, 0, 0, 0xd8, 66, 0 }, .expected = "A�B" },
+            .{ .bytes = &.{ 0, 0xdc, 0, 0xd8 }, .expected = "��" },
+            .{ .bytes = &.{ 0xff, 0xfe }, .expected = "\u{feff}" },
+        } else [_]Case{
+            .{ .bytes = &.{}, .expected = "" },
+            .{ .bytes = &.{ 0x26, 0xf4, 1, 0 }, .expected = "🐦" },
+            .{ .bytes = &.{ 65, 0, 0, 0, 0, 0xd8, 0, 0 }, .expected = "A�" },
+            .{ .bytes = &.{ 0, 0, 0x11, 0, 255, 255, 255, 255 }, .expected = "��" },
+            .{ .bytes = &.{ 0xff, 0xfe, 0, 0 }, .expected = "\u{feff}" },
+        };
+        for (cases) |case| {
+            inline for (.{ spec[1], spec[2] }, 0..) |decode, order| {
+                var input: [32]u8 = undefined;
+                @memcpy(input[0..case.bytes.len], case.bytes);
+                if (order == 1) {
+                    var i: usize = 0;
+                    while (i < case.bytes.len) : (i += @sizeOf(Unit)) std.mem.reverse(u8, input[i..][0..@sizeOf(Unit)]);
+                }
+                const list = RocList{ .bytes = &input, .length = case.bytes.len, .capacity_or_alloc_ptr = RocList.encodeCapacity(case.bytes.len) };
+                const result = decode(list, env.getOps());
+                defer result.decref(env.getOps());
+                try testing.expectEqualStrings(case.expected, result.asSlice());
+            }
+        }
     }
-    const units32 = [_]u32{ 0x1f426, 0x110000, 0xdfff, 0x10ffff, 0xffffffff };
-    const list32 = RocList{ .bytes = @ptrCast(@constCast(&units32)), .length = units32.len, .capacity_or_alloc_ptr = RocList.encodeCapacity(units32.len) };
-    const result32 = fromUtf32Short(list32, env.getOps());
-    try testing.expect(result32.isSmallStr());
-    try testing.expectEqualStrings("🐦\u{fffd}\u{fffd}\u{10ffff}\u{fffd}", result32.asSlice());
+    inline for (.{ fromUtf16LeShort, fromUtf16BeShort, fromUtf32LeShort, fromUtf32BeShort }) |decode| {
+        var input = [_]u8{65};
+        const result = decode(.{ .bytes = &input, .length = 1, .capacity_or_alloc_ptr = RocList.encodeCapacity(1) }, env.getOps());
+        defer result.decref(env.getOps());
+        try testing.expectEqualStrings("�", result.asSlice());
+    }
     try testing.expectEqual(@as(usize, 0), env.getAllocationCount());
+}
+
+test "short wide UTF decoding: inline capacity boundaries" {
+    inline for (.{ .{ u16, fromUtf16LeShort, std.builtin.Endian.little }, .{ u16, fromUtf16BeShort, std.builtin.Endian.big }, .{ u32, fromUtf32LeShort, std.builtin.Endian.little }, .{ u32, fromUtf32BeShort, std.builtin.Endian.big } }) |spec| {
+        const Unit = spec[0];
+        for ([_]usize{ 0, 7, 8, 11, 12, 22, 23 }) |len| {
+            var env = TestEnv.init(testing.allocator);
+            defer env.deinit();
+            var input: [WIDE_UTF_SHORT_MAX_BYTES * @sizeOf(Unit) + 1]u8 = undefined;
+            for (0..len) |i| std.mem.writeInt(Unit, input[1 + i * @sizeOf(Unit) ..][0..@sizeOf(Unit)], 65, spec[2]);
+            const list = RocList{ .bytes = input[1..].ptr, .length = len * @sizeOf(Unit), .capacity_or_alloc_ptr = RocList.encodeCapacity(len * @sizeOf(Unit)) };
+            const result = spec[1](list, env.getOps());
+            defer result.decref(env.getOps());
+            const expected = [_]u8{65} ** WIDE_UTF_SHORT_MAX_BYTES;
+            try testing.expectEqualStrings(expected[0..len], result.asSlice());
+            try testing.expectEqual(@as(usize, if (RocStr.fitsInSmallStr(len)) 0 else 1), env.getAllocationCount());
+        }
+    }
 }
 
 /// TODO: Document fromUtf8Lossy.

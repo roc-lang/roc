@@ -4290,15 +4290,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
                     return try self.callList1RocOpsToStr(list_off, @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf8_validated), LowLevelBuiltins.strOp(.str_from_utf8_validated));
                 },
-                .str_from_utf16_short => {
+                .str_from_utf16_le_short => {
                     const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
-                    return try self.callList1RocOpsToStr(list_off, @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf16_short), LowLevelBuiltins.strOp(.str_from_utf16_short));
+                    return try self.callList1RocOpsToStr(list_off, @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf16_le_short), LowLevelBuiltins.strOp(.str_from_utf16_le_short));
                 },
-                .str_from_utf32_short => {
+                .str_from_utf16_be_short => {
                     const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
-                    return try self.callList1RocOpsToStr(list_off, @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf32_short), LowLevelBuiltins.strOp(.str_from_utf32_short));
+                    return try self.callList1RocOpsToStr(list_off, @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf16_be_short), LowLevelBuiltins.strOp(.str_from_utf16_be_short));
+                },
+                .str_from_utf32_le_short => {
+                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    return try self.callList1RocOpsToStr(list_off, @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf32_le_short), LowLevelBuiltins.strOp(.str_from_utf32_le_short));
+                },
+                .str_from_utf32_be_short => {
+                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    return try self.callList1RocOpsToStr(list_off, @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf32_be_short), LowLevelBuiltins.strOp(.str_from_utf32_be_short));
                 },
                 .str_from_utf8_lossy => {
                     // str_from_utf8_lossy(list) -> Str
@@ -7564,8 +7574,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .str_from_utf8,
                 .str_from_utf8_lossy,
                 .str_from_utf8_validated,
-                .str_from_utf16_short,
-                .str_from_utf32_short,
+                .str_from_utf16_le_short,
+                .str_from_utf16_be_short,
+                .str_from_utf32_le_short,
+                .str_from_utf32_be_short,
 
                 .str_get_utf8_byte_unsafe,
                 .str_inspect,

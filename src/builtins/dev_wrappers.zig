@@ -528,13 +528,21 @@ pub fn roc_builtins_str_from_utf8_validated(out: *RocStr, bytes: ?[*]u8, len: us
 }
 
 /// Wrapper for the private inline-sized UTF-16 decode. The input remains borrowed.
-pub fn roc_builtins_str_from_utf16_short(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize) callconv(.c) void {
-    out.* = str.fromUtf16Short(.{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap }, in_process_host.ops());
+pub fn roc_builtins_str_from_utf16_le_short(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize) callconv(.c) void {
+    out.* = str.fromUtf16LeShort(.{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap }, in_process_host.ops());
+}
+/// Wrapper for the private big-endian UTF-16 byte decode. Borrows its input.
+pub fn roc_builtins_str_from_utf16_be_short(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize) callconv(.c) void {
+    out.* = str.fromUtf16BeShort(.{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap }, in_process_host.ops());
 }
 
 /// Wrapper for the private inline-sized UTF-32 decode. The input remains borrowed.
-pub fn roc_builtins_str_from_utf32_short(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize) callconv(.c) void {
-    out.* = str.fromUtf32Short(.{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap }, in_process_host.ops());
+pub fn roc_builtins_str_from_utf32_le_short(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize) callconv(.c) void {
+    out.* = str.fromUtf32LeShort(.{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap }, in_process_host.ops());
+}
+/// Wrapper for the private big-endian UTF-32 byte decode. Borrows its input.
+pub fn roc_builtins_str_from_utf32_be_short(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize) callconv(.c) void {
+    out.* = str.fromUtf32BeShort(.{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap }, in_process_host.ops());
 }
 
 /// Wrapper: fromUtf8Lossy(RocList, *RocOps) -> RocStr

@@ -69,41 +69,46 @@ lowerer.
 
 ## UTF-16 and UTF-32 decoding primitives
 
-`Str.from_utf16`, `Str.from_utf16_lossy`, `Str.from_utf32`, and
-`Str.from_utf32_lossy` decode in checked Roc code. The loops borrow numeric
-code-unit lists and make two forward passes: sizing, then encoding. Full ASCII
-blocks use the existing `U16x8`/`U32x4` SIMD types: typed loads, unsigned
-comparison against 127, narrowing, and `U8x16.append_to`. Their operations
-follow the ordinary LIR/backend SIMD path and the target's existing CPU
-contract; Zig vector code does not implement a separate decoding kernel.
+`Str.from_utf16_le`, `Str.from_utf16_be`, `Str.from_utf16_bom`, and their
+UTF-32 equivalents consume `List(U8)`. Each has a `_lossy` variant. Byte order
+is explicit and independent of the target. The BOM variants require and consume
+one leading encoding-specific byte order mark; missing or incomplete markers
+return `MissingByteOrderMark`, including for lossy decoding. Explicit LE/BE
+variants preserve U+FEFF as text and never change byte order based on input.
 
-Typed SIMD loads consume numeric lanes from `List(U16)` or `List(U32)` at a
-unit index. The input list's explicit item type determines the address
-stride. Byte-list loads continue to interpret bytes as little-endian lanes. Bounds
-are checked before each full block, and partial blocks use scalar decoding.
+Strict decoding reports the first malformed sequence's zero-based byte offset
+in the original input, including the consumed BOM. `UnexpectedEndOfSequence`
+means a trailing partial code unit. Earlier malformed units take precedence.
+Lossy decoding replaces each unpaired UTF-16 surrogate, invalid UTF-32 unit,
+or trailing partial unit with U+FFFD. A high surrogate consumes a following
+unit only for a valid pair; a high surrogate followed by one remaining byte
+therefore produces two replacements. Noncharacters are preserved.
 
-Strict decoding reports the first invalid input code-unit index. Lossy
-decoding replaces each unpaired UTF-16 surrogate or invalid UTF-32 unit with
-U+FFFD, consuming the following unit only for a valid surrogate pair. The
-private Roc helpers return `{ index : U64, status : U8, string : Str }`;
-public wrappers construct the nominal error values from their status. No
-backend knows the wide-UTF error representation.
+Checked Roc code borrows the bytes and makes two forward passes: sizing, then
+encoding. Full ASCII blocks use existing byte-list `U16x8`/`U32x4` SIMD loads,
+which read little-endian bytes on every target. On wasm32v1, the loads, splats,
+bitwise operations, lane shifts, comparisons, bitmasks, and wrapping narrows
+used here lower to scalar instructions over sixteen-byte stack slots; list
+appends use the existing explicit LIR uniqueness data. BE lanes are byte-swapped with explicit
+shifts and masks before classification and narrowing. Bounds are checked before
+each full block; partial blocks use scalar decoding. Typed `load_units` APIs
+remain available independently and do not implement byte decoding.
 
-The sizing pass validates and computes the exact UTF-8 length without
-allocating, so strict failure allocates nothing. Output of at most 23 bytes
-(the 64-bit inline string capacity) is built by the private scalar primitives
-`str_from_utf16_short`/`str_from_utf32_short` from a stack buffer: it stays
-inline without allocating wherever it fits, and allocates once on 32-bit
-targets whose inline capacity is smaller. These primitives contain no Zig
-vector code; they only see inputs whose output was already sized. Longer
-output is encoded into one byte list of exactly the sized capacity, so it
-never regrows. Only validated scalars and checked ASCII reach it. The private
-`str_from_utf8_validated` primitive consumes that guarantee to produce an owned
-string without a validation rescan, retaining the byte storage. Successful
-decoding therefore allocates at most once. Inputs remain
-unchanged, BOMs and noncharacters are preserved, and byte order belongs to
-the caller's byte-decoding step. Output encoders (`to_utf16`/`to_utf32`) remain
-a separate API addition.
+The private Roc helpers return `{ index : U64, status : U8, string : Str }`;
+public wrappers construct nominal error values. No backend knows the wide-UTF
+error representation. BOM wrappers borrow the payload slice and add the marker
+width to error offsets. Backends consume ordinary LIR operations and explicit
+ARC statements, with no encoding or ownership policy of their own.
+
+Sizing validates and computes exact UTF-8 length without allocating, so strict
+failure allocates nothing. Output of at most 23 bytes is built from a stack
+buffer by `str_from_utf16_le_short`, `str_from_utf16_be_short`, or the analogous
+UTF-32 primitives. These borrow bytes, read with fixed byte order, and contain
+only scalar code. Inline-sized results allocate nothing; on 32-bit targets a
+result above inline capacity allocates once. Longer output uses one exact-capacity
+byte list and `str_from_utf8_validated`, without a validation rescan. Successful
+decoding allocates at most once and leaves input unchanged. Output encoders
+(`to_utf16`/`to_utf32`) remain a separate API addition.
 
 ## Core Principles
 
@@ -18461,8 +18466,8 @@ the pass/fail bar while the language is 128-bit-only.
   its place once real kernels are measured (expressible today as multiple
   16-byte lookups plus selects).
 - Additional typed-item loads beyond `U16x8.load_units` and
-  `U32x4.load_units` remain demand-driven. Wide-UTF decoding uses those two
-  numeric-unit loads; byte-buffer codecs retain the existing byte loads.
+  `U32x4.load_units` remain demand-driven. Wide-UTF decoding and other
+  byte-buffer codecs use the existing byte loads.
 - Saturating arithmetic on 32/64-bit lanes, `abs` on `I64x2`, and unsigned
   ordering compares on `U64x2` are omitted because no cataloged kernel
   uses them and hardware support is ragged; any of them can be added later

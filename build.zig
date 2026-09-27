@@ -2540,6 +2540,7 @@ const RemoveDirTreeStep = struct {
 fn buildAndCopyWasmHostObject(
     b: *std.Build,
     target: ResolvedTarget,
+    target_name: []const u8,
     optimize: OptimizeMode,
     roc_modules: modules.RocModules,
     strip: bool,
@@ -2567,7 +2568,7 @@ fn buildAndCopyWasmHostObject(
     // Wasm LLD must resolve these against Roc's strong builtins definitions.
     obj.bundle_compiler_rt = true;
 
-    const dest_path = "test/wasm/platform/targets/wasm32/host.wasm";
+    const dest_path = b.fmt("test/wasm/platform/targets/{s}/host.wasm", .{target_name});
     const copy_step = b.addUpdateSourceFiles();
     copy_step.addCopyFileToSource(obj.getEmittedBin(), dest_path);
 
@@ -2974,11 +2975,22 @@ fn setupTestPlatforms(
     const wasm_host_step = buildAndCopyWasmHostObject(
         b,
         wasm_target,
+        "wasm32",
         optimize,
         roc_modules,
         strip,
         omit_frame_pointer,
     );
+    const wasm_v1_host_step = buildAndCopyWasmHostObject(
+        b,
+        b.resolveTargetQuery(roc_target.RocTarget.wasm32v1.llvmTargetQuery()),
+        "wasm32v1",
+        optimize,
+        roc_modules,
+        strip,
+        omit_frame_pointer,
+    );
+    wasm_host_step.dependOn(wasm_v1_host_step);
     clear_cache_step.dependOn(wasm_host_step);
     clear_cache_step.dependOn(buildAndCopyStrongIntrinsicWasmHostObject(
         b,
@@ -3026,12 +3038,25 @@ fn addWasmStaticLibAppBuild(
     options: []const []const u8,
     output_basename: []const u8,
 ) WasmStaticLibAppBuild {
+    return addWasmStaticLibAppBuildForTarget(b, roc_exe, build_roc_step, sources, app, options, output_basename, "wasm32");
+}
+
+fn addWasmStaticLibAppBuildForTarget(
+    b: *std.Build,
+    roc_exe: *Step.Compile,
+    build_roc_step: *Step,
+    sources: *Step.WriteFile,
+    app: []const u8,
+    options: []const []const u8,
+    output_basename: []const u8,
+    target_name: []const u8,
+) WasmStaticLibAppBuild {
     const run = b.addRunArtifact(roc_exe);
     run.step.dependOn(build_roc_step);
     run.addArg("build");
     run.addFileArg(sources.getDirectory().path(b, app));
     run.addArgs(options);
-    run.addArg("--target=wasm32");
+    run.addArg(b.fmt("--target={s}", .{target_name}));
     const wasm = run.addPrefixedOutputFileArg("--output=", output_basename);
     return .{ .run = run, .wasm = wasm };
 }
@@ -5012,6 +5037,7 @@ pub fn build(b: *std.Build) void {
             .include_extensions = &.{".roc"},
         });
         _ = wasm_app_sources.addCopyFile(b.path("test/wasm/platform/targets/wasm32/host.wasm"), "platform/targets/wasm32/host.wasm");
+        _ = wasm_app_sources.addCopyFile(b.path("test/wasm/platform/targets/wasm32v1/host.wasm"), "platform/targets/wasm32v1/host.wasm");
         wasm_app_sources.step.dependOn(wasm_host_step);
 
         const build_wasm_provided_callable_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, provided_callable_app_sources, "app.roc", &.{}, "app.wasm");
@@ -5025,6 +5051,8 @@ pub fn build(b: *std.Build) void {
 
         const build_wasm_builtin_routing_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "builtin_routing_static_lib_app.roc", &.{"--opt=dev"}, "builtin_routing_static_lib_app.wasm.a");
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_builtin_routing_app.run.step);
+        const build_wasm_v1_builtin_routing_app = addWasmStaticLibAppBuildForTarget(b, roc_exe, build_roc_step, wasm_app_sources, "builtin_routing_static_lib_app.roc", &.{"--opt=dev"}, "builtin_routing_static_lib_app_v1.wasm", "wasm32v1");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_v1_builtin_routing_app.run.step);
 
         const build_wasm_single_variant_hosted_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, wasm_app_sources, "single_variant_hosted_static_lib_app.roc", &.{"--opt=speed"}, "single_variant_hosted_static_lib_app.wasm");
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_single_variant_hosted_app.run.step);
@@ -5192,6 +5220,13 @@ pub fn build(b: *std.Build) void {
             });
             run_wasm_provided_callable_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_provided_callable_test.step);
+
+            const run_wasm_v1_builtin_routing_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_v1_builtin_routing_test.addArg("--wasm-path");
+            run_wasm_v1_builtin_routing_test.addFileArg(build_wasm_v1_builtin_routing_app.wasm);
+            run_wasm_v1_builtin_routing_test.addArgs(&.{ "--expected", "ok", "--assert-alloc-balanced" });
+            run_wasm_v1_builtin_routing_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_v1_builtin_routing_test.step);
 
             const run_wasm_list_builtin_test = b.addRunArtifact(wasm_test_exe);
             run_wasm_list_builtin_test.addArg("--wasm-path");

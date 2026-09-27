@@ -21,17 +21,18 @@ import subprocess
 import sys
 import time
 binary, compiler = sys.argv[1:]
-print('compiler,width,mode,case,units,iterations,median_ms')
+print('compiler,width,order,mode,case,units,iterations,median_ms')
 for width in ('16', '32'):
-    for mode in ('strict', 'lossy'):
-        for case in ('ascii', 'mostly_ascii', 'bmp', 'supplementary', 'invalid_tail', 'invalid_head'):
-            samples = []
-            outputs = []
-            for _ in range(5):
-                start = time.perf_counter_ns()
-                outputs.append(subprocess.check_output([binary, width, mode, case, '1048576', '64']))
-                samples.append((time.perf_counter_ns() - start) / 1e6)
-            assert len(set(outputs)) == 1, 'non-deterministic output'
-            print(f'{compiler},{width},{mode},{case},1048576,64,{statistics.median(samples):.3f}', flush=True)
+    for order in ('le', 'be'):
+        for mode in ('strict', 'lossy'):
+            for case in ('ascii', 'mostly_ascii', 'bmp', 'supplementary', 'invalid_tail', 'invalid_head'):
+                samples = []
+                outputs = []
+                for _ in range(5):
+                    start = time.perf_counter_ns()
+                    outputs.append(subprocess.check_output([binary, width, mode, case, '1048576', '64', order]))
+                    samples.append((time.perf_counter_ns() - start) / 1e6)
+                assert len(set(outputs)) == 1, 'non-deterministic output'
+                print(f'{compiler},{width},{order},{mode},{case},1048576,64,{statistics.median(samples):.3f}', flush=True)
 PY
 done

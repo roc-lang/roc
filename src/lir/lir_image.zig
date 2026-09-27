@@ -57,7 +57,7 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v35: statements carry an explicit origin kind (`LIR.OriginKind`).
 /// v36: removing `num_round` changes the numeric IDs of later LowLevel ops.
 /// v37: wide-UTF decoding LowLevel ops shift the numeric IDs of later ops.
-pub const FORMAT_VERSION: u32 = 37;
+pub const FORMAT_VERSION: u32 = 38;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.

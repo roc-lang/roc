@@ -1,11 +1,12 @@
 # Benchmark the public Roc path, including its SIMD lowering and ARC.
-# Arguments: unit width (16/32), mode (strict/lossy), case, units, iterations.
+# Arguments: unit width (16/32), mode (strict/lossy), case, units, iterations, byte order (le/be).
 main! = |args| {
 	width = args.get(0).ok_or("16")
 	mode = args.get(1).ok_or("strict")
 	kind = args.get(2).ok_or("ascii")
 	len = U64.from_str(args.get(3).ok_or("1048576")).ok_or(1048576)
 	iterations = U64.from_str(args.get(4).ok_or("64")).ok_or(64)
+	order = args.get(5).ok_or("le")
 	var $units = List.with_capacity(len)
 	var $index = 0.U64
 	while $index < len {
@@ -41,15 +42,44 @@ main! = |args| {
 		$units = $units.append(unit)
 		$index = $index + 1
 	}
+	var $bytes = List.with_capacity(
+		len * (
+			if width == "16" {
+				2
+			} else {
+				4
+			}
+		),
+	)
+	for unit in $units {
+		if order == "le" {
+			$bytes = $bytes.append(unit.to_u8_wrap()).append(unit.shr_wrap(8).to_u8_wrap())
+			if width == "32" {
+				$bytes = $bytes.append(unit.shr_wrap(16).to_u8_wrap()).append(unit.shr_wrap(24).to_u8_wrap())
+			}
+		} else {
+			if width == "32" {
+				$bytes = $bytes.append(unit.shr_wrap(24).to_u8_wrap()).append(unit.shr_wrap(16).to_u8_wrap())
+			}
+			$bytes = $bytes.append(unit.shr_wrap(8).to_u8_wrap()).append(unit.to_u8_wrap())
+		}
+	}
 	var $checksum = 0.U64
 	var $iteration = 0.U64
 	if width == "16" {
-		units = $units.map(|unit| unit.to_u16_wrap())
 		while $iteration < iterations {
 			text = if mode == "lossy" {
-				Str.from_utf16_lossy(units)
+				if order == "le" {
+					Str.from_utf16_le_lossy($bytes)
+				} else {
+					Str.from_utf16_be_lossy($bytes)
+				}
 			} else {
-				Str.from_utf16(units).ok_or("")
+				if order == "le" {
+					Str.from_utf16_le($bytes).ok_or("")
+				} else {
+					Str.from_utf16_be($bytes).ok_or("")
+				}
 			}
 			$checksum = $checksum.plus_wrap(text.count_utf8_bytes())
 			$iteration = $iteration + 1
@@ -57,9 +87,17 @@ main! = |args| {
 	} else {
 		while $iteration < iterations {
 			text = if mode == "lossy" {
-				Str.from_utf32_lossy($units)
+				if order == "le" {
+					Str.from_utf32_le_lossy($bytes)
+				} else {
+					Str.from_utf32_be_lossy($bytes)
+				}
 			} else {
-				Str.from_utf32($units).ok_or("")
+				if order == "le" {
+					Str.from_utf32_le($bytes).ok_or("")
+				} else {
+					Str.from_utf32_be($bytes).ok_or("")
+				}
 			}
 			$checksum = $checksum.plus_wrap(text.count_utf8_bytes())
 			$iteration = $iteration + 1

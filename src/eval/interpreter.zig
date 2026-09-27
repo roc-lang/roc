@@ -6426,12 +6426,20 @@ pub const Interpreter = struct {
                 const result = builtins.str.fromUtf8Validated(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
-            .str_from_utf16_short => blk: {
-                const result = builtins.str.fromUtf16Short(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
+            .str_from_utf16_le_short => blk: {
+                const result = builtins.str.fromUtf16LeShort(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
-            .str_from_utf32_short => blk: {
-                const result = builtins.str.fromUtf32Short(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
+            .str_from_utf16_be_short => blk: {
+                const result = builtins.str.fromUtf16BeShort(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
+                break :blk self.rocStrToValue(result, ll.ret_layout);
+            },
+            .str_from_utf32_le_short => blk: {
+                const result = builtins.str.fromUtf32LeShort(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
+                break :blk self.rocStrToValue(result, ll.ret_layout);
+            },
+            .str_from_utf32_be_short => blk: {
+                const result = builtins.str.fromUtf32BeShort(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
             .str_from_utf8_lossy => blk: {
