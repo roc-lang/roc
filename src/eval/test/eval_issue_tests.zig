@@ -3375,15 +3375,17 @@ pub const tests = [_]TestCase{
         .name = "issue 11502: rejected equality leaves its operand parameter's type intact",
         .source_kind = .module,
         .source =
-        \\Ref :: { value : Str }.{
-        \\    is_eq : Ref, Ref -> Bool
-        \\    is_eq = |left, right| left.value == right.value
+        \\M :: [].{
+        \\    Ref :: { value : Str }.{
+        \\        is_eq : Ref, Ref -> Bool
+        \\        is_eq = |left, right| left.value == right.value
+        \\    }
+        \\
+        \\    check : Ref, Str -> Bool
+        \\    check = |a, b| a == b
         \\}
         \\
-        \\check : Ref, Str -> Bool
-        \\check = |a, b| a == b
-        \\
-        \\main = check({ value: "x" }, "x")
+        \\main = M.check({ value: "x" }, "x")
         ,
         .expected = .{ .problem_and_crash = {} },
     },
@@ -3391,15 +3393,17 @@ pub const tests = [_]TestCase{
         .name = "issue 11502: rejected method call argument leaves its parameter's type intact",
         .source_kind = .module,
         .source =
-        \\Ref :: { value : Str }.{
-        \\    same : Ref, Ref -> Bool
-        \\    same = |left, right| left.value == right.value
+        \\M :: [].{
+        \\    Ref :: { value : Str }.{
+        \\        same : Ref, Ref -> Bool
+        \\        same = |left, right| left.value == right.value
+        \\    }
+        \\
+        \\    check : Ref, Str -> Bool
+        \\    check = |a, b| a.same(b)
         \\}
         \\
-        \\check : Ref, Str -> Bool
-        \\check = |a, b| a.same(b)
-        \\
-        \\main = check({ value: "x" }, "x")
+        \\main = M.check({ value: "x" }, "x")
         ,
         .expected = .{ .problem_and_crash = {} },
     },
@@ -3407,10 +3411,12 @@ pub const tests = [_]TestCase{
         .name = "issue 11502: rejected arithmetic operand leaves its parameter's type intact",
         .source_kind = .module,
         .source =
-        \\check : I64, Str -> I64
-        \\check = |n, s| n + s
+        \\M :: [].{
+        \\    check : I64, Str -> I64
+        \\    check = |n, s| n + s
+        \\}
         \\
-        \\main = check(1, "x")
+        \\main = M.check(1, "x")
         ,
         .expected = .{ .problem_and_crash = {} },
     },
@@ -3418,10 +3424,12 @@ pub const tests = [_]TestCase{
         .name = "issue 11502: rejected if condition leaves its parameter's type intact",
         .source_kind = .module,
         .source =
-        \\check : Str, I64 -> I64
-        \\check = |s, n| if s n else 2
+        \\M :: [].{
+        \\    check : Str, I64 -> I64
+        \\    check = |s, n| if s n else 2
+        \\}
         \\
-        \\main = check("x", 1)
+        \\main = M.check("x", 1)
         ,
         .expected = .{ .problem_and_crash = {} },
     },
@@ -3429,13 +3437,15 @@ pub const tests = [_]TestCase{
         .name = "issue 11502: rejected match guard leaves its parameter's type intact",
         .source_kind = .module,
         .source =
-        \\check : Str, I64 -> I64
-        \\check = |s, n| match n {
-        \\    _ if s => 1
-        \\    _ => 2
+        \\M :: [].{
+        \\    check : Str, I64 -> I64
+        \\    check = |s, n| match n {
+        \\        _ if s => 1
+        \\        _ => 2
+        \\    }
         \\}
         \\
-        \\main = check("x", 1)
+        \\main = M.check("x", 1)
         ,
         .expected = .{ .problem_and_crash = {} },
     },
@@ -3443,10 +3453,12 @@ pub const tests = [_]TestCase{
         .name = "issue 11502: rejected list element leaves its parameter's type intact",
         .source_kind = .module,
         .source =
-        \\check : Str -> List(Bool)
-        \\check = |s| [Bool.True, s]
+        \\M :: [].{
+        \\    check : Str -> List(Bool)
+        \\    check = |s| [Bool.True, s]
+        \\}
         \\
-        \\main = check("x").len()
+        \\main = M.check("x").len()
         ,
         .expected = .{ .problem_and_crash = {} },
     },
@@ -3454,10 +3466,12 @@ pub const tests = [_]TestCase{
         .name = "issue 11502: body rejected by its annotation leaves the returned parameter's type intact",
         .source_kind = .module,
         .source =
-        \\check : Str -> Bool
-        \\check = |s| s
+        \\M :: [].{
+        \\    check : Str -> Bool
+        \\    check = |s| s
+        \\}
         \\
-        \\main = check("x")
+        \\main = M.check("x")
         ,
         .expected = .{ .problem_and_crash = {} },
     },
@@ -3465,13 +3479,15 @@ pub const tests = [_]TestCase{
         .name = "issue 11502: rejected derived equality argument leaves the captured parameter's type intact",
         .source_kind = .module,
         .source =
-        \\check : Str -> Bool
-        \\check = |b| {
-        \\    f = |a| a.is_eq(b)
-        \\    f({ v: "x" })
+        \\M :: [].{
+        \\    check : Str -> Bool
+        \\    check = |b| {
+        \\        f = |a| a.is_eq(b)
+        \\        f({ v: "x" })
+        \\    }
         \\}
         \\
-        \\main = check("x")
+        \\main = M.check("x")
         ,
         .expected = .{ .problem_and_crash = {} },
     },
