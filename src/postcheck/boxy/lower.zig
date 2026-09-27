@@ -19835,10 +19835,37 @@ const ProcBodyBuilder = struct {
             self.parent.result.layouts.getLayout(target_layout).tag == .erased_callable;
         const source_is_callable = self.functionChildrenForRep(source_rep) != null and
             self.parent.result.layouts.getLayout(source_layout).tag == .erased_callable;
-        if (target_is_callable or source_is_callable) {
+        // A runtime adapter converts bytes through descriptors, which do not
+        // describe a callable's erased-call convention. A callable directly in
+        // the value, or inside its record, tuple, tag, or named structure,
+        // crosses through lowering, which wraps each callable in an adapter.
+        if (target_is_callable or source_is_callable or
+            try self.repHoldsCallableInStructure(target_rep) or
+            try self.repHoldsCallableInStructure(source_rep))
+        {
             return try self.assignRepresentationBoundaryConsumingSource(target, source, target_rep, source_rep, next);
         }
+        return try self.assignRuntimeAdapterBoundary(target, source, target_rep, source_rep, source_mode, next);
+    }
 
+    /// Convert a value through one runtime adapter, which rewrites its bytes by
+    /// source and target descriptors. Descriptors do not describe a callable's
+    /// erased-call convention, so the value holds no callable outside a shared
+    /// nominal backing template.
+    fn assignRuntimeAdapterBoundary(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+        source_rep: Plan.TypeRepId,
+        source_mode: LIR.BoxyTransferMode,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (try self.repHoldsCallableInStructure(target_rep) or try self.repHoldsCallableInStructure(source_rep)) {
+            boxyLowerInvariant("runtime boxy adapter reached a value holding a callable");
+        }
+        const target_layout = self.parent.result.store.getLocal(target).layout_idx;
+        const source_layout = self.parent.result.store.getLocal(source).layout_idx;
         const source_desc_info = try self.adapterDescriptorForSource(source, source_rep);
         const source_desc = source_desc_info.desc orelse
             boxyLowerInvariant("planned boxy call adapter had no source descriptor");
@@ -19892,6 +19919,39 @@ const ProcBodyBuilder = struct {
         continuation = try self.prependDescriptorArgMaterializations(target_desc_prerequisites.items, continuation);
         continuation = try self.prependOptionalDescriptorMaterialization(target_desc_info.prerequisite, continuation);
         return try self.prependOptionalDescriptorMaterialization(source_desc_info.materialize, continuation);
+    }
+
+    /// Whether an erased callable sits inside this representation's record
+    /// fields, tuple elements, tag payloads, or alias and nominal backings.
+    /// Callables inside list elements and box payloads are behind their
+    /// container's own allocation and are not structure of this value. A
+    /// shared nominal backing template states its callables over the
+    /// nominal's formals, so every instantiation shares their erased-call
+    /// convention and only the formals' descriptors differ.
+    fn repHoldsCallableInStructure(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!bool {
+        var visited = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
+        defer visited.deinit();
+        return try self.repHoldsCallableInStructureVisited(rep_id, &visited);
+    }
+
+    fn repHoldsCallableInStructureVisited(
+        self: *ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        visited: *collections.DenseMap(Plan.TypeRepId, void),
+    ) Allocator.Error!bool {
+        if ((try visited.getOrPut(rep_id)).found_existing) return false;
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        if (rep.kind == .erased_callable) return true;
+        for (self.parent.plan.childSlice(rep.children)) |child| {
+            if (self.parent.plan.childIsSharedBackingTemplate(rep_id, child)) continue;
+            switch (child.role) {
+                .record_field, .tuple_elem, .tag_payload, .alias_backing, .nominal_backing => {
+                    if (try self.repHoldsCallableInStructureVisited(child.rep, visited)) return true;
+                },
+                .alias_arg, .nominal_arg, .nominal_padding_field, .record_ext, .tag_ext, .function_arg, .function_ret, .list_elem, .box_payload => {},
+            }
+        }
+        return false;
     }
 
     fn assignStaticMethodBoundary(
@@ -33498,7 +33558,9 @@ const ProcBodyBuilder = struct {
                     );
                     break :blk try self.prependOptionalDescriptorMaterialization(resolved_target_desc.materialize, adapt);
                 },
-                .concrete => if (try self.assignListRepresentationBoundary(target, source, identity_target_rep, identity_source_rep, next)) |adapted|
+                .concrete => if (try self.assignPresenceSlotToValueBoundary(target, source, identity_target_rep, identity_source_rep, next)) |adapted|
+                    adapted
+                else if (try self.assignListRepresentationBoundary(target, source, identity_target_rep, identity_source_rep, next)) |adapted|
                     adapted
                 else if (try self.assignSingletonZstTagToConcreteBoundary(target, source, identity_target_rep, identity_source_rep, next)) |adapted|
                     adapted
@@ -33519,6 +33581,30 @@ const ProcBodyBuilder = struct {
                     ),
             },
         };
+    }
+
+    /// A still-undetermined record field is stored as its presence slot; where
+    /// checking made the field required, the value is the slot's Present
+    /// payload, converted to the target's representation like any other
+    /// value. The field is required at this type, so the slot is never
+    /// Missing.
+    fn assignPresenceSlotToValueBoundary(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+        source_rep: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!?LIR.CFStmtId {
+        const slot = self.presenceSlotVariants(source_rep) orelse return null;
+        if (self.presenceSlotVariants(target_rep) != null) return null;
+        const payload = try self.generatedParserSingleTagPayloadLocal(slot.present);
+        const converted = try self.assignRepresentationBoundary(target, payload.local, target_rep, payload.child.rep, next);
+        const present_body = try self.generatedParserReadTagPayload(source, slot.present, payload, converted);
+        const missing_body = try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin());
+        const variants = [_]ProcedureBuilder.GeneratedParserTagVariant{slot.present};
+        const bodies = [_]LIR.CFStmtId{present_body};
+        return try self.generatedParserTagDispatch(source, source_rep, &variants, &bodies, missing_body);
     }
 
     /// A dynamic target whose formal an enclosing nominal scope binds to a
@@ -33558,7 +33644,7 @@ const ProcBodyBuilder = struct {
                 if (!self.localIsReadOnlyDescriptorInput(target_desc_local) and
                     (source_desc == null or !std.meta.eql(desc, source_desc.?)))
                 {
-                    return try self.assignPlannedCallBoundaryWithSourceMode(
+                    return try self.assignRuntimeAdapterBoundary(
                         target,
                         source,
                         target_rep,

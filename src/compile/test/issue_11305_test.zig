@@ -110,3 +110,27 @@ test "issue 11305: Boxy top-level generic map function bound to a local and call
 test "issue 11305: LSS top-level generic map function bound to a local and called" {
     try expectFixtureRuns("aliased_top_level.roc", .lss);
 }
+
+test "issue 11305: Boxy generic record field function mapping with an identity callback called at a concrete type" {
+    try expectFixtureRuns("called_field_map_identity.roc", .boxy);
+}
+
+test "issue 11305: LSS generic record field function mapping with an identity callback called at a concrete type" {
+    try expectFixtureRuns("called_field_map_identity.roc", .lss);
+}
+
+test "issue 11305: Boxy top-level generic function mapping with a numeric callback" {
+    try expectFixtureRuns("top_level_map_callback.roc", .boxy);
+}
+
+test "issue 11305: LSS top-level generic function mapping with a numeric callback" {
+    try expectFixtureRuns("top_level_map_callback.roc", .lss);
+}
+
+test "issue 11305: Boxy top-level generic method function bound to a local and called" {
+    try expectFixtureRuns("aliased_top_level_method.roc", .boxy);
+}
+
+test "issue 11305: LSS top-level generic method function bound to a local and called" {
+    try expectFixtureRuns("aliased_top_level_method.roc", .lss);
+}

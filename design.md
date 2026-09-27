@@ -12997,6 +12997,17 @@ representation itself maps to the descriptor being built. Descriptor template
 capture sets include both spans, so every local an inspect span names is
 supplied to the materialization.
 
+A runtime adapter rewrites bytes through descriptors, and descriptors do not
+describe a callable's erased-call convention. A value holding a callable in its
+record fields, tuple elements, tag payloads, or alias and nominal backings
+therefore crosses a boundary structurally in lowering, which wraps each
+callable in a callable adapter; only a shared nominal backing template, whose
+callables are stated over the nominal's formals and so share one convention
+across instantiations, may cross inside a runtime adapter. A still-undetermined
+record field is stored as its presence slot; where checking made the field
+required on the other side of a boundary, the value is the slot's `Present`
+payload, converted like any other value.
+
 Every non-identity representation boundary also has a planned adapter request.
 After layouts are committed, the adapter builder resolves each request to an
 interned `BoxyAdapter`. The adapter records source and target layouts, source and
