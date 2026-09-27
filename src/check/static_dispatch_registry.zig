@@ -1292,6 +1292,30 @@ pub const StructuralKind = enum(u8) {
     map_effectful,
 };
 
+/// How a dispatch whose dispatcher no edge can pin is discharged once the
+/// dispatcher settles on its uninhabited default.
+pub const UnpinnedDispatchResolution = enum {
+    /// Compare or hash the vacuous shape structurally.
+    structural,
+    /// No value of the dispatcher's type exists, so the dispatch never runs.
+    unreachable_value,
+};
+
+/// The one rule for discharging a dispatch on a dispatcher no edge can pin.
+/// Equality and hashing of the vacuous shape remain structural; every other
+/// dispatch, including parser, encoder, and derived map selections, is
+/// statically unreachable. Checking applies it to dispatchers it can see are
+/// unpinned, and post-check lowering applies it to callable-derived evidence
+/// whose dispatcher finalizes as the same uninhabited default, so evidence
+/// read at either stage agrees.
+pub fn unpinnedDispatchResolution(structural: ?StructuralKind) UnpinnedDispatchResolution {
+    const kind = structural orelse return .unreachable_value;
+    return switch (kind) {
+        .equality, .hash => .structural,
+        .parser, .encoder, .map, .map_effectful => .unreachable_value,
+    };
+}
+
 /// Canonical payload-slot identity selected by the checker for derived map.
 pub const DerivedMapPlan = struct {
     tag: canonical.TagNameId,

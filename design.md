@@ -9475,20 +9475,25 @@ applies in `lowerCheckedTypeVariable`: its numeric default when it carries a
 numeric default phase, otherwise its row default (`{}` or `[]`), otherwise the
 empty tag union. Planning records that sealed representation as explicit
 `sealed_default` data on the flex representation, so lowering reads it rather
-than re-deriving a default from the checked type. A literal's numeric default
-applies only when nothing resolves the variable, so a numeric-literal variable
-that a scheme quantifies has no sealed default: every instantiation supplies its
-type through the descriptor the scheme's uses pass, exactly as for any other
-quantified variable. A flex variable carrying
-static-dispatch constraints that a quantifying scheme would have to own has no
-sealed default, because each of those needs a dictionary only a quantifying
-scheme can supply; reaching it without a bound descriptor, like reaching an
-unbound rigid variable, is a lowering invariant violation. The derived `is_eq`
+than re-deriving a default from the checked type. A default applies only when
+nothing resolves the variable, so a variable that a scheme quantifies has no
+sealed default, whether or not it carries a numeric default phase or
+static-dispatch constraints: every instantiation supplies its type, and its
+dictionaries, through the descriptor and dictionary arguments the scheme's uses
+pass, including when a worker is planned at a concrete instantiation and its
+body's variables take their representations from that instantiation. Reaching a
+quantified variable without a bound descriptor, like reaching an unbound rigid
+variable, is a lowering invariant violation. An unquantified variable carrying
+static-dispatch constraints seals like any other, and each of its dispatches
+resolves against its default: through the default owner for a numeric default,
+and otherwise by the unpinned-dispatch rule (`unpinnedDispatchResolution`) the
+checker applies to a dispatcher no edge can pin, under which equality and
+hashing of the vacuous shape stay structural and every other dispatch is
+unreachable. The derived `is_eq`
 equality placeholder Check leaves on an undetermined variable inside values
-compared with structural equality is not such a constraint: it discharges by
+compared with structural equality needs no dictionary: it discharges by
 comparing structurally with no owner (the same carve-out Check's ambiguity
-judgment applies), so planning seals the variable exactly like an unconstrained
-one and records no dictionary for it. A quantified variable's `is_eq` erased
+judgment applies), so planning records no dictionary for it. A quantified variable's `is_eq` erased
 requirement is owned instead—the scheme forwards it as compiler-derived structural
 evidence—so it keeps its dictionary requirement.
 
@@ -11781,7 +11786,12 @@ leaf counts as proven uninhabited when its recorded final default is: the
 checker left it unconstrained, requests are seeded before a body is lowered,
 so nothing inside the body can bind it to anything but that default, and an
 interface replay may close the same cell to that default at any moment, so
-evidence read before and after such a replay must agree. If compile-time
+evidence read before and after such a replay must agree. A component proven
+uninhabited resolves by the unpinned-dispatch rule
+(`unpinnedDispatchResolution`), the same one the checker applies to a
+dispatcher no edge can pin, before any structural derivation is attempted: a
+derived map needs a payload selection only checking can make, and no value
+exists to map. If compile-time
 evaluation stores that function inside another value before the
 callable is concrete, `ConstStore` retains the same symbolic entry in the
 function's evidence vector, including inside nested evidence trees. Pool offsets are not
@@ -13025,6 +13035,17 @@ representation itself maps to the descriptor being built. Descriptor template
 capture sets include both spans, so every local an inspect span names is
 supplied to the materialization.
 
+A runtime adapter rewrites bytes through descriptors, and descriptors do not
+describe a callable's erased-call convention. A value holding a callable in its
+record fields, tuple items, tag payloads, or alias and nominal backings
+therefore crosses a boundary structurally in lowering, which wraps each
+callable in a callable adapter; only a shared nominal backing template, whose
+callables are stated over the nominal's formals and so share one convention
+across instantiations, may cross inside a runtime adapter. A still-undetermined
+record field is stored as its presence slot; where checking made the field
+required on the other side of a boundary, the value is the slot's `Present`
+payload, converted like any other value.
+
 Every non-identity representation boundary also has a planned adapter request.
 After layouts are committed, the adapter builder resolves each request to an
 interned `BoxyAdapter`. The adapter records source and target layouts, source and
@@ -13183,7 +13204,13 @@ that use. Planning determines the descriptors a body requires from the checked
 expression and pattern types it analyzes for that body: each unsealed type
 variable those types reach, and each one a callable the body creates or calls
 needs beyond its own scheme variables, unless the signature or checked evidence
-already supplies it. A variable a generalized local scope quantifies belongs to
+already supplies it. A use instantiates the callee's scheme variables it needs
+with the types its checked substitution names, and the body requires every
+variable of those types that its own scheme or an enclosing local scope
+quantifies. A variable reached only through a dispatch constraint's signature,
+such as the callback type `c` in `a.map : a, (c -> d) -> b`, appears in no type
+the body mentions, so the substitution is the only place it is named. A
+variable a generalized local scope quantifies belongs to
 the outermost scope listing it and is required only by that scope and the
 bodies it encloses. Descriptors required only by the callable body are captured from
 those planned use-site arguments; descriptors represented structurally in the
