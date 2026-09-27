@@ -4283,11 +4283,19 @@ Every live literal-origin record leaves checking with one explicit resolution:
   the conversion without looking up or instantiating a method. Monotype
   materializes the value directly.
 - `custom_dispatch` means checking selected and typechecked one concrete custom
-  conversion callable. `CheckedModule` construction retains its
-  dispatcher and callable types and gives the literal exactly one
-  `numeral_conversion`/`quote_conversion` root, linked from the checked
-  literal data (`conversion_root`). That root is the single source of the
-  literal's value: its body lowers through ordinary dispatch-call lowering,
+  conversion callable. This does not prove independence from its lexical
+  scheme: a concrete receiver's nested codec evidence may still be supplied by
+  that scheme. `CheckedModule` construction retains the dispatcher and callable
+  types, resolves dispatch evidence once, and uses the finalized `direct_closed`
+  classification to give independent conversions exactly one
+  `numeral_conversion`/`quote_conversion` root, linked from the checked literal
+  data (`conversion_root`). Root wrappers are appended after this decision,
+  with their single conversion reference recorded directly; evidence resolution
+  and source-body collection are not repeated. A dependent conversion keeps no
+  standalone root and follows the specialization-owned hoisting path below,
+  with its enclosing evidence intact. The checked boundary validates that every
+  standalone conversion root references a closed dispatch. That root is the
+  single source of the literal's value: its body lowers through ordinary dispatch-call lowering,
   and every use restores the root's stored payload, or, while its module is
   still finalizing, reads the root's declared compile-time value. A root no
   evaluation requests (its type holds a callable, so the root is
