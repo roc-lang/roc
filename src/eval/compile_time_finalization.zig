@@ -47,6 +47,17 @@ pub const EventCallback = struct {
 };
 
 /// Where the compile-time evaluator splices object-cache entries from.
+pub const SpliceSource = backend.dev.SpliceSource;
+
+/// The object cache compile-time evaluation reads, the same way in every
+/// command: entries compiled for the host under the dev policy, which run
+/// expects. The evaluator's program takes a hit for a procedure it runs, under
+/// `comptime_closure_hits`, only when the entry names that procedure's own
+/// identity, and splices its cached code in place of compiling it.
+pub const CompileTimeObjectCache = struct {
+    spec_cache: lir.CheckedPipeline.SpecCacheLookup,
+    splice_source: SpliceSource,
+};
 /// Runtime options for compile-time finalization.
 pub const Options = struct {
     pub const StderrWriter = struct {
@@ -79,6 +90,7 @@ pub const Options = struct {
     slow_root_threshold_ns: u64 = 3 * std.time.ns_per_s,
     slow_root_period_ns: u64 = std.time.ns_per_s,
     timing: ?*Timing = null,
+    object_cache: ?CompileTimeObjectCache = null,
     /// Where a compile-time failure is reported when the source it names
     /// belongs to a checked module this finalization does not complete: a
     /// literal in a module whose checking finished in an earlier compilation,
@@ -320,11 +332,10 @@ pub const ProgramSession = struct {
             };
             return self.continueRuntimeConsumer(allocator, owned, target);
         }
-        // Any other runtime consumer specializes the checked modules itself
-        // under its own policy, reading every compile-time value from the
-        // modules' constant stores. Solved programs built under different
-        // inlining and SpecConstr policies specialize one function
-        // differently, so only the stores name a value in both.
+        // A Boxy runtime program has no Monotype stage to share, and a
+        // compilation with no program roots specialized nothing: either
+        // lowers the checked modules itself, reading every compile-time value
+        // from the modules' constant stores.
         return lir.CheckedPipeline.lowerCheckedModulesToLir(allocator, self.modules, roots, target);
     }
 
@@ -361,7 +372,6 @@ pub const ProgramSession = struct {
         var scalar_values = try lir.CheckedPipeline.CompletedScalarValues.init(allocator, &source.lir_result, host_frozen);
         defer scalar_values.deinit(allocator);
         var frozen_context = RuntimeFrozenMaterializer{ .source = source };
-        defer frozen_context.successful_roots.deinit(allocator);
         owned_live = false;
         var lowered = try lir.CheckedPipeline.lowerFinalConsumerToLir(owned, .{
             .roots = consumer_roots,
@@ -371,7 +381,6 @@ pub const ProgramSession = struct {
             .frozen_materializer = .{
                 .context = &frozen_context,
                 .materialize = RuntimeFrozenMaterializer.materialize,
-                .complete_guards = RuntimeFrozenMaterializer.completeGuards,
             },
             .observers = lir.CheckedPipeline.Observers.fromTarget(target),
             .lir_policy = lir.CheckedPipeline.LirPolicy.fromTarget(target),
@@ -389,13 +398,7 @@ pub const ProgramSession = struct {
 };
 
 const RuntimeFrozenMaterializer = struct {
-    const SuccessfulRoot = struct {
-        module: checked.ModuleId,
-        root: lir.LIR.ComptimeProducer,
-    };
-
     source: *const lir.CheckedPipeline.LoweredProgram,
-    successful_roots: std.ArrayList(SuccessfulRoot) = .empty,
 
     fn materialize(
         allocator: Allocator,
@@ -403,19 +406,7 @@ const RuntimeFrozenMaterializer = struct {
         target: *LirProgram.Result,
     ) Allocator.Error!LirProgram.FrozenStaticData {
         const self: *RuntimeFrozenMaterializer = @ptrCast(@alignCast(context));
-        return transcodeCompletedSlots(allocator, self.source, target, &self.successful_roots);
-    }
-
-    fn completeGuards(context: *anyopaque, target: *LirProgram.Result) Allocator.Error!void {
-        const self: *RuntimeFrozenMaterializer = @ptrCast(@alignCast(context));
-        for (self.successful_roots.items) |successful| {
-            for (target.static_data_values.items, 0..) |value, index| {
-                const root = value.compile_time_root orelse continue;
-                if (root.role != .value or !std.meta.eql(root.module, successful.module) or !root.root.eql(successful.root)) continue;
-                try lir.ComptimeValueGuards.completeSuccessfulSlot(target, @enumFromInt(index));
-                break;
-            } else finalizationInvariant("successful completed root was removed before guard completion");
-        }
+        return transcodeCompletedSlots(allocator, self.source, target);
     }
 };
 
@@ -425,7 +416,6 @@ fn transcodeCompletedSlots(
     allocator: Allocator,
     source: *const lir.CheckedPipeline.LoweredProgram,
     target: *LirProgram.Result,
-    successful_roots: *std.ArrayList(RuntimeFrozenMaterializer.SuccessfulRoot),
 ) Allocator.Error!LirProgram.FrozenStaticData {
     const frozen = source.frozen_static_data orelse finalizationInvariant("host program omitted its completed frozen values");
     var exports = std.ArrayList(static_data_exports.StaticDataExport).empty;
@@ -452,17 +442,24 @@ fn transcodeCompletedSlots(
         if (entry.found_existing) finalizationInvariant("checked root has ambiguous source value slots");
         entry.value_ptr.* = ordinal;
     }
+    const source_symbols = try allocator.alloc(?static_data_exports.StaticDataSymbolId, source.lir_result.static_data_values.items.len);
+    defer allocator.free(source_symbols);
+    @memset(source_symbols, null);
+    for (frozen.exports, 0..) |item, symbol| {
+        const slot = item.value_id orelse continue;
+        source_symbols[@intFromEnum(slot)] = @enumFromInt(symbol);
+    }
     for (target.static_data_values.items, 0..) |target_entry, index| {
         const target_root = target_entry.compile_time_root orelse continue;
         const target_slot: lir.LIR.StaticDataId = @enumFromInt(index);
         const ordinal = source_slots.get(.{ .module = target_root.module, .root = target_root.root, .role = std.meta.activeTag(target_root.role) }) orelse
             finalizationInvariant("target slot has no corresponding host root");
         const source_entry = source.lir_result.static_data_values.items[ordinal];
-        const source_symbol = frozenSlotSymbol(frozen.exports, @enumFromInt(ordinal));
+        const source_symbol = frozenSlotSymbol(source_symbols, @enumFromInt(ordinal));
         const failed = if (target_root.role == .value) block: {
             const failure_slot = source_entry.compile_time_root.?.role.value.failure_slot;
             const failure_entry = source.lir_result.static_data_values.items[@intFromEnum(failure_slot)];
-            const failure_symbol = frozenSlotSymbol(frozen.exports, failure_slot);
+            const failure_symbol = frozenSlotSymbol(source_symbols, failure_slot);
             const failure_export = frozen.exports[@intFromEnum(failure_symbol)];
             const offset = failure_entry.compile_time_root.?.role.failure_message.failed_offset;
             break :block failure_export.bytes[failure_export.symbol_offset + offset] != 0;
@@ -478,17 +475,12 @@ fn transcodeCompletedSlots(
             return err;
         };
         allocator.free(converted);
-        if (target_root.role == .value and !failed) try successful_roots.append(allocator, .{
-            .module = target_root.module,
-            .root = target_root.root,
-        });
     }
     return .{ .allocator = allocator, .exports = try exports.toOwnedSlice(allocator) };
 }
 
-fn frozenSlotSymbol(exports: []const static_data_exports.StaticDataExport, slot: lir.LIR.StaticDataId) static_data_exports.StaticDataSymbolId {
-    for (exports, 0..) |item, index| if (item.value_id == slot) return @enumFromInt(index);
-    finalizationInvariant("completed frozen graph omitted a declared slot");
+fn frozenSlotSymbol(symbols: []const ?static_data_exports.StaticDataSymbolId, slot: lir.LIR.StaticDataId) static_data_exports.StaticDataSymbolId {
+    return symbols[@intFromEnum(slot)] orelse finalizationInvariant("completed frozen graph omitted a declared slot");
 }
 
 /// Failed values have no representation to convert. Their explicit guard
@@ -535,21 +527,27 @@ fn deinitRootRequests(allocator: Allocator, roots: lir.CheckedPipeline.RootReque
     }
 }
 
-/// The one target compile-time evaluation lowers under. Nothing a command
-/// configures reaches it: every command that checks a program evaluates the
-/// same roots through the same code and so produces the same values and the
-/// same reports. Its Solved policy is the one dev builds use, so a dev
-/// build's runtime program continues the same Solved program.
-fn compileTimeTarget(options: Options) lir.CheckedPipeline.TargetConfig {
-    return .{
+/// The Solved policy compile-time evaluation specializes under when no
+/// runtime program shares its specialization, as in `roc check`: dev's.
+const check_solved_policy = lir.CheckedPipeline.SolvedPolicy.fromTarget(.{
+    .inline_mode = .wrappers,
+    .spec_constr_clone_inlining = .iterator_fusion,
+});
+
+/// The target compile-time evaluation lowers under. Its Solved policy is
+/// that of the program being built, so evaluation runs inside that program's
+/// one specialization; inlining and SpecConstr preserve meaning, so every
+/// command evaluates the same roots to the same values and reports. Every
+/// other setting is fixed: evaluation runs on the host, runs expects, and
+/// hoists every literal conversion.
+fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.SolvedPolicy) lir.CheckedPipeline.TargetConfig {
+    var target: lir.CheckedPipeline.TargetConfig = .{
         .target_usize = base.target.TargetUsize.native,
         .specialization_strategy = .lss,
         .checked_module_state = .checking_finalization,
         .comptime_value_reads = true,
         .literal_roots = true,
         .inline_expects = .run,
-        .inline_mode = .wrappers,
-        .spec_constr_clone_inlining = .iterator_fusion,
         // The rewrites that only speed up the produced program stay off,
         // as in dev builds: compile-time code runs once.
         .fuse_tag_cases = false,
@@ -558,9 +556,12 @@ fn compileTimeTarget(options: Options) lir.CheckedPipeline.TargetConfig {
         // Specialization records procedure names for every consumer of the
         // program; a runtime consumer's diagnostics read them.
         .proc_debug_names = true,
+        .spec_cache = if (options.object_cache) |cache| cache.spec_cache else null,
         .post_check_executor = options.post_check_executor,
         .timing = if (options.timing) |timing| &timing.lowering else null,
     };
+    solved_policy.applyTo(&target);
+    return target;
 }
 
 /// Complete checked values in the caller's dependency order, using the
@@ -629,7 +630,10 @@ pub fn finalizeProgram(
         defer allocator.free(union_test_metadata);
         for (union_test_metadata) |*metadata| metadata.request_index += @intCast(compile_time_root_count);
         union_roots.test_plan_metadata = union_test_metadata;
-        var host_target = compileTimeTarget(options);
+        // An LSS runtime consumer continues this specialization, so it is
+        // made under the runtime's Solved policy.
+        const solved_policy = if (lss_runtime) lir.CheckedPipeline.SolvedPolicy.fromTarget(runtime_target.?) else check_solved_policy;
+        var host_target = compileTimeTarget(options, solved_policy);
         // Counting work observes the evaluation without shaping it.
         if (runtime_target) |target| host_target.work_metrics = target.work_metrics;
         var monotype = lir.CheckedPipeline.prepareCheckedModulesMonotype(allocator, lowering_modules, union_roots, host_target) catch |err| switch (err) {
@@ -638,11 +642,8 @@ pub fn finalizeProgram(
         };
         var monotype_owned = true;
         errdefer if (monotype_owned) monotype.deinit();
-        // A runtime consumer whose Solved policy is compile-time evaluation's
-        // continues the same Solved program; see `ProgramSession.takeRuntime`
-        // for every other one.
-        const shares_solved = lss_runtime and
-            std.meta.eql(lir.CheckedPipeline.SolvedPolicy.fromTarget(runtime_target.?), lir.CheckedPipeline.SolvedPolicy.fromTarget(host_target));
+        // An LSS runtime consumer continues this Solved program.
+        const shares_solved = lss_runtime;
         monotype_owned = false;
         var prepared = try lir.CheckedPipeline.prepareMonotypeToSolved(monotype);
         var prepared_owned = true;
@@ -3062,6 +3063,7 @@ const DevProgram = struct {
             error.MissingStaticDataSymbol => finalizationInvariant("CTFE slot image omitted a declared static data symbol"),
             error.DuplicateStaticDataSymbol => finalizationInvariant("CTFE slot image contains conflicting static data symbols"),
         };
+        if (options.object_cache) |cache| try splice.spliceExternal(&codegen, evaluation_demand, cache.splice_source);
         const static_rc_helpers = try static_data_exports.collectRequiredRcHelpers(allocator, slots.materialized);
         defer allocator.free(static_rc_helpers);
         var artifacts = try compileProcedures(allocator, &codegen, evaluation_demand, static_rc_helpers, options);
@@ -4925,7 +4927,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     const int_addend_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = addend_int, .value = .{ .i64_literal = .{ .value = 345, .layout_idx = .u64 } }, .next = float_input_stmt } }, .test_fixture);
     const consumer_body = try result.store.addCFStmt(.{ .assign_literal = .{ .target = input_int, .value = .{ .i64_literal = .{ .value = 12000, .layout_idx = .u64 } }, .next = int_addend_stmt } }, .test_fixture);
     const consumer_proc = try result.store.addProcSpec(.{ .name = .fromRaw(1), .identity = lir.LIR.ProcIdentity.forTest(2), .args = .empty(), .frame_locals = try result.store.addLocalSpan(&.{ consumer_local, live_int, live_float, expected_int, expected_float, equal_int, equal_float, input_int, addend_int, input_float, addend_float }), .body = consumer_body, .ret_layout = .str }, .none);
-    try lir.ComptimeValueGuards.insert(allocator, result);
+    try lir.ComptimeValueGuards.insert(allocator, result, null);
 
     const failure_size = result.layouts.layoutSize(result.layouts.getLayout(failure_layout));
     const zeros = try allocator.alloc(u8, failure_size);

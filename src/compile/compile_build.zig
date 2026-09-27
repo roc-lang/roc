@@ -212,6 +212,9 @@ pub const BuildEnv = struct {
     // Actor model coordinator (owns all mutable compilation state)
     coordinator: ?*Coordinator = null,
     runtime_lowering: ?RuntimeLoweringConfig = null,
+    /// See `eval.CompileTimeFinalization.CompileTimeObjectCache`.
+    compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
+    compile_time_object_cache_owner: ?CompileTimeObjectCacheOwner = null,
     /// Let a caller declare a test plan from prepared artifacts before CTFE.
     defer_post_check: bool = false,
     // Cache manager for compiled modules
@@ -435,6 +438,8 @@ pub const BuildEnv = struct {
         self.workspace_roots.deinit();
 
         self.sink.deinit();
+        // Last: the coordinator's retained programs may borrow cached code.
+        if (self.compile_time_object_cache_owner) |owner| owner.deinit(owner.context);
     }
 
     /// Set the cache manager for this build environment
@@ -810,7 +815,31 @@ pub const BuildEnv = struct {
         coord.enable_hosted_transform = true;
         coord.setWatchInputTracking(self.track_watch_inputs);
         coord.runtime_lowering = self.runtime_lowering;
+        coord.compile_time_object_cache = self.compile_time_object_cache;
         self.coordinator = coord;
+    }
+
+    /// The storage behind a compile-time object cache, which this build
+    /// environment owns once attached.
+    pub const CompileTimeObjectCacheOwner = struct {
+        context: *anyopaque,
+        /// Gives the cache this build environment, whose module set decides
+        /// which packs it loads, before compile-time evaluation reads it.
+        bind: *const fn (*anyopaque, *BuildEnv) void,
+        deinit: *const fn (*anyopaque) void,
+    };
+
+    /// Every command that checks a program attaches this the same way, so
+    /// compile-time evaluation reads one object cache whatever the command.
+    pub fn setCompileTimeObjectCache(
+        self: *BuildEnv,
+        cache: eval.CompileTimeFinalization.CompileTimeObjectCache,
+        owner: CompileTimeObjectCacheOwner,
+    ) void {
+        std.debug.assert(self.compile_time_object_cache_owner == null);
+        if (self.coordinator) |coordinator| coordinator.compile_time_object_cache = cache;
+        self.compile_time_object_cache = cache;
+        self.compile_time_object_cache_owner = owner;
     }
 
     pub fn setRuntimeLowering(self: *BuildEnv, config: RuntimeLoweringConfig) void {
@@ -1140,6 +1169,11 @@ pub const BuildEnv = struct {
 
     pub fn finishCheckedProgram(self: *BuildEnv) CompileDiscoveredError!void {
         const coord = self.coordinator orelse unreachable;
+        if (self.compile_time_object_cache_owner) |owner| owner.bind(owner.context, self);
+        const test_modules = try self.collectProgramTestModules(self.gpa);
+        defer self.gpa.free(test_modules);
+        coord.program_test_modules = test_modules;
+        defer coord.program_test_modules = &.{};
         coord.finishCheckedProgram(self.post_check_publication_mode) catch |err| {
             self.emitAccumulatedReportsForError();
             return err;
@@ -2789,6 +2823,40 @@ pub const BuildEnv = struct {
     /// compiler-owned platform, because a path dependency declared inside a
     /// fetched dependency arrived by download too and must not inherit the
     /// root's ownership.
+    /// The checked modules whose `expect`s are the developer's own tests,
+    /// exactly the modules `roc test` runs, ordered by package and module
+    /// name so every command evaluates their test roots in one order.
+    fn collectProgramTestModules(
+        self: *BuildEnv,
+        allocator: Allocator,
+    ) Allocator.Error![]check.CheckedArtifact.CheckedModuleArtifactKey {
+        const coord = self.coordinator orelse unreachable;
+        var test_owned_packages = try self.collectTestOwnedPackages(allocator);
+        defer test_owned_packages.deinit(allocator);
+
+        const Entry = struct { package: []const u8, module: []const u8, key: check.CheckedArtifact.CheckedModuleArtifactKey };
+        var entries = std.ArrayList(Entry).empty;
+        defer entries.deinit(allocator);
+        var pkg_it = coord.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            if (!test_owned_packages.contains(entry.key_ptr.*)) continue;
+            for (entry.value_ptr.*.modules.items) |*mod| {
+                const artifact = mod.checkedArtifact() orelse continue;
+                try entries.append(allocator, .{ .package = entry.key_ptr.*, .module = mod.name, .key = artifact.key });
+            }
+        }
+        std.mem.sort(Entry, entries.items, {}, struct {
+            fn lessThan(_: void, a: Entry, b: Entry) bool {
+                const package_order = std.mem.order(u8, a.package, b.package);
+                if (package_order != .eq) return package_order == .lt;
+                return std.mem.lessThan(u8, a.module, b.module);
+            }
+        }.lessThan);
+        const keys = try allocator.alloc(check.CheckedArtifact.CheckedModuleArtifactKey, entries.items.len);
+        for (entries.items, keys) |entry, *key| key.* = entry.key;
+        return keys;
+    }
+
     fn collectTestOwnedPackages(
         self: *BuildEnv,
         allocator: Allocator,

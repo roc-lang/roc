@@ -59,6 +59,126 @@ const Exemption = struct {
 /// Static data has a constant refcount, which no op can move.
 const cases = [_]Case{
     .{
+        // A parsed prefix's `rest` is a slice of its argument, so each of
+        // these hands back part of an allocation it borrowed or took.
+        .name = "numeric prefix parsers slice unique and shared inputs",
+        .source =
+        \\{
+        \\    shared = Str.concat("7 then a tail long enough that the string needs the heap", "!")
+        \\    holder = [shared, shared]
+        \\    shared_bytes = Str.to_utf8(shared)
+        \\    byte_holder = [shared_bytes, shared_bytes]
+        \\    unique_str_0 = U8.from_str_prefix(Str.concat("7 then a unique tail long enough to need the heap", "!"))
+        \\    shared_str_0 = U8.from_str_prefix(shared)
+        \\    unique_utf8_0 = U8.from_utf8_prefix(Str.to_utf8(Str.concat("7 then a unique tail long enough to need the heap", "!")))
+        \\    shared_utf8_0 = U8.from_utf8_prefix(shared_bytes)
+        \\    unique_str_1 = I8.from_str_prefix(Str.concat("7 then a unique tail long enough to need the heap", "!"))
+        \\    shared_str_1 = I8.from_str_prefix(shared)
+        \\    unique_utf8_1 = I8.from_utf8_prefix(Str.to_utf8(Str.concat("7 then a unique tail long enough to need the heap", "!")))
+        \\    shared_utf8_1 = I8.from_utf8_prefix(shared_bytes)
+        \\    unique_str_2 = U16.from_str_prefix(Str.concat("7 then a unique tail long enough to need the heap", "!"))
+        \\    shared_str_2 = U16.from_str_prefix(shared)
+        \\    unique_utf8_2 = U16.from_utf8_prefix(Str.to_utf8(Str.concat("7 then a unique tail long enough to need the heap", "!")))
+        \\    shared_utf8_2 = U16.from_utf8_prefix(shared_bytes)
+        \\    unique_str_3 = I16.from_str_prefix(Str.concat("7 then a unique tail long enough to need the heap", "!"))
+        \\    shared_str_3 = I16.from_str_prefix(shared)
+        \\    unique_utf8_3 = I16.from_utf8_prefix(Str.to_utf8(Str.concat("7 then a unique tail long enough to need the heap", "!")))
+        \\    shared_utf8_3 = I16.from_utf8_prefix(shared_bytes)
+        \\    unique_str_4 = U32.from_str_prefix(Str.concat("7 then a unique tail long enough to need the heap", "!"))
+        \\    shared_str_4 = U32.from_str_prefix(shared)
+        \\    unique_utf8_4 = U32.from_utf8_prefix(Str.to_utf8(Str.concat("7 then a unique tail long enough to need the heap", "!")))
+        \\    shared_utf8_4 = U32.from_utf8_prefix(shared_bytes)
+        \\    unique_str_5 = I32.from_str_prefix(Str.concat("7 then a unique tail long enough to need the heap", "!"))
+        \\    shared_str_5 = I32.from_str_prefix(shared)
+        \\    unique_utf8_5 = I32.from_utf8_prefix(Str.to_utf8(Str.concat("7 then a unique tail long enough to need the heap", "!")))
+        \\    shared_utf8_5 = I32.from_utf8_prefix(shared_bytes)
+        \\    unique_str_6 = U64.from_str_prefix(Str.concat("7 then a unique tail long enough to need the heap", "!"))
+        \\    shared_str_6 = U64.from_str_prefix(shared)
+        \\    unique_utf8_6 = U64.from_utf8_prefix(Str.to_utf8(Str.concat("7 then a unique tail long enough to need the heap", "!")))
+        \\    shared_utf8_6 = U64.from_utf8_prefix(shared_bytes)
+        \\    unique_str_7 = I64.from_str_prefix(Str.concat("7 then a unique tail long enough to need the heap", "!"))
+        \\    shared_str_7 = I64.from_str_prefix(shared)
+        \\    unique_utf8_7 = I64.from_utf8_prefix(Str.to_utf8(Str.concat("7 then a unique tail long enough to need the heap", "!")))
+        \\    shared_utf8_7 = I64.from_utf8_prefix(shared_bytes)
+        \\    unique_str_8 = U128.from_str_prefix(Str.concat("7 then a unique tail long enough to need the heap", "!"))
+        \\    shared_str_8 = U128.from_str_prefix(shared)
+        \\    unique_utf8_8 = U128.from_utf8_prefix(Str.to_utf8(Str.concat("7 then a unique tail long enough to need the heap", "!")))
+        \\    shared_utf8_8 = U128.from_utf8_prefix(shared_bytes)
+        \\    unique_str_9 = I128.from_str_prefix(Str.concat("7 then a unique tail long enough to need the heap", "!"))
+        \\    shared_str_9 = I128.from_str_prefix(shared)
+        \\    unique_utf8_9 = I128.from_utf8_prefix(Str.to_utf8(Str.concat("7 then a unique tail long enough to need the heap", "!")))
+        \\    shared_utf8_9 = I128.from_utf8_prefix(shared_bytes)
+        \\    unique_str_10 = Dec.from_str_prefix(Str.concat("7 then a unique tail long enough to need the heap", "!"))
+        \\    shared_str_10 = Dec.from_str_prefix(shared)
+        \\    unique_utf8_10 = Dec.from_utf8_prefix(Str.to_utf8(Str.concat("7 then a unique tail long enough to need the heap", "!")))
+        \\    shared_utf8_10 = Dec.from_utf8_prefix(shared_bytes)
+        \\    unique_str_11 = F32.from_str_prefix(Str.concat("7 then a unique tail long enough to need the heap", "!"))
+        \\    shared_str_11 = F32.from_str_prefix(shared)
+        \\    unique_utf8_11 = F32.from_utf8_prefix(Str.to_utf8(Str.concat("7 then a unique tail long enough to need the heap", "!")))
+        \\    shared_utf8_11 = F32.from_utf8_prefix(shared_bytes)
+        \\    unique_str_12 = F64.from_str_prefix(Str.concat("7 then a unique tail long enough to need the heap", "!"))
+        \\    shared_str_12 = F64.from_str_prefix(shared)
+        \\    unique_utf8_12 = F64.from_utf8_prefix(Str.to_utf8(Str.concat("7 then a unique tail long enough to need the heap", "!")))
+        \\    shared_utf8_12 = F64.from_utf8_prefix(shared_bytes)
+        \\    parsed = [
+        \\        unique_str_0.is_ok(),
+        \\        shared_str_0.is_ok(),
+        \\        unique_utf8_0.is_ok(),
+        \\        shared_utf8_0.is_ok(),
+        \\        unique_str_1.is_ok(),
+        \\        shared_str_1.is_ok(),
+        \\        unique_utf8_1.is_ok(),
+        \\        shared_utf8_1.is_ok(),
+        \\        unique_str_2.is_ok(),
+        \\        shared_str_2.is_ok(),
+        \\        unique_utf8_2.is_ok(),
+        \\        shared_utf8_2.is_ok(),
+        \\        unique_str_3.is_ok(),
+        \\        shared_str_3.is_ok(),
+        \\        unique_utf8_3.is_ok(),
+        \\        shared_utf8_3.is_ok(),
+        \\        unique_str_4.is_ok(),
+        \\        shared_str_4.is_ok(),
+        \\        unique_utf8_4.is_ok(),
+        \\        shared_utf8_4.is_ok(),
+        \\        unique_str_5.is_ok(),
+        \\        shared_str_5.is_ok(),
+        \\        unique_utf8_5.is_ok(),
+        \\        shared_utf8_5.is_ok(),
+        \\        unique_str_6.is_ok(),
+        \\        shared_str_6.is_ok(),
+        \\        unique_utf8_6.is_ok(),
+        \\        shared_utf8_6.is_ok(),
+        \\        unique_str_7.is_ok(),
+        \\        shared_str_7.is_ok(),
+        \\        unique_utf8_7.is_ok(),
+        \\        shared_utf8_7.is_ok(),
+        \\        unique_str_8.is_ok(),
+        \\        shared_str_8.is_ok(),
+        \\        unique_utf8_8.is_ok(),
+        \\        shared_utf8_8.is_ok(),
+        \\        unique_str_9.is_ok(),
+        \\        shared_str_9.is_ok(),
+        \\        unique_utf8_9.is_ok(),
+        \\        shared_utf8_9.is_ok(),
+        \\        unique_str_10.is_ok(),
+        \\        shared_str_10.is_ok(),
+        \\        unique_utf8_10.is_ok(),
+        \\        shared_utf8_10.is_ok(),
+        \\        unique_str_11.is_ok(),
+        \\        shared_str_11.is_ok(),
+        \\        unique_utf8_11.is_ok(),
+        \\        shared_utf8_11.is_ok(),
+        \\        unique_str_12.is_ok(),
+        \\        shared_str_12.is_ok(),
+        \\        unique_utf8_12.is_ok(),
+        \\        shared_utf8_12.is_ok(),
+        \\    ]
+        \\    List.len(parsed) + List.len(holder) + List.len(byte_holder)
+        \\}
+        ,
+    },
+    .{
         .name = "str copy-on-write ops, unique and shared inputs",
         .source =
         \\{
@@ -242,6 +362,149 @@ const cases = [_]Case{
         \\        F64.to_str(3.25),
         \\    ]
         \\    List.len(parts) + Str.count_utf8_bytes(Str.join_with(parts, ","))
+        \\}
+        ,
+    },
+    .{
+        .name = "numeric prefix parsers slice their input, unique and shared inputs",
+        .source =
+        \\{
+        \\    tail = " and a tail long enough that the rest stays on the heap"
+        \\    unsigned = Str.concat("42", tail)
+        \\    signed = Str.concat("-42", tail)
+        \\    fractional = Str.concat("1.5", tail)
+        \\    holder = [unsigned, signed, fractional]
+        \\    str_0 = match U8.from_str_prefix(unsigned) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_0 = match U8.from_utf8_prefix(Str.to_utf8(Str.concat("42", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_1 = match I8.from_str_prefix(signed) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_1 = match I8.from_utf8_prefix(Str.to_utf8(Str.concat("-42", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_2 = match U16.from_str_prefix(unsigned) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_2 = match U16.from_utf8_prefix(Str.to_utf8(Str.concat("42", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_3 = match I16.from_str_prefix(signed) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_3 = match I16.from_utf8_prefix(Str.to_utf8(Str.concat("-42", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_4 = match U32.from_str_prefix(unsigned) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_4 = match U32.from_utf8_prefix(Str.to_utf8(Str.concat("42", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_5 = match I32.from_str_prefix(signed) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_5 = match I32.from_utf8_prefix(Str.to_utf8(Str.concat("-42", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_6 = match U64.from_str_prefix(unsigned) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_6 = match U64.from_utf8_prefix(Str.to_utf8(Str.concat("42", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_7 = match I64.from_str_prefix(signed) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_7 = match I64.from_utf8_prefix(Str.to_utf8(Str.concat("-42", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_8 = match U128.from_str_prefix(unsigned) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_8 = match U128.from_utf8_prefix(Str.to_utf8(Str.concat("42", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_9 = match I128.from_str_prefix(signed) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_9 = match I128.from_utf8_prefix(Str.to_utf8(Str.concat("-42", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_10 = match Dec.from_str_prefix(fractional) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_10 = match Dec.from_utf8_prefix(Str.to_utf8(Str.concat("1.5", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_11 = match F32.from_str_prefix(fractional) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_11 = match F32.from_utf8_prefix(Str.to_utf8(Str.concat("1.5", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_12 = match F64.from_str_prefix(fractional) {
+        \\        Ok(parsed) => Str.count_utf8_bytes(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    bytes_12 = match F64.from_utf8_prefix(Str.to_utf8(Str.concat("1.5", tail))) {
+        \\        Ok(parsed) => List.len(parsed.rest)
+        \\        Err(_) => 0
+        \\    }
+        \\    str_0
+        \\        + bytes_0
+        \\        + str_1
+        \\        + bytes_1
+        \\        + str_2
+        \\        + bytes_2
+        \\        + str_3
+        \\        + bytes_3
+        \\        + str_4
+        \\        + bytes_4
+        \\        + str_5
+        \\        + bytes_5
+        \\        + str_6
+        \\        + bytes_6
+        \\        + str_7
+        \\        + bytes_7
+        \\        + str_8
+        \\        + bytes_8
+        \\        + str_9
+        \\        + bytes_9
+        \\        + str_10
+        \\        + bytes_10
+        \\        + str_11
+        \\        + bytes_11
+        \\        + str_12
+        \\        + bytes_12
+        \\        + List.len(holder)
         \\}
         ,
     },
