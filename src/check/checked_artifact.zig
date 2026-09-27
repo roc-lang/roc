@@ -19559,15 +19559,13 @@ const EvidencePass = struct {
         }
 
         // No edge can ever supply this dispatcher (not a param of any
-        // enclosing callable, no defaulting literal). Equality and hashing of
-        // the vacuous shape remain structural. Generated codecs require the
-        // explicit checker snapshot handled above; without one, parser,
-        // encoder, map, and value dispatches are statically unreachable.
-        if (structural_kind) |kind| switch (kind) {
-            .equality, .hash => return .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) },
-            .parser, .encoder, .map, .map_effectful => return .@"unreachable",
+        // enclosing callable, no defaulting literal). Generated codecs require
+        // the explicit checker snapshot handled above; without one, the
+        // unpinned-dispatch rule decides.
+        return switch (static_dispatch.unpinnedDispatchResolution(structural_kind)) {
+            .structural => .{ .structural = try self.structuralDerivation(structural_kind.?, constraint_fn_var) },
+            .unreachable_value => .@"unreachable",
         };
-        return .@"unreachable";
     }
 
     fn structuralDerivation(
