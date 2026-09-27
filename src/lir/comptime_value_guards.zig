@@ -278,7 +278,7 @@ fn testCompletedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error ||
     const failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0);
     const plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
     try program.const_plans.append(allocator, .scalar);
-    // Slot pairs: 0/1 is a successful value, 2/3 a failed one.
+    // The first failure/value slot pair succeeds, the second fails.
     var value_slots: [2]LIR.StaticDataId = undefined; // Both entries are assigned below before use.
     var failure_slots: [2]LIR.StaticDataId = undefined; // Both entries are assigned below before use.
     for (&value_slots, &failure_slots) |*value_slot, *failure_slot_out| {
