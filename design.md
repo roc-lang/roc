@@ -7197,6 +7197,13 @@ checker records distinct checked types for the propagated value and the
 function return; post-check lowering consumes its existing explicit return
 boundary and must not reconstruct or widen either type.
 
+A rejected return contribution—a `?`, an ordinary `return`, or the body
+itself—owns its diagnostic and poisons only its own expression, which becomes
+a runtime error. The function's result is shared with its body, its other
+contributions, and every caller, so it keeps the type those give it; a caller
+may still widen it, and the rejected return, lowered as a terminated block,
+flows no value across the return boundary.
+
 Monotype dispatches on the checked return context: a `try_suffix` return lowers
 its value at the source's checked type and retains the active specialization's
 return cell as the boundary target. Constructor preparation must not propagate

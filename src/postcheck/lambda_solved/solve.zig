@@ -1059,10 +1059,14 @@ const Solver = struct {
     }
 
     /// Terminal expressions retain their checked type for structural consumers,
-    /// but produce no value that can flow into a return destination.
+    /// but produce no value that can flow into a return destination. That
+    /// includes a block SpecConstr terminated: its final `unreachable` follows
+    /// a statement that never completes.
     fn relateReturnedExpr(self: *Solver, value: Lifted.ExprId, target: Type.TypeVarId) Allocator.Error!void {
-        const tag = std.meta.activeTag(self.lifted.exprs[@intFromEnum(value)].data);
+        const data = self.lifted.exprs[@intFromEnum(value)].data;
+        const tag = std.meta.activeTag(data);
         if (tag == .crash or tag == .comptime_exhaustiveness_failed or tag == .@"unreachable") return;
+        if (tag == .block and self.lifted.exprs[@intFromEnum(data.block.final_expr)].data == .@"unreachable") return;
         try self.relateReturn(self.inferredExpr(value), target);
     }
 

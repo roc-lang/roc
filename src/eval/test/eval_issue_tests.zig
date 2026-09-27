@@ -3589,4 +3589,41 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "\"select 1\"" },
     },
+    .{
+        // A `?` whose closed error row the enclosing annotated result rejects
+        // is a checked error that crashes when reached. The function keeps its
+        // body's result type, so a caller that widens the error row still
+        // specializes it, and the rejected return never flows a value.
+        .name = "rejected try suffix on a nominal payload function crashes at runtime",
+        .source_kind = .module,
+        .source =
+        \\Holder := [H({} -> Try(I64, [WrongArity, TypeMismatch]))].{
+        \\    run : Holder -> Try(I64, _)
+        \\    run = |h|
+        \\        match h {
+        \\            H(fn) => {
+        \\                n = fn({})?
+        \\                if n > 0 Ok(n) else Err(NotAFunction)
+        \\            }
+        \\        }
+        \\}
+        \\
+        \\main = Holder.run(H(|_| Err(WrongArity))) == Err(WrongArity)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "rejected try suffix on a function parameter crashes at runtime",
+        .source_kind = .module,
+        .source =
+        \\run : ({} -> Try(I64, [WrongArity, TypeMismatch])) -> Try(I64, _)
+        \\run = |fn| {
+        \\    n = fn({})?
+        \\    if n > 0 Ok(n) else Err(NotAFunction)
+        \\}
+        \\
+        \\main = run(|_| Err(WrongArity)) == Err(WrongArity)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
 };
