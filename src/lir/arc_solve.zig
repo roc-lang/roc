@@ -7503,6 +7503,10 @@ test "uniqueness carries a candidate read's origin through a returned record fie
     const callee_body = try f.store.addCFStmt(.{ .assign_list = .{ .target = other, .elems = try f.store.addLocalSpan(&.{}), .next = make_pair } }, .test_fixture);
     const callee = try f.proc(&.{param}, callee_body, f.list);
     const fresh_form = try f.proc(&.{}, null, f.list);
+    var static_values: std.ArrayList(core.Program.StaticDataValue) = .empty;
+    defer static_values.deinit(allocator);
+    const static_list: LIR.StaticDataId = @enumFromInt(static_values.items.len);
+    try static_values.append(allocator, .{ .initializer = fresh_form, .layout_idx = f.list });
 
     // Caller: read the candidate, pass it through the callee, take the
     // field back, and check it.
@@ -7526,7 +7530,7 @@ test "uniqueness carries a candidate read's origin through a returned record fie
     const call = try f.call(got, callee, &.{candidate}, take);
     const read = try f.store.addCFStmt(.{ .assign_literal = .{
         .target = candidate,
-        .value = .{ .static_data = @enumFromInt(0) },
+        .value = .{ .static_data = static_list },
         .fresh_alternative = fresh_form,
         .next = call,
     } }, .test_fixture);
@@ -7546,7 +7550,7 @@ test "uniqueness carries a candidate read's origin through a returned record fie
     const idle_call = try f.call(idle_got, callee, &.{idle}, idle_take);
     const idle_read = try f.store.addCFStmt(.{ .assign_literal = .{
         .target = idle,
-        .value = .{ .static_data = @enumFromInt(0) },
+        .value = .{ .static_data = static_list },
         .fresh_alternative = fresh_form,
         .next = idle_call,
     } }, .test_fixture);

@@ -17444,17 +17444,27 @@ test "post-check diagnostics preserve labeled LIR pass counts" {
         .prepared_statement_rows = 100,
         .appended_statements = 30,
         .peak_retained_shards = 8,
-        .committed_by_phase = .{ 1, 2, 3, 4, 5, 6, 7 },
-        .changed_by_phase = .{ 0, 1, 2, 3, 4, 5, 6 },
+        .committed_by_phase = .{ 1, 2, 3, 4, 5, 6, 7, 8 },
+        .changed_by_phase = .{ 0, 1, 2, 3, 4, 5, 6, 7 },
     });
     try std.testing.expectEqualStrings("Tasks submitted", rows[0].name);
     try std.testing.expectEqual(@as(u64, 10), rows[0].count);
     try std.testing.expectEqualStrings("Peak retained procedure shards", rows[4].name);
     try std.testing.expectEqual(@as(u64, 8), rows[4].count);
-    try std.testing.expectEqualStrings("Forwarding joins tasks", rows[7].name);
-    try std.testing.expectEqualStrings("Tag-case fusion rewrites", rows[10].name);
-    try std.testing.expectEqualStrings("Box reuse rewrites", rows[18].name);
-    for (0..std.meta.fields(lir.CheckedPipeline.LirPassPhase).len) |index| {
+    const phase_names = .{
+        "Branch expectation",
+        "TRMC",
+        "Forwarding joins",
+        "Tag-case fusion",
+        "Join scalarization",
+        "Loop append promotion",
+        "Range proving",
+        "Box reuse",
+    };
+    try std.testing.expectEqual(std.meta.fields(lir.CheckedPipeline.LirPassPhase).len, phase_names.len);
+    inline for (phase_names, 0..) |name, index| {
+        try std.testing.expectEqualStrings(name ++ " tasks", rows[5 + 2 * index].name);
+        try std.testing.expectEqualStrings(name ++ " rewrites", rows[6 + 2 * index].name);
         try std.testing.expectEqual(@as(u64, @intCast(index + 1)), rows[5 + 2 * index].count);
         try std.testing.expectEqual(@as(u64, @intCast(index)), rows[6 + 2 * index].count);
     }

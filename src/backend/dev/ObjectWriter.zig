@@ -1148,7 +1148,7 @@ test "all-zero static data without relocations is declared as zero-fill, not sto
     const allocator = std.testing.allocator;
     const Compiler = @import("ObjectFileCompiler.zig");
     const zeros = [_]u8{0} ** 65536;
-    const relocations = [_]Compiler.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "table", .target = .{ .data_symbol = @enumFromInt(0) }, .addend = 8 }};
+    const relocations = [_]Compiler.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "table", .target = .named, .addend = 8 }};
     const exports = [_]Compiler.StaticDataExport{
         // A list backing: an allocation header word, then 65528 zero bytes.
         .{ .symbol_name = "table", .bytes = &zeros, .symbol_offset = 8, .alignment = 8, .is_exported = false },
@@ -1171,9 +1171,9 @@ test "all-zero static data without relocations is declared as zero-fill, not sto
         try std.testing.expectEqual(@as(usize, 1), decoded.data.len / decoded.relocation_size);
         // The table's symbol lives in the zero-fill section, past its header
         // word; the other two stay in readonly data.
-        try std.testing.expectEqual(zero_fill.section_number, try symbolSectionNumber(decoded, target, "table"));
-        try std.testing.expect(zero_fill.section_number != try symbolSectionNumber(decoded, target, "descriptor"));
-        try std.testing.expect(zero_fill.section_number != try symbolSectionNumber(decoded, target, "filled"));
+        try std.testing.expectEqual(zero_fill.section_number, try symbolSectionNumber(decoded, "table"));
+        try std.testing.expect(zero_fill.section_number != try symbolSectionNumber(decoded, "descriptor"));
+        try std.testing.expect(zero_fill.section_number != try symbolSectionNumber(decoded, "filled"));
     }
 }
 
@@ -1238,7 +1238,7 @@ fn zeroFillSection(target: RocTarget, bytes: []const u8) error{ InvalidObjectFil
 }
 
 /// The section number of the named symbol in a decoded object.
-fn symbolSectionNumber(decoded: TestObjectTables, target: RocTarget, wanted: []const u8) error{SymbolNotFound}!u32 {
+fn symbolSectionNumber(decoded: TestObjectTables, wanted: []const u8) error{SymbolNotFound}!u32 {
     switch (decoded.format) {
         .elf => for (0..decoded.symbols.len / 24) |index| {
             const symbol = decoded.symbols[index * 24 ..][0..24];
@@ -1261,7 +1261,6 @@ fn symbolSectionNumber(decoded: TestObjectTables, target: RocTarget, wanted: []c
             if (std.mem.eql(u8, name, wanted)) return @intCast(TestObjectTables.read16(symbol, 12));
         },
     }
-    _ = target;
     return error.SymbolNotFound;
 }
 

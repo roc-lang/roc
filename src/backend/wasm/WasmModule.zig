@@ -7466,7 +7466,7 @@ test "all-zero static exports without relocations become zero-fill segments" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
-    const relocations = [_]StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "table", .target = .{ .data_symbol = @enumFromInt(0) }, .addend = 8 }};
+    const relocations = [_]StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "table", .target = .named, .addend = 8 }};
     const exports = [_]StaticDataExport{
         .{ .symbol_name = "table", .bytes = &([_]u8{0} ** 64), .symbol_offset = 8, .alignment = 8, .is_exported = false },
         .{ .symbol_name = "descriptor", .bytes = &([_]u8{0} ** 12), .alignment = 4, .is_exported = false, .relocations = &relocations },
