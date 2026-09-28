@@ -5009,10 +5009,7 @@ const Lowerer = struct {
         const store = &self.result.store;
         var new_locals: std.ArrayList(LIR.LocalId) = .empty;
         defer new_locals.deinit(self.allocator);
-        var join_points: std.ArrayList(LIR.JoinPoint) = .empty;
-        defer join_points.deinit(self.allocator);
-        var next_join_point: u32 = 0;
-        const context = UniformConstructorEmitContext{ .lowerer = self, .new_locals = &new_locals, .join_points = &join_points, .next_join_point = &next_join_point };
+        const context = UniformConstructorEmitContext{ .lowerer = self, .new_locals = &new_locals };
         // The constructor is its own procedure: it carries the location of
         // the read that requested it, outside that read's inline scopes.
         const origin = LIR.StmtOrigin{
@@ -5029,7 +5026,7 @@ const Lowerer = struct {
             .identity = try self.uniformListConstructorIdentity(id, layout_idx),
             .args = LIR.LocalSpan.empty(),
             .frame_locals = try store.addLocalSpan(new_locals.items),
-            .join_points = try store.addJoinPointSpan(join_points.items),
+            .join_points = LIR.JoinPointSpan.empty(),
             .body = body,
             .ret_layout = layout_idx,
             .abi = .roc,
@@ -5042,29 +5039,11 @@ const Lowerer = struct {
     const UniformConstructorEmitContext = struct {
         lowerer: *Lowerer,
         new_locals: *std.ArrayList(LIR.LocalId),
-        join_points: *std.ArrayList(LIR.JoinPoint),
-        next_join_point: *u32,
 
         pub fn addLocal(self: UniformConstructorEmitContext, layout_idx: layout.Idx) Common.LowerError!LIR.LocalId {
             const local = try self.lowerer.addLocalForLayout(layout_idx);
             try self.new_locals.append(self.lowerer.allocator, local);
             return local;
-        }
-
-        pub fn freshJoinPointId(self: UniformConstructorEmitContext) LIR.JoinPointId {
-            const id: LIR.JoinPointId = @enumFromInt(self.next_join_point.*);
-            self.next_join_point.* += 1;
-            return id;
-        }
-
-        pub fn addJoin(self: UniformConstructorEmitContext, point: LIR.JoinPoint, remainder: LIR.CFStmtId, origin: LIR.StmtOrigin) Common.LowerError!LIR.CFStmtId {
-            try self.join_points.append(self.lowerer.allocator, point);
-            return try self.lowerer.result.store.addCFStmt(.{ .join = .{
-                .id = point.id,
-                .params = point.params,
-                .body = point.body,
-                .remainder = remainder,
-            } }, origin);
         }
     };
 
@@ -5075,7 +5054,7 @@ const Lowerer = struct {
         var digests = try layout.Digests.init(self.allocator, &self.result.layouts);
         defer digests.deinit();
         var hasher = base.TypeDigestHasher.init();
-        hasher.update("roc.proc.uniform-list-constructor.v1");
+        hasher.update("roc.proc.uniform-list-constructor.v2");
         hasher.update(&try digests.get(layout_idx));
         const slot: u32 = @intFromEnum(id);
         hasher.update(&[_]u8{ @truncate(slot), @truncate(slot >> 8), @truncate(slot >> 16), @truncate(slot >> 24) });
