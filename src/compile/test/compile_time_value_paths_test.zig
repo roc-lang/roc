@@ -46,9 +46,12 @@ const platform_files = [_]struct { path: []const u8, source: []const u8 }{
 };
 
 /// The runtime target of an optimized build: expects omitted, so the runtime
-/// program is a separate consumer of the evaluation's specialization.
+/// program is a separate consumer of the evaluation's specialization, and
+/// builtin wrappers inlined, so a list operation's runtime uniqueness check
+/// sits in the procedure that calls the builtin.
 const optimized_target: lir.CheckedPipeline.TargetConfig = .{
     .inline_expects = .omit,
+    .inline_mode = .wrappers,
 };
 
 /// Both runtime programs of one app.
@@ -128,7 +131,7 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
             .include_provided_data_exports = true,
             .include_internal_static_data = true,
         },
-        .{ .target_usize = base.target.TargetUsize.native },
+        .{ .target_usize = base.target.TargetUsize.native, .inline_mode = .wrappers },
     );
     return .{ .coord = coord, .continued = continued, .restored = restored };
 }
@@ -270,5 +273,79 @@ test "an empty compile-time list read at another layout index still lowers as it
         try std.testing.expect(countLowLevel(result, .list_with_capacity) >= 1);
         try std.testing.expect(hasIntLiteral(result, 64));
         try std.testing.expectEqual(@as(usize, 0), countListSlots(result));
+    }
+}
+
+/// The proven-unique masks of every list operation that may runtime-check
+/// an argument's uniqueness, in statement order.
+fn checkedListOpUniqueMasks(result: *const lir.Program.Result, out: *std.ArrayList(u64), allocator: std.mem.Allocator) std.mem.Allocator.Error!void {
+    for (result.store.getCFStmts()) |stmt| {
+        if (stmt != .assign_low_level) continue;
+        const assign = stmt.assign_low_level;
+        if (!std.mem.startsWith(u8, @tagName(assign.op), "list_") or assign.rc_effect.may_runtime_uniqueness_check_args == 0) continue;
+        try out.append(allocator, assign.unique_args);
+    }
+}
+
+test "a compile-time table only read stays static data, with no fresh build" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = base.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\table : List(U32)
+        \\table = List.repeat(0.U32, 1000)
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(List.get(table, List.len(args))))
+        \\    Echo.line!(Str.inspect(List.get(table, List.len(args) + 1)))
+        \\    Ok({})
+        \\}
+    );
+    defer lowered.deinit();
+    for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
+        // Both reads only borrow the table: it rides in static data and no
+        // fresh build survives ARC's choice.
+        try std.testing.expect(countListSlots(result) > 0);
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_append_unsafe));
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_with_capacity));
+    }
+}
+
+test "a compile-time table consumed by an in-place write is built fresh and mutated without a copy" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = base.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\table : List(U32)
+        \\table = List.repeat(0.U32, 1000)
+        \\main! = |args| {
+        \\    written = List.append(table, List.len(args).to_u32_wrap())
+        \\    Echo.line!(Str.inspect(List.get(written, 0)))
+        \\    Ok({})
+        \\}
+    );
+    defer lowered.deinit();
+    for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
+        // The read's value is the argument `List.append` may extend in
+        // place, so the read takes its fresh form: the table's slot is gone,
+        // the repeat loop is present, and the append is proven unique.
+        try std.testing.expectEqual(@as(usize, 0), countListSlots(result));
+        try std.testing.expect(countLowLevel(result, .list_append_unsafe) >= 1);
+        var masks: std.ArrayList(u64) = .empty;
+        defer masks.deinit(gpa);
+        try checkedListOpUniqueMasks(result, &masks, gpa);
+        // The append's reserve is the one checked list operation, and its
+        // list argument is proven unique.
+        try std.testing.expectEqual(@as(usize, 1), masks.items.len);
+        try std.testing.expectEqual(@as(u64, 1), masks.items[0] & 1);
     }
 }

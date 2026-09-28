@@ -1176,6 +1176,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .assign_literal => |s| try self.store.addCFStmt(.{ .assign_literal = .{
                     .target = try self.mapLocal(s.target),
                     .value = s.value,
+                    .fresh_alternative = s.fresh_alternative,
                     .next = try self.cloneStmt(s.next),
                 } }, origin),
                 .assign_call => |s| try self.store.addCFStmt(.{ .assign_call = .{

@@ -2217,11 +2217,23 @@ const Inserter = struct {
                     .next = next,
                 } }, origin);
             },
-            .assign_literal => |assign| try self.store.addCFStmt(.{ .assign_literal = .{
-                .target = assign.target,
-                .value = assign.value,
-                .next = next,
-            } }, origin),
+            // A read with a fresh form settles here: the reads whose birth
+            // some uniqueness verdict rests on call the fresh procedure, and
+            // every other one keeps the static datum, its fresh procedure
+            // leaving with the next reachability pass.
+            .assign_literal => |assign| if (assign.fresh_alternative != null and self.solution.fresh_reads.isSet(@intFromEnum(at)))
+                try self.store.addCFStmt(.{ .assign_call = .{
+                    .target = assign.target,
+                    .proc = assign.fresh_alternative.?,
+                    .args = LIR.LocalSpan.empty(),
+                    .next = next,
+                } }, origin)
+            else
+                try self.store.addCFStmt(.{ .assign_literal = .{
+                    .target = assign.target,
+                    .value = assign.value,
+                    .next = next,
+                } }, origin),
             .init_uninitialized => |uninit| try self.store.addCFStmt(.{ .init_uninitialized = .{
                 .target = uninit.target,
                 .next = next,

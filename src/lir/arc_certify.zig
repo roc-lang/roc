@@ -466,6 +466,12 @@ fn certifyUniqueArgs(
 
         for (proc_stmts.items) |current| {
             const stmt = store.getCFStmt(current);
+            if (stmt == .assign_literal and stmt.assign_literal.fresh_alternative != null) {
+                diag.context_proc = proc_id;
+                diag.context_stmt = current;
+                diag.set("stmt={d}: a read still names a fresh form after ARC chose", .{@intFromEnum(current)});
+                return error.Certification;
+            }
             if (stmt != .assign_low_level) continue;
             const assign = stmt.assign_low_level;
             if (assign.unique_args == 0) continue;

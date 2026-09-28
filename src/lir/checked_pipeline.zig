@@ -1721,6 +1721,20 @@ fn finishLoweredOutput(
     if (target.timing) |timing| timing.addArcParallel(arc_metrics.?.*);
     arc_timing_scope.end();
 
+    // ARC settled every read that named a fresh form, so a fresh-form
+    // procedure no read chose is now unreferenced.
+    if (target.keep_specialization_procs) {
+        if (frozen.*) |*data| {
+            try ReachableProcs.runKeepingSpecializationsWithFrozen(&lowered.lir_result, data);
+        } else {
+            try ReachableProcs.runKeepingSpecializations(&lowered.lir_result);
+        }
+    } else if (frozen.*) |*data| {
+        try ReachableProcs.runWithFrozen(&lowered.lir_result, data);
+    } else {
+        try ReachableProcs.run(&lowered.lir_result);
+    }
+
     // After the certifier has checked ARC's ledger, so that what it verified
     // is the placement ARC produced.
     _ = try ImmortalLocals.elide(allocator, &lowered.lir_result.store);

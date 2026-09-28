@@ -111,6 +111,7 @@ const Printer = struct {
                         .null_ptr => try writer.writeAll("literal null_ptr"),
                         .proc_ref => |p| try writer.print("literal proc_ref p{d}", .{@intFromEnum(p)}),
                     }
+                    if (s.fresh_alternative) |proc| try writer.print(" fresh=p{d}", .{@intFromEnum(proc)});
                     try writer.writeAll("\n");
                     current = s.next;
                 },

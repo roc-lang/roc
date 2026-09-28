@@ -774,6 +774,8 @@ const Lowerer = struct {
     mono_const_type_map: collections.DenseMap(MonoType.TypeId, const_store.ConstTypeId),
     callable_source_fn_map: collections.DenseMap(Type.TypeId, SolvedType.TypeVarId),
     static_initializer_map: std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId),
+    /// The fresh-form procedure of each static list of copies, by slot.
+    uniform_constructors: collections.DenseMap(LIR.StaticDataId, LIR.LirProcSpecId),
     comptime_value_map: std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId),
     /// The one slot holding each evaluated root's completed value.
     comptime_root_slots: std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot),
@@ -1028,6 +1030,7 @@ const Lowerer = struct {
             .mono_const_type_map = collections.DenseMap(MonoType.TypeId, const_store.ConstTypeId).init(allocator),
             .callable_source_fn_map = collections.DenseMap(Type.TypeId, SolvedType.TypeVarId).init(allocator),
             .static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(allocator),
+            .uniform_constructors = collections.DenseMap(LIR.StaticDataId, LIR.LirProcSpecId).init(allocator),
             .comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(allocator),
             .comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(allocator),
             .static_initializer_queue = .empty,
@@ -1144,6 +1147,7 @@ const Lowerer = struct {
         self.deinitPackedPlans();
         self.static_initializer_queue.deinit(self.allocator);
         self.static_initializer_map.deinit();
+        self.uniform_constructors.deinit();
         self.comptime_value_map.deinit();
         self.comptime_root_slots.deinit();
         self.layout_owner_types.deinit();
@@ -1208,6 +1212,7 @@ const Lowerer = struct {
         self.deinitPackedPlans();
         self.static_initializer_queue.deinit(self.allocator);
         self.static_initializer_map.deinit();
+        self.uniform_constructors.deinit();
         self.comptime_value_map.deinit();
         self.comptime_root_slots.deinit();
         self.layout_owner_types.deinit();
@@ -1254,6 +1259,7 @@ const Lowerer = struct {
         self.packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(self.allocator);
         self.packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(self.allocator);
         self.static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(self.allocator);
+        self.uniform_constructors = collections.DenseMap(LIR.StaticDataId, LIR.LirProcSpecId).init(self.allocator);
         self.comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(self.allocator);
         self.comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(self.allocator);
         self.comptime_site_map = &.{};
@@ -3228,6 +3234,116 @@ const Lowerer = struct {
     /// empty list's `with_capacity` request cannot survive in a slot, while
     /// a list with elements is served from static data, since rebuilding it
     /// would allocate at every read.
+    /// The list of copies a restored constant expression builds, when its
+    /// items are all one construction: what `List.repeat` and a packed
+    /// literal of one repeated item restore to.
+    fn uniformListOfExpr(self: *Lowerer, arena: std.mem.Allocator, expr_id: Lifted.ExprId, ty: Type.TypeId, layout_idx: layout.Idx) Common.LowerError!?postcheck_values.UniformList {
+        const value_layout = self.result.layouts.getLayout(layout_idx);
+        if (value_layout.tag != .list) return null;
+        const expr = self.solved.lifted.getExpr(expr_id);
+        return switch (expr.data) {
+            .list => |items| try self.uniformListOfItems(arena, items, ty, value_layout),
+            .bytes_lit => |literal| try self.uniformListOfPackedItems(arena, literal, ty, value_layout),
+            .nominal => |backing| try self.uniformListOfExpr(arena, backing, try self.nominalBackingType(ty, backing), layout_idx),
+            .static_data_candidate => |candidate| try self.uniformListOfExpr(arena, candidate.runtime_expr, ty, layout_idx),
+            .unit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .low_level,
+            .record,
+            .tuple,
+            .tag,
+            .local,
+            .@"unreachable",
+            .inline_expects_enabled,
+            .comptime_value,
+            .typed_boundary,
+            .record_update,
+            .let_,
+            .lambda,
+            .def_ref,
+            .fn_def,
+            .fn_ref,
+            .call_value,
+            .call_proc,
+            .field_access,
+            .tuple_access,
+            .structural_eq,
+            .structural_hash,
+            .match_,
+            .if_,
+            .uninitialized,
+            .uninitialized_payload,
+            .if_initialized_payload,
+            .try_sequence,
+            .try_record_sequence,
+            .block,
+            .loop_,
+            .break_,
+            .continue_,
+            .join_point,
+            .jump,
+            .return_,
+            .crash,
+            .comptime_branch_taken,
+            .comptime_exhaustiveness_failed,
+            .dbg,
+            .expect_err,
+            .literal_rejected,
+            .expect,
+            => null,
+        };
+    }
+
+    fn uniformListOfItems(self: *Lowerer, arena: std.mem.Allocator, span: Lifted.Span(Lifted.ExprId), ty: Type.TypeId, value_layout: layout.Layout) Common.LowerError!?postcheck_values.UniformList {
+        const items = self.solved.lifted.exprSpan(span);
+        if (items.len == 0) return null;
+        const element_layout = value_layout.getIdx();
+        const element_ty = self.listElemType(ty);
+        const first = try self.constructionOfExpr(arena, GuardedList.at(items, 0), element_ty, element_layout) orelse return null;
+        for (1..items.len) |index| {
+            const other = try self.constructionOfExpr(arena, GuardedList.at(items, index), element_ty, element_layout) orelse return null;
+            if (!constructionEql(first, other)) return null;
+        }
+        return .{ .element = first, .count = items.len };
+    }
+
+    /// A packed list is uniform when every item's packed bytes match the
+    /// first's; that item then decodes through the frozen-image decoder,
+    /// over its memory bytes.
+    fn uniformListOfPackedItems(self: *Lowerer, arena: std.mem.Allocator, literal: Mono.PackedListLiteral, ty: Type.TypeId, value_layout: layout.Layout) Common.LowerError!?postcheck_values.UniformList {
+        if (literal.len == 0) return null;
+        const element_layout = value_layout.getIdx();
+        const encoded = self.stringLiteral(literal.literal).text();
+        const width: usize = if (literal.element) |scalar| scalar.byteWidth() else literal.product_width;
+        if (width == 0 or encoded.len < @as(usize, literal.len) * width) return null;
+        const first = encoded[0..width];
+        for (1..literal.len) |index| {
+            if (!std.mem.eql(u8, first, encoded[index * width ..][0..width])) return null;
+        }
+        const size_align = self.result.layouts.layoutSizeAlign(self.result.layouts.getLayout(element_layout));
+        const memory = try arena.alloc(u8, size_align.size);
+        if (literal.element != null) {
+            if (memory.len != width) return null;
+            @memcpy(memory, first);
+        } else {
+            if (!self.packed_plans.contains(element_layout)) {
+                var plan = try lir_core.PackedData.Plan.init(self.allocator, &self.result.layouts, element_layout);
+                errdefer plan.deinit();
+                try self.packed_plans.put(element_layout, plan);
+            }
+            const plan = self.packed_plans.getPtr(element_layout).?;
+            if (plan.packed_width != literal.product_width or plan.memory_width != memory.len) return null;
+            plan.decode(memory, first, 1);
+        }
+        var decoder = postcheck_values.Decoder{ .program = &self.result, .frozen = null, .arena = arena };
+        const element = try decoder.decode(null, memory, 0, try self.constPlanOfType(self.listElemType(ty)), element_layout) orelse return null;
+        return .{ .element = element, .count = literal.len };
+    }
+
     fn constructionOfListExpr(self: *Lowerer, span: Lifted.Span(Lifted.ExprId), value_layout: layout.Layout) ?postcheck_values.Construction {
         if (value_layout.tag != .list) return null;
         if (self.solved.lifted.exprSpan(span).len == 0) return .{ .empty_list = 0 };
@@ -4863,11 +4979,99 @@ const Lowerer = struct {
                 .next = next,
             } }, where.source());
         }
+        // A list of copies keeps its slot and also names its fresh form.
+        const fresh_alternative = if (runtime_values) |values| blk: {
+            const uniform = values.uniformListFor(root.module, root.root) orelse break :blk null;
+            break :blk try self.uniformListConstructor(where, id, uniform, layout_idx);
+        } else null;
         return try self.result.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
             .value = .{ .static_data = id },
+            .fresh_alternative = fresh_alternative,
             .next = next,
         } }, where.source());
+    }
+
+    /// The argument-free procedure that builds the list of copies held in
+    /// slot `id` fresh, created on its first use. Null when the value does
+    /// not fit `layout_idx` as a list.
+    fn uniformListConstructor(self: *Lowerer, where: LowerSite, id: LIR.StaticDataId, uniform: postcheck_values.UniformList, layout_idx: layout.Idx) Common.LowerError!?LIR.LirProcSpecId {
+        if (self.uniform_constructors.get(id)) |proc| return proc;
+        if (uniform.count > std.math.maxInt(i64)) return null;
+        const store = &self.result.store;
+        var new_locals: std.ArrayList(LIR.LocalId) = .empty;
+        defer new_locals.deinit(self.allocator);
+        var join_points: std.ArrayList(LIR.JoinPoint) = .empty;
+        defer join_points.deinit(self.allocator);
+        var next_join_point: u32 = 0;
+        const context = UniformConstructorEmitContext{ .lowerer = self, .new_locals = &new_locals, .join_points = &join_points, .next_join_point = &next_join_point };
+        // The constructor is its own procedure: it carries the location of
+        // the read that requested it, outside that read's inline scopes.
+        const origin = LIR.StmtOrigin{
+            .loc = where.loc,
+            .region = where.region,
+            .inline_scope = .none,
+            .kind = .scaffold,
+        };
+        const value = try context.addLocal(layout_idx);
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, origin);
+        const body = try postcheck_values.emitRepeat(context, store, &self.result.layouts, origin, value, uniform.element, @intCast(uniform.count), ret) orelse return null;
+        const proc = try store.addProcSpec(.{
+            .name = lirSymbol(self.symbols.fresh()),
+            .identity = try self.uniformListConstructorIdentity(id, layout_idx),
+            .args = LIR.LocalSpan.empty(),
+            .frame_locals = try store.addLocalSpan(new_locals.items),
+            .join_points = try store.addJoinPointSpan(join_points.items),
+            .body = body,
+            .ret_layout = layout_idx,
+            .abi = .roc,
+        }, where.loc);
+        if (store.procNeedsStackProbe(&self.result.layouts, store.getProcSpec(proc))) store.getProcSpecPtr(proc).stack_probe = .required;
+        try self.uniform_constructors.put(id, proc);
+        return proc;
+    }
+
+    const UniformConstructorEmitContext = struct {
+        lowerer: *Lowerer,
+        new_locals: *std.ArrayList(LIR.LocalId),
+        join_points: *std.ArrayList(LIR.JoinPoint),
+        next_join_point: *u32,
+
+        pub fn addLocal(self: UniformConstructorEmitContext, layout_idx: layout.Idx) Common.LowerError!LIR.LocalId {
+            const local = try self.lowerer.addLocalForLayout(layout_idx);
+            try self.new_locals.append(self.lowerer.allocator, local);
+            return local;
+        }
+
+        pub fn freshJoinPointId(self: UniformConstructorEmitContext) LIR.JoinPointId {
+            const id: LIR.JoinPointId = @enumFromInt(self.next_join_point.*);
+            self.next_join_point.* += 1;
+            return id;
+        }
+
+        pub fn addJoin(self: UniformConstructorEmitContext, point: LIR.JoinPoint, remainder: LIR.CFStmtId, origin: LIR.StmtOrigin) Common.LowerError!LIR.CFStmtId {
+            try self.join_points.append(self.lowerer.allocator, point);
+            return try self.lowerer.result.store.addCFStmt(.{ .join = .{
+                .id = point.id,
+                .params = point.params,
+                .body = point.body,
+                .remainder = remainder,
+            } }, origin);
+        }
+    };
+
+    /// Identity of a fresh-form procedure: it builds the value of one
+    /// static-data slot at one layout within this program, and is never
+    /// shared across programs.
+    fn uniformListConstructorIdentity(self: *Lowerer, id: LIR.StaticDataId, layout_idx: layout.Idx) std.mem.Allocator.Error!LIR.ProcIdentity {
+        var digests = try layout.Digests.init(self.allocator, &self.result.layouts);
+        defer digests.deinit();
+        var hasher = base.TypeDigestHasher.init();
+        hasher.update("roc.proc.uniform-list-constructor.v1");
+        hasher.update(&try digests.get(layout_idx));
+        const slot: u32 = @intFromEnum(id);
+        hasher.update(&[_]u8{ @truncate(slot), @truncate(slot >> 8), @truncate(slot >> 16), @truncate(slot >> 24) });
+        return .{ .bytes = hasher.finalResult() };
     }
 
     /// The procedure that reads compile-time value slot `id`, which holds
@@ -4953,9 +5157,18 @@ const Lowerer = struct {
         }
         if (try self.lowerConstructionExprInto(where, target, candidate.runtime_expr, ty, next)) |built| return built;
         if (candidate.storage.needsTargetStorage(self.result.layouts.targetUsize()) and self.layoutNeedsStaticData(layout_idx)) {
+            const id = try self.lirStaticDataFor(candidate, ty, layout_idx);
+            // A list of copies keeps its slot and also names its fresh form.
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            const fresh_alternative = if (try self.uniformListOfExpr(arena.allocator(), candidate.runtime_expr, ty, layout_idx)) |uniform|
+                try self.uniformListConstructor(where, id, uniform, layout_idx)
+            else
+                null;
             return try self.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
-                .value = .{ .static_data = try self.lirStaticDataFor(candidate, ty, layout_idx) },
+                .value = .{ .static_data = id },
+                .fresh_alternative = fresh_alternative,
                 .next = next,
             } }, where.source());
         }
@@ -13865,4 +14078,27 @@ test "layout lowering preserves recursive slots across cached children (issue 11
             try std.testing.expectEqual(layout.LayoutTag.box, lowerer.result.layouts.getLayout(info.fields.get(i).layout).tag);
         }
     }
+}
+
+/// Whether two constructions build the same value.
+fn constructionEql(a: postcheck_values.Construction, b: postcheck_values.Construction) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .literal => |literal| std.meta.eql(literal, b.literal),
+        .zst, .empty_str => true,
+        .empty_list => |capacity| capacity == b.empty_list,
+        .record => |fields| blk: {
+            if (fields.len != b.record.len) break :blk false;
+            for (fields, b.record) |field, other| {
+                if (!constructionEql(field, other)) break :blk false;
+            }
+            break :blk true;
+        },
+        .tag => |tag| blk: {
+            if (tag.variant_index != b.tag.variant_index or tag.discriminant != b.tag.discriminant) break :blk false;
+            if ((tag.payload == null) != (b.tag.payload == null)) break :blk false;
+            if (tag.payload) |payload| break :blk constructionEql(payload.*, b.tag.payload.?.*);
+            break :blk true;
+        },
+    };
 }

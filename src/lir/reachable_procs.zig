@@ -284,6 +284,8 @@ const Pass = struct {
                     } else if (s.value == .static_data) {
                         try self.markStaticData(s.value.static_data);
                     }
+                    // The fresh form stays available until ARC chooses.
+                    if (s.fresh_alternative) |fresh| try self.markProc(fresh);
                     try self.pushStmt(s.next);
                 },
                 .assign_call => |s| {
@@ -504,6 +506,7 @@ const Pass = struct {
                     } else if (s.value == .static_data) {
                         s.value.static_data = self.remapStaticData(s.value.static_data);
                     }
+                    if (s.fresh_alternative) |proc| s.fresh_alternative = self.remapProc(proc);
                     const next = s.next;
                     s.next = self.remapStmt(next);
                     try self.pushStmt(next);
@@ -1004,6 +1007,7 @@ const Pass = struct {
                 } else if (s.value == .static_data) {
                     self.verifyStaticDataRef(s.value.static_data);
                 }
+                if (s.fresh_alternative) |proc| self.verifyProcRef(proc, proc_count);
                 self.verifyStmtRef(s.next, stmt_count);
             },
             .assign_call => |s| {
