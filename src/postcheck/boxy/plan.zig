@@ -7608,6 +7608,17 @@ const Builder = struct {
 
             try pending.appendSlice(self.allocator, try self.schemeDictionaryParams(worker));
             const body_start: u32 = @intCast(pending.items.len);
+            // A checked requirement can be used only by a forwarded call or
+            // nested callable. Its dictionary still belongs to this worker's
+            // ABI even when no value in the public signature reaches it.
+            if (self.workerEvidenceParams(worker.source)) |schema| {
+                for (schema.params) |param| {
+                    if (!param.runtime_dictionary or param.source == .scheme_requirement) continue;
+                    const rep = self.plan.repForSourceType(typeRef(schema.view, param.dispatcher_ty)) orelse
+                        boxyPlanInvariant("worker dictionary requirement dispatcher was not analyzed");
+                    try self.collectHiddenDictionariesForRep(rep, &pending, &seen_reps);
+                }
+            }
             for (self.scheme_dictionary_uses.items) |use| {
                 if (use.worker != worker.id) continue;
                 const present = for (pending.items) |param| {
@@ -9895,6 +9906,15 @@ const Builder = struct {
         defer substitutions.deinit(self.allocator);
         var seen_substitutions = std.AutoHashMap(u64, void).init(self.allocator);
         defer seen_substitutions.deinit();
+
+        // The checked scheme substitution also names receivers reachable only
+        // through method constraints. Argument/result traversal cannot supply
+        // those body dictionaries; consume their exact producer-owned slots.
+        for (self.plan.schemeRepSubstitutionSlice(requirement_substitution)) |pair| {
+            if (self.plan.representations.items[@intFromEnum(pair.scheme_rep)].dictionaries.len != 0) {
+                try substitutions.put(self.allocator, pair.scheme_rep, pair.site_rep);
+            }
+        }
 
         const definition_type = self.workerCheckedTypeForSource(worker.source, worker.checked_type);
         if (!typeRefEql(definition_type, worker.checked_type)) {

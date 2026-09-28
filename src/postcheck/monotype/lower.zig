@@ -44006,7 +44006,7 @@ const BodyContext = struct {
         // stored inside that value; that recipe is not an initializer edge.
         if (schema.params.len == 0) return &.{};
         if (site_refs) |refs| {
-            if (refs.len != schema.params.len) Common.invariant("checked site evidence length differed from its scheme's requirements");
+            return try self.deriveCheckedEvidenceVector(schema, subst, site_view, refs, purpose);
         }
         const arena = self.builder.evidence_arena.allocator();
         const out = try arena.alloc(SpecEvidence, schema.params.len);
@@ -44015,68 +44015,9 @@ const BodyContext = struct {
         @memset(derived, false);
         for (schema.params, 0..) |param, k| {
             if (param.source == .scheme_requirement) {
-                if (param.slot != null) Common.invariant("composite requirement occupied a quantified-variable slot");
-                const refs = site_refs orelse Common.invariant("composite scheme requirement had no checked call-site evidence");
-                out[k] = if (refs[k].resolution == .from_scheme)
-                    .{ .from_scheme = @intCast(k) }
-                else
-                    try self.materializeCheckedEvidenceRef(site_view, refs[k], param, purpose);
-                derived[k] = true;
-                continue;
+                Common.invariant("composite scheme requirement had no checked call-site evidence");
             }
             if (param.slot.? >= subst.len) Common.invariant("requirement receiver slot was outside the request substitution");
-            const site_ref: ?static_dispatch.CheckedEvidence = if (site_refs) |refs| refs[k] else null;
-            if (site_ref) |ref| switch (ref.resolution) {
-                .structural => |evidence| {
-                    out[k] = .{ .structural = .{
-                        .derivation = evidence.derivation,
-                        .checked = .{ .view = site_view, .evidence = evidence },
-                    } };
-                    derived[k] = true;
-                },
-                .unreachable_value => {
-                    out[k] = .unreachable_value;
-                    derived[k] = true;
-                },
-                .checked_error => {
-                    out[k] = .checked_error;
-                    derived[k] = true;
-                },
-                .from_scheme => Common.invariant("abstract scheme evidence named an ordinary callable parameter"),
-                .from_callable => {
-                    out[k] = .{ .from_callable = .{
-                        .independent_callable = false,
-                    } };
-                    derived[k] = true;
-                },
-                .constraint => |constraint| switch (self.evidence.at(constraint.index) orelse
-                    Common.invariant("checked requirement reference was absent from its lexical evidence chain")) {
-                    .structural => |structural| {
-                        out[k] = .{ .structural = structural };
-                        derived[k] = true;
-                    },
-                    .unreachable_value => {
-                        out[k] = .unreachable_value;
-                        derived[k] = true;
-                    },
-                    .checked_error => {
-                        out[k] = .checked_error;
-                        derived[k] = true;
-                    },
-                    .from_scheme => |index| {
-                        out[k] = .{ .from_scheme = index };
-                        derived[k] = true;
-                    },
-                    .from_callable => |use| {
-                        out[k] = .{ .from_callable = .{
-                            .independent_callable = use.independent_callable or constraint.independent_callable,
-                        } };
-                        derived[k] = true;
-                    },
-                    .target => {},
-                },
-                .direct => {},
-            };
             if (subst[param.slot.?] == .checked_error) {
                 out[k] = .checked_error;
                 derived[k] = true;
@@ -44088,14 +44029,10 @@ const BodyContext = struct {
         // selected target to its constraint binds every quantified variable
         // only that callable reaches. Each such binding can resolve another
         // requirement's receiver, so the derivation runs to a fixpoint before
-        // any receiver is judged open. A checked instantiation record binds
-        // slot identities, hidden ones included. Its complete checked evidence
-        // contract is related below after materialization, rather than using
-        // these intermediate target selections. A forwarded structural codec
+        // any receiver is judged open. A forwarded structural codec
         // carries its checked callable, which can reach variables its receiver
         // does not (a parser's error row), so it is related like a target.
         // The context is created by the first relation.
-        const relate_targets = site_refs == null;
         var scheme_ctx: ?BodyContext = null;
         defer if (scheme_ctx) |*ctx| ctx.deinit();
         var progress = true;
@@ -44114,7 +44051,7 @@ const BodyContext = struct {
                         out[k] = forwarded;
                         derived[k] = true;
                         progress = true;
-                        if (relate_targets) switch (forwarded) {
+                        switch (forwarded) {
                             .structural => |structural| if (structural.checked) |checked_structural| {
                                 if (scheme_ctx == null) {
                                     scheme_ctx = try BodyContext.initWithMethodScope(
@@ -44131,7 +44068,7 @@ const BodyContext = struct {
                                 try self.relateStructuralEvidenceToConstraint(checked_structural, &scheme_ctx.?, param);
                             },
                             .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
-                        };
+                        }
                         continue;
                     },
                     .target => {},
@@ -44140,7 +44077,6 @@ const BodyContext = struct {
                 out[k] = try self.synthesizeComponentEvidenceAtNodeForPurpose(schema.view, param.method, param.structural, node, purpose);
                 derived[k] = true;
                 progress = true;
-                if (!relate_targets) continue;
                 switch (out[k]) {
                     .target => |target| {
                         if (scheme_ctx == null) {
@@ -44166,22 +44102,68 @@ const BodyContext = struct {
             if (derived[k]) continue;
             out[k] = try self.deriveOpenRequirement(schema.view, param, subst[param.slot.?].node, purpose);
         }
-        if (site_refs) |refs| {
-            for (refs, schema.params, out) |ref, param, *entry| switch (ref.resolution) {
-                .direct, .constraint => {
-                    entry.* = try self.mergeCheckedEvidenceContract(
-                        entry.*,
-                        try self.materializeCheckedEvidenceRef(site_view, ref, param, purpose),
-                    );
-                },
-                .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
+        return out;
+    }
+
+    /// Checked edges supply every target contract before receiver-based
+    /// selection. Relate those contracts first: one method's signature can
+    /// bind a different requirement's hidden receiver. Reuse the output vector
+    /// for materialization and merging, without a second vector or fixpoint.
+    fn deriveCheckedEvidenceVector(
+        self: *BodyContext,
+        schema: SchemeRequirements,
+        subst: SpecSubstitution,
+        site_view: ModuleView,
+        refs: []const static_dispatch.CheckedEvidence,
+        purpose: EvidenceMaterializationPurpose,
+    ) Allocator.Error![]const SpecEvidence {
+        if (refs.len != schema.params.len) Common.invariant("checked site evidence length differed from its scheme's requirements");
+        const out = try self.builder.evidence_arena.allocator().alloc(SpecEvidence, schema.params.len);
+        for (refs, schema.params, out, 0..) |ref, param, *entry, k| {
+            if (param.source == .scheme_requirement) {
+                if (param.slot != null) Common.invariant("composite requirement occupied a quantified-variable slot");
+                entry.* = if (ref.resolution == .from_scheme)
+                    .{ .from_scheme = @intCast(k) }
+                else
+                    try self.materializeCheckedEvidenceRef(site_view, ref, param, purpose);
+                continue;
+            }
+            if (param.slot.? >= subst.len) Common.invariant("requirement receiver slot was outside the request substitution");
+            entry.* = switch (ref.resolution) {
+                .from_callable => .{ .from_callable = .{ .independent_callable = false } },
+                .from_scheme => Common.invariant("abstract scheme evidence named an ordinary callable parameter"),
+                .direct, .constraint, .structural, .unreachable_value, .checked_error => try self.materializeCheckedEvidenceRef(site_view, ref, param, purpose),
             };
+            if (subst[param.slot.?] == .checked_error) {
+                entry.* = switch (ref.resolution) {
+                    .direct, .constraint => try self.mergeCheckedEvidenceContract(.checked_error, entry.*),
+                    .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => .checked_error,
+                };
+            }
         }
-        if (site_refs != null and purpose != .interface_summary_input) {
+        // Summary lookup describes the unrefined input. On a cache miss its
+        // expansion applies these relations to detached substitution cells;
+        // a hit replays the completed relation without repeating this work.
+        if (purpose != .interface_summary_input) {
             var checked_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, schema.view, self.method_scope, self.owner_template, self.graph, self.draft);
             defer checked_ctx.deinit();
             try checked_ctx.seedSubstitution(schema, subst);
             try self.relateMaterializedEvidenceConstraints(&checked_ctx, schema, out);
+        }
+        for (schema.params, out) |param, *entry| {
+            if (param.source == .scheme_requirement or entry.* != .target) continue;
+            const node = subst[param.slot.?].node;
+            const derived = derive: {
+                if (self.forwardedRequirement(node, schema.view.names, param.method)) |forwarded| switch (forwarded) {
+                    .target => {},
+                    .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => break :derive forwarded,
+                };
+                break :derive if (self.methodOwnerFromNode(node) != null)
+                    try self.synthesizeComponentEvidenceAtNodeForPurpose(schema.view, param.method, param.structural, node, purpose)
+                else
+                    try self.deriveOpenRequirement(schema.view, param, node, purpose);
+            };
+            entry.* = try self.mergeCheckedEvidenceContract(derived, entry.*);
         }
         return out;
     }
