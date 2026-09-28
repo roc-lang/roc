@@ -160,6 +160,9 @@ pub const ReportBuilder = struct {
     diff_fields: SnapshotRecordFieldSafeList,
     diff_tags: SnapshotTagSafeList,
     typo_suggestions: diff.TypoSuggestion.ArrayList,
+    /// Interned display text lets mismatch reports recognize identical renderings
+    /// without conflating them with semantic type equality.
+    type_displays: base.SerialStringInterner = .{},
     /// When the current report is a record-destructure pattern mismatch, holds
     /// the pattern and value type snapshots so `makeMismatchReport` can show the
     /// tailored `field: _` / `..` hint in place of the generic field diff.
@@ -216,6 +219,7 @@ pub const ReportBuilder = struct {
         self.diff_fields.deinit(self.gpa);
         self.diff_tags.deinit(self.gpa);
         self.typo_suggestions.deinit();
+        self.type_displays.deinit(self.gpa);
     }
 
     /// Reset report builder, only fields it owns
@@ -612,8 +616,10 @@ pub const ReportBuilder = struct {
 
         const actual_formatted = self.getFormattedString(actual_snapshot);
         const expected_formatted = self.getFormattedString(expected_snapshot);
+        const actual_display = try self.type_displays.insert(self.gpa, actual_formatted);
+        const expected_display = try self.type_displays.insert(self.gpa, expected_formatted);
 
-        if (std.mem.eql(u8, actual_formatted, expected_formatted)) {
+        if (actual_display == expected_display) {
             try D.renderSlice(&.{D.bytes("The type involved is:")}, self, &report);
             try report.document.addLineBreak();
             try report.document.addLineBreak();
