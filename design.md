@@ -9756,6 +9756,23 @@ by the dictionary occupies its interned slot, and every other slot is an
 explicit absent entry. Consequently a dictionary carrying a superset of checked
 requirements can satisfy a callee that uses a subset without remapping its
 pointer or searching by a module-local method id.
+Repeated independent callable constraints on one receiver and method share
+one runtime target slot, in the same first-occurrence order as the checked
+evidence parameters. Planning still analyzes every callable relation for its
+type and descriptor requirements. Requirements reachable only through another
+constraint's callable are explicit hidden dictionaries too; they are not
+reconstructed from defaults when absent from the worker's argument/result
+representations. Checked owner indexes identify their forwarding and captures.
+A primary signature requirement and an enclosing checked owner for the same
+receiver and callable share a dictionary group. The worker ABI includes that
+group once, retaining its checked owner and evidence index even when signature
+or body traversal also reaches it. Inline closures capture that group once;
+the owner's selected method keeps its exact slot within the group.
+Function lookups plan the worker from its declared callable type, just as direct
+calls do. The lookup's instantiated type describes the callable boundary and
+supplies hidden arguments; it must not erase dictionary parameters from a
+worker whose body still refers to the declaration's generic variables.
+
 If a polymorphic function requires a method dictionary, that dictionary is an
 explicit hidden parameter or capture. If a concrete call site invokes the
 function, the caller supplies the exact static dictionary for the concrete
@@ -9842,7 +9859,9 @@ code. The LIR hosted proc retains its exact checked hosted ABI. A boxy call
 site adapts internal boxy arguments into that ABI, calls the hosted proc, and
 adapts the result back to the internal boxy representation when needed. It must
 not change the hosted symbol signature and must not ask the host to provide
-hidden descriptors.
+hidden descriptors. When used as a Roc callable value, a hosted worker retains
+its planned descriptor captures like any other erased callable. Those captures
+belong to the private Roc callable and never cross the hosted ABI.
 
 `RocBox(RocUnknown)` at the host boundary is opaque unless Roc already has
 explicit descriptor data on the Roc side. The host ABI passes only the Roc box
@@ -10524,6 +10543,11 @@ keys include the checked signature identity, method scope, adapter reachability,
 and complete input constraint. They consume no nested dispatch evidence.
 Expansion uses detached inputs; replay creates fresh open cells and preserves
 the input's sharing, so independent calls never share new quantified variables.
+Construction of a checked procedure's method signature is itself an immutable
+snapshot, keyed by its checked signature and method scope before any request
+relation is applied. Different constraint inputs instantiate fresh cells from
+that snapshot rather than re-expanding the same nominal declarations. Local
+method signatures remain context-owned and are not shared through this cache.
 
 Interface summaries are immutable constraints over explicit input roots. They
 preserve unresolved variables and their defaults, row tails, variable and
@@ -11854,9 +11878,24 @@ the candidate pair; the unifier is the exact equality authority, and a pair it
 cannot establish stays separate. Because merging two callables can bring their
 private receivers' own same-name requirements together, those receivers are
 revisited until no receiver holds two same-shape callables. Independent same-name callable relations
-share one evidence parameter: the runtime target is selected by dispatcher and
-method, while each dispatch plan checks and instantiates that target against its
-own callable relation.
+share one target evidence parameter. A sparse side vector carries the checked
+contracts for its other distinct callable classes in constraint order. Each
+contract is produced from that callable's exact scheme-use record and includes
+its own nested evidence. Dispatch plans and forwarded evidence name the target
+slot and, when needed, the side-vector index. Monotype consumes these as
+specialization evidence. Boxy gives each independent callable contract its own
+hidden dictionary, so one target worker can be invoked with different adapters
+and nested dictionaries. The checked owner parameter and contract index identify
+those dictionaries across forwarding and lexical capture. Side vectors are interned and omitted when all selected
+target schemas authorize callable derivation. Target-owned nested evidence
+remains explicit for Boxy's per-call dictionary contracts. Forwarding
+remaps contract indexes through explicit checked references, never carrying an
+enclosing schema's side-vector positions into a different schema. Consumers
+select the indexed contract before applying the callable relation, and never
+infer contract equality from a shared method name.
+Contract identities are consumed at the target boundary; equivalent completed
+specializations still share one body. Stored function values preserve the side
+vectors along with ordinary nested evidence.
 
 **Edges supply substitutions.** A scheme's quantified variables are its
 identity variables in identity order (`scheme_vars` on the checked template

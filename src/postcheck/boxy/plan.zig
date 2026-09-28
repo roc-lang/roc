@@ -346,11 +346,14 @@ pub const WorkerEvidenceDescriptorParam = struct {
 pub const SchemeDictionaryKey = struct {
     module: checked.ModuleId,
     param: u32,
+    callable_contract: ?u32 = null,
 };
 
 /// Hidden worker parameter that supplies one or more method dictionaries.
 pub const HiddenDictionaryParam = struct {
     scheme_param: ?SchemeDictionaryKey = null,
+    /// Exact method in a shared dictionary group, when selected by a checked owner.
+    dispatch_requirement: ?DictionaryRequirementId = null,
     /// Explicit scheme requirements have their own checked evidence slot.
     evidence_index: ?u32 = null,
     source_type: CheckedTypeIdentity,
@@ -6467,9 +6470,14 @@ const Builder = struct {
         constraints: []const checked.CheckedStaticDispatchConstraint,
     ) Allocator.Error!Span {
         const start: u32 = @intCast(self.plan.dictionaries.items.len);
+        var methods = std.AutoHashMapUnmanaged(checked_names.MethodNameId, void).empty;
+        defer methods.deinit(self.allocator);
         for (constraints, 0..) |constraint, index| {
             if (self.constraintIsOwnerlessStructuralEquality(source_type, constraint)) continue;
             if (!static_dispatch.requiresRuntimeDictionary(constraint.origin)) continue;
+            // Independent callable relations share the checker's target slot.
+            // Their signatures are all analyzed below, including duplicates.
+            if (constraints.len > 1 and (try methods.getOrPut(self.allocator, constraint.fn_name)).found_existing) continue;
             try self.plan.dictionaries.append(self.allocator, .{
                 .source_type = source_type,
                 .constraint_index = @intCast(index),
@@ -7516,19 +7524,33 @@ const Builder = struct {
         };
     }
 
-    /// Materialize captured composite scheme requirements once per worker. These are
-    /// scheme-owned dictionaries, not constraints on a representation shared
-    /// with unrelated expressions.
+    /// Requirements outside the callable signature, and independent callable
+    /// contracts, have explicit checked identities in the worker's scheme.
+    /// Their dictionaries cannot be enumerated from signature representations.
     fn schemeDictionaryParams(self: *Builder, worker: WorkerPlan) Allocator.Error![]const HiddenDictionaryParam {
         if (self.scheme_dictionary_params.get(worker.id)) |params| return params;
         var pending = std.ArrayList(HiddenDictionaryParam).empty;
         errdefer pending.deinit(self.allocator);
+        var groups = std.AutoHashMapUnmanaged(Span, void).empty;
+        defer groups.deinit(self.allocator);
         if (self.workerEvidenceParams(worker.source)) |schema| {
             for (schema.params, 0..) |param, index| {
-                if (param.source != .scheme_requirement) continue;
-                var hidden = try self.schemeDictionary(.{ .module = schema.view.key, .param = schema.start + @as(u32, @intCast(index)) });
-                hidden.evidence_index = @intCast(index);
-                try pending.append(self.allocator, hidden);
+                const param_index = schema.start + @as(u32, @intCast(index));
+                if (param.runtime_dictionary and param.source != .scheme_callable) {
+                    var hidden = try self.schemeDictionary(.{ .module = schema.view.key, .param = param_index });
+                    hidden.evidence_index = @intCast(index);
+                    if (!(try groups.getOrPut(self.allocator, hidden.dictionaries)).found_existing)
+                        try pending.append(self.allocator, hidden);
+                }
+                if (param.runtime_dictionary) for (0..param.callable_contracts.len) |contract| {
+                    var hidden = try self.schemeDictionary(.{
+                        .module = schema.view.key,
+                        .param = param_index,
+                        .callable_contract = @intCast(contract),
+                    });
+                    hidden.evidence_index = @intCast(index);
+                    try pending.append(self.allocator, hidden);
+                };
             }
         }
         const params = try pending.toOwnedSlice(self.allocator);
@@ -7541,24 +7563,57 @@ const Builder = struct {
         if (self.scheme_dictionaries.get(key)) |param| return param;
         const view = self.moduleForId(key.module);
         const schema = view.checked_procedure_templates.evidence_params_pool;
-        if (key.param >= schema.len or schema[key.param].source != .scheme_requirement)
-            boxyPlanInvariant("composite dictionary did not name a checked scheme requirement");
+        if (key.param >= schema.len)
+            boxyPlanInvariant("dictionary did not name a checked evidence parameter");
         const param = schema[key.param];
+        const callable_ty = if (key.callable_contract) |contract| blk: {
+            if (contract >= param.callable_contracts.len)
+                boxyPlanInvariant("dictionary callable contract was outside its checked parameter");
+            break :blk view.checked_procedure_templates.evidence_param_callables[param.callable_contracts.start + contract];
+        } else if (param.runtime_dictionary and param.source != .scheme_callable)
+            param.callable_ty
+        else
+            boxyPlanInvariant("owned dictionary did not name a checked requirement outside the callable signature");
         const rep = try self.analyzeType(view, param.dispatcher_ty);
-        _ = try self.analyzeType(view, param.callable_ty);
+        _ = try self.analyzeType(view, callable_ty);
+        // The signature and checked owner describe the same dictionary when
+        // they name the same receiver and primary callable. Share its group so
+        // an inline closure captures that dictionary instead of introducing a
+        // second requirement for the identical checked variable. Independent
+        // callable contracts and composite scheme requirements own separate ABIs.
+        if (key.callable_contract == null and param.source != .scheme_requirement) {
+            const group = self.plan.representations.items[@intFromEnum(rep)].dictionaries;
+            for (self.plan.dictionarySlice(group), 0..) |requirement, index| {
+                if (requirement.fn_name != param.method) continue;
+                if (!typeRefEql(requirement.fn_ty, typeRef(view, callable_ty)))
+                    boxyPlanInvariant("checked dictionary owner disagreed with its primary callable");
+                const hidden = HiddenDictionaryParam{
+                    .scheme_param = key,
+                    .dispatch_requirement = @enumFromInt(group.start + @as(u32, @intCast(index))),
+                    .source_type = typeRef(view, param.dispatcher_ty),
+                    .rep = rep,
+                    .dictionaries = group,
+                };
+                try self.scheme_dictionaries.put(key, hidden);
+                return hidden;
+            }
+        }
+        // Literal requirements exposed only through constraints have no raw
+        // signature slot; their checked schema explicitly supplies this slot.
         const start: u32 = @intCast(self.plan.dictionaries.items.len);
         try self.plan.dictionaries.append(self.allocator, .{
             .source_type = typeRef(view, param.dispatcher_ty),
             .constraint_index = key.param,
             .slot = try self.internDictionaryMethodSlot(view.key, param.method),
             .fn_name = param.method,
-            .fn_ty = typeRef(view, param.callable_ty),
+            .fn_ty = typeRef(view, callable_ty),
             .origin = .method_call,
             .binop_negated = false,
             .num_literal = null,
         });
         const hidden = HiddenDictionaryParam{
             .scheme_param = key,
+            .dispatch_requirement = @enumFromInt(start),
             .source_type = typeRef(view, param.dispatcher_ty),
             .rep = rep,
             .dictionaries = .{ .start = start, .len = 1 },
@@ -7606,7 +7661,18 @@ const Builder = struct {
                 try self.collectHiddenDictionariesForRep(worker.rep, &pending, &seen_reps);
             }
 
-            try pending.appendSlice(self.allocator, try self.schemeDictionaryParams(worker));
+            for (try self.schemeDictionaryParams(worker)) |param| {
+                // A signature group and its checked owner share one ABI slot.
+                // Retain the owner's exact evidence index on that slot.
+                const existing = for (pending.items, 0..) |candidate, index| {
+                    if (std.meta.eql(candidate.dictionaries, param.dictionaries)) break index;
+                } else null;
+                if (existing) |index| {
+                    pending.items[index] = param;
+                } else {
+                    try pending.append(self.allocator, param);
+                }
+            }
             const body_start: u32 = @intCast(pending.items.len);
             // A checked requirement can be used only by a forwarded call or
             // nested callable. Its dictionary still belongs to this worker's
@@ -7646,11 +7712,6 @@ const Builder = struct {
 
     fn materializeWorkerErasedCaptures(self: *Builder) Allocator.Error!void {
         for (self.plan.workers.items, 0..) |worker, worker_index| {
-            if (self.workerResolvesToHosted(worker.source)) {
-                self.plan.workers.items[worker_index].erased_captures = .{};
-                continue;
-            }
-
             var pending = std.ArrayList(ErasedCapture).empty;
             defer pending.deinit(self.allocator);
 
@@ -9990,11 +10051,12 @@ const Builder = struct {
                 param.dictionaries,
                 requirement_substitution,
                 caller_id,
+                if (param.scheme_param) |key| key.callable_contract else null,
+                param.evidence_index != null,
             );
             if (evidence_source.bound_evidence) |bound| {
                 const caller = caller_id orelse boxyPlanInvariant("forwarded checked dictionary had no calling worker");
-                const view = evidence_view orelse boxyPlanInvariant("forwarded codec evidence had no checked module");
-                const source = try self.requireWorkerSchemeDictionary(caller, .{ .module = view.key, .param = bound });
+                const source = try self.requireWorkerSchemeDictionary(caller, bound);
                 try pending.append(self.allocator, .{
                     .worker_dictionaries = param.dictionaries,
                     .source_type = source.source_type,
@@ -10140,7 +10202,10 @@ const Builder = struct {
 
         const rep = self.plan.representations.items[@intFromEnum(rep_id)];
         if (rep.dictionaries.len != 0) {
-            try pending.append(self.allocator, .{
+            const present = for (pending.items) |param| {
+                if (std.meta.eql(param.dictionaries, rep.dictionaries)) break true;
+            } else false;
+            if (!present) try pending.append(self.allocator, .{
                 .source_type = rep.source_type,
                 .rep = rep_id,
                 .dictionaries = rep.dictionaries,
@@ -10849,7 +10914,7 @@ const Builder = struct {
     }
 
     const CallableEvidenceSource = struct {
-        bound_evidence: ?u32 = null,
+        bound_evidence: ?SchemeDictionaryKey = null,
         rep: ?TypeRepId = null,
         method_evidence: Span = .{},
     };
@@ -10862,6 +10927,8 @@ const Builder = struct {
         dictionaries: Span,
         requirement_substitution: Span,
         caller_id: ?WorkerPlanId,
+        callable_contract: ?u32,
+        indexed_evidence: bool,
     ) Allocator.Error!CallableEvidenceSource {
         const entries = maybe_entries orelse return .{};
         const view = maybe_view orelse
@@ -10872,14 +10939,28 @@ const Builder = struct {
         defer selected.deinit(self.allocator);
         try selected.ensureTotalCapacity(self.allocator, dictionaries.len);
         while (selected.items.len < dictionaries.len and next_evidence.* < entries.len) {
-            const entry = entries[next_evidence.*];
+            var entry = entries[next_evidence.*];
             next_evidence.* += 1;
-            if (!entry.runtime_dictionary) continue;
+            // An indexed singleton is the exact schema requirement, including
+            // literals reached only through constraints. Signature groups still
+            // exclude standalone entries that require no runtime dictionary.
+            if ((!indexed_evidence or dictionaries.len != 1) and !entry.runtime_dictionary) continue;
+            if (callable_contract) |contract| {
+                if (entry.callable_contracts.len != 0) {
+                    if (contract >= entry.callable_contracts.len)
+                        boxyPlanInvariant("checked dictionary contract index exceeded its side vector");
+                    entry = view.static_dispatch_plans.evidence_refs[entry.callable_contracts.start + contract];
+                } else {
+                    // Omitted contracts explicitly authorize deriving this
+                    // target's callable from the receiving relation.
+                    entry.resolution = .from_callable;
+                }
+            }
             selected.appendAssumeCapacity(entry);
         }
         if (selected.items.len != dictionaries.len) return .{};
         var found: ?TypeRepId = null;
-        var bound_evidence: ?u32 = null;
+        var bound_evidence: ?SchemeDictionaryKey = null;
         var methods = std.ArrayList(DictionaryMethodEvidence).empty;
         defer methods.deinit(self.allocator);
         try methods.ensureTotalCapacity(self.allocator, selected.items.len);
@@ -10975,17 +11056,22 @@ const Builder = struct {
                     };
                 },
                 .constraint => |constraint| blk: {
-                    if (selected.items.len == 1) bound_evidence = constraint.scheme_param;
+                    if (selected.items.len == 1) if (constraint.scheme_param) |param| {
+                        bound_evidence = .{ .module = view.key, .param = param, .callable_contract = constraint.callable_contract };
+                    };
                     break :blk .{
                         .requirement_type = requirement.fn_ty,
                         .callable_type = requirement.fn_ty,
                         .resolution = .constraint,
                     };
                 },
-                .from_callable, .from_scheme => .{
-                    .requirement_type = requirement.fn_ty,
-                    .callable_type = requirement.fn_ty,
-                    .resolution = .constraint,
+                .from_callable, .from_scheme => blk: {
+                    if (callable_contract != null) found = try self.analyzeType(view, entry.dispatcher_ty);
+                    break :blk .{
+                        .requirement_type = requirement.fn_ty,
+                        .callable_type = requirement.fn_ty,
+                        .resolution = .constraint,
+                    };
                 },
                 .checked_error => .{
                     .requirement_type = requirement.fn_ty,
@@ -11437,7 +11523,11 @@ const Builder = struct {
                     .parser, .encoder => boxyPlanInvariant("structural codec dictionary evidence had no generated worker"),
                     .map, .map_effectful => boxyPlanInvariant("derived map evidence reached static dictionary worker planning"),
                 },
-                .constraint => try self.staticDictionaryMethodEvidence(caller, call, source_rep_id, requirement),
+                .constraint => blk: {
+                    var resolved = try self.staticDictionaryMethodEvidence(caller, call, source_rep_id, requirement);
+                    resolved.requirement_substitution = method.requirement_substitution;
+                    break :blk resolved;
+                },
                 .checked_error => boxyPlanInvariant("checked-error dictionary evidence reached Boxy worker planning"),
                 .unreachable_value => method,
             });
@@ -12821,10 +12911,9 @@ const Builder = struct {
             }
             return;
         }
-        const checked_type = if (source == .nested_expr)
-            self.workerCheckedTypeForSource(source, typeRef(view, expr.ty))
-        else
-            typeRef(view, expr.ty);
+        // A lookup instantiates the callable boundary, not its worker body.
+        // The body retains its declaration's variables and dictionary ABI.
+        const checked_type = self.workerCheckedTypeForSource(source, typeRef(view, expr.ty));
         const worker = try self.ensureWorker(source, checked_type, null);
         if (stored_fn) |stored| try self.analyzeStoredFnCaptureNodes(stored, worker);
         const use = CheckedExprIdentity{ .module = view.key, .expr = expr_id };
@@ -13433,8 +13522,10 @@ const Builder = struct {
                 const dictionary = try self.requireWorkerSchemeDictionary(caller, .{
                     .module = view.key,
                     .param = dispatch.resolution.evidence_dependent.scheme_param.?,
+                    .callable_contract = dispatch.resolution.evidence_dependent.callable_contract,
                 });
-                break :blk @enumFromInt(dictionary.dictionaries.start);
+                break :blk dictionary.dispatch_requirement orelse
+                    boxyPlanInvariant("checked dictionary owner had no method requirement");
             } else blk: {
                 try self.recordActiveWorkerDictionaryUse(dispatcher_rep);
                 break :blk null;
@@ -16235,6 +16326,119 @@ test "boxy planner classifies constrained variables as dynamic with descriptor a
     try std.testing.expectEqual(@as(usize, 1), plan.dictionarySlice(rep.dictionaries).len);
     try std.testing.expectEqual(@as(usize, 1), plan.descriptors.items.len);
     try std.testing.expectEqual(DescriptorReason.dynamic_payload, plan.descriptors.items[0].reason);
+}
+
+test "boxy dictionary target slots share independent callable relations" {
+    const gpa = std.testing.allocator;
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .flex = .{ .constraints = .{ .start = 0, .len = 3 } } },
+        .{ .function = .{ .kind = .pure, .args = .{}, .ret = @enumFromInt(3) } },
+        .{ .function = .{ .kind = .pure, .args = .{}, .ret = @enumFromInt(4) } },
+        .{ .nominal = builtinNominal(.u64, @enumFromInt(3), .{}) },
+        .{ .rigid = .{} },
+    };
+    const constraints = [_]checked.CheckedStaticDispatchConstraint{
+        .{ .fn_name = @enumFromInt(9), .fn_ty = @enumFromInt(1), .origin = .method_call },
+        .{ .fn_name = @enumFromInt(9), .fn_ty = @enumFromInt(2), .origin = .method_call },
+        .{ .fn_name = @enumFromInt(10), .fn_ty = @enumFromInt(1), .origin = .method_call },
+    };
+    var plan = try analyzeCheckedTypes(gpa, .{
+        .stored_payloads = &payloads,
+        .constraint_pool = &constraints,
+    }, &.{@as(checked.CheckedTypeId, @enumFromInt(fixtureTableIndex(0)))}, .{});
+    defer plan.deinit();
+    const rep = plan.representations.items[@intFromEnum(plan.root_reps.items[0])];
+    const requirements = plan.dictionarySlice(rep.dictionaries);
+    try std.testing.expectEqual(@as(usize, 2), requirements.len);
+    try std.testing.expectEqual(@as(u32, 0), requirements[0].constraint_index);
+    try std.testing.expectEqual(@as(u32, 2), requirements[1].constraint_index);
+    // The second callable's private return still needs representation planning.
+    try std.testing.expect(plan.repForSourceType(rootTypeRef(@enumFromInt(4))) != null);
+}
+
+test "boxy dictionary owners share signature groups and forward exact callable contracts" {
+    const gpa = std.testing.allocator;
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .flex = .{ .constraints = .{ .start = 0, .len = 2 } } },
+        .{ .function = .{ .kind = .pure, .args = .{}, .ret = @enumFromInt(3) } },
+        .{ .function = .{ .kind = .pure, .args = .{}, .ret = @enumFromInt(4) } },
+        .{ .nominal = builtinNominal(.u64, @enumFromInt(3), .{}) },
+        .{ .rigid = .{} },
+    };
+    const constraints = [_]checked.CheckedStaticDispatchConstraint{
+        .{ .fn_name = @enumFromInt(9), .fn_ty = @enumFromInt(1), .origin = .method_call },
+        .{ .fn_name = @enumFromInt(10), .fn_ty = @enumFromInt(1), .origin = .method_call },
+    };
+    var params = [_]static_dispatch.EvidenceParamRecord{
+        .{ .method = @enumFromInt(9), .dispatcher_ty = @enumFromInt(fixtureTableIndex(0)), .callable_ty = @enumFromInt(1), .source = .{ .constraint_callable = .{ .callable_ty = @enumFromInt(1) } }, .runtime_dictionary = true, .slot = 0, .callable_contracts = .{ .start = 0, .len = 1 } },
+        .{ .method = @enumFromInt(10), .dispatcher_ty = @enumFromInt(fixtureTableIndex(0)), .callable_ty = @enumFromInt(1), .source = .{ .constraint_callable = .{ .callable_ty = @enumFromInt(1) } }, .runtime_dictionary = true, .slot = 0 },
+    };
+    var callables = [_]checked.CheckedTypeId{@enumFromInt(2)};
+    const templates = checked.CheckedProcedureTemplateTable{
+        .evidence_params_pool = &params,
+        .evidence_param_callables = &callables,
+    };
+    var refs = [_]static_dispatch.CheckedEvidence{.{
+        .dispatcher_ty = @enumFromInt(fixtureTableIndex(0)),
+        .runtime_dictionary = false,
+        .resolution = .{ .constraint = .{ .scheme_param = 0, .index = .{ .depth = 0, .index = 0 } } },
+    }};
+    const plans = static_dispatch.StaticDispatchPlanTable{ .evidence_refs = &refs };
+    var builder = Builder.init(gpa, .{ .root_view = .{
+        .checked_types = .{ .stored_payloads = &payloads, .constraint_pool = &constraints },
+        .checked_procedure_templates = &templates,
+        .static_dispatch_plans = &plans,
+    } });
+    defer builder.deinit();
+
+    const first = try builder.schemeDictionary(.{ .module = .{}, .param = 0 });
+    const second = try builder.schemeDictionary(.{ .module = .{}, .param = 1 });
+    try std.testing.expectEqual(first.dictionaries, second.dictionaries);
+    try std.testing.expectEqual(@as(u32, 2), first.dictionaries.len);
+    try std.testing.expect(first.dispatch_requirement.? != second.dispatch_requirement.?);
+    const side = try builder.schemeDictionary(.{ .module = .{}, .param = 0, .callable_contract = 0 });
+    try std.testing.expect(!std.meta.eql(first.dictionaries, side.dictionaries));
+    try std.testing.expectEqual(rootTypeRef(@enumFromInt(2)), builder.plan.dictionaries.items[side.dictionaries.start].fn_ty);
+
+    // Body traversal must not append a second, unowned copy of the primary
+    // group after the checked owner and independent contract enter the ABI.
+    var pending = std.ArrayList(HiddenDictionaryParam).empty;
+    defer pending.deinit(gpa);
+    try pending.appendSlice(gpa, &.{ first, side });
+    var seen_reps = collections.DenseMap(TypeRepId, void).init(gpa);
+    defer seen_reps.deinit();
+    try builder.collectHiddenDictionariesForRep(first.rep, &pending, &seen_reps);
+    try std.testing.expectEqual(@as(usize, 2), pending.items.len);
+    try std.testing.expectEqual(first.scheme_param, pending.items[0].scheme_param);
+    try std.testing.expectEqual(side.scheme_param, pending.items[1].scheme_param);
+
+    // An indexed schema requirement consumes its exact entry even if the
+    // original literal's standalone classification needed no dictionary.
+    // The side entry explicitly forwards to the caller's primary contract.
+    const entries = [_]static_dispatch.CheckedEvidence{.{
+        .dispatcher_ty = @enumFromInt(fixtureTableIndex(0)),
+        .runtime_dictionary = false,
+        .resolution = .checked_error,
+        .callable_contracts = .{ .start = 0, .len = 1 },
+    }};
+    var next: usize = 0;
+    const source = try builder.evidenceDictionarySource(builder.root_view, &entries, &next, side.dictionaries, .{}, null, 0, true);
+    try std.testing.expectEqual(@as(usize, 1), next);
+    try std.testing.expectEqual(SchemeDictionaryKey{ .module = .{}, .param = 0 }, source.bound_evidence.?);
+
+    // A signature group skips standalone literal evidence between its methods.
+    const grouped_entries = [_]static_dispatch.CheckedEvidence{
+        .{ .dispatcher_ty = @enumFromInt(fixtureTableIndex(0)), .runtime_dictionary = true, .resolution = .{ .constraint = .{ .scheme_param = 0, .index = .{ .depth = 0, .index = 0 } } } },
+        .{ .dispatcher_ty = @enumFromInt(fixtureTableIndex(0)), .runtime_dictionary = false, .resolution = .checked_error },
+        .{ .dispatcher_ty = @enumFromInt(fixtureTableIndex(0)), .runtime_dictionary = true, .resolution = .{ .constraint = .{ .scheme_param = 1, .index = .{ .depth = 0, .index = 1 } } } },
+    };
+    next = 0;
+    const grouped = try builder.evidenceDictionarySource(builder.root_view, &grouped_entries, &next, first.dictionaries, .{}, null, null, true);
+    try std.testing.expectEqual(@as(usize, 3), next);
+    try std.testing.expectEqual(@as(u32, 2), grouped.method_evidence.len);
+    for (builder.plan.dictionary_method_evidence.items[grouped.method_evidence.start..][0..grouped.method_evidence.len]) |method| {
+        try std.testing.expect(method.resolution == .constraint);
+    }
 }
 
 test "boxy planner keeps checked specialization defaults dynamically represented" {
