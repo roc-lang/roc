@@ -7,9 +7,9 @@ rank = |value|
         _ => 3
     }
 
-main! = |_args| {
+main! = |args| {
     low : Str
-    low = "low"
+    low = if args.is_empty() "low" else "other"
     high : Str
     high = "high"
     other : Str
