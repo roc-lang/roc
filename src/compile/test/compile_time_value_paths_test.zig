@@ -337,9 +337,13 @@ test "a compile-time table consumed by an in-place write is built fresh and muta
     for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
         // The read's value is the argument `List.append` may extend in
         // place, so the read takes its fresh form: the table's slot is gone,
-        // the repeat loop is present, and the append is proven unique.
+        // the fresh build seeds one item and fills the rest as a range copy
+        // rather than looping (the program's own append is the other
+        // unchecked append), and the append is proven unique.
         try std.testing.expectEqual(@as(usize, 0), countListSlots(result));
         try std.testing.expect(countLowLevel(result, .list_append_unsafe) >= 1);
+        try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .list_append_range_within_unsafe));
+        try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .list_with_capacity));
         var masks: std.ArrayList(u64) = .empty;
         defer masks.deinit(gpa);
         try checkedListOpUniqueMasks(result, &masks, gpa);

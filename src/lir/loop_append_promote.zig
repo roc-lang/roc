@@ -65,6 +65,7 @@
 //! inside the head's body so every jump still targets an enclosing join.
 
 const std = @import("std");
+const builtins = @import("builtins");
 const Allocator = std.mem.Allocator;
 const collections = @import("collections");
 const core = @import("lir_core");
@@ -1923,7 +1924,7 @@ const Pass = struct {
 
         const elem_size = self.layouts.builtinListAbi(self.store.getLocal(list_arg).layout_idx).elem_size;
         std.debug.assert(elem_size != 0);
-        const slop_elements: u64 = (40 + elem_size - 1) / elem_size;
+        const slop_elements: u64 = (builtins.list.append_range_within_scratch_bytes + elem_size - 1) / elem_size;
 
         const slop = try self.freshLocal(.u64, new_locals);
         const cur_len = try self.freshLocal(.u64, new_locals);

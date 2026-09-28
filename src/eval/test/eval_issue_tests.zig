@@ -624,6 +624,33 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "[{ a: 3, b: 287454020, c: (-7, 2.5) }, { a: 3, b: 287454020, c: (-7, 2.5) }]" },
     },
     .{
+        // A compile-time list of copies that an in-place write consumes is
+        // built fresh by a seed append and a range fill; every copy and the
+        // length must match the static table it replaces.
+        .name = "consumed compile-time list of copies is filled, not looped",
+        .source_kind = .module,
+        .source =
+        \\table : List(U16)
+        \\table = List.repeat(513, 100)
+        \\main = {
+        \\    written = table.set(99, 7) ?? []
+        \\    (written.len(), written.get(0), written.get(50), written.get(98), written.get(99), written.count_if(|x| x == 513))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(100, Ok(513), Ok(513), Ok(513), Ok(7), 99)" },
+    },
+    .{
+        // A single copy is the seed alone.
+        .name = "consumed compile-time list of one copy is the seed append alone",
+        .source_kind = .module,
+        .source =
+        \\table : List(U64)
+        \\table = List.repeat(9, 1)
+        \\main = table.set(0, 4) ?? []
+        ,
+        .expected = .{ .inspect_str = "[4]" },
+    },
+    .{
         .name = "issue 11376: packed nominal constants preserve copy-on-write sharing",
         .source_kind = .module,
         .source =

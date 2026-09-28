@@ -14580,8 +14580,11 @@ A read of a compile-time list of copies lowers as its static-data slot and
 also names the argument-free procedure that would build the list fresh. The
 static datum has the static count, so it is never born unique: a mutating
 consumer copies it on first write, at the one allocation a fresh build would
-have spent, plus the copy. The fresh build allocates on every execution of the
-read, which a read whose value is only ever read has no use for. Which form a
+have spent, plus the copy. The fresh build reserves the count plus the range
+copy's scratch, appends the one item, and fills the rest with the unchecked
+range-within append, whose periodic copy runs at word-store pace; it allocates
+on every execution of the read, which a read whose value is only ever read has
+no use for. Which form a
 read takes is therefore a question of where its value reaches, and the
 uniqueness analysis answers it.
 
