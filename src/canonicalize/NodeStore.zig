@@ -139,6 +139,7 @@ const ExprNodeTag = enum {
     expr_method_eq,
     expr_type_method_call,
     expr_type_dispatch_call,
+    expr_type_dispatch_call_dispatcher,
     malformed,
 };
 
@@ -1859,6 +1860,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
             return CIR.Expr{ .e_derived_method = .{
                 .ident = @bitCast(p.ident),
                 .kind = @enumFromInt(p.kind),
+                .owner = @enumFromInt(p.owner),
             } };
         },
         .expr_return => {
@@ -2004,10 +2006,13 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
                 .args = store.getMethodCallArgs(p.method_call_data_idx),
             } };
         },
-        .expr_type_dispatch_call => {
+        .expr_type_dispatch_call, .expr_type_dispatch_call_dispatcher => {
             const p = payload.expr_type_dispatch_call;
             return CIR.Expr{ .e_type_dispatch_call = .{
-                .type_dispatch_stmt = @enumFromInt(p.type_dispatch_stmt),
+                .owner = if (tag == .expr_type_dispatch_call)
+                    .{ .statement = @enumFromInt(p.owner) }
+                else
+                    .{ .dispatcher = @enumFromInt(p.owner) },
                 .method_name = @bitCast(p.method_name),
                 .method_name_region = store.getMethodNameRegion(p.method_call_data_idx),
                 .args = store.getMethodCallArgs(p.method_call_data_idx),
@@ -2436,11 +2441,25 @@ pub fn replaceExprWithInterpolationConstraint(
     store.nodes.set(node_idx, node);
 }
 
+fn typeDispatchCallNodeTag(owner: CIR.TypeDispatchOwner) Node.Tag {
+    return switch (owner) {
+        .statement => .expr_type_dispatch_call,
+        .dispatcher => .expr_type_dispatch_call_dispatcher,
+    };
+}
+
+fn typeDispatchOwnerBits(owner: CIR.TypeDispatchOwner) u32 {
+    return switch (owner) {
+        .statement => |stmt| @intFromEnum(stmt),
+        .dispatcher => |dispatcher| @intFromEnum(dispatcher),
+    };
+}
+
 /// Replaces an existing expression with unresolved type dispatch metadata.
 pub fn replaceExprWithTypeDispatchCall(
     store: *NodeStore,
     expr_idx: CIR.Expr.Idx,
-    type_dispatch_stmt: CIR.Statement.Idx,
+    owner: CIR.TypeDispatchOwner,
     method_name: base.Ident.Idx,
     method_name_region: Region,
     args: CIR.Expr.Span,
@@ -2448,9 +2467,9 @@ pub fn replaceExprWithTypeDispatchCall(
 ) Allocator.Error!void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
     const method_call_data_idx = try store.addMethodCallData(args, method_name_region, .method_call);
-    var node = Node.init(.expr_type_dispatch_call);
+    var node = Node.init(typeDispatchCallNodeTag(owner));
     node.setPayload(.{ .expr_type_dispatch_call = .{
-        .type_dispatch_stmt = @intFromEnum(type_dispatch_stmt),
+        .owner = typeDispatchOwnerBits(owner),
         .method_name = @bitCast(method_name),
         .method_call_data_idx = method_call_data_idx,
         .constraint_fn_var = @intFromEnum(constraint_fn_var),
@@ -3671,10 +3690,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             } });
         },
         .e_type_dispatch_call => |e| {
-            node.tag = .expr_type_dispatch_call;
+            node.tag = typeDispatchCallNodeTag(e.owner);
             const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region, .method_call);
             node.setPayload(.{ .expr_type_dispatch_call = .{
-                .type_dispatch_stmt = @intFromEnum(e.type_dispatch_stmt),
+                .owner = typeDispatchOwnerBits(e.owner),
                 .method_name = @bitCast(e.method_name),
                 .method_call_data_idx = method_call_data_idx,
                 .constraint_fn_var = @intFromEnum(e.constraint_fn_var),
@@ -3720,6 +3739,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.setPayload(.{ .expr_derived_method = .{
                 .ident = @bitCast(derived.ident),
                 .kind = @intFromEnum(derived.kind),
+                .owner = @intFromEnum(derived.owner),
             } });
         },
         .e_return => |ret| {

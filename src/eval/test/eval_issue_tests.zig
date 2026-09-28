@@ -3937,4 +3937,139 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .problem_and_crash = {} },
     },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11769
+        // A custom encoder_for calls another type's derived `encoder_for : _`
+        // by name, so both values encode through Flag's derived encoder.
+        .name = "issue 11769: custom encoder_for calls a derived encoder_for by name",
+        .source_kind = .module,
+        .source =
+        \\Flag := [On, Off].{
+        \\    encoder_for : _
+        \\}
+        \\
+        \\Wrap := [W(Flag)].{
+        \\    encoder_for = |encoding| {
+        \\        encode_flag = Flag.encoder_for(encoding)
+        \\        |W(flag), state| encode_flag(flag, state)
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = "${Json.to_str(Flag.On)} ${Json.to_str(Wrap.W(Flag.Off))}"
+        ,
+        .expected = .{ .inspect_str = "\"\\\"On\\\" \\\"Off\\\"\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11769
+        // A builtin type's derived encoder_for, called by name.
+        .name = "issue 11769: custom encoder_for calls a builtin derived encoder_for by name",
+        .source_kind = .module,
+        .source =
+        \\Wrap := [W(Bool)].{
+        \\    encoder_for = |encoding| {
+        \\        encode_bool = Bool.encoder_for(encoding)
+        \\        |W(b), state| encode_bool(b, state)
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = Json.to_str(Wrap.W(Bool.True))
+        ,
+        .expected = .{ .inspect_str = "\"true\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11769
+        // A record-backed derived encoder_for reached through a type alias.
+        .name = "issue 11769: derived encoder_for of a record backing called through a type alias",
+        .source_kind = .module,
+        .source =
+        \\Point := { x : I64, y : I64 }.{
+        \\    encoder_for : _
+        \\}
+        \\
+        \\P : Point
+        \\
+        \\Wrap := [W(Point)].{
+        \\    encoder_for = |encoding| {
+        \\        encode_point = P.encoder_for(encoding)
+        \\        |W(point), state| encode_point(point, state)
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = Json.to_str(Wrap.W(Point.({ x: 1, y: 2 })))
+        ,
+        .expected = .{ .inspect_str = "\"{\\\"x\\\":1,\\\"y\\\":2}\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11769
+        // A parameterized owner's derived encoder_for, called by name.
+        .name = "issue 11769: derived encoder_for of a parameterized nominal called by name",
+        .source_kind = .module,
+        .source =
+        \\Pair(a) := [Pair(a, a)].{
+        \\    encoder_for : _
+        \\}
+        \\
+        \\Wrap := [W(Pair(Str))].{
+        \\    encoder_for = |encoding| {
+        \\        encode_pair = Pair.encoder_for(encoding)
+        \\        |W(pair), state| encode_pair(pair, state)
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = Json.to_str(Wrap.W(Pair.Pair("a", "b")))
+        ,
+        .expected = .{ .inspect_str = "\"{\\\"Pair\\\":[\\\"a\\\",\\\"b\\\"]}\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11769
+        // A custom parser_for calls another type's derived parser_for by name.
+        .name = "issue 11769: custom parser_for calls a derived parser_for by name",
+        .source_kind = .module,
+        .source =
+        \\Flag := [On, Off].{
+        \\    parser_for : _
+        \\}
+        \\
+        \\Wrap := [W(Flag)].{
+        \\    parser_for = |format| {
+        \\        parse_flag = Flag.parser_for(format)
+        \\        |state| {
+        \\            parsed = parse_flag(state)?
+        \\            Ok({ value: W(parsed.value), rest: parsed.rest })
+        \\        }
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try(Wrap, [InvalidJson(Str)])
+        \\    decoded = Json.parse("\"Off\"")
+        \\    match decoded {
+        \\        Ok(W(Off)) => "off"
+        \\        Ok(W(On)) => "on"
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"off\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11769
+        // Derived is_eq and to_hash called by name.
+        .name = "issue 11769: derived is_eq called by name",
+        .source_kind = .module,
+        .source =
+        \\Flag := [On, Off].{
+        \\    is_eq : _
+        \\}
+        \\
+        \\main : Bool
+        \\main = Flag.is_eq(Flag.On, Flag.On) and !Flag.is_eq(Flag.On, Flag.Off)
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
 };

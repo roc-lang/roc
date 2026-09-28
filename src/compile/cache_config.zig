@@ -242,7 +242,9 @@ pub const Constants = struct {
     ///      named by the `.malformed` payload.
     /// 110: Expect roots reaching checked errors are ineligible for execution,
     ///      including errors in referenced procedures and constants.
-    pub const CACHE_VERSION = 110;
+    /// 111: Derived-method markers record their owner type declaration, and a
+    ///      type-rooted dispatch call can dispatch on an explicit type var.
+    pub const CACHE_VERSION = 111;
 };
 
 /// Configuration for the Roc cache system.

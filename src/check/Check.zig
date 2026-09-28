@@ -565,6 +565,11 @@ checking_call_arg: bool = false,
 /// A lambda in this position is immediately executed by the call, so references
 /// in its body remain strict dependencies of the surrounding value.
 checking_immediate_callee: bool = false,
+/// The callee expression of the call whose callee is being checked.
+direct_callee_expr: ?CIR.Expr.Idx = null,
+/// Set when that callee names a compiler-derived associated method; the call
+/// then dispatches the method on the method's owner type.
+derived_method_callee: ?DerivedMethodCallee = null,
 /// Nonzero while checking code reached only through a closure body that is not
 /// the immediate callee of the current call expression. Recursive references
 /// reached under this depth are delayed dependencies, not strict value cycles.
@@ -10720,7 +10725,7 @@ fn hoistedRootDependenciesAreKeptInternal(
         // dispatch plans and therefore cannot establish compile-time safety.
         .e_type_method_call => false,
         .e_type_dispatch_call => |call| (try self.staticDispatchAllowsHoistedRoot(
-            self.typeDispatchOwnerVar(call.type_dispatch_stmt),
+            self.typeDispatchCallDispatcherVar(call.owner),
             call.constraint_fn_var,
         )) and
             try self.hoistedRootExprSpanDependenciesAreKept(call.args, context, keep_oracle),
@@ -22286,8 +22291,8 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
         .e_lookup_local => |lookup| blk: {
             const pat_var = ModuleEnv.varFrom(lookup.pattern_idx);
 
-            if (self.localLookupIsGeneratedDerivedMethodMarker(lookup.pattern_idx)) {
-                try self.reportAnnotationOnlyValueUse(expr_var, expr_region, env);
+            if (self.localLookupDerivedMethod(lookup.pattern_idx)) |derived| {
+                try self.checkDerivedMethodReference(expr_idx, expr_var, self.cir, true, derived, expr_region, env);
                 break :blk;
             }
 
@@ -22603,8 +22608,9 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 // its binder pattern rather than a def; only a def can be a
                 // generated method marker or an annotation-only declaration.
                 const target_is_def = ext_ref.other_cir.store.nodes.get(ext_ref.other_cir_node_idx).tag == .def;
-                if (target_is_def and generatedDerivedMethodDef(ext_ref.other_cir, target_def)) {
-                    try self.reportAnnotationOnlyValueUse(expr_var, expr_region, env);
+                const derived_method = if (target_is_def) derivedMethodDef(ext_ref.other_cir, target_def) else null;
+                if (derived_method) |derived| {
+                    try self.checkDerivedMethodReference(expr_idx, expr_var, ext_ref.other_cir, false, derived, expr_region, env);
                 } else if (target_is_def and annotationOnlyValueDef(ext_ref.other_cir, target_def)) {
                     try self.reportValuelessDeclarationUse(expr_var, expr_region);
                 } else if (target_is_def and hostedDeclarationIsNotEffectful(ext_ref.other_cir, target_def)) {
@@ -22975,7 +22981,15 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                     // It could be effectful, e.g. `(mk_fn!())(arg)`
                     self.checking_call_arg = true;
                     self.checking_immediate_callee = true;
+                    const saved_direct_callee_expr = self.direct_callee_expr;
+                    self.direct_callee_expr = call.func;
                     does_fx = try self.checkExpr(call.func, env, child_expected) or does_fx;
+                    self.direct_callee_expr = saved_direct_callee_expr;
+                    if (self.derived_method_callee) |callee| {
+                        self.derived_method_callee = null;
+                        does_fx = try self.checkDerivedMethodCall(expr_idx, expr_var, call.func, call.args, callee, env, child_expected) or does_fx;
+                        break :blk;
+                    }
                     const call_func_expr_var = ModuleEnv.varFrom(call.func);
 
                     // If the function was generalized (e.g. an immediately-invoked
@@ -23627,7 +23641,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 );
                 try self.cir.store.replaceExprWithTypeDispatchCall(
                     expr_idx,
-                    method_call.type_dispatch_stmt,
+                    .{ .statement = method_call.type_dispatch_stmt },
                     method_call.method_name,
                     method_call.method_name_region,
                     method_call.args,
@@ -23640,7 +23654,10 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             }
         },
         .e_type_dispatch_call => |method_call| {
-            try self.noteTypeDeclReferenceForLocalProcedures(method_call.type_dispatch_stmt);
+            switch (method_call.owner) {
+                .statement => |stmt| try self.noteTypeDeclReferenceForLocalProcedures(stmt),
+                .dispatcher => {},
+            }
             const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
             for (arg_expr_idxs) |arg_expr_idx| {
                 self.checking_call_arg = true;
@@ -23983,7 +24000,7 @@ const AssociatedLookupResolution = struct {
 };
 
 fn staticDispatchBindingIsDerivedMarker(lookup: StaticDispatchMethodBinding) bool {
-    return generatedDerivedMethodDef(lookup.env, lookup.binding.def_idx);
+    return derivedMethodDef(lookup.env, lookup.binding.def_idx) != null;
 }
 
 fn staticDispatchBindingIsUnsupportedGeneratedMethod(lookup: StaticDispatchMethodBinding) bool {
@@ -24238,11 +24255,6 @@ fn patternIdentInModule(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?Ide
         => null,
         .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
     };
-}
-
-fn generatedDerivedMethodDef(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) bool {
-    const def = module_env.store.getDef(def_idx);
-    return module_env.store.getExpr(def.expr) == .e_derived_method;
 }
 
 /// A declaration that carries a type annotation and names no value. Builtin.roc
@@ -25307,6 +25319,13 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
         .does_fx = does_fx,
         .diverges = diverges,
         .blocks_later_hoists = blocks_later_hoists,
+    };
+}
+
+fn typeDispatchCallDispatcherVar(self: *Self, owner: CIR.TypeDispatchOwner) Var {
+    return switch (owner) {
+        .statement => |stmt_idx| self.typeDispatchOwnerVar(stmt_idx),
+        .dispatcher => |dispatcher| dispatcher,
     };
 }
 
@@ -28155,8 +28174,8 @@ fn checkResolvedAssociatedTarget(
     region: Region,
     env: *Env,
 ) Allocator.Error!void {
-    if (generatedDerivedMethodDef(target_env, target_def_idx)) {
-        try self.reportAnnotationOnlyValueUse(expr_var, region, env);
+    if (derivedMethodDef(target_env, target_def_idx)) |derived| {
+        try self.checkDerivedMethodReference(expr_idx, expr_var, target_env, is_this_module, derived, region, env);
         return;
     }
 
@@ -30091,9 +30110,14 @@ fn defaultMaterializationIsRecursive(
                 try appendArgsInvoked(self.gpa, &invoked_work, self.cir.store.sliceExpr(call.args));
             },
             .e_type_dispatch_call => |call| {
-                if (self.cir.lookupMethodBindingForOwnerConst(call.type_dispatch_stmt, call.method_name)) |binding| {
-                    // A resolved method binding is INVOKED by this call.
-                    try invoked_work.append(self.gpa, self.cir.store.getDef(binding.def_idx).expr);
+                // A derived method dispatched through its owner type has no
+                // body for the call to invoke.
+                switch (call.owner) {
+                    .statement => |stmt| if (self.cir.lookupMethodBindingForOwnerConst(stmt, call.method_name)) |binding| {
+                        // A resolved method binding is INVOKED by this call.
+                        try invoked_work.append(self.gpa, self.cir.store.getDef(binding.def_idx).expr);
+                    },
+                    .dispatcher => {},
                 }
                 try appendArgsInvoked(self.gpa, &invoked_work, self.cir.store.sliceExpr(call.args));
             },
@@ -32001,12 +32025,13 @@ fn schemeCandidateIsUnresolvedGeneratedCodec(
     if (!self.schemeCandidateUsesGeneratedCodec(candidate)) return false;
 
     const region = self.getRegionAt(candidate.receiver_var);
-    const support = if (candidate.constraint.fn_name.eql(self.cir.idents.parser_for)) blk: {
+    const shape_support = if (candidate.constraint.fn_name.eql(self.cir.idents.parser_for)) blk: {
         break :blk try self.varSupportsDerivedParseShape(candidate.receiver_var, env, region);
     } else if (candidate.constraint.fn_name.eql(self.cir.idents.encoder_for)) blk: {
         const encoding_var = self.encoderForConstraintEncodingVar(candidate.constraint) orelse return false;
         break :blk try self.varSupportsDerivedEncodeShape(candidate.receiver_var, encoding_var, env, region);
     } else return false;
+    const support = combineDerivedSupport(shape_support, self.generatedCodecFormatSupport(candidate.constraint));
 
     return support == .unresolved and
         !self.schemeCodecReceiverHasOpenOuterRow(candidate.receiver_var);
@@ -32605,31 +32630,38 @@ fn anyDeferredDispatchReceiverResolved(self: *Self, env: *Env) Allocator.Error!b
 }
 
 fn deferredConstraintWaitsOnDerivedParse(self: *Self, deferred: DeferredConstraintCheck, env: *Env) Allocator.Error!bool {
-    var has_parser_for = false;
+    var maybe_parser_for: ?StaticDispatchConstraint = null;
     for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |constraint| {
         if (constraint.fn_name.eql(self.cir.idents.parser_for)) {
-            has_parser_for = true;
+            maybe_parser_for = constraint;
             break;
         }
     }
-    if (!has_parser_for) return false;
+    const parser_for = maybe_parser_for orelse return false;
 
     const region = self.getRegionAt(deferred.var_);
-    return (try self.varSupportsDerivedParseShape(deferred.var_, env, region)) == .unresolved;
+    return combineDerivedSupport(
+        try self.varSupportsDerivedParseShape(deferred.var_, env, region),
+        self.generatedCodecFormatSupport(parser_for),
+    ) == .unresolved;
 }
 
 fn deferredConstraintWaitsOnDerivedEncode(self: *Self, deferred: DeferredConstraintCheck, env: *Env) Allocator.Error!bool {
-    var maybe_encoding_var: ?Var = null;
+    var maybe_encoder_for: ?StaticDispatchConstraint = null;
     for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |constraint| {
         if (constraint.fn_name.eql(self.cir.idents.encoder_for)) {
-            maybe_encoding_var = self.encoderForConstraintEncodingVar(constraint);
+            maybe_encoder_for = constraint;
             break;
         }
     }
-    const encoding_var = maybe_encoding_var orelse return false;
+    const encoder_for = maybe_encoder_for orelse return false;
+    const encoding_var = self.encoderForConstraintEncodingVar(encoder_for) orelse return false;
 
     const region = self.getRegionAt(deferred.var_);
-    return (try self.varSupportsDerivedEncodeShape(deferred.var_, encoding_var, env, region)) == .unresolved;
+    return combineDerivedSupport(
+        try self.varSupportsDerivedEncodeShape(deferred.var_, encoding_var, env, region),
+        self.generatedCodecFormatSupport(encoder_for),
+    ) == .unresolved;
 }
 
 fn encoderForConstraintEncodingVar(self: *Self, constraint: StaticDispatchConstraint) ?Var {
@@ -36126,7 +36158,10 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                             // rows inside the nominal's args (eg a Dict
                             // key union). See closeTagRowsForDerivation.
                             if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
-                            switch (try self.nominalSupportsDerivedParseShape(nominal_type, env, region)) {
+                            switch (combineDerivedSupport(
+                                try self.nominalSupportsDerivedParseShape(nominal_type, env, region),
+                                self.generatedCodecFormatSupport(constraint),
+                            )) {
                                 .supported => if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
                                     try self.satisfyImplicitParserConstraint(
                                         deferred_constraint.var_,
@@ -36170,7 +36205,10 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                             // rows inside the nominal's args (see
                             // closeTagRowsForDerivation).
                             if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
-                            switch (try self.nominalSupportsDerivedEncodeShape(nominal_type, encoding_var, env, region)) {
+                            switch (combineDerivedSupport(
+                                try self.nominalSupportsDerivedEncodeShape(nominal_type, encoding_var, env, region),
+                                self.generatedCodecFormatSupport(constraint),
+                            )) {
                                 .supported => if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
                                     try self.satisfyImplicitEncoderForConstraint(
                                         deferred_constraint.var_,
@@ -36470,7 +36508,10 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                             // deriving against the alias backing (see
                             // closeTagRowsForDerivation).
                             if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
-                            switch (try self.varSupportsDerivedParseShape(backing_var, env, region)) {
+                            switch (combineDerivedSupport(
+                                try self.varSupportsDerivedParseShape(backing_var, env, region),
+                                self.generatedCodecFormatSupport(constraint),
+                            )) {
                                 .supported => {
                                     if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
                                         try self.satisfyImplicitParserConstraint(
@@ -36519,7 +36560,10 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                             // deriving against the alias backing (see
                             // closeTagRowsForDerivation).
                             if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
-                            switch (try self.varSupportsDerivedEncodeShape(backing_var, encoding_var, env, region)) {
+                            switch (combineDerivedSupport(
+                                try self.varSupportsDerivedEncodeShape(backing_var, encoding_var, env, region),
+                                self.generatedCodecFormatSupport(constraint),
+                            )) {
                                 .supported => {
                                     if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
                                         try self.satisfyImplicitEncoderForConstraint(
@@ -38566,6 +38610,15 @@ const DerivedSupport = enum {
 
 fn derivedSupportFromBool(value: bool) DerivedSupport {
     return if (value) .supported else .unsupported;
+}
+
+/// A generated parser or encoder is built from its format's methods, so it
+/// cannot be generated while the format is still a flex var: a later use may
+/// yet choose the format. Both `parser_for` and `encoder_for` take the format
+/// as their only argument.
+fn generatedCodecFormatSupport(self: *Self, constraint: StaticDispatchConstraint) DerivedSupport {
+    const format_var = self.encoderForConstraintEncodingVar(constraint) orelse return .supported;
+    return if (self.types.resolveVar(format_var).desc.content == .flex) .unresolved else .supported;
 }
 
 fn combineDerivedSupport(a: DerivedSupport, b: DerivedSupport) DerivedSupport {
@@ -41434,9 +41487,118 @@ fn finalizeGeneratedCodecConstraintsToQuiescence(
     }
 }
 
-fn localLookupIsGeneratedDerivedMethodMarker(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
-    const processing_def = self.topLevelPattern(pattern_idx) orelse return false;
-    return generatedDerivedMethodDef(self.cir, processing_def.def_idx);
+fn localLookupDerivedMethod(self: *const Self, pattern_idx: CIR.Pattern.Idx) ?DerivedMethod {
+    const processing_def = self.topLevelPattern(pattern_idx) orelse return null;
+    return derivedMethodDef(self.cir, processing_def.def_idx);
+}
+
+const DerivedMethod = @FieldType(CIR.Expr, "e_derived_method");
+
+const DerivedMethodCallee = struct {
+    dispatcher_var: Var,
+    method_name: Ident.Idx,
+};
+
+fn derivedMethodDef(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?DerivedMethod {
+    const expr = module_env.store.getExpr(module_env.store.getDef(def_idx).expr);
+    if (expr != .e_derived_method) return null;
+    return expr.e_derived_method;
+}
+
+fn derivedMethodName(self: *const Self, kind: CIR.DerivedMethodKind) Ident.Idx {
+    const idents = self.cir.idents;
+    return switch (kind) {
+        .equality => idents.is_eq,
+        .hash => idents.to_hash,
+        .parser => idents.parser_for,
+        .encoder => idents.encoder_for,
+        .map => idents.map,
+        .map_effectful => idents.map_bang,
+    };
+}
+
+/// A reference to a compiler-derived associated method names that method on
+/// its owner type. Called directly, the enclosing call dispatches the method
+/// on a fresh instance of the owner type, exactly as a where-clause dispatch
+/// on that type does.
+fn checkDerivedMethodReference(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    expr_var: Var,
+    owner_env: *const ModuleEnv,
+    is_this_module: bool,
+    derived: DerivedMethod,
+    region: Region,
+    env: *Env,
+) Allocator.Error!void {
+    if (self.direct_callee_expr != expr_idx) {
+        _ = try self.problems.appendProblem(self.gpa, .{ .derived_method_value_use = .{
+            .method_name = self.derivedMethodName(derived.kind),
+            .region = region,
+        } });
+        try self.markErroneous(expr_var);
+        return;
+    }
+    if (is_this_module) try self.noteTypeDeclReferenceForLocalProcedures(derived.owner);
+    const owner_decl_var = if (is_this_module)
+        ModuleEnv.varFrom(derived.owner)
+    else
+        try self.importedSchemeFromSource(owner_env, ModuleEnv.nodeIdxFrom(derived.owner));
+    self.derived_method_callee = .{
+        .dispatcher_var = try self.instantiateVar(owner_decl_var, env, .{ .explicit = region }, .none),
+        .method_name = self.derivedMethodName(derived.kind),
+    };
+}
+
+/// Check a call whose callee names a compiler-derived associated method as a
+/// type-rooted dispatch of that method on its owner type.
+fn checkDerivedMethodCall(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    expr_var: Var,
+    callee_expr: CIR.Expr.Idx,
+    args: CIR.Expr.Span,
+    callee: DerivedMethodCallee,
+    env: *Env,
+    child_expected: Expected,
+) Allocator.Error!bool {
+    var does_fx = false;
+    const arg_expr_idxs = self.cir.store.sliceExpr(args);
+    var arg_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
+    const arg_vars_alloc = arg_vars_sfa.get();
+    const arg_vars = try arg_vars_alloc.alloc(Var, arg_expr_idxs.len);
+    defer arg_vars_alloc.free(arg_vars);
+
+    for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
+        self.checking_call_arg = true;
+        does_fx = try self.checkExpr(arg_expr_idx, env, child_expected) or does_fx;
+        arg_vars[i] = ModuleEnv.varFrom(arg_expr_idx);
+    }
+    if (try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, arg_expr_idxs)) return does_fx;
+
+    const method_name_region = self.cir.store.getExprRegion(callee_expr);
+    const constraint_fn_var = try self.mkTypeMethodCallConstraint(
+        callee.dispatcher_var,
+        arg_vars,
+        expr_var,
+        callee.method_name,
+        env,
+        method_name_region,
+        expr_idx,
+    );
+    try self.cir.store.replaceExprWithTypeDispatchCall(
+        expr_idx,
+        .{ .dispatcher = callee.dispatcher_var },
+        callee.method_name,
+        method_name_region,
+        args,
+        constraint_fn_var,
+    );
+    if (try self.varIsEffectfulFunction(constraint_fn_var)) {
+        self.markCurrentHoistObservableEffect();
+        does_fx = true;
+    }
+    return does_fx;
 }
 
 fn localLookupHasNoValue(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
@@ -41464,16 +41626,6 @@ fn reportValuelessDeclarationUse(
 fn markNonEffectfulHostedDeclarationUse(self: *Self, expr_idx: CIR.Expr.Idx, expr_var: Var) Allocator.Error!void {
     try self.markErroneous(expr_var);
     try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
-}
-
-fn reportAnnotationOnlyValueUse(
-    self: *Self,
-    expr_var: Var,
-    region: Region,
-    _: *Env,
-) Allocator.Error!void {
-    _ = try self.problems.appendProblem(self.gpa, .{ .annotation_only_value = .{ .region = region } });
-    try self.markErroneous(expr_var);
 }
 
 /// A derived codec is the compiler's own structural encoder/parser for the

@@ -833,7 +833,10 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .write = "(" });
             try frames.append(allocator, .{ .write = self.module_env.getIdent(method_call.method_name) });
             try frames.append(allocator, .{ .write = "." });
-            const alias_str = try std.fmt.allocPrint(allocator, "__type_dispatch_{d}__", .{@intFromEnum(method_call.type_dispatch_stmt)});
+            const alias_str = switch (method_call.owner) {
+                .statement => |stmt| try std.fmt.allocPrint(allocator, "__type_dispatch_{d}__", .{@intFromEnum(stmt)}),
+                .dispatcher => |dispatcher| try std.fmt.allocPrint(allocator, "__type_dispatch_var_{d}__", .{@intFromEnum(dispatcher)}),
+            };
             try frames.append(allocator, .{ .write = alias_str });
         },
         .e_runtime_error => try self.write("<runtime_error>"),

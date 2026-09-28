@@ -79,6 +79,7 @@ pub const Tag = enum {
     expr_method_eq,
     expr_type_method_call,
     expr_type_dispatch_call,
+    expr_type_dispatch_call_dispatcher,
     expr_static_dispatch,
     expr_external_lookup,
     expr_deferred_import_ref,
@@ -818,8 +819,10 @@ pub const Payload = extern union {
         _reserved: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
+    /// `expr_type_dispatch_call` stores a statement owner and
+    /// `expr_type_dispatch_call_dispatcher` stores a dispatcher type var.
     pub const ExprTypeDispatchCall = extern struct {
-        type_dispatch_stmt: u32,
+        owner: u32,
         method_name: u32,
         method_call_data_idx: u32,
         constraint_fn_var: u32,
@@ -934,7 +937,8 @@ pub const Payload = extern union {
     pub const ExprDerivedMethod = extern struct {
         ident: u32,
         kind: u32,
-        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        owner: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     /// expr_return: return expression

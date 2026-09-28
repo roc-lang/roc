@@ -2042,8 +2042,7 @@ during canonicalization, and Builtin.roc's compiler-owned intrinsic annotations,
 whose bodies post-check lowering emits at each checked call site. Every other
 `e_anno_only` declaration keeps its declared type, so surrounding code still
 checks, but reading it is an error: checking reports the missing value at the
-reference and marks that expression erroneous, exactly as it already does for
-the sibling body-free state `e_derived_method`. This holds for a plain lookup,
+reference and marks that expression erroneous. This holds for a plain lookup,
 an imported lookup, a qualified associated read, and a method dispatch alike, so
 no reference to a valueless declaration survives checking. Post-check stages
 therefore never see one, and their rule that a procedure use carries a
@@ -4682,12 +4681,28 @@ Calls from that method to ordinary helpers share specializations with calls
 from scalar format methods at the same type and evidence.
 
 Canonicalization records each recognized associated underscore opt-in as an
-`e_derived_method` CIR expression carrying its exact derived-method kind. An
-ordinary annotation without a body remains `e_anno_only`; in a platform package,
-only that ordinary form may be rewritten into a hosted declaration. Checking and
-insertion into the checked method registry consume the explicit derived-method
-kind and must not recover compiler intent from identifier text or the annotation
-shape.
+`e_derived_method` CIR expression carrying its exact derived-method kind and the
+type declaration that owns it. An ordinary annotation without a body remains
+`e_anno_only`; in a platform package, only that ordinary form may be rewritten
+into a hosted declaration. Checking and insertion into the checked method
+registry consume the explicit derived-method kind and must not recover compiler
+intent from identifier text or the annotation shape.
+
+A derived method names a dispatch, not a value. When source calls one through
+its owner type (`Flag.encoder_for(encoding)`, whether the owner is local,
+imported, a builtin, or reached through a type alias), checking rewrites the
+whole call into a type-rooted dispatch call whose dispatcher is a fresh
+instantiation of the marker's owner type, and its output is a `.type_only`
+static-dispatch plan. The call then resolves exactly like any other dispatch
+of that method on that type, so it shares the same generated-codec derivation
+and needs no lowering of its own. A reference that is not the direct callee of a
+call has no dispatch to perform; checking reports it and marks it erroneous.
+
+A generated parser or encoder is built from its format's methods, so its
+relation cannot be validated while the format is still a flex var. Checking
+treats such a relation as unresolved: when the format escapes through the
+enclosing definition's interface, the relation belongs to that definition's
+scheme and is validated at each use with the use's format.
 
 A derived parser or encoder is still finite, shape-specific generated code.
 Boxy planning records a generated-codec worker from the checked structural
