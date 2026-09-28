@@ -24714,26 +24714,1435 @@ const BodyContext = struct {
         defer self.restoreBinders(saved.items);
         return try self.lowerLambdaTemplateAtNode(lambda_id, lambda, fn_node);
     }
+    // Expression evidence //
+    //
+    // An expression's type node, call-result evidence, produced-value
+    // evidence, and request relations each depend on the same evidence of its
+    // operands. They are evaluated by one explicit kernel: every computation
+    // that needs an operand's evidence suspends as an `EvidenceFrame` on a
+    // heap-backed stack and resumes with the operand's result, so expression
+    // nesting depth never becomes native call depth. Each frame runs on the
+    // exact body context the direct computation used, and every graph relation
+    // happens in the same order.
+
+    const CheckedCall = @FieldType(checked.CheckedExprData, "call");
+    const CheckedFieldAccess = @FieldType(checked.CheckedExprData, "field_access");
+
+    const EvidenceResult = union(enum) {
+        none,
+        node: NodeId,
+        maybe_node: ?NodeId,
+
+        fn nodeValue(self: EvidenceResult) NodeId {
+            return switch (self) {
+                .node => |node| node,
+                .none, .maybe_node => unreachable,
+            };
+        }
+
+        fn maybeNodeValue(self: EvidenceResult) ?NodeId {
+            return switch (self) {
+                .maybe_node => |node| node,
+                .node => |node| node,
+                .none => unreachable,
+            };
+        }
+    };
+
+    const EvidenceTask = union(enum) {
+        /// `lowerExprTypeNode`
+        type_node: struct { expr: checked.CheckedExprId, timing: BodyWorkTimingScope = .{} },
+        /// `exprCallResultEvidenceNode`
+        call_evidence: struct { expr: checked.CheckedExprId, expected_ty: ?Type.TypeId },
+        /// `exprCallArgumentEvidenceNode`
+        argument_evidence: struct { expr: checked.CheckedExprId, argument_node: NodeId = undefined },
+        /// `exprProducedValueEvidenceNode`
+        produced_value: ProducedValueTask,
+        /// `dispatchResultTypeNodeInPhase`, including its callable relation.
+        dispatch_result: DispatchResultTask,
+        /// `callableDispatchResultTypeNodeInPhase`
+        callable_dispatch_result: DispatchResultTask,
+        /// `callResultTypeNode`
+        call_result: CallResultTask,
+        /// `directCallRequestNode`
+        direct_call_request: DirectCallTask,
+        /// `directCallTypeNode`
+        direct_call_type: DirectCallTask,
+        /// `instantiateCallNodeFromCallerAtNode`, run on the callee context.
+        instantiate_call: InstantiateCallTask,
+        /// `instantiateCallableDispatchPlanCallNodeFromCallerAtNode`, run on the callee context.
+        instantiate_dispatch: InstantiateDispatchTask,
+        /// `fieldAccessTypeNode`
+        field_access: struct { checked_ty: checked.CheckedTypeId, access: CheckedFieldAccess, expected_ty: ?Type.TypeId },
+        /// `tupleAccessTypeNode`
+        tuple_access: struct { checked_ty: checked.CheckedTypeId, tuple: checked.CheckedExprId, elem_index: usize, expected_ty: ?Type.TypeId },
+        /// `directCallCompletedResultNode`
+        completed_result: CompletedResultTask,
+        /// `prepareDirectCallArgsAtNodes`
+        prepare_direct_args: PrepareArgsTask,
+        /// `prepareExprSpanAtNodes`
+        prepare_span: PrepareArgsTask,
+        /// `relateExprAtNode`
+        relate: RelateTask,
+    };
+
+    const ProducedValueTask = struct {
+        expr: checked.CheckedExprId,
+        request_node: NodeId,
+        index: usize = 0,
+        requires_distinct_witness: bool = false,
+        /// Child nodes, or record fields, being filled for a constructor.
+        child_nodes: []const NodeId = &.{},
+        produced_nodes: []NodeId = &.{},
+        produced_fields: []InstField = &.{},
+        base_node: ?NodeId = null,
+        produced_element: ?NodeId = null,
+        current_child_node: NodeId = undefined,
+        name: names.TagNameId = undefined,
+    };
+
+    const DispatchResultTask = struct {
+        checked_ret_ty: checked.CheckedTypeId,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        callable_plan: CallableDispatchPlan = undefined,
+        expected_ret_node: ?NodeId,
+        phase: DispatchInstantiationPhase,
+        call_ctx: ?*BodyContext = null,
+    };
+
+    const CallResultTask = struct {
+        expr: checked.CheckedExprId,
+        checked_ret_ty: checked.CheckedTypeId,
+        call: CheckedCall,
+        expected_ret_ty: ?Type.TypeId,
+        call_ctx: ?*BodyContext = null,
+        source_fn_ty: checked.CheckedTypeId = undefined,
+    };
+
+    const DirectCallTask = struct {
+        expr: checked.CheckedExprId,
+        target: checked.ResolvedValueId,
+        call: CheckedCall,
+        checked_ret_ty: checked.CheckedTypeId,
+        source_fn_ty: checked.CheckedTypeId,
+        expected_ret_node: ?NodeId,
+        call_ctx: ?*BodyContext = null,
+    };
+
+    const InstantiateCallTask = struct {
+        source_fn_ty: checked.CheckedTypeId,
+        caller: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        checked_args: []const checked.CheckedExprId,
+        expected_ret_node: ?NodeId,
+        hosted_try_capability: ?HostedTryAdapterCapability,
+        capture_constructor_argument_evidence: bool,
+        fn_node: NodeId = undefined,
+        formal_nodes: []const NodeId = &.{},
+        ret_node: NodeId = undefined,
+        request_args: []NodeId = &.{},
+        index: usize = 0,
+    };
+
+    const InstantiateDispatchTask = struct {
+        callable_plan: CallableDispatchPlan,
+        caller: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        expected_ret_node: ?NodeId,
+        phase: DispatchInstantiationPhase,
+        fn_node: NodeId = undefined,
+        formal_nodes: []const NodeId = &.{},
+        ret_node: NodeId = undefined,
+        request_args: []NodeId = &.{},
+        index: usize = 0,
+    };
+
+    const CompletedResultTask = struct {
+        expr: checked.CheckedExprId,
+        target: checked.ResolvedValueId,
+        call: CheckedCall,
+        source_fn_ty: checked.CheckedTypeId,
+        fn_node: NodeId,
+    };
+
+    const PrepareArgsTask = struct {
+        expr: checked.CheckedExprId = undefined,
+        fn_node: NodeId = undefined,
+        checked_exprs: []const checked.CheckedExprId,
+        nodes: []const NodeId,
+        index: usize = 0,
+    };
+
+    const RelateTask = struct {
+        expr: checked.CheckedExprId,
+        expected_node: NodeId,
+        timing: BodyWorkTimingScope = .{},
+        index: usize = 0,
+        /// Per-child nodes for a constructor or call argument span.
+        child_nodes: []const NodeId = &.{},
+        fn_node: NodeId = undefined,
+        call_ctx: ?*BodyContext = null,
+        name: names.TagNameId = undefined,
+    };
+
+    const EvidenceFrame = struct {
+        ctx: *BodyContext,
+        cursor: u8 = 0,
+        task: EvidenceTask,
+    };
+
+    const EvidenceStep = union(enum) {
+        call: struct { ctx: *BodyContext, task: EvidenceTask },
+        ret: EvidenceResult,
+    };
+
+    fn evidenceCall(ctx: *BodyContext, task: EvidenceTask) EvidenceStep {
+        return .{ .call = .{ .ctx = ctx, .task = task } };
+    }
+
+    /// Run an evidence computation to completion on an explicit frame stack.
+    fn runEvidence(self: *BodyContext, root: EvidenceTask) Allocator.Error!EvidenceResult {
+        var frames: std.ArrayList(EvidenceFrame) = .empty;
+        defer frames.deinit(self.allocator);
+        errdefer {
+            while (frames.pop()) |frame| {
+                var owned = frame;
+                owned.ctx.releaseEvidenceFrame(&owned);
+            }
+        }
+        try frames.append(self.allocator, .{ .ctx = self, .task = root });
+        var input: ?EvidenceResult = null;
+        while (true) {
+            const frame = &frames.items[frames.items.len - 1];
+            switch (try frame.ctx.stepEvidence(frame, input)) {
+                .call => |next| {
+                    try frames.append(self.allocator, .{ .ctx = next.ctx, .task = next.task });
+                    input = null;
+                },
+                .ret => |result| {
+                    var finished = frames.pop().?;
+                    finished.ctx.releaseEvidenceFrame(&finished);
+                    if (frames.items.len == 0) return result;
+                    input = result;
+                },
+            }
+        }
+    }
+
+    /// Release what a frame still owns: its timing scope, its callee context,
+    /// and its scratch spans. Idempotent, so a frame that already released
+    /// them on its normal path is unaffected.
+    fn releaseEvidenceFrame(self: *BodyContext, frame: *EvidenceFrame) void {
+        switch (frame.task) {
+            .type_node => |*task| task.timing.end(),
+            .relate => |*task| {
+                if (task.call_ctx) |call_ctx| self.destroyCallContext(call_ctx);
+                task.call_ctx = null;
+                task.timing.end();
+            },
+            .dispatch_result, .callable_dispatch_result => |*task| {
+                if (task.call_ctx) |call_ctx| self.destroyCallContext(call_ctx);
+                task.call_ctx = null;
+            },
+            .call_result => |*task| {
+                if (task.call_ctx) |call_ctx| self.destroyCallContext(call_ctx);
+                task.call_ctx = null;
+            },
+            .direct_call_type, .direct_call_request => |*task| {
+                if (task.call_ctx) |call_ctx| self.destroyCallContext(call_ctx);
+                task.call_ctx = null;
+            },
+            .produced_value => |*task| {
+                self.allocator.free(task.produced_nodes);
+                task.produced_nodes = &.{};
+                self.allocator.free(task.produced_fields);
+                task.produced_fields = &.{};
+            },
+            .call_evidence,
+            .argument_evidence,
+            .instantiate_call,
+            .instantiate_dispatch,
+            .field_access,
+            .tuple_access,
+            .completed_result,
+            .prepare_direct_args,
+            .prepare_span,
+            => {},
+        }
+    }
+
+    /// A context for instantiating a callee's checked type in the caller's
+    /// graph, owned by the computation that creates it.
+    fn createCallContext(self: *BodyContext) Allocator.Error!*BodyContext {
+        const call_ctx = try self.allocator.create(BodyContext);
+        errdefer self.allocator.destroy(call_ctx);
+        call_ctx.* = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
+        call_ctx.evidence = self.evidence;
+        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
+        call_ctx.current_fn_key = self.current_fn_key;
+        call_ctx.source_region_override = self.source_region_override;
+        call_ctx.current_entry_root = self.current_entry_root;
+        call_ctx.in_deferred_body = self.in_deferred_body;
+        return call_ctx;
+    }
+
+    fn destroyCallContext(self: *BodyContext, call_ctx: *BodyContext) void {
+        call_ctx.deinit();
+        self.allocator.destroy(call_ctx);
+    }
+
+    fn stepEvidence(self: *BodyContext, frame: *EvidenceFrame, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
+        return switch (frame.task) {
+            .type_node => |*task| self.stepTypeNode(frame, task, input),
+            .call_evidence => |*task| self.stepCallEvidence(frame, task.expr, task.expected_ty, input),
+            .argument_evidence => |*task| self.stepArgumentEvidence(frame, task, input),
+            .produced_value => |*task| self.stepProducedValue(frame, task, input),
+            .dispatch_result => |*task| self.stepDispatchResult(frame, task, input, true),
+            .callable_dispatch_result => |*task| self.stepDispatchResult(frame, task, input, false),
+            .call_result => |*task| self.stepCallResult(frame, task, input),
+            .direct_call_request => |*task| self.stepDirectCallRequest(frame, task, input),
+            .direct_call_type => |*task| self.stepDirectCallType(frame, task, input),
+            .instantiate_call => |*task| self.stepInstantiateCall(frame, task, input),
+            .instantiate_dispatch => |*task| self.stepInstantiateDispatch(frame, task, input),
+            .field_access => |task| self.stepFieldAccess(frame, task.checked_ty, task.access, task.expected_ty, input),
+            .tuple_access => |task| self.stepTupleAccess(frame, task.checked_ty, task.tuple, task.elem_index, task.expected_ty, input),
+            .completed_result => |task| self.stepCompletedResult(frame, task, input),
+            .prepare_direct_args => |*task| self.stepPrepareArgs(frame, task, input, true),
+            .prepare_span => |*task| self.stepPrepareArgs(frame, task, input, false),
+            .relate => |*task| self.stepRelate(frame, task, input),
+        };
+    }
+
+    fn finishTypeNodeLeaf(task: anytype, node: NodeId) EvidenceStep {
+        task.timing.end();
+        return .{ .ret = .{ .node = node } };
+    }
+
+    fn stepTypeNode(self: *BodyContext, frame: *EvidenceFrame, task: anytype, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
+        if (frame.cursor == 1) {
+            task.timing.end();
+            return .{ .ret = input.? };
+        }
+        task.timing = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+        frame.cursor = 1;
+        const expr_id = task.expr;
+        const expr = self.view.bodies.expr(expr_id);
+        const next: EvidenceTask = switch (expr.data) {
+            .call => |call| .{ .call_result = .{ .expr = expr_id, .checked_ret_ty = expr.ty, .call = call, .expected_ret_ty = null } },
+            .dispatch_call => |plan| .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = null, .phase = .expression_lowering } },
+            .interpolation => |interpolation| .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = interpolation.plan, .expected_ret_node = null, .phase = .expression_lowering } },
+            .type_dispatch_call => |plan| .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = null, .phase = .expression_lowering } },
+            .method_eq => |plan| .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = null, .phase = .expression_lowering } },
+            .field_access => |field| .{ .field_access = .{ .checked_ty = expr.ty, .access = field, .expected_ty = null } },
+            .tuple_access => |access| .{ .tuple_access = .{ .checked_ty = expr.ty, .tuple = access.tuple, .elem_index = access.elem_index, .expected_ty = null } },
+            .lookup_local => |lookup| return finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, lookup.resolved)),
+            .lookup_external => |resolved| return finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, resolved)),
+            .lookup_required => |resolved| return finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, resolved)),
+            .lambda => |lambda| return finishTypeNodeLeaf(task, try self.lambdaFunctionNode(expr.ty, lambda)),
+            .closure => |closure| return finishTypeNodeLeaf(task, try self.closureFunctionNode(closure)),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return finishTypeNodeLeaf(task, try self.lowerTypeNode(expr.ty)),
+        };
+        return evidenceCall(self, next);
+    }
+
+    fn stepCallEvidence(
+        self: *BodyContext,
+        frame: *EvidenceFrame,
+        checked_arg: checked.CheckedExprId,
+        expected_ty: ?Type.TypeId,
+        input: ?EvidenceResult,
+    ) Allocator.Error!EvidenceStep {
+        const expr = self.view.bodies.expr(checked_arg);
+        switch (frame.cursor) {
+            0 => {},
+            // A direct call's shared request interface.
+            1 => {
+                const call = expr.data.call;
+                const target = call.direct_target.?;
+                const fn_node = input.?.nodeValue();
+                const fn_nodes = try self.graph.functionNodes(fn_node);
+                if (try self.graph.containsGeneratedPrivate(fn_nodes.ret)) return .{ .ret = .{ .maybe_node = fn_nodes.ret } };
+                frame.cursor = 2;
+                return evidenceCall(self, .{ .completed_result = .{
+                    .expr = checked_arg,
+                    .target = target,
+                    .call = call,
+                    .source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload),
+                    .fn_node = fn_node,
+                } });
+            },
+            else => return .{ .ret = .{ .maybe_node = input.?.maybeNodeValue() } },
+        }
+        if (self.checkedExprDivergesInLoweredRuntime(checked_arg)) return .{ .ret = .{ .maybe_node = null } };
+        const expected_node: ?NodeId = if (expected_ty) |expected| try self.activeNodeFromType(expected) else null;
+        switch (expr.data) {
+            .call => |call| {
+                if (call.direct_target) |target| {
+                    frame.cursor = 1;
+                    return evidenceCall(self, .{ .direct_call_request = .{
+                        .expr = checked_arg,
+                        .target = target,
+                        .call = call,
+                        .checked_ret_ty = expr.ty,
+                        .source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload),
+                        .expected_ret_node = expected_node,
+                    } });
+                }
+                frame.cursor = 2;
+                return evidenceCall(self, .{ .call_result = .{ .expr = checked_arg, .checked_ret_ty = expr.ty, .call = call, .expected_ret_ty = expected_ty } });
+            },
+            .dispatch_call => |plan| {
+                frame.cursor = 2;
+                return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = expected_node, .phase = .expression_lowering } });
+            },
+            .interpolation => |interpolation| {
+                frame.cursor = 2;
+                return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = interpolation.plan, .expected_ret_node = expected_node, .phase = .expression_lowering } });
+            },
+            .type_dispatch_call => |plan| {
+                frame.cursor = 2;
+                return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = expected_node, .phase = .expression_lowering } });
+            },
+            .method_eq => |plan| {
+                frame.cursor = 2;
+                return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = expected_node, .phase = .expression_lowering } });
+            },
+            .field_access => |field| {
+                frame.cursor = 2;
+                return evidenceCall(self, .{ .field_access = .{ .checked_ty = expr.ty, .access = field, .expected_ty = expected_ty } });
+            },
+            .tuple_access => |access| {
+                frame.cursor = 2;
+                return evidenceCall(self, .{ .tuple_access = .{ .checked_ty = expr.ty, .tuple = access.tuple, .elem_index = access.elem_index, .expected_ty = expected_ty } });
+            },
+            .lookup_local => |lookup| return .{ .ret = .{ .maybe_node = try self.lookupCallArgumentEvidenceNode(expr.ty, lookup.resolved, expected_ty) } },
+            .lookup_external => |resolved| return .{ .ret = .{ .maybe_node = try self.lookupCallArgumentEvidenceNode(expr.ty, resolved, expected_ty) } },
+            .lookup_required => |resolved| return .{ .ret = .{ .maybe_node = try self.lookupCallArgumentEvidenceNode(expr.ty, resolved, expected_ty) } },
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+        }
+        if (expected_ty) |ty| {
+            try self.constrainTypeToMono(expr.ty, ty);
+            return .{ .ret = .{ .maybe_node = try self.activeNodeFromType(ty) } };
+        }
+        return .{ .ret = .{ .maybe_node = null } };
+    }
+
+    fn stepArgumentEvidence(self: *BodyContext, frame: *EvidenceFrame, task: anytype, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
+        switch (frame.cursor) {
+            0 => {
+                frame.cursor = 1;
+                return evidenceCall(self, .{ .call_evidence = .{ .expr = task.expr, .expected_ty = null } });
+            },
+            1 => {
+                if (input.?.maybeNodeValue()) |produced| {
+                    return .{ .ret = .{ .maybe_node = if (try self.graph.containsGeneratedPrivate(produced)) produced else null } };
+                }
+                const expr = self.view.bodies.expr(task.expr);
+                switch (expr.data) {
+                    .tuple, .record, .tag, .nominal, .list => {},
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return .{ .ret = .{ .maybe_node = null } },
+                }
+                task.argument_node = try self.freshInstNode(expr.ty);
+                frame.cursor = 2;
+                return evidenceCall(self, .{ .produced_value = .{ .expr = task.expr, .request_node = task.argument_node } });
+            },
+            else => {
+                const produced = input.?.maybeNodeValue() orelse return .{ .ret = .{ .maybe_node = null } };
+                return .{ .ret = .{ .maybe_node = if (try self.graph.containsGeneratedPrivate(produced)) produced else null } };
+            },
+        }
+    }
+
+    /// Produced-value evidence: a direct producer or lookup supplies its own
+    /// evidence; a constructor propagates each child's evidence into its exact
+    /// positional slot and creates a distinct container witness when needed.
+    fn stepProducedValue(self: *BodyContext, frame: *EvidenceFrame, task: *ProducedValueTask, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
+        const request_node = task.request_node;
+        const expr = self.view.bodies.expr(task.expr);
+        switch (frame.cursor) {
+            0 => {
+                frame.cursor = 1;
+                return evidenceCall(self, .{ .call_evidence = .{ .expr = task.expr, .expected_ty = null } });
+            },
+            1 => {
+                if (input.?.maybeNodeValue()) |produced| {
+                    return .{ .ret = .{ .maybe_node = try self.relateCheckedNodeToProducedValue(request_node, produced) } };
+                }
+                frame.cursor = 2;
+                switch (expr.data) {
+                    .tuple => |items| {
+                        const item_nodes = try self.graph.tupleItemNodes(request_node);
+                        if (items.len != item_nodes.len) Common.invariant("tuple value evidence arity differed from its graph type");
+                        task.child_nodes = item_nodes;
+                        task.produced_nodes = try self.allocator.alloc(NodeId, items.len);
+                    },
+                    .tag => |tag| {
+                        task.name = try self.tagName(self.view, tag.name);
+                        task.produced_nodes = try self.allocator.alloc(NodeId, tag.args.len);
+                    },
+                    .record => |record| {
+                        const target_fields = (try self.graph.recordConstructionNodes(request_node)).fields;
+                        task.produced_fields = try self.allocator.dupe(InstField, target_fields);
+                        if (record.ext) |base_expr| {
+                            // The base evidence is requested before any field.
+                            frame.cursor = 3;
+                            return evidenceCall(self, .{ .produced_value = .{
+                                .expr = base_expr,
+                                .request_node = try self.freshInstNode(self.view.bodies.expr(base_expr).ty),
+                            } });
+                        }
+                    },
+                    .list => task.current_child_node = try self.graph.listElementNode(request_node),
+                    .nominal => |nominal| {
+                        const representation_node = self.constructorRepresentationNode(request_node);
+                        const named = switch (self.graph.content(representation_node)) {
+                            .named => |value| value,
+                            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("nominal value evidence had no nominal graph representation"),
+                        };
+                        const backing = named.backing orelse
+                            Common.invariant("nominal value evidence graph node had no backing");
+                        task.current_child_node = backing.node;
+                        return evidenceCall(self, .{ .produced_value = .{ .expr = nominal.backing_expr, .request_node = backing.node } });
+                    },
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return .{ .ret = .{ .maybe_node = null } },
+                }
+                return try self.nextProducedValueChild(frame, task, expr);
+            },
+            // A record update's base evidence.
+            3 => {
+                task.base_node = input.?.maybeNodeValue();
+                frame.cursor = 2;
+                return try self.nextProducedValueChild(frame, task, expr);
+            },
+            else => {
+                // A child's produced evidence.
+                const child_node = task.current_child_node;
+                const produced = input.?.maybeNodeValue() orelse child_node;
+                switch (expr.data) {
+                    .tuple => {
+                        const witness = try self.constructorChildWitness(
+                            child_node,
+                            produced,
+                            "tuple value evidence child differed without explicit representation evidence",
+                        );
+                        task.produced_nodes[task.index] = witness.slot;
+                        if (witness.requires_witness) task.requires_distinct_witness = true;
+                    },
+                    .tag => {
+                        const witness = try self.constructorChildWitness(
+                            child_node,
+                            produced,
+                            "tag value evidence child differed without explicit representation evidence",
+                        );
+                        task.produced_nodes[task.index] = witness.slot;
+                        if (witness.requires_witness) task.requires_distinct_witness = true;
+                    },
+                    .record => {
+                        const field = task.produced_fields[task.index];
+                        const produced_value = input.?.maybeNodeValue() orelse task.current_child_node;
+                        const produced_slot = switch (try self.graph.recordConstructionFieldKind(request_node, field.name)) {
+                            .required, .defaulted => produced_value,
+                            .optional => optional: {
+                                const present = try self.nameStoreMut().internTagLabel(Builder.optional_slot_present_tag);
+                                const present_node = try self.graph.tagValueNodeWithPayloads(field.ty, present, &.{produced_value});
+                                break :optional try self.constructorWitnessWithStructuralNode(field.ty, present_node);
+                            },
+                        };
+                        const witness = try self.constructorChildWitness(
+                            field.ty,
+                            produced_slot,
+                            "record value evidence child differed without explicit representation evidence",
+                        );
+                        task.produced_fields[task.index].ty = witness.slot;
+                        if (witness.requires_witness) task.requires_distinct_witness = true;
+                    },
+                    .list => {
+                        if (task.produced_element) |selected| {
+                            try selectRequestRepresentation(self.graph, selected, produced);
+                        } else {
+                            const witness = try self.constructorChildWitness(
+                                child_node,
+                                produced,
+                                "list value evidence child differed without explicit representation evidence",
+                            );
+                            if (witness.requires_witness) task.produced_element = witness.slot;
+                        }
+                    },
+                    .nominal => {
+                        const produced_backing = input.?.maybeNodeValue() orelse return .{ .ret = .{ .maybe_node = null } };
+                        const representation_node = self.constructorRepresentationNode(request_node);
+                        const backing_witness = try self.constructorChildWitness(
+                            child_node,
+                            produced_backing,
+                            "nominal value evidence child differed without explicit representation evidence",
+                        );
+                        if (!backing_witness.requires_witness) return .{ .ret = .{ .maybe_node = null } };
+                        const witness = try self.graph.namedValueNodeWithBacking(representation_node, backing_witness.slot);
+                        return .{ .ret = .{ .maybe_node = try self.relateCheckedNodeToProducedValue(representation_node, witness) } };
+                    },
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable,
+                }
+                task.index += 1;
+                return try self.nextProducedValueChild(frame, task, expr);
+            },
+        }
+    }
+
+    /// Request the next constructor child's produced evidence, or finish the
+    /// constructor's witness once every child has contributed.
+    fn nextProducedValueChild(self: *BodyContext, frame: *EvidenceFrame, task: *ProducedValueTask, expr: checked.CheckedExpr) Allocator.Error!EvidenceStep {
+        _ = frame;
+        const request_node = task.request_node;
+        switch (expr.data) {
+            .tuple => |items| {
+                if (task.index < items.len) {
+                    task.current_child_node = task.child_nodes[task.index];
+                    return evidenceCall(self, .{ .produced_value = .{ .expr = items[task.index], .request_node = task.current_child_node } });
+                }
+                if (!task.requires_distinct_witness) return .{ .ret = .{ .maybe_node = null } };
+                const structural_node = try self.graph.newNode(.{
+                    .tuple = try self.graph.arena().dupe(NodeId, task.produced_nodes),
+                });
+                const witness = try self.constructorWitnessWithStructuralNode(request_node, structural_node);
+                return .{ .ret = .{ .maybe_node = try self.relateCheckedNodeToProducedValue(request_node, witness) } };
+            },
+            .tag => |tag| {
+                if (task.index < tag.args.len) {
+                    task.current_child_node = try self.graph.tagConstructionPayloadNode(request_node, task.name, task.index);
+                    return evidenceCall(self, .{ .produced_value = .{ .expr = tag.args[task.index], .request_node = task.current_child_node } });
+                }
+                if (!task.requires_distinct_witness) return .{ .ret = .{ .maybe_node = null } };
+                const structural_node = try self.graph.tagValueNodeWithPayloads(request_node, task.name, task.produced_nodes);
+                const witness = try self.constructorWitnessWithStructuralNode(request_node, structural_node);
+                return .{ .ret = .{ .maybe_node = try self.relateCheckedNodeToProducedValue(request_node, witness) } };
+            },
+            .record => |record| {
+                while (task.index < task.produced_fields.len) : (task.index += 1) {
+                    const field = task.produced_fields[task.index];
+                    const field_value = (try self.recordUpdateFieldValue(record.fields, field.name)) orelse {
+                        const base_witness = task.base_node orelse continue;
+                        var is_unset = false;
+                        for (record.unsets) |label| {
+                            if (try self.recordFieldName(self.view, label) == field.name) {
+                                is_unset = true;
+                                break;
+                            }
+                        }
+                        if (is_unset) continue;
+                        const produced_slot = try self.graph.recordConstructionFieldNode(base_witness, field.name);
+                        const witness = try self.constructorChildWitness(
+                            field.ty,
+                            produced_slot,
+                            "record update evidence field differed without explicit representation evidence",
+                        );
+                        task.produced_fields[task.index].ty = witness.slot;
+                        if (witness.requires_witness) task.requires_distinct_witness = true;
+                        continue;
+                    };
+                    task.current_child_node = try self.graph.recordConstructionFieldValueNode(request_node, field.name);
+                    return evidenceCall(self, .{ .produced_value = .{ .expr = field_value, .request_node = task.current_child_node } });
+                }
+                if (!task.requires_distinct_witness) return .{ .ret = .{ .maybe_node = null } };
+                const structural_node = try self.graph.newNode(.{ .record = .{
+                    .fields = try self.graph.arena().dupe(InstField, task.produced_fields),
+                    .ext = try self.graph.newNode(.empty_record),
+                } });
+                const witness = try self.constructorWitnessWithStructuralNode(request_node, structural_node);
+                return .{ .ret = .{ .maybe_node = try self.relateCheckedNodeToProducedValue(request_node, witness) } };
+            },
+            .list => |items| {
+                if (task.index < items.len) {
+                    return evidenceCall(self, .{ .produced_value = .{ .expr = items[task.index], .request_node = task.current_child_node } });
+                }
+                const element_witness = task.produced_element orelse return .{ .ret = .{ .maybe_node = null } };
+                const structural_node = try self.graph.newNode(.{ .list = element_witness });
+                const witness = try self.constructorWitnessWithStructuralNode(request_node, structural_node);
+                return .{ .ret = .{ .maybe_node = try self.relateCheckedNodeToProducedValue(request_node, witness) } };
+            },
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .nominal => unreachable,
+        }
+    }
+
+    /// `dispatchResultTypeNodeInPhase` (starting at the plan) or
+    /// `callableDispatchResultTypeNodeInPhase` (starting at an already
+    /// selected callable plan).
+    fn stepDispatchResult(self: *BodyContext, frame: *EvidenceFrame, task: *DispatchResultTask, input: ?EvidenceResult, from_plan: bool) Allocator.Error!EvidenceStep {
+        if (frame.cursor == 1) {
+            var callable_node = input.?.nodeValue();
+            const call_ctx = task.call_ctx.?;
+            const callable_plan = task.callable_plan;
+            const plan = callable_plan.plan;
+            const plan_args = callable_plan.operands;
+            const resolution = self.evidenceResolution(plan) orelse
+                Common.invariant("runtime method result had no CheckedCallResolution evidence");
+            switch (resolution) {
+                .target => |lookup| {
+                    const relation_lookup = lookup;
+                    const target_node = try self.methodTargetNodeFromPlan(relation_lookup, call_ctx, plan.callable_ty);
+                    try self.relateDispatchTargetRequestInterface(relation_lookup, target_node, callable_node);
+                    if (try self.generatedIteratorMethodRequestNode(
+                        relation_lookup,
+                        target_node,
+                        callable_node,
+                        plan_args,
+                    )) |private_node| {
+                        callable_node = private_node;
+                    }
+                    if (task.phase == .expression_lowering) {
+                        callable_node = try self.lowerAndCompleteIteratorMethodResultAtNode(
+                            relation_lookup,
+                            callable_node,
+                            plan,
+                            self.dispatchUsesDirectGraphCallee(plan),
+                        );
+                    }
+                },
+                .structural => {},
+            }
+            self.destroyCallContext(call_ctx);
+            task.call_ctx = null;
+            return .{ .ret = .{ .node = switch (self.graph.content(callable_node)) {
+                .func => |function| function.ret,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked dispatch plan had a non-function graph node"),
+            } } };
+        }
+
+        if (from_plan) {
+            const plan_id = task.maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
+            const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+            if (try self.closedDirectGraphFreeResultNode(task.checked_ret_ty, plan, task.expected_ret_node)) |ret_node| {
+                return .{ .ret = .{ .node = ret_node } };
+            }
+            task.callable_plan = switch (self.dispatchRuntimePlan(plan)) {
+                .callable => |callable_plan| callable_plan,
+                .crash => return .{ .ret = .{ .node = task.expected_ret_node orelse
+                    Common.invariant("rejected dispatch reached result type lookup without a contextual result cell") } },
+            };
+        }
+        const call_ctx = try self.createCallContext();
+        task.call_ctx = call_ctx;
+        frame.cursor = 1;
+        return evidenceCall(call_ctx, .{ .instantiate_dispatch = .{
+            .callable_plan = task.callable_plan,
+            .caller = self,
+            .checked_ret_ty = task.checked_ret_ty,
+            .expected_ret_node = task.expected_ret_node,
+            .phase = task.phase,
+        } });
+    }
+
+    fn stepCallResult(self: *BodyContext, frame: *EvidenceFrame, task: *CallResultTask, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
+        const call = task.call;
+        switch (frame.cursor) {
+            0 => {},
+            // An indirect call's instantiated callee.
+            1 => {
+                const fn_node = input.?.nodeValue();
+                self.destroyCallContext(task.call_ctx.?);
+                task.call_ctx = null;
+                return .{ .ret = .{ .node = switch (self.graph.content(fn_node)) {
+                    .func => |function| function.ret,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked indirect call instantiated a non-function graph node"),
+                } } };
+            },
+            // A direct call's request interface.
+            2 => {
+                frame.cursor = 3;
+                return evidenceCall(self, .{ .completed_result = .{
+                    .expr = task.expr,
+                    .target = call.direct_target.?,
+                    .call = call,
+                    .source_fn_ty = task.source_fn_ty,
+                    .fn_node = input.?.nodeValue(),
+                } });
+            },
+            else => return .{ .ret = input.? },
+        }
+
+        const expected_ret_ty = task.expected_ret_ty;
+        const checked_ret_ty = task.checked_ret_ty;
+        if (call.direct_target == null) {
+            if (try self.indirectCalleeMonoType(call.func, call.args, expected_ret_ty)) |fn_ty| {
+                const ret_ty = self.functionReturnType(fn_ty);
+                if (expected_ret_ty) |expected| {
+                    if (!self.sameType(expected, ret_ty)) {
+                        Common.invariant("checked indirect call result type differed from its expected Monotype type");
+                    }
+                    try self.constrainTypeToMono(checked_ret_ty, expected);
+                    return .{ .ret = .{ .node = try self.activeNodeFromType(expected) } };
+                }
+                try self.constrainTypeToMono(checked_ret_ty, ret_ty);
+                return .{ .ret = .{ .node = try self.activeNodeFromType(ret_ty) } };
+            }
+
+            const call_ctx = try self.createCallContext();
+            task.call_ctx = call_ctx;
+            frame.cursor = 1;
+            return evidenceCall(call_ctx, .{ .instantiate_call = .{
+                .source_fn_ty = call.source_fn_ty_payload,
+                .caller = self,
+                .checked_ret_ty = checked_ret_ty,
+                .checked_args = call.args,
+                .expected_ret_node = if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
+                .hosted_try_capability = null,
+                .capture_constructor_argument_evidence = false,
+            } });
+        }
+
+        const target = call.direct_target.?;
+        task.source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
+        frame.cursor = 2;
+        return evidenceCall(self, .{ .direct_call_request = .{
+            .expr = task.expr,
+            .target = target,
+            .call = call,
+            .checked_ret_ty = checked_ret_ty,
+            .source_fn_ty = task.source_fn_ty,
+            .expected_ret_node = if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
+        } });
+    }
+
+    /// The request interface of a direct call expression, instantiated once
+    /// per body and shared by every later read of the same expression (see
+    /// `directCallRequestNode`).
+    fn stepDirectCallRequest(self: *BodyContext, frame: *EvidenceFrame, task: *DirectCallTask, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
+        switch (frame.cursor) {
+            0 => {},
+            1 => return .{ .ret = input.? },
+            else => {
+                const fn_node = input.?.nodeValue();
+                try self.direct_call_requests.put(self.allocator, task.expr, .{ .fn_node = fn_node });
+                return .{ .ret = .{ .node = fn_node } };
+            },
+        }
+        const type_task = EvidenceTask{ .direct_call_type = .{
+            .expr = task.expr,
+            .target = task.target,
+            .call = task.call,
+            .checked_ret_ty = task.checked_ret_ty,
+            .source_fn_ty = task.source_fn_ty,
+            .expected_ret_node = task.expected_ret_node,
+        } };
+        if (!try self.directCallRequestIsShareable(task.target, task.expected_ret_node)) {
+            frame.cursor = 1;
+            return evidenceCall(self, type_task);
+        }
+        if (self.direct_call_requests.get(task.expr)) |request| {
+            self.builder.countBodyDiagnostic("direct_call_request_reuses");
+            if (task.expected_ret_node) |expected| {
+                const fn_nodes = try self.graph.functionNodes(request.fn_node);
+                _ = try checkedMonoRequestNode(self.graph, fn_nodes.ret, expected, .exact);
+            }
+            return .{ .ret = .{ .node = request.fn_node } };
+        }
+        frame.cursor = 2;
+        return evidenceCall(self, type_task);
+    }
+
+    fn stepDirectCallType(self: *BodyContext, frame: *EvidenceFrame, task: *DirectCallTask, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
+        const call = task.call;
+        if (frame.cursor == 1) {
+            var fn_node = input.?.nodeValue();
+            if (self.iteratorProcedureForResolvedTarget(call.direct_target.?)) |procedure| {
+                const public_fn_node = self.graph.requestSourceInterface(fn_node) orelse fn_node;
+                if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, call.args)) |private_fn_node| {
+                    try self.graph.registerRequestSourceInterface(private_fn_node, public_fn_node);
+                    try relateFunctionRequestInterface(self.graph, public_fn_node, private_fn_node);
+                    fn_node = private_fn_node;
+                }
+            }
+            self.destroyCallContext(task.call_ctx.?);
+            task.call_ctx = null;
+            return .{ .ret = .{ .node = fn_node } };
+        }
+        if (call.direct_target == null) {
+            Common.invariant("direct checked call instantiation received an indirect call");
+        }
+        const call_ctx = try self.createCallContext();
+        task.call_ctx = call_ctx;
+        frame.cursor = 1;
+        return evidenceCall(call_ctx, .{ .instantiate_call = .{
+            .source_fn_ty = task.source_fn_ty,
+            .caller = self,
+            .checked_ret_ty = task.checked_ret_ty,
+            .checked_args = call.args,
+            .expected_ret_node = task.expected_ret_node,
+            .hosted_try_capability = try self.hostedTryCapabilityForResolvedTarget(call.direct_target.?),
+            .capture_constructor_argument_evidence = try self.iteratorCallNeedsConstructorArgumentEvidence(
+                self.iteratorProcedureForResolvedTarget(call.direct_target.?),
+                call.args,
+            ),
+        } });
+    }
+
+    /// Instantiate a callee's checked function type from the caller's
+    /// argument evidence. Runs on the callee context; each argument's
+    /// evidence is computed on the caller.
+    fn stepInstantiateCall(self: *BodyContext, frame: *EvidenceFrame, task: *InstantiateCallTask, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
+        const caller = task.caller;
+        if (frame.cursor == 0) {
+            const function = self.checkedFunctionType(task.source_fn_ty);
+            if (function.args.len != task.checked_args.len) {
+                Common.invariant("checked direct call arity differs from its function type");
+            }
+            task.fn_node = try self.instNode(task.source_fn_ty);
+            const fn_graph = switch (self.graph.content(task.fn_node)) {
+                .func => |func| func,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked direct call had a non-function instantiation node"),
+            };
+            if (fn_graph.args.len != task.checked_args.len) {
+                Common.invariant("checked direct call graph arity differed from its argument span");
+            }
+            task.formal_nodes = fn_graph.args;
+            task.ret_node = fn_graph.ret;
+            task.request_args = try self.graph.arena().alloc(NodeId, function.args.len);
+            frame.cursor = 1;
+        } else {
+            // An argument's evidence.
+            const index = task.index;
+            const formal_node = task.formal_nodes[index];
+            const checked_arg = task.checked_args[index];
+            const arg_ty = caller.view.bodies.expr(checked_arg).ty;
+            if (input.?.maybeNodeValue()) |evidence| {
+                if (try self.graph.containsGeneratedPrivate(evidence)) {
+                    const public_node = try caller.freshInstNode(arg_ty);
+                    try self.graph.relateOpaqueInterface(public_node, evidence);
+                    try relateRequestComponent(self.graph, formal_node, public_node);
+                    task.request_args[index] = evidence;
+                } else {
+                    const request = try self.unifyFormalWithCallerArgNode(caller, formal_node, arg_ty);
+                    try relateRequestComponent(self.graph, formal_node, evidence);
+                    task.request_args[index] = request;
+                }
+            } else {
+                task.request_args[index] = try self.unifyFormalWithCallerArgNode(caller, formal_node, arg_ty);
+            }
+            task.index += 1;
+        }
+
+        if (task.index < task.checked_args.len) {
+            const checked_arg = task.checked_args[task.index];
+            return evidenceCall(caller, if (task.capture_constructor_argument_evidence or caller.propagate_constructor_value_evidence)
+                .{ .argument_evidence = .{ .expr = checked_arg } }
+            else
+                .{ .call_evidence = .{ .expr = checked_arg, .expected_ty = null } });
+        }
+
+        const fn_node = task.fn_node;
+        const request_args = task.request_args;
+        const checked_ret_ty = task.checked_ret_ty;
+        if (task.expected_ret_node) |expected| {
+            if (task.hosted_try_capability) |capability| {
+                if (try self.hostedTryWidenedRequestNode(capability, fn_node, request_args, expected)) |request_fn| {
+                    return .{ .ret = .{ .node = request_fn } };
+                }
+            }
+            // An explicit request owns the call's exact result evidence. Keep
+            // the checked result as a fresh public interface: its cached cell
+            // may already contain private evidence from another occurrence.
+            const public_ret = try caller.freshInstNode(checked_ret_ty);
+            try relateRequestComponent(self.graph, task.ret_node, public_ret);
+        } else {
+            const caller_ret = try caller.instNode(checked_ret_ty);
+            if (task.hosted_try_capability) |capability| {
+                if (try self.hostedTryWidenedRequestNode(capability, fn_node, request_args, caller_ret)) |request_fn| {
+                    return .{ .ret = .{ .node = request_fn } };
+                }
+            }
+            if (try self.graph.containsGeneratedPrivate(caller_ret)) {
+                // A prior occurrence may already have refined this cached cell
+                // to a private producer representation. Preserve its public
+                // interface without letting that representation select this
+                // call's producer before the call itself has done so.
+                const public_ret = try caller.freshInstNode(checked_ret_ty);
+                try self.graph.relateOpaqueInterface(public_ret, caller_ret);
+                try relateRequestComponent(self.graph, task.ret_node, public_ret);
+            } else {
+                try relateRequestComponent(self.graph, task.ret_node, caller_ret);
+            }
+        }
+        var request_ret = task.ret_node;
+        if (task.expected_ret_node) |expected| {
+            request_ret = if (try self.graph.containsGeneratedPrivate(expected))
+                expected
+            else
+                try checkedMonoRequestNode(self.graph, task.ret_node, expected, .exact);
+        }
+        return .{ .ret = .{ .node = try functionRequestNode(self.graph, fn_node, request_args, request_ret) } };
+    }
+
+    /// Instantiate a dispatch plan's callable from the caller's operand
+    /// evidence. Runs on the callee context; each operand's type node is
+    /// computed on the caller.
+    fn stepInstantiateDispatch(self: *BodyContext, frame: *EvidenceFrame, task: *InstantiateDispatchTask, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
+        const caller = task.caller;
+        const plan = task.callable_plan.plan;
+        const operands = task.callable_plan.operands;
+        if (frame.cursor == 0) {
+            const source_fn_ty = plan.callable_ty;
+            const function = self.checkedFunctionType(source_fn_ty);
+            if (function.args.len != operands.len) {
+                Common.invariant("checked dispatch plan arity differs from its function type");
+            }
+            task.fn_node = try self.instNode(source_fn_ty);
+            const fn_graph = switch (self.graph.content(task.fn_node)) {
+                .func => |func| func,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked dispatch plan had a non-function instantiation node"),
+            };
+            if (fn_graph.args.len != operands.len) {
+                Common.invariant("checked dispatch plan graph arity differed from its operand span");
+            }
+            task.formal_nodes = fn_graph.args;
+            task.ret_node = fn_graph.ret;
+            switch (plan.dispatcher) {
+                .arg => |index| {
+                    if (index >= fn_graph.args.len) Common.invariant("dispatch plan dispatcher argument index was outside the callable graph");
+                    const dispatcher_node = try caller.instNode(plan.dispatcher_ty);
+                    try relateRequestComponent(self.graph, fn_graph.args[index], dispatcher_node);
+                },
+                .type_only => {},
+            }
+            task.request_args = try self.graph.arena().alloc(NodeId, function.args.len);
+            frame.cursor = 1;
+        } else {
+            // An operand's type node.
+            const formal_node = task.formal_nodes[task.index];
+            const checked_arg = operands[task.index].checked_expr;
+            const arg_ty = caller.view.bodies.expr(checked_arg).ty;
+            const evidence_node = input.?.nodeValue();
+            if (try self.graph.containsGeneratedPrivate(evidence_node)) {
+                const public_node = try caller.freshInstNode(arg_ty);
+                try self.graph.relateOpaqueInterface(public_node, evidence_node);
+                try relateRequestComponent(self.graph, formal_node, public_node);
+                task.request_args[task.index] = evidence_node;
+            } else {
+                const public_node = try caller.instNode(arg_ty);
+                try relateRequestComponent(self.graph, formal_node, public_node);
+                try relateRequestComponent(self.graph, formal_node, evidence_node);
+            }
+            task.index += 1;
+        }
+
+        while (task.index < operands.len) : (task.index += 1) {
+            const formal_node = task.formal_nodes[task.index];
+            task.request_args[task.index] = formal_node;
+            switch (operands[task.index]) {
+                .checked_expr => |checked_arg| {
+                    if (task.phase == .expression_lowering) {
+                        return evidenceCall(caller, .{ .type_node = .{ .expr = checked_arg } });
+                    }
+                    const arg_ty = caller.view.bodies.expr(checked_arg).ty;
+                    try relateRequestComponent(self.graph, formal_node, try caller.instNode(arg_ty));
+                },
+                .generated_interpolation_iter,
+                .generated_numeral,
+                .generated_quote,
+                => {},
+            }
+        }
+
+        var request_ret = task.ret_node;
+        const checked_ret_ty = task.checked_ret_ty;
+        if (task.expected_ret_node) |expected| {
+            try relateRequestComponent(self.graph, task.ret_node, try caller.freshInstNode(checked_ret_ty));
+            request_ret = if (try self.graph.containsGeneratedPrivate(expected))
+                expected
+            else
+                try checkedMonoRequestNode(self.graph, task.ret_node, expected, .exact);
+        } else {
+            const caller_ret = try caller.instNode(checked_ret_ty);
+            if (try self.graph.containsGeneratedPrivate(caller_ret)) {
+                const public_ret = try caller.freshInstNode(checked_ret_ty);
+                try self.graph.relateOpaqueInterface(public_ret, caller_ret);
+                try relateRequestComponent(self.graph, task.ret_node, public_ret);
+            } else {
+                try relateRequestComponent(self.graph, task.ret_node, caller_ret);
+            }
+        }
+        return .{ .ret = .{ .node = try functionRequestNode(self.graph, task.fn_node, task.request_args, request_ret) } };
+    }
+
+    fn stepFieldAccess(
+        self: *BodyContext,
+        frame: *EvidenceFrame,
+        checked_ty: checked.CheckedTypeId,
+        access: CheckedFieldAccess,
+        expected_ty: ?Type.TypeId,
+        input: ?EvidenceResult,
+    ) Allocator.Error!EvidenceStep {
+        if (frame.cursor == 0) {
+            if (access.segments.len == 0) Common.invariant("checked field access path had no segments");
+            frame.cursor = 1;
+            return evidenceCall(self, .{ .type_node = .{ .expr = access.receiver } });
+        }
+        var saw_optional = false;
+        var field_node = input.?.nodeValue();
+        for (access.segments, 0..) |segment, index| {
+            const is_last = index + 1 == access.segments.len;
+            const mono_field_name = try self.recordFieldName(self.view, segment.field_name);
+            switch (segment.mode) {
+                // A required segment's slot IS the field's value: the chain
+                // continues from the receiver-derived slot node so a
+                // producer-authored (generated-private) representation—e.g.
+                // a stored iterator witness—survives the access. The
+                // segment's checked success type relates to the slot only as
+                // its public interface, never by direct unification; the
+                // final segment's relation is the trailing whole-expression
+                // constraint below.
+                .required => {
+                    const slot_node = try self.graph.requiredRecordFieldNode(field_node, mono_field_name);
+                    if (!is_last) {
+                        try self.constrainCheckedInterfaceToCell(
+                            segment.success_ty,
+                            DraftTypeCell.fromGraphNode(slot_node),
+                        );
+                    }
+                    field_node = slot_node;
+                },
+                // A `.?` segment's slot is the tagged representation of the
+                // value; the chain continues from the Present payload.
+                .optional => {
+                    saw_optional = true;
+                    const field = try self.graph.optionalRecordFieldNodes(field_node, mono_field_name);
+                    const value_node = try self.instNode(segment.success_ty);
+                    try self.graph.unify(field.value, value_node);
+                    try self.graph.unify(field.slot, try self.optionalSlotNode(value_node));
+                    field_node = field.value;
+                },
+            }
+        }
+        if (saw_optional) {
+            // The chain's observable type is the checked expression's own
+            // `Try(τ, [MissingField])` from the checking output; constrain
+            // its Ok argument with the receiver-refined final value node
+            // (instNode caches by checked identity, so this reaches the Try
+            // node's arg).
+            try self.graph.unify(field_node, try self.instNode(self.checkedTryOkArg(checked_ty)));
+            field_node = try self.instNode(checked_ty);
+        }
+        try self.constrainCheckedInterfaceToCell(
+            checked_ty,
+            DraftTypeCell.fromGraphNode(field_node),
+        );
+        if (expected_ty) |expected| {
+            try relateRequestComponent(self.graph, try self.graph.importMono(expected), field_node);
+        }
+        return .{ .ret = .{ .node = field_node } };
+    }
+
+    fn stepTupleAccess(
+        self: *BodyContext,
+        frame: *EvidenceFrame,
+        checked_ty: checked.CheckedTypeId,
+        tuple: checked.CheckedExprId,
+        elem_index: usize,
+        expected_ty: ?Type.TypeId,
+        input: ?EvidenceResult,
+    ) Allocator.Error!EvidenceStep {
+        if (frame.cursor == 0) {
+            frame.cursor = 1;
+            return evidenceCall(self, .{ .type_node = .{ .expr = tuple } });
+        }
+        const tuple_node = input.?.nodeValue();
+        const item_nodes = try self.graph.tupleItemNodes(tuple_node);
+        if (elem_index >= item_nodes.len) Common.invariant("tuple access index was outside its graph tuple type");
+        const item_node = item_nodes[elem_index];
+        try self.constrainCheckedInterfaceToCell(
+            checked_ty,
+            DraftTypeCell.fromGraphNode(item_node),
+        );
+        if (expected_ty) |expected| {
+            try relateRequestComponent(self.graph, try self.graph.importMono(expected), item_node);
+        }
+        return .{ .ret = .{ .node = item_node } };
+    }
+
+    /// The result cell of a direct call is the selected specialization's
+    /// result (see `directCallCompletedResultNode`).
+    fn stepCompletedResult(self: *BodyContext, frame: *EvidenceFrame, task: CompletedResultTask, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
+        _ = input;
+        const checked_expr = task.expr;
+        const target = task.target;
+        const call = task.call;
+        const fn_node = task.fn_node;
+        if (frame.cursor == 0) {
+            if (self.direct_call_requests.get(checked_expr)) |request| {
+                if (request.fn_node == fn_node) {
+                    if (request.completed) |completed| return .{ .ret = .{ .node = (try self.graph.functionNodes(completed.fn_node)).ret } };
+                }
+            }
+            if (self.callsiteIntrinsicForResolvedTarget(target)) |intrinsic| {
+                const callable_node = try self.callsiteIntrinsicRequestNode(intrinsic, fn_node);
+                return .{ .ret = .{ .node = (try self.graph.functionNodes(callable_node)).ret } };
+            }
+            const fn_nodes = try self.graph.functionNodes(fn_node);
+            if (self.checkedExprDivergesInLoweredRuntime(call.func)) return .{ .ret = .{ .node = fn_nodes.ret } };
+            for (call.args) |arg| {
+                if (self.checkedExprDivergesInLoweredRuntime(arg)) return .{ .ret = .{ .node = fn_nodes.ret } };
+            }
+            frame.cursor = 1;
+            return evidenceCall(self, .{ .prepare_direct_args = .{
+                .expr = checked_expr,
+                .fn_node = fn_node,
+                .checked_exprs = call.args,
+                .nodes = fn_nodes.args,
+            } });
+        }
+        const fn_nodes = try self.graph.functionNodes(fn_node);
+        for (fn_nodes.args) |arg_node| {
+            if (try self.nodeIsProvenUninhabited(arg_node)) return .{ .ret = .{ .node = fn_nodes.ret } };
+        }
+        if (self.iteratorProcedureForResolvedTarget(target)) |procedure| {
+            if (procedure == .iter_next and fn_nodes.args.len == 1 and self.isGeneratedIteratorEvidenceNode(fn_nodes.args[0])) {
+                return .{ .ret = .{ .node = fn_nodes.ret } };
+            }
+        }
+        if (self.resolvedTargetIsStrInspect(target)) return .{ .ret = .{ .node = fn_nodes.ret } };
+        const completed = try self.completedDirectCalleeAtNode(checked_expr, target, task.source_fn_ty, fn_node);
+        return .{ .ret = .{ .node = (try self.graph.functionNodes(completed.fn_node)).ret } };
+    }
+
+    /// Relate each checked argument to its request node, then prepare nested
+    /// callables. A direct call prepares its shared request's arguments once.
+    fn stepPrepareArgs(self: *BodyContext, frame: *EvidenceFrame, task: *PrepareArgsTask, input: ?EvidenceResult, direct_call: bool) Allocator.Error!EvidenceStep {
+        _ = input;
+        if (frame.cursor == 0) {
+            if (direct_call) {
+                if (self.direct_call_requests.get(task.expr)) |request| {
+                    if (request.fn_node == task.fn_node and request.args_prepared) return .{ .ret = .none };
+                }
+            }
+            if (task.checked_exprs.len != task.nodes.len) Common.invariant("checked call argument count differed from graph function arity");
+            self.builder.countBodyDiagnostic("argument_spans_prepared");
+            self.builder.countBodyDiagnosticBy("arguments_prepared", task.checked_exprs.len);
+            frame.cursor = 1;
+        } else {
+            task.index += 1;
+        }
+        if (task.index < task.checked_exprs.len) {
+            return evidenceCall(self, .{ .relate = .{ .expr = task.checked_exprs[task.index], .expected_node = task.nodes[task.index] } });
+        }
+        try self.ensureNestedCallablesAtNodes(task.checked_exprs, task.nodes);
+        if (direct_call) {
+            if (self.direct_call_requests.getPtr(task.expr)) |request| {
+                if (request.fn_node == task.fn_node) request.args_prepared = true;
+            }
+        }
+        return .{ .ret = .none };
+    }
+
+    /// Relate a checked expression's value to a request node.
+    fn stepRelate(self: *BodyContext, frame: *EvidenceFrame, task: *RelateTask, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
+        const checked_expr = task.expr;
+        const expected_node = task.expected_node;
+        const expr = self.view.bodies.expr(checked_expr);
+        if (frame.cursor == 0) {
+            task.timing = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+            self.builder.countBodyDiagnostic("expr_relation_requests");
+            // Divergent expressions never return a value to relate to the
+            // request. In particular, checking may replace a failed callee
+            // with `runtime_error`, which emits a crash, while its unused call
+            // type contains `.err`.
+            if (self.checkedExprDivergesInLoweredRuntime(checked_expr)) return self.finishRelate(task);
+            frame.cursor = 1;
+            switch (expr.data) {
+                .lookup_local => |lookup| try self.relateLookupExprAtNode(checked_expr, lookup.resolved, expected_node),
+                .lookup_external => |resolved| try self.relateLookupExprAtNode(checked_expr, resolved, expected_node),
+                .lookup_required => |resolved| try self.relateLookupExprAtNode(checked_expr, resolved, expected_node),
+                .call => |call| return try self.beginRelateCall(frame, task, expr.ty, call),
+                .dispatch_call => |plan| return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = expected_node, .phase = .expression_lowering } }),
+                .interpolation => |interpolation| return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = interpolation.plan, .expected_ret_node = expected_node, .phase = .expression_lowering } }),
+                .type_dispatch_call => |plan| return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = expected_node, .phase = .expression_lowering } }),
+                .method_eq => |plan| return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = expected_node, .phase = .expression_lowering } }),
+                .field_access => |field| return evidenceCall(self, .{ .field_access = .{ .checked_ty = expr.ty, .access = field, .expected_ty = null } }),
+                .tag => |tag| {
+                    task.name = try self.tagName(self.view, tag.name);
+                    return try self.nextRelateChild(task, expr);
+                },
+                .zero_argument_tag => _ = try self.graph.tagRowNodes(expected_node),
+                .nominal => |nominal| {
+                    const representation_node = self.constructorRepresentationNode(expected_node);
+                    if (self.graph.content(representation_node) != .named) {
+                        Common.invariant("nominal constructor had no nominal graph representation");
+                    }
+                    const named = self.graph.namedNodes(representation_node);
+                    const backing_node = (named.backing orelse
+                        Common.invariant("nominal constructor graph node had no backing")).node;
+                    task.index = 1;
+                    return evidenceCall(self, .{ .relate = .{ .expr = nominal.backing_expr, .expected_node = backing_node } });
+                },
+                .tuple => |items| {
+                    const item_nodes = try self.graph.tupleItemNodes(expected_node);
+                    if (items.len != item_nodes.len) Common.invariant("tuple constructor arity differed from its graph type");
+                    task.child_nodes = item_nodes;
+                    return try self.nextRelateChild(task, expr);
+                },
+                .list => {
+                    task.fn_node = try self.graph.listElementNode(expected_node);
+                    return try self.nextRelateChild(task, expr);
+                },
+                .empty_list => _ = try self.graph.listElementNode(expected_node),
+                .empty_record => _ = try self.graph.recordConstructionNodes(expected_node),
+                .record => {
+                    _ = try self.graph.recordConstructionNodes(expected_node);
+                    return try self.nextRelateChild(task, expr);
+                },
+                // These forms propagate the exact result cell while their own
+                // lowering establishes branch-local binders and statement
+                // state. Relating their shared checked result node here would
+                // collapse distinct generated-private representations across
+                // branches.
+                .block, .match_, .if_, .runtime_error => {},
+                .lambda, .closure => _ = try self.graph.functionNodes(expected_node),
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return evidenceCall(self, .{ .type_node = .{ .expr = checked_expr } }),
+            }
+            return self.finishRelate(task);
+        }
+
+        switch (expr.data) {
+            .dispatch_call, .interpolation, .type_dispatch_call, .method_eq, .field_access => {
+                try relateRequestComponent(self.graph, input.?.nodeValue(), expected_node);
+                return self.finishRelate(task);
+            },
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {
+                try self.graph.unify(expected_node, input.?.nodeValue());
+                return self.finishRelate(task);
+            },
+            .call => |call| return try self.resumeRelateCall(frame, task, expr.ty, call, input),
+            .tag, .tuple, .list, .record => {
+                task.index += 1;
+                return try self.nextRelateChild(task, expr);
+            },
+            .nominal => return self.finishRelate(task),
+            .lookup_local, .lookup_external, .lookup_required, .zero_argument_tag, .empty_list, .empty_record, .block, .match_, .if_, .runtime_error, .lambda, .closure => unreachable,
+        }
+    }
+
+    fn finishRelate(self: *BodyContext, task: *RelateTask) EvidenceStep {
+        _ = self;
+        task.timing.end();
+        return .{ .ret = .none };
+    }
+
+    /// Relate the next constructor child to its slot of the request.
+    fn nextRelateChild(self: *BodyContext, task: *RelateTask, expr: checked.CheckedExpr) Allocator.Error!EvidenceStep {
+        const expected_node = task.expected_node;
+        switch (expr.data) {
+            .tag => |tag| {
+                if (task.index < tag.args.len) {
+                    return evidenceCall(self, .{ .relate = .{
+                        .expr = tag.args[task.index],
+                        .expected_node = try self.graph.tagConstructionPayloadNode(expected_node, task.name, task.index),
+                    } });
+                }
+            },
+            .tuple => |items| {
+                if (task.index < items.len) {
+                    return evidenceCall(self, .{ .relate = .{ .expr = items[task.index], .expected_node = task.child_nodes[task.index] } });
+                }
+            },
+            .list => |items| {
+                if (task.index < items.len) {
+                    return evidenceCall(self, .{ .relate = .{ .expr = items[task.index], .expected_node = task.fn_node } });
+                }
+            },
+            .record => |record| {
+                if (task.index < record.fields.len) {
+                    const field = record.fields[task.index];
+                    const mono_field_name = try self.recordFieldName(self.view, field.label);
+                    return evidenceCall(self, .{ .relate = .{
+                        .expr = field.value,
+                        .expected_node = try self.graph.recordConstructionFieldValueNode(expected_node, mono_field_name),
+                    } });
+                }
+            },
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .nominal => unreachable,
+        }
+        return self.finishRelate(task);
+    }
+
+    /// `relateCallExprAtNode`: a shareable direct call relates its shared
+    /// request; any other call instantiates its callee on a call context.
+    fn beginRelateCall(self: *BodyContext, frame: *EvidenceFrame, task: *RelateTask, checked_ret_ty: checked.CheckedTypeId, call: CheckedCall) Allocator.Error!EvidenceStep {
+        if (call.direct_target) |target| {
+            if (try self.directCallRequestIsShareable(target, null)) {
+                frame.cursor = 2;
+                return evidenceCall(self, .{ .direct_call_request = .{
+                    .expr = task.expr,
+                    .target = target,
+                    .call = call,
+                    .checked_ret_ty = checked_ret_ty,
+                    .source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload),
+                    .expected_ret_node = null,
+                } });
+            }
+        }
+        const call_ctx = try self.createCallContext();
+        task.call_ctx = call_ctx;
+
+        const source_fn_ty = if (call.direct_target) |target|
+            self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload)
+        else
+            call.source_fn_ty_payload;
+        const hosted_try_capability = if (call.direct_target) |target|
+            try self.hostedTryCapabilityForResolvedTarget(target)
+        else
+            null;
+        frame.cursor = 3;
+        return evidenceCall(call_ctx, .{ .instantiate_call = .{
+            .source_fn_ty = source_fn_ty,
+            .caller = self,
+            .checked_ret_ty = checked_ret_ty,
+            .checked_args = call.args,
+            .expected_ret_node = if (hosted_try_capability != null) task.expected_node else null,
+            .hosted_try_capability = hosted_try_capability,
+            .capture_constructor_argument_evidence = if (call.direct_target) |target|
+                try self.iteratorCallNeedsConstructorArgumentEvidence(
+                    self.iteratorProcedureForResolvedTarget(target),
+                    call.args,
+                )
+            else
+                false,
+        } });
+    }
+
+    /// Continue relating a call: after its request node, relate each
+    /// argument to its request slot, then an indirect call's callee.
+    fn resumeRelateCall(self: *BodyContext, frame: *EvidenceFrame, task: *RelateTask, checked_ret_ty: checked.CheckedTypeId, call: CheckedCall, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
+        _ = checked_ret_ty;
+        switch (frame.cursor) {
+            // The call's request node.
+            2, 3 => {
+                task.fn_node = input.?.nodeValue();
+                const fn_nodes = try self.graph.functionNodes(task.fn_node);
+                try relateRequestComponent(self.graph, fn_nodes.ret, task.expected_node);
+                task.child_nodes = fn_nodes.args;
+                task.index = 0;
+                frame.cursor += 2;
+            },
+            // An argument relation.
+            4, 5 => task.index += 1,
+            // The indirect callee relation.
+            else => {
+                if (task.call_ctx) |call_ctx| self.destroyCallContext(call_ctx);
+                task.call_ctx = null;
+                return self.finishRelate(task);
+            },
+        }
+        if (task.index < call.args.len) {
+            return evidenceCall(self, .{ .relate = .{ .expr = call.args[task.index], .expected_node = task.child_nodes[task.index] } });
+        }
+        if (frame.cursor == 5 and call.direct_target == null) {
+            frame.cursor = 6;
+            return evidenceCall(self, .{ .relate = .{ .expr = call.func, .expected_node = task.fn_node } });
+        }
+        if (task.call_ctx) |call_ctx| self.destroyCallContext(call_ctx);
+        task.call_ctx = null;
+        return self.finishRelate(task);
+    }
 
     fn lowerExprTypeNode(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!NodeId {
-        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
-        defer timing_scope.end();
-        const expr = self.view.bodies.expr(expr_id);
-        return switch (expr.data) {
-            .call => |call| try self.callResultTypeNode(expr_id, expr.ty, call, null),
-            .dispatch_call => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
-            .interpolation => |interpolation| try self.dispatchResultTypeNode(expr.ty, interpolation.plan, null),
-            .type_dispatch_call => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
-            .method_eq => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
-            .lookup_local => |lookup| try self.lookupExprTypeNode(expr.ty, lookup.resolved),
-            .lookup_external => |resolved| try self.lookupExprTypeNode(expr.ty, resolved),
-            .lookup_required => |resolved| try self.lookupExprTypeNode(expr.ty, resolved),
-            .lambda => |lambda| try self.lambdaFunctionNode(expr.ty, lambda),
-            .closure => |closure| try self.closureFunctionNode(closure),
-            .field_access => |field| try self.fieldAccessTypeNode(expr.ty, field, null),
-            .tuple_access => |access| try self.tupleAccessTypeNode(expr.ty, access.tuple, access.elem_index, null),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => try self.lowerTypeNode(expr.ty),
-        };
+        return (try self.runEvidence(.{ .type_node = .{ .expr = expr_id } })).nodeValue();
     }
 
     fn lowerExprType(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!Type.TypeId {
@@ -33793,78 +35202,7 @@ const BodyContext = struct {
         hosted_try_capability: ?HostedTryAdapterCapability,
         capture_constructor_argument_evidence: bool,
     ) Allocator.Error!NodeId {
-        const function = self.checkedFunctionType(source_fn_ty);
-        if (function.args.len != checked_args.len) {
-            Common.invariant("checked direct call arity differs from its function type");
-        }
-        const fn_node = try self.instNode(source_fn_ty);
-        const fn_graph = switch (self.graph.content(fn_node)) {
-            .func => |func| func,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked direct call had a non-function instantiation node"),
-        };
-        if (fn_graph.args.len != checked_args.len) {
-            Common.invariant("checked direct call graph arity differed from its argument span");
-        }
-        const request_args = try self.graph.arena().alloc(NodeId, function.args.len);
-        for (fn_graph.args, checked_args, 0..) |formal_node, checked_arg, index| {
-            const arg_ty = caller.view.bodies.expr(checked_arg).ty;
-            const evidence_node = if (capture_constructor_argument_evidence or caller.propagate_constructor_value_evidence)
-                try caller.exprCallArgumentEvidenceNode(checked_arg)
-            else
-                try caller.exprCallResultEvidenceNode(checked_arg, null);
-            if (evidence_node) |evidence| {
-                if (try self.graph.containsGeneratedPrivate(evidence)) {
-                    const public_node = try caller.freshInstNode(arg_ty);
-                    try self.graph.relateOpaqueInterface(public_node, evidence);
-                    try relateRequestComponent(self.graph, formal_node, public_node);
-                    request_args[index] = evidence;
-                } else {
-                    const request = try self.unifyFormalWithCallerArgNode(caller, formal_node, arg_ty);
-                    try relateRequestComponent(self.graph, formal_node, evidence);
-                    request_args[index] = request;
-                }
-            } else {
-                request_args[index] = try self.unifyFormalWithCallerArgNode(caller, formal_node, arg_ty);
-            }
-        }
-        if (expected_ret_node) |expected| {
-            if (hosted_try_capability) |capability| {
-                if (try self.hostedTryWidenedRequestNode(capability, fn_node, request_args, expected)) |request_fn| {
-                    return request_fn;
-                }
-            }
-            // An explicit request owns the call's exact result evidence. Keep
-            // the checked result as a fresh public interface: its cached cell
-            // may already contain private evidence from another occurrence.
-            const public_ret = try caller.freshInstNode(checked_ret_ty);
-            try relateRequestComponent(self.graph, fn_graph.ret, public_ret);
-        } else {
-            const caller_ret = try caller.instNode(checked_ret_ty);
-            if (hosted_try_capability) |capability| {
-                if (try self.hostedTryWidenedRequestNode(capability, fn_node, request_args, caller_ret)) |request_fn| {
-                    return request_fn;
-                }
-            }
-            if (try self.graph.containsGeneratedPrivate(caller_ret)) {
-                // A prior occurrence may already have refined this cached cell
-                // to a private producer representation. Preserve its public
-                // interface without letting that representation select this
-                // call's producer before the call itself has done so.
-                const public_ret = try caller.freshInstNode(checked_ret_ty);
-                try self.graph.relateOpaqueInterface(public_ret, caller_ret);
-                try relateRequestComponent(self.graph, fn_graph.ret, public_ret);
-            } else {
-                try relateRequestComponent(self.graph, fn_graph.ret, caller_ret);
-            }
-        }
-        var request_ret = fn_graph.ret;
-        if (expected_ret_node) |expected| {
-            request_ret = if (try self.graph.containsGeneratedPrivate(expected))
-                expected
-            else
-                try checkedMonoRequestNode(self.graph, fn_graph.ret, expected, .exact);
-        }
-        return try functionRequestNode(self.graph, fn_node, request_args, request_ret);
+        return (try self.runEvidence(.{ .instantiate_call = .{ .source_fn_ty = source_fn_ty, .caller = caller, .checked_ret_ty = checked_ret_ty, .checked_args = checked_args, .expected_ret_node = expected_ret_node, .hosted_try_capability = hosted_try_capability, .capture_constructor_argument_evidence = capture_constructor_argument_evidence } })).nodeValue();
     }
 
     fn hostedTryWidenedRequestNode(
@@ -33912,75 +35250,7 @@ const BodyContext = struct {
         expected_ret_node: ?NodeId,
         phase: DispatchInstantiationPhase,
     ) Allocator.Error!NodeId {
-        const plan = callable_plan.plan;
-        const operands = callable_plan.operands;
-        const source_fn_ty = plan.callable_ty;
-        const function = self.checkedFunctionType(source_fn_ty);
-        if (function.args.len != operands.len) {
-            Common.invariant("checked dispatch plan arity differs from its function type");
-        }
-        const fn_node = try self.instNode(source_fn_ty);
-        const fn_graph = switch (self.graph.content(fn_node)) {
-            .func => |func| func,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked dispatch plan had a non-function instantiation node"),
-        };
-        if (fn_graph.args.len != operands.len) {
-            Common.invariant("checked dispatch plan graph arity differed from its operand span");
-        }
-        switch (plan.dispatcher) {
-            .arg => |index| {
-                if (index >= fn_graph.args.len) Common.invariant("dispatch plan dispatcher argument index was outside the callable graph");
-                const dispatcher_node = try caller.instNode(plan.dispatcher_ty);
-                try relateRequestComponent(self.graph, fn_graph.args[index], dispatcher_node);
-            },
-            .type_only => {},
-        }
-        const request_args = try self.graph.arena().alloc(NodeId, function.args.len);
-        for (fn_graph.args, operands, request_args) |formal_node, operand, *request_arg| {
-            request_arg.* = formal_node;
-            switch (operand) {
-                .checked_expr => |checked_arg| {
-                    const arg_ty = caller.view.bodies.expr(checked_arg).ty;
-                    if (phase == .expression_lowering) {
-                        const evidence_node = try caller.lowerExprTypeNode(checked_arg);
-                        if (try self.graph.containsGeneratedPrivate(evidence_node)) {
-                            const public_node = try caller.freshInstNode(arg_ty);
-                            try self.graph.relateOpaqueInterface(public_node, evidence_node);
-                            try relateRequestComponent(self.graph, formal_node, public_node);
-                            request_arg.* = evidence_node;
-                        } else {
-                            const public_node = try caller.instNode(arg_ty);
-                            try relateRequestComponent(self.graph, formal_node, public_node);
-                            try relateRequestComponent(self.graph, formal_node, evidence_node);
-                        }
-                    } else {
-                        try relateRequestComponent(self.graph, formal_node, try caller.instNode(arg_ty));
-                    }
-                },
-                .generated_interpolation_iter,
-                .generated_numeral,
-                .generated_quote,
-                => {},
-            }
-        }
-        var request_ret = fn_graph.ret;
-        if (expected_ret_node) |expected| {
-            try relateRequestComponent(self.graph, fn_graph.ret, try caller.freshInstNode(checked_ret_ty));
-            request_ret = if (try self.graph.containsGeneratedPrivate(expected))
-                expected
-            else
-                try checkedMonoRequestNode(self.graph, fn_graph.ret, expected, .exact);
-        } else {
-            const caller_ret = try caller.instNode(checked_ret_ty);
-            if (try self.graph.containsGeneratedPrivate(caller_ret)) {
-                const public_ret = try caller.freshInstNode(checked_ret_ty);
-                try self.graph.relateOpaqueInterface(public_ret, caller_ret);
-                try relateRequestComponent(self.graph, fn_graph.ret, public_ret);
-            } else {
-                try relateRequestComponent(self.graph, fn_graph.ret, caller_ret);
-            }
-        }
-        return try functionRequestNode(self.graph, fn_node, request_args, request_ret);
+        return (try self.runEvidence(.{ .instantiate_dispatch = .{ .callable_plan = callable_plan, .caller = caller, .checked_ret_ty = checked_ret_ty, .expected_ret_node = expected_ret_node, .phase = phase } })).nodeValue();
     }
 
     fn instantiateTargetFromPlanNode(
@@ -34066,42 +35336,7 @@ const BodyContext = struct {
         checked_arg: checked.CheckedExprId,
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!?NodeId {
-        if (self.checkedExprDivergesInLoweredRuntime(checked_arg)) return null;
-        const expr = self.view.bodies.expr(checked_arg);
-        switch (expr.data) {
-            .call => |call| {
-                if (call.direct_target) |target| {
-                    const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
-                    const fn_node = try self.directCallRequestNode(
-                        checked_arg,
-                        target,
-                        call,
-                        expr.ty,
-                        source_fn_ty,
-                        if (expected_ty) |expected| try self.activeNodeFromType(expected) else null,
-                    );
-                    const fn_nodes = try self.graph.functionNodes(fn_node);
-                    if (try self.graph.containsGeneratedPrivate(fn_nodes.ret)) return fn_nodes.ret;
-                    return try self.directCallCompletedResultNode(checked_arg, target, call, source_fn_ty, fn_node);
-                }
-                return try self.callResultTypeNode(checked_arg, expr.ty, call, expected_ty);
-            },
-            .dispatch_call => |plan| return try self.dispatchResultTypeNode(expr.ty, plan, expected_ty),
-            .interpolation => |interpolation| return try self.dispatchResultTypeNode(expr.ty, interpolation.plan, expected_ty),
-            .type_dispatch_call => |plan| return try self.dispatchResultTypeNode(expr.ty, plan, expected_ty),
-            .method_eq => |plan| return try self.dispatchResultTypeNode(expr.ty, plan, expected_ty),
-            .field_access => |field| return try self.fieldAccessTypeNode(expr.ty, field, expected_ty),
-            .tuple_access => |access| return try self.tupleAccessTypeNode(expr.ty, access.tuple, access.elem_index, expected_ty),
-            .lookup_local => |lookup| return try self.lookupCallArgumentEvidenceNode(expr.ty, lookup.resolved, expected_ty),
-            .lookup_external => |resolved| return try self.lookupCallArgumentEvidenceNode(expr.ty, resolved, expected_ty),
-            .lookup_required => |resolved| return try self.lookupCallArgumentEvidenceNode(expr.ty, resolved, expected_ty),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
-        }
-        if (expected_ty) |ty| {
-            try self.constrainTypeToMono(expr.ty, ty);
-            return try self.activeNodeFromType(ty);
-        }
-        return null;
+        return (try self.runEvidence(.{ .call_evidence = .{ .expr = checked_arg, .expected_ty = expected_ty } })).maybeNodeValue();
     }
 
     /// Return the exact representation carried by a call argument. Besides a
@@ -34113,17 +35348,7 @@ const BodyContext = struct {
         self: *BodyContext,
         checked_arg: checked.CheckedExprId,
     ) Allocator.Error!?NodeId {
-        if (try self.exprCallResultEvidenceNode(checked_arg, null)) |produced| {
-            return if (try self.graph.containsGeneratedPrivate(produced)) produced else null;
-        }
-        const expr = self.view.bodies.expr(checked_arg);
-        switch (expr.data) {
-            .tuple, .record, .tag, .nominal, .list => {},
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
-        }
-        const argument_node = try self.freshInstNode(expr.ty);
-        const produced = (try self.exprProducedValueEvidenceNode(checked_arg, argument_node)) orelse return null;
-        return if (try self.graph.containsGeneratedPrivate(produced)) produced else null;
+        return (try self.runEvidence(.{ .argument_evidence = .{ .expr = checked_arg } })).maybeNodeValue();
     }
 
     /// Return the exact value witness explicitly produced by an expression at
@@ -34135,156 +35360,7 @@ const BodyContext = struct {
         checked_expr: checked.CheckedExprId,
         request_node: NodeId,
     ) Allocator.Error!?NodeId {
-        if (try self.exprCallResultEvidenceNode(checked_expr, null)) |produced| {
-            return try self.relateCheckedNodeToProducedValue(request_node, produced);
-        }
-        const expr = self.view.bodies.expr(checked_expr);
-        return switch (expr.data) {
-            .tuple => |items| blk: {
-                const item_nodes = try self.graph.tupleItemNodes(request_node);
-                if (items.len != item_nodes.len) Common.invariant("tuple value evidence arity differed from its graph type");
-                const produced_items = try self.allocator.alloc(NodeId, items.len);
-                defer self.allocator.free(produced_items);
-                var requires_distinct_witness = false;
-                for (items, item_nodes, 0..) |item, item_node, index| {
-                    const produced = (try self.exprProducedValueEvidenceNode(item, item_node)) orelse item_node;
-                    const witness = try self.constructorChildWitness(
-                        item_node,
-                        produced,
-                        "tuple value evidence child differed without explicit representation evidence",
-                    );
-                    produced_items[index] = witness.slot;
-                    if (witness.requires_witness) requires_distinct_witness = true;
-                }
-                if (!requires_distinct_witness) break :blk null;
-                const structural_node = try self.graph.newNode(.{
-                    .tuple = try self.graph.arena().dupe(NodeId, produced_items),
-                });
-                const witness = try self.constructorWitnessWithStructuralNode(request_node, structural_node);
-                break :blk try self.relateCheckedNodeToProducedValue(request_node, witness);
-            },
-            .tag => |tag| blk: {
-                const name = try self.tagName(self.view, tag.name);
-                const produced_payloads = try self.allocator.alloc(NodeId, tag.args.len);
-                defer self.allocator.free(produced_payloads);
-                var requires_distinct_witness = false;
-                for (tag.args, 0..) |payload, index| {
-                    const payload_node = try self.graph.tagConstructionPayloadNode(request_node, name, index);
-                    const produced = (try self.exprProducedValueEvidenceNode(payload, payload_node)) orelse payload_node;
-                    const witness = try self.constructorChildWitness(
-                        payload_node,
-                        produced,
-                        "tag value evidence child differed without explicit representation evidence",
-                    );
-                    produced_payloads[index] = witness.slot;
-                    if (witness.requires_witness) requires_distinct_witness = true;
-                }
-                if (!requires_distinct_witness) break :blk null;
-                const structural_node = try self.graph.tagValueNodeWithPayloads(request_node, name, produced_payloads);
-                const witness = try self.constructorWitnessWithStructuralNode(request_node, structural_node);
-                break :blk try self.relateCheckedNodeToProducedValue(request_node, witness);
-            },
-            .record => |record| blk: {
-                const target_fields = (try self.graph.recordConstructionNodes(request_node)).fields;
-                const produced_fields = try self.allocator.dupe(InstField, target_fields);
-                defer self.allocator.free(produced_fields);
-                const base_node = if (record.ext) |base_expr|
-                    try self.exprProducedValueEvidenceNode(
-                        base_expr,
-                        try self.freshInstNode(self.view.bodies.expr(base_expr).ty),
-                    )
-                else
-                    null;
-                var requires_distinct_witness = false;
-                for (target_fields, 0..) |field, index| {
-                    const field_value = (try self.recordUpdateFieldValue(record.fields, field.name)) orelse {
-                        const base_witness = base_node orelse continue;
-                        var is_unset = false;
-                        for (record.unsets) |label| {
-                            if (try self.recordFieldName(self.view, label) == field.name) {
-                                is_unset = true;
-                                break;
-                            }
-                        }
-                        if (is_unset) continue;
-                        const produced_slot = try self.graph.recordConstructionFieldNode(base_witness, field.name);
-                        const witness = try self.constructorChildWitness(
-                            field.ty,
-                            produced_slot,
-                            "record update evidence field differed without explicit representation evidence",
-                        );
-                        produced_fields[index].ty = witness.slot;
-                        if (witness.requires_witness) requires_distinct_witness = true;
-                        continue;
-                    };
-                    const value_node = try self.graph.recordConstructionFieldValueNode(request_node, field.name);
-                    const produced_value = (try self.exprProducedValueEvidenceNode(field_value, value_node)) orelse value_node;
-                    const produced_slot = switch (try self.graph.recordConstructionFieldKind(request_node, field.name)) {
-                        .required, .defaulted => produced_value,
-                        .optional => optional: {
-                            const present = try self.nameStoreMut().internTagLabel(Builder.optional_slot_present_tag);
-                            const present_node = try self.graph.tagValueNodeWithPayloads(field.ty, present, &.{produced_value});
-                            break :optional try self.constructorWitnessWithStructuralNode(field.ty, present_node);
-                        },
-                    };
-                    const witness = try self.constructorChildWitness(
-                        field.ty,
-                        produced_slot,
-                        "record value evidence child differed without explicit representation evidence",
-                    );
-                    produced_fields[index].ty = witness.slot;
-                    if (witness.requires_witness) requires_distinct_witness = true;
-                }
-                if (!requires_distinct_witness) break :blk null;
-                const structural_node = try self.graph.newNode(.{ .record = .{
-                    .fields = try self.graph.arena().dupe(InstField, produced_fields),
-                    .ext = try self.graph.newNode(.empty_record),
-                } });
-                const witness = try self.constructorWitnessWithStructuralNode(request_node, structural_node);
-                break :blk try self.relateCheckedNodeToProducedValue(request_node, witness);
-            },
-            .list => |items| blk: {
-                const element_node = try self.graph.listElementNode(request_node);
-                var produced_element: ?NodeId = null;
-                for (items) |item| {
-                    const produced = (try self.exprProducedValueEvidenceNode(item, element_node)) orelse element_node;
-                    if (produced_element) |selected| {
-                        try selectRequestRepresentation(self.graph, selected, produced);
-                    } else {
-                        const witness = try self.constructorChildWitness(
-                            element_node,
-                            produced,
-                            "list value evidence child differed without explicit representation evidence",
-                        );
-                        if (witness.requires_witness) produced_element = witness.slot;
-                    }
-                }
-                const element_witness = produced_element orelse break :blk null;
-                const structural_node = try self.graph.newNode(.{ .list = element_witness });
-                const witness = try self.constructorWitnessWithStructuralNode(request_node, structural_node);
-                break :blk try self.relateCheckedNodeToProducedValue(request_node, witness);
-            },
-            .nominal => |nominal| blk: {
-                const representation_node = self.constructorRepresentationNode(request_node);
-                const named = switch (self.graph.content(representation_node)) {
-                    .named => |value| value,
-                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("nominal value evidence had no nominal graph representation"),
-                };
-                const backing = named.backing orelse
-                    Common.invariant("nominal value evidence graph node had no backing");
-                const produced = (try self.exprProducedValueEvidenceNode(nominal.backing_expr, backing.node)) orelse
-                    break :blk null;
-                const backing_witness = try self.constructorChildWitness(
-                    backing.node,
-                    produced,
-                    "nominal value evidence child differed without explicit representation evidence",
-                );
-                if (!backing_witness.requires_witness) break :blk null;
-                const witness = try self.graph.namedValueNodeWithBacking(representation_node, backing_witness.slot);
-                break :blk try self.relateCheckedNodeToProducedValue(representation_node, witness);
-            },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
-        };
+        return (try self.runEvidence(.{ .produced_value = .{ .expr = checked_expr, .request_node = request_node } })).maybeNodeValue();
     }
 
     fn lookupCallArgumentEvidenceNode(
@@ -34493,60 +35569,7 @@ const BodyContext = struct {
         access: anytype,
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!NodeId {
-        if (access.segments.len == 0) Common.invariant("checked field access path had no segments");
-        var saw_optional = false;
-        var field_node = try self.lowerExprTypeNode(access.receiver);
-        for (access.segments, 0..) |segment, index| {
-            const is_last = index + 1 == access.segments.len;
-            const mono_field_name = try self.recordFieldName(self.view, segment.field_name);
-            switch (segment.mode) {
-                // A required segment's slot IS the field's value: the chain
-                // continues from the receiver-derived slot node so a
-                // producer-authored (generated-private) representation—e.g.
-                // a stored iterator witness—survives the access. The
-                // segment's checked success type relates to the slot only as
-                // its public interface, never by direct unification; the
-                // final segment's relation is the trailing whole-expression
-                // constraint below.
-                .required => {
-                    const slot_node = try self.graph.requiredRecordFieldNode(field_node, mono_field_name);
-                    if (!is_last) {
-                        try self.constrainCheckedInterfaceToCell(
-                            segment.success_ty,
-                            DraftTypeCell.fromGraphNode(slot_node),
-                        );
-                    }
-                    field_node = slot_node;
-                },
-                // A `.?` segment's slot is the tagged representation of the
-                // value; the chain continues from the Present payload.
-                .optional => {
-                    saw_optional = true;
-                    const field = try self.graph.optionalRecordFieldNodes(field_node, mono_field_name);
-                    const value_node = try self.instNode(segment.success_ty);
-                    try self.graph.unify(field.value, value_node);
-                    try self.graph.unify(field.slot, try self.optionalSlotNode(value_node));
-                    field_node = field.value;
-                },
-            }
-        }
-        if (saw_optional) {
-            // The chain's observable type is the checked expression's own
-            // `Try(τ, [MissingField])` from the checking output; constrain
-            // its Ok argument with the receiver-refined final value node
-            // (instNode caches by checked identity, so this reaches the Try
-            // node's arg).
-            try self.graph.unify(field_node, try self.instNode(self.checkedTryOkArg(checked_ty)));
-            field_node = try self.instNode(checked_ty);
-        }
-        try self.constrainCheckedInterfaceToCell(
-            checked_ty,
-            DraftTypeCell.fromGraphNode(field_node),
-        );
-        if (expected_ty) |expected| {
-            try relateRequestComponent(self.graph, try self.graph.importMono(expected), field_node);
-        }
-        return field_node;
+        return (try self.runEvidence(.{ .field_access = .{ .checked_ty = checked_ty, .access = access, .expected_ty = expected_ty } })).nodeValue();
     }
 
     fn tupleAccessTypeNode(
@@ -34556,18 +35579,7 @@ const BodyContext = struct {
         elem_index: usize,
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!NodeId {
-        const tuple_node = try self.lowerExprTypeNode(tuple);
-        const item_nodes = try self.graph.tupleItemNodes(tuple_node);
-        if (elem_index >= item_nodes.len) Common.invariant("tuple access index was outside its graph tuple type");
-        const item_node = item_nodes[elem_index];
-        try self.constrainCheckedInterfaceToCell(
-            checked_ty,
-            DraftTypeCell.fromGraphNode(item_node),
-        );
-        if (expected_ty) |expected| {
-            try relateRequestComponent(self.graph, try self.graph.importMono(expected), item_node);
-        }
-        return item_node;
+        return (try self.runEvidence(.{ .tuple_access = .{ .checked_ty = checked_ty, .tuple = tuple, .elem_index = elem_index, .expected_ty = expected_ty } })).nodeValue();
     }
 
     /// The Ok type argument of a checked nominal `Try` type (behind
@@ -34608,55 +35620,7 @@ const BodyContext = struct {
         call: anytype,
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!NodeId {
-        if (call.direct_target == null) {
-            if (try self.indirectCalleeMonoType(call.func, call.args, expected_ret_ty)) |fn_ty| {
-                const ret_ty = self.functionReturnType(fn_ty);
-                if (expected_ret_ty) |expected| {
-                    if (!self.sameType(expected, ret_ty)) {
-                        Common.invariant("checked indirect call result type differed from its expected Monotype type");
-                    }
-                    try self.constrainTypeToMono(checked_ret_ty, expected);
-                    return try self.activeNodeFromType(expected);
-                }
-                try self.constrainTypeToMono(checked_ret_ty, ret_ty);
-                return try self.activeNodeFromType(ret_ty);
-            }
-
-            var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
-            call_ctx.evidence = self.evidence;
-            defer call_ctx.deinit();
-            call_ctx.owner_context_fn_key = self.owner_context_fn_key;
-            call_ctx.current_fn_key = self.current_fn_key;
-            call_ctx.source_region_override = self.source_region_override;
-            call_ctx.current_entry_root = self.current_entry_root;
-            call_ctx.in_deferred_body = self.in_deferred_body;
-
-            const fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(
-                call.source_fn_ty_payload,
-                self,
-                checked_ret_ty,
-                call.args,
-                if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
-                null,
-                false,
-            );
-            return switch (self.graph.content(fn_node)) {
-                .func => |function| function.ret,
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked indirect call instantiated a non-function graph node"),
-            };
-        }
-
-        const target = call.direct_target.?;
-        const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
-        const fn_node = try self.directCallRequestNode(
-            checked_expr,
-            target,
-            call,
-            checked_ret_ty,
-            source_fn_ty,
-            if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
-        );
-        return try self.directCallCompletedResultNode(checked_expr, target, call, source_fn_ty, fn_node);
+        return (try self.runEvidence(.{ .call_result = .{ .expr = checked_expr, .checked_ret_ty = checked_ret_ty, .call = call, .expected_ret_ty = expected_ret_ty } })).nodeValue();
     }
 
     /// The request interface of a direct call expression, instantiated once
@@ -34678,20 +35642,7 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         expected_ret_node: ?NodeId,
     ) Allocator.Error!NodeId {
-        if (!try self.directCallRequestIsShareable(target, expected_ret_node)) {
-            return try self.directCallTypeNode(checked_ret_ty, call, source_fn_ty, expected_ret_node);
-        }
-        if (self.direct_call_requests.get(checked_expr)) |request| {
-            self.builder.countBodyDiagnostic("direct_call_request_reuses");
-            if (expected_ret_node) |expected| {
-                const fn_nodes = try self.graph.functionNodes(request.fn_node);
-                _ = try checkedMonoRequestNode(self.graph, fn_nodes.ret, expected, .exact);
-            }
-            return request.fn_node;
-        }
-        const fn_node = try self.directCallTypeNode(checked_ret_ty, call, source_fn_ty, expected_ret_node);
-        try self.direct_call_requests.put(self.allocator, checked_expr, .{ .fn_node = fn_node });
-        return fn_node;
+        return (try self.runEvidence(.{ .direct_call_request = .{ .expr = checked_expr, .target = target, .call = call, .checked_ret_ty = checked_ret_ty, .source_fn_ty = source_fn_ty, .expected_ret_node = expected_ret_node } })).nodeValue();
     }
 
     fn directCallRequestIsShareable(
@@ -34716,13 +35667,7 @@ const BodyContext = struct {
         checked_args: []const checked.CheckedExprId,
         arg_nodes: []const NodeId,
     ) Allocator.Error!void {
-        if (self.direct_call_requests.get(checked_expr)) |request| {
-            if (request.fn_node == fn_node and request.args_prepared) return;
-        }
-        try self.prepareExprSpanAtNodes(checked_args, arg_nodes);
-        if (self.direct_call_requests.getPtr(checked_expr)) |request| {
-            if (request.fn_node == fn_node) request.args_prepared = true;
-        }
+        _ = try self.runEvidence(.{ .prepare_direct_args = .{ .expr = checked_expr, .fn_node = fn_node, .checked_exprs = checked_args, .nodes = arg_nodes } });
     }
 
     /// Select and draft the callee specialization of a direct call's request
@@ -34778,32 +35723,7 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         fn_node: NodeId,
     ) Allocator.Error!NodeId {
-        if (self.direct_call_requests.get(checked_expr)) |request| {
-            if (request.fn_node == fn_node) {
-                if (request.completed) |completed| return (try self.graph.functionNodes(completed.fn_node)).ret;
-            }
-        }
-        if (self.callsiteIntrinsicForResolvedTarget(target)) |intrinsic| {
-            const callable_node = try self.callsiteIntrinsicRequestNode(intrinsic, fn_node);
-            return (try self.graph.functionNodes(callable_node)).ret;
-        }
-        const fn_nodes = try self.graph.functionNodes(fn_node);
-        if (self.checkedExprDivergesInLoweredRuntime(call.func)) return fn_nodes.ret;
-        for (call.args) |arg| {
-            if (self.checkedExprDivergesInLoweredRuntime(arg)) return fn_nodes.ret;
-        }
-        try self.prepareDirectCallArgsAtNodes(checked_expr, fn_node, call.args, fn_nodes.args);
-        for (fn_nodes.args) |arg_node| {
-            if (try self.nodeIsProvenUninhabited(arg_node)) return fn_nodes.ret;
-        }
-        if (self.iteratorProcedureForResolvedTarget(target)) |procedure| {
-            if (procedure == .iter_next and fn_nodes.args.len == 1 and self.isGeneratedIteratorEvidenceNode(fn_nodes.args[0])) {
-                return fn_nodes.ret;
-            }
-        }
-        if (self.resolvedTargetIsStrInspect(target)) return fn_nodes.ret;
-        const completed = try self.completedDirectCalleeAtNode(checked_expr, target, source_fn_ty, fn_node);
-        return (try self.graph.functionNodes(completed.fn_node)).ret;
+        return (try self.runEvidence(.{ .completed_result = .{ .expr = checked_expr, .target = target, .call = call, .source_fn_ty = source_fn_ty, .fn_node = fn_node } })).nodeValue();
     }
 
     fn directCallTypeNode(
@@ -34813,38 +35733,7 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         expected_ret_node: ?NodeId,
     ) Allocator.Error!NodeId {
-        if (call.direct_target == null) {
-            Common.invariant("direct checked call instantiation received an indirect call");
-        }
-        var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
-        call_ctx.evidence = self.evidence;
-        defer call_ctx.deinit();
-        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
-        call_ctx.current_fn_key = self.current_fn_key;
-        call_ctx.source_region_override = self.source_region_override;
-        call_ctx.current_entry_root = self.current_entry_root;
-        call_ctx.in_deferred_body = self.in_deferred_body;
-        var fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(
-            source_fn_ty,
-            self,
-            checked_ret_ty,
-            call.args,
-            expected_ret_node,
-            try self.hostedTryCapabilityForResolvedTarget(call.direct_target.?),
-            try self.iteratorCallNeedsConstructorArgumentEvidence(
-                self.iteratorProcedureForResolvedTarget(call.direct_target.?),
-                call.args,
-            ),
-        );
-        if (self.iteratorProcedureForResolvedTarget(call.direct_target.?)) |procedure| {
-            const public_fn_node = self.graph.requestSourceInterface(fn_node) orelse fn_node;
-            if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, call.args)) |private_fn_node| {
-                try self.graph.registerRequestSourceInterface(private_fn_node, public_fn_node);
-                try relateFunctionRequestInterface(self.graph, public_fn_node, private_fn_node);
-                fn_node = private_fn_node;
-            }
-        }
-        return fn_node;
+        return (try self.runEvidence(.{ .direct_call_type = .{ .expr = undefined, .target = call.direct_target orelse Common.invariant("direct checked call instantiation received an indirect call"), .call = call, .checked_ret_ty = checked_ret_ty, .source_fn_ty = source_fn_ty, .expected_ret_node = expected_ret_node } })).nodeValue();
     }
 
     fn fnTemplateForDirectCallAtNode(
@@ -38562,184 +39451,7 @@ const BodyContext = struct {
         checked_expr: checked.CheckedExprId,
         expected_node: NodeId,
     ) Allocator.Error!void {
-        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
-        defer timing_scope.end();
-        self.builder.countBodyDiagnostic("expr_relation_requests");
-        // Divergent expressions never return a value to relate to the request.
-        // In particular, checking may replace a failed callee with
-        // `runtime_error`, which emits a crash, while its unused call type
-        // contains `.err`.
-        if (self.checkedExprDivergesInLoweredRuntime(checked_expr)) return;
-        const expr = self.view.bodies.expr(checked_expr);
-        switch (expr.data) {
-            .lookup_local => |lookup| try self.relateLookupExprAtNode(checked_expr, lookup.resolved, expected_node),
-            .lookup_external => |resolved| try self.relateLookupExprAtNode(checked_expr, resolved, expected_node),
-            .lookup_required => |resolved| try self.relateLookupExprAtNode(checked_expr, resolved, expected_node),
-            .call => |call| try self.relateCallExprAtNode(checked_expr, expr.ty, call, expected_node),
-            .dispatch_call => |plan| try self.relateDispatchExprAtNode(expr.ty, plan, expected_node),
-            .interpolation => |interpolation| try self.relateDispatchExprAtNode(expr.ty, interpolation.plan, expected_node),
-            .type_dispatch_call => |plan| try self.relateDispatchExprAtNode(expr.ty, plan, expected_node),
-            .method_eq => |plan| try self.relateDispatchExprAtNode(expr.ty, plan, expected_node),
-            .field_access => |field| try self.relateFieldAccessExprAtNode(expr.ty, field, expected_node),
-            .tag => |tag| try self.relateTagExprAtNode(tag, expected_node),
-            .zero_argument_tag => _ = try self.graph.tagRowNodes(expected_node),
-            .nominal => |nominal| try self.relateNominalExprAtNode(nominal, expected_node),
-            .tuple => |items| try self.relateTupleExprAtNode(items, expected_node),
-            .list => |items| try self.relateListExprAtNode(items, expected_node),
-            .empty_list => _ = try self.graph.listElementNode(expected_node),
-            .empty_record => _ = try self.graph.recordConstructionNodes(expected_node),
-            .record => |record| try self.relateRecordExprAtNode(record, expected_node),
-            // These forms propagate the exact result cell while their own
-            // lowering establishes branch-local binders and statement state.
-            // Relating their shared checked result node here would collapse
-            // distinct generated-private representations across branches.
-            .block, .match_, .if_, .runtime_error => {},
-            .lambda, .closure => _ = try self.graph.functionNodes(expected_node),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => try self.graph.unify(expected_node, try self.lowerExprTypeNode(checked_expr)),
-        }
-    }
-
-    fn relateTagExprAtNode(
-        self: *BodyContext,
-        tag: anytype,
-        tag_node: NodeId,
-    ) Allocator.Error!void {
-        const name = try self.tagName(self.view, tag.name);
-        for (tag.args, 0..) |arg, index| {
-            try self.relateExprAtNode(
-                arg,
-                try self.graph.tagConstructionPayloadNode(tag_node, name, index),
-            );
-        }
-    }
-
-    fn relateNominalExprAtNode(
-        self: *BodyContext,
-        nominal: anytype,
-        nominal_node: NodeId,
-    ) Allocator.Error!void {
-        const representation_node = self.constructorRepresentationNode(nominal_node);
-        if (self.graph.content(representation_node) != .named) {
-            Common.invariant("nominal constructor had no nominal graph representation");
-        }
-        const named = self.graph.namedNodes(representation_node);
-        const backing_node = (named.backing orelse
-            Common.invariant("nominal constructor graph node had no backing")).node;
-        try self.relateExprAtNode(nominal.backing_expr, backing_node);
-    }
-
-    fn relateTupleExprAtNode(
-        self: *BodyContext,
-        items: []const checked.CheckedExprId,
-        tuple_node: NodeId,
-    ) Allocator.Error!void {
-        const item_nodes = try self.graph.tupleItemNodes(tuple_node);
-        if (items.len != item_nodes.len) Common.invariant("tuple constructor arity differed from its graph type");
-        for (items, item_nodes) |item, item_node| try self.relateExprAtNode(item, item_node);
-    }
-
-    fn relateListExprAtNode(
-        self: *BodyContext,
-        items: []const checked.CheckedExprId,
-        list_node: NodeId,
-    ) Allocator.Error!void {
-        const element_node = try self.graph.listElementNode(list_node);
-        for (items) |item| try self.relateExprAtNode(item, element_node);
-    }
-
-    fn relateRecordExprAtNode(
-        self: *BodyContext,
-        record: anytype,
-        record_node: NodeId,
-    ) Allocator.Error!void {
-        _ = try self.graph.recordConstructionNodes(record_node);
-        for (record.fields) |field| {
-            const mono_field_name = try self.recordFieldName(self.view, field.label);
-            try self.relateExprAtNode(
-                field.value,
-                try self.graph.recordConstructionFieldValueNode(record_node, mono_field_name),
-            );
-        }
-    }
-
-    fn relateDispatchExprAtNode(
-        self: *BodyContext,
-        checked_ret_ty: checked.CheckedTypeId,
-        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
-        expected_ret_node: NodeId,
-    ) Allocator.Error!void {
-        const actual_ret_node = try self.dispatchResultTypeNodeInPhase(
-            checked_ret_ty,
-            maybe_plan,
-            expected_ret_node,
-            .expression_lowering,
-        );
-        try relateRequestComponent(self.graph, actual_ret_node, expected_ret_node);
-    }
-
-    fn relateCallExprAtNode(
-        self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
-        checked_ret_ty: checked.CheckedTypeId,
-        call: anytype,
-        expected_ret_node: NodeId,
-    ) Allocator.Error!void {
-        if (call.direct_target) |target| {
-            if (try self.directCallRequestIsShareable(target, null)) {
-                const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
-                const fn_node = try self.directCallRequestNode(checked_expr, target, call, checked_ret_ty, source_fn_ty, null);
-                const fn_nodes = try self.graph.functionNodes(fn_node);
-                try relateRequestComponent(self.graph, fn_nodes.ret, expected_ret_node);
-                for (call.args, fn_nodes.args) |arg, arg_node| try self.relateExprAtNode(arg, arg_node);
-                return;
-            }
-        }
-        var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
-        call_ctx.evidence = self.evidence;
-        defer call_ctx.deinit();
-        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
-        call_ctx.current_fn_key = self.current_fn_key;
-        call_ctx.source_region_override = self.source_region_override;
-        call_ctx.current_entry_root = self.current_entry_root;
-        call_ctx.in_deferred_body = self.in_deferred_body;
-
-        const source_fn_ty = if (call.direct_target) |target|
-            self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload)
-        else
-            call.source_fn_ty_payload;
-        const hosted_try_capability = if (call.direct_target) |target|
-            try self.hostedTryCapabilityForResolvedTarget(target)
-        else
-            null;
-        const fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(
-            source_fn_ty,
-            self,
-            checked_ret_ty,
-            call.args,
-            if (hosted_try_capability != null) expected_ret_node else null,
-            hosted_try_capability,
-            if (call.direct_target) |target|
-                try self.iteratorCallNeedsConstructorArgumentEvidence(
-                    self.iteratorProcedureForResolvedTarget(target),
-                    call.args,
-                )
-            else
-                false,
-        );
-        const fn_nodes = try self.graph.functionNodes(fn_node);
-        try relateRequestComponent(self.graph, fn_nodes.ret, expected_ret_node);
-        for (call.args, fn_nodes.args) |arg, arg_node| try self.relateExprAtNode(arg, arg_node);
-        if (call.direct_target == null) try self.relateExprAtNode(call.func, fn_node);
-    }
-
-    fn relateFieldAccessExprAtNode(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        field: anytype,
-        expected_field_node: NodeId,
-    ) Allocator.Error!void {
-        const actual_field_node = try self.fieldAccessTypeNode(checked_ty, field, null);
-        try relateRequestComponent(self.graph, actual_field_node, expected_field_node);
+        _ = try self.runEvidence(.{ .relate = .{ .expr = checked_expr, .expected_node = expected_node } });
     }
 
     fn prepareConstructorChildrenAtNodes(
@@ -38775,13 +39487,7 @@ const BodyContext = struct {
         checked_exprs: []const checked.CheckedExprId,
         nodes: []const NodeId,
     ) Allocator.Error!void {
-        if (checked_exprs.len != nodes.len) Common.invariant("checked call argument count differed from graph function arity");
-        self.builder.countBodyDiagnostic("argument_spans_prepared");
-        self.builder.countBodyDiagnosticBy("arguments_prepared", checked_exprs.len);
-        for (checked_exprs, nodes) |checked_expr, node| {
-            try self.relateExprAtNode(checked_expr, node);
-        }
-        try self.ensureNestedCallablesAtNodes(checked_exprs, nodes);
+        _ = try self.runEvidence(.{ .prepare_span = .{ .checked_exprs = checked_exprs, .nodes = nodes } });
     }
 
     fn lowerPreparedExprSpanAtNodes(
@@ -42936,21 +43642,7 @@ const BodyContext = struct {
         expected_ret_node: ?NodeId,
         phase: DispatchInstantiationPhase,
     ) Allocator.Error!NodeId {
-        const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
-        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
-        if (try self.closedDirectGraphFreeResultNode(checked_ret_ty, plan, expected_ret_node)) |ret_node| {
-            return ret_node;
-        }
-        return switch (self.dispatchRuntimePlan(plan)) {
-            .callable => |callable_plan| try self.callableDispatchResultTypeNodeInPhase(
-                checked_ret_ty,
-                callable_plan,
-                expected_ret_node,
-                phase,
-            ),
-            .crash => expected_ret_node orelse
-                Common.invariant("rejected dispatch reached result type lookup without a contextual result cell"),
-        };
+        return (try self.runEvidence(.{ .dispatch_result = .{ .checked_ret_ty = checked_ret_ty, .maybe_plan = maybe_plan, .expected_ret_node = expected_ret_node, .phase = phase } })).nodeValue();
     }
 
     /// Consume a CheckedModule-proved closed direct call without constructing a
@@ -43038,54 +43730,7 @@ const BodyContext = struct {
         expected_ret_node: ?NodeId,
         phase: DispatchInstantiationPhase,
     ) Allocator.Error!NodeId {
-        const plan = callable_plan.plan;
-        var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
-        call_ctx.evidence = self.evidence;
-        defer call_ctx.deinit();
-        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
-        call_ctx.current_fn_key = self.current_fn_key;
-        call_ctx.source_region_override = self.source_region_override;
-        call_ctx.current_entry_root = self.current_entry_root;
-        call_ctx.in_deferred_body = self.in_deferred_body;
-
-        const plan_args = callable_plan.operands;
-        var callable_node = try call_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
-            callable_plan,
-            self,
-            checked_ret_ty,
-            expected_ret_node,
-            phase,
-        );
-        const resolution = self.evidenceResolution(plan) orelse
-            Common.invariant("runtime method result had no CheckedCallResolution evidence");
-        switch (resolution) {
-            .target => |lookup| {
-                const relation_lookup = lookup;
-                const target_node = try self.methodTargetNodeFromPlan(relation_lookup, &call_ctx, plan.callable_ty);
-                try self.relateDispatchTargetRequestInterface(relation_lookup, target_node, callable_node);
-                if (try self.generatedIteratorMethodRequestNode(
-                    relation_lookup,
-                    target_node,
-                    callable_node,
-                    plan_args,
-                )) |private_node| {
-                    callable_node = private_node;
-                }
-                if (phase == .expression_lowering) {
-                    callable_node = try self.lowerAndCompleteIteratorMethodResultAtNode(
-                        relation_lookup,
-                        callable_node,
-                        plan,
-                        self.dispatchUsesDirectGraphCallee(plan),
-                    );
-                }
-            },
-            .structural => {},
-        }
-        return switch (self.graph.content(callable_node)) {
-            .func => |function| function.ret,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked dispatch plan had a non-function graph node"),
-        };
+        return (try self.runEvidence(.{ .callable_dispatch_result = .{ .checked_ret_ty = checked_ret_ty, .maybe_plan = null, .callable_plan = callable_plan, .expected_ret_node = expected_ret_node, .phase = phase } })).nodeValue();
     }
 
     fn materializeConstFnEvidence(self: *BodyContext, fn_value: check.ConstStore.ConstFn) Allocator.Error!EvidenceChain {

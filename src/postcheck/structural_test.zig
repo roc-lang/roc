@@ -99,7 +99,7 @@ test "Monotype record expression lowering does not keep mutable field-store slic
 test "Monotype lookup lowering uses explicit resolved use nodes" {
     const lower_source = @embedFile("monotype/lower.zig");
     const lower_call = sourceSliceBetween(lower_source, "fn lowerCall", "fn directCallInstantiationSourceFnType");
-    const lower_expr_type = sourceSliceBetween(lower_source, "fn lowerExprType", "fn lowerExpr(self:");
+    const type_node_step = sourceSliceBetween(lower_source, "fn stepTypeNode(", "fn stepCallEvidence(");
     const lower_expr_at_type = sourceSliceBetween(lower_source, "fn lowerExprAtType", "fn sameType");
     const lower_lookup_at_type = sourceSliceBetween(lower_source, "fn lowerLookupExprAtType", "fn lowerProcedureUseValue");
     const lookup_type_node = sourceSliceBetween(lower_source, "fn lookupExprTypeNode", "fn lookupExprMonoType");
@@ -109,7 +109,7 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerExprType(call.func)") == null);
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerType(call.source_fn_ty_payload)") == null);
 
-    try expectContains(lower_expr_type, ".lookup_required => |resolved| try self.lookupExprTypeNode(expr.ty, resolved)");
+    try expectContains(type_node_step, ".lookup_required => |resolved| return finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, resolved))");
     try expectContains(lower_expr_at_type, ".lookup_required => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty)");
     try expectContains(lookup_type_node, "return try self.lowerTypeNode(checked_ty);");
     try std.testing.expect(std.mem.find(u8, lookup_type_node, "lookupExprMonoType") == null);
@@ -414,7 +414,12 @@ test "Monotype generated-private selection cannot become ordinary or reopen fini
         "fn instantiateTargetFromPlanNode(",
     );
     try expectContains(dispatch_instantiation, "callable_plan: CallableDispatchPlan");
-    try expectContains(dispatch_instantiation, "try relateRequestComponent(self.graph, fn_graph.args[index], dispatcher_node)");
+    const dispatch_instantiation_step = sourceSliceBetween(
+        lower_source,
+        "fn stepInstantiateDispatch(",
+        "fn stepFieldAccess(",
+    );
+    try expectContains(dispatch_instantiation_step, "try relateRequestComponent(self.graph, fn_graph.args[index], dispatcher_node)");
 
     const entry_wrapper = sourceSliceBetween(
         lower_source,
@@ -451,10 +456,10 @@ test "Monotype iterator result completion stays out of relation replay and retai
     const lower_source = @embedFile("monotype/lower.zig");
     const dispatch_result = sourceSliceBetween(
         lower_source,
-        "fn callableDispatchResultTypeNodeInPhase(",
-        "fn materializeConstFnEvidence(",
+        "fn stepDispatchResult(",
+        "fn stepCallResult(",
     );
-    try expectContains(dispatch_result, "if (phase == .expression_lowering)");
+    try expectContains(dispatch_result, "if (task.phase == .expression_lowering)");
     try expectContains(dispatch_result, "lowerAndCompleteIteratorMethodResultAtNode(");
 
     const completion = sourceSliceBetween(
@@ -562,18 +567,18 @@ test "Monotype gates divergent relations and crash dispatches before type instan
 
     const result_lookup = sourceSliceBetween(
         lower_source,
-        "fn dispatchResultTypeNodeInPhase(",
-        "fn callableDispatchResultTypeNodeInPhase(",
+        "fn stepDispatchResult(",
+        "fn stepCallResult(",
     );
     try expectContains(result_lookup, "rejected dispatch reached result type lookup without a contextual result cell");
     try expectNotContains(result_lookup, "unitType()");
 
     const relation_gate = sourceSliceBetween(
         lower_source,
-        "fn relateExprAtNode(",
-        "fn relateTagExprAtNode(",
+        "fn stepRelate(",
+        "fn finishRelate(",
     );
-    try expectContains(relation_gate, "if (self.checkedExprDivergesInLoweredRuntime(checked_expr)) return;");
+    try expectContains(relation_gate, "if (self.checkedExprDivergesInLoweredRuntime(checked_expr)) return self.finishRelate(task);");
     try expectNotContains(relation_gate, "checkedTypeContainsError");
 }
 
@@ -724,8 +729,10 @@ test "Monotype indirect calls retain graph-native function provenance" {
     try std.testing.expect(direct_prepare < direct_specialize);
     const direct_complete = std.mem.find(u8, call_source, "try self.completedDirectCalleeAtNode(checked_expr, target, source_fn_ty, fn_node)").?;
     try std.testing.expect(direct_prepare < direct_complete);
-    const prepare_source = sourceSliceBetween(lower_source, "fn prepareDirectCallArgsAtNodes(", "fn completedDirectCalleeAtNode(");
-    try expectContains(prepare_source, "try self.prepareExprSpanAtNodes(checked_args, arg_nodes)");
+    const prepare_source = sourceSliceBetween(lower_source, "fn stepPrepareArgs(", "fn stepRelate(");
+    try expectContains(prepare_source, "if (direct_call) {");
+    try expectContains(prepare_source, ".relate = .{ .expr = task.checked_exprs[task.index], .expected_node = task.nodes[task.index] }");
+    try expectContains(prepare_source, "try self.ensureNestedCallablesAtNodes(task.checked_exprs, task.nodes)");
 }
 
 test "Monotype open specialization lookup covers the complete function interface" {

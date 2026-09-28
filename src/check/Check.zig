@@ -23295,6 +23295,10 @@ const BlockStatementsCheck = struct {
 /// One statement suspended on a child expression.
 const StatementCheck = struct {
     stmt_idx: CIR.Statement.Idx,
+    /// The statement as it was when checking began. Checking a child can
+    /// retire this statement node to a runtime error; the statement's own
+    /// checking still finishes from the payload it started with.
+    stmt: CIR.Statement,
     statement_expected: Expected,
     blocks_later_hoists: bool = false,
     phase: u8 = 0,
@@ -23338,6 +23342,7 @@ fn stepBlockStatements(self: *Self, state: *BlockStatementsCheck, statements: CI
 
         state.current = .{
             .stmt_idx = stmt_idx,
+            .stmt = self.cir.store.getStatement(stmt_idx),
             .statement_expected = if (state.blocks_later_hoists)
                 base_statement_expected.suppressHoistSelection()
             else
@@ -23387,7 +23392,7 @@ fn releaseDeclStatement(self: *Self, decl: DeclStatementCheck) void {
 /// or null when the statement is fully checked.
 fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *StatementCheck, env: *Env) std.mem.Allocator.Error!?ExprChildRequest {
     const stmt_idx = statement.stmt_idx;
-    const stmt = self.cir.store.getStatement(stmt_idx);
+    const stmt = statement.stmt;
     const stmt_var = ModuleEnv.varFrom(stmt_idx);
     const stmt_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(stmt_idx));
     const statement_expected = statement.statement_expected;
@@ -23665,7 +23670,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
 /// or null when the statement is fully checked.
 fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *StatementCheck, env: *Env, child_does_fx: bool) std.mem.Allocator.Error!?ExprChildRequest {
     const stmt_idx = statement.stmt_idx;
-    const stmt = self.cir.store.getStatement(stmt_idx);
+    const stmt = statement.stmt;
     const stmt_var = ModuleEnv.varFrom(stmt_idx);
     const stmt_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(stmt_idx));
     const statement_expected = statement.statement_expected;

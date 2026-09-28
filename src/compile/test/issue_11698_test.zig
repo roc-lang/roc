@@ -1,35 +1,39 @@
 //! Regression coverage for https://github.com/roc-lang/roc/issues/11698
 //!
-//! A left-associative chain of ~1500 `+` operators type-checks cleanly but
-//! overflowed the compiler's stack during post-check lowering to LIR.
-//! Expected behavior: lowering such a deep chain succeeds. Reaching the end of
-//! this test without a stack-overflow crash (and without a checker error) is
-//! the assertion.
+//! A long left-associative `+` chain on a runtime value must check and lower
+//! to LIR without any compiler stage's native call depth growing with the
+//! chain. The lowering runs on a thread whose stack is far smaller than the
+//! chain length times any per-level recursion cost, so a stage that recurses
+//! once per nesting level fails here deterministically.
 
 const std = @import("std");
 const harness = @import("lower_to_lir_harness.zig");
 
-test "issue 11698: lowering a ~1500-term + chain does not overflow the stack" {
-    const term_count = 1500;
+const term_count = 10_000;
+const stack_bytes = 8 * 1024 * 1024;
 
-    const app_body = try std.testing.allocator.alloc(u8, 64 + term_count * 4);
-    defer std.testing.allocator.free(app_body);
+fn lowerOnSmallStack(app_body: []const u8, result: *harness.LowerToLirHarnessError!void) void {
+    result.* = harness.expectLowersToLir(app_body);
+}
 
-    var writer = std.Io.Writer.fixed(app_body);
-    try writer.writeAll(
+test "issue 11698: a long + chain on a runtime value lowers on a small stack" {
+    const gpa = std.testing.allocator;
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(gpa);
+    try source.appendSlice(gpa,
         \\main! = |args| {
         \\    x = List.len(args)
         \\    _y = x
     );
-    var i: usize = 1;
-    while (i < term_count) : (i += 1) {
-        try writer.writeAll(" + x");
-    }
-    try writer.writeAll(
+    for (1..term_count) |_| try source.appendSlice(gpa, " + x");
+    try source.appendSlice(gpa,
         \\
         \\    Ok({})
         \\}
     );
 
-    try harness.expectLowersToLir(app_body);
+    var result: harness.LowerToLirHarnessError!void = {};
+    const thread = try std.Thread.spawn(.{ .stack_size = stack_bytes }, lowerOnSmallStack, .{ source.items, &result });
+    thread.join();
+    try result;
 }
