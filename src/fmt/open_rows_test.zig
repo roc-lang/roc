@@ -44,6 +44,24 @@ test "open rows - function result drops its `..`" {
     );
 }
 
+test "open rows - auto-imported Range uses its source formal positions" {
+    try expectFormatsTo(
+        \\value : Str -> Range([E, ..])
+        \\value = |_| crash "unused"
+        \\
+        \\consume : Range([E, ..]) -> Str
+        \\consume = |_| "ok"
+        \\
+    ,
+        \\value : Str -> Range([E])
+        \\value = |_| crash "unused"
+        \\
+        \\consume : Range([E, ..]) -> Str
+        \\consume = |_| "ok"
+        \\
+    );
+}
+
 test "open rows - function argument keeps its `..`" {
     try expectUnchanged(
         \\handle : [Known, ..] -> Str

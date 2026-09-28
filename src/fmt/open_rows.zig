@@ -11,24 +11,27 @@
 //! The walk mirrors `Check.generateAnnoTypeInPlace`: the root of an annotation
 //! is an output, each function establishes input arguments and an output
 //! return, and other positions inherit their surroundings; a type application's argument is generated at
-//! the application's polarity composed with the variance of the declaration
+//! the application's polarity composed with the positions of the declaration
 //! formal it is substituted for; a where-method signature opens only the rows
 //! the result-row widening adapter can re-tag. Which annotations qualify at all
 //! mirrors `Check.checkDef`'s `generalizes_regardless` together with
 //! `Check.collectHostBoundaryAnnotations`.
 //!
 //! The checker reads resolved names; the parse AST has only spellings. So every
-//! question the checker answers from a resolved declaration is answered here
-//! over EVERY declaration the spelling could resolve to—each same-named type
-//! declaration anywhere in the file, the `Builtin` type of that name, and any
-//! import that could introduce it—and a `..` is dropped only when every
-//! candidate gives the same answer. A question with no unanimous answer keeps
+//! application root is checked against every declaration its spelling could
+//! resolve to: same-named declarations in the file and compiler builtins.
+//! Roots with imports or disagreeing candidates retain `..`; ambiguous nested
+//! references also retain it because their declaration binding is unknown.
+//! A question with no proven answer keeps
 //! the `..`, so a row is never opened that the checker would generate closed or
 //! rigid: this module may keep a `..` the checker calls redundant, and never
 //! drops one it does not.
 
 const std = @import("std");
 const parse = @import("parse");
+const base = @import("base");
+const CIR = @import("can").CIR;
+const Positions = base.annotation_positions.Positions;
 
 const AST = parse.AST;
 const Token = parse.tokenize.Token;
@@ -44,25 +47,7 @@ pub const StatementScope = enum {
     block,
 };
 
-/// The parameterized types every module can name unqualified from `Builtin`.
-/// Every parameterized `Builtin` declaration is covariant in each of its
-/// formals or leaves the formal unused (design.md "Polarity"), which is what
-/// `Check.applyDeclKnowledge` answers for a reference into `Builtin`.
-const builtin_parameterized_types = [_][]const u8{ "List", "Box", "Try", "Dict", "Set", "Iter", "Stream" };
-
-/// `Try`'s arity and the index of its error row, as `Check.applyTryErrorArgIndex`
-/// counts them.
 const try_type_name = "Try";
-const try_arity: usize = 2;
-const try_error_arg_index: usize = 1;
-
-/// The same bounds `Check` walks declarations with. A walk that reaches one
-/// gives no answer, and an unanswered question keeps the `..`.
-const max_tracked_alias_formals: usize = 8;
-const max_formal_variance_decl_depth: usize = 8;
-const max_formal_variance_pending: usize = 256;
-const max_formal_variance_nodes: usize = 2048;
-const max_try_alias_depth: usize = 64;
 
 const Polarity = enum {
     pos,
@@ -88,106 +73,7 @@ const Ctx = struct {
     }
 };
 
-/// `Check.FormalVariance`.
-const Variance = enum {
-    unused,
-    covariant,
-    output,
-    contravariant,
-    invariant,
-
-    fn join(self: Variance, other: Variance) Variance {
-        if (self == .unused) return other;
-        if (other == .unused) return self;
-        if (self == other) return self;
-        if ((self == .covariant and other == .output) or
-            (self == .output and other == .covariant)) return .covariant;
-        return .invariant;
-    }
-
-    fn ofOccurrence(polarity: ?Polarity) Variance {
-        return if (polarity) |position| switch (position) {
-            .pos => .output,
-            .neg => .contravariant,
-        } else .covariant;
-    }
-};
-
-/// How one argument of a type application is generated relative to the
-/// application itself.
-const ArgRule = enum {
-    /// At the application's own polarity (a covariant or unused formal).
-    keep,
-    /// In a function result, independently of the reference position.
-    pos,
-    /// At the negative polarity whatever the application's is (an invariant
-    /// formal).
-    neg,
-    /// The declaration's variance is unknown: the argument is generated as
-    /// written at every depth, and a formal found beneath it is invariant.
-    opaque_variance,
-
-    fn ofVariance(variance: Variance) ArgRule {
-        return switch (variance) {
-            .unused, .covariant => .keep,
-            .output => .pos,
-            .contravariant, .invariant => .neg,
-        };
-    }
-
-    fn apply(self: ArgRule, polarity: anytype) @TypeOf(polarity) {
-        return switch (self) {
-            .keep, .opaque_variance => polarity,
-            .pos => .pos,
-            .neg => .neg,
-        };
-    }
-};
-
-/// State of one `applyArgRules` question, with the bounds of
-/// `Check.FormalVarianceWalk`.
-const VarianceWalk = struct {
-    /// Declarations whose bodies are being walked, outermost first.
-    open_decls: [max_formal_variance_decl_depth]AST.Statement.Idx = undefined,
-    open_decls_len: usize = 0,
-    /// Positions the walk may still visit, counted as the checker counts them.
-    fuel: usize = max_formal_variance_nodes,
-
-    fn isOpen(self: *const VarianceWalk, decl_idx: AST.Statement.Idx) bool {
-        for (self.open_decls[0..self.open_decls_len]) |open_decl| {
-            if (open_decl == decl_idx) return true;
-        }
-        return false;
-    }
-
-    fn visit(self: *VarianceWalk) Unanswered!void {
-        if (self.fuel == 0) return Unanswered.Unanswered;
-        self.fuel -= 1;
-    }
-};
-
-/// One position of a declaration body, relative to the declaration's root.
-const VariancePosition = struct {
-    polarity: ?Polarity,
-    /// Below a reference whose variance is unknown.
-    unknown: bool = false,
-    /// How many positions the checker's explicit stack could be holding
-    /// alongside this one: at most every child of every ancestor within the
-    /// declaration.
-    pending: usize = 0,
-
-    fn child(self: VariancePosition, sibling_count: usize) VariancePosition {
-        return .{ .polarity = self.polarity, .unknown = self.unknown, .pending = self.pending + sibling_count };
-    }
-
-    fn withPolarity(self: VariancePosition, polarity: ?Polarity) VariancePosition {
-        return .{ .polarity = polarity, .unknown = self.unknown, .pending = self.pending };
-    }
-};
-
 /// A question the walk could not answer the way the checker does.
-const Unanswered = error{Unanswered};
-
 /// The declarations one written type name could resolve to.
 const Candidates = struct {
     /// Every type declaration in the file with this name, at any depth.
@@ -207,6 +93,9 @@ const VarOccurrences = std.StringHashMapUnmanaged(bool);
 /// Redundant-`..` analysis for one parsed file.
 pub const OpenRows = struct {
     gpa: Allocator,
+    builtin_owner: bool = false,
+    builtin_syntax: ?*BuiltinSyntax = null,
+    position_cache: std.AutoHashMapUnmanaged(AST.Statement.Idx, ?[]Positions) = .empty,
     ast: *const AST,
     /// One bit per AST node, set on a tag union whose anonymous `..` is
     /// redundant.
@@ -297,6 +186,15 @@ pub const OpenRows = struct {
 
     /// Free everything `init` allocated.
     pub fn deinit(self: *OpenRows) void {
+        var positions = self.position_cache.valueIterator();
+        while (positions.next()) |value| if (value.*) |items| self.gpa.free(items);
+        self.position_cache.deinit(self.gpa);
+        if (self.builtin_syntax) |syntax| {
+            syntax.rows.deinit();
+            syntax.ast.deinit();
+            syntax.env.deinit(self.gpa);
+            self.gpa.destroy(syntax);
+        }
         var decls_it = self.type_decls.valueIterator();
         while (decls_it.next()) |list| list.deinit(self.gpa);
         self.type_decls.deinit(self.gpa);
@@ -409,10 +307,7 @@ pub const OpenRows = struct {
                 for (self.ast.store.typeAnnoSlice(func.args)) |arg| {
                     try self.walk(arg, ctx.withReach(.nested), .neg, occurrences);
                 }
-                const ret_reach: Reach = switch (ctx.reach) {
-                    .signature => .result,
-                    .result, .try_row, .nested => .nested,
-                };
+                const ret_reach = base.annotation_positions.functionReturnReach(ctx.reach);
                 try self.walk(func.ret, ctx.withReach(ret_reach), .pos, occurrences);
             },
             .tag_union => |tag_union| {
@@ -451,26 +346,17 @@ pub const OpenRows = struct {
                 const head = all_args[0];
                 const args = all_args[1..];
 
-                // An application this walk cannot answer for is generated as
-                // written beneath it, the most conservative answer.
-                var rules: [max_tracked_alias_formals]ArgRule = undefined;
-                var variance_walk = VarianceWalk{};
-                const rules_known = args.len <= max_tracked_alias_formals and
-                    if (self.applyArgRules(head, args.len, &rules, &variance_walk)) |_| true else |_| false;
+                const positions = try self.applyPositions(head, args.len);
+                defer if (positions) |items| self.gpa.free(items);
 
-                const try_error_index: ?usize = switch (ctx.reach) {
-                    .result => self.tryErrorArgIndex(head, args.len, 0),
-                    .signature, .try_row, .nested => null,
-                };
+                const reaches = if (ctx.opening == .per_use and ctx.reach != .nested) try self.applyReaches(head, args.len, ctx.reach) else null;
+                defer if (reaches) |items| self.gpa.free(items);
 
                 for (args, 0..) |arg, arg_index| {
-                    const rule: ArgRule = if (rules_known) rules[arg_index] else .opaque_variance;
-                    const reach: Reach = if (try_error_index == arg_index) .try_row else .nested;
-                    const arg_ctx = switch (rule) {
-                        .opaque_variance => ctx.withReach(reach).withOpening(.as_written),
-                        .keep, .pos, .neg => ctx.withReach(reach),
-                    };
-                    try self.walk(arg, arg_ctx, rule.apply(polarity), occurrences);
+                    const reach: Reach = if (reaches) |known| known[arg_index] else .nested;
+                    const arg_ctx = if (positions != null) ctx.withReach(reach) else ctx.withReach(reach).withOpening(.as_written);
+                    const arg_polarity = if (positions) |known| known[arg_index].polarity(polarity) else polarity;
+                    try self.walk(arg, arg_ctx, arg_polarity, occurrences);
                 }
             },
         }
@@ -512,8 +398,10 @@ pub const OpenRows = struct {
         const name = self.tokenName(ty.token);
         const locals: []const AST.Statement.Idx = if (self.type_decls.get(name)) |list| list.items else &.{};
         var builtin = false;
-        for (builtin_parameterized_types) |builtin_name| {
-            if (std.mem.eql(u8, builtin_name, name)) builtin = true;
+        // Use the same exposure inventory as canonicalization. Arity and
+        // positions still come from the compiler-owned declaration source.
+        for (CIR.builtin_type_specs) |spec| {
+            if (!self.builtin_owner and spec.auto_import and std.mem.eql(u8, spec.display_name, name)) builtin = true;
         }
         const imported = self.wildcard_import or self.external_names.contains(name);
         return .{
@@ -525,181 +413,75 @@ pub const OpenRows = struct {
         };
     }
 
-    /// How each argument of an application of `head` is generated, answered
-    /// unanimously over every declaration `head` could name
-    /// (`Check.applyFormalVariances` with `Check.applyDeclKnowledge`).
-    fn applyArgRules(
-        self: *const OpenRows,
-        head: AST.TypeAnno.Idx,
-        arity: usize,
-        out: *[max_tracked_alias_formals]ArgRule,
-        variance_walk: *VarianceWalk,
-    ) Unanswered!void {
-        std.debug.assert(arity <= max_tracked_alias_formals);
+    fn builtinRows(self: *OpenRows) Allocator.Error!*OpenRows {
+        if (self.builtin_owner) return self;
+        if (self.builtin_syntax) |syntax| return &syntax.rows;
+        const syntax = try self.gpa.create(BuiltinSyntax);
+        errdefer self.gpa.destroy(syntax);
+        syntax.env = try base.CommonEnv.init(self.gpa, @import("builtin_source").source);
+        errdefer syntax.env.deinit(self.gpa);
+        syntax.ast = try parse.file(self.gpa, &syntax.env);
+        errdefer syntax.ast.deinit();
+        syntax.rows = try OpenRows.init(self.gpa, syntax.ast);
+        syntax.rows.builtin_owner = true;
+        self.builtin_syntax = syntax;
+        return &syntax.rows;
+    }
+
+    fn declarationPositions(self: *OpenRows, statement: AST.Statement.Idx) Allocator.Error!?[]const Positions {
+        if (self.position_cache.get(statement)) |cached| return cached;
+        var analysis = PositionAnalysis.init(self.gpa, .{ .allocator = self.gpa });
+        defer analysis.adapter.children.deinit(self.gpa);
+        defer analysis.deinit();
+        const result = try analysis.analyze(.{ .owner = self, .statement = statement });
+        errdefer if (result) |items| self.gpa.free(items);
+        try self.position_cache.put(self.gpa, statement, result);
+        return result;
+    }
+
+    /// Drop syntax only when every possible declaration has the same transfer.
+    fn applyPositions(self: *OpenRows, head: AST.TypeAnno.Idx, arity: usize) Allocator.Error!?[]Positions {
         const found = self.candidates(head);
-        var answered = false;
-        var candidate_rules: [max_tracked_alias_formals]ArgRule = undefined;
-
+        if (found.external) return null;
+        var answer: ?[]Positions = null;
+        errdefer if (answer) |items| self.gpa.free(items);
+        for (found.locals) |statement| {
+            const positions = (try self.declarationPositions(statement)) orelse {
+                if (answer) |items| self.gpa.free(items);
+                return null;
+            };
+            if (positions.len != arity) {
+                if (answer) |items| self.gpa.free(items);
+                return null;
+            }
+            if (answer) |items| {
+                for (items, positions) |left, right| if (@as(u8, @bitCast(left)) != @as(u8, @bitCast(right))) {
+                    self.gpa.free(items);
+                    return null;
+                };
+            } else answer = try self.gpa.dupe(Positions, positions);
+        }
         if (found.builtin) {
-            try agree(out, &answered, uniformRules(&candidate_rules, arity, .keep));
-        }
-        if (found.external) {
-            try agree(out, &answered, uniformRules(&candidate_rules, arity, .opaque_variance));
-        }
-        for (found.locals) |decl_idx| {
-            if (variance_walk.isOpen(decl_idx)) {
-                // A cycle cannot prove an explicit row extension redundant.
-                try agree(out, &answered, uniformRules(&candidate_rules, arity, .opaque_variance));
-                continue;
+            const builtin_rows = try self.builtinRows();
+            const name = self.tokenName(self.ast.store.getTypeAnno(head).ty.token);
+            const declarations = builtin_rows.type_decls.get(name) orelse unreachable;
+            std.debug.assert(declarations.items.len == 1);
+            const positions = (try builtin_rows.declarationPositions(declarations.items[0])) orelse {
+                if (answer) |items| self.gpa.free(items);
+                return null;
+            };
+            if (positions.len != arity) {
+                if (answer) |items| self.gpa.free(items);
+                return null;
             }
-            var variances: [max_tracked_alias_formals]Variance = undefined;
-            const formals_len = try self.declFormalVariances(decl_idx, &variances, variance_walk);
-            if (formals_len != arity) return Unanswered.Unanswered;
-            for (variances[0..arity], candidate_rules[0..arity]) |variance, *rule| rule.* = ArgRule.ofVariance(variance);
-            try agree(out, &answered, candidate_rules[0..arity]);
+            if (answer) |items| {
+                for (items, positions) |left, right| if (@as(u8, @bitCast(left)) != @as(u8, @bitCast(right))) {
+                    self.gpa.free(items);
+                    return null;
+                };
+            } else answer = try self.gpa.dupe(Positions, positions);
         }
-        if (!answered) return Unanswered.Unanswered;
-    }
-
-    fn uniformRules(rules: *[max_tracked_alias_formals]ArgRule, arity: usize, rule: ArgRule) []const ArgRule {
-        for (rules[0..arity]) |*slot| slot.* = rule;
-        return rules[0..arity];
-    }
-
-    /// Record one candidate's answer, requiring it to match every earlier one.
-    fn agree(out: *[max_tracked_alias_formals]ArgRule, answered: *bool, rules: []const ArgRule) Unanswered!void {
-        if (answered.*) {
-            for (out[0..rules.len], rules) |existing, rule| {
-                if (existing != rule) return Unanswered.Unanswered;
-            }
-            return;
-        }
-        @memcpy(out[0..rules.len], rules);
-        answered.* = true;
-    }
-
-    /// `Check.declFormalVariances`: the variance of each of a type
-    /// declaration's formals within its body.
-    fn declFormalVariances(
-        self: *const OpenRows,
-        decl_idx: AST.Statement.Idx,
-        out: *[max_tracked_alias_formals]Variance,
-        variance_walk: *VarianceWalk,
-    ) Unanswered!usize {
-        if (variance_walk.open_decls_len == max_formal_variance_decl_depth) return Unanswered.Unanswered;
-        const decl = self.ast.store.getStatement(decl_idx).type_decl;
-        const header = self.ast.store.getTypeHeader(decl.header) catch return Unanswered.Unanswered;
-        const formals = self.ast.store.typeAnnoSlice(header.args);
-        if (formals.len > max_tracked_alias_formals) return Unanswered.Unanswered;
-        for (out[0..formals.len]) |*variance| variance.* = .unused;
-
-        variance_walk.open_decls[variance_walk.open_decls_len] = decl_idx;
-        variance_walk.open_decls_len += 1;
-        defer variance_walk.open_decls_len -= 1;
-
-        try self.accumulateFormalVariances(decl.anno, formals, .{ .polarity = null }, out, variance_walk);
-        return formals.len;
-    }
-
-    /// `Check.accumulateFormalVariances`, recursive where the checker keeps an
-    /// explicit stack. `here.pending` bounds that stack's height from above,
-    /// so this walk gives up whenever the checker's could.
-    fn accumulateFormalVariances(
-        self: *const OpenRows,
-        anno_idx: AST.TypeAnno.Idx,
-        formals: []const AST.TypeAnno.Idx,
-        here: VariancePosition,
-        out: *[max_tracked_alias_formals]Variance,
-        variance_walk: *VarianceWalk,
-    ) Unanswered!void {
-        try variance_walk.visit();
-        const anno = self.ast.store.getTypeAnno(anno_idx);
-        const child_count: usize = switch (anno) {
-            .ty_var, .underscore_type_var, .underscore, .ty, .malformed => 0,
-            .parens => 1,
-            .@"fn" => |func| self.ast.store.typeAnnoSlice(func.args).len + 1,
-            .tag_union => |tag_union| self.ast.store.typeAnnoSlice(tag_union.tags).len +
-                @intFromBool(tag_union.ext != .closed),
-            .tuple => |tuple| self.ast.store.typeAnnoSlice(tuple.annos).len,
-            .record => |record| self.ast.store.annoRecordFieldSlice(record.fields).len +
-                @intFromBool(record.ext != .closed),
-            .apply => |apply| self.ast.store.typeAnnoSlice(apply.args).len - 1,
-        };
-        if (here.pending + child_count > max_formal_variance_pending) return Unanswered.Unanswered;
-        const child = here.child(child_count);
-
-        switch (anno) {
-            .ty_var => |v| self.joinFormal(v.tok, formals, here, out),
-            .underscore_type_var => |v| self.joinFormal(v.tok, formals, here, out),
-            .underscore, .ty, .malformed => {},
-            .parens => |parens| try self.accumulateFormalVariances(parens.anno, formals, child, out, variance_walk),
-            .@"fn" => |func| {
-                for (self.ast.store.typeAnnoSlice(func.args)) |arg| {
-                    try self.accumulateFormalVariances(arg, formals, child.withPolarity(.neg), out, variance_walk);
-                }
-                try self.accumulateFormalVariances(func.ret, formals, child.withPolarity(.pos), out, variance_walk);
-            },
-            .tag_union => |tag_union| {
-                for (self.ast.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
-                    // The checker visits the tag itself before its payloads.
-                    try variance_walk.visit();
-                    switch (self.ast.store.getTypeAnno(tag_idx)) {
-                        .apply => |tag| {
-                            const payloads = self.ast.store.typeAnnoSlice(tag.args)[1..];
-                            if (child.pending + payloads.len > max_formal_variance_pending) return Unanswered.Unanswered;
-                            const payload_position = child.child(payloads.len);
-                            for (payloads) |payload| {
-                                try self.accumulateFormalVariances(payload, formals, payload_position, out, variance_walk);
-                            }
-                        },
-                        .ty_var, .underscore_type_var, .underscore, .ty, .tag_union, .tuple, .record, .@"fn", .parens, .malformed => {},
-                    }
-                }
-                switch (tag_union.ext) {
-                    .named => |named| try self.accumulateFormalVariances(named.anno, formals, child, out, variance_walk),
-                    .open => try variance_walk.visit(),
-                    .closed => {},
-                }
-            },
-            .tuple => |tuple| for (self.ast.store.typeAnnoSlice(tuple.annos)) |elem| {
-                try self.accumulateFormalVariances(elem, formals, child, out, variance_walk);
-            },
-            .record => |record| {
-                for (self.ast.store.annoRecordFieldSlice(record.fields)) |field_idx| {
-                    const field = self.ast.store.getAnnoRecordField(field_idx) catch return Unanswered.Unanswered;
-                    try self.accumulateFormalVariances(field.ty, formals, child, out, variance_walk);
-                }
-                switch (record.ext) {
-                    .named => |named| try self.accumulateFormalVariances(named.anno, formals, child, out, variance_walk),
-                    .open => try variance_walk.visit(),
-                    .closed => {},
-                }
-            },
-            .apply => |apply| {
-                const all_args = self.ast.store.typeAnnoSlice(apply.args);
-                const args = all_args[1..];
-                if (args.len > max_tracked_alias_formals) return Unanswered.Unanswered;
-                var rules: [max_tracked_alias_formals]ArgRule = undefined;
-                try self.applyArgRules(all_args[0], args.len, &rules, variance_walk);
-                for (args, rules[0..args.len]) |arg, rule| {
-                    var arg_position = child.withPolarity(rule.apply(here.polarity));
-                    arg_position.unknown = here.unknown or rule == .opaque_variance;
-                    try self.accumulateFormalVariances(arg, formals, arg_position, out, variance_walk);
-                }
-            },
-        }
-    }
-
-    fn joinFormal(
-        self: *const OpenRows,
-        var_tok: Token.Idx,
-        formals: []const AST.TypeAnno.Idx,
-        here: VariancePosition,
-        out: *[max_tracked_alias_formals]Variance,
-    ) void {
-        const formal_index = self.formalIndex(self.tokenName(var_tok), formals) orelse return;
-        const occurrence: Variance = if (here.unknown) .invariant else Variance.ofOccurrence(here.polarity);
-        out[formal_index] = out[formal_index].join(occurrence);
+        return answer;
     }
 
     /// The index of the declaration formal named `name`.
@@ -730,65 +512,40 @@ pub const OpenRows = struct {
         }
     }
 
-    /// `Check.applyTryErrorArgIndex`: which argument of an application of
-    /// `head` lands in the builtin `Try`'s error row, answered unanimously
-    /// over every declaration `head` could name.
-    fn tryErrorArgIndex(self: *const OpenRows, head: AST.TypeAnno.Idx, arity: usize, depth: usize) ?usize {
-        if (depth == max_try_alias_depth) return null;
-        if (arity > max_tracked_alias_formals) return null;
+    fn applyReaches(self: *OpenRows, head: AST.TypeAnno.Idx, arity: usize, reach: Reach) Allocator.Error!?[]Reach {
         const found = self.candidates(head);
         if (found.external) return null;
-
-        var answer: ?usize = null;
-        if (found.builtin) {
-            const name = self.tokenName(self.ast.store.getTypeAnno(head).ty.token);
-            if (!std.mem.eql(u8, name, try_type_name) or arity != try_arity) return null;
-            answer = try_error_arg_index;
-        }
-        for (found.locals) |decl_idx| {
-            const index = self.aliasTryErrorArgIndex(decl_idx, arity, depth) orelse return null;
-            if (answer) |existing| {
-                if (existing != index) return null;
+        var answer: ?[]Reach = null;
+        errdefer if (answer) |items| self.gpa.free(items);
+        for (found.locals) |statement| {
+            const candidate = (try ReachAnalysis.analyze(self.gpa, .{ .owner = self, .statement = statement }, reach)) orelse {
+                if (answer) |items| self.gpa.free(items);
+                return null;
+            };
+            defer self.gpa.free(candidate);
+            if (candidate.len != arity or (answer != null and !std.mem.eql(Reach, answer.?, candidate))) {
+                if (answer) |items| self.gpa.free(items);
+                return null;
             }
-            answer = index;
+            if (answer == null) answer = try self.gpa.dupe(Reach, candidate);
+        }
+        if (found.builtin) {
+            const owner = try self.builtinRows();
+            const name = self.tokenName(self.ast.store.getTypeAnno(head).ty.token);
+            const declarations = owner.type_decls.get(name) orelse unreachable;
+            std.debug.assert(declarations.items.len == 1);
+            const candidate = (try ReachAnalysis.analyze(self.gpa, .{ .owner = owner, .statement = declarations.items[0] }, reach)) orelse {
+                if (answer) |items| self.gpa.free(items);
+                return null;
+            };
+            defer self.gpa.free(candidate);
+            if (candidate.len != arity or (answer != null and !std.mem.eql(Reach, answer.?, candidate))) {
+                if (answer) |items| self.gpa.free(items);
+                return null;
+            }
+            if (answer == null) answer = try self.gpa.dupe(Reach, candidate);
         }
         return answer;
-    }
-
-    /// One local declaration's answer to `tryErrorArgIndex`: a transparent
-    /// alias passing a formal straight through to a `Try`'s error row, or a
-    /// chain of such aliases.
-    fn aliasTryErrorArgIndex(self: *const OpenRows, decl_idx: AST.Statement.Idx, arity: usize, depth: usize) ?usize {
-        const decl = self.ast.store.getStatement(decl_idx).type_decl;
-        if (decl.kind != .alias) return null;
-        const header = self.ast.store.getTypeHeader(decl.header) catch return null;
-        const formals = self.ast.store.typeAnnoSlice(header.args);
-        if (formals.len != arity) return null;
-
-        const body = switch (self.ast.store.getTypeAnno(self.skipParens(decl.anno))) {
-            .apply => |apply| apply,
-            .ty_var, .underscore_type_var, .underscore, .ty, .tag_union, .tuple, .record, .@"fn", .parens, .malformed => return null,
-        };
-        const body_all_args = self.ast.store.typeAnnoSlice(body.args);
-        const body_args = body_all_args[1..];
-        const inner_index = self.tryErrorArgIndex(body_all_args[0], body_args.len, depth + 1) orelse return null;
-
-        // Past a `Try` itself only its error row must be a formal; through an
-        // alias over an alias every argument must be passed straight through.
-        const body_is_try = self.candidatesAreOnlyBuiltin(body_all_args[0]);
-        if (!body_is_try) {
-            for (body_args) |body_arg| {
-                const name = self.varName(body_arg) orelse return null;
-                _ = self.formalIndex(name, formals) orelse return null;
-            }
-        }
-        const name = self.varName(body_args[inner_index]) orelse return null;
-        return self.formalIndex(name, formals);
-    }
-
-    fn candidatesAreOnlyBuiltin(self: *const OpenRows, head: AST.TypeAnno.Idx) bool {
-        const found = self.candidates(head);
-        return found.builtin and !found.external and found.locals.len == 0;
     }
 
     /// Every uppercase name written in an import's token range.
@@ -808,5 +565,227 @@ pub const OpenRows = struct {
     fn tokenName(self: *const OpenRows, tok: Token.Idx) []const u8 {
         const text = self.ast.resolve(tok);
         return if (text.len > 0 and text[0] == '.') text[1..] else text;
+    }
+};
+
+const BuiltinSyntax = struct { env: base.CommonEnv, ast: *AST, rows: OpenRows };
+const PositionAnalysis = base.annotation_positions.Solver(PositionAdapter);
+const PositionAdapter = struct {
+    /// AST ownership is explicit so builtin and user node indices never mix.
+    pub const Key = struct { owner: *OpenRows, statement: AST.Statement.Idx };
+    /// Parse annotation identity within its owner.
+    pub const Annotation = AST.TypeAnno.Idx;
+    allocator: Allocator,
+    children: std.ArrayList(Annotation) = .empty,
+
+    pub fn declaration(_: *PositionAdapter, key: Key) Allocator.Error!?struct { body: Annotation, formal_count: usize, nominal: bool } {
+        const decl = key.owner.ast.store.getStatement(key.statement).type_decl;
+        const header = key.owner.ast.store.getTypeHeader(decl.header) catch return null;
+        return .{ .body = decl.anno, .formal_count = key.owner.ast.store.typeAnnoSlice(header.args).len, .nominal = decl.kind != .alias };
+    }
+
+    fn reference(owner: *OpenRows, head: Annotation) Allocator.Error!PositionAnalysis.Reference {
+        const found = owner.candidates(head);
+        if (found.external) return .invalid;
+        if (found.locals.len == 1 and !found.builtin) return .{ .declaration = .{ .owner = owner, .statement = found.locals[0] } };
+        if (found.locals.len == 0 and found.builtin) {
+            const builtin_rows = try owner.builtinRows();
+            const name = owner.tokenName(owner.ast.store.getTypeAnno(head).ty.token);
+            const declarations = builtin_rows.type_decls.get(name) orelse unreachable;
+            std.debug.assert(declarations.items.len == 1);
+            return .{ .declaration = .{ .owner = builtin_rows, .statement = declarations.items[0] } };
+        }
+        // The parser cannot resolve shadowing within a declaration body.
+        return .invalid;
+    }
+
+    pub fn node(self: *PositionAdapter, key: Key, annotation: Annotation) Allocator.Error!PositionAnalysis.Node {
+        const owner = key.owner;
+        const ast = owner.ast;
+        const decl = ast.store.getStatement(key.statement).type_decl;
+        const header = ast.store.getTypeHeader(decl.header) catch return .invalid;
+        const formals = ast.store.typeAnnoSlice(header.args);
+        if (owner.varName(annotation)) |name| if (owner.formalIndex(name, formals)) |index| return .{ .formal = index };
+        self.children.clearRetainingCapacity();
+        switch (ast.store.getTypeAnno(annotation)) {
+            .parens => |parens| try self.children.append(self.allocator, parens.anno),
+            .@"fn" => |func| return .{ .function = .{ .args = ast.store.typeAnnoSlice(func.args), .ret = func.ret } },
+            .tag_union => |union_| {
+                for (ast.store.typeAnnoSlice(union_.tags)) |tag| switch (ast.store.getTypeAnno(tag)) {
+                    .apply => |application| try self.children.appendSlice(self.allocator, ast.store.typeAnnoSlice(application.args)[1..]),
+                    .ty => {},
+                    .ty_var, .underscore_type_var, .underscore, .tag_union, .tuple, .record, .@"fn", .parens, .malformed => return .invalid,
+                };
+                if (union_.ext == .named) try self.children.append(self.allocator, union_.ext.named.anno);
+            },
+            .tuple => |tuple| return .{ .children = ast.store.typeAnnoSlice(tuple.annos) },
+            .record => |record| {
+                for (ast.store.annoRecordFieldSlice(record.fields)) |field_index| {
+                    const field = ast.store.getAnnoRecordField(field_index) catch return .invalid;
+                    try self.children.append(self.allocator, field.ty);
+                }
+                if (record.ext == .named) try self.children.append(self.allocator, record.ext.named.anno);
+            },
+            .apply => |application| {
+                const args = ast.store.typeAnnoSlice(application.args);
+                return .{ .apply = .{ .reference = try reference(owner, args[0]), .args = args[1..] } };
+            },
+            .ty_var, .underscore_type_var, .underscore, .ty => return .leaf,
+            .malformed => return .invalid,
+        }
+        return .{ .children = self.children.items };
+    }
+};
+
+/// Exact alias source-formal adapter reach over a finite declaration/context graph.
+/// Nominal bodies are not transparent; unresolved parser names supply no proof.
+const ReachAnalysis = struct {
+    const Key = struct { declaration: PositionAdapter.Key, reach: Reach };
+    const State = struct { key: Key, results: []u4 };
+    const Item = struct { annotation: AST.TypeAnno.Idx, reaches: u4 };
+    allocator: Allocator,
+    states: std.ArrayList(State) = .empty,
+    indices: std.AutoHashMapUnmanaged(Key, usize) = .empty,
+    pending: std.ArrayList(Item) = .empty,
+    invalid: bool = false,
+
+    fn bit(reach: Reach) u4 {
+        return @as(u4, 1) << @as(u2, @intCast(@intFromEnum(reach)));
+    }
+
+    fn register(self: *ReachAnalysis, key: Key) Allocator.Error!?usize {
+        if (self.indices.get(key)) |index| return index;
+        const owner = key.declaration.owner;
+        const decl = owner.ast.store.getStatement(key.declaration.statement).type_decl;
+        const header = owner.ast.store.getTypeHeader(decl.header) catch return null;
+        const args = owner.ast.store.typeAnnoSlice(header.args);
+        const results = try self.allocator.alloc(u4, args.len);
+        errdefer self.allocator.free(results);
+        @memset(results, 0);
+        if (decl.kind != .alias) {
+            const builtin_try = owner.builtin_owner and std.mem.eql(u8, owner.tokenName(header.name), try_type_name);
+            for (results, 0..) |*result, index| result.* = bit(base.annotation_positions.nominalArgumentReach(key.reach, builtin_try, index));
+        }
+        const index = self.states.items.len;
+        try self.indices.put(self.allocator, key, index);
+        try self.states.append(self.allocator, .{ .key = key, .results = results });
+        return index;
+    }
+
+    fn push(self: *ReachAnalysis, annotation: AST.TypeAnno.Idx, reaches: u4) Allocator.Error!void {
+        if (reaches != 0) try self.pending.append(self.allocator, .{ .annotation = annotation, .reaches = reaches });
+    }
+
+    fn pushSlice(self: *ReachAnalysis, annotations: []const AST.TypeAnno.Idx, reaches: u4) Allocator.Error!void {
+        for (annotations) |annotation| try self.push(annotation, reaches);
+    }
+
+    fn evaluate(self: *ReachAnalysis, index: usize) Allocator.Error!bool {
+        const state = self.states.items[index];
+        const owner = state.key.declaration.owner;
+        const ast = owner.ast;
+        const decl = ast.store.getStatement(state.key.declaration.statement).type_decl;
+        if (decl.kind != .alias) return false;
+        const header = ast.store.getTypeHeader(decl.header) catch {
+            self.invalid = true;
+            return false;
+        };
+        const formals = ast.store.typeAnnoSlice(header.args);
+        var changed = false;
+        self.pending.clearRetainingCapacity();
+        try self.push(decl.anno, bit(state.key.reach));
+        while (self.pending.pop()) |item| {
+            if (owner.varName(item.annotation)) |name| {
+                if (owner.formalIndex(name, formals)) |formal| {
+                    const previous = state.results[formal];
+                    state.results[formal] |= item.reaches;
+                    changed = changed or previous != state.results[formal];
+                    continue;
+                }
+            }
+            switch (ast.store.getTypeAnno(item.annotation)) {
+                .parens => |parens| try self.push(parens.anno, item.reaches),
+                .@"fn" => |func| {
+                    try self.pushSlice(ast.store.typeAnnoSlice(func.args), bit(.nested));
+                    var returns: u4 = 0;
+                    inline for (std.meta.fields(Reach)) |field| {
+                        const reach: Reach = @enumFromInt(field.value);
+                        if (item.reaches & bit(reach) != 0) returns |= bit(base.annotation_positions.functionReturnReach(reach));
+                    }
+                    try self.push(func.ret, returns);
+                },
+                .tuple => |tuple| try self.pushSlice(ast.store.typeAnnoSlice(tuple.annos), bit(.nested)),
+                .record => |record| {
+                    for (ast.store.annoRecordFieldSlice(record.fields)) |field_index| {
+                        const field = ast.store.getAnnoRecordField(field_index) catch {
+                            self.invalid = true;
+                            continue;
+                        };
+                        try self.push(field.ty, bit(.nested));
+                    }
+                    if (record.ext == .named) try self.push(record.ext.named.anno, bit(.nested));
+                },
+                .tag_union => |union_| {
+                    for (ast.store.typeAnnoSlice(union_.tags)) |tag| switch (ast.store.getTypeAnno(tag)) {
+                        .apply => |application| try self.pushSlice(ast.store.typeAnnoSlice(application.args)[1..], bit(.nested)),
+                        .ty => {},
+                        .ty_var, .underscore_type_var, .underscore, .tag_union, .tuple, .record, .@"fn", .parens, .malformed => self.invalid = true,
+                    };
+                    if (union_.ext == .named) try self.push(union_.ext.named.anno, item.reaches);
+                },
+                .apply => |application| {
+                    const all_args = ast.store.typeAnnoSlice(application.args);
+                    const args = all_args[1..];
+                    switch (try PositionAdapter.reference(owner, all_args[0])) {
+                        .invalid => self.invalid = true,
+                        .builtin => try self.pushSlice(args, bit(.nested)),
+                        .declaration => |target| {
+                            inline for (std.meta.fields(Reach)) |field| {
+                                const reach: Reach = @enumFromInt(field.value);
+                                if (item.reaches & bit(reach) != 0) {
+                                    const target_index = (try self.register(.{ .declaration = target, .reach = reach })) orelse {
+                                        self.invalid = true;
+                                        return false;
+                                    };
+                                    const results = self.states.items[target_index].results;
+                                    if (results.len != args.len) {
+                                        self.invalid = true;
+                                        return false;
+                                    }
+                                    for (args, results) |arg, reaches| try self.push(arg, reaches);
+                                }
+                            }
+                        },
+                    }
+                },
+                .ty_var, .underscore_type_var, .underscore, .ty => {},
+                .malformed => self.invalid = true,
+            }
+        }
+        return changed;
+    }
+
+    fn analyze(allocator: Allocator, declaration: PositionAdapter.Key, reach: Reach) Allocator.Error!?[]Reach {
+        var self = ReachAnalysis{ .allocator = allocator };
+        defer {
+            for (self.states.items) |state| allocator.free(state.results);
+            self.states.deinit(allocator);
+            self.indices.deinit(allocator);
+            self.pending.deinit(allocator);
+        }
+        const root = (try self.register(.{ .declaration = declaration, .reach = reach })) orelse return null;
+        var changed = true;
+        while (changed and !self.invalid) {
+            changed = false;
+            const count = self.states.items.len;
+            for (0..count) |index| changed = (try self.evaluate(index)) or changed;
+            changed = changed or count != self.states.items.len;
+        }
+        if (self.invalid) return null;
+        const result = try allocator.alloc(Reach, self.states.items[root].results.len);
+        for (result, self.states.items[root].results) |*value, mask| {
+            value.* = if (mask == 0 or mask & bit(.nested) != 0) .nested else if (@popCount(mask) > 1) .try_row else @enumFromInt(@ctz(mask));
+        }
+        return result;
     }
 };

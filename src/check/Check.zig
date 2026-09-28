@@ -17669,14 +17669,14 @@ fn applicationArgumentReaches(self: *Self, apply: CIR.TypeAnno.Apply, env: *Env,
             .structure => |flat| switch (flat) {
                 .fn_pure, .fn_effectful, .fn_unbound => |func| {
                     for (self.types.sliceVars(func.args)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .reach = .nested });
-                    try pending.append(self.gpa, .{ .var_ = func.ret, .reach = if (item.reach == .signature) .result else .nested });
+                    try pending.append(self.gpa, .{ .var_ = func.ret, .reach = base.annotation_positions.functionReturnReach(item.reach) });
                     for (self.types.sliceVars(func.effect_deps)) |dep| try pending.append(self.gpa, .{ .var_ = dep, .reach = .nested });
                 },
                 .nominal_type => |nominal| {
                     const is_try = nominal.originIsBuiltin() and nominal.sourceDeclOptional() == self.builtinTrySourceDecl();
                     for (self.types.sliceNominalArgs(nominal), 0..) |arg, index| try pending.append(self.gpa, .{
                         .var_ = arg,
-                        .reach = if (is_try and item.reach == .result and index == 1) .try_row else .nested,
+                        .reach = base.annotation_positions.nominalArgumentReach(item.reach, is_try, index),
                     });
                 },
                 .tuple => |tuple| for (self.types.sliceVars(tuple.elems)) |arg| {
@@ -18767,14 +18767,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             // result within the adapter's reach; any function nested deeper
             // is out of reach.
             const ret_ctx = switch (ctx) {
-                .annotation => |anno_ctx| switch (anno_ctx.adapter_reach) {
-                    // The where-method signature's OWN function: its direct
-                    // result is the row the adapter re-tags.
-                    .signature => ctx.withReach(.result),
-                    // A function nested inside a result row, inside a `Try`
-                    // row, or anywhere else is out of the adapter's reach.
-                    .result, .try_row, .nested => ctx.withReach(.nested),
-                },
+                .annotation => |anno_ctx| ctx.withReach(base.annotation_positions.functionReturnReach(anno_ctx.adapter_reach)),
                 // A declaration body has no use-site result position to reach;
                 // `withReach` is a no-op on `.type_decl` (see `withReach`).
                 .type_decl => ctx.withReach(.nested),

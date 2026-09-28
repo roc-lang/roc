@@ -6924,7 +6924,7 @@ A row the reference itself WRITES as a type argument is decided the same way,
 by composition rather than by inheritance. A declaration's formal stands
 wherever the declaration's body puts it, so the argument substituted for it is
 generated according to the formal's position transfer
-(`Check.applyFormalVariances`): `Handler(e) : e -> Str` holds `e` in an input
+(`base.annotation_positions`): `Handler(e) : e -> Str` holds `e` in an input
 position, so the `[A, B]` of `Handler([A, B])` written as an output is
 generated closed, exactly like the `[A, B] -> Str` the reference stands for,
 and `Handler([A, B])` written as an INPUT also stays closed, exactly
@@ -7045,9 +7045,17 @@ own a private graph, are the exception noted in the Monotype sealing rule.)
 
 #### Declaration Position and Adapter Reach
 
-`annotation_positions` computes source-formal positions from CIR
-bindings in the referenced declarations, including imported and builtin
-owners. Each formal has inherited, function-input, and function-output
+`base.annotation_positions` owns the source-formal position algebra and finite
+formal-flow solver. The checker supplies a CIR adapter with resolved declaration
+bindings, including imported and builtin owners. The formatter supplies an AST
+adapter to this same solver, with declaration and annotation owner identities
+kept separate for user source and the compiler-owned `Builtin.roc` source.
+Known local declarations have no analysis depth or arity bounds. Builtin
+function-shaped formals are analyzed from their declarations rather than
+assigned uniform covariance. The parser cannot resolve imports or lexical
+shadowing: uncertain nested references retain explicit row extensions, and
+root candidates must unanimously agree before syntax can be removed. This is
+a parse-only proof boundary, never a checker position policy. Each formal has inherited, function-input, and function-output
 occurrence bits. Applications compose these finite equations to their inheritance and
 function-position fixed points;
 recursive nominal declarations do not require depth or arity bounds. A shared
@@ -7081,6 +7089,11 @@ and a shared formal with any nested occurrence stays closed. Source formal
 identities determine the argument mapping; no names, chain limits, or module
 boundary guesses participate. The instantiator carries the same signature,
 result, error-row, and nested positions through hidden alias parameters.
+The formatter determines alias argument reach with a finite declaration/context
+worklist and joins all formal occurrences. It treats nominal bodies as opaque
+and recognizes builtin `Try` only through its compiler-owned source identity.
+Function-return and nominal-argument reach transitions live beside the shared
+position solver and are used by both frontend walks and instantiation.
 The reachable set remains exactly the existing result-row adapter contract;
 this does not extend the adapter to nested functions, payloads, or `Try` ok rows.
 

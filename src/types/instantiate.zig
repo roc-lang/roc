@@ -29,12 +29,6 @@ const Rank = types_mod.Rank;
 const Polarity = types_mod.Polarity;
 const Ident = base.Ident;
 
-/// Type-argument index of `Builtin.Try`'s error row. The Monotype widening
-/// relation (`lower.zig`'s `try_error_type_arg_index`) opens the same cell, and
-/// `Check.annoApplyIsBuiltinTry`'s caller passes the adapter's reach to the
-/// same index for a `Try` written inline.
-const try_error_type_arg_index: u32 = 1;
-
 /// Where a position sits relative to the result row the Monotype result-row
 /// widening adapter can re-tag (design.md "Result-Row Widening Adapter"). The
 /// checker's annotation walk makes this decision for rows written inline in a
@@ -711,7 +705,7 @@ pub const Instantiator = struct {
                 .structure => |flat| switch (flat) {
                     .fn_pure, .fn_effectful, .fn_unbound => |func| {
                         for (self.store.sliceVars(func.args)) |arg| try pending.append(allocator, .{ .var_ = arg, .polarity = .neg, .reach = .nested });
-                        try pending.append(allocator, .{ .var_ = func.ret, .polarity = .pos, .reach = if (item.reach == .signature) .result else .nested });
+                        try pending.append(allocator, .{ .var_ = func.ret, .polarity = .pos, .reach = base.annotation_positions.functionReturnReach(item.reach) });
                         for (self.store.sliceVars(func.effect_deps)) |dep| try pending.append(allocator, .{ .var_ = dep, .polarity = item.polarity, .reach = .nested });
                     },
                     .nominal_type => |nominal| for (self.store.sliceNominalArgs(nominal), 0..) |arg, index| {
@@ -721,7 +715,7 @@ pub const Instantiator = struct {
                             std.debug.assert(nominal.sourceDeclOptional() == null);
                             break :blk item.polarity;
                         };
-                        const reach: AdapterReachPosition = if (self.nominalIsBuiltinTry(nominal) and item.reach == .result and index == 1) .try_row else .nested;
+                        const reach: AdapterReachPosition = base.annotation_positions.nominalArgumentReach(item.reach, self.nominalIsBuiltinTry(nominal), index);
                         try pending.append(allocator, .{ .var_ = arg, .polarity = polarity, .reach = reach });
                     },
                     .tuple => |tuple| for (self.store.sliceVars(tuple.elems)) |arg| {
@@ -1355,22 +1349,7 @@ pub const Instantiator = struct {
                 // A `Try` written as the direct result passes the adapter's
                 // reach to its ERROR row. The ok row is deliberately NOT
                 // reachable: the adapter asserts the ok type is unchanged.
-                const try_error_row_reachable = frame.is_try and
-                    arrived == try_error_type_arg_index and
-                    switch (frame.saved_reach) {
-                        // The signature's direct result: the adapter re-tags
-                        // this `Try`'s error row.
-                        .result => true,
-                        // A `Try` standing IN another `Try`'s error row. The
-                        // relation re-tags that row and relates everything
-                        // below it EXACTLY (`resultRowWideningOrNull`,
-                        // src/postcheck/monotype/lower.zig:1806-1812), so a
-                        // second descent would open a row lowering will not
-                        // adapt.
-                        .signature, .try_row => false,
-                        .nested => false,
-                    };
-                self.current_reach = if (try_error_row_reachable) .try_row else .nested;
+                self.current_reach = base.annotation_positions.nominalArgumentReach(frame.saved_reach, frame.is_try, arrived);
                 if (!try self.requestVar(arg_var, false)) return false;
                 continue;
             }
@@ -1409,7 +1388,7 @@ pub const Instantiator = struct {
             if (arrived == args_count) {
                 // Each function establishes its own output position.
                 self.current_polarity = .pos;
-                self.current_reach = if (frame.saved_reach == .signature) .result else .nested;
+                self.current_reach = base.annotation_positions.functionReturnReach(frame.saved_reach);
                 if (!try self.requestVar(frame.func.ret, false)) return false;
                 continue;
             }
