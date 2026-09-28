@@ -257,7 +257,7 @@ pub const Decoder = struct {
             .named => |named| try self.decode(data_export, bytes, offset, named.backing, layout_idx),
             .tuple, .record => |child_plans| try self.decodeRecord(data_export, bytes, offset, child_plans, value_layout),
             .tag_union => |variants| try self.decodeTag(data_export, bytes, offset, variants, layout_idx),
-            .pending, .layout_only, .box, .fn_value, .erased_fn => null,
+            .pending, .layout_only, .box, .boxy_box, .fn_value, .erased_fn => null,
         };
     }
 

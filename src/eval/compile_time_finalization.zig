@@ -28,6 +28,7 @@ const static_data_exports = @import("static_data");
 const Interpreter = interpreter_mod.Interpreter;
 const ExpectFailure = interpreter_mod.ExpectFailure;
 const FinalizeError = checked.CompileTimeFinalizer.Error;
+pub const RuntimeMaterializationError = lir.CheckedPipeline.LowerResourceError || FinalizeError;
 const LirProgram = lir.Program;
 const BoxyBuiltinFn = backend.LirCodeGenMod.BoxyBuiltinFn;
 const BoxyNativeFnTable = backend.LirCodeGenMod.BoxyNativeFnTable;
@@ -265,6 +266,8 @@ const ModuleOwners = struct {
 /// program its runtime consumer continues, across checking completion.
 /// Diagnostic destinations are consumed during finalizeProgram.
 pub const ProgramSession = struct {
+    /// Boxy materializes its own literal results after shared finalization.
+    /// This program already owns those frozen values when runtime takes it.
     allocator: Allocator,
     modules: lir.CheckedPipeline.CheckedModuleSet,
     runtime_requests: []const checked.RootRequest,
@@ -296,7 +299,7 @@ pub const ProgramSession = struct {
         allocator: Allocator,
         roots: lir.CheckedPipeline.RootRequestSet,
         target: lir.CheckedPipeline.TargetConfig,
-    ) lir.CheckedPipeline.LowerResourceError!lir.CheckedPipeline.LoweredProgram {
+    ) RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
         const configured = self.runtime_target orelse finalizationInvariant("check-only session has no runtime consumer");
         inline for (comptime std.meta.tags(std.meta.FieldEnum(lir.CheckedPipeline.TargetConfig))) |field| {
             if (comptime field == .timing or
@@ -323,6 +326,10 @@ pub const ProgramSession = struct {
             } else if (expected != actual) finalizationInvariant("runtime request policy differs from the declared consumer");
         }
         self.runtime_target = null;
+        if (target.specialization_strategy == .boxy) {
+            try lir.CheckedPipeline.requireHostedProceduresBound(self.modules, target);
+            return materializeBoxyLiterals(allocator, self.modules, roots, target);
+        }
         if (self.runtime_prepared) |prepared| {
             self.runtime_prepared = null;
             var owned = prepared;
@@ -726,6 +733,60 @@ pub fn finalizeProgram(
     };
 }
 
+/// Boxy alone pays for this second representation of literal results. Normal
+/// finalization already owns all language observations, so there are no report
+/// destinations or debug sinks here. Operational failures still propagate.
+fn materializeBoxyLiterals(
+    allocator: Allocator,
+    modules: lir.CheckedPipeline.CheckedModuleSet,
+    roots: lir.CheckedPipeline.RootRequestSet,
+    target: lir.CheckedPipeline.TargetConfig,
+) FinalizeError!lir.CheckedPipeline.LoweredProgram {
+    var host_target = target;
+    host_target.target_usize = .native;
+    host_target.checked_module_state = .checking_finalization;
+    var prepared = lir.CheckedPipeline.prepareBoxyCheckedModules(allocator, modules, roots, host_target) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.HostedFunctionNotBound => finalizationInvariant("Boxy literal planning encountered an unbound hosted procedure"),
+    };
+    defer prepared.deinit();
+    if (!prepared.hasLiteralRoots()) return prepared.lower(target) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.HostedFunctionNotBound => finalizationInvariant("prepared Boxy lowering changed hosted procedure bindings"),
+    };
+    var host = prepared.lower(host_target) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.HostedFunctionNotBound => finalizationInvariant("Boxy literal lowering encountered an unbound hosted procedure"),
+    };
+    errdefer host.deinit();
+    if (host.lir_result.literal_roots.items.len != 0)
+        try evaluateLoweredRootsWithObservations(allocator, &.{}, modules, &host, 0, .{ .stderr = .{} }, false);
+
+    if (target.target_usize != host_target.target_usize) {
+        var runtime_target = target;
+        runtime_target.checked_module_state = .checking_finalization;
+        var runtime = prepared.lower(runtime_target) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.HostedFunctionNotBound => finalizationInvariant("Boxy runtime lowering encountered an unbound hosted procedure"),
+        };
+        errdefer runtime.deinit();
+        if (host.frozen_static_data != null) runtime.frozen_static_data = try transcodeCompletedSlots(allocator, &host, &runtime.lir_result);
+        try retainBoxyRuntimeRoots(allocator, &runtime);
+        host.deinit();
+        return runtime;
+    }
+    try retainBoxyRuntimeRoots(allocator, &host);
+    return host;
+}
+
+fn retainBoxyRuntimeRoots(allocator: Allocator, program: *lir.CheckedPipeline.LoweredProgram) Allocator.Error!void {
+    if (program.lir_result.literal_roots.items.len == 0) return;
+    const positions = try allocator.alloc(u32, program.lir_result.root_procs.items.len);
+    defer allocator.free(positions);
+    for (positions, 0..) |*position, index| position.* = @intCast(index);
+    try lir.CheckedPipeline.retainRuntimeRoots(program, positions);
+}
+
 /// Where each runtime request sits in the specialized program's root plan.
 /// A runtime consumer continues the program compile-time evaluation
 /// specialized, so everything it lowers is among the program roots that
@@ -767,10 +828,22 @@ fn evaluateLoweredRoots(
     compile_time_root_count: usize,
     options: Options,
 ) FinalizeError!void {
+    return evaluateLoweredRootsWithObservations(allocator, modules, lowering_modules, host, compile_time_root_count, options, true);
+}
+
+fn evaluateLoweredRootsWithObservations(
+    allocator: Allocator,
+    modules: []const ProgramModule,
+    lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
+    host: *lir.CheckedPipeline.LoweredProgram,
+    compile_time_root_count: usize,
+    options: Options,
+    comptime report_observations: bool,
+) FinalizeError!void {
     if (comptime compilerHostMustUseInterpreterForCtfe()) {
         const interpreted = try InterpreterProgram.init(allocator, lowering_modules, host, options);
         defer interpreted.deinit();
-        try finalizeLoweredProgram(allocator, modules, host, compile_time_root_count, interpreted, options);
+        try finalizeLoweredProgram(allocator, modules, host, compile_time_root_count, interpreted, options, report_observations);
         host.frozen_static_data = try interpreted.slots.freezeCompleted();
         return;
     }
@@ -778,7 +851,7 @@ fn evaluateLoweredRoots(
     var native = try DevProgram.init(allocator, lowering_modules, host, options);
     defer native.deinit();
     native.codegen.static_strings = native.static_strings.view();
-    try finalizeLoweredProgram(allocator, modules, host, compile_time_root_count, &native, options);
+    try finalizeLoweredProgram(allocator, modules, host, compile_time_root_count, &native, options, report_observations);
     host.frozen_static_data = try native.freezeCompleted();
 }
 
@@ -833,6 +906,7 @@ fn finalizeLoweredProgram(
     root_count: usize,
     program: anytype,
     options: Options,
+    comptime report_observations: bool,
 ) FinalizeError!void {
     const Driver = struct {
         const Self = @This();
@@ -891,7 +965,7 @@ fn finalizeLoweredProgram(
                     evaluation_options.publish_shared_slots = false;
                 }
                 const previous_report_sites = self.owners.report_sites;
-                self.owners.report_sites = index == root.module;
+                self.owners.report_sites = previous_report_sites and index == root.module;
                 defer self.owners.report_sites = previous_report_sites;
                 _ = try evalProgramRoots(self.allocator, entry.module, requests[request_index..][0..1], state.completion.request_root_ids[request_index..][0..1], &state.completion, entry.problem_store, &state.coverage, self.owners, evaluation_options, self.lowered, self.lowered.lir_result.const_roots.items[demand_ordinal..][0..1], self.program);
                 if (!state.completion.isDone(id)) finalizationInvariant("demanded compile-time producer did not complete");
@@ -908,6 +982,7 @@ fn finalizeLoweredProgram(
         }
     };
     var owners = try ModuleOwners.init(allocator, &lowered.lir_result, modules);
+    owners.report_sites = report_observations;
     defer owners.deinit(allocator);
     owners.unfinalized = options.unfinalized_reports;
     const states = try allocator.alloc(Driver.State, modules.len);
@@ -2212,7 +2287,7 @@ fn evalDevLiteralRoot(
         .crashed => {},
     };
     const failed = failure orelse {
-        if (options.publish_shared_slots) try native.publishRoot(lowered, plan.module, producer, plan.shape(), .{ .ptr = ret_buf.ptr });
+        if (options.publish_shared_slots) try native.publishRootWithRuntime(lowered, plan.module, producer, plan.shape(), .{ .ptr = ret_buf.ptr }, if (selected_runtime) |runtime| &runtime.runtime else null);
         if (options.publish_shared_slots) try native.publishFailure(lowered, plan.module, producer, null);
         return;
     };
@@ -2244,6 +2319,7 @@ fn reportLiteralRootFailure(
     plan: LirProgram.LiteralRootPlan,
     failure: LiteralRootFailure,
 ) FinalizeError!void {
+    if (!owners.report_sites) return;
     if (failedLiteralRejection(&lowered.lir_result, failure.stmt)) |site| {
         return reportLiteralRejection(allocator, owners, site, failure.message);
     }
@@ -3184,7 +3260,10 @@ const DevProgram = struct {
     }
 
     fn publishRoot(self: *DevProgram, lowered: *lir.CheckedPipeline.LoweredProgram, module: checked.ModuleId, producer: lir.LIR.ComptimeProducer, shape: LirProgram.RootShape, value: @import("value.zig").Value) FinalizeError!void {
-        try self.slots.publishRoot(lowered, module, producer, shape, value, .{ .context = self, .resolve = resolveCallable }, .{ .context = self, .resolve = resolveFrozenFunction });
+        try self.publishRootWithRuntime(lowered, module, producer, shape, value, null);
+    }
+    fn publishRootWithRuntime(self: *DevProgram, lowered: *lir.CheckedPipeline.LoweredProgram, module: checked.ModuleId, producer: lir.LIR.ComptimeProducer, shape: LirProgram.RootShape, value: @import("value.zig").Value, runtime: ?*const @import("boxy_runtime.zig").BoxyRuntime) FinalizeError!void {
+        try self.slots.publishRoot(lowered, module, producer, shape, value, .{ .context = self, .resolve = resolveCallable, .runtime = runtime }, .{ .context = self, .resolve = resolveFrozenFunction });
     }
     fn publishFailure(self: *DevProgram, lowered: *const lir.CheckedPipeline.LoweredProgram, module: checked.ModuleId, producer: lir.LIR.ComptimeProducer, message: ?[]const u8) FinalizeError!void {
         try self.slots.publishFailure(lowered, module, producer, message, .{ .context = self, .resolve = resolveFrozenFunction });

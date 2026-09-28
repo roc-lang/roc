@@ -234,7 +234,7 @@ const Pass = struct {
         self.remapStaticDataInitializers();
         try self.remapFrozenExports();
         try self.remapErasedFns();
-        self.remapBoxyTableProcs();
+        try self.remapBoxyTableProcs();
         self.remapComptimeSites();
         self.remapProcDebugNames();
         self.compactProcSpecs();
@@ -381,6 +381,7 @@ const Pass = struct {
             => {},
             .list => |elem| try self.markConstPlan(elem),
             .box => |boxed| try self.markConstPlan(boxed),
+            .boxy_box => |boxed| try self.markConstPlan(boxed.payload),
             .tuple => |items| for (items) |item| try self.markConstPlan(item),
             .record => |fields| for (fields) |field| try self.markConstPlan(field),
             .tag_union => |variants| {
@@ -445,6 +446,11 @@ const Pass = struct {
         for (set.entries) |entry| {
             try self.markProc(entry.entry);
             for (entry.captures) |capture| try self.markConstPlan(capture.plan);
+            if (entry.boxy) |boxy| for (boxy.captures) |capture| switch (capture.value) {
+                .value => |plan| try self.markConstPlan(plan),
+                .descriptor, .contents_descriptor => {},
+                .dictionary => {},
+            };
         }
     }
 
@@ -816,8 +822,11 @@ const Pass = struct {
             if (kept_count == 0) {
                 for (old_entries) |entry| {
                     if (entry.captures.len > 0) self.allocator.free(entry.captures);
-                    if (entry.template.evidence.len > 0) self.allocator.free(entry.template.evidence);
-                    if (entry.template.evidence_frames.len > 0) self.allocator.free(entry.template.evidence_frames);
+                    if (entry.template) |template| {
+                        if (template.evidence.len > 0) self.allocator.free(template.evidence);
+                        if (template.evidence_frames.len > 0) self.allocator.free(template.evidence_frames);
+                    }
+                    if (entry.boxy) |boxy| self.allocator.free(boxy.captures);
                 }
                 if (old_entries.len > 0) self.allocator.free(old_entries);
                 set.entries = &.{};
@@ -833,8 +842,11 @@ const Pass = struct {
                     write += 1;
                 } else {
                     if (entry.captures.len > 0) self.allocator.free(entry.captures);
-                    if (entry.template.evidence.len > 0) self.allocator.free(entry.template.evidence);
-                    if (entry.template.evidence_frames.len > 0) self.allocator.free(entry.template.evidence_frames);
+                    if (entry.template) |template| {
+                        if (template.evidence.len > 0) self.allocator.free(template.evidence);
+                        if (template.evidence_frames.len > 0) self.allocator.free(template.evidence_frames);
+                    }
+                    if (entry.boxy) |boxy| self.allocator.free(boxy.captures);
                 }
             }
             if (old_entries.len > 0) self.allocator.free(old_entries);
@@ -842,7 +854,15 @@ const Pass = struct {
         }
     }
 
-    fn remapBoxyTableProcs(self: *Pass) void {
+    fn remapBoxyTableProcs(self: *Pass) Allocator.Error!void {
+        var origins: @TypeOf(self.result.boxy_frozen_method_origins) = .empty;
+        errdefer origins.deinit(self.allocator);
+        var entries = self.result.boxy_frozen_method_origins.iterator();
+        while (entries.next()) |entry| {
+            if (self.maybeRemapProc(entry.key_ptr.*)) |adapter| try origins.put(self.allocator, adapter, entry.value_ptr.*);
+        }
+        self.result.boxy_frozen_method_origins.deinit(self.allocator);
+        self.result.boxy_frozen_method_origins = origins;
         for (self.result.boxy_method_slots.items) |*slot| {
             if (!slot.present or slot.structural_eq) continue;
             slot.proc = self.remapProc(slot.proc);
@@ -1509,6 +1529,23 @@ test "erased callable pruning frees evidence for fully and partly discarded sets
     try run(&result);
     try std.testing.expectEqual(@as(usize, 0), result.erased_fns.items[0].entries.len);
     try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries.len);
-    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.evidence.len);
-    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.evidence_frames.len);
+    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.?.evidence.len);
+    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.?.evidence_frames.len);
+}
+
+test "reachable proc pass retains frozen method provenance after implementation inlining" {
+    const gpa = std.testing.allocator;
+    var result = try LirProgram.Result.init(gpa, @import("base").target.TargetUsize.native);
+    defer result.deinit();
+    const local = try result.store.addLocal(.{ .layout_idx = .zst });
+    const body = try result.store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
+    const implementation_identity = LIR.ProcIdentity.forTest(81);
+    _ = try result.store.addProcSpec(.{ .name = result.store.freshSyntheticSymbol(), .identity = implementation_identity, .args = .empty(), .body = body, .ret_layout = .zst }, .none);
+    const adapter = try result.store.addProcSpec(.{ .name = result.store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(82), .args = .empty(), .body = body, .ret_layout = .zst }, .none);
+    try result.root_procs.append(gpa, adapter);
+    const origin = LirProgram.BoxyFrozenMethodOrigin{ .worker = implementation_identity, .requirement_module = .{ .bytes = @splat(0) }, .requirement_type = @enumFromInt(1), .callable_module = .{ .bytes = @splat(0) }, .callable_type = @enumFromInt(2) };
+    try result.boxy_frozen_method_origins.put(gpa, adapter, origin);
+    try run(&result);
+    try std.testing.expectEqual(@as(usize, 1), result.store.procSpecCount());
+    try std.testing.expectEqualDeep(origin, result.boxy_frozen_method_origins.get(result.root_procs.items[0]).?);
 }

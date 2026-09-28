@@ -12618,22 +12618,72 @@ lowerer copies the checked literal bytes into the LIR string store and emits
 `assign_literal.str_literal` with a view over exactly those bytes. A
 `str_from_quote` expression whose checked target is builtin `Str` follows the
 same path. A `str_from_quote` expression with a static-dispatch conversion plan
-is not a string literal assignment; it lowers through the checked dispatch plan
-for that conversion. Evidence-dependent quote conversions use the existing
-checked dispatch resolution to select runtime conversion without looking for a
-compile-time root. Direct custom conversions still require their checker-selected
-root. Quote constraints carry runtime dictionary evidence,
-including at procedure-value and closure boundaries; their literal origin does
-not make the callable descriptor-only. Checked evidence and Boxy dictionary
-planning use the same classification. Numeral defaulting retains its existing
-descriptor-guided scalar operation. No additional per-literal representation or
-root index is needed. Converted pattern guards evaluate conversion and equality
-only after preceding patterns have matched, through ordinary expression lowering.
-The checked quote callable takes concrete `Str`; its generic result and error
-leaves are supplied by the selected dictionary method's requirement descriptors.
-Boxy binds those exact leaf descriptors in the call's descriptor scope and builds
-constructor descriptors from them through ordinary call lowering. It never asks
-the caller to invent a static descriptor for the conversion's generic error type.
+is not a string literal assignment. A concrete checked conversion restores its
+checker-selected constant root. A generic custom conversion reads literal-result
+evidence produced by Boxy's own planner; it must not execute user `from_quote`
+or `from_numeral` code at runtime. Ordinary explicit calls to those methods still
+use the checked dispatch plan. Builtin descriptor-guided numeral operations
+remain ordinary Boxy representation operations.
+
+A literal requirement names the checked literal site, the complete conversion
+callable type, and the selected conversion evidence in the requiring worker's
+variables. Evidence retains the checked target, its complete scheme substitution,
+worker descriptors, and nested method dictionaries. This includes variables used
+only in a nested constraint callable or error row. A callable's argument and
+result types alone do not determine those evidence-only variables. Only the
+successful value is frozen. Constructor identity preserves nominal identity and
+structural labels. Checked call substitutions instantiate type terms, and checked
+dictionary arguments instantiate evidence terms. Closed requirements name
+compile-time literal results; open requirements propagate to the caller. The planner interns terms and requirements and processes
+new edge/requirement pairs through a worklist, including edges discovered while
+planning dictionary methods. It must not rescan all existing requirements after
+each new demand or identify a requirement by a call path. Literal evidence follows
+all existing evidence channels: direct calls, dictionary methods, generated and
+iterator calls, root and compile-time calls, and erased callable captures.
+The demand graph, substitutions, and term interning tables are planning scratch.
+Once the ABI is fixed, the plan retains literal-site argument ordinals and closed
+initializer recipes; body lowering does not search or retain the demand graph.
+
+Monomorphic recursive calls forward identical requirements. Annotated polymorphic
+recursion remains governed by the language's existing rules: it can change type
+arguments, and structural interning alone does not prove termination for an
+unbounded instantiation family. This Boxy mechanism covers finite literal demand
+closures; it adds no checker restriction and no runtime conversion fallback for
+an unbounded family. Checking and LSS carry no additional Boxy-only requirements.
+
+Closed results are evaluated and frozen in Boxy's representation domain. Existing
+compile-time finalization owns user-visible observations; Boxy's materialization
+must not replay them. A failed result retains its failure message and origin.
+Forwarding or capturing a result never raises that failure: its guard runs at the
+original literal use, after earlier patterns and conditions have matched.
+Representation ownership remains explicit LIR consumed by ARC and the backends.
+
+A Boxy literal result may contain erased callables created by the conversion.
+Closure packing therefore records a typed freeze recipe alongside the
+procedure, capture layout, and drop plan. Adapter closures record their own
+recipes, including the wrapped callable. These are runtime environment recipes,
+not ConstStore captures: they must not invent checked capture types or stored
+function provenance. Recipes are finalized after reachable producers have been
+lowered, so recursive callable values can refer to reserved constant plans.
+Compiler descriptor captures freeze as immutable, pointer-free Boxy image rows
+whose references name the same program's sidecar tables. They never retain an
+evaluator address. Captured dictionaries retain the selected implementation's
+producer identity and checked method contract; distinct generated adapters for
+that same contract are matched through this evidence and their descriptor
+graphs, never by comparing code addresses or inspecting procedure bodies.
+A closure made by a generic helper retains the helper's worker storage. Freezing
+must instantiate its environment schema through that helper's checked call
+substitutions, including capture-only types and dictionary evidence. These
+compile-time environment observations use the literal planner's same finite
+closure and are excluded from the runtime ABI. An open environment on a
+runtime-only call path is not a requirement to freeze that value. Every value
+actually exported must match a closed producer recipe; an unresolved literal
+requirement remains an error. They specialize freeze metadata, never
+worker bodies. A boxed generic capture preserves its worker box and freezes the
+payload using the instantiated type's explicit plan. Every allocation reachable
+from a frozen closure is immutable; its frozen environment owns no live heap
+resources and therefore needs no drop callback. Host/target correspondence uses Boxy producer identities and
+paired capture slots; it does not borrow LSS specialization identities.
 
 Checked bytes literals follow the same byte-copying LIR literal path as string
 segments: the literal bytes are copied into the LIR string store and referenced
@@ -12641,7 +12691,7 @@ by `assign_literal.str_literal`. The checked type remains `List(U8)` and layout
 selection comes from the checked type's boxy representation; the lowerer does
 not synthesize a list item-by-item from the bytes.
 
-A generalized numeral literal whose checked conversion is a runtime operation
+A generalized builtin numeral literal whose checked conversion is a runtime operation
 retains its exact checked numeral in the Boxy plan. If its target is
 descriptor-governed, lowering emits the descriptor-guided dynamic integer or
 fractional literal operation and materializes the exact target descriptor. If
