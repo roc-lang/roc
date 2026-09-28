@@ -46,7 +46,7 @@ TYPE MISMATCH - type_local_scope_vars.md:19:14:19:14
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 19 14) (end 19 18))
+		(region (start 19 16) (end 19 17))
 		(headline
 			(reflow "The")
 			(reflow " ")

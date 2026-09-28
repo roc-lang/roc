@@ -22,6 +22,8 @@ const COFF = struct {
     // Section flags
     const IMAGE_SCN_CNT_CODE = 0x00000020;
     const IMAGE_SCN_CNT_INITIALIZED_DATA = 0x00000040;
+    const IMAGE_SCN_CNT_UNINITIALIZED_DATA = 0x00000080;
+    const IMAGE_SCN_MEM_WRITE = 0x80000000;
     const IMAGE_SCN_MEM_EXECUTE = 0x20000000;
     const IMAGE_SCN_MEM_READ = 0x40000000;
     const IMAGE_SCN_ALIGN_4BYTES = 0x00300000;
@@ -273,6 +275,8 @@ pub const CoffWriter = struct {
     text: []const u8,
     data: std.ArrayList(u8),
     rdata: []const u8,
+    /// Size of `.bss`, which the file declares without storing bytes.
+    zero_fill_size: u64,
 
     // Symbol table
     symbols: std.ArrayList(Symbol),
@@ -310,6 +314,7 @@ pub const CoffWriter = struct {
             .text = &.{},
             .data = .empty,
             .rdata = &.{},
+            .zero_fill_size = 0,
             .symbols = .empty,
             .text_relocs = .empty,
             .rdata_relocs = .empty,
@@ -339,6 +344,10 @@ pub const CoffWriter = struct {
     }
 
     /// Borrow read-only data section contents until write completes.
+    pub fn setZeroFill(self: *Self, size: u64) void {
+        self.zero_fill_size = size;
+    }
+
     pub fn setRodata(self: *Self, rodata: []const u8) void {
         self.rdata = rodata;
     }
@@ -892,11 +901,14 @@ pub const CoffWriter = struct {
         const last_fixed_section: i16 = 1 + @as(i16, if (has_rdata) 1 else 0) + @as(i16, if (need_unwind) 2 else 0);
         const SECT_DEBUG_ABBREV: i16 = if (has_debug) last_fixed_section + 1 else 0;
         const SECT_DEBUG_LINE: i16 = if (has_debug) last_fixed_section + 2 else 0;
+        // `.bss` comes after every byte-backed section.
+        const has_bss = self.zero_fill_size > 0;
+        const SECT_BSS: i16 = if (has_bss) last_fixed_section + @as(i16, if (has_debug) 3 else 0) + 1 else 0;
 
         // Calculate layout
         const header_size: u32 = @sizeOf(CoffHeader);
         const section_header_size: u32 = @sizeOf(SectionHeader);
-        const num_sections: u16 = 1 + @as(u16, if (has_rdata) 1 else 0) + @as(u16, if (need_unwind) 2 else 0) + @as(u16, if (has_debug) 3 else 0);
+        const num_sections: u16 = 1 + @as(u16, if (has_rdata) 1 else 0) + @as(u16, if (need_unwind) 2 else 0) + @as(u16, if (has_debug) 3 else 0) + @as(u16, if (has_bss) 1 else 0);
 
         const function_count: u32 = @intCast(self.functions.items.len);
         const pdata_size: u32 = if (need_unwind) function_count * self.pdataEntrySize() else 0;
@@ -1020,7 +1032,7 @@ pub const CoffWriter = struct {
                     .text => SECT_TEXT,
                     .data => 0, // Would be section 2 if we had .data
                     .rdata => SECT_RDATA,
-                    .bss => 0,
+                    .bss => SECT_BSS,
                     .undef => COFF.IMAGE_SYM_UNDEFINED,
                 };
             };
@@ -1159,6 +1171,29 @@ pub const CoffWriter = struct {
             output.appendSliceAssumeCapacity(std.mem.asBytes(&line_header));
             const info_header = debugSectionHeader(debug_info_name, debug_info_size, debug_info_offset, debug_info_reloc_offset, debug_info_relocs);
             output.appendSliceAssumeCapacity(std.mem.asBytes(&info_header));
+        }
+
+        if (has_bss) {
+            // Uninitialized data has a size and no raw data: the loader
+            // provides zero pages for its extent.
+            var bss_name: [8]u8 = std.mem.zeroes([8]u8);
+            @memcpy(bss_name[0..4], ".bss");
+            const bss_header = SectionHeader{
+                .name = bss_name,
+                .virtual_size = 0,
+                .virtual_address = 0,
+                .size_of_raw_data = @intCast(self.zero_fill_size),
+                .pointer_to_raw_data = 0,
+                .pointer_to_relocations = 0,
+                .pointer_to_line_numbers = 0,
+                .number_of_relocations = 0,
+                .number_of_line_numbers = 0,
+                .characteristics = COFF.IMAGE_SCN_CNT_UNINITIALIZED_DATA |
+                    COFF.IMAGE_SCN_MEM_READ |
+                    COFF.IMAGE_SCN_MEM_WRITE |
+                    COFF.IMAGE_SCN_ALIGN_16BYTES,
+            };
+            output.appendSliceAssumeCapacity(std.mem.asBytes(&bss_header));
         }
 
         // Write .text section content

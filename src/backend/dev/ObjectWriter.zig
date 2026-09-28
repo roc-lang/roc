@@ -77,10 +77,13 @@ pub fn generateObjectFileWithDebug(
         .symbol = table.indices.get(rel.target_symbol_name).?,
         .addend = rel.addend,
     };
-    return generateIndexedObjectFileWithDebug(allocator, target, code, rodata, symbols, indexed.items, indexed_data, &.{}, debug, output);
+    return generateIndexedObjectFileWithDebug(allocator, target, code, rodata, 0, symbols, indexed.items, indexed_data, &.{}, debug, output);
 }
 
 /// Write producer-resolved relocations. Every target indexes the supplied symbol column.
+///
+/// `zero_fill_size` is the byte size of the object's zero-fill section, which
+/// symbols in `.zero_fill` address; the object stores no bytes for it.
 ///
 /// `unwind_functions` names every callable range code generation recorded,
 /// including reference-count helpers emitted inline after a procedure body
@@ -92,6 +95,7 @@ pub fn generateIndexedObjectFileWithDebug(
     target: RocTarget,
     code: []const u8,
     rodata: []const u8,
+    zero_fill_size: u64,
     symbols: []const Symbol,
     relocations: []const IndexedRelocation,
     rodata_relocations: []const IndexedDataRelocation,
@@ -117,6 +121,7 @@ pub fn generateIndexedObjectFileWithDebug(
 
             elf.setCode(code);
             elf.setRodata(rodata);
+            elf.setZeroFill(zero_fill_size);
             if (debug) |d| elf.setDebugSections(d.line, d.abbrev, d.info, d.line_relocs, d.info_relocs);
 
             // Add symbols
@@ -159,6 +164,7 @@ pub fn generateIndexedObjectFileWithDebug(
 
             macho.setCode(code);
             macho.setRodata(rodata);
+            macho.setZeroFill(zero_fill_size);
             if (debug) |d| macho.setDebugSections(d.line, d.abbrev, d.info, d.line_relocs, d.info_relocs);
 
             const referenced = try allocator.alloc(bool, symbols.len);
@@ -210,6 +216,7 @@ pub fn generateIndexedObjectFileWithDebug(
 
             coff_writer.setCode(code);
             coff_writer.setRodata(rodata);
+            coff_writer.setZeroFill(zero_fill_size);
             if (debug) |d| coff_writer.setDebugSections(d.line, d.abbrev, d.info, d.line_relocs, d.info_relocs);
 
             // Ranges the published symbols already describe, so recorded
@@ -313,6 +320,9 @@ pub const IndexedDataRelocation = struct {
 pub const Section = enum {
     text,
     rodata,
+    /// Zero-initialized data the object declares by size alone: the file
+    /// holds no bytes for it and the loader maps zero pages.
+    zero_fill,
     undef,
 };
 
@@ -320,6 +330,7 @@ fn machoSectionNumber(section: Section) u8 {
     return switch (section) {
         .text => 1,
         .rodata => 2,
+        .zero_fill => object.macho.zero_fill_section_number,
         .undef => 0,
     };
 }
@@ -328,6 +339,7 @@ fn elfSection(section: Section) object.elf.Section {
     return switch (section) {
         .text => .text,
         .rodata => .rodata,
+        .zero_fill => .bss,
         .undef => .undef,
     };
 }
@@ -346,6 +358,7 @@ fn coffSection(section: Section) object.coff.Section {
     return switch (section) {
         .text => .text,
         .rodata => .rdata,
+        .zero_fill => .bss,
         .undef => .undef,
     };
 }
@@ -613,7 +626,7 @@ test "x86_64 windows object covers recorded helper ranges without symbols" {
     }) |case| {
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(allocator);
-        try generateIndexedObjectFileWithDebug(allocator, .x64win, code, &.{}, symbols, &.{}, &.{}, case.recorded, null, &output);
+        try generateIndexedObjectFileWithDebug(allocator, .x64win, code, &.{}, 0, symbols, &.{}, &.{}, case.recorded, null, &output);
 
         // No .rdata, so .pdata is the second section header; each x64 entry is 12 bytes.
         const num_sections = std.mem.readInt(u16, output.items[2..4], .little);
@@ -978,7 +991,7 @@ test "indexed object relocations preserve targets through format symbol ordering
         };
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(allocator);
-        try generateIndexedObjectFileWithDebug(allocator, target, &([_]u8{0} ** 32), &([_]u8{0} ** 32), &symbols, &relocations, &data_relocations, &.{}, null, &output);
+        try generateIndexedObjectFileWithDebug(allocator, target, &([_]u8{0} ** 32), &([_]u8{0} ** 32), 0, &symbols, &relocations, &data_relocations, &.{}, null, &output);
         const decoded = try TestObjectTables.read(target, output.items);
         const expected = [_][]const u8{ "local_data", "external_function", "local_data", "global_data" };
         try std.testing.expectEqual(@as(usize, 4), decoded.text.len / decoded.relocation_size);
@@ -1129,6 +1142,130 @@ test "separate static data objects expose private backing symbols to code object
         try std.testing.expectEqual(@as(u8, if (private) 2 else 0), symbol[5] & 3); // visibility
     }
     try std.testing.expectEqual(@as(usize, 2), found);
+}
+
+test "all-zero static data without relocations is declared as zero-fill, not stored" {
+    const allocator = std.testing.allocator;
+    const Compiler = @import("ObjectFileCompiler.zig");
+    const zeros = [_]u8{0} ** 65536;
+    var exports: std.ArrayList(Compiler.StaticDataExport) = .empty;
+    defer exports.deinit(allocator);
+    // Relocations identify the table by its actual position in the export list.
+    const table_index = exports.items.len;
+    // A list backing: an allocation header word, then 65528 zero bytes.
+    try exports.append(allocator, .{ .symbol_name = "table", .bytes = &zeros, .symbol_offset = 8, .alignment = 8, .is_exported = false });
+    const relocations = [_]Compiler.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "table", .target = .{ .data_symbol = @enumFromInt(table_index) }, .addend = 8 }};
+    try exports.appendSlice(allocator, &.{
+        // The descriptor is all zeros too, but a relocation writes the
+        // table's address into it at link time.
+        .{ .symbol_name = "descriptor", .bytes = &([_]u8{0} ** 24), .alignment = 8, .is_exported = false, .relocations = &relocations },
+        .{ .symbol_name = "filled", .bytes = &.{ 1, 2, 3, 4, 5, 6, 7, 8 }, .alignment = 8, .is_exported = false },
+    });
+    for ([_]RocTarget{ .x64linux, .x64mac, .x64win }) |target| {
+        var compiler = Compiler.ObjectFileCompiler.init(allocator);
+        var result = try compiler.compileStaticDataObject(exports.items, target);
+        defer result.deinit();
+        // The object declares the table's 64 KB and stores none of it.
+        try std.testing.expect(result.object_bytes.len < zeros.len);
+        const zero_fill = try zeroFillSection(target, result.object_bytes);
+        try std.testing.expectEqual(@as(u64, zeros.len), zero_fill.size);
+        try std.testing.expect(zero_fill.stores_no_bytes);
+        // The descriptor's relocation survives and names the table.
+        const decoded = try TestObjectTables.read(target, result.object_bytes);
+        try std.testing.expectEqual(@as(usize, 1), decoded.data.len / decoded.relocation_size);
+        // The table's symbol lives in the zero-fill section, past its header
+        // word; the other two stay in readonly data.
+        try std.testing.expectEqual(zero_fill.section_number, try symbolSectionNumber(decoded, "table"));
+        try std.testing.expect(zero_fill.section_number != try symbolSectionNumber(decoded, "descriptor"));
+        try std.testing.expect(zero_fill.section_number != try symbolSectionNumber(decoded, "filled"));
+    }
+}
+
+const ZeroFillSection = struct { size: u64, stores_no_bytes: bool, section_number: u32 };
+
+/// The zero-fill section an object declares: `.bss` on ELF and COFF,
+/// `__bss` on Mach-O.
+fn zeroFillSection(target: RocTarget, bytes: []const u8) error{ InvalidObjectFile, UnsupportedTarget, SectionNotFound }!ZeroFillSection {
+    switch (roc_target.classifyOs(target.toOsTag())) {
+        .linux => {
+            const e_shoff = std.mem.readInt(u64, bytes[40..48], .little);
+            const e_shentsize = std.mem.readInt(u16, bytes[58..60], .little);
+            const e_shnum = std.mem.readInt(u16, bytes[60..62], .little);
+            const e_shstrndx = std.mem.readInt(u16, bytes[62..64], .little);
+            const shstr_hdr = e_shoff + @as(u64, e_shstrndx) * e_shentsize;
+            const shstr = bytes[@intCast(std.mem.readInt(u64, bytes[@intCast(shstr_hdr + 24)..][0..8], .little))..];
+            for (0..e_shnum) |index| {
+                const header = bytes[@intCast(e_shoff + index * e_shentsize)..][0..64];
+                const name = std.mem.sliceTo(shstr[std.mem.readInt(u32, header[0..4], .little)..], 0);
+                if (!std.mem.eql(u8, name, ".bss")) continue;
+                return .{
+                    .size = std.mem.readInt(u64, header[32..40], .little),
+                    .stores_no_bytes = std.mem.readInt(u32, header[4..8], .little) == 8, // SHT_NOBITS
+                    .section_number = @intCast(index),
+                };
+            }
+            return error.SectionNotFound;
+        },
+        .macos => {
+            var command: usize = 32;
+            for (0..TestObjectTables.read32(bytes, 16)) |_| {
+                if (TestObjectTables.read32(bytes, command) == 0x19) {
+                    for (0..TestObjectTables.read32(bytes, command + 64)) |i| {
+                        const section = bytes[command + 72 + i * 80 ..][0..80];
+                        if (!std.mem.eql(u8, std.mem.sliceTo(section[0..16], 0), "__bss")) continue;
+                        return .{
+                            .size = std.mem.readInt(u64, section[40..48], .little),
+                            .stores_no_bytes = TestObjectTables.read32(section, 48) == 0 and TestObjectTables.read32(section, 64) & 0xff == 0x1, // no offset, S_ZEROFILL
+                            .section_number = @intCast(i + 1),
+                        };
+                    }
+                }
+                command += TestObjectTables.read32(bytes, command + 4);
+            }
+            return error.SectionNotFound;
+        },
+        .windows => {
+            const count = TestObjectTables.read16(bytes, 2);
+            for (0..count) |index| {
+                const header = bytes[20 + index * 40 ..][0..40];
+                if (!std.mem.eql(u8, std.mem.sliceTo(header[0..8], 0), ".bss")) continue;
+                return .{
+                    .size = TestObjectTables.read32(header, 16),
+                    .stores_no_bytes = TestObjectTables.read32(header, 20) == 0 and TestObjectTables.read32(header, 36) & 0x80 != 0, // no raw data, IMAGE_SCN_CNT_UNINITIALIZED_DATA
+                    .section_number = @intCast(index + 1),
+                };
+            }
+            return error.SectionNotFound;
+        },
+        .freebsd, .openbsd, .netbsd, .other => return error.UnsupportedTarget,
+    }
+}
+
+/// The section number of the named symbol in a decoded object.
+fn symbolSectionNumber(decoded: TestObjectTables, wanted: []const u8) error{SymbolNotFound}!u32 {
+    switch (decoded.format) {
+        .elf => for (0..decoded.symbols.len / 24) |index| {
+            const symbol = decoded.symbols[index * 24 ..][0..24];
+            const name = std.mem.sliceTo(decoded.strings[TestObjectTables.read32(symbol, 0)..], 0);
+            if (std.mem.eql(u8, name, wanted)) return @intCast(TestObjectTables.read16(symbol, 6));
+        },
+        .macho => for (0..decoded.symbols.len / 16) |index| {
+            const symbol = decoded.symbols[index * 16 ..][0..16];
+            const name = std.mem.sliceTo(decoded.strings[TestObjectTables.read32(symbol, 0)..], 0);
+            if (name.len == wanted.len + 1 and name[0] == '_' and std.mem.eql(u8, name[1..], wanted)) return symbol[5];
+        },
+        .coff => for (0..decoded.symbols.len / 18) |index| {
+            const symbol = decoded.symbols[index * 18 ..][0..18];
+            // A name longer than eight bytes is an offset into the string
+            // table, whose first four bytes are its own size.
+            const name = if (TestObjectTables.read32(symbol, 0) == 0)
+                std.mem.sliceTo(decoded.strings[TestObjectTables.read32(symbol, 4)..], 0)
+            else
+                std.mem.sliceTo(symbol[0..8], 0);
+            if (std.mem.eql(u8, name, wanted)) return @intCast(TestObjectTables.read16(symbol, 12));
+        },
+    }
+    return error.SymbolNotFound;
 }
 
 test "static data object collection scales linearly and preserves cyclic targets" {

@@ -1205,7 +1205,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 52 2) (end 69 3))
+		(region (start 58 17) (end 58 22))
 		(headline
 			(reflow "The")
 			(reflow " ")

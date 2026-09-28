@@ -94,22 +94,18 @@ fn expectCheckReports(fixture: []const u8, expected_titles: []const []const u8) 
     }
 }
 
-test "issue 11292: Boxy lowers and runs a generalized string literal pattern" {
-    try harness.runAppPathLoweredInspection(app_path, .{ .specialization_strategy = .boxy }, expectAppRunsSuccessfully);
-}
-
 test "issue 11292: LSS lowers and runs a generalized string literal pattern" {
     try harness.runAppPathLoweredInspection(app_path, .{ .specialization_strategy = .lss }, expectAppRunsSuccessfully);
 }
 
+// Boxy reads generic literal results from the compile-time image, so its runs
+// of these programs are the echo-platform CLI tests for issue 11292.
 test "issue 11292: custom conversion and equality with generic forwarding and guard fallthrough" {
-    inline for (.{ .boxy, .lss }) |strategy| {
-        try harness.runAppPathLoweredInspection(
-            "test/postcheck/issue_11292_generalized_string_pattern/custom.roc",
-            .{ .specialization_strategy = strategy },
-            expectAppRunsSuccessfully,
-        );
-    }
+    try harness.runAppPathLoweredInspection(
+        "test/postcheck/issue_11292_generalized_string_pattern/custom.roc",
+        .{ .specialization_strategy = .lss },
+        expectAppRunsSuccessfully,
+    );
 }
 
 // Every pattern literal's conversion is hoisted, and hoisting is eager: a

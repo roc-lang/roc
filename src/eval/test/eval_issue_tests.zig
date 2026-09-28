@@ -266,6 +266,54 @@ const issue11377GenericNominalCollectionSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "issue 11737: independent calls select different nested method targets",
+        .source_kind = .module,
+        .source =
+        \\Runner :: {}.{
+        \\    run = |_, body| body({}).repeat(3)
+        \\}
+        \\demo = |runner| (runner.run(|{}| "a"), runner.run(|{}| [1.U64]))
+        \\main = demo(Runner.{})
+        ,
+        .expected = .{ .inspect_str = "(\"aaa\", [[1], [1], [1]])" },
+    },
+    .{
+        .name = "issue 11737: independent nominal calls preserve nested evidence and distinct results",
+        .source_kind = .module,
+        .source =
+        \\Db(deps) :: { deps : deps }.{
+        \\    run = |db, body| {
+        \\        fetch = db.deps.fetch
+        \\        repeated = fetch({}).repeat(3)
+        \\        (repeated, body({}))
+        \\    }
+        \\}
+        \\demo = |db| (db.run(|{}| "a"), db.run(|{}| 42.U64))
+        \\forward = |db| demo(db)
+        \\main = forward(Db.{ deps: { fetch: |{}| "x" } })
+        ,
+        .expected = .{ .inspect_str = "((\"xxx\", \"a\"), (\"xxx\", 42))" },
+    },
+    .{
+        .name = "issue 11737: stored generic function retains independent callable contracts",
+        .source_kind = .module,
+        .source =
+        \\Db(deps) :: { deps : deps }.{
+        \\    run = |db, body| {
+        \\        fetch = db.deps.fetch
+        \\        (fetch({}).concat("y"), body({}))
+        \\    }
+        \\}
+        \\demo = |db| (db.run(|{}| "a"), db.run(|{}| "b"))
+        \\saved = { invoke: demo }
+        \\main = {
+        \\    invoke = saved.invoke
+        \\    invoke(Db.{ deps: { fetch: |{}| "x" } })
+        \\}
+        ,
+        .expected = .{ .inspect_str = "((\"xy\", \"a\"), (\"xy\", \"b\"))" },
+    },
+    .{
         .name = "issue 11661: closure relaxation preserves previous loop list",
         .source_kind = .module,
         .source =
@@ -622,6 +670,33 @@ pub const tests = [_]TestCase{
         \\main = xs
         ,
         .expected = .{ .inspect_str = "[{ a: 3, b: 287454020, c: (-7, 2.5) }, { a: 3, b: 287454020, c: (-7, 2.5) }]" },
+    },
+    .{
+        // A compile-time list of copies that an in-place write consumes is
+        // built fresh by a seed append and a range fill; every copy and the
+        // length must match the static table it replaces.
+        .name = "consumed compile-time list of copies is filled, not looped",
+        .source_kind = .module,
+        .source =
+        \\table : List(U16)
+        \\table = List.repeat(513, 100)
+        \\main = {
+        \\    written = table.set(99, 7) ?? []
+        \\    (written.len(), written.get(0), written.get(50), written.get(98), written.get(99), written.count_if(|x| x == 513))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(100, Ok(513), Ok(513), Ok(513), Ok(7), 99)" },
+    },
+    .{
+        // A single copy is the seed alone.
+        .name = "consumed compile-time list of one copy is the seed append alone",
+        .source_kind = .module,
+        .source =
+        \\table : List(U64)
+        \\table = List.repeat(9, 1)
+        \\main = table.set(0, 4) ?? []
+        ,
+        .expected = .{ .inspect_str = "[4]" },
     },
     .{
         .name = "issue 11376: packed nominal constants preserve copy-on-write sharing",
