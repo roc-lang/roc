@@ -7466,13 +7466,16 @@ test "all-zero static exports without relocations become zero-fill segments" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
     defer module.deinit();
-    const relocations = [_]StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "table", .target = .{ .data_symbol = @enumFromInt(0) }, .addend = 8 }};
-    const exports = [_]StaticDataExport{
-        .{ .symbol_name = "table", .bytes = &([_]u8{0} ** 64), .symbol_offset = 8, .alignment = 8, .is_exported = false },
+    var exports = std.ArrayList(StaticDataExport).empty;
+    defer exports.deinit(allocator);
+    const table_index = exports.items.len;
+    try exports.append(allocator, .{ .symbol_name = "table", .bytes = &([_]u8{0} ** 64), .symbol_offset = 8, .alignment = 8, .is_exported = false });
+    const relocations = [_]StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "table", .target = .{ .data_symbol = @enumFromInt(table_index) }, .addend = 8 }};
+    try exports.appendSlice(allocator, &.{
         .{ .symbol_name = "descriptor", .bytes = &([_]u8{0} ** 12), .alignment = 4, .is_exported = false, .relocations = &relocations },
         .{ .symbol_name = "filled", .bytes = &.{ 1, 0, 0, 0 }, .alignment = 4, .is_exported = false },
-    };
-    try module.addStaticDataExports(&exports);
+    });
+    try module.addStaticDataExports(exports.items);
     // Linear memory starts zeroed, so the table needs no bytes; the
     // descriptor is written by a relocation and the filled export is not
     // zero, so both stay byte-backed.
