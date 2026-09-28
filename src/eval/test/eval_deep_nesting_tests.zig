@@ -25,12 +25,15 @@ fn repeat(comptime text: []const u8, comptime count: usize) []const u8 {
 pub const tests = cases ++ boxyVariants(&cases);
 
 /// Each case again, lowered without specialization (`--specialize=no`).
+/// The wasm evaluator runs a module without the Boxy runtime object that a
+/// `roc build` links in, so these variants run on the native backends.
 fn boxyVariants(comptime lss: []const TestCase) [lss.len]TestCase {
     var out: [lss.len]TestCase = undefined;
     for (lss, &out) |case, *variant| {
         variant.* = case;
         variant.name = case.name ++ " (specialize=no)";
         variant.specialization_strategy = .boxy;
+        variant.skip.wasm = true;
     }
     return out;
 }
@@ -142,6 +145,22 @@ const cases = [_]TestCase{
             break :blk out;
         } ++ "f" ++ depth_str ++ " : U64 -> U64\nf" ++ depth_str ++ " = |x| x\nrun = |n| if n == 0 { 1.U64 } else { f0(n) }\nmain = run(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
+        .stack_bytes = stack_bytes,
+        .opt_in = true,
+    },
+    .{
+        .name = "TEMPDEEP nested for loops",
+        .source_kind = .module,
+        .source = "count = |n| {\n    var $total = n\n" ++ repeat("for _ in [1.U64] {\n", depth) ++ "$total = $total + 1\n" ++ repeat("}\n", depth) ++ "    $total\n}\nmain = count(0.U64)\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = stack_bytes,
+        .opt_in = true,
+    },
+    .{
+        .name = "TEMPDEEP nested matches",
+        .source_kind = .module,
+        .source = "pick = |x| " ++ repeat("match x { 0 => 0.U64, _ => ", depth) ++ "x" ++ repeat(" }", depth) ++ "\nmain = pick(3.U64)\n",
+        .expected = .{ .inspect_str = "3" },
         .stack_bytes = stack_bytes,
         .opt_in = true,
     },
