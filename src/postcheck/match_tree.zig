@@ -992,12 +992,13 @@ pub fn Compiler(comptime Ctx: type) type {
         /// buildStrArm(pat, capture_locals, on_match) StrArm
         /// strMatchSet(source, arms, on_miss) CFStmtId
         /// bindPatternLocal(local, ty, source, next) CFStmtId
-        /// lowerBindings(bindings, next) CFStmtId          // before guard/body
-        /// lowerBody(body, next) CFStmtId                 // into the result local
         /// guardTemp(guard) LirLocal
-        /// lowerGuard(cond, guard, next) CFStmtId
         /// boolSwitch(cond, then, els) CFStmtId
         /// ```
+        ///
+        /// Branch bodies, binding statements, and guards are lowered by the
+        /// host: emission suspends with an `EmitRequest` for each, and the
+        /// host resumes it with the lowered statement.
         const CtxStmt = Ctx.CFStmtId;
         const CtxLocal = Ctx.LirLocal;
 
@@ -1023,7 +1024,9 @@ pub fn Compiler(comptime Ctx: type) type {
 
         const Extraction = struct {
             occ: OccId,
-            what: enum { value, disc, len },
+            what: What,
+
+            const What = enum { value, disc, len };
         };
 
         /// The scope that must be entered before an occurrence's value can be
@@ -1043,6 +1046,23 @@ pub fn Compiler(comptime Ctx: type) type {
             str_arm: struct { occ: OccId, shape: u32 },
         };
 
+        /// Work the emitter hands back to the host lowerer. Each request is
+        /// answered by passing the lowered statement to `Emitter.advance`.
+        pub const EmitRequest = union(enum) {
+            /// Lower a branch body into the host's result local, then `next`.
+            body: struct { body: ExprId, next: CtxStmt },
+            /// Lower a branch's binding statements, then `next`.
+            bindings: struct { bindings: BindingSpan, next: CtxStmt },
+            /// Lower a guard expression into `cond`, then `next`.
+            guard: struct { cond: CtxLocal, guard: ExprId, next: CtxStmt },
+        };
+
+        pub const EmitProgress = union(enum) {
+            request: EmitRequest,
+            /// The match's entry statement.
+            done: CtxStmt,
+        };
+
         pub const Emitter = struct {
             arena: std.mem.Allocator,
             ctx: Ctx,
@@ -1054,27 +1074,99 @@ pub fn Compiler(comptime Ctx: type) type {
             /// Statements added by delegated body/guard lowering, excluded
             /// from the lint's machinery count.
             delegated_stmts: usize,
+            /// Statement count when the outstanding request was issued.
+            request_start: ?usize = null,
+            /// Statement count when emission began.
+            machinery_start: usize = 0,
+            /// Suspended emission steps. Tree depth never becomes native
+            /// call depth, and a request suspends the whole emission until
+            /// the host answers it.
+            frames: std.ArrayList(EmitFrame) = .empty,
 
             const Env = struct {
                 locals: std.AutoHashMapUnmanaged(OccId, EmitLocals),
 
-                fn clone(self: *const Env, arena: std.mem.Allocator) error{OutOfMemory}!Env {
-                    return .{ .locals = try self.locals.clone(arena) };
+                fn clone(self: *const Env, arena: std.mem.Allocator) error{OutOfMemory}!*Env {
+                    const cloned = try arena.create(Env);
+                    cloned.* = .{ .locals = try self.locals.clone(arena) };
+                    return cloned;
                 }
             };
 
-            /// Emit `tree` and return the entry statement. `scrutinee` is the
-            /// already-allocated local the caller evaluates the scrutinee
-            /// into; bodies are lowered into the caller's result local and
-            /// jump to `done`.
-            pub fn emitMatch(
+            const EmitFrame = struct {
+                cursor: u8 = 0,
+                index: usize = 0,
+                task: EmitTask,
+            };
+
+            const EmitTask = union(enum) {
+                root: struct { env: *Env, extractions: []const Extraction },
+                tree: TreeTask,
+                arm: ArmTask,
+                /// A discriminant, integer, or length switch.
+                switch_: SwitchTask,
+                eq_chain: struct { t: TestNode, env: *Env, source: CtxLocal = undefined, current: CtxStmt = undefined },
+                str_set: StrSetTask,
+            };
+
+            const TreeTask = struct {
+                tree: *const Tree,
+                env: *Env,
+                body: CtxStmt = undefined,
+                cond: CtxLocal = undefined,
+                then_env: *Env = undefined,
+                extractions: []const Extraction = &.{},
+                jp: Ctx.JoinPointId = undefined,
+            };
+
+            const ArmTask = struct {
+                t: TestNode,
+                arm: Arm,
+                env: *Env,
+                arm_env: *Env = undefined,
+                extractions: []const Extraction = &.{},
+            };
+
+            const SwitchTask = struct {
+                t: TestNode,
+                env: *Env,
+                selector: enum { disc, value, len },
+                values: []u64 = &.{},
+                bodies: []CtxStmt = &.{},
+            };
+
+            const StrSetTask = struct {
+                t: TestNode,
+                env: *Env,
+                arms: []Ctx.StrArm = &.{},
+                arm_env: *Env = undefined,
+                capture_locals: []const ?CtxLocal = &.{},
+                extractions: []const Extraction = &.{},
+            };
+
+            const EmitStep = union(enum) {
+                /// Suspend this frame until `task` returns.
+                call: EmitTask,
+                /// Replace this frame by `task`.
+                tail: EmitTask,
+                /// Suspend emission until the host answers.
+                request: EmitRequest,
+                ret: CtxStmt,
+            };
+
+            /// Begin emitting `result`. `scrutinee` is the already-allocated
+            /// local the caller evaluates the scrutinee into; bodies are
+            /// lowered into the caller's result local and jump to `done`.
+            /// Drive the emission with `advance`.
+            pub fn begin(
                 arena: std.mem.Allocator,
                 ctx: Ctx,
                 result: BuildResult,
                 scrutinee: CtxLocal,
                 done: Ctx.JoinPointId,
-            ) Ctx.LowerError!CtxStmt {
-                var self = Emitter{
+            ) Ctx.LowerError!*Emitter {
+                const self = try arena.create(Emitter);
+                self.* = .{
                     .arena = arena,
                     .ctx = ctx,
                     .occs = result.occs,
@@ -1086,63 +1178,120 @@ pub fn Compiler(comptime Ctx: type) type {
                 };
                 try self.collectUses(result.tree);
 
-                var env = Env{ .locals = .empty };
+                const env = try arena.create(Env);
+                env.* = .{ .locals = .empty };
                 try env.locals.put(arena, .root, .{ .value = scrutinee });
 
-                const before = self.ctx.stmtCount();
+                self.machinery_start = self.ctx.stmtCount();
                 var entry_extractions: std.ArrayList(Extraction) = .empty;
-                try self.enterScope(&env, .top, &entry_extractions);
-                var body = try self.emitTree(result.tree, &env);
-                body = try self.emitExtractions(entry_extractions.items, &env, body);
+                try self.enterScope(env, .top, &entry_extractions);
+                try self.frames.append(arena, .{ .task = .{ .root = .{ .env = env, .extractions = entry_extractions.items } } });
+                try self.frames.append(arena, .{ .task = .{ .tree = .{ .tree = result.tree, .env = env } } });
+                return self;
+            }
 
-                if (std.debug.runtime_safety) {
-                    const machinery = (self.ctx.stmtCount() - before) - self.delegated_stmts;
-                    const bound = @as(usize, LINT_MULT) * @as(usize, result.stats.pattern_nodes) + LINT_BASE;
-                    if (machinery > bound) {
-                        std.debug.panic(
-                            "match_tree emitted {d} machinery statements for {d} pattern nodes (bound {d}); the linear-size guarantee regressed",
-                            .{ machinery, result.stats.pattern_nodes, bound },
-                        );
+            /// Continue emission. `input` answers the outstanding request,
+            /// and is null on the first call.
+            pub fn advance(self: *Emitter, input: ?CtxStmt) Ctx.LowerError!EmitProgress {
+                if (self.request_start) |start| {
+                    self.delegated_stmts += self.ctx.stmtCount() - start;
+                    self.request_start = null;
+                }
+                var carried = input;
+                while (true) {
+                    const frame = &self.frames.items[self.frames.items.len - 1];
+                    switch (try self.stepFrame(frame, carried)) {
+                        .call => |task| {
+                            try self.frames.append(self.arena, .{ .task = task });
+                            carried = null;
+                        },
+                        .tail => |task| {
+                            frame.* = .{ .task = task };
+                            carried = null;
+                        },
+                        .request => |request| {
+                            self.request_start = self.ctx.stmtCount();
+                            return .{ .request = request };
+                        },
+                        .ret => |stmt| {
+                            _ = self.frames.pop();
+                            if (self.frames.items.len == 0) return .{ .done = stmt };
+                            carried = stmt;
+                        },
                     }
                 }
-                return body;
+            }
+
+            fn stepFrame(self: *Emitter, frame: *EmitFrame, input: ?CtxStmt) Ctx.LowerError!EmitStep {
+                return switch (frame.task) {
+                    .root => |*task| {
+                        var body = input.?;
+                        body = try self.emitExtractions(task.extractions, task.env, body);
+                        if (std.debug.runtime_safety) {
+                            const machinery = (self.ctx.stmtCount() - self.machinery_start) - self.delegated_stmts;
+                            const bound = @as(usize, LINT_MULT) * @as(usize, self.tree_stats.pattern_nodes) + LINT_BASE;
+                            if (machinery > bound) {
+                                std.debug.panic(
+                                    "match_tree emitted {d} machinery statements for {d} pattern nodes (bound {d}); the linear-size guarantee regressed",
+                                    .{ machinery, self.tree_stats.pattern_nodes, bound },
+                                );
+                            }
+                        }
+                        return .{ .ret = body };
+                    },
+                    .tree => |*task| self.stepTree(frame, task, input),
+                    .arm => |*task| self.stepArm(frame, task, input),
+                    .switch_ => |*task| self.stepSwitch(frame, task, input),
+                    .eq_chain => |*task| self.stepEqChain(frame, task, input),
+                    .str_set => |*task| self.stepStrSet(frame, task, input),
+                };
             }
 
             fn occEntry(self: *const Emitter, occ: OccId) OccEntry {
                 return self.occs[occ.idx()];
             }
 
-            fn markUse(self: *Emitter, occ: OccId, comptime what: enum { value, disc, len }) error{OutOfMemory}!void {
-                // A derived or extracted read needs its parent's value.
-                const gop = try self.uses.getOrPut(occ);
-                if (!gop.found_existing) gop.value_ptr.* = .{};
-                switch (what) {
-                    .value => gop.value_ptr.value = true,
-                    .disc => gop.value_ptr.disc = true,
-                    .len => gop.value_ptr.len = true,
-                }
-                const entry = self.occEntry(occ);
-                if (occ != .root) try self.markUse(entry.parent, .value);
-                // Back-relative and rest reads need the parent list's length.
-                switch (entry.step) {
-                    .list_elem_back, .list_rest => try self.markUse(entry.parent, .len),
-                    .root,
-                    .field,
-                    .tag_payload,
-                    .callable_payload,
-                    .list_elem_front,
-                    .nominal_backing,
-                    .str_capture,
-                    => {},
+            /// A derived or extracted read needs its parent's value, and
+            /// back-relative and rest reads need the parent list's length.
+            /// Every mark is a monotone flag, so the marks are propagated
+            /// from a worklist in any order.
+            fn markUse(self: *Emitter, occ: OccId, what: Extraction.What) error{OutOfMemory}!void {
+                const Mark = struct { occ: OccId, what: Extraction.What };
+                var marks: std.ArrayList(Mark) = .empty;
+                try marks.append(self.arena, .{ .occ = occ, .what = what });
+                while (marks.pop()) |mark| {
+                    const gop = try self.uses.getOrPut(mark.occ);
+                    if (!gop.found_existing) gop.value_ptr.* = .{};
+                    switch (mark.what) {
+                        .value => gop.value_ptr.value = true,
+                        .disc => gop.value_ptr.disc = true,
+                        .len => gop.value_ptr.len = true,
+                    }
+                    if (mark.occ == .root) continue;
+                    const entry = self.occEntry(mark.occ);
+                    try marks.append(self.arena, .{ .occ = entry.parent, .what = .value });
+                    switch (entry.step) {
+                        .list_elem_back, .list_rest => try marks.append(self.arena, .{ .occ = entry.parent, .what = .len }),
+                        .root,
+                        .field,
+                        .tag_payload,
+                        .callable_payload,
+                        .list_elem_front,
+                        .nominal_backing,
+                        .str_capture,
+                        => {},
+                    }
                 }
             }
 
-            fn collectUses(self: *Emitter, tree: *const Tree) error{OutOfMemory}!void {
-                switch (tree.*) {
+            fn collectUses(self: *Emitter, root: *const Tree) error{OutOfMemory}!void {
+                var trees: std.ArrayList(*const Tree) = .empty;
+                try trees.append(self.arena, root);
+                while (trees.pop()) |tree| switch (tree.*) {
                     .leaf => |leaf| for (leaf.binds) |bind| try self.markUse(bind.occ, .value),
                     .guard => |g| {
                         for (g.binds) |bind| try self.markUse(bind.occ, .value);
-                        try self.collectUses(g.otherwise);
+                        try trees.append(self.arena, g.otherwise);
                     },
                     .test_ => |t| {
                         switch (t.kind) {
@@ -1154,20 +1303,20 @@ pub fn Compiler(comptime Ctx: type) type {
                             .int_switch, .eq_chain, .str_set => try self.markUse(t.occ, .value),
                             .list_len => try self.markUse(t.occ, .len),
                         }
-                        for (t.arms) |arm| try self.collectUses(arm.subtree);
-                        if (t.default) |d| try self.collectUses(d);
+                        for (t.arms) |arm| try trees.append(self.arena, arm.subtree);
+                        if (t.default) |d| try trees.append(self.arena, d);
                     },
                     .len_check => |lc| {
                         try self.markUse(lc.occ, .len);
-                        try self.collectUses(lc.then);
-                        try self.collectUses(lc.otherwise);
+                        try trees.append(self.arena, lc.then);
+                        try trees.append(self.arena, lc.otherwise);
                     },
                     .exit_join => |j| {
-                        try self.collectUses(j.cont);
-                        try self.collectUses(j.inner);
+                        try trees.append(self.arena, j.cont);
+                        try trees.append(self.arena, j.inner);
                     },
                     .exit_, .fail => {},
-                }
+                };
             }
 
             /// The scope in which `occ`'s value becomes extractable.
@@ -1319,176 +1468,222 @@ pub fn Compiler(comptime Ctx: type) type {
                 return current;
             }
 
-            fn lowerBodyCounted(self: *Emitter, body: ExprId, next: CtxStmt) Ctx.LowerError!CtxStmt {
-                const before = self.ctx.stmtCount();
-                const result = try self.ctx.lowerBody(body, next);
-                self.delegated_stmts += self.ctx.stmtCount() - before;
-                return result;
-            }
-
-            fn lowerBindingsCounted(self: *Emitter, bindings: BindingSpan, next: CtxStmt) Ctx.LowerError!CtxStmt {
-                const before = self.ctx.stmtCount();
-                const result = try self.ctx.lowerBindings(bindings, next);
-                self.delegated_stmts += self.ctx.stmtCount() - before;
-                return result;
-            }
-
-            fn emitTree(self: *Emitter, tree: *const Tree, env: *Env) Ctx.LowerError!CtxStmt {
-                switch (tree.*) {
-                    .leaf => |leaf| {
-                        var body = try self.lowerBodyCounted(leaf.body, try self.ctx.joinJump(self.done));
-                        body = try self.lowerBindingsCounted(leaf.bindings, body);
-                        return try self.emitBinds(leaf.binds, env, body);
+            fn stepTree(self: *Emitter, frame: *EmitFrame, task: *TreeTask, input: ?CtxStmt) Ctx.LowerError!EmitStep {
+                const env = task.env;
+                switch (task.tree.*) {
+                    .leaf => |leaf| switch (frame.cursor) {
+                        0 => {
+                            frame.cursor = 1;
+                            return .{ .request = .{ .body = .{ .body = leaf.body, .next = try self.ctx.joinJump(self.done) } } };
+                        },
+                        1 => {
+                            frame.cursor = 2;
+                            return .{ .request = .{ .bindings = .{ .bindings = leaf.bindings, .next = input.? } } };
+                        },
+                        else => return .{ .ret = try self.emitBinds(leaf.binds, env, input.?) },
                     },
-                    .guard => |g| {
-                        const body = try self.lowerBodyCounted(g.body, try self.ctx.joinJump(self.done));
-                        const otherwise = try self.emitTree(g.otherwise, env);
-                        const cond = try self.ctx.guardTemp(g.guard);
-                        const guard_switch = try self.ctx.boolSwitch(cond, body, otherwise);
-                        const before = self.ctx.stmtCount();
-                        var guarded = try self.ctx.lowerGuard(cond, g.guard, guard_switch);
-                        self.delegated_stmts += self.ctx.stmtCount() - before;
-                        guarded = try self.lowerBindingsCounted(g.bindings, guarded);
-                        return try self.emitBinds(g.binds, env, guarded);
+                    .guard => |g| switch (frame.cursor) {
+                        0 => {
+                            frame.cursor = 1;
+                            return .{ .request = .{ .body = .{ .body = g.body, .next = try self.ctx.joinJump(self.done) } } };
+                        },
+                        1 => {
+                            task.body = input.?;
+                            frame.cursor = 2;
+                            return .{ .call = .{ .tree = .{ .tree = g.otherwise, .env = env } } };
+                        },
+                        2 => {
+                            const otherwise = input.?;
+                            const cond = try self.ctx.guardTemp(g.guard);
+                            const guard_switch = try self.ctx.boolSwitch(cond, task.body, otherwise);
+                            frame.cursor = 3;
+                            return .{ .request = .{ .guard = .{ .cond = cond, .guard = g.guard, .next = guard_switch } } };
+                        },
+                        3 => {
+                            frame.cursor = 4;
+                            return .{ .request = .{ .bindings = .{ .bindings = g.bindings, .next = input.? } } };
+                        },
+                        else => return .{ .ret = try self.emitBinds(g.binds, env, input.?) },
                     },
-                    .test_ => |t| return try self.emitTest(t, env),
-                    .len_check => |lc| {
-                        var then_env = try env.clone(self.arena);
-                        var extractions: std.ArrayList(Extraction) = .empty;
-                        try self.enterScope(&then_env, .{ .list_len = .{ .occ = lc.occ, .min_len = lc.min_len } }, &extractions);
-                        var then = try self.emitTree(lc.then, &then_env);
-                        then = try self.emitExtractions(extractions.items, &then_env, then);
-                        const otherwise = try self.emitTree(lc.otherwise, env);
-                        return try self.ctx.lenGteTest(self.lenLocal(env, lc.occ), lc.min_len, then, otherwise);
+                    .test_ => |t| return .{ .tail = switch (t.kind) {
+                        .tag, .callable => .{ .switch_ = .{ .t = t, .env = env, .selector = .disc } },
+                        .int_switch => .{ .switch_ = .{ .t = t, .env = env, .selector = .value } },
+                        .list_len => .{ .switch_ = .{ .t = t, .env = env, .selector = .len } },
+                        .eq_chain => .{ .eq_chain = .{ .t = t, .env = env } },
+                        .str_set => .{ .str_set = .{ .t = t, .env = env } },
+                    } },
+                    .len_check => |lc| switch (frame.cursor) {
+                        0 => {
+                            task.then_env = try env.clone(self.arena);
+                            var extractions: std.ArrayList(Extraction) = .empty;
+                            try self.enterScope(task.then_env, .{ .list_len = .{ .occ = lc.occ, .min_len = lc.min_len } }, &extractions);
+                            task.extractions = extractions.items;
+                            frame.cursor = 1;
+                            return .{ .call = .{ .tree = .{ .tree = lc.then, .env = task.then_env } } };
+                        },
+                        1 => {
+                            task.body = try self.emitExtractions(task.extractions, task.then_env, input.?);
+                            frame.cursor = 2;
+                            return .{ .call = .{ .tree = .{ .tree = lc.otherwise, .env = env } } };
+                        },
+                        else => return .{ .ret = try self.ctx.lenGteTest(self.lenLocal(env, lc.occ), lc.min_len, task.body, input.?) },
                     },
-                    .exit_join => |j| {
-                        const jp = self.ctx.freshJoinPointId();
-                        try self.exit_joins.put(j.id, jp);
-                        const cont = try self.emitTree(j.cont, env);
-                        const inner = try self.emitTree(j.inner, env);
-                        return try self.ctx.addExitJoin(jp, cont, inner);
+                    .exit_join => |j| switch (frame.cursor) {
+                        0 => {
+                            task.jp = self.ctx.freshJoinPointId();
+                            try self.exit_joins.put(j.id, task.jp);
+                            frame.cursor = 1;
+                            return .{ .call = .{ .tree = .{ .tree = j.cont, .env = env } } };
+                        },
+                        1 => {
+                            task.body = input.?;
+                            frame.cursor = 2;
+                            return .{ .call = .{ .tree = .{ .tree = j.inner, .env = env } } };
+                        },
+                        else => return .{ .ret = try self.ctx.addExitJoin(task.jp, task.body, input.?) },
                     },
-                    .exit_ => |id| return try self.ctx.joinJump(self.exit_joins.get(id).?),
-                    .fail => return try self.ctx.failTerminal(),
+                    .exit_ => |id| return .{ .ret = try self.ctx.joinJump(self.exit_joins.get(id).?) },
+                    .fail => return .{ .ret = try self.ctx.failTerminal() },
                 }
             }
 
-            fn emitTest(self: *Emitter, t: TestNode, env: *Env) Ctx.LowerError!CtxStmt {
-                switch (t.kind) {
-                    .tag, .callable => return try self.emitDiscTest(t, env),
-                    .int_switch => return try self.emitIntSwitch(t, env),
-                    .eq_chain => return try self.emitEqChain(t, env),
-                    .str_set => return try self.emitStrSet(t, env),
-                    .list_len => return try self.emitLenSwitch(t, env),
+            fn stepArm(self: *Emitter, frame: *EmitFrame, task: *ArmTask, input: ?CtxStmt) Ctx.LowerError!EmitStep {
+                if (frame.cursor == 1) {
+                    return .{ .ret = try self.emitExtractions(task.extractions, task.arm_env, input.?) };
                 }
-            }
-
-            fn emitArm(self: *Emitter, t: TestNode, arm: Arm, env: *Env) Ctx.LowerError!CtxStmt {
-                var arm_env = try env.clone(self.arena);
-                var extractions: std.ArrayList(Extraction) = .empty;
+                const t = task.t;
                 const scope: Scope = switch (t.kind) {
-                    .tag => .{ .tag_arm = .{ .occ = t.occ, .variant = @intCast(arm.key) } },
-                    .callable => .{ .callable_arm = .{ .occ = t.occ, .variant = @intCast(arm.key) } },
-                    .list_len => .{ .list_len = .{ .occ = t.occ, .min_len = @truncate(arm.key) } },
+                    .tag => .{ .tag_arm = .{ .occ = t.occ, .variant = @intCast(task.arm.key) } },
+                    .callable => .{ .callable_arm = .{ .occ = t.occ, .variant = @intCast(task.arm.key) } },
+                    .list_len => .{ .list_len = .{ .occ = t.occ, .min_len = @truncate(task.arm.key) } },
                     .int_switch, .eq_chain => {
                         // Literal arms impose no sub-structure; no new scope.
-                        return try self.emitTree(arm.subtree, env);
+                        return .{ .tail = .{ .tree = .{ .tree = task.arm.subtree, .env = task.env } } };
                     },
-                    .str_set => unreachable, // handled by emitStrSet
+                    .str_set => unreachable, // handled by the string-set step
                 };
-                try self.enterScope(&arm_env, scope, &extractions);
-                var body = try self.emitTree(arm.subtree, &arm_env);
-                body = try self.emitExtractions(extractions.items, &arm_env, body);
-                return body;
+                task.arm_env = try task.env.clone(self.arena);
+                var extractions: std.ArrayList(Extraction) = .empty;
+                try self.enterScope(task.arm_env, scope, &extractions);
+                task.extractions = extractions.items;
+                frame.cursor = 1;
+                return .{ .call = .{ .tree = .{ .tree = task.arm.subtree, .env = task.arm_env } } };
             }
 
-            fn emitDiscTest(self: *Emitter, t: TestNode, env: *Env) Ctx.LowerError!CtxStmt {
-                if (t.exhaustive and t.arms.len == 1) {
-                    // The union has exactly one variant and the sole arm
-                    // covers it: no dispatch, no discriminant read (a
-                    // zero-branch switch is also rejected by the dev
-                    // backend).
-                    return try self.emitArm(t, t.arms[0], env);
+            /// A discriminant, integer, or length switch: one body per arm,
+            /// then the default. An exhaustive discriminant test turns its
+            /// last arm into the default.
+            fn stepSwitch(self: *Emitter, frame: *EmitFrame, task: *SwitchTask, input: ?CtxStmt) Ctx.LowerError!EmitStep {
+                const t = task.t;
+                const exhaustive_disc = task.selector == .disc and t.exhaustive;
+                switch (frame.cursor) {
+                    0 => {
+                        if (task.selector == .disc) {
+                            if (t.exhaustive and t.arms.len == 1) {
+                                // The union has exactly one variant and the sole arm
+                                // covers it: no dispatch, no discriminant read (a
+                                // zero-branch switch is also rejected by the dev
+                                // backend).
+                                return .{ .tail = .{ .arm = .{ .t = t, .arm = t.arms[0], .env = task.env } } };
+                            }
+                            if (self.ctx.isZstLirLocal(self.valueLocal(task.env, t.occ))) {
+                                // A ZST scrutinee has exactly one possible variant; no
+                                // dispatch is needed (mirrors the chain's ZST fast path).
+                                std.debug.assert(t.arms.len == 1);
+                                return .{ .tail = .{ .arm = .{ .t = t, .arm = t.arms[0], .env = task.env } } };
+                            }
+                        }
+                        const arm_count = if (exhaustive_disc) t.arms.len - 1 else t.arms.len;
+                        task.values = try self.arena.alloc(u64, arm_count);
+                        task.bodies = try self.arena.alloc(CtxStmt, arm_count);
+                        frame.cursor = 1;
+                    },
+                    1 => {
+                        task.bodies[frame.index] = input.?;
+                        frame.index += 1;
+                    },
+                    else => {
+                        const selector = switch (task.selector) {
+                            .disc => self.discLocal(task.env, t.occ),
+                            .value => self.valueLocal(task.env, t.occ),
+                            .len => self.lenLocal(task.env, t.occ),
+                        };
+                        return .{ .ret = try self.ctx.switchStmt(selector, task.values, task.bodies, input.?) };
+                    },
                 }
-                const source = self.valueLocal(env, t.occ);
-                if (self.ctx.isZstLirLocal(source)) {
-                    // A ZST scrutinee has exactly one possible variant; no
-                    // dispatch is needed (mirrors the chain's ZST fast path).
-                    std.debug.assert(t.arms.len == 1);
-                    return try self.emitArm(t, t.arms[0], env);
+                if (frame.index < task.values.len) {
+                    const arm = t.arms[frame.index];
+                    task.values[frame.index] = switch (task.selector) {
+                        .disc => @intCast(arm.key),
+                        .value => self.ctx.intSwitchValue(arm.example, arm.example_ty).?,
+                        .len => @truncate(arm.key),
+                    };
+                    return .{ .call = .{ .arm = .{ .t = t, .arm = arm, .env = task.env } } };
                 }
-                const arm_count = if (t.exhaustive) t.arms.len - 1 else t.arms.len;
-                const values = try self.arena.alloc(u64, arm_count);
-                const bodies = try self.arena.alloc(CtxStmt, arm_count);
-                for (t.arms[0..arm_count], values, bodies) |arm, *value, *body| {
-                    value.* = @intCast(arm.key);
-                    body.* = try self.emitArm(t, arm, env);
-                }
-                const default = if (t.exhaustive)
-                    try self.emitArm(t, t.arms[t.arms.len - 1], env)
+                frame.cursor = 2;
+                return .{ .call = if (exhaustive_disc)
+                    .{ .arm = .{ .t = t, .arm = t.arms[t.arms.len - 1], .env = task.env } }
                 else
-                    try self.emitTree(t.default.?, env);
-                return try self.ctx.switchStmt(self.discLocal(env, t.occ), values, bodies, default);
+                    .{ .tree = .{ .tree = t.default.?, .env = task.env } } };
             }
 
-            fn emitIntSwitch(self: *Emitter, t: TestNode, env: *Env) Ctx.LowerError!CtxStmt {
-                const values = try self.arena.alloc(u64, t.arms.len);
-                const bodies = try self.arena.alloc(CtxStmt, t.arms.len);
-                for (t.arms, values, bodies) |arm, *value, *body| {
-                    value.* = self.ctx.intSwitchValue(arm.example, arm.example_ty).?;
-                    body.* = try self.emitArm(t, arm, env);
+            fn stepEqChain(self: *Emitter, frame: *EmitFrame, task: anytype, input: ?CtxStmt) Ctx.LowerError!EmitStep {
+                const t = task.t;
+                switch (frame.cursor) {
+                    0 => {
+                        task.source = self.valueLocal(task.env, t.occ);
+                        frame.index = t.arms.len;
+                        frame.cursor = 1;
+                        return .{ .call = .{ .tree = .{ .tree = t.default.?, .env = task.env } } };
+                    },
+                    1 => task.current = input.?,
+                    else => {
+                        const arm = t.arms[frame.index];
+                        task.current = try self.ctx.literalEqTest(task.source, arm.example_ty, arm.example, input.?, task.current);
+                    },
                 }
-                const default = try self.emitTree(t.default.?, env);
-                return try self.ctx.switchStmt(self.valueLocal(env, t.occ), values, bodies, default);
+                if (frame.index == 0) return .{ .ret = task.current };
+                frame.index -= 1;
+                frame.cursor = 2;
+                return .{ .call = .{ .arm = .{ .t = t, .arm = t.arms[frame.index], .env = task.env } } };
             }
 
-            fn emitEqChain(self: *Emitter, t: TestNode, env: *Env) Ctx.LowerError!CtxStmt {
-                const source = self.valueLocal(env, t.occ);
-                var current = try self.emitTree(t.default.?, env);
-                var i = t.arms.len;
-                while (i > 0) {
-                    i -= 1;
-                    const arm = t.arms[i];
-                    const body = try self.emitArm(t, arm, env);
-                    current = try self.ctx.literalEqTest(source, arm.example_ty, arm.example, body, current);
+            fn stepStrSet(self: *Emitter, frame: *EmitFrame, task: *StrSetTask, input: ?CtxStmt) Ctx.LowerError!EmitStep {
+                const t = task.t;
+                switch (frame.cursor) {
+                    0 => {
+                        task.arms = try self.arena.alloc(Ctx.StrArm, t.arms.len);
+                        frame.cursor = 1;
+                    },
+                    1 => {
+                        const arm = t.arms[frame.index];
+                        const body = try self.emitExtractions(task.extractions, task.arm_env, input.?);
+                        task.arms[frame.index] = try self.ctx.buildStrArm(arm.example, task.capture_locals, body);
+                        frame.index += 1;
+                    },
+                    else => return .{ .ret = try self.ctx.strMatchSet(self.valueLocal(task.env, t.occ), task.arms, input.?) },
                 }
-                return current;
-            }
-
-            fn emitStrSet(self: *Emitter, t: TestNode, env: *Env) Ctx.LowerError!CtxStmt {
-                const arms = try self.arena.alloc(Ctx.StrArm, t.arms.len);
-                for (t.arms, arms) |arm, *out| {
-                    var arm_env = try env.clone(self.arena);
-                    const capture_locals = try self.ctx.strArmCaptureLocals(arm.example);
+                if (frame.index < t.arms.len) {
+                    const arm = t.arms[frame.index];
+                    task.arm_env = try task.env.clone(self.arena);
+                    task.capture_locals = try self.ctx.strArmCaptureLocals(arm.example);
                     // Register capture locals under their occurrences before
                     // entering the subtree; only interned (used) captures
                     // matter.
                     const shape: u32 = @truncate(arm.key);
-                    for (capture_locals, 0..) |maybe_local, step_index| {
+                    for (task.capture_locals, 0..) |maybe_local, step_index| {
                         const local = maybe_local orelse continue;
                         if (self.lookupOcc(t.occ, .{ .str_capture = .{ .shape = shape, .index = @intCast(step_index) } })) |occ| {
-                            try arm_env.locals.put(self.arena, occ, .{ .value = local });
+                            try task.arm_env.locals.put(self.arena, occ, .{ .value = local });
                         }
                     }
                     var extractions: std.ArrayList(Extraction) = .empty;
-                    try self.enterScope(&arm_env, .{ .str_arm = .{ .occ = t.occ, .shape = shape } }, &extractions);
-                    var body = try self.emitTree(arm.subtree, &arm_env);
-                    body = try self.emitExtractions(extractions.items, &arm_env, body);
-                    out.* = try self.ctx.buildStrArm(arm.example, capture_locals, body);
+                    try self.enterScope(task.arm_env, .{ .str_arm = .{ .occ = t.occ, .shape = shape } }, &extractions);
+                    task.extractions = extractions.items;
+                    return .{ .call = .{ .tree = .{ .tree = arm.subtree, .env = task.arm_env } } };
                 }
-                const on_miss = try self.emitTree(t.default.?, env);
-                return try self.ctx.strMatchSet(self.valueLocal(env, t.occ), arms, on_miss);
-            }
-
-            fn emitLenSwitch(self: *Emitter, t: TestNode, env: *Env) Ctx.LowerError!CtxStmt {
-                const values = try self.arena.alloc(u64, t.arms.len);
-                const bodies = try self.arena.alloc(CtxStmt, t.arms.len);
-                for (t.arms, values, bodies) |arm, *value, *body| {
-                    value.* = @truncate(arm.key);
-                    body.* = try self.emitArm(t, arm, env);
-                }
-                const default = try self.emitTree(t.default.?, env);
-                return try self.ctx.switchStmt(self.lenLocal(env, t.occ), values, bodies, default);
+                frame.cursor = 2;
+                return .{ .call = .{ .tree = .{ .tree = t.default.?, .env = task.env } } };
             }
 
             /// Look up an interned occurrence without creating it. Returns

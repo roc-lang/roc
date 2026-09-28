@@ -4936,32 +4936,6 @@ const Lowerer = struct {
         return (try self.specIdentity(self.fn_specs.items[@intFromEnum(target)])).bytes;
     }
 
-    fn lowerStaticDataCandidateInto(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        candidate: Mono.StaticDataCandidate,
-        ty: Type.TypeId,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        const layout_idx = self.result.store.getLocal(target).layout_idx;
-        const proc_id = self.current_proc orelse Common.invariant("static data candidate lowering ran without a current procedure");
-        if (self.result.store.getProcSpec(proc_id).is_static_initializer) {
-            // Closed target initializers serialize the stored value, not a
-            // runtime construction.
-            return try self.lowerExprIntoAtType(where, target, candidate.runtime_expr, ty, next);
-        }
-        if (try self.lowerConstructionExprInto(where, target, candidate.runtime_expr, ty, next)) |built| return built;
-        if (candidate.storage.needsTargetStorage(self.result.layouts.targetUsize()) and self.layoutNeedsStaticData(layout_idx)) {
-            return try self.result.store.addCFStmt(.{ .assign_literal = .{
-                .target = target,
-                .value = .{ .static_data = try self.lirStaticDataFor(candidate, ty, layout_idx) },
-                .next = next,
-            } }, where.source());
-        }
-        return try self.lowerExprIntoAtType(where, target, candidate.runtime_expr, ty, next);
-    }
-
     fn noteWorkerExpr(self: *Lowerer, data: Lifted.ExprData) void {
         // A lifted join point is entered again by the jumps in its body, so
         // it lowers to the same back-edge shape as a loop.
@@ -4973,6 +4947,376 @@ const Lowerer = struct {
         if (data == .loop_ or data == .join_point) self.worker_features.loop = true;
     }
 
+    // Expression lowering //
+    //
+    // An expression lowers backwards: each subexpression is lowered into its
+    // local with the statement that follows it as its continuation, and the
+    // subexpression's entry statement becomes the continuation of whatever
+    // precedes it. Every construct that lowers a subexpression suspends as a
+    // `LowerFrame` on one heap-backed stack and resumes with the
+    // subexpression's entry statement, so expression nesting depth never
+    // becomes native call depth. Frames make the same lowering calls in the
+    // same order a direct recursive lowering would, and restore the lowerer
+    // state they change when they finish or unwind.
+
+    /// A subexpression lowered into `target` before `next`, at `ty` when the
+    /// consumer fixes its type and at the expression's own type otherwise.
+    const ExprRequest = struct {
+        parent: LowerSite,
+        target: LIR.LocalId,
+        expr: Lifted.ExprId,
+        ty: ?Type.TypeId,
+        next: LIR.CFStmtId,
+    };
+
+    /// One position of a chain. Positions lower in order, each before the
+    /// entry statement of the one lowered ahead of it.
+    const ChainItem = union(enum) {
+        expr: struct {
+            target: LIR.LocalId,
+            expr: Lifted.ExprId,
+            ty: ?Type.TypeId,
+            /// Lowered inside a return-forwarding scope for `target`.
+            forwarding: bool = false,
+            /// The current return target while this position lowers.
+            return_target: ?(?LIR.LocalId) = null,
+        },
+        stmt: Lifted.StmtId,
+    };
+
+    const ChainTask = struct {
+        where: LowerSite,
+        /// Owned.
+        items: []ChainItem,
+        current: LIR.CFStmtId,
+        forwarding: ?ReturnForwardingScope = null,
+        restore_return_target: ?(?LIR.LocalId) = null,
+    };
+
+    /// A subexpression lowered while the lowerer's current return target is
+    /// changed; the saved target is restored when it finishes.
+    const ScopedTask = struct {
+        saved_return_target: ?LIR.LocalId,
+        restored: bool = false,
+        child: ExprRequest,
+    };
+
+    const ComptimeBranchTask = struct {
+        where: LowerSite,
+        site: LIR.ComptimeSiteId,
+        branch_index: @FieldType(@FieldType(LIR.CFStmt, "comptime_branch_taken"), "branch_index"),
+        child: ExprRequest,
+    };
+
+    const StructExprsTask = struct {
+        where: LowerSite,
+        target: LIR.LocalId,
+        /// Owned.
+        items: []Lifted.ExprId,
+        /// Owned.
+        tys: []Type.TypeId,
+        next: LIR.CFStmtId,
+        field_locals: []LIR.LocalId = &.{},
+        current: LIR.CFStmtId = undefined,
+        saved_return_target: ?LIR.LocalId = null,
+        demanded_child: ?usize = null,
+        restore_return_target: ?(?LIR.LocalId) = null,
+    };
+
+    const RecordUpdateTask = struct {
+        where: LowerSite,
+        target: LIR.LocalId,
+        ty: Type.TypeId,
+        update: Lifted.RecordUpdate,
+        next: LIR.CFStmtId,
+        type_fields: []const Type.Field = &.{},
+        updates_by_field: []?Lifted.ExprId = &.{},
+        field_locals: []LIR.LocalId = &.{},
+        base_ty: Type.TypeId = undefined,
+        base_local: LIR.LocalId = undefined,
+        target_is_zst: bool = false,
+        current: LIR.CFStmtId = undefined,
+    };
+
+    const TagPayloadTask = struct {
+        where: LowerSite,
+        target: LIR.LocalId,
+        ty: Type.TypeId,
+        variant_index: u16,
+        payloads: Lifted.Span(Lifted.ExprId),
+        next: LIR.CFStmtId,
+        restore_return_target: ?(?LIR.LocalId) = null,
+    };
+
+    const RecordBindingTask = struct {
+        where: LowerSite,
+        id: usize,
+        next: LIR.CFStmtId,
+        plan: RecordPlan = undefined,
+        shape: RecordShape = undefined,
+        current: LIR.CFStmtId = undefined,
+        saved_return_target: ?LIR.LocalId = null,
+        restore: bool = false,
+        forwarding: ?ReturnForwardingScope = null,
+    };
+
+    const LetTask = struct {
+        where: LowerSite,
+        target: LIR.LocalId,
+        result_ty: Type.TypeId,
+        bind: Lifted.PatId,
+        value: Lifted.ExprId,
+        rest: Lifted.ExprId,
+        comptime_site: ?Lifted.ComptimeSiteId,
+        next: LIR.CFStmtId,
+        planned: ?RecordBindingRestore = null,
+    };
+
+    const DirectBindTask = struct {
+        where: LowerSite,
+        pat: Lifted.PatId,
+        local: Lifted.LocalId,
+        value: Lifted.ExprId,
+        next: LIR.CFStmtId,
+        forwarding: ?ReturnForwardingScope = null,
+    };
+
+    const RecursiveLetTask = struct {
+        where: LowerSite,
+        pat: Lifted.PatId,
+        value: Lifted.ExprId,
+        next: LIR.CFStmtId,
+        target: LIR.LocalId = undefined,
+        ptr: LIR.LocalId = undefined,
+    };
+
+    const DirectCallTask = struct {
+        where: LowerSite,
+        target: LIR.LocalId,
+        result_ty: Type.TypeId,
+        callee: Lifted.FnId,
+        /// Owned.
+        args: []Lifted.ExprId,
+        /// Owned.
+        capture_operands: []Lifted.CaptureOperand,
+        is_cold: bool,
+        next: LIR.CFStmtId,
+        target_fn: Type.FnId = undefined,
+        captures: CaptureSpanId = undefined,
+        capture_ty: Type.TypeId = undefined,
+        capture_local: LIR.LocalId = undefined,
+    };
+
+    const KnownCallTask = struct {
+        where: LowerSite,
+        target: LIR.LocalId,
+        result_ty: Type.TypeId,
+        callee: Type.FnId,
+        /// Owned.
+        args: []Lifted.ExprId,
+        capture_arg: ?LIR.LocalId,
+        is_cold: bool,
+        next: LIR.CFStmtId,
+        arg_tys: []Type.TypeId = &.{},
+        lowered: ?LoweredExprLocals = null,
+    };
+
+    const InlineCallTask = struct {
+        where: LowerSite,
+        target: LIR.LocalId,
+        callee: Type.FnId,
+        /// Owned.
+        arg_locals: []LIR.LocalId,
+        body_expr: Lifted.ExprId,
+        next: LIR.CFStmtId,
+        /// The bindings the callee's arguments shadowed, once installed.
+        saved: ?[]?LIR.LocalId = null,
+    };
+
+    const CallableCallTask = struct {
+        where: LowerSite,
+        target: LIR.LocalId,
+        result_ty: Type.TypeId,
+        callee_expr: Lifted.ExprId,
+        callee_ty: Type.TypeId,
+        /// Owned.
+        variants: []Type.FnVariant,
+        /// Owned.
+        args: []Lifted.ExprId,
+        next: LIR.CFStmtId,
+        callee: LIR.LocalId = undefined,
+        done: LIR.JoinPointId = undefined,
+        current: LIR.CFStmtId = undefined,
+    };
+
+    const CallableVariantTask = struct {
+        where: LowerSite,
+        callee: LIR.LocalId,
+        variant_index: u16,
+        payload: LIR.LocalId,
+        /// The variant target's call, until it is started.
+        call: ?KnownCallTask,
+    };
+
+    const MatchTask = struct {
+        where: LowerSite,
+        target: LIR.LocalId,
+        result_ty: Type.TypeId,
+        scrutinee: Lifted.ExprId,
+        next: LIR.CFStmtId,
+        scrutinee_ty: Type.TypeId = undefined,
+        scrutinee_local: LIR.LocalId = undefined,
+        done: LIR.JoinPointId = undefined,
+        /// Owns the decision tree and its emitter.
+        arena: ?*std.heap.ArenaAllocator = null,
+        emitter: *match_tree.Compiler(MatchTreeCtx).Emitter = undefined,
+    };
+
+    const IfTask = struct {
+        where: LowerSite,
+        target: LIR.LocalId,
+        result_ty: Type.TypeId,
+        branches: Lifted.Span(Lifted.IfBranch),
+        final_else: Lifted.ExprId,
+        next: LIR.CFStmtId,
+        done: LIR.JoinPointId = undefined,
+        current: LIR.CFStmtId = undefined,
+        body: LIR.CFStmtId = undefined,
+    };
+
+    const PayloadSwitchTask = struct {
+        where: LowerSite,
+        target: LIR.LocalId,
+        payload_switch: Lifted.InitializedPayloadSwitch,
+        next: LIR.CFStmtId,
+        done: LIR.JoinPointId = undefined,
+        branch_done: LIR.CFStmtId = undefined,
+        initialized_body: LIR.CFStmtId = undefined,
+    };
+
+    const TrySequenceTask = struct {
+        where: LowerSite,
+        target: LIR.LocalId,
+        out_try_ty: Type.TypeId,
+        sequence: Mono.TrySequence,
+        next: LIR.CFStmtId,
+        input_try_local: LIR.LocalId = undefined,
+        ok_variant: u16 = undefined,
+        err_variant: u16 = undefined,
+        out_err_variant: u16 = undefined,
+    };
+
+    const TryRecordSequenceTask = struct {
+        where: LowerSite,
+        target: LIR.LocalId,
+        out_try_ty: Type.TypeId,
+        sequence: Mono.TryRecordSequence,
+        next: LIR.CFStmtId,
+        input_try_local: LIR.LocalId = undefined,
+        ok_variant: u16 = undefined,
+        err_variant: u16 = undefined,
+        out_err_variant: u16 = undefined,
+        ok_payload_ty: Type.TypeId = undefined,
+    };
+
+    const BlockTask = struct {
+        where: LowerSite,
+        target: LIR.LocalId,
+        result_ty: Type.TypeId,
+        stmts: Lifted.Span(Lifted.StmtId),
+        final_expr: Lifted.ExprId,
+        next: LIR.CFStmtId,
+        planned: std.ArrayList(RecordBindingRestore) = .empty,
+        current: LIR.CFStmtId = undefined,
+    };
+
+    const LoopTask = struct {
+        where: LowerSite,
+        target: LIR.LocalId,
+        result_ty: Type.TypeId,
+        params: Lifted.Span(Lifted.TypedLocal),
+        initial_values: Lifted.Span(Lifted.ExprId),
+        body: Lifted.ExprId,
+        next: LIR.CFStmtId,
+        saved_return_target: ?LIR.LocalId = null,
+        /// The loop's lowerer state is installed and must be removed.
+        entered: bool = false,
+        active_param_count: usize = 0,
+        loop_pushed: bool = false,
+        param_tys: []Type.TypeId = &.{},
+        param_span: LIR.LocalSpan = undefined,
+        maybe_uninitialized_span: LIR.LocalSpan = undefined,
+        maybe_uninitialized_conditions_span: LIR.LocalSpan = undefined,
+        maybe_uninitialized_condition_masks_span: @FieldType(@FieldType(LIR.CFStmt, "join"), "maybe_uninitialized_condition_masks") = undefined,
+        join_id: LIR.JoinPointId = undefined,
+        body_stmt: LIR.CFStmtId = undefined,
+    };
+
+    const JoinPointTask = struct {
+        where: LowerSite,
+        target: LIR.LocalId,
+        result_ty: Type.TypeId,
+        join_point: Lifted.JoinPointExpr,
+        next: LIR.CFStmtId,
+        saved_return_target: ?LIR.LocalId = null,
+        entered: bool = false,
+        join_pushed: bool = false,
+        param_tys: []Type.TypeId = &.{},
+        param_span: LIR.LocalSpan = undefined,
+        retained_span: LIR.LocalSpan = undefined,
+        maybe_uninitialized_span: LIR.LocalSpan = undefined,
+        maybe_uninitialized_conditions_span: LIR.LocalSpan = undefined,
+        maybe_uninitialized_condition_masks_span: @FieldType(@FieldType(LIR.CFStmt, "join"), "maybe_uninitialized_condition_masks") = undefined,
+        lir_join_id: LIR.JoinPointId = undefined,
+        body_stmt: LIR.CFStmtId = undefined,
+    };
+
+    const LowerTask = union(enum) {
+        expr: ExprRequest,
+        stmt: struct { parent: LowerSite, stmt: Lifted.StmtId, next: LIR.CFStmtId },
+        chain: ChainTask,
+        scoped: ScopedTask,
+        comptime_branch: ComptimeBranchTask,
+        struct_exprs: StructExprsTask,
+        record_update: RecordUpdateTask,
+        tag_payload: TagPayloadTask,
+        record_binding: RecordBindingTask,
+        let_: LetTask,
+        direct_bind: DirectBindTask,
+        recursive_let: RecursiveLetTask,
+        direct_call: DirectCallTask,
+        known_call: KnownCallTask,
+        inline_call: InlineCallTask,
+        callable_call: CallableCallTask,
+        callable_variant: CallableVariantTask,
+        match_: MatchTask,
+        if_: IfTask,
+        payload_switch: PayloadSwitchTask,
+        try_sequence: TrySequenceTask,
+        try_record_sequence: TryRecordSequenceTask,
+        block: BlockTask,
+        loop_: LoopTask,
+        join_point: JoinPointTask,
+    };
+
+    const LowerFrame = struct {
+        cursor: u8 = 0,
+        index: usize = 0,
+        task: LowerTask,
+    };
+
+    const LowerStep = union(enum) {
+        /// Suspend this frame until `task` returns its entry statement.
+        call: LowerTask,
+        /// Replace this frame by `task`, whose result is this frame's result.
+        tail: LowerTask,
+        ret: LIR.CFStmtId,
+    };
+
+    fn exprTask(parent: LowerSite, target: LIR.LocalId, expr: Lifted.ExprId, ty: ?Type.TypeId, next: LIR.CFStmtId) LowerTask {
+        return .{ .expr = .{ .parent = parent, .target = target, .expr = expr, .ty = ty, .next = next } };
+    }
+
     fn lowerExprInto(
         self: *Lowerer,
         parent: LowerSite,
@@ -4980,133 +5324,7 @@ const Lowerer = struct {
         expr_id: Lifted.ExprId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
-        const expr_data = self.solved.lifted.getExpr(expr_id);
-        self.noteWorkerExpr(expr_data.data);
-        const expr_ty = try self.lowerExprTy(expr_id);
-        const where = try self.exprSite(parent, expr_id);
-        return switch (expr_data.data) {
-            .local => |local| try self.lowerLocalInto(where, target, local, expr_ty, next),
-            .unit => try self.assignZst(where, target, next),
-            .int_lit => |value| try self.result.store.addCFStmt(.{ .assign_literal = .{
-                .target = target,
-                .value = .{ .i128_literal = .{
-                    .value = value.toI128(),
-                    .layout_idx = self.result.store.getLocal(target).layout_idx,
-                } },
-                .next = next,
-            } }, where.source()),
-            .frac_f32_lit => |value| try self.result.store.addCFStmt(.{ .assign_literal = .{
-                .target = target,
-                .value = .{ .f32_literal = value },
-                .next = next,
-            } }, where.source()),
-            .frac_f64_lit => |value| try self.result.store.addCFStmt(.{ .assign_literal = .{
-                .target = target,
-                .value = .{ .f64_literal = value },
-                .next = next,
-            } }, where.source()),
-            .dec_lit => |value| try self.result.store.addCFStmt(.{ .assign_literal = .{
-                .target = target,
-                .value = .{ .dec_literal = value.num },
-                .next = next,
-            } }, where.source()),
-            .str_lit => |literal| blk: {
-                const str_lit = self.stringLiteral(literal);
-                break :blk try self.result.store.addCFStmt(.{ .assign_literal = .{
-                    .target = target,
-                    .value = .{ .str_literal = try self.result.store.insertStringView(str_lit.backing, str_lit.offset, str_lit.len) },
-                    .next = next,
-                } }, where.source());
-            },
-            .bytes_lit => |literal| try self.result.store.addCFStmt(.{ .assign_literal = .{
-                .target = target,
-                .value = .{ .bytes_literal = try self.packedListLiteral(literal, self.localListElemLayout(target)) },
-                .next = next,
-            } }, where.source()),
-            .@"unreachable" => Common.invariant("unreachable marker escaped its terminated block-final position during direct LIR lowering"),
-            .uninitialized, .uninitialized_payload => next,
-            .static_data_candidate => |candidate| try self.lowerStaticDataCandidateInto(where, target, candidate, expr_ty, next),
-            .inline_expects_enabled => try self.lowerInlineExpectsEnabledInto(where, target, next),
-            .comptime_value => |value| try self.lowerComptimeValueInto(where, target, value, expr_ty, next),
-            .typed_boundary => |boundary| try self.lowerTypedBoundaryInto(where, target, expr_ty, boundary, next),
-            .list => |items| try self.lowerListIntoAtType(where, target, expr_ty, items, next),
-            .tuple => |items| try self.lowerTupleIntoAtType(where, target, expr_ty, items, next),
-            .record => |fields| try self.lowerRecordInto(where, target, expr_ty, fields, next),
-            .record_update => |update| try self.lowerRecordUpdateInto(where, target, expr_ty, update, next),
-            .tag => |tag| try self.lowerTagInto(where, target, expr_ty, tag.name, tag.payloads, next),
-            .lambda,
-            .def_ref,
-            .fn_def,
-            => Common.invariant("pre-lift function expression reached direct LIR lowering"),
-            .fn_ref => |fn_ref| try self.lowerFnRefInto(where, target, expr_id, fn_ref.fn_id, self.solved.lifted.captureOperandSpan(fn_ref.captures), next),
-            .nominal => |backing| try self.lowerNominalInto(where, target, expr_ty, backing, next),
-            .let_ => |let_| try self.lowerLetIntoAtType(where, target, expr_ty, let_, next),
-            .call_proc => |call| try self.lowerDirectProcCallInto(
-                where,
-                target,
-                expr_ty,
-                Lifted.directCallee(call).local,
-                self.solved.lifted.exprSpan(call.args),
-                self.solved.lifted.captureOperandSpan(call.captures),
-                call.is_cold,
-                next,
-            ),
-            .call_value => |call| try self.lowerValueCallInto(where, target, expr_ty, call.callee, self.solved.lifted.exprSpan(call.args), next),
-            .low_level => |call| try self.lowerLowLevelInto(where, target, call.op, call.args, next),
-            .field_access => |field| try self.lowerFieldAccessInto(where, target, field.receiver, field.segments, next),
-            .tuple_access => |access| try self.lowerTupleAccessInto(where, target, access.tuple, access.elem_index, next),
-            .structural_eq => |eq| try self.lowerStructuralEqInto(where, target, eq.lhs, eq.rhs, eq.negated, next),
-            .structural_hash => |h| try self.lowerStructuralHashInto(where, target, h.value, h.hasher, next),
-            .match_ => |match_| try self.lowerMatchInto(where, target, expr_ty, match_.scrutinee, match_.branches, match_.comptime_site, next),
-            .if_ => |if_| try self.lowerIfInto(where, target, expr_ty, if_.branches, if_.final_else, next),
-            .if_initialized_payload => |payload_switch| try self.lowerInitializedPayloadSwitchInto(where, target, payload_switch, next),
-            .try_sequence => |sequence| try self.lowerTrySequenceInto(where, target, expr_ty, sequence, next),
-            .try_record_sequence => |sequence| try self.lowerTryRecordSequenceInto(where, target, expr_ty, sequence, next),
-            .block => |block| try self.lowerBlockIntoAtType(where, target, expr_ty, block.statements, block.final_expr, next),
-            .loop_ => |loop| try self.lowerLoopIntoAtType(where, target, expr_ty, loop, next),
-            .break_ => |value| try self.lowerBreak(where, value),
-            .continue_ => |continue_| try self.lowerContinue(where, continue_.values),
-            .join_point => |join_point| try self.lowerJoinPointIntoAtType(where, target, expr_ty, join_point, next),
-            .jump => |jump| try self.lowerJump(where, jump),
-            .return_ => |ret| try self.lowerReturn(where, ret),
-            .crash => |msg| try self.result.store.addCFStmt(.{ .crash = .{
-                .msg = .{ .literal = try self.result.store.insertString(self.stringLiteralText(msg)) },
-            } }, where.source()),
-            .comptime_branch_taken => |taken| try self.result.store.addCFStmt(.{ .comptime_branch_taken = .{
-                .site = try self.lowerComptimeSite(taken.site),
-                .branch_index = taken.branch_index,
-                .next = try self.lowerExprInto(where, target, taken.body, next),
-            } }, where.source()),
-            .comptime_exhaustiveness_failed => |site| try self.result.store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{
-                .site = try self.lowerComptimeSite(site),
-            } }, where.source()),
-            .dbg => |child| blk: {
-                const after_dbg = try self.assignZst(where, target, next);
-                const message = try self.addTemp(try self.lowerExprTy(child));
-                const debug_stmt = try self.result.store.addCFStmt(.{ .debug = .{ .message = message, .next = after_dbg } }, where.source());
-                break :blk try self.lowerExprInto(where, message, child, debug_stmt);
-            },
-            .expect_err => |expect_err| blk: {
-                const message = try self.addTemp(try self.lowerExprTy(expect_err.msg));
-                const expect_err_stmt = try self.result.store.addCFStmt(.{ .expect_err = .{
-                    .message = message,
-                    .region = expect_err.region,
-                } }, where.source());
-                break :blk try self.lowerExprInto(where, message, expect_err.msg, expect_err_stmt);
-            },
-            .literal_rejected => |rejected| blk: {
-                const message = try self.addTemp(try self.lowerExprTy(rejected.msg));
-                const crash_stmt = try self.result.store.addCFStmt(.{ .crash = .{
-                    .msg = .{ .local = message },
-                    .literal_rejection = rejected.site,
-                } }, where.source());
-                break :blk try self.lowerExprInto(where, message, rejected.msg, crash_stmt);
-            },
-            .expect => |child| if (self.inline_expects == .omit)
-                try self.assignZst(where, target, next)
-            else
-                try self.lowerExpectExprInto(where, target, child, next),
-        };
+        return try self.runLowerTasks(exprTask(parent, target, expr_id, null, next));
     }
 
     fn lowerExprIntoAtType(
@@ -5117,56 +5335,367 @@ const Lowerer = struct {
         ty: Type.TypeId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
+        return try self.runLowerTasks(exprTask(parent, target, expr_id, ty, next));
+    }
+
+    /// Run a lowering to completion on an explicit frame stack.
+    fn runLowerTasks(self: *Lowerer, root: LowerTask) Common.LowerError!LIR.CFStmtId {
+        var frames: std.ArrayList(LowerFrame) = .empty;
+        defer frames.deinit(self.allocator);
+        errdefer {
+            while (frames.pop()) |frame| {
+                var owned = frame;
+                self.releaseLowerFrame(&owned);
+            }
+        }
+        try frames.append(self.allocator, .{ .task = root });
+        var input: ?LIR.CFStmtId = null;
+        while (true) {
+            const frame = &frames.items[frames.items.len - 1];
+            switch (try self.stepLowerFrame(frame, input)) {
+                .call => |task| {
+                    try frames.append(self.allocator, .{ .task = task });
+                    input = null;
+                },
+                .tail => |task| {
+                    self.releaseLowerFrame(frame);
+                    frame.* = .{ .task = task };
+                    input = null;
+                },
+                .ret => |stmt| {
+                    var finished = frames.pop().?;
+                    self.releaseLowerFrame(&finished);
+                    if (frames.items.len == 0) return stmt;
+                    input = stmt;
+                },
+            }
+        }
+    }
+
+    /// Release what a frame still owns and restore the lowerer state it
+    /// still has installed. Idempotent, so a frame that already restored its
+    /// state on its normal path is unaffected.
+    fn releaseLowerFrame(self: *Lowerer, frame: *LowerFrame) void {
+        switch (frame.task) {
+            .chain => |*task| {
+                if (task.forwarding) |scope| self.leaveReturnForwarding(scope);
+                task.forwarding = null;
+                if (task.restore_return_target) |saved| self.current_return_target = saved;
+                task.restore_return_target = null;
+                self.allocator.free(task.items);
+                task.items = &.{};
+            },
+            .scoped => |*task| {
+                if (!task.restored) self.current_return_target = task.saved_return_target;
+                task.restored = true;
+            },
+            .struct_exprs => |*task| {
+                if (task.restore_return_target) |saved| self.current_return_target = saved;
+                task.restore_return_target = null;
+                self.allocator.free(task.items);
+                task.items = &.{};
+                self.allocator.free(task.tys);
+                task.tys = &.{};
+                self.allocator.free(task.field_locals);
+                task.field_locals = &.{};
+            },
+            .record_update => |*task| {
+                self.allocator.free(task.type_fields);
+                task.type_fields = &.{};
+                self.allocator.free(task.updates_by_field);
+                task.updates_by_field = &.{};
+                self.allocator.free(task.field_locals);
+                task.field_locals = &.{};
+            },
+            .tag_payload => |*task| {
+                if (task.restore_return_target) |saved| self.current_return_target = saved;
+                task.restore_return_target = null;
+            },
+            .record_binding => |*task| {
+                if (task.forwarding) |scope| self.leaveReturnForwarding(scope);
+                task.forwarding = null;
+                if (task.restore) self.current_return_target = task.saved_return_target;
+                task.restore = false;
+            },
+            .let_ => |*task| {
+                if (task.planned) |binding| self.restoreRecordBinding(binding);
+                task.planned = null;
+            },
+            .direct_bind => |*task| {
+                if (task.forwarding) |scope| self.leaveReturnForwarding(scope);
+                task.forwarding = null;
+            },
+            .direct_call => |*task| {
+                self.allocator.free(task.args);
+                task.args = &.{};
+                self.allocator.free(task.capture_operands);
+                task.capture_operands = &.{};
+            },
+            .known_call => |*task| {
+                self.allocator.free(task.args);
+                task.args = &.{};
+                self.allocator.free(task.arg_tys);
+                task.arg_tys = &.{};
+                if (task.lowered) |lowered| lowered.deinit(self.allocator);
+                task.lowered = null;
+            },
+            .inline_call => |*task| {
+                self.restoreInlineCallArgs(task);
+                self.allocator.free(task.arg_locals);
+                task.arg_locals = &.{};
+            },
+            .callable_call => |*task| {
+                self.allocator.free(task.variants);
+                task.variants = &.{};
+                self.allocator.free(task.args);
+                task.args = &.{};
+            },
+            .match_ => |*task| {
+                if (task.arena) |arena| {
+                    arena.deinit();
+                    self.allocator.destroy(arena);
+                }
+                task.arena = null;
+            },
+            .block => |*task| {
+                var index = task.planned.items.len;
+                while (index != 0) {
+                    index -= 1;
+                    self.restoreRecordBinding(task.planned.items[index]);
+                }
+                task.planned.deinit(self.allocator);
+                task.planned = .empty;
+            },
+            .loop_ => |*task| self.leaveLoop(task),
+            .join_point => |*task| self.leaveJoinPoint(task),
+            .callable_variant => |*task| {
+                if (task.call) |call| self.allocator.free(call.args);
+                task.call = null;
+            },
+            .expr,
+            .stmt,
+            .comptime_branch,
+            .recursive_let,
+            .if_,
+            .payload_switch,
+            .try_sequence,
+            .try_record_sequence,
+            => {},
+        }
+    }
+
+    fn stepLowerFrame(self: *Lowerer, frame: *LowerFrame, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        return switch (frame.task) {
+            .expr => |request| self.stepExpr(request),
+            .stmt => |task| self.stepStmt(task.parent, task.stmt, task.next),
+            .chain => |*task| self.stepChain(frame, task, input),
+            .scoped => |*task| {
+                if (frame.cursor == 0) {
+                    frame.cursor = 1;
+                    return .{ .call = .{ .expr = task.child } };
+                }
+                self.current_return_target = task.saved_return_target;
+                task.restored = true;
+                return .{ .ret = input.? };
+            },
+            .comptime_branch => |*task| {
+                if (frame.cursor == 0) {
+                    frame.cursor = 1;
+                    return .{ .call = .{ .expr = task.child } };
+                }
+                return .{ .ret = try self.result.store.addCFStmt(.{ .comptime_branch_taken = .{
+                    .site = task.site,
+                    .branch_index = task.branch_index,
+                    .next = input.?,
+                } }, task.where.source()) };
+            },
+            .struct_exprs => |*task| self.stepStructExprs(frame, task, input),
+            .record_update => |*task| self.stepRecordUpdate(frame, task, input),
+            .tag_payload => |*task| self.stepTagPayload(frame, task, input),
+            .record_binding => |*task| self.stepRecordBinding(frame, task, input),
+            .let_ => |*task| self.stepLet(frame, task, input),
+            .direct_bind => |*task| self.stepDirectBind(frame, task, input),
+            .recursive_let => |*task| {
+                if (frame.cursor == 0) {
+                    frame.cursor = 1;
+                    return self.recursiveLetStart(task);
+                }
+                const ptr_cast_stmt = try self.assignUnaryLowLevel(task.where, task.ptr, .ptr_cast, task.target, input.?);
+                return .{ .ret = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+                    .target = task.target,
+                    .op = .box_alloc_zeroed,
+                    .rc_effect = LIR.LowLevel.box_alloc_zeroed.rcEffect(),
+                    .args = LIR.LocalSpan.empty(),
+                    .next = ptr_cast_stmt,
+                } }, task.where.source()) };
+            },
+            .direct_call => |*task| self.stepDirectCall(frame, task, input),
+            .known_call => |*task| self.stepKnownCall(frame, task, input),
+            .inline_call => |*task| self.stepInlineCall(frame, task, input),
+            .callable_call => |*task| self.stepCallableCall(frame, task, input),
+            .callable_variant => |*task| {
+                if (frame.cursor == 0) {
+                    const call = task.call.?;
+                    task.call = null;
+                    frame.cursor = 1;
+                    return .{ .call = .{ .known_call = call } };
+                }
+                const call = input.?;
+                if (self.isZstLocal(task.payload)) return .{ .ret = call };
+                return .{ .ret = try self.addAssignRef(task.where, task.payload, .{ .tag_payload_struct = .{
+                    .source = task.callee,
+                    .variant_index = task.variant_index,
+                    .tag_discriminant = task.variant_index,
+                } }, call) };
+            },
+            .match_ => |*task| self.stepMatch(frame, task, input),
+            .if_ => |*task| self.stepIf(frame, task, input),
+            .payload_switch => |*task| self.stepPayloadSwitch(frame, task, input),
+            .try_sequence => |*task| self.stepTrySequence(task, input),
+            .try_record_sequence => |*task| self.stepTryRecordSequence(task, input),
+            .block => |*task| self.stepBlock(frame, task, input),
+            .loop_ => |*task| self.stepLoop(frame, task, input),
+            .join_point => |*task| self.stepJoinPoint(frame, task, input),
+        };
+    }
+
+    fn stepChain(self: *Lowerer, frame: *LowerFrame, task: *ChainTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        if (frame.cursor == 1) {
+            task.current = input.?;
+            if (task.forwarding) |scope| self.leaveReturnForwarding(scope);
+            task.forwarding = null;
+        }
+        frame.cursor = 1;
+        if (frame.index < task.items.len) {
+            const item = task.items[frame.index];
+            frame.index += 1;
+            switch (item) {
+                .expr => |position| {
+                    if (position.return_target) |return_target| {
+                        if (task.restore_return_target == null) task.restore_return_target = self.current_return_target;
+                        self.current_return_target = return_target;
+                    }
+                    if (position.forwarding) task.forwarding = self.enterReturnForwarding(position.target);
+                    return .{ .call = exprTask(task.where, position.target, position.expr, position.ty, task.current) };
+                },
+                .stmt => |stmt_id| return .{ .call = .{ .stmt = .{ .parent = task.where, .stmt = stmt_id, .next = task.current } } },
+            }
+        }
+        if (task.restore_return_target) |saved| self.current_return_target = saved;
+        task.restore_return_target = null;
+        return .{ .ret = task.current };
+    }
+
+    /// A chain lowering each operand of `lowered` into its temp, plain local
+    /// reads nearest their consumer. See `operandIsPlainLocalRead`.
+    fn operandChain(
+        self: *Lowerer,
+        where: LowerSite,
+        lowered: LoweredExprLocals,
+        tys: ?[]const Type.TypeId,
+        tail_item: ?ChainItem,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LowerTask {
+        if (tys) |types| {
+            if (lowered.ids.len != types.len) Common.invariant("typed expression prepend arity differed from local arity");
+        }
+        var items: std.ArrayList(ChainItem) = .empty;
+        errdefer items.deinit(self.allocator);
+        for ([_]bool{ true, false }) |plain_reads| {
+            var i = lowered.ids.len;
+            while (i > 0) {
+                i -= 1;
+                if (self.operandIsPlainLocalRead(lowered.exprs[i]) != plain_reads) continue;
+                try items.append(self.allocator, .{ .expr = .{
+                    .target = lowered.ids[i],
+                    .expr = lowered.exprs[i],
+                    .ty = if (tys) |types| types[i] else null,
+                } });
+            }
+        }
+        if (tail_item) |item| try items.append(self.allocator, item);
+        return .{ .chain = .{ .where = where, .items = try items.toOwnedSlice(self.allocator), .current = next } };
+    }
+
+    /// Chain items lowering each join argument that needs a write into its
+    /// temp, last argument first.
+    fn appendJoinArgItems(
+        self: *Lowerer,
+        items: *std.ArrayList(ChainItem),
+        lowered: LoweredJoinExprLocals,
+        tys: []const Type.TypeId,
+    ) Common.LowerError!void {
+        if (lowered.ids.len != tys.len) Common.invariant("typed join expression prepend arity differed from local arity");
+        var i = lowered.ids.len;
+        while (i > 0) {
+            i -= 1;
+            const target = lowered.ids[i] orelse continue;
+            try items.append(self.allocator, .{ .expr = .{ .target = target, .expr = lowered.exprs[i], .ty = tys[i] } });
+        }
+    }
+
+    fn chainTask(self: *Lowerer, where: LowerSite, items: *std.ArrayList(ChainItem), next: LIR.CFStmtId) Common.LowerError!LowerTask {
+        return .{ .chain = .{ .where = where, .items = try items.toOwnedSlice(self.allocator), .current = next } };
+    }
+
+    /// Lower one expression request: `lowerExprInto` when the request has no
+    /// type, `lowerExprIntoAtType` when it does.
+    fn stepExpr(self: *Lowerer, request: ExprRequest) Common.LowerError!LowerStep {
+        const ty = request.ty orelse return self.stepExprAtOwnType(request);
+        const expr_id = request.expr;
+        const target = request.target;
+        const next = request.next;
         const expr_data = self.solved.lifted.getExpr(expr_id);
         self.noteWorkerExpr(expr_data.data);
-        const where = try self.exprSite(parent, expr_id);
+        const where = try self.exprSite(request.parent, expr_id);
 
         return switch (expr_data.data) {
-            .local => |local| try self.lowerLocalInto(where, target, local, ty, next),
-            .list => |items| try self.lowerListIntoAtType(where, target, ty, items, next),
-            .tuple => |items| try self.lowerTupleIntoAtType(where, target, ty, items, next),
-            .record => |fields| try self.lowerRecordInto(where, target, ty, fields, next),
-            .record_update => |update| try self.lowerRecordUpdateInto(where, target, ty, update, next),
-            .tag => |tag| try self.lowerTagInto(where, target, ty, tag.name, tag.payloads, next),
-            .call_proc => |call| try self.lowerDirectProcCallInto(
-                where,
-                target,
-                ty,
-                Lifted.directCallee(call).local,
-                self.solved.lifted.exprSpan(call.args),
-                self.solved.lifted.captureOperandSpan(call.captures),
-                call.is_cold,
-                next,
-            ),
-            .fn_ref => |fn_ref| try self.lowerFnRefIntoAtType(
-                where,
-                target,
-                expr_id,
-                fn_ref.fn_id,
-                self.solved.lifted.captureOperandSpan(fn_ref.captures),
-                ty,
-                next,
-            ),
-            .nominal => |backing| try self.lowerNominalInto(where, target, ty, backing, next),
-            .let_ => |let_| try self.lowerLetIntoAtType(where, target, ty, let_, next),
-            .static_data_candidate => |candidate| try self.lowerStaticDataCandidateInto(where, target, candidate, ty, next),
-            .inline_expects_enabled => try self.lowerInlineExpectsEnabledInto(where, target, next),
-            .comptime_value => |value| try self.lowerComptimeValueInto(where, target, value, ty, next),
-            .typed_boundary => |boundary| try self.lowerTypedBoundaryInto(where, target, ty, boundary, next),
-            .field_access => |field| try self.lowerFieldAccessInto(where, target, field.receiver, field.segments, next),
-            .call_value => |call| try self.lowerValueCallInto(where, target, ty, call.callee, self.solved.lifted.exprSpan(call.args), next),
-            .match_ => |match_| try self.lowerMatchInto(where, target, ty, match_.scrutinee, match_.branches, match_.comptime_site, next),
-            .if_ => |if_| try self.lowerIfInto(where, target, ty, if_.branches, if_.final_else, next),
-            .try_sequence => |sequence| try self.lowerTrySequenceInto(where, target, ty, sequence, next),
-            .try_record_sequence => |sequence| try self.lowerTryRecordSequenceInto(where, target, ty, sequence, next),
-            .block => |block| try self.lowerBlockIntoAtType(where, target, ty, block.statements, block.final_expr, next),
-            .loop_ => |loop| try self.lowerLoopIntoAtType(where, target, ty, loop, next),
-            .join_point => |join_point| try self.lowerJoinPointIntoAtType(where, target, ty, join_point, next),
-            .comptime_branch_taken => |taken| try self.result.store.addCFStmt(.{ .comptime_branch_taken = .{
+            .local => |local| .{ .ret = try self.lowerLocalInto(where, target, local, ty, next) },
+            .list => |items| try self.listStep(where, target, ty, items, next),
+            .tuple => |items| try self.structExprsStep(where, target, self.solved.lifted.exprSpan(items), self.tupleItemTypes(ty), next),
+            .record => |fields| try self.recordStep(where, target, ty, fields, next),
+            .record_update => |update| .{ .tail = .{ .record_update = .{ .where = where, .target = target, .ty = ty, .update = update, .next = next } } },
+            .tag => |tag| .{ .tail = .{ .tag_payload = .{ .where = where, .target = target, .ty = ty, .variant_index = self.tagIndex(ty, tag.name), .payloads = tag.payloads, .next = next } } },
+            .call_proc => |call| try self.directCallStep(where, target, ty, Lifted.directCallee(call).local, call, next),
+            .fn_ref => |fn_ref| try self.fnRefStep(where, target, expr_id, fn_ref.fn_id, fn_ref.captures, ty, next),
+            .nominal => |backing| try self.nominalStep(where, target, ty, backing, next),
+            .let_ => |let_| .{ .tail = .{ .let_ = .{
+                .where = where,
+                .target = target,
+                .result_ty = ty,
+                .bind = let_.bind,
+                .value = let_.value,
+                .rest = let_.rest,
+                .comptime_site = let_.comptime_site,
+                .next = next,
+            } } },
+            .static_data_candidate => |candidate| try self.staticDataCandidateStep(where, target, candidate, ty, next),
+            .inline_expects_enabled => .{ .ret = try self.lowerInlineExpectsEnabledInto(where, target, next) },
+            .comptime_value => |value| .{ .ret = try self.lowerComptimeValueInto(where, target, value, ty, next) },
+            .typed_boundary => |boundary| try self.typedBoundaryStep(where, target, ty, boundary, next),
+            .field_access => |field| try self.fieldAccessStep(where, target, field.receiver, field.segments, next),
+            .call_value => |call| try self.valueCallStep(where, target, ty, call.callee, call.args, next),
+            .match_ => |match_| try self.matchStep(where, target, ty, match_.scrutinee, match_.branches, match_.comptime_site, next),
+            .if_ => |if_| .{ .tail = .{ .if_ = .{ .where = where, .target = target, .result_ty = ty, .branches = if_.branches, .final_else = if_.final_else, .next = next } } },
+            .try_sequence => |sequence| .{ .tail = .{ .try_sequence = .{ .where = where, .target = target, .out_try_ty = ty, .sequence = sequence, .next = next } } },
+            .try_record_sequence => |sequence| .{ .tail = .{ .try_record_sequence = .{ .where = where, .target = target, .out_try_ty = ty, .sequence = sequence, .next = next } } },
+            .block => |block| .{ .tail = .{ .block = .{ .where = where, .target = target, .result_ty = ty, .stmts = block.statements, .final_expr = block.final_expr, .next = next } } },
+            .loop_ => |loop| .{ .tail = .{ .loop_ = .{
+                .where = where,
+                .target = target,
+                .result_ty = ty,
+                .params = loop.params,
+                .initial_values = loop.initial_values,
+                .body = loop.body,
+                .next = next,
+            } } },
+            .join_point => |join_point| .{ .tail = .{ .join_point = .{ .where = where, .target = target, .result_ty = ty, .join_point = join_point, .next = next } } },
+            .comptime_branch_taken => |taken| .{ .tail = .{ .comptime_branch = .{
+                .where = where,
                 .site = try self.lowerComptimeSite(taken.site),
                 .branch_index = taken.branch_index,
-                .next = try self.lowerExprIntoAtType(where, target, taken.body, ty, next),
-            } }, where.source()),
+                .child = .{ .parent = where, .target = target, .expr = taken.body, .ty = ty, .next = next },
+            } } },
             .unit,
             .@"unreachable",
             .int_lit,
@@ -5195,32 +5724,243 @@ const Lowerer = struct {
             .expect_err,
             .literal_rejected,
             .expect,
-            => try self.lowerExprInto(where, target, expr_id, next),
+            => .{ .tail = exprTask(where, target, expr_id, null, next) },
         };
     }
 
-    fn lowerTypedBoundaryInto(
+    /// `lowerExprInto`: the expression lowered at its own type.
+    fn stepExprAtOwnType(self: *Lowerer, request: ExprRequest) Common.LowerError!LowerStep {
+        const expr_id = request.expr;
+        const target = request.target;
+        const next = request.next;
+        const expr_data = self.solved.lifted.getExpr(expr_id);
+        self.noteWorkerExpr(expr_data.data);
+        const expr_ty = try self.lowerExprTy(expr_id);
+        const where = try self.exprSite(request.parent, expr_id);
+        return switch (expr_data.data) {
+            .local => |local| .{ .ret = try self.lowerLocalInto(where, target, local, expr_ty, next) },
+            .unit => .{ .ret = try self.assignZst(where, target, next) },
+            .int_lit => |value| .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .i128_literal = .{
+                    .value = value.toI128(),
+                    .layout_idx = self.result.store.getLocal(target).layout_idx,
+                } },
+                .next = next,
+            } }, where.source()) },
+            .frac_f32_lit => |value| .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .f32_literal = value },
+                .next = next,
+            } }, where.source()) },
+            .frac_f64_lit => |value| .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .f64_literal = value },
+                .next = next,
+            } }, where.source()) },
+            .dec_lit => |value| .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .dec_literal = value.num },
+                .next = next,
+            } }, where.source()) },
+            .str_lit => |literal| blk: {
+                const str_lit = self.stringLiteral(literal);
+                break :blk .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
+                    .target = target,
+                    .value = .{ .str_literal = try self.result.store.insertStringView(str_lit.backing, str_lit.offset, str_lit.len) },
+                    .next = next,
+                } }, where.source()) };
+            },
+            .bytes_lit => |literal| .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .bytes_literal = try self.packedListLiteral(literal, self.localListElemLayout(target)) },
+                .next = next,
+            } }, where.source()) },
+            .@"unreachable" => Common.invariant("unreachable marker escaped its terminated block-final position during direct LIR lowering"),
+            .uninitialized, .uninitialized_payload => .{ .ret = next },
+            .static_data_candidate => |candidate| try self.staticDataCandidateStep(where, target, candidate, expr_ty, next),
+            .inline_expects_enabled => .{ .ret = try self.lowerInlineExpectsEnabledInto(where, target, next) },
+            .comptime_value => |value| .{ .ret = try self.lowerComptimeValueInto(where, target, value, expr_ty, next) },
+            .typed_boundary => |boundary| try self.typedBoundaryStep(where, target, expr_ty, boundary, next),
+            .list => |items| try self.listStep(where, target, expr_ty, items, next),
+            .tuple => |items| try self.structExprsStep(where, target, self.solved.lifted.exprSpan(items), self.tupleItemTypes(expr_ty), next),
+            .record => |fields| try self.recordStep(where, target, expr_ty, fields, next),
+            .record_update => |update| .{ .tail = .{ .record_update = .{ .where = where, .target = target, .ty = expr_ty, .update = update, .next = next } } },
+            .tag => |tag| .{ .tail = .{ .tag_payload = .{ .where = where, .target = target, .ty = expr_ty, .variant_index = self.tagIndex(expr_ty, tag.name), .payloads = tag.payloads, .next = next } } },
+            .lambda,
+            .def_ref,
+            .fn_def,
+            => Common.invariant("pre-lift function expression reached direct LIR lowering"),
+            .fn_ref => |fn_ref| try self.fnRefStep(where, target, expr_id, fn_ref.fn_id, fn_ref.captures, try self.lowerExprTy(expr_id), next),
+            .nominal => |backing| try self.nominalStep(where, target, expr_ty, backing, next),
+            .let_ => |let_| .{ .tail = .{ .let_ = .{
+                .where = where,
+                .target = target,
+                .result_ty = expr_ty,
+                .bind = let_.bind,
+                .value = let_.value,
+                .rest = let_.rest,
+                .comptime_site = let_.comptime_site,
+                .next = next,
+            } } },
+            .call_proc => |call| try self.directCallStep(where, target, expr_ty, Lifted.directCallee(call).local, call, next),
+            .call_value => |call| try self.valueCallStep(where, target, expr_ty, call.callee, call.args, next),
+            .low_level => |call| try self.lowLevelStep(where, target, call.op, call.args, next),
+            .field_access => |field| try self.fieldAccessStep(where, target, field.receiver, field.segments, next),
+            .tuple_access => |access| try self.tupleAccessStep(where, target, access.tuple, access.elem_index, next),
+            .structural_eq => |eq| blk: {
+                const lhs_ty = try self.lowerExprTy(eq.lhs);
+                const lhs_local = try self.addTemp(lhs_ty);
+                const rhs_local = try self.addTemp(try self.lowerExprTy(eq.rhs));
+                const current = try self.lowerEqLocalsInto(where.derived(), target, lhs_local, rhs_local, lhs_ty, eq.negated, next);
+                break :blk .{ .tail = try self.pairChain(where, rhs_local, eq.rhs, lhs_local, eq.lhs, current) };
+            },
+            .structural_hash => |h| blk: {
+                const value_ty = try self.lowerExprTy(h.value);
+                const value_local = try self.addTemp(value_ty);
+                const hasher_local = try self.addTemp(try self.lowerExprTy(h.hasher));
+                const current = try self.lowerHashLocalsInto(where.derived(), target, value_local, hasher_local, value_ty, next);
+                break :blk .{ .tail = try self.pairChain(where, hasher_local, h.hasher, value_local, h.value, current) };
+            },
+            .match_ => |match_| try self.matchStep(where, target, expr_ty, match_.scrutinee, match_.branches, match_.comptime_site, next),
+            .if_ => |if_| .{ .tail = .{ .if_ = .{ .where = where, .target = target, .result_ty = expr_ty, .branches = if_.branches, .final_else = if_.final_else, .next = next } } },
+            .if_initialized_payload => |payload_switch| .{ .tail = .{ .payload_switch = .{ .where = where, .target = target, .payload_switch = payload_switch, .next = next } } },
+            .try_sequence => |sequence| .{ .tail = .{ .try_sequence = .{ .where = where, .target = target, .out_try_ty = expr_ty, .sequence = sequence, .next = next } } },
+            .try_record_sequence => |sequence| .{ .tail = .{ .try_record_sequence = .{ .where = where, .target = target, .out_try_ty = expr_ty, .sequence = sequence, .next = next } } },
+            .block => |block| .{ .tail = .{ .block = .{ .where = where, .target = target, .result_ty = expr_ty, .stmts = block.statements, .final_expr = block.final_expr, .next = next } } },
+            .loop_ => |loop| .{ .tail = .{ .loop_ = .{
+                .where = where,
+                .target = target,
+                .result_ty = expr_ty,
+                .params = loop.params,
+                .initial_values = loop.initial_values,
+                .body = loop.body,
+                .next = next,
+            } } },
+            .break_ => |value| blk: {
+                const loop = self.currentLoop();
+                const expr = value orelse break :blk .{ .ret = try self.assignZst(where, loop.result_target, loop.after_loop) };
+                break :blk .{ .tail = exprTask(where, loop.result_target, expr, loop.result_ty, loop.after_loop) };
+            },
+            .continue_ => |continue_| try self.continueStep(where, continue_.values),
+            .join_point => |join_point| .{ .tail = .{ .join_point = .{ .where = where, .target = target, .result_ty = expr_ty, .join_point = join_point, .next = next } } },
+            .jump => |jump| try self.jumpStep(where, jump),
+            .return_ => |ret| try self.returnStep(where, ret),
+            .crash => |msg| .{ .ret = try self.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .literal = try self.result.store.insertString(self.stringLiteralText(msg)) },
+            } }, where.source()) },
+            .comptime_branch_taken => |taken| .{ .tail = .{ .comptime_branch = .{
+                .where = where,
+                .site = try self.lowerComptimeSite(taken.site),
+                .branch_index = taken.branch_index,
+                .child = .{ .parent = where, .target = target, .expr = taken.body, .ty = null, .next = next },
+            } } },
+            .comptime_exhaustiveness_failed => |site| .{ .ret = try self.result.store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{
+                .site = try self.lowerComptimeSite(site),
+            } }, where.source()) },
+            .dbg => |child| blk: {
+                const after_dbg = try self.assignZst(where, target, next);
+                const message = try self.addTemp(try self.lowerExprTy(child));
+                const debug_stmt = try self.result.store.addCFStmt(.{ .debug = .{ .message = message, .next = after_dbg } }, where.source());
+                break :blk .{ .tail = exprTask(where, message, child, null, debug_stmt) };
+            },
+            .expect_err => |expect_err| blk: {
+                const message = try self.addTemp(try self.lowerExprTy(expect_err.msg));
+                const expect_err_stmt = try self.result.store.addCFStmt(.{ .expect_err = .{
+                    .message = message,
+                    .region = expect_err.region,
+                } }, where.source());
+                break :blk .{ .tail = exprTask(where, message, expect_err.msg, null, expect_err_stmt) };
+            },
+            .literal_rejected => |rejected| blk: {
+                const message = try self.addTemp(try self.lowerExprTy(rejected.msg));
+                const crash_stmt = try self.result.store.addCFStmt(.{ .crash = .{
+                    .msg = .{ .local = message },
+                    .literal_rejection = rejected.site,
+                } }, where.source());
+                break :blk .{ .tail = exprTask(where, message, rejected.msg, null, crash_stmt) };
+            },
+            .expect => |child| if (self.inline_expects == .omit)
+                .{ .ret = try self.assignZst(where, target, next) }
+            else
+                try self.expectStmtStep(where, child, try self.assignZst(where, target, next)),
+        };
+    }
+
+    /// Two operands lowered into their locals, `first` nearest `next`.
+    fn pairChain(
+        self: *Lowerer,
+        where: LowerSite,
+        first_target: LIR.LocalId,
+        first: Lifted.ExprId,
+        second_target: LIR.LocalId,
+        second: Lifted.ExprId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LowerTask {
+        const items = try self.allocator.alloc(ChainItem, 2);
+        items[0] = .{ .expr = .{ .target = first_target, .expr = first, .ty = null } };
+        items[1] = .{ .expr = .{ .target = second_target, .expr = second, .ty = null } };
+        return .{ .chain = .{ .where = where, .items = items, .current = next } };
+    }
+
+    fn expectStmtStep(self: *Lowerer, where: LowerSite, child: Lifted.ExprId, next: LIR.CFStmtId) Common.LowerError!LowerStep {
+        const cond = try self.addTemp(try self.lowerExprTy(child));
+        const expect_stmt = try self.result.store.addCFStmt(.{ .expect = .{
+            .condition = cond,
+            .site = self.expectSite(where),
+            .next = next,
+        } }, where.source());
+        return .{ .tail = exprTask(where, cond, child, null, expect_stmt) };
+    }
+
+    fn staticDataCandidateStep(
+        self: *Lowerer,
+        where: LowerSite,
+        target: LIR.LocalId,
+        candidate: Mono.StaticDataCandidate,
+        ty: Type.TypeId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LowerStep {
+        const layout_idx = self.result.store.getLocal(target).layout_idx;
+        const proc_id = self.current_proc orelse Common.invariant("static data candidate lowering ran without a current procedure");
+        if (self.result.store.getProcSpec(proc_id).is_static_initializer) {
+            // Closed target initializers serialize the stored value, not a
+            // runtime construction.
+            return .{ .tail = exprTask(where, target, candidate.runtime_expr, ty, next) };
+        }
+        if (try self.lowerConstructionExprInto(where, target, candidate.runtime_expr, ty, next)) |built| return .{ .ret = built };
+        if (candidate.storage.needsTargetStorage(self.result.layouts.targetUsize()) and self.layoutNeedsStaticData(layout_idx)) {
+            return .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .static_data = try self.lirStaticDataFor(candidate, ty, layout_idx) },
+                .next = next,
+            } }, where.source()) };
+        }
+        return .{ .tail = exprTask(where, target, candidate.runtime_expr, ty, next) };
+    }
+
+    fn typedBoundaryStep(
         self: *Lowerer,
         where: LowerSite,
         target: LIR.LocalId,
         target_ty: Type.TypeId,
         boundary: Lifted.TypedBoundary,
         next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
+    ) Common.LowerError!LowerStep {
         const source_ty = try self.lowerExprContextTy(boundary.value);
         const source = try self.addTemp(source_ty);
         const after_source = try self.assignTypedBoundary(where, target, target_ty, source, source_ty, next);
-        return try self.lowerExprIntoAtType(where, source, boundary.value, source_ty, after_source);
+        return .{ .tail = exprTask(where, source, boundary.value, source_ty, after_source) };
     }
 
-    fn lowerListIntoAtType(
+    fn listStep(
         self: *Lowerer,
         where: LowerSite,
         target: LIR.LocalId,
         ty: Type.TypeId,
         span: Lifted.Span(Lifted.ExprId),
         next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
+    ) Common.LowerError!LowerStep {
         const items = self.solved.lifted.exprSpan(span);
         const elem_locals = try self.allocator.alloc(LIR.LocalId, items.len);
         defer self.allocator.free(elem_locals);
@@ -5232,100 +5972,596 @@ const Lowerer = struct {
             try self.local_types.put(elem_locals[i], elem_ty);
         }
 
-        var current = try self.result.store.addCFStmt(.{ .assign_list = .{
+        const current = try self.result.store.addCFStmt(.{ .assign_list = .{
             .target = target,
             .elems = try self.result.store.addLocalSpan(elem_locals),
             .next = next,
         } }, where.source());
-        var i = items.len;
-        while (i > 0) {
-            i -= 1;
-            current = try self.lowerExprIntoAtType(where, elem_locals[i], GuardedList.at(items, i), elem_ty, current);
+        const chain = try self.allocator.alloc(ChainItem, items.len);
+        for (chain, 0..) |*item, position| {
+            const i = items.len - 1 - position;
+            item.* = .{ .expr = .{ .target = elem_locals[i], .expr = GuardedList.at(items, i), .ty = elem_ty } };
         }
-        return current;
+        return .{ .tail = .{ .chain = .{ .where = where, .items = chain, .current = current } } };
     }
 
-    fn lowerTupleIntoAtType(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        ty: Type.TypeId,
-        span: Lifted.Span(Lifted.ExprId),
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        const items = self.solved.lifted.exprSpan(span);
-        return try self.lowerStructExprsIntoAtTypes(where, target, items, self.tupleItemTypes(ty), next);
-    }
-
-    fn lowerStructExprsIntoAtTypes(
+    fn structExprsStep(
         self: *Lowerer,
         where: LowerSite,
         target: LIR.LocalId,
         items: anytype,
         item_tys: anytype,
         next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
+    ) Common.LowerError!LowerStep {
         if (items.len != item_tys.len) Common.invariant("struct expression arity differed from target type arity");
         const owned_items = try GuardedList.dupe(self.allocator, Lifted.ExprId, items);
-        defer self.allocator.free(owned_items);
+        errdefer self.allocator.free(owned_items);
         const owned_tys = try GuardedList.dupe(self.allocator, Type.TypeId, item_tys);
-        defer self.allocator.free(owned_tys);
-        if (self.boxBackingLayoutForDirectConstruction(target)) |backing_layout| {
-            const backing_local = try self.addLocalForLayout(backing_layout);
-            const boundary = try self.assignBoxBoundary(where, target, backing_local, backing_layout, next);
-            const saved_return_target = self.current_return_target;
-            if (saved_return_target == target) {
-                self.current_return_target = backing_local;
-            }
-            defer self.current_return_target = saved_return_target;
-            return try self.lowerStructExprsIntoAtTypes(where, backing_local, owned_items, owned_tys, boundary);
-        }
-
-        const field_locals = try self.allocator.alloc(LIR.LocalId, owned_items.len);
-        defer self.allocator.free(field_locals);
-
-        const target_is_zst = self.isZstLocal(target);
-        for (0..owned_items.len) |i| {
-            const field_layout = if (target_is_zst)
-                layout.Idx.zst
-            else
-                self.localFieldLayout(target, @intCast(i));
-            field_locals[i] = try self.addLocalForLayout(field_layout);
-            try self.local_types.put(field_locals[i], owned_tys[i]);
-        }
-
-        var current = if (target_is_zst)
-            try self.assignZst(where, target, next)
-        else
-            try self.result.store.addCFStmt(.{ .assign_struct = .{
-                .target = target,
-                .fields = try self.result.store.addLocalSpan(field_locals),
-                .next = next,
-            } }, where.source());
-        const saved_return_target = self.current_return_target;
-        const demanded_child = if (saved_return_target == target)
-            self.singleErasedResultChildIndex(owned_tys)
-        else
-            null;
-        var i = owned_items.len;
-        while (i > 0) {
-            i -= 1;
-            self.current_return_target = if (demanded_child != null and demanded_child.? == i)
-                field_locals[i]
-            else if (saved_return_target == target)
-                null
-            else
-                saved_return_target;
-            current = self.lowerExprIntoAtType(where, field_locals[i], owned_items[i], owned_tys[i], current) catch |err| {
-                self.current_return_target = saved_return_target;
-                return err;
-            };
-        }
-        self.current_return_target = saved_return_target;
-        return current;
+        return .{ .tail = .{ .struct_exprs = .{ .where = where, .target = target, .items = owned_items, .tys = owned_tys, .next = next } } };
     }
 
-    fn lowerCaptureRecordFromCaptureExprsInto(
+    fn recordStep(
+        self: *Lowerer,
+        where: LowerSite,
+        target: LIR.LocalId,
+        ty: Type.TypeId,
+        span: Lifted.Span(Lifted.FieldExpr),
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LowerStep {
+        const shape = try self.recordShape(ty);
+        const type_fields = shape.fields;
+        const expr_fields = self.solved.lifted.fieldExprSpan(span);
+        if (expr_fields.len != type_fields.len) Common.invariant("record expression missing field output by Lambda Mono type");
+        const ordered = try self.allocator.alloc(Lifted.ExprId, type_fields.len);
+        errdefer self.allocator.free(ordered);
+        const field_tys = try self.allocator.alloc(Type.TypeId, type_fields.len);
+
+        for (type_fields, 0..) |field, index| field_tys[index] = field.ty;
+        for (0..expr_fields.len) |index| {
+            const field = GuardedList.at(expr_fields, index);
+            const position = shape.indices.get(field.name) orelse Common.invariant("record field missing from committed type");
+            ordered[position] = field.value;
+        }
+
+        return .{ .tail = .{ .struct_exprs = .{ .where = where, .target = target, .items = ordered, .tys = field_tys, .next = next } } };
+    }
+
+    fn stepStructExprs(self: *Lowerer, frame: *LowerFrame, task: *StructExprsTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        if (frame.cursor == 0) {
+            // A boxed target is built in its backing and boxed after; the
+            // backing is the return target while it is built.
+            while (self.boxBackingLayoutForDirectConstruction(task.target)) |backing_layout| {
+                const backing_local = try self.addLocalForLayout(backing_layout);
+                const boundary = try self.assignBoxBoundary(task.where, task.target, backing_local, backing_layout, task.next);
+                if (task.restore_return_target == null) task.restore_return_target = self.current_return_target;
+                if (self.current_return_target == task.target) {
+                    self.current_return_target = backing_local;
+                }
+                task.target = backing_local;
+                task.next = boundary;
+            }
+
+            task.field_locals = try self.allocator.alloc(LIR.LocalId, task.items.len);
+            const target_is_zst = self.isZstLocal(task.target);
+            for (0..task.items.len) |i| {
+                const field_layout = if (target_is_zst)
+                    layout.Idx.zst
+                else
+                    self.localFieldLayout(task.target, @intCast(i));
+                task.field_locals[i] = try self.addLocalForLayout(field_layout);
+                try self.local_types.put(task.field_locals[i], task.tys[i]);
+            }
+
+            task.current = if (target_is_zst)
+                try self.assignZst(task.where, task.target, task.next)
+            else
+                try self.result.store.addCFStmt(.{ .assign_struct = .{
+                    .target = task.target,
+                    .fields = try self.result.store.addLocalSpan(task.field_locals),
+                    .next = task.next,
+                } }, task.where.source());
+            task.saved_return_target = self.current_return_target;
+            if (task.restore_return_target == null) task.restore_return_target = task.saved_return_target;
+            task.demanded_child = if (task.saved_return_target == task.target)
+                self.singleErasedResultChildIndex(task.tys)
+            else
+                null;
+            frame.index = task.items.len;
+            frame.cursor = 1;
+        } else {
+            task.current = input.?;
+        }
+        if (frame.index > 0) {
+            frame.index -= 1;
+            const i = frame.index;
+            self.current_return_target = if (task.demanded_child != null and task.demanded_child.? == i)
+                task.field_locals[i]
+            else if (task.saved_return_target == task.target)
+                null
+            else
+                task.saved_return_target;
+            return .{ .call = exprTask(task.where, task.field_locals[i], task.items[i], task.tys[i], task.current) };
+        }
+        if (task.restore_return_target) |saved| self.current_return_target = saved;
+        task.restore_return_target = null;
+        return .{ .ret = task.current };
+    }
+
+    fn stepRecordUpdate(self: *Lowerer, frame: *LowerFrame, task: *RecordUpdateTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        if (frame.cursor == 0) {
+            while (self.boxBackingLayoutForDirectConstruction(task.target)) |backing_layout| {
+                const backing_local = try self.addLocalForLayout(backing_layout);
+                task.next = try self.assignBoxBoundary(task.where, task.target, backing_local, backing_layout, task.next);
+                task.target = backing_local;
+            }
+
+            const shape = try self.recordShape(task.ty);
+            task.type_fields = try self.allocator.dupe(Type.Field, shape.fields);
+            const update_fields = try GuardedList.dupe(self.allocator, Lifted.FieldExpr, self.solved.lifted.fieldExprSpan(task.update.fields));
+            defer self.allocator.free(update_fields);
+            task.updates_by_field = try self.allocator.alloc(?Lifted.ExprId, task.type_fields.len);
+            @memset(task.updates_by_field, null);
+            for (update_fields) |field| {
+                const field_index = shape.indices.get(field.name) orelse Common.invariant("record update field missing from committed type");
+                if (task.updates_by_field[field_index] != null) Common.invariant("record update contained the same field more than once");
+                task.updates_by_field[field_index] = field.value;
+            }
+
+            task.base_ty = try self.lowerExprContextTy(task.update.base);
+            task.base_local = try self.addTemp(task.base_ty);
+            task.field_locals = try self.allocator.alloc(LIR.LocalId, task.type_fields.len);
+            task.target_is_zst = self.isZstLocal(task.target);
+            for (task.type_fields, 0..) |field, index| {
+                const field_layout = if (task.target_is_zst)
+                    layout.Idx.zst
+                else
+                    self.localFieldLayout(task.target, @intCast(index));
+                task.field_locals[index] = try self.addLocalForLayout(field_layout);
+                try self.local_types.put(task.field_locals[index], field.ty);
+            }
+
+            task.current = if (task.target_is_zst)
+                try self.assignZst(task.where, task.target, task.next)
+            else
+                try self.result.store.addCFStmt(.{ .assign_struct = .{
+                    .target = task.target,
+                    .fields = try self.result.store.addLocalSpan(task.field_locals),
+                    .next = task.next,
+                } }, task.where.source());
+            frame.index = task.type_fields.len;
+            frame.cursor = 1;
+        } else {
+            task.current = input.?;
+        }
+        while (frame.index > 0) {
+            frame.index -= 1;
+            const index = frame.index;
+            if (task.updates_by_field[index]) |value| {
+                return .{ .call = exprTask(task.where, task.field_locals[index], value, task.type_fields[index].ty, task.current) };
+            }
+        }
+
+        const source_ty = self.storageTypeOfLocalOr(task.base_local, task.base_ty);
+        const source_shape = try self.recordShape(source_ty);
+        var index = task.type_fields.len;
+        while (index > 0) {
+            index -= 1;
+            if (task.updates_by_field[index] != null) continue;
+            if (task.target_is_zst) {
+                task.current = try self.assignZst(task.where, task.field_locals[index], task.current);
+                continue;
+            }
+            const source_index = source_shape.indices.get(task.type_fields[index].name) orelse Common.invariant("record update source omitted a field");
+            const source_field_ty = source_shape.fields[source_index].ty;
+            task.current = try self.assignTypedRefRead(
+                task.where,
+                task.field_locals[index],
+                task.type_fields[index].ty,
+                source_field_ty,
+                self.localFieldLayout(task.base_local, source_index),
+                .{ .field = .{ .source = task.base_local, .field_idx = source_index } },
+                task.current,
+            );
+        }
+
+        return .{ .tail = exprTask(task.where, task.base_local, task.update.base, task.base_ty, task.current) };
+    }
+
+    fn stepTagPayload(self: *Lowerer, frame: *LowerFrame, task: *TagPayloadTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        if (frame.cursor == 1) {
+            if (task.restore_return_target) |saved| self.current_return_target = saved;
+            task.restore_return_target = null;
+            return .{ .ret = input.? };
+        }
+        // A boxed target is built in its backing and boxed after; the
+        // backing is the return target while it is built.
+        while (self.boxBackingLayoutForDirectConstruction(task.target)) |backing_layout| {
+            const backing_local = try self.addLocalForLayout(backing_layout);
+            const boundary = try self.assignBoxBoundary(task.where, task.target, backing_local, backing_layout, task.next);
+            if (task.restore_return_target == null) task.restore_return_target = self.current_return_target;
+            if (self.current_return_target == task.target) {
+                self.current_return_target = backing_local;
+            }
+            task.target = backing_local;
+            task.next = boundary;
+        }
+        const target = task.target;
+        const where = task.where;
+        const next = task.next;
+        const variant_index = task.variant_index;
+
+        const payloads = self.solved.lifted.exprSpan(task.payloads);
+        const payload_tys = self.tagPayloadTypesByIndex(task.ty, variant_index);
+        if (payloads.len != payload_tys.len) Common.invariant("tag expression payload arity differed from target tag type");
+        if (payloads.len == 0) {
+            const stmt = if (self.isZstLocal(target))
+                try self.assignZst(where, target, next)
+            else
+                try self.result.store.addCFStmt(.{ .assign_tag = .{
+                    .target = target,
+                    .variant_index = variant_index,
+                    .discriminant = variant_index,
+                    .payload = null,
+                    .next = next,
+                } }, where.source());
+            if (task.restore_return_target) |saved| self.current_return_target = saved;
+            task.restore_return_target = null;
+            return .{ .ret = stmt };
+        }
+
+        const target_layout = self.result.store.getLocal(target).layout_idx;
+        const payload_local = try self.addLocalForLayout(if (self.isZstLocal(target))
+            .zst
+        else
+            self.tagUnionPayloadLayout(target_layout, variant_index));
+        if (self.isZstLocal(target) and !self.isZstLocal(payload_local)) {
+            Common.invariant("zero-sized tag layout had a non-zero-sized payload");
+        }
+        const assign_tag = if (self.isZstLocal(target))
+            try self.assignZst(where, target, next)
+        else
+            try self.result.store.addCFStmt(.{ .assign_tag = .{
+                .target = target,
+                .variant_index = variant_index,
+                .discriminant = variant_index,
+                .payload = payload_local,
+                .next = next,
+            } }, where.source());
+
+        const variant_has_demand = self.erasedResultDemandForSimultaneousTypes(payload_tys) == .single_slot;
+        if (task.restore_return_target == null) task.restore_return_target = self.current_return_target;
+        if (self.current_return_target == target) {
+            self.current_return_target = if (variant_has_demand) payload_local else null;
+        }
+
+        frame.cursor = 1;
+        if (payloads.len == 1) {
+            return .{ .call = exprTask(where, payload_local, GuardedList.at(payloads, 0), GuardedList.at(payload_tys, 0), assign_tag) };
+        }
+        const owned_items = try GuardedList.dupe(self.allocator, Lifted.ExprId, payloads);
+        errdefer self.allocator.free(owned_items);
+        const owned_tys = try GuardedList.dupe(self.allocator, Type.TypeId, payload_tys);
+        return .{ .call = .{ .struct_exprs = .{ .where = where, .target = payload_local, .items = owned_items, .tys = owned_tys, .next = assign_tag } } };
+    }
+
+    fn nominalStep(self: *Lowerer, where: LowerSite, target: LIR.LocalId, nominal_ty: Type.TypeId, backing: Lifted.ExprId, next: LIR.CFStmtId) Common.LowerError!LowerStep {
+        const backing_ty = try self.nominalBackingType(nominal_ty, backing);
+        const backing_data = self.solved.lifted.getExpr(backing).data;
+        // Constructors do not have a pre-existing runtime representation.
+        // Build them directly in the nominal target layout so recursive
+        // Box edges come from that producer-owned layout graph instead of
+        // constructing an independently rooted backing layout and then
+        // recursively converting the completed value.
+        if (backing_data == .list or backing_data == .tuple or backing_data == .record or
+            backing_data == .record_update or backing_data == .tag)
+        {
+            return .{ .tail = exprTask(where, target, backing, backing_ty, next) };
+        }
+
+        const backing_layout = try self.layoutOfType(backing_ty);
+        const backing_local = try self.addLocalForLayout(backing_layout);
+        const assign = try self.assignNominalBoundaryAtTypes(where, target, nominal_ty, backing_local, backing_ty, backing_layout, next);
+        const saved_return_target = self.current_return_target;
+        if (saved_return_target == target and self.result.store.getLocal(target).layout_idx == backing_layout) {
+            self.current_return_target = backing_local;
+        }
+        return .{ .tail = .{ .scoped = .{
+            .saved_return_target = saved_return_target,
+            .child = .{ .parent = where, .target = backing_local, .expr = backing, .ty = backing_ty, .next = assign },
+        } } };
+    }
+
+    fn stepLet(self: *Lowerer, frame: *LowerFrame, task: *LetTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        switch (frame.cursor) {
+            0 => {
+                task.planned = try self.planRecordBinding(task.bind, task.value);
+                frame.cursor = 1;
+                return .{ .call = exprTask(task.where, task.target, task.rest, task.result_ty, task.next) };
+            },
+            1 => {
+                const rest = input.?;
+                frame.cursor = 2;
+                const binding_pat = self.pat(task.bind);
+                if (binding_pat.data == .bind) {
+                    return .{ .call = .{ .direct_bind = .{
+                        .where = task.where,
+                        .pat = task.bind,
+                        .local = binding_pat.data.bind,
+                        .value = task.value,
+                        .next = rest,
+                    } } };
+                }
+                const value_local = try self.addTemp(try self.lowerExprTy(task.value));
+                const bind = try self.bindPatternOrCrash(task.where, task.bind, value_local, rest, task.comptime_site);
+                return .{ .call = exprTask(task.where, value_local, task.value, null, bind) };
+            },
+            else => {
+                if (task.planned) |binding| self.restoreRecordBinding(binding);
+                task.planned = null;
+                return .{ .ret = input.? };
+            },
+        }
+    }
+
+    fn stepDirectBind(self: *Lowerer, frame: *LowerFrame, task: *DirectBindTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        if (frame.cursor == 1) {
+            if (task.forwarding) |scope| self.leaveReturnForwarding(scope);
+            task.forwarding = null;
+            return .{ .ret = input.? };
+        }
+        const planned_id = if (self.aggregate_bindings) |aggregates| aggregates.bindings.get(task.local) else null;
+        if (planned_id) |id| {
+            if (self.aggregate_bindings.?.plans.items[id].materialized == null) {
+                return .{ .tail = .{ .record_binding = .{ .where = task.where, .id = id, .next = task.next } } };
+            }
+        }
+        const bind_ty = try self.lowerPatTy(task.pat);
+        const value_local = self.existingLocalForTyped(task.local, bind_ty) orelse try self.addTemp(bind_ty);
+        task.forwarding = self.enterReturnForwarding(value_local);
+        frame.cursor = 1;
+        if (planned_id) |id| return .{ .call = .{ .record_binding = .{ .where = task.where, .id = id, .next = task.next } } };
+        return .{ .call = exprTask(task.where, value_local, task.value, self.typeOfLocalOr(value_local, bind_ty), task.next) };
+    }
+
+    /// Emit a planned record binding: its materialized struct, then its
+    /// evaluated components last to first, then the copied seeds and the
+    /// update base.
+    fn stepRecordBinding(self: *Lowerer, frame: *LowerFrame, task: *RecordBindingTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        const aggregates = self.aggregate_bindings.?;
+        switch (frame.cursor) {
+            0 => {
+                task.plan = aggregates.plans.items[task.id];
+                task.shape = aggregates.shapes.get(task.plan.ty).?;
+                task.current = task.next;
+                task.saved_return_target = self.current_return_target;
+                task.restore = true;
+                if (task.plan.materialized != null and task.plan.materialized == task.saved_return_target and task.plan.producer != .update) {
+                    // Forward the explicit unique result-component demand through shared
+                    // record versions to the original evaluated component's producer.
+                    if (task.shape.return_child) |child| {
+                        try self.noteReturnForwardingSource(aggregates.fields.get(task.plan.root, task.shape.fields.len, child));
+                    }
+                    self.current_return_target = null;
+                }
+                if (task.plan.materialized) |target| {
+                    const components = try self.allocator.alloc(LIR.LocalId, task.shape.fields.len);
+                    defer self.allocator.free(components);
+                    aggregates.fields.write(task.plan.root, components);
+                    task.current = try self.result.store.addCFStmt(.{ .assign_struct = .{
+                        .target = target,
+                        .fields = try self.result.store.addLocalSpan(components),
+                        .next = task.current,
+                    } }, task.where.source());
+                }
+                frame.index = task.plan.values.len;
+                frame.cursor = 1;
+            },
+            1 => {
+                task.current = input.?;
+                if (task.forwarding) |scope| self.leaveReturnForwarding(scope);
+                task.forwarding = null;
+            },
+            else => {
+                self.current_return_target = task.saved_return_target;
+                task.restore = false;
+                return .{ .ret = input.? };
+            },
+        }
+        if (frame.index != 0) {
+            frame.index -= 1;
+            const field = task.plan.values[frame.index];
+            task.forwarding = self.enterReturnForwarding(field.local);
+            return .{ .call = exprTask(task.where, field.local, field.expr, task.shape.fields[field.index].ty, task.current) };
+        }
+        if (task.plan.base) |record_base| {
+            var index = task.plan.seeds.len;
+            while (index != 0) {
+                index -= 1;
+                const seed = task.plan.seeds[index];
+                const forwarding = self.enterReturnForwarding(seed.target);
+                defer self.leaveReturnForwarding(forwarding);
+                task.current = try self.assignTypedRefRead(task.where, seed.target, seed.target_ty, seed.source_ty, self.localFieldLayout(record_base.local, seed.source_index), .{ .field = .{ .source = record_base.local, .field_idx = seed.source_index } }, task.current);
+            }
+            frame.cursor = 2;
+            return .{ .call = exprTask(task.where, record_base.local, record_base.expr, record_base.ty, task.current) };
+        }
+        self.current_return_target = task.saved_return_target;
+        task.restore = false;
+        return .{ .ret = task.current };
+    }
+
+    fn recursiveLetStart(self: *Lowerer, task: *RecursiveLetTask) Common.LowerError!LowerStep {
+        const where = task.where;
+        const next = task.next;
+        const pattern = self.solved.lifted.getPat(task.pat);
+        if (pattern.data != .bind) Common.invariant("recursive Monotype let statement must bind one local directly");
+        const local = pattern.data.bind;
+        const bind_ty = try self.lowerPatTy(task.pat);
+        const binding = try self.bindRecursiveLocalForTyped(local, bind_ty);
+        const target = binding.slot;
+        const target_layout = self.result.store.getLocal(target).layout_idx;
+        const target_content = self.result.layouts.getLayout(target_layout);
+        if (target_content.tag != .box) Common.invariant("recursive Monotype let statement must bind a boxed runtime layout");
+        const payload_layout = target_content.getIdx();
+
+        const value = try self.addTemp(bind_ty);
+        const value_layout = self.result.store.getLocal(value).layout_idx;
+        const payload = if (value_layout == payload_layout)
+            value
+        else
+            try self.addLocalForLayout(payload_layout);
+        const ptr = try self.addLocalForLayout(.opaque_ptr);
+        const unit = try self.addLocalForLayout(.zst);
+
+        var after_store = next;
+        if (binding.forward_local) |forward_local| {
+            after_store = try self.assignTypedBoundary(
+                where,
+                forward_local,
+                self.typeOfLocalOr(forward_local, bind_ty),
+                target,
+                bind_ty,
+                after_store,
+            );
+        }
+
+        const ptr_store_args = [_]LIR.LocalId{ ptr, payload };
+        const ptr_store_stmt = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = unit,
+            .op = .ptr_store,
+            .rc_effect = LIR.LowLevel.ptr_store.rcEffect(),
+            .args = try self.result.store.addLocalSpan(&ptr_store_args),
+            .next = after_store,
+        } }, where.source());
+        var current = ptr_store_stmt;
+        if (payload != value) {
+            current = try self.assignBoxBoundary(where, payload, value, value_layout, current);
+        }
+        task.target = target;
+        task.ptr = ptr;
+        return .{ .call = exprTask(where, value, task.value, bind_ty, current) };
+    }
+
+    fn fnRefStep(
+        self: *Lowerer,
+        where: LowerSite,
+        target: LIR.LocalId,
+        expr_id: Lifted.ExprId,
+        fn_id: Lifted.FnId,
+        capture_operand_span: Lifted.Span(Lifted.CaptureOperand),
+        ty: Type.TypeId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LowerStep {
+        const capture_operands = self.solved.lifted.captureOperandSpan(capture_operand_span);
+        const captures = self.memberCapturesForExpr(expr_id, fn_id);
+        if (self.solved.lifted.typedLocalSpan(self.solved.lifted.getFn(fn_id).captures).len != capture_operands.len) {
+            Common.invariant("function reference capture operand count differed from lifted function captures");
+        }
+        const fn_symbol = self.solved.lifted.getFn(fn_id).symbol;
+        const content = self.types.get(ty);
+        if (content == .callable) {
+            const variants = self.types.fnVariantSpan(content.callable);
+            for (0..variants.len) |variant_index| {
+                const variant = GuardedList.at(variants, variant_index);
+                if (variant.source != fn_symbol) continue;
+                return try self.finiteCallableValueStep(where, target, @intCast(variant_index), captures, capture_operands, variant.capture_ty, next);
+            }
+            return Common.invariant("finite callable type did not contain referenced function");
+        } else if (content == .erased_fn) {
+            const variants = self.types.fnVariantSpan(content.erased_fn.members);
+            for (0..variants.len) |variant_index| {
+                const variant = GuardedList.at(variants, variant_index);
+                if (variant.source != fn_symbol) continue;
+                return try self.packedErasedFnStep(where, target, variant.target, captures, capture_operands, variant.capture_ty, next);
+            }
+            return Common.invariant("erased callable type did not contain referenced function");
+        } else {
+            return Common.invariant("function value lowered to non-callable direct Lambda Mono type");
+        }
+    }
+
+    fn finiteCallableValueStep(
+        self: *Lowerer,
+        where: LowerSite,
+        callable_target: LIR.LocalId,
+        variant_index: u16,
+        captures: CaptureSpanId,
+        capture_operands: anytype,
+        capture_ty: ?Type.TypeId,
+        callable_next: LIR.CFStmtId,
+    ) Common.LowerError!LowerStep {
+        var target = callable_target;
+        var next = callable_next;
+        while (self.boxBackingLayoutForDirectConstruction(target)) |backing_layout| {
+            const backing_local = try self.addLocalForLayout(backing_layout);
+            next = try self.assignBoxBoundary(where, target, backing_local, backing_layout, next);
+            target = backing_local;
+        }
+
+        if (capture_ty) |payload_ty| {
+            if (self.captureSpan(captures).len != capture_operands.len) {
+                Common.invariant("finite callable capture operand count differed from lifted function captures");
+            }
+            const payload = try self.addTemp(payload_ty);
+            if (self.isZstLocal(target) and !self.isZstLocal(payload)) {
+                Common.invariant("zero-sized callable layout had a non-zero-sized payload");
+            }
+            const assign = if (self.isZstLocal(target))
+                try self.assignZst(where, target, next)
+            else
+                try self.result.store.addCFStmt(.{ .assign_tag = .{
+                    .target = target,
+                    .variant_index = variant_index,
+                    .discriminant = variant_index,
+                    .payload = payload,
+                    .next = next,
+                } }, where.source());
+            return .{ .tail = try self.captureRecordTask(where, payload, captures, capture_operands, payload_ty, assign) };
+        }
+        if (capture_operands.len != 0) Common.invariant("finite callable without capture payload carried capture operands");
+        if (self.isZstLocal(target)) return .{ .ret = try self.assignZst(where, target, next) };
+        return .{ .ret = try self.result.store.addCFStmt(.{ .assign_tag = .{
+            .target = target,
+            .variant_index = variant_index,
+            .discriminant = variant_index,
+            .payload = null,
+            .next = next,
+        } }, where.source()) };
+    }
+
+    fn packedErasedFnStep(
+        self: *Lowerer,
+        where: LowerSite,
+        target: LIR.LocalId,
+        fn_id: Type.FnId,
+        captures: CaptureSpanId,
+        capture_operands: anytype,
+        capture_ty: ?Type.TypeId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LowerStep {
+        if (self.captureSpan(captures).len != capture_operands.len) {
+            Common.invariant("erased callable capture operand count differed from lifted function captures");
+        }
+        const capture = if (capture_ty) |ty| try self.addTemp(ty) else null;
+        const capture_layout = if (capture) |local| self.result.store.getLocal(local).layout_idx else null;
+        const reuse = try self.erasedCallableReuseForPack(target, capture_layout);
+        const assign = try self.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
+            .target = target,
+            .proc = try self.markReachableFn(fn_id),
+            .capture = capture,
+            .capture_layout = capture_layout,
+            .on_drop = self.erasedCallableOnDrop(capture_layout),
+            .reuse = reuse,
+            .next = next,
+        } }, where.source());
+        if (capture_ty) |ty| return .{ .tail = try self.captureRecordTask(where, capture.?, captures, capture_operands, ty, assign) };
+        if (capture_operands.len != 0) Common.invariant("erased callable without capture payload carried capture operands");
+        return .{ .ret = assign };
+    }
+
+    /// A chain building the capture record `target` from its capture
+    /// operands, in ascending CaptureId order.
+    fn captureRecordTask(
         self: *Lowerer,
         where: LowerSite,
         target: LIR.LocalId,
@@ -5333,7 +6569,7 @@ const Lowerer = struct {
         capture_operands: anytype,
         capture_ty: Type.TypeId,
         next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
+    ) Common.LowerError!LowerTask {
         const captures = self.captureSpan(capture_span);
         const capture_content = self.types.get(capture_ty);
         if (capture_content != .capture_record) Common.invariant("callable capture payload was not a capture record");
@@ -5370,7 +6606,7 @@ const Lowerer = struct {
             try self.local_types.put(field_locals[i], field.storage_ty);
         }
 
-        var current = if (target_is_zst)
+        const current = if (target_is_zst)
             try self.assignZst(where, target, next)
         else
             try self.result.store.addCFStmt(.{ .assign_struct = .{
@@ -5378,12 +6614,1262 @@ const Lowerer = struct {
                 .fields = try self.result.store.addLocalSpan(field_locals),
                 .next = next,
             } }, where.source());
-        var i = captures.len;
-        while (i > 0) {
-            i -= 1;
-            current = try self.lowerExprIntoAtType(where, field_locals[i], GuardedList.at(capture_operands, i).value, field_storage_tys[i], current);
+        const items = try self.allocator.alloc(ChainItem, captures.len);
+        for (items, 0..) |*item, position| {
+            const i = captures.len - 1 - position;
+            item.* = .{ .expr = .{ .target = field_locals[i], .expr = GuardedList.at(capture_operands, i).value, .ty = field_storage_tys[i] } };
         }
-        return current;
+        return .{ .chain = .{ .where = where, .items = items, .current = current } };
+    }
+
+    fn directCallStep(
+        self: *Lowerer,
+        where: LowerSite,
+        target: LIR.LocalId,
+        result_ty: Type.TypeId,
+        callee: Lifted.FnId,
+        call: @FieldType(Lifted.ExprData, "call_proc"),
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LowerStep {
+        const args = try GuardedList.dupe(self.allocator, Lifted.ExprId, self.solved.lifted.exprSpan(call.args));
+        errdefer self.allocator.free(args);
+        const capture_operands = try GuardedList.dupe(self.allocator, Lifted.CaptureOperand, self.solved.lifted.captureOperandSpan(call.captures));
+        return .{ .tail = .{ .direct_call = .{
+            .where = where,
+            .target = target,
+            .result_ty = result_ty,
+            .callee = callee,
+            .args = args,
+            .capture_operands = capture_operands,
+            .is_cold = call.is_cold,
+            .next = next,
+        } } };
+    }
+
+    fn stepDirectCall(self: *Lowerer, frame: *LowerFrame, task: *DirectCallTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        if (frame.cursor == 1) {
+            const call = input.?;
+            return .{ .tail = try self.captureRecordTask(task.where, task.capture_local, task.captures, task.capture_operands, task.capture_ty, call) };
+        }
+        const callee = task.callee;
+        const callee_is_hosted = switch (self.solved.lifted.getFn(callee).body) {
+            .roc => false,
+            .hosted => true,
+        };
+        const return_reuse = if (!callee_is_hosted and
+            self.erasedResultDemand(task.result_ty) == .single_slot and
+            self.current_return_target == task.target)
+            self.currentErasedReturnReuse()
+        else
+            ErasedReturnReuse.none;
+        task.target_fn = switch (return_reuse) {
+            .none => try self.ensureOwnFnSpec(callee, .finite),
+            .erased_callable => |capture_ty| try self.ensureOwnFnSpecWithErasedReturnReuse(callee, capture_ty),
+        };
+        task.captures = try self.capturesForFn(callee);
+        const capture_items = self.captureSpan(task.captures);
+        const args = try self.allocator.dupe(Lifted.ExprId, task.args);
+        errdefer self.allocator.free(args);
+        if (capture_items.len == 0) {
+            if (task.capture_operands.len != 0) Common.invariant("direct call carried capture operands for a capture-free callee");
+            return .{ .tail = .{ .known_call = .{
+                .where = task.where,
+                .target = task.target,
+                .result_ty = task.result_ty,
+                .callee = task.target_fn,
+                .args = args,
+                .capture_arg = null,
+                .is_cold = task.is_cold,
+                .next = task.next,
+            } } };
+        }
+        if (capture_items.len != task.capture_operands.len) Common.invariant("direct call capture operand count differed from callee capture count");
+        task.capture_ty = self.fn_entries.items[@intFromEnum(task.target_fn)].spec.capture_ty orelse
+            Common.invariant("capturing direct call target had no capture record type");
+        task.capture_local = try self.addTemp(task.capture_ty);
+        frame.cursor = 1;
+        return .{ .call = .{ .known_call = .{
+            .where = task.where,
+            .target = task.target,
+            .result_ty = task.result_ty,
+            .callee = task.target_fn,
+            .args = args,
+            .capture_arg = task.capture_local,
+            .is_cold = task.is_cold,
+            .next = task.next,
+        } } };
+    }
+
+    fn stepKnownCall(self: *Lowerer, frame: *LowerFrame, task: *KnownCallTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        if (frame.cursor == 1) {
+            const lowered = task.lowered.?;
+            return .{ .tail = try self.operandChain(task.where, lowered, task.arg_tys, null, input.?) };
+        }
+        const callee = task.callee;
+        const where = task.where;
+        const target = task.target;
+        task.arg_tys = try self.lowerFnSpecArgTypes(callee);
+        task.lowered = try self.lowerExprsToTempsAtTypes(task.args, task.arg_tys);
+        const lowered = task.lowered.?;
+
+        const callee_ret_ty = self.fn_entries.items[@intFromEnum(callee)].ret;
+        const callee_ret_layout = try self.layoutOfType(callee_ret_ty);
+        const target_layout = self.result.store.getLocal(target).layout_idx;
+        const call_target = if (target_layout == callee_ret_layout)
+            target
+        else
+            try self.addTemp(callee_ret_ty);
+        const after_call = if (call_target == target)
+            task.next
+        else
+            try self.assignTypedBoundary(where, target, task.result_ty, call_target, callee_ret_ty, task.next);
+
+        const callee_spec = self.fn_entries.items[@intFromEnum(callee)].spec;
+        const has_return_reuse = callee_spec.return_reuse.enabled();
+        // Destination-specialized helpers carry an explicit hidden ownership
+        // input. The ordinary inline path has no representation for that
+        // input, so preserve the specialized call boundary until inlining can
+        // model destination demand directly.
+        if (task.capture_arg == null and !task.is_cold and !has_return_reuse) {
+            if (try self.inlineBodyForKnownCall(callee)) |body_expr| {
+                const arg_locals = try self.allocator.dupe(LIR.LocalId, lowered.ids);
+                frame.cursor = 1;
+                return .{ .call = .{ .inline_call = .{
+                    .where = where,
+                    .target = call_target,
+                    .callee = callee,
+                    .arg_locals = arg_locals,
+                    .body_expr = body_expr,
+                    .next = after_call,
+                } } };
+            }
+        }
+
+        const extra_arg_count = @as(usize, @intFromBool(task.capture_arg != null)) +
+            @as(usize, @intFromBool(has_return_reuse));
+        const call_args = if (extra_arg_count > 0) blk: {
+            const values = try self.allocator.alloc(LIR.LocalId, lowered.ids.len + extra_arg_count);
+            errdefer self.allocator.free(values);
+            @memcpy(values[0..lowered.ids.len], lowered.ids);
+            var index = lowered.ids.len;
+            if (task.capture_arg) |capture_local| {
+                values[index] = capture_local;
+                index += 1;
+            }
+            if (has_return_reuse) {
+                values[index] = self.current_erased_reuse orelse
+                    Common.invariant("destination-specialized direct call lacked a current erased return destination");
+            }
+            break :blk values;
+        } else lowered.ids;
+        defer if (extra_arg_count > 0) self.allocator.free(call_args);
+        const current = try self.result.store.addCFStmt(.{ .assign_call = .{
+            .target = call_target,
+            .proc = try self.markReachableFn(callee),
+            .args = try self.result.store.addLocalSpan(call_args),
+            .is_cold = task.is_cold,
+            .next = after_call,
+        } }, where.source());
+        return .{ .tail = try self.operandChain(where, lowered, task.arg_tys, null, current) };
+    }
+
+    fn stepInlineCall(self: *Lowerer, frame: *LowerFrame, task: *InlineCallTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        if (frame.cursor == 1) {
+            self.restoreInlineCallArgs(task);
+            return .{ .ret = input.? };
+        }
+        const spec = self.fn_specs.items[@intFromEnum(task.callee)];
+        if (spec.abi != .finite) Common.invariant("attempted to inline a non-finite function spec");
+        if (spec.capture_ty != null) Common.invariant("attempted to inline a capturing function spec");
+
+        const source_fn = self.solved.lifted.getFn(spec.source);
+        const fn_content = self.solved.types.rootContent(spec.solved_fn_ty);
+        if (fn_content != .func) Common.invariant("direct Lambda Mono function table contains a non-function type");
+        const func = fn_content.func;
+        const solved_args = self.solved_types.span(func.args);
+        const lifted_args = self.solved.lifted.typedLocalSpan(source_fn.args);
+        if (solved_args.len != lifted_args.len) Common.invariant("direct Lambda Mono function arity changed after Lambda Solved");
+        if (task.arg_locals.len != lifted_args.len) Common.invariant("inline call argument count differed from function arity");
+
+        const saved = try self.allocator.alloc(?LIR.LocalId, lifted_args.len);
+        errdefer self.allocator.free(saved);
+        for (0..lifted_args.len) |i| {
+            const arg = GuardedList.at(lifted_args, i);
+            const entry = try self.local_map.getOrPut(arg.local);
+            saved[i] = if (entry.found_existing) entry.value_ptr.* else null;
+            entry.value_ptr.* = task.arg_locals[i];
+        }
+        task.saved = saved;
+
+        // The callee body's lifted inline scopes are rebased under the known
+        // call's scope, whose call site is this call.
+        var callee_parent = task.where;
+        callee_parent.outer = try self.addKnownCallInlineScope(task.where, source_fn, task.body_expr);
+        frame.cursor = 1;
+        return .{ .call = exprTask(callee_parent, task.target, task.body_expr, null, task.next) };
+    }
+
+    /// Put back the bindings an inlined call's arguments shadowed.
+    fn restoreInlineCallArgs(self: *Lowerer, task: *InlineCallTask) void {
+        const saved = task.saved orelse return;
+        const spec = self.fn_specs.items[@intFromEnum(task.callee)];
+        const lifted_args = self.solved.lifted.typedLocalSpan(self.solved.lifted.getFn(spec.source).args);
+        for (0..lifted_args.len) |i| {
+            const arg = GuardedList.at(lifted_args, i);
+            if (saved[i]) |previous| {
+                self.local_map.getPtr(arg.local).?.* = previous;
+            } else {
+                _ = self.local_map.remove(arg.local);
+            }
+        }
+        self.allocator.free(saved);
+        task.saved = null;
+    }
+
+    fn valueCallStep(
+        self: *Lowerer,
+        where: LowerSite,
+        target: LIR.LocalId,
+        result_ty: Type.TypeId,
+        callee_expr: Lifted.ExprId,
+        arg_span: Lifted.Span(Lifted.ExprId),
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LowerStep {
+        const callee_ty = try self.lowerExprContextTy(callee_expr);
+        const content = self.types.get(callee_ty);
+        if (content == .callable) {
+            self.noteErasedOwnerAmbiguous(target);
+            // Branch lowering can lower argument types that append more variants to
+            // self.types, so keep this iteration independent of the store backing.
+            const variants = try GuardedList.dupe(self.allocator, Type.FnVariant, self.types.fnVariantSpan(content.callable));
+            errdefer self.allocator.free(variants);
+            const args = try GuardedList.dupe(self.allocator, Lifted.ExprId, self.solved.lifted.exprSpan(arg_span));
+            return .{ .tail = .{ .callable_call = .{
+                .where = where,
+                .target = target,
+                .result_ty = result_ty,
+                .callee_expr = callee_expr,
+                .callee_ty = callee_ty,
+                .variants = variants,
+                .args = args,
+                .next = next,
+            } } };
+        } else if (content == .erased_fn) {
+            return try self.erasedValueCallStep(where, target, result_ty, callee_expr, callee_ty, self.solved.lifted.exprSpan(arg_span), next);
+        } else {
+            return Common.invariant("value call callee had no callable direct Lambda Mono representation");
+        }
+    }
+
+    fn erasedValueCallStep(
+        self: *Lowerer,
+        where: LowerSite,
+        target: LIR.LocalId,
+        result_ty: Type.TypeId,
+        callee_expr: Lifted.ExprId,
+        callee_ty: Type.TypeId,
+        arg_exprs: anytype,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LowerStep {
+        const arg_tys = try self.lowerCallableArgTypes(callee_ty);
+        defer self.allocator.free(arg_tys);
+
+        const args = try self.lowerExprsToTempsAtTypes(arg_exprs, arg_tys);
+        defer args.deinit(self.allocator);
+        const callee = try self.addTemp(callee_ty);
+        const result_layout = try self.layoutOfType(result_ty);
+        const target_layout = self.result.store.getLocal(target).layout_idx;
+        const call_target = if (target_layout == result_layout)
+            target
+        else
+            try self.addTemp(result_ty);
+        const after_call = if (call_target == target)
+            next
+        else
+            try self.assignTypedBoundary(where, target, result_ty, call_target, result_ty, next);
+        const reuse_closure = self.erasedResultDemand(result_ty) == .single_slot;
+        const call_stmt = try self.result.store.addCFStmt(.{ .assign_call_erased = .{
+            .target = call_target,
+            .closure = callee,
+            .args = try self.result.store.addLocalSpan(args.ids),
+            .arg_layouts = try self.appendErasedArgumentLayouts(args.ids),
+            .arg_plan = try self.erasedCallArgsPlan(args.ids),
+            .reuse_closure = reuse_closure,
+            .reuse_source = if (reuse_closure) callee else null,
+            .next = after_call,
+        } }, where.source());
+        if (reuse_closure) {
+            try self.erased_call_owner_uses.append(self.allocator, .{
+                .stmt = call_stmt,
+                .closure = callee,
+            });
+        }
+        return .{ .tail = try self.operandChain(where, args, arg_tys, .{ .expr = .{ .target = callee, .expr = callee_expr, .ty = callee_ty } }, call_stmt) };
+    }
+
+    fn stepCallableCall(self: *Lowerer, frame: *LowerFrame, task: *CallableCallTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        switch (frame.cursor) {
+            0 => {
+                task.callee = try self.addTemp(task.callee_ty);
+                task.done = self.freshJoinPointId();
+                task.current = try self.result.store.addCFStmt(.{ .runtime_error = {} }, task.where.glue());
+                frame.index = task.variants.len;
+                frame.cursor = 1;
+            },
+            1 => {
+                const variant_index: u16 = @intCast(frame.index);
+                task.current = try self.discriminantSwitch(task.where, task.callee, variant_index, input.?, task.current, false);
+            },
+            else => return .{ .ret = try self.result.store.addCFStmt(.{ .join = .{
+                .id = task.done,
+                .params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{task.target}),
+                .body = task.next,
+                .remainder = input.?,
+            } }, task.where.glue()) },
+        }
+        if (frame.index > 0) {
+            frame.index -= 1;
+            const variant = task.variants[frame.index];
+            const variant_index: u16 = @intCast(frame.index);
+            const branch_done = try self.joinJump(task.where, task.done);
+            return .{ .call = try self.callableVariantCallTask(task.where, task.target, task.result_ty, task.callee, variant, variant_index, task.args, branch_done) };
+        }
+        frame.cursor = 2;
+        return .{ .call = exprTask(task.where, task.callee, task.callee_expr, task.callee_ty, task.current) };
+    }
+
+    /// The call of one callable variant: a known call of its target, with
+    /// the variant's capture payload read from the callee first.
+    fn callableVariantCallTask(
+        self: *Lowerer,
+        where: LowerSite,
+        target: LIR.LocalId,
+        result_ty: Type.TypeId,
+        callee: LIR.LocalId,
+        variant: Type.FnVariant,
+        variant_index: u16,
+        arg_exprs: []const Lifted.ExprId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LowerTask {
+        const args = try self.allocator.dupe(Lifted.ExprId, arg_exprs);
+        if (variant.capture_ty) |_| {
+            errdefer self.allocator.free(args);
+            const payload = try self.addLocalForLayout(self.tagUnionPayloadLayout(self.result.store.getLocal(callee).layout_idx, variant_index));
+            return .{ .callable_variant = .{
+                .where = where,
+                .callee = callee,
+                .variant_index = variant_index,
+                .payload = payload,
+                .call = .{
+                    .where = where,
+                    .target = target,
+                    .result_ty = result_ty,
+                    .callee = variant.target,
+                    .args = args,
+                    .capture_arg = payload,
+                    .is_cold = false,
+                    .next = next,
+                },
+            } };
+        }
+        return .{ .known_call = .{
+            .where = where,
+            .target = target,
+            .result_ty = result_ty,
+            .callee = variant.target,
+            .args = args,
+            .capture_arg = null,
+            .is_cold = false,
+            .next = next,
+        } };
+    }
+
+    fn lowLevelStep(self: *Lowerer, where: LowerSite, target: LIR.LocalId, op: can.CIR.Expr.LowLevel, span: Lifted.Span(Lifted.ExprId), next: LIR.CFStmtId) Common.LowerError!LowerStep {
+        const args = self.solved.lifted.exprSpan(span);
+        if (op == .crash) {
+            if (args.len != 1) Common.invariant("crash low-level operation received the wrong number of arguments");
+            const lowered = try self.lowerExprsToTemps(args);
+            defer lowered.deinit(self.allocator);
+            const crash_stmt = try self.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .local = lowered.ids[0] },
+            } }, where.source());
+            return .{ .tail = try self.operandChain(where, lowered, null, null, crash_stmt) };
+        }
+        if (op == .dict_pseudo_seed and self.dict_seed_mode == .comptime_zero) {
+            if (args.len != 0) Common.invariant("Dict seed low-level operation received arguments");
+            return .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .i64_literal = .{
+                    .value = 0,
+                    .layout_idx = self.result.store.getLocal(target).layout_idx,
+                } },
+                .next = next,
+            } }, where.source()) };
+        }
+        if (op == .box_box or op == .box_unbox) {
+            if (args.len != 1) Common.invariant("Box low-level operation reached LIR lowering with the wrong arity");
+            const arg = GuardedList.at(args, 0);
+            const source = try self.addTemp(try self.lowerExprTy(arg));
+            const source_layout = self.result.store.getLocal(source).layout_idx;
+            const saved_return_target = self.current_return_target;
+            if (saved_return_target == target and op == .box_box) {
+                self.current_return_target = source;
+            }
+            const assign = self.assignBoxBoundary(where, target, source, source_layout, next) catch |err| {
+                self.current_return_target = saved_return_target;
+                return err;
+            };
+            return .{ .tail = .{ .scoped = .{
+                .saved_return_target = saved_return_target,
+                .child = .{ .parent = where, .target = source, .expr = arg, .ty = null, .next = assign },
+            } } };
+        }
+        if (op == .list_map_can_reuse) {
+            const interchangeable = try self.listMapLayoutsInterchangeable(args);
+            if (!interchangeable.get(.u32) and !interchangeable.get(.u64)) {
+                // Reuse is statically impossible (or disabled) on every
+                // width, so the runtime uniqueness check never needs to
+                // run. The op's arguments are pure local reads, so dropping
+                // them is safe.
+                return .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
+                    .target = target,
+                    .value = .{ .i64_literal = .{
+                        .value = 0,
+                        .layout_idx = self.result.store.getLocal(target).layout_idx,
+                    } },
+                    .next = next,
+                } }, where.source()) };
+            }
+            // Reuse is possible on at least one width; carry the per-width
+            // bits so codegen forces a constant 0 on any width where the
+            // layouts are not interchangeable.
+            const lowered = try self.lowerExprsToTemps(args);
+            defer lowered.deinit(self.allocator);
+            const current = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = target,
+                .op = op,
+                .rc_effect = op.rcEffect(),
+                .args = try self.result.store.addLocalSpan(lowered.ids),
+                .interchangeable = interchangeable,
+                .next = next,
+            } }, where.source());
+            return .{ .tail = try self.operandChain(where, lowered, null, null, current) };
+        }
+        const lowered = try self.lowerExprsToTemps(args);
+        defer lowered.deinit(self.allocator);
+        const lowered_op = if (lowered.ids.len > 0)
+            CheckedArithmetic.lowerOp(op, self.result.store.getLocal(lowered.ids[0]).layout_idx)
+        else
+            op;
+        const current = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = lowered_op,
+            .rc_effect = lowered_op.rcEffect(),
+            .args = try self.result.store.addLocalSpan(lowered.ids),
+            .next = next,
+        } }, where.source());
+        return .{ .tail = try self.operandChain(where, lowered, null, null, current) };
+    }
+
+    fn fieldAccessStep(
+        self: *Lowerer,
+        where: LowerSite,
+        target: LIR.LocalId,
+        receiver: Lifted.ExprId,
+        segments_span: Lifted.Span(Lifted.FieldAccessSegment),
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LowerStep {
+        const segments = self.solved.lifted.fieldAccessSegmentSpan(segments_span);
+        if (segments.len == 0) Common.invariant("field access path had no segments");
+
+        const receiver_ty = try self.lowerExprContextTy(receiver);
+        var source_ty = receiver_ty;
+        var first_segment: usize = 0;
+        var component: ?LIR.LocalId = null;
+        const receiver_data = self.solved.lifted.getExpr(receiver).data;
+        if (receiver_data == .local) {
+            if (self.aggregate_bindings) |aggregates| {
+                if (aggregates.bindings.get(receiver_data.local)) |id| {
+                    const plan = aggregates.plans.items[id];
+                    if (plan.ty == receiver_ty) {
+                        const shape = aggregates.shapes.get(plan.ty).?;
+                        const field = shape.indices.get(GuardedList.at(segments, 0).field).?;
+                        component = aggregates.fields.get(plan.root, shape.fields.len, field);
+                        source_ty = shape.fields[field].ty;
+                        first_segment = 1;
+                    }
+                }
+            }
+        }
+        const receiver_local = component orelse try self.addTemp(receiver_ty);
+        if (first_segment == segments.len) {
+            try self.noteReturnForwardingLocal(target, receiver_local);
+            return .{ .ret = try self.assignTypedBoundary(where, target, self.typeOfLocalOr(target, source_ty), receiver_local, source_ty, next) };
+        }
+
+        const FieldRead = struct {
+            target: LIR.LocalId,
+            target_ty: Type.TypeId,
+            source: LIR.LocalId,
+            source_ty: Type.TypeId,
+            source_field_index: u16,
+            storage_layout: ?layout.Idx,
+        };
+        const reads = try self.allocator.alloc(FieldRead, segments.len - first_segment);
+        defer self.allocator.free(reads);
+
+        var logical_source_ty = source_ty;
+        var source_local = receiver_local;
+        for (first_segment..segments.len) |index| {
+            const segment = GuardedList.at(segments, index);
+            const target_field_index = self.recordFieldIndex(logical_source_ty, segment.field);
+            const target_fields = self.recordFields(logical_source_ty);
+            const target_field_ty = GuardedList.at(target_fields, @intCast(target_field_index)).ty;
+            const destination = if (index + 1 == segments.len)
+                target
+            else
+                try self.addTemp(target_field_ty);
+
+            const storage_source_ty = self.storageTypeOfLocalOr(source_local, logical_source_ty);
+            const source_field_index = self.recordFieldIndex(storage_source_ty, segment.field);
+            const source_fields = self.recordFields(storage_source_ty);
+            const source_field_ty = GuardedList.at(source_fields, @intCast(source_field_index)).ty;
+            reads[index - first_segment] = .{
+                .target = destination,
+                .target_ty = target_field_ty,
+                .source = source_local,
+                .source_ty = source_field_ty,
+                .source_field_index = source_field_index,
+                .storage_layout = if (self.isZstLocal(destination))
+                    null
+                else
+                    self.localFieldLayout(source_local, source_field_index),
+            };
+
+            source_local = destination;
+            logical_source_ty = target_field_ty;
+        }
+
+        var current = next;
+        var index = reads.len;
+        while (index > 0) {
+            index -= 1;
+            const read = reads[index];
+            current = if (read.storage_layout) |storage_layout|
+                try self.assignTypedRefRead(
+                    where,
+                    read.target,
+                    read.target_ty,
+                    read.source_ty,
+                    storage_layout,
+                    .{ .field = .{ .source = read.source, .field_idx = read.source_field_index } },
+                    current,
+                )
+            else
+                try self.assignZst(where, read.target, current);
+        }
+        if (component != null) return .{ .ret = current };
+        return .{ .tail = exprTask(where, receiver_local, receiver, receiver_ty, current) };
+    }
+
+    fn tupleAccessStep(self: *Lowerer, where: LowerSite, target: LIR.LocalId, tuple: Lifted.ExprId, elem_index: u32, next: LIR.CFStmtId) Common.LowerError!LowerStep {
+        const tuple_ty = try self.lowerExprContextTy(tuple);
+        const tuple_local = try self.addTemp(tuple_ty);
+        const field_index: u16 = @intCast(elem_index);
+        const target_item_tys = self.tupleItemTypes(tuple_ty);
+        const source_item_tys = self.tupleItemTypes(self.storageTypeOfLocalOr(tuple_local, tuple_ty));
+        if (self.isZstLocal(target)) {
+            return .{ .tail = exprTask(where, tuple_local, tuple, tuple_ty, try self.assignZst(where, target, next)) };
+        }
+        const assign = try self.assignTypedRefRead(
+            where,
+            target,
+            GuardedList.at(target_item_tys, elem_index),
+            GuardedList.at(source_item_tys, elem_index),
+            self.localFieldLayout(tuple_local, field_index),
+            .{ .field = .{ .source = tuple_local, .field_idx = field_index } },
+            next,
+        );
+        return .{ .tail = exprTask(where, tuple_local, tuple, tuple_ty, assign) };
+    }
+
+    fn matchStep(
+        self: *Lowerer,
+        where: LowerSite,
+        target: LIR.LocalId,
+        result_ty: Type.TypeId,
+        scrutinee: Lifted.ExprId,
+        branches_span: Lifted.Span(Lifted.Branch),
+        comptime_site: ?Lifted.ComptimeSiteId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LowerStep {
+        // When the in-place `List.map` branch is statically impossible—the
+        // optimization is disabled or the element layouts are not
+        // interchangeable—lower only the branch a constant-0
+        // `list_map_can_reuse` selects, so the in-place machinery never reaches
+        // LIR. Each fold is recorded as explicit data; the debug Lambda Mono
+        // materializer replays the recorded resolutions instead of recomputing
+        // them (it runs before layout selection and has no layout store), so
+        // the two derivations demand the same set of functions.
+        if (self.solved.lifted.listMapCanReuseMatch(scrutinee, branches_span)) |folded| {
+            const args = self.solved.lifted.exprSpan(folded.call_args);
+            const interchangeable = try self.listMapLayoutsInterchangeable(args);
+            // Reuse possible on at least one width keeps the match, so each
+            // backend can decide per the width it is building.
+            if (!interchangeable.get(.u32) and !interchangeable.get(.u64)) {
+                if (builtin.mode == .Debug) {
+                    try self.folded_map_matches.append(self.allocator, .{
+                        .scrutinee = scrutinee,
+                        .body = folded.zero_branch_body,
+                    });
+                }
+                return .{ .tail = exprTask(where, target, folded.zero_branch_body, result_ty, next) };
+            }
+        }
+        self.noteErasedOwnerAmbiguous(target);
+        const scrutinee_ty = try self.lowerExprContextTy(scrutinee);
+        const scrutinee_local = try self.addTemp(scrutinee_ty);
+        const branches = try GuardedList.dupe(self.allocator, Lifted.Branch, self.solved.lifted.branchSpan(branches_span));
+        defer self.allocator.free(branches);
+        const done = self.freshJoinPointId();
+
+        // Lower the match through the shared decision-tree compiler
+        // (src/postcheck/match_tree.zig): one multiway test per tested
+        // occurrence, one discriminant/length/field read per position, and
+        // branch bodies lowered exactly once.
+        const arena_state = try self.allocator.create(std.heap.ArenaAllocator);
+        arena_state.* = std.heap.ArenaAllocator.init(self.allocator);
+        errdefer {
+            arena_state.deinit();
+            self.allocator.destroy(arena_state);
+        }
+        const arena = arena_state.allocator();
+
+        const shapes = try arena.create(MatchTreeCtx.ShapeInterner);
+        shapes.* = .{ .map = .init(arena) };
+        const ctx = MatchTreeCtx{
+            .l = self,
+            .where = where,
+            .arena = arena,
+            .target = target,
+            .result_ty = result_ty,
+            .comptime_site = comptime_site,
+            .shapes = shapes,
+        };
+
+        const MT = match_tree.Compiler(MatchTreeCtx);
+        const mt_branches = try arena.alloc(MT.Branch, branches.len);
+        for (branches, mt_branches, 0..) |branch, *out, i| {
+            out.* = .{
+                .pat = branch.pat,
+                .bindings = branch.bindings,
+                .guard = branch.guard,
+                .body = branch.body,
+                .branch_index = @intCast(i),
+            };
+        }
+        const built = try MT.build(arena, ctx, scrutinee_ty, mt_branches);
+        const emitter = try MT.Emitter.begin(arena, ctx, built, scrutinee_local, done);
+        return .{ .tail = .{ .match_ = .{
+            .where = where,
+            .target = target,
+            .result_ty = result_ty,
+            .scrutinee = scrutinee,
+            .next = next,
+            .scrutinee_ty = scrutinee_ty,
+            .scrutinee_local = scrutinee_local,
+            .done = done,
+            .arena = arena_state,
+            .emitter = emitter,
+        } } };
+    }
+
+    fn stepMatch(self: *Lowerer, frame: *LowerFrame, task: *MatchTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        switch (frame.cursor) {
+            // Emitting the decision tree; `input` answers its request.
+            0 => switch (try task.emitter.advance(input)) {
+                .request => |request| switch (request) {
+                    .body => |body| return .{ .call = exprTask(task.where, task.target, body.body, task.result_ty, body.next) },
+                    .bindings => |bindings| {
+                        const stmts = self.solved.lifted.stmtSpan(bindings.bindings);
+                        const items = try self.allocator.alloc(ChainItem, stmts.len);
+                        for (items, 0..) |*item, position| item.* = .{ .stmt = GuardedList.at(stmts, stmts.len - 1 - position) };
+                        return .{ .call = .{ .chain = .{ .where = task.where, .items = items, .current = bindings.next } } };
+                    },
+                    .guard => |guard| return .{ .call = exprTask(task.where, guard.cond, guard.guard, null, guard.next) },
+                },
+                .done => |branch_chain| {
+                    if (task.arena) |arena| {
+                        arena.deinit();
+                        self.allocator.destroy(arena);
+                    }
+                    task.arena = null;
+                    frame.cursor = 1;
+                    return .{ .call = exprTask(task.where, task.scrutinee_local, task.scrutinee, task.scrutinee_ty, branch_chain) };
+                },
+            },
+            else => return .{ .ret = try self.result.store.addCFStmt(.{ .join = .{
+                .id = task.done,
+                .params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{task.target}),
+                .body = task.next,
+                .remainder = input.?,
+            } }, task.where.glue()) },
+        }
+    }
+
+    fn stepIf(self: *Lowerer, frame: *LowerFrame, task: *IfTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        switch (frame.cursor) {
+            0 => {
+                self.noteErasedOwnerAmbiguous(task.target);
+                task.done = self.freshJoinPointId();
+                frame.index = self.solved.lifted.ifBranchSpan(task.branches).len;
+                frame.cursor = 1;
+                return .{ .call = exprTask(task.where, task.target, task.final_else, task.result_ty, try self.joinJump(task.where, task.done)) };
+            },
+            // A lowered branch body; lower its condition before the switch.
+            2 => {
+                task.body = input.?;
+                const branch = GuardedList.at(self.solved.lifted.ifBranchSpan(task.branches), frame.index);
+                const cond_local = try self.addTemp(try self.lowerExprTy(branch.cond));
+                const switch_stmt = try self.boolSwitchNoContinuation(task.where, cond_local, task.body, task.current);
+                frame.cursor = 1;
+                return .{ .call = exprTask(task.where, cond_local, branch.cond, null, switch_stmt) };
+            },
+            else => task.current = input.?,
+        }
+        if (frame.index > 0) {
+            frame.index -= 1;
+            const branch = GuardedList.at(self.solved.lifted.ifBranchSpan(task.branches), frame.index);
+            frame.cursor = 2;
+            return .{ .call = exprTask(task.where, task.target, branch.body, task.result_ty, try self.joinJump(task.where, task.done)) };
+        }
+        return .{ .ret = try self.result.store.addCFStmt(.{ .join = .{
+            .id = task.done,
+            .params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{task.target}),
+            .body = task.next,
+            .remainder = task.current,
+        } }, task.where.glue()) };
+    }
+
+    fn stepPayloadSwitch(self: *Lowerer, frame: *LowerFrame, task: *PayloadSwitchTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        const payload_switch = task.payload_switch;
+        const shared = payload_switch.initialized == payload_switch.uninitialized;
+        switch (frame.cursor) {
+            0 => {
+                self.noteErasedOwnerAmbiguous(task.target);
+                task.done = self.freshJoinPointId();
+                task.branch_done = try self.joinJump(task.where, task.done);
+                frame.cursor = 1;
+                return .{ .call = exprTask(task.where, task.target, payload_switch.initialized, null, task.branch_done) };
+            },
+            1 => {
+                task.initialized_body = input.?;
+                if (!shared) {
+                    frame.cursor = 2;
+                    return .{ .call = exprTask(task.where, task.target, payload_switch.uninitialized, null, task.branch_done) };
+                }
+            },
+            2 => {},
+            else => return .{ .ret = try self.payloadSwitchJoin(task, input.?) },
+        }
+        const uninitialized_body = if (shared) task.initialized_body else input.?;
+        const cond_data = self.solved.lifted.getExpr(payload_switch.cond);
+        const cond_local = if (cond_data.data == .local)
+            try self.localFor(cond_data.data.local)
+        else
+            try self.addTemp(try self.lowerExprTy(payload_switch.cond));
+        const switch_stmt = try self.result.store.addCFStmt(.{ .switch_initialized_payload = .{
+            .cond = cond_local,
+            .cond_mask = payload_switch.cond_mask,
+            .payload = try self.localFor(payload_switch.payload),
+            .uninitialized_is_cold = payload_switch.uninitialized_is_cold,
+            .initialized_branch = task.initialized_body,
+            .uninitialized_branch = uninitialized_body,
+        } }, task.where.glue());
+        if (cond_data.data == .local) return .{ .ret = try self.payloadSwitchJoin(task, switch_stmt) };
+        frame.cursor = 3;
+        return .{ .call = exprTask(task.where, cond_local, payload_switch.cond, null, switch_stmt) };
+    }
+
+    fn payloadSwitchJoin(self: *Lowerer, task: *PayloadSwitchTask, remainder: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        return try self.result.store.addCFStmt(.{ .join = .{
+            .id = task.done,
+            .params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{task.target}),
+            .body = task.next,
+            .remainder = remainder,
+        } }, task.where.glue());
+    }
+
+    /// The Err branch of a Try sequence without a shared error target: the
+    /// Err payload rewrapped in the output Try.
+    fn tryErrRewrap(
+        self: *Lowerer,
+        where: LowerSite,
+        target: LIR.LocalId,
+        out_try_ty: Type.TypeId,
+        input_try_local: LIR.LocalId,
+        err_variant: u16,
+        out_err_variant: u16,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const out_backing_ty = self.runtimeBackingType(out_try_ty);
+        const out_backing_layout = try self.layoutOfType(out_backing_ty);
+        const out_backing_local = try self.addLocalForLayout(out_backing_layout);
+        const boundary = try self.assignNominalBoundary(where, target, out_backing_local, out_backing_layout, next);
+
+        const err_payload_layout = self.tagUnionPayloadLayout(self.result.store.getLocal(input_try_local).layout_idx, err_variant);
+        const err_payload_local = try self.addLocalForLayout(err_payload_layout);
+        const err_tag = if (self.isZstLocal(out_backing_local))
+            try self.assignZst(where, out_backing_local, boundary)
+        else
+            try self.result.store.addCFStmt(.{ .assign_tag = .{
+                .target = out_backing_local,
+                .variant_index = out_err_variant,
+                .discriminant = out_err_variant,
+                .payload = err_payload_local,
+                .next = boundary,
+            } }, where.source());
+        return if (self.isZstLocal(err_payload_local))
+            err_tag
+        else
+            try self.addAssignRef(where, err_payload_local, .{ .tag_payload_struct = .{
+                .source = input_try_local,
+                .variant_index = err_variant,
+                .tag_discriminant = err_variant,
+            } }, err_tag);
+    }
+
+    fn stepTrySequence(self: *Lowerer, task: *TrySequenceTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        const where = task.where;
+        const sequence = task.sequence;
+        const ok_body = input orelse {
+            self.noteErasedOwnerAmbiguous(task.target);
+            const input_try_ty = try self.lowerExprTy(sequence.try_expr);
+            task.input_try_local = try self.addTemp(input_try_ty);
+
+            task.ok_variant = self.tagIndexByText(input_try_ty, "Ok");
+            task.err_variant = self.tagIndexByText(input_try_ty, "Err");
+            task.out_err_variant = self.tagIndexByText(task.out_try_ty, "Err");
+            return .{ .call = exprTask(where, task.target, sequence.ok_body, task.out_try_ty, task.next) };
+        };
+        const ok_payload_local = try self.localFor(sequence.ok_local);
+        const ok_start = if (self.isZstLocal(ok_payload_local))
+            try self.assignZst(where, ok_payload_local, ok_body)
+        else
+            try self.addAssignRef(where, ok_payload_local, .{ .tag_payload_struct = .{
+                .source = task.input_try_local,
+                .variant_index = task.ok_variant,
+                .tag_discriminant = task.ok_variant,
+            } }, ok_body);
+
+        const err_start = if (sequence.err_target) |err_target|
+            try self.lowerTryErrJump(where, task.input_try_local, task.err_variant, err_target)
+        else
+            try self.tryErrRewrap(where, task.target, task.out_try_ty, task.input_try_local, task.err_variant, task.out_err_variant, task.next);
+
+        const switch_stmt = try self.discriminantSwitch(where, task.input_try_local, task.ok_variant, ok_start, err_start, sequence.err_is_cold);
+        return .{ .tail = exprTask(where, task.input_try_local, sequence.try_expr, null, switch_stmt) };
+    }
+
+    fn stepTryRecordSequence(self: *Lowerer, task: *TryRecordSequenceTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        const where = task.where;
+        const sequence = task.sequence;
+        var ok_start = input orelse {
+            self.noteErasedOwnerAmbiguous(task.target);
+            const input_try_ty = try self.lowerExprTy(sequence.try_expr);
+            task.input_try_local = try self.addTemp(input_try_ty);
+
+            task.ok_variant = self.tagIndexByText(input_try_ty, "Ok");
+            task.err_variant = self.tagIndexByText(input_try_ty, "Err");
+            task.out_err_variant = self.tagIndexByText(task.out_try_ty, "Err");
+            task.ok_payload_ty = self.singleTagPayloadTypeByIndex(input_try_ty, task.ok_variant);
+            return .{ .call = exprTask(where, task.target, sequence.ok_body, task.out_try_ty, task.next) };
+        };
+        ok_start = try self.bindTryRecordPayloadField(
+            where,
+            sequence.rest_local,
+            task.input_try_local,
+            task.ok_variant,
+            task.ok_payload_ty,
+            sequence.rest_field,
+            ok_start,
+        );
+        ok_start = try self.bindTryRecordPayloadField(
+            where,
+            sequence.value_local,
+            task.input_try_local,
+            task.ok_variant,
+            task.ok_payload_ty,
+            sequence.value_field,
+            ok_start,
+        );
+
+        const err_start = if (sequence.err_target) |err_target|
+            try self.lowerTryErrJump(where, task.input_try_local, task.err_variant, err_target)
+        else
+            try self.tryErrRewrap(where, task.target, task.out_try_ty, task.input_try_local, task.err_variant, task.out_err_variant, task.next);
+
+        const switch_stmt = try self.discriminantSwitch(where, task.input_try_local, task.ok_variant, ok_start, err_start, sequence.err_is_cold);
+        return .{ .tail = exprTask(where, task.input_try_local, sequence.try_expr, null, switch_stmt) };
+    }
+
+    fn stepBlock(self: *Lowerer, frame: *LowerFrame, task: *BlockTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        const stmts = self.solved.lifted.stmtSpan(task.stmts);
+        if (frame.cursor == 0) {
+            for (0..stmts.len) |index| {
+                const stmt = self.solved.lifted.getStmt(GuardedList.at(stmts, index));
+                if (stmt != .let_ or stmt.let_.recursive) continue;
+                if (try self.planRecordBinding(stmt.let_.pat, stmt.let_.value)) |binding| {
+                    try task.planned.append(self.allocator, binding);
+                }
+            }
+            frame.index = stmts.len;
+            frame.cursor = 1;
+            if (self.solved.lifted.getExpr(task.final_expr).data == .@"unreachable") {
+                if (stmts.len == 0) {
+                    Common.invariant("unreachable block-final marker had no preceding terminating statement");
+                }
+                // Monotype emits this marker only after its checked, explicit
+                // statement-termination relation has stopped the block. Its
+                // block-final position is the capability to erase it; the
+                // generic expression path rejects the marker.
+                task.current = task.next;
+            } else {
+                return .{ .call = exprTask(task.where, task.target, task.final_expr, task.result_ty, task.next) };
+            }
+        } else {
+            task.current = input.?;
+        }
+        if (frame.index > 0) {
+            frame.index -= 1;
+            return .{ .call = .{ .stmt = .{ .parent = task.where, .stmt = GuardedList.at(stmts, frame.index), .next = task.current } } };
+        }
+        var index = task.planned.items.len;
+        while (index != 0) {
+            index -= 1;
+            self.restoreRecordBinding(task.planned.items[index]);
+        }
+        task.planned.clearRetainingCapacity();
+        return .{ .ret = task.current };
+    }
+
+    fn stepStmt(self: *Lowerer, parent: LowerSite, stmt_id: Lifted.StmtId, next: LIR.CFStmtId) Common.LowerError!LowerStep {
+        const where = try self.stmtSite(parent, stmt_id);
+        return switch (self.solved.lifted.getStmt(stmt_id)) {
+            .uninitialized => |pat_id| .{ .ret = try self.initUninitializedPattern(where, pat_id, next) },
+            .let_ => |let_| blk: {
+                if (let_.recursive) {
+                    break :blk .{ .tail = .{ .recursive_let = .{ .where = where, .pat = let_.pat, .value = let_.value, .next = next } } };
+                }
+                const binding_pat = self.pat(let_.pat);
+                if (binding_pat.data == .bind) {
+                    break :blk .{ .tail = .{ .direct_bind = .{
+                        .where = where,
+                        .pat = let_.pat,
+                        .local = binding_pat.data.bind,
+                        .value = let_.value,
+                        .next = next,
+                    } } };
+                }
+                const value = try self.addTemp(try self.lowerExprTy(let_.value));
+                const bind = try self.bindPatternOrCrash(where, let_.pat, value, next, let_.comptime_site);
+                break :blk .{ .tail = exprTask(where, value, let_.value, null, bind) };
+            },
+            .expr => |expr_id| blk: {
+                const temp = try self.addTemp(try self.lowerExprTy(expr_id));
+                break :blk .{ .tail = exprTask(where, temp, expr_id, null, next) };
+            },
+            .expect => |expr_id| if (self.inline_expects == .omit) .{ .ret = next } else try self.expectStmtStep(where, expr_id, next),
+            .dbg => |expr_id| blk: {
+                const temp = try self.addTemp(try self.lowerExprTy(expr_id));
+                const debug_stmt = try self.result.store.addCFStmt(.{ .debug = .{ .message = temp, .next = next } }, where.source());
+                break :blk .{ .tail = exprTask(where, temp, expr_id, null, debug_stmt) };
+            },
+            .return_ => |ret| try self.returnStep(where, ret),
+            .crash => |msg| .{ .ret = try self.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .literal = try self.result.store.insertString(self.stringLiteralText(msg)) },
+            } }, where.source()) },
+        };
+    }
+
+    fn returnStep(self: *Lowerer, where: LowerSite, ret: Mono.Return) Common.LowerError!LowerStep {
+        const ret_ty = self.current_ret_ty orelse Common.invariant("return expression reached LIR lowering outside a function");
+        const ret_local = try self.addTemp(ret_ty);
+        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, where.source());
+        const saved_return_target = self.current_return_target;
+        self.current_return_target = if (self.return_forwarding_repeatable_depth == 0) ret_local else null;
+        return .{ .tail = .{ .scoped = .{
+            .saved_return_target = saved_return_target,
+            .child = .{ .parent = where, .target = ret_local, .expr = ret.value, .ty = ret_ty, .next = ret_stmt },
+        } } };
+    }
+
+    fn stepLoop(self: *Lowerer, frame: *LowerFrame, task: *LoopTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        switch (frame.cursor) {
+            0 => {
+                self.noteErasedOwnerAmbiguous(task.target);
+                task.saved_return_target = self.current_return_target;
+                self.current_return_target = null;
+                self.return_forwarding_repeatable_depth += 1;
+                task.entered = true;
+                const params = self.solved.lifted.typedLocalSpan(task.params);
+                const initial_values = self.solved.lifted.exprSpan(task.initial_values);
+                if (params.len != initial_values.len) Common.invariant("Lambda Mono loop parameter count differs from initial value count");
+
+                const param_locals = try self.allocator.alloc(LIR.LocalId, params.len);
+                defer self.allocator.free(param_locals);
+                task.param_tys = try self.allocator.alloc(Type.TypeId, params.len);
+                for (0..params.len) |i| {
+                    const param = GuardedList.at(params, i);
+                    task.param_tys[i] = try self.lowerLocalTy(param.local);
+                    param_locals[i] = try self.bindLocalForTyped(param.local, task.param_tys[i]);
+                }
+                task.param_span = try self.result.store.addLocalSpan(param_locals);
+                for (0..params.len) |index| {
+                    const param = GuardedList.at(params, index);
+                    const slot = try self.active_loop_params.getOrPut(param.local);
+                    if (slot.found_existing) Common.invariant("one local was active as two loop parameters");
+                    slot.value_ptr.* = .{ .local = param_locals[index], .ty = task.param_tys[index] };
+                    task.active_param_count += 1;
+                }
+                var maybe_uninitialized_params: std.ArrayList(LIR.LocalId) = .empty;
+                defer maybe_uninitialized_params.deinit(self.allocator);
+                var maybe_uninitialized_conditions: std.ArrayList(LIR.LocalId) = .empty;
+                defer maybe_uninitialized_conditions.deinit(self.allocator);
+                var maybe_uninitialized_condition_masks: std.ArrayList(u64) = .empty;
+                defer maybe_uninitialized_condition_masks.deinit(self.allocator);
+                for (0..initial_values.len) |i| {
+                    const initial = GuardedList.at(initial_values, i);
+                    const param_local = param_locals[i];
+                    const initial_data = self.solved.lifted.getExpr(initial).data;
+                    if (initial_data == .uninitialized_payload) {
+                        const payload = initial_data.uninitialized_payload;
+                        try maybe_uninitialized_params.append(self.allocator, param_local);
+                        try maybe_uninitialized_conditions.append(self.allocator, try self.localFor(payload.condition));
+                        try maybe_uninitialized_condition_masks.append(self.allocator, payload.mask);
+                    }
+                }
+                task.maybe_uninitialized_span = try self.result.store.addLocalSpan(maybe_uninitialized_params.items);
+                task.maybe_uninitialized_conditions_span = try self.result.store.addLocalSpan(maybe_uninitialized_conditions.items);
+                task.maybe_uninitialized_condition_masks_span = try self.result.store.addU64Span(maybe_uninitialized_condition_masks.items);
+                task.join_id = self.freshJoinPointId();
+
+                try self.loop_stack.append(self.allocator, .{
+                    .join_id = task.join_id,
+                    .params = task.param_span,
+                    .param_tys = task.param_tys,
+                    .result_target = task.target,
+                    .result_ty = task.result_ty,
+                    .after_loop = task.next,
+                });
+                task.loop_pushed = true;
+                frame.cursor = 1;
+                return .{ .call = exprTask(task.where, task.target, task.body, task.result_ty, task.next) };
+            },
+            1 => {
+                task.body_stmt = input.?;
+                const initial_values = self.solved.lifted.exprSpan(task.initial_values);
+                const jump_args = try self.lowerExprsToJoinTempsAtTypes(task.param_span, task.param_tys, initial_values);
+                defer jump_args.deinit(self.allocator);
+                var initial_jump = try self.result.store.addCFStmt(.{ .jump = .{
+                    .target = task.join_id,
+                } }, task.where.glue());
+                initial_jump = try self.prependJoinParamInitializers(task.where, task.param_span, jump_args.ids, initial_jump);
+                var items: std.ArrayList(ChainItem) = .empty;
+                errdefer items.deinit(self.allocator);
+                try self.appendJoinArgItems(&items, jump_args, task.param_tys);
+                frame.cursor = 2;
+                return .{ .call = try self.chainTask(task.where, &items, initial_jump) };
+            },
+            else => {
+                const stmt = try self.result.store.addCFStmt(.{ .join = .{
+                    .id = task.join_id,
+                    .params = task.param_span,
+                    .maybe_uninitialized_params = task.maybe_uninitialized_span,
+                    .maybe_uninitialized_conditions = task.maybe_uninitialized_conditions_span,
+                    .maybe_uninitialized_condition_masks = task.maybe_uninitialized_condition_masks_span,
+                    .body = task.body_stmt,
+                    .remainder = input.?,
+                } }, task.where.glue());
+                self.leaveLoop(task);
+                return .{ .ret = stmt };
+            },
+        }
+    }
+
+    /// Remove the loop's lowerer state. Idempotent.
+    fn leaveLoop(self: *Lowerer, task: *LoopTask) void {
+        if (task.loop_pushed) _ = self.loop_stack.pop();
+        task.loop_pushed = false;
+        const params = self.solved.lifted.typedLocalSpan(task.params);
+        for (0..task.active_param_count) |index| {
+            _ = self.active_loop_params.remove(GuardedList.at(params, index).local);
+        }
+        task.active_param_count = 0;
+        if (task.entered) {
+            self.return_forwarding_repeatable_depth -= 1;
+            self.current_return_target = task.saved_return_target;
+        }
+        task.entered = false;
+        self.allocator.free(task.param_tys);
+        task.param_tys = &.{};
+    }
+
+    fn continueStep(self: *Lowerer, where: LowerSite, values_span: Lifted.Span(Lifted.ExprId)) Common.LowerError!LowerStep {
+        const loop = self.currentLoop();
+        const values = self.solved.lifted.exprSpan(values_span);
+        if (self.result.store.getLocalSpan(loop.params).len != values.len) {
+            Common.invariant("continue value count differed from loop parameter count during direct LIR lowering");
+        }
+        const locals = try self.lowerExprsToJoinTempsAtTypes(loop.params, loop.param_tys, values);
+        defer locals.deinit(self.allocator);
+        var jump = try self.result.store.addCFStmt(.{ .jump = .{
+            .target = loop.join_id,
+        } }, where.glue());
+        jump = try self.prependJoinParamInitializers(where, loop.params, locals.ids, jump);
+        var items: std.ArrayList(ChainItem) = .empty;
+        errdefer items.deinit(self.allocator);
+        try self.appendJoinArgItems(&items, locals, loop.param_tys);
+        return .{ .tail = try self.chainTask(where, &items, jump) };
+    }
+
+    fn stepJoinPoint(self: *Lowerer, frame: *LowerFrame, task: *JoinPointTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
+        switch (frame.cursor) {
+            0 => {
+                const join_point = task.join_point;
+                self.noteErasedOwnerAmbiguous(task.target);
+                task.saved_return_target = self.current_return_target;
+                self.current_return_target = null;
+                self.return_forwarding_repeatable_depth += 1;
+                task.entered = true;
+                const params = self.solved.lifted.typedLocalSpan(join_point.params);
+                const param_locals = try self.allocator.alloc(LIR.LocalId, params.len);
+                defer self.allocator.free(param_locals);
+                task.param_tys = try self.allocator.alloc(Type.TypeId, params.len);
+                for (0..params.len) |index| {
+                    const param = GuardedList.at(params, index);
+                    task.param_tys[index] = try self.lowerLocalTy(param.local);
+                    param_locals[index] = try self.bindLocalForTyped(param.local, task.param_tys[index]);
+                }
+
+                task.param_span = try self.result.store.addLocalSpan(param_locals);
+                const retained = self.solved.lifted.typedLocalSpan(join_point.retained);
+                var retained_locals: std.ArrayList(LIR.LocalId) = .empty;
+                defer retained_locals.deinit(self.allocator);
+                var maybe_uninitialized_retained: std.ArrayList(LIR.LocalId) = .empty;
+                defer maybe_uninitialized_retained.deinit(self.allocator);
+                var maybe_uninitialized_conditions: std.ArrayList(LIR.LocalId) = .empty;
+                defer maybe_uninitialized_conditions.deinit(self.allocator);
+                var maybe_uninitialized_condition_masks: std.ArrayList(u64) = .empty;
+                defer maybe_uninitialized_condition_masks.deinit(self.allocator);
+                for (0..retained.len) |index| {
+                    const retained_local = GuardedList.at(retained, index);
+                    const has_lexical_binding = self.local_map.contains(retained_local.local) or
+                        self.typed_local_map.contains(.{
+                            .local = retained_local.local,
+                            .ty = try self.lowerLocalTy(retained_local.local),
+                        }) or
+                        (try self.mappedLocalForMatchingLocal(retained_local.local)) != null;
+                    // A captured value is borrowed from its capture storage rather than
+                    // owned by an independent local in this procedure. Its operational
+                    // reads keep that storage live; materializing a retained local here
+                    // would create an uninitialized alias with no lexical producer.
+                    if (!has_lexical_binding and try self.captureBindingForLocal(retained_local.local) != null) continue;
+                    const lir_local = try self.localFor(retained_local.local);
+                    try retained_locals.append(self.allocator, lir_local);
+                    if (self.payload_conditions[@intFromEnum(retained_local.local)]) |payload| {
+                        try maybe_uninitialized_retained.append(self.allocator, lir_local);
+                        try maybe_uninitialized_conditions.append(self.allocator, try self.localFor(payload.condition));
+                        try maybe_uninitialized_condition_masks.append(self.allocator, payload.mask);
+                    }
+                }
+                task.retained_span = try self.result.store.addLocalSpan(retained_locals.items);
+                task.maybe_uninitialized_span = try self.result.store.addLocalSpan(maybe_uninitialized_retained.items);
+                task.maybe_uninitialized_conditions_span = try self.result.store.addLocalSpan(maybe_uninitialized_conditions.items);
+                task.maybe_uninitialized_condition_masks_span = try self.result.store.addU64Span(maybe_uninitialized_condition_masks.items);
+                task.lir_join_id = self.freshJoinPointId();
+                try self.join_stack.append(self.allocator, .{
+                    .source_id = join_point.id,
+                    .join_id = task.lir_join_id,
+                    .params = task.param_span,
+                    .param_tys = task.param_tys,
+                });
+                task.join_pushed = true;
+                frame.cursor = 1;
+                return .{ .call = exprTask(task.where, task.target, join_point.body, task.result_ty, task.next) };
+            },
+            1 => {
+                task.body_stmt = input.?;
+                frame.cursor = 2;
+                return .{ .call = exprTask(task.where, task.target, task.join_point.remainder, task.result_ty, task.next) };
+            },
+            else => {
+                const stmt = try self.result.store.addCFStmt(.{ .join = .{
+                    .id = task.lir_join_id,
+                    .params = task.param_span,
+                    .retained = task.retained_span,
+                    .maybe_uninitialized_params = task.maybe_uninitialized_span,
+                    .maybe_uninitialized_conditions = task.maybe_uninitialized_conditions_span,
+                    .maybe_uninitialized_condition_masks = task.maybe_uninitialized_condition_masks_span,
+                    .body = task.body_stmt,
+                    .remainder = input.?,
+                } }, task.where.glue());
+                self.leaveJoinPoint(task);
+                return .{ .ret = stmt };
+            },
+        }
+    }
+
+    /// Remove the join point's lowerer state. Idempotent.
+    fn leaveJoinPoint(self: *Lowerer, task: *JoinPointTask) void {
+        if (task.join_pushed) _ = self.join_stack.pop();
+        task.join_pushed = false;
+        if (task.entered) {
+            self.return_forwarding_repeatable_depth -= 1;
+            self.current_return_target = task.saved_return_target;
+        }
+        task.entered = false;
+        self.allocator.free(task.param_tys);
+        task.param_tys = &.{};
+    }
+
+    fn jumpStep(self: *Lowerer, where: LowerSite, jump: Lifted.JumpExpr) Common.LowerError!LowerStep {
+        const join_point = self.activeJoinPoint(jump.target);
+        const args = self.solved.lifted.exprSpan(jump.args);
+        if (self.result.store.getLocalSpan(join_point.params).len != args.len) {
+            Common.invariant("jump argument count differed from join-point parameter count during direct LIR lowering");
+        }
+
+        const locals = try self.lowerExprsToJoinTempsAtTypes(join_point.params, join_point.param_tys, args);
+        defer locals.deinit(self.allocator);
+
+        const update_params = self.solved.lifted.typedLocalSpan(jump.loop_params);
+        const update_values = self.solved.lifted.exprSpan(jump.loop_values);
+        if (update_params.len != update_values.len) {
+            Common.invariant("jump loop-update parameter count differed from value count during direct LIR lowering");
+        }
+        const update_targets = try self.allocator.alloc(LIR.LocalId, update_params.len);
+        defer self.allocator.free(update_targets);
+        const update_tys = try self.allocator.alloc(Type.TypeId, update_params.len);
+        defer self.allocator.free(update_tys);
+        for (0..update_params.len) |index| {
+            const param = GuardedList.at(update_params, index);
+            const active = self.activeLoopParam(param.local);
+            update_targets[index] = active.local;
+            update_tys[index] = active.ty;
+        }
+        const update_target_span = try self.result.store.addLocalSpan(update_targets);
+        const updates = try self.lowerExprsToJoinTempsAtTypes(update_target_span, update_tys, update_values);
+        defer updates.deinit(self.allocator);
+
+        var lir_jump = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_point.join_id } }, where.glue());
+        lir_jump = try self.prependJoinParamInitializers(where, join_point.params, locals.ids, lir_jump);
+        lir_jump = try self.prependJoinParamInitializers(where, update_target_span, updates.ids, lir_jump);
+        var items: std.ArrayList(ChainItem) = .empty;
+        errdefer items.deinit(self.allocator);
+        try self.appendJoinArgItems(&items, locals, join_point.param_tys);
+        try self.appendJoinArgItems(&items, updates, update_tys);
+        return .{ .tail = try self.chainTask(where, &items, lir_jump) };
     }
 
     /// Builder-owned record versions. Components are fresh locals evaluated at
@@ -5624,280 +8110,12 @@ const Lowerer = struct {
         return .{ .local = local, .previous = previous };
     }
 
-    fn emitRecordBinding(self: *Lowerer, where: LowerSite, id: usize, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        const aggregates = self.aggregate_bindings.?;
-        const plan = aggregates.plans.items[id];
-        const shape = aggregates.shapes.get(plan.ty).?;
-        var current = next;
-        const saved_return_target = self.current_return_target;
-        defer self.current_return_target = saved_return_target;
-        if (plan.materialized != null and plan.materialized == saved_return_target and plan.producer != .update) {
-            // Forward the explicit unique result-component demand through shared
-            // record versions to the original evaluated component's producer.
-            if (shape.return_child) |child| {
-                try self.noteReturnForwardingSource(aggregates.fields.get(plan.root, shape.fields.len, child));
-            }
-            self.current_return_target = null;
-        }
-        if (plan.materialized) |target| {
-            const components = try self.allocator.alloc(LIR.LocalId, shape.fields.len);
-            defer self.allocator.free(components);
-            aggregates.fields.write(plan.root, components);
-            current = try self.result.store.addCFStmt(.{ .assign_struct = .{
-                .target = target,
-                .fields = try self.result.store.addLocalSpan(components),
-                .next = current,
-            } }, where.source());
-        }
-        var index = plan.values.len;
-        while (index != 0) {
-            index -= 1;
-            const field = plan.values[index];
-            const forwarding = self.enterReturnForwarding(field.local);
-            defer self.leaveReturnForwarding(forwarding);
-            current = try self.lowerExprIntoAtType(where, field.local, field.expr, shape.fields[field.index].ty, current);
-        }
-        if (plan.base) |record_base| {
-            index = plan.seeds.len;
-            while (index != 0) {
-                index -= 1;
-                const seed = plan.seeds[index];
-                const forwarding = self.enterReturnForwarding(seed.target);
-                defer self.leaveReturnForwarding(forwarding);
-                current = try self.assignTypedRefRead(where, seed.target, seed.target_ty, seed.source_ty, self.localFieldLayout(record_base.local, seed.source_index), .{ .field = .{ .source = record_base.local, .field_idx = seed.source_index } }, current);
-            }
-            current = try self.lowerExprIntoAtType(where, record_base.local, record_base.expr, record_base.ty, current);
-        }
-        return current;
-    }
-
-    fn lowerRecordInto(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        ty: Type.TypeId,
-        span: Lifted.Span(Lifted.FieldExpr),
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        const shape = try self.recordShape(ty);
-        const type_fields = shape.fields;
-        const expr_fields = self.solved.lifted.fieldExprSpan(span);
-        if (expr_fields.len != type_fields.len) Common.invariant("record expression missing field output by Lambda Mono type");
-        const ordered = try self.allocator.alloc(Lifted.ExprId, type_fields.len);
-        defer self.allocator.free(ordered);
-        const field_tys = try self.allocator.alloc(Type.TypeId, type_fields.len);
-        defer self.allocator.free(field_tys);
-
-        for (type_fields, 0..) |field, index| field_tys[index] = field.ty;
-        for (0..expr_fields.len) |index| {
-            const field = GuardedList.at(expr_fields, index);
-            const position = shape.indices.get(field.name) orelse Common.invariant("record field missing from committed type");
-            ordered[position] = field.value;
-        }
-
-        return try self.lowerStructExprsIntoAtTypes(where, target, ordered, field_tys, next);
-    }
-
-    fn lowerRecordUpdateInto(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        ty: Type.TypeId,
-        update: Lifted.RecordUpdate,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        if (self.boxBackingLayoutForDirectConstruction(target)) |backing_layout| {
-            const backing_local = try self.addLocalForLayout(backing_layout);
-            const boundary = try self.assignBoxBoundary(where, target, backing_local, backing_layout, next);
-            return try self.lowerRecordUpdateInto(where, backing_local, ty, update, boundary);
-        }
-
-        const shape = try self.recordShape(ty);
-        const type_fields = shape.fields;
-        const update_fields = try GuardedList.dupe(self.allocator, Lifted.FieldExpr, self.solved.lifted.fieldExprSpan(update.fields));
-        defer self.allocator.free(update_fields);
-        const updates_by_field = try self.allocator.alloc(?Lifted.ExprId, type_fields.len);
-        defer self.allocator.free(updates_by_field);
-        @memset(updates_by_field, null);
-        for (update_fields) |field| {
-            const field_index = shape.indices.get(field.name) orelse Common.invariant("record update field missing from committed type");
-            if (updates_by_field[field_index] != null) Common.invariant("record update contained the same field more than once");
-            updates_by_field[field_index] = field.value;
-        }
-
-        const base_ty = try self.lowerExprContextTy(update.base);
-        const base_local = try self.addTemp(base_ty);
-        const field_locals = try self.allocator.alloc(LIR.LocalId, type_fields.len);
-        defer self.allocator.free(field_locals);
-        const target_is_zst = self.isZstLocal(target);
-        for (type_fields, 0..) |field, index| {
-            const field_layout = if (target_is_zst)
-                layout.Idx.zst
-            else
-                self.localFieldLayout(target, @intCast(index));
-            field_locals[index] = try self.addLocalForLayout(field_layout);
-            try self.local_types.put(field_locals[index], field.ty);
-        }
-
-        var current = if (target_is_zst)
-            try self.assignZst(where, target, next)
-        else
-            try self.result.store.addCFStmt(.{ .assign_struct = .{
-                .target = target,
-                .fields = try self.result.store.addLocalSpan(field_locals),
-                .next = next,
-            } }, where.source());
-
-        var index = type_fields.len;
-        while (index > 0) {
-            index -= 1;
-            if (updates_by_field[index]) |value| {
-                current = try self.lowerExprIntoAtType(where, field_locals[index], value, type_fields[index].ty, current);
-            }
-        }
-
-        const source_ty = self.storageTypeOfLocalOr(base_local, base_ty);
-        const source_shape = try self.recordShape(source_ty);
-        index = type_fields.len;
-        while (index > 0) {
-            index -= 1;
-            if (updates_by_field[index] != null) continue;
-            if (target_is_zst) {
-                current = try self.assignZst(where, field_locals[index], current);
-                continue;
-            }
-            const source_index = source_shape.indices.get(type_fields[index].name) orelse Common.invariant("record update source omitted a field");
-            const source_field_ty = source_shape.fields[source_index].ty;
-            current = try self.assignTypedRefRead(
-                where,
-                field_locals[index],
-                type_fields[index].ty,
-                source_field_ty,
-                self.localFieldLayout(base_local, source_index),
-                .{ .field = .{ .source = base_local, .field_idx = source_index } },
-                current,
-            );
-        }
-
-        return try self.lowerExprIntoAtType(where, base_local, update.base, base_ty, current);
-    }
-
-    fn lowerTagInto(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        ty: Type.TypeId,
-        name: Type.names.TagNameId,
-        payload_span: Lifted.Span(Lifted.ExprId),
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        const variant_index = self.tagIndex(ty, name);
-        return try self.lowerTagPayloadInto(where, target, ty, variant_index, payload_span, next);
-    }
-
-    fn lowerTagPayloadInto(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        ty: Type.TypeId,
-        variant_index: u16,
-        payload_span: Lifted.Span(Lifted.ExprId),
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        if (self.boxBackingLayoutForDirectConstruction(target)) |backing_layout| {
-            const backing_local = try self.addLocalForLayout(backing_layout);
-            const boundary = try self.assignBoxBoundary(where, target, backing_local, backing_layout, next);
-            const saved_return_target = self.current_return_target;
-            if (saved_return_target == target) {
-                self.current_return_target = backing_local;
-            }
-            defer self.current_return_target = saved_return_target;
-            return try self.lowerTagPayloadInto(where, backing_local, ty, variant_index, payload_span, boundary);
-        }
-
-        const payloads = self.solved.lifted.exprSpan(payload_span);
-        const payload_tys = self.tagPayloadTypesByIndex(ty, variant_index);
-        if (payloads.len != payload_tys.len) Common.invariant("tag expression payload arity differed from target tag type");
-        if (payloads.len == 0) {
-            if (self.isZstLocal(target)) return try self.assignZst(where, target, next);
-            return try self.result.store.addCFStmt(.{ .assign_tag = .{
-                .target = target,
-                .variant_index = variant_index,
-                .discriminant = variant_index,
-                .payload = null,
-                .next = next,
-            } }, where.source());
-        }
-
-        const target_layout = self.result.store.getLocal(target).layout_idx;
-        const payload_local = try self.addLocalForLayout(if (self.isZstLocal(target))
-            .zst
-        else
-            self.tagUnionPayloadLayout(target_layout, variant_index));
-        if (self.isZstLocal(target) and !self.isZstLocal(payload_local)) {
-            Common.invariant("zero-sized tag layout had a non-zero-sized payload");
-        }
-        const assign_tag = if (self.isZstLocal(target))
-            try self.assignZst(where, target, next)
-        else
-            try self.result.store.addCFStmt(.{ .assign_tag = .{
-                .target = target,
-                .variant_index = variant_index,
-                .discriminant = variant_index,
-                .payload = payload_local,
-                .next = next,
-            } }, where.source());
-
-        const saved_return_target = self.current_return_target;
-        const variant_has_demand = self.erasedResultDemandForSimultaneousTypes(payload_tys) == .single_slot;
-        if (saved_return_target == target) {
-            self.current_return_target = if (variant_has_demand) payload_local else null;
-        }
-        defer self.current_return_target = saved_return_target;
-
-        if (payloads.len == 1) {
-            return try self.lowerExprIntoAtType(
-                where,
-                payload_local,
-                GuardedList.at(payloads, 0),
-                GuardedList.at(payload_tys, 0),
-                assign_tag,
-            );
-        }
-        return try self.lowerStructExprsIntoAtTypes(where, payload_local, payloads, payload_tys, assign_tag);
-    }
-
     fn boxBackingLayoutForDirectConstruction(self: *Lowerer, target: LIR.LocalId) ?layout.Idx {
         const target_layout = self.result.store.getLocal(target).layout_idx;
         const target_content = self.result.layouts.getLayout(target_layout);
         if (target_content.tag == .box) return target_content.getIdx();
         if (target_content.tag == .box_of_zst) return .zst;
         return null;
-    }
-
-    fn lowerNominalInto(self: *Lowerer, where: LowerSite, target: LIR.LocalId, nominal_ty: Type.TypeId, backing: Lifted.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        const backing_ty = try self.nominalBackingType(nominal_ty, backing);
-        const backing_data = self.solved.lifted.getExpr(backing).data;
-        // Constructors do not have a pre-existing runtime representation.
-        // Build them directly in the nominal target layout so recursive
-        // Box edges come from that producer-owned layout graph instead of
-        // constructing an independently rooted backing layout and then
-        // recursively converting the completed value.
-        if (backing_data == .list or backing_data == .tuple or backing_data == .record or
-            backing_data == .record_update or backing_data == .tag)
-        {
-            return try self.lowerExprIntoAtType(where, target, backing, backing_ty, next);
-        }
-
-        const backing_layout = try self.layoutOfType(backing_ty);
-        const backing_local = try self.addLocalForLayout(backing_layout);
-        const assign = try self.assignNominalBoundaryAtTypes(where, target, nominal_ty, backing_local, backing_ty, backing_layout, next);
-        const saved_return_target = self.current_return_target;
-        if (saved_return_target == target and self.result.store.getLocal(target).layout_idx == backing_layout) {
-            self.current_return_target = backing_local;
-        }
-        defer self.current_return_target = saved_return_target;
-        return try self.lowerExprIntoAtType(where, backing_local, backing, backing_ty, assign);
     }
 
     fn nominalBackingType(self: *Lowerer, nominal_ty: Type.TypeId, backing: Lifted.ExprId) Common.LowerError!Type.TypeId {
@@ -6403,26 +8621,6 @@ const Lowerer = struct {
         } }, where.source());
     }
 
-    fn lowerLetIntoAtType(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        result_ty: Type.TypeId,
-        let_: anytype,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        const planned = try self.planRecordBinding(let_.bind, let_.value);
-        defer if (planned) |binding| self.restoreRecordBinding(binding);
-        const rest = try self.lowerExprIntoAtType(where, target, let_.rest, result_ty, next);
-        const binding_pat = self.pat(let_.bind);
-        if (binding_pat.data == .bind) {
-            return try self.lowerDirectBindValue(where, let_.bind, binding_pat.data.bind, let_.value, rest);
-        }
-        const value_local = try self.addTemp(try self.lowerExprTy(let_.value));
-        const bind = try self.bindPatternOrCrash(where, let_.bind, value_local, rest, let_.comptime_site);
-        return try self.lowerExprInto(where, value_local, let_.value, bind);
-    }
-
     const ReturnForwardingScope = struct {
         saved_target: ?LIR.LocalId,
         finishes_ambiguous_group: bool,
@@ -6444,217 +8642,6 @@ const Lowerer = struct {
     fn leaveReturnForwarding(self: *Lowerer, scope: ReturnForwardingScope) void {
         self.current_return_target = scope.saved_target;
         if (scope.finishes_ambiguous_group) self.return_forwarding_ambiguous = false;
-    }
-
-    fn lowerDirectBindValue(
-        self: *Lowerer,
-        where: LowerSite,
-        pat_id: Lifted.PatId,
-        local: Lifted.LocalId,
-        value: Lifted.ExprId,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        const planned_id = if (self.aggregate_bindings) |aggregates| aggregates.bindings.get(local) else null;
-        if (planned_id) |id| {
-            if (self.aggregate_bindings.?.plans.items[id].materialized == null) return self.emitRecordBinding(where, id, next);
-        }
-        const bind_ty = try self.lowerPatTy(pat_id);
-        const value_local = self.existingLocalForTyped(local, bind_ty) orelse try self.addTemp(bind_ty);
-        const forwarding = self.enterReturnForwarding(value_local);
-        defer self.leaveReturnForwarding(forwarding);
-        if (planned_id) |id| return self.emitRecordBinding(where, id, next);
-        return try self.lowerExprIntoAtType(where, value_local, value, self.typeOfLocalOr(value_local, bind_ty), next);
-    }
-
-    fn lowerRecursiveLetStmt(self: *Lowerer, where: LowerSite, let_: anytype, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        const pattern = self.solved.lifted.getPat(let_.pat);
-        if (pattern.data != .bind) Common.invariant("recursive Monotype let statement must bind one local directly");
-        const local = pattern.data.bind;
-        const bind_ty = try self.lowerPatTy(let_.pat);
-        const binding = try self.bindRecursiveLocalForTyped(local, bind_ty);
-        const target = binding.slot;
-        const target_layout = self.result.store.getLocal(target).layout_idx;
-        const target_content = self.result.layouts.getLayout(target_layout);
-        if (target_content.tag != .box) Common.invariant("recursive Monotype let statement must bind a boxed runtime layout");
-        const payload_layout = target_content.getIdx();
-
-        const value = try self.addTemp(bind_ty);
-        const value_layout = self.result.store.getLocal(value).layout_idx;
-        const payload = if (value_layout == payload_layout)
-            value
-        else
-            try self.addLocalForLayout(payload_layout);
-        const ptr = try self.addLocalForLayout(.opaque_ptr);
-        const unit = try self.addLocalForLayout(.zst);
-
-        var after_store = next;
-        if (binding.forward_local) |forward_local| {
-            after_store = try self.assignTypedBoundary(
-                where,
-                forward_local,
-                self.typeOfLocalOr(forward_local, bind_ty),
-                target,
-                bind_ty,
-                after_store,
-            );
-        }
-
-        const ptr_store_args = [_]LIR.LocalId{ ptr, payload };
-        const ptr_store_stmt = try self.result.store.addCFStmt(.{ .assign_low_level = .{
-            .target = unit,
-            .op = .ptr_store,
-            .rc_effect = LIR.LowLevel.ptr_store.rcEffect(),
-            .args = try self.result.store.addLocalSpan(&ptr_store_args),
-            .next = after_store,
-        } }, where.source());
-        var current = ptr_store_stmt;
-        if (payload != value) {
-            current = try self.assignBoxBoundary(where, payload, value, value_layout, current);
-        }
-        current = try self.lowerExprIntoAtType(where, value, let_.value, bind_ty, current);
-        const ptr_cast_stmt = try self.assignUnaryLowLevel(where, ptr, .ptr_cast, target, current);
-        const alloc_stmt = try self.result.store.addCFStmt(.{ .assign_low_level = .{
-            .target = target,
-            .op = .box_alloc_zeroed,
-            .rc_effect = LIR.LowLevel.box_alloc_zeroed.rcEffect(),
-            .args = LIR.LocalSpan.empty(),
-            .next = ptr_cast_stmt,
-        } }, where.source());
-        return alloc_stmt;
-    }
-
-    fn lowerFnRefInto(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        expr_id: Lifted.ExprId,
-        fn_id: Lifted.FnId,
-        capture_operands: anytype,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        return try self.lowerFnRefIntoAtType(where, target, expr_id, fn_id, capture_operands, try self.lowerExprTy(expr_id), next);
-    }
-
-    fn lowerFnRefIntoAtType(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        expr_id: Lifted.ExprId,
-        fn_id: Lifted.FnId,
-        capture_operands: anytype,
-        ty: Type.TypeId,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        const captures = self.memberCapturesForExpr(expr_id, fn_id);
-        if (self.solved.lifted.typedLocalSpan(self.solved.lifted.getFn(fn_id).captures).len != capture_operands.len) {
-            Common.invariant("function reference capture operand count differed from lifted function captures");
-        }
-        const fn_symbol = self.solved.lifted.getFn(fn_id).symbol;
-        const content = self.types.get(ty);
-        if (content == .callable) {
-            const variants = self.types.fnVariantSpan(content.callable);
-            for (0..variants.len) |variant_index| {
-                const variant = GuardedList.at(variants, variant_index);
-                if (variant.source != fn_symbol) continue;
-                return try self.lowerFiniteCallableValueInto(where, target, @intCast(variant_index), captures, capture_operands, variant.capture_ty, next);
-            }
-            return Common.invariant("finite callable type did not contain referenced function");
-        } else if (content == .erased_fn) {
-            const variants = self.types.fnVariantSpan(content.erased_fn.members);
-            for (0..variants.len) |variant_index| {
-                const variant = GuardedList.at(variants, variant_index);
-                if (variant.source != fn_symbol) continue;
-                return try self.lowerPackedErasedFnInto(where, target, variant.target, captures, capture_operands, variant.capture_ty, next);
-            }
-            return Common.invariant("erased callable type did not contain referenced function");
-        } else {
-            return Common.invariant("function value lowered to non-callable direct Lambda Mono type");
-        }
-    }
-
-    fn lowerFiniteCallableValueInto(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        variant_index: u16,
-        captures: CaptureSpanId,
-        capture_operands: anytype,
-        capture_ty: ?Type.TypeId,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        if (self.boxBackingLayoutForDirectConstruction(target)) |backing_layout| {
-            const backing_local = try self.addLocalForLayout(backing_layout);
-            const boundary = try self.assignBoxBoundary(where, target, backing_local, backing_layout, next);
-            return try self.lowerFiniteCallableValueInto(
-                where,
-                backing_local,
-                variant_index,
-                captures,
-                capture_operands,
-                capture_ty,
-                boundary,
-            );
-        }
-
-        if (capture_ty) |payload_ty| {
-            if (self.captureSpan(captures).len != capture_operands.len) {
-                Common.invariant("finite callable capture operand count differed from lifted function captures");
-            }
-            const payload = try self.addTemp(payload_ty);
-            if (self.isZstLocal(target) and !self.isZstLocal(payload)) {
-                Common.invariant("zero-sized callable layout had a non-zero-sized payload");
-            }
-            const assign = if (self.isZstLocal(target))
-                try self.assignZst(where, target, next)
-            else
-                try self.result.store.addCFStmt(.{ .assign_tag = .{
-                    .target = target,
-                    .variant_index = variant_index,
-                    .discriminant = variant_index,
-                    .payload = payload,
-                    .next = next,
-                } }, where.source());
-            return try self.lowerCaptureRecordFromCaptureExprsInto(where, payload, captures, capture_operands, payload_ty, assign);
-        }
-        if (capture_operands.len != 0) Common.invariant("finite callable without capture payload carried capture operands");
-        if (self.isZstLocal(target)) return try self.assignZst(where, target, next);
-        return try self.result.store.addCFStmt(.{ .assign_tag = .{
-            .target = target,
-            .variant_index = variant_index,
-            .discriminant = variant_index,
-            .payload = null,
-            .next = next,
-        } }, where.source());
-    }
-
-    fn lowerPackedErasedFnInto(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        fn_id: Type.FnId,
-        captures: CaptureSpanId,
-        capture_operands: anytype,
-        capture_ty: ?Type.TypeId,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        if (self.captureSpan(captures).len != capture_operands.len) {
-            Common.invariant("erased callable capture operand count differed from lifted function captures");
-        }
-        const capture = if (capture_ty) |ty| try self.addTemp(ty) else null;
-        const capture_layout = if (capture) |local| self.result.store.getLocal(local).layout_idx else null;
-        const reuse = try self.erasedCallableReuseForPack(target, capture_layout);
-        const assign = try self.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
-            .target = target,
-            .proc = try self.markReachableFn(fn_id),
-            .capture = capture,
-            .capture_layout = capture_layout,
-            .on_drop = self.erasedCallableOnDrop(capture_layout),
-            .reuse = reuse,
-            .next = next,
-        } }, where.source());
-        if (capture_ty) |ty| return try self.lowerCaptureRecordFromCaptureExprsInto(where, capture.?, captures, capture_operands, ty, assign);
-        if (capture_operands.len != 0) Common.invariant("erased callable without capture payload carried capture operands");
-        return assign;
     }
 
     fn erasedCallableReuseForPack(
@@ -6812,117 +8799,6 @@ const Lowerer = struct {
         };
     }
 
-    fn lowerDirectProcCallInto(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        result_ty: Type.TypeId,
-        callee: Lifted.FnId,
-        args: anytype,
-        capture_operands: anytype,
-        is_cold: bool,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        const callee_is_hosted = switch (self.solved.lifted.getFn(callee).body) {
-            .roc => false,
-            .hosted => true,
-        };
-        const return_reuse = if (!callee_is_hosted and
-            self.erasedResultDemand(result_ty) == .single_slot and
-            self.current_return_target == target)
-            self.currentErasedReturnReuse()
-        else
-            ErasedReturnReuse.none;
-        const target_fn = switch (return_reuse) {
-            .none => try self.ensureOwnFnSpec(callee, .finite),
-            .erased_callable => |capture_ty| try self.ensureOwnFnSpecWithErasedReturnReuse(callee, capture_ty),
-        };
-        const captures = try self.capturesForFn(callee);
-        const capture_items = self.captureSpan(captures);
-        if (capture_items.len == 0) {
-            if (capture_operands.len != 0) Common.invariant("direct call carried capture operands for a capture-free callee");
-            return try self.lowerKnownCallInto(where, target, result_ty, target_fn, args, null, is_cold, next);
-        }
-        if (capture_items.len != capture_operands.len) Common.invariant("direct call capture operand count differed from callee capture count");
-        const capture_ty = self.fn_entries.items[@intFromEnum(target_fn)].spec.capture_ty orelse
-            Common.invariant("capturing direct call target had no capture record type");
-        const capture_local = try self.addTemp(capture_ty);
-        const call = try self.lowerKnownCallInto(where, target, result_ty, target_fn, args, capture_local, is_cold, next);
-        return try self.lowerCaptureRecordFromCaptureExprsInto(where, capture_local, captures, capture_operands, capture_ty, call);
-    }
-
-    fn lowerKnownCallInto(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        result_ty: Type.TypeId,
-        callee: Type.FnId,
-        args: anytype,
-        capture_arg: ?LIR.LocalId,
-        is_cold: bool,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        const arg_tys = try self.lowerFnSpecArgTypes(callee);
-        defer self.allocator.free(arg_tys);
-
-        const lowered = try self.lowerExprsToTempsAtTypes(args, arg_tys);
-        defer lowered.deinit(self.allocator);
-
-        const callee_ret_ty = self.fn_entries.items[@intFromEnum(callee)].ret;
-        const callee_ret_layout = try self.layoutOfType(callee_ret_ty);
-        const target_layout = self.result.store.getLocal(target).layout_idx;
-        const call_target = if (target_layout == callee_ret_layout)
-            target
-        else
-            try self.addTemp(callee_ret_ty);
-        const after_call = if (call_target == target)
-            next
-        else
-            try self.assignTypedBoundary(where, target, result_ty, call_target, callee_ret_ty, next);
-
-        const callee_spec = self.fn_entries.items[@intFromEnum(callee)].spec;
-        const has_return_reuse = callee_spec.return_reuse.enabled();
-        // Destination-specialized helpers carry an explicit hidden ownership
-        // input. The ordinary inline path has no representation for that
-        // input, so preserve the specialized call boundary until inlining can
-        // model destination demand directly.
-        if (capture_arg == null and !is_cold and !has_return_reuse) {
-            if (try self.inlineBodyForKnownCall(callee)) |body_expr| {
-                var current = try self.lowerInlineKnownCallInto(where, call_target, callee, lowered.ids, body_expr, after_call);
-                current = try self.prependExprsAtTypes(where, lowered, arg_tys, current);
-                return current;
-            }
-        }
-
-        const extra_arg_count = @as(usize, @intFromBool(capture_arg != null)) +
-            @as(usize, @intFromBool(has_return_reuse));
-        const call_args = if (extra_arg_count > 0) blk: {
-            const values = try self.allocator.alloc(LIR.LocalId, lowered.ids.len + extra_arg_count);
-            errdefer self.allocator.free(values);
-            @memcpy(values[0..lowered.ids.len], lowered.ids);
-            var index = lowered.ids.len;
-            if (capture_arg) |capture_local| {
-                values[index] = capture_local;
-                index += 1;
-            }
-            if (has_return_reuse) {
-                values[index] = self.current_erased_reuse orelse
-                    Common.invariant("destination-specialized direct call lacked a current erased return destination");
-            }
-            break :blk values;
-        } else lowered.ids;
-        defer if (extra_arg_count > 0) self.allocator.free(call_args);
-        var current = try self.result.store.addCFStmt(.{ .assign_call = .{
-            .target = call_target,
-            .proc = try self.markReachableFn(callee),
-            .args = try self.result.store.addLocalSpan(call_args),
-            .is_cold = is_cold,
-            .next = after_call,
-        } }, where.source());
-        current = try self.prependExprsAtTypes(where, lowered, arg_tys, current);
-        return current;
-    }
-
     fn currentErasedReturnReuse(self: *Lowerer) ErasedReturnReuse {
         if (self.current_erased_reuse == null) return .none;
         const fn_id = self.current_fn orelse return .none;
@@ -6959,122 +8835,6 @@ const Lowerer = struct {
         if (spec.capture_ty != null) Common.invariant("inline plan selected a capturing function spec");
 
         return body_expr;
-    }
-
-    fn lowerInlineKnownCallInto(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        callee: Type.FnId,
-        arg_locals: []const LIR.LocalId,
-        body_expr: Lifted.ExprId,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        const spec = self.fn_specs.items[@intFromEnum(callee)];
-        if (spec.abi != .finite) Common.invariant("attempted to inline a non-finite function spec");
-        if (spec.capture_ty != null) Common.invariant("attempted to inline a capturing function spec");
-
-        const source_fn = self.solved.lifted.getFn(spec.source);
-        const fn_content = self.solved.types.rootContent(spec.solved_fn_ty);
-        if (fn_content != .func) Common.invariant("direct Lambda Mono function table contains a non-function type");
-        const func = fn_content.func;
-        const solved_args = self.solved_types.span(func.args);
-        const lifted_args = self.solved.lifted.typedLocalSpan(source_fn.args);
-        if (solved_args.len != lifted_args.len) Common.invariant("direct Lambda Mono function arity changed after Lambda Solved");
-        if (arg_locals.len != lifted_args.len) Common.invariant("inline call argument count differed from function arity");
-
-        const saved = try self.allocator.alloc(?LIR.LocalId, lifted_args.len);
-        defer self.allocator.free(saved);
-        for (0..lifted_args.len) |i| {
-            const arg = GuardedList.at(lifted_args, i);
-            const entry = try self.local_map.getOrPut(arg.local);
-            saved[i] = if (entry.found_existing) entry.value_ptr.* else null;
-            entry.value_ptr.* = arg_locals[i];
-        }
-        defer {
-            for (0..lifted_args.len) |i| {
-                const arg = GuardedList.at(lifted_args, i);
-                if (saved[i]) |previous| {
-                    self.local_map.getPtr(arg.local).?.* = previous;
-                } else {
-                    _ = self.local_map.remove(arg.local);
-                }
-            }
-        }
-
-        // The callee body's lifted inline scopes are rebased under the known
-        // call's scope, whose call site is this call.
-        var callee_parent = where;
-        callee_parent.outer = try self.addKnownCallInlineScope(where, source_fn, body_expr);
-        return try self.lowerExprInto(callee_parent, target, body_expr, next);
-    }
-
-    fn lowerValueCallInto(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        result_ty: Type.TypeId,
-        callee_expr: Lifted.ExprId,
-        arg_exprs: anytype,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        const callee_ty = try self.lowerExprContextTy(callee_expr);
-        const content = self.types.get(callee_ty);
-        if (content == .callable) {
-            return try self.lowerCallableValueCallInto(where, target, result_ty, callee_expr, callee_ty, content.callable, arg_exprs, next);
-        } else if (content == .erased_fn) {
-            return try self.lowerErasedValueCallInto(where, target, result_ty, callee_expr, callee_ty, arg_exprs, next);
-        } else {
-            return Common.invariant("value call callee had no callable direct Lambda Mono representation");
-        }
-    }
-
-    fn lowerErasedValueCallInto(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        result_ty: Type.TypeId,
-        callee_expr: Lifted.ExprId,
-        callee_ty: Type.TypeId,
-        arg_exprs: anytype,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        const arg_tys = try self.lowerCallableArgTypes(callee_ty);
-        defer self.allocator.free(arg_tys);
-
-        const args = try self.lowerExprsToTempsAtTypes(arg_exprs, arg_tys);
-        defer args.deinit(self.allocator);
-        const callee = try self.addTemp(callee_ty);
-        const result_layout = try self.layoutOfType(result_ty);
-        const target_layout = self.result.store.getLocal(target).layout_idx;
-        const call_target = if (target_layout == result_layout)
-            target
-        else
-            try self.addTemp(result_ty);
-        const after_call = if (call_target == target)
-            next
-        else
-            try self.assignTypedBoundary(where, target, result_ty, call_target, result_ty, next);
-        const reuse_closure = self.erasedResultDemand(result_ty) == .single_slot;
-        const call_stmt = try self.result.store.addCFStmt(.{ .assign_call_erased = .{
-            .target = call_target,
-            .closure = callee,
-            .args = try self.result.store.addLocalSpan(args.ids),
-            .arg_layouts = try self.appendErasedArgumentLayouts(args.ids),
-            .arg_plan = try self.erasedCallArgsPlan(args.ids),
-            .reuse_closure = reuse_closure,
-            .reuse_source = if (reuse_closure) callee else null,
-            .next = after_call,
-        } }, where.source());
-        if (reuse_closure) {
-            try self.erased_call_owner_uses.append(self.allocator, .{
-                .stmt = call_stmt,
-                .closure = callee,
-            });
-        }
-        var current = call_stmt;
-        current = try self.prependExprsAtTypes(where, args, arg_tys, current);
-        return try self.lowerExprIntoAtType(where, callee, callee_expr, callee_ty, current);
     }
 
     fn erasedCallArgsPlan(self: *Lowerer, args: []const LIR.LocalId) Common.LowerError!LIR.ErasedCallArgsPlanId {
@@ -7187,141 +8947,6 @@ const Lowerer = struct {
             source_size_align.size == target_size_align.size;
     }
 
-    fn lowerCallableValueCallInto(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        result_ty: Type.TypeId,
-        callee_expr: Lifted.ExprId,
-        callee_ty: Type.TypeId,
-        variants_span: Type.Span,
-        arg_exprs: anytype,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        self.noteErasedOwnerAmbiguous(target);
-        const callee = try self.addTemp(callee_ty);
-        const done = self.freshJoinPointId();
-        // Branch lowering can lower argument types that append more variants to
-        // self.types, so keep this iteration independent of the store backing.
-        const variants = try GuardedList.dupe(self.allocator, Type.FnVariant, self.types.fnVariantSpan(variants_span));
-        defer self.allocator.free(variants);
-        var current = try self.result.store.addCFStmt(.{ .runtime_error = {} }, where.glue());
-        var i = variants.len;
-        while (i > 0) {
-            i -= 1;
-            const variant: Type.FnVariant = variants[i];
-            const variant_index: u16 = @intCast(i);
-            const branch_done = try self.joinJump(where, done);
-            const branch_body = try self.lowerCallableVariantCallInto(where, target, result_ty, callee, variant, variant_index, arg_exprs, branch_done);
-            current = try self.discriminantSwitch(where, callee, variant_index, branch_body, current, false);
-        }
-        const remainder = try self.lowerExprIntoAtType(where, callee, callee_expr, callee_ty, current);
-        return try self.result.store.addCFStmt(.{ .join = .{
-            .id = done,
-            .params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{target}),
-            .body = next,
-            .remainder = remainder,
-        } }, where.glue());
-    }
-
-    fn lowerCallableVariantCallInto(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        result_ty: Type.TypeId,
-        callee: LIR.LocalId,
-        variant: Type.FnVariant,
-        variant_index: u16,
-        arg_exprs: anytype,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        if (variant.capture_ty) |_| {
-            const payload = try self.addLocalForLayout(self.tagUnionPayloadLayout(self.result.store.getLocal(callee).layout_idx, variant_index));
-            const call = try self.lowerKnownCallInto(where, target, result_ty, variant.target, arg_exprs, payload, false, next);
-            if (self.isZstLocal(payload)) return call;
-            return try self.addAssignRef(where, payload, .{ .tag_payload_struct = .{
-                .source = callee,
-                .variant_index = variant_index,
-                .tag_discriminant = variant_index,
-            } }, call);
-        }
-        return try self.lowerKnownCallInto(where, target, result_ty, variant.target, arg_exprs, null, false, next);
-    }
-
-    fn lowerLowLevelInto(self: *Lowerer, where: LowerSite, target: LIR.LocalId, op: can.CIR.Expr.LowLevel, span: Lifted.Span(Lifted.ExprId), next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        const args = self.solved.lifted.exprSpan(span);
-        if (op == .crash) {
-            if (args.len != 1) Common.invariant("crash low-level operation received the wrong number of arguments");
-            const lowered = try self.lowerExprsToTemps(args);
-            defer lowered.deinit(self.allocator);
-            const crash_stmt = try self.result.store.addCFStmt(.{ .crash = .{
-                .msg = .{ .local = lowered.ids[0] },
-            } }, where.source());
-            return try self.prependExprs(where, lowered, crash_stmt);
-        }
-        if (op == .dict_pseudo_seed and self.dict_seed_mode == .comptime_zero) {
-            if (args.len != 0) Common.invariant("Dict seed low-level operation received arguments");
-            return try self.result.store.addCFStmt(.{ .assign_literal = .{
-                .target = target,
-                .value = .{ .i64_literal = .{
-                    .value = 0,
-                    .layout_idx = self.result.store.getLocal(target).layout_idx,
-                } },
-                .next = next,
-            } }, where.source());
-        }
-        if (op == .box_box or op == .box_unbox) {
-            return try self.lowerBoxBoundaryLowLevelInto(where, target, op, args, next);
-        }
-        if (op == .list_map_can_reuse) {
-            const interchangeable = try self.listMapLayoutsInterchangeable(args);
-            if (!interchangeable.get(.u32) and !interchangeable.get(.u64)) {
-                // Reuse is statically impossible (or disabled) on every
-                // width, so the runtime uniqueness check never needs to
-                // run. The op's arguments are pure local reads, so dropping
-                // them is safe.
-                return try self.result.store.addCFStmt(.{ .assign_literal = .{
-                    .target = target,
-                    .value = .{ .i64_literal = .{
-                        .value = 0,
-                        .layout_idx = self.result.store.getLocal(target).layout_idx,
-                    } },
-                    .next = next,
-                } }, where.source());
-            }
-            // Reuse is possible on at least one width; carry the per-width
-            // bits so codegen forces a constant 0 on any width where the
-            // layouts are not interchangeable.
-            const lowered = try self.lowerExprsToTemps(args);
-            defer lowered.deinit(self.allocator);
-            var current = try self.result.store.addCFStmt(.{ .assign_low_level = .{
-                .target = target,
-                .op = op,
-                .rc_effect = op.rcEffect(),
-                .args = try self.result.store.addLocalSpan(lowered.ids),
-                .interchangeable = interchangeable,
-                .next = next,
-            } }, where.source());
-            current = try self.prependExprs(where, lowered, current);
-            return current;
-        }
-        const lowered = try self.lowerExprsToTemps(args);
-        defer lowered.deinit(self.allocator);
-        const lowered_op = if (lowered.ids.len > 0)
-            CheckedArithmetic.lowerOp(op, self.result.store.getLocal(lowered.ids[0]).layout_idx)
-        else
-            op;
-        var current = try self.result.store.addCFStmt(.{ .assign_low_level = .{
-            .target = target,
-            .op = lowered_op,
-            .rc_effect = lowered_op.rcEffect(),
-            .args = try self.result.store.addLocalSpan(lowered.ids),
-            .next = next,
-        } }, where.source());
-        current = try self.prependExprs(where, lowered, current);
-        return current;
-    }
-
     /// Compile-time half of the `list_map_can_reuse` decision, computed for
     /// both pointer widths. A width's bit is true when the input and output
     /// element layouts of a `List.map` call are interchangeable in one
@@ -7389,160 +9014,6 @@ const Lowerer = struct {
         return true;
     }
 
-    fn lowerBoxBoundaryLowLevelInto(self: *Lowerer, where: LowerSite, target: LIR.LocalId, op: can.CIR.Expr.LowLevel, args: anytype, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        if (args.len != 1) Common.invariant("Box low-level operation reached LIR lowering with the wrong arity");
-        const arg = GuardedList.at(args, 0);
-        const source = try self.addTemp(try self.lowerExprTy(arg));
-        const source_layout = self.result.store.getLocal(source).layout_idx;
-        const saved_return_target = self.current_return_target;
-        if (saved_return_target == target and op == .box_box) {
-            self.current_return_target = source;
-        }
-        defer self.current_return_target = saved_return_target;
-        if (op != .box_box and op != .box_unbox) unreachable;
-        const assign = try self.assignBoxBoundary(where, target, source, source_layout, next);
-        return try self.lowerExprInto(where, source, arg, assign);
-    }
-
-    fn lowerFieldAccessInto(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        receiver: Lifted.ExprId,
-        segments_span: Lifted.Span(Lifted.FieldAccessSegment),
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        const segments = self.solved.lifted.fieldAccessSegmentSpan(segments_span);
-        if (segments.len == 0) Common.invariant("field access path had no segments");
-
-        const receiver_ty = try self.lowerExprContextTy(receiver);
-        var source_ty = receiver_ty;
-        var first_segment: usize = 0;
-        var component: ?LIR.LocalId = null;
-        const receiver_data = self.solved.lifted.getExpr(receiver).data;
-        if (receiver_data == .local) {
-            if (self.aggregate_bindings) |aggregates| {
-                if (aggregates.bindings.get(receiver_data.local)) |id| {
-                    const plan = aggregates.plans.items[id];
-                    if (plan.ty == receiver_ty) {
-                        const shape = aggregates.shapes.get(plan.ty).?;
-                        const field = shape.indices.get(GuardedList.at(segments, 0).field).?;
-                        component = aggregates.fields.get(plan.root, shape.fields.len, field);
-                        source_ty = shape.fields[field].ty;
-                        first_segment = 1;
-                    }
-                }
-            }
-        }
-        const receiver_local = component orelse try self.addTemp(receiver_ty);
-        if (first_segment == segments.len) {
-            try self.noteReturnForwardingLocal(target, receiver_local);
-            return self.assignTypedBoundary(where, target, self.typeOfLocalOr(target, source_ty), receiver_local, source_ty, next);
-        }
-
-        const FieldRead = struct {
-            target: LIR.LocalId,
-            target_ty: Type.TypeId,
-            source: LIR.LocalId,
-            source_ty: Type.TypeId,
-            source_field_index: u16,
-            storage_layout: ?layout.Idx,
-        };
-        const reads = try self.allocator.alloc(FieldRead, segments.len - first_segment);
-        defer self.allocator.free(reads);
-
-        var logical_source_ty = source_ty;
-        var source_local = receiver_local;
-        for (first_segment..segments.len) |index| {
-            const segment = GuardedList.at(segments, index);
-            const target_field_index = self.recordFieldIndex(logical_source_ty, segment.field);
-            const target_fields = self.recordFields(logical_source_ty);
-            const target_field_ty = GuardedList.at(target_fields, @intCast(target_field_index)).ty;
-            const destination = if (index + 1 == segments.len)
-                target
-            else
-                try self.addTemp(target_field_ty);
-
-            const storage_source_ty = self.storageTypeOfLocalOr(source_local, logical_source_ty);
-            const source_field_index = self.recordFieldIndex(storage_source_ty, segment.field);
-            const source_fields = self.recordFields(storage_source_ty);
-            const source_field_ty = GuardedList.at(source_fields, @intCast(source_field_index)).ty;
-            reads[index - first_segment] = .{
-                .target = destination,
-                .target_ty = target_field_ty,
-                .source = source_local,
-                .source_ty = source_field_ty,
-                .source_field_index = source_field_index,
-                .storage_layout = if (self.isZstLocal(destination))
-                    null
-                else
-                    self.localFieldLayout(source_local, source_field_index),
-            };
-
-            source_local = destination;
-            logical_source_ty = target_field_ty;
-        }
-
-        var current = next;
-        var index = reads.len;
-        while (index > 0) {
-            index -= 1;
-            const read = reads[index];
-            current = if (read.storage_layout) |storage_layout|
-                try self.assignTypedRefRead(
-                    where,
-                    read.target,
-                    read.target_ty,
-                    read.source_ty,
-                    storage_layout,
-                    .{ .field = .{ .source = read.source, .field_idx = read.source_field_index } },
-                    current,
-                )
-            else
-                try self.assignZst(where, read.target, current);
-        }
-        return if (component != null) current else try self.lowerExprIntoAtType(where, receiver_local, receiver, receiver_ty, current);
-    }
-
-    fn lowerTupleAccessInto(self: *Lowerer, where: LowerSite, target: LIR.LocalId, tuple: Lifted.ExprId, elem_index: u32, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        const tuple_ty = try self.lowerExprContextTy(tuple);
-        const tuple_local = try self.addTemp(tuple_ty);
-        const field_index: u16 = @intCast(elem_index);
-        const target_item_tys = self.tupleItemTypes(tuple_ty);
-        const source_item_tys = self.tupleItemTypes(self.storageTypeOfLocalOr(tuple_local, tuple_ty));
-        if (self.isZstLocal(target)) {
-            return try self.lowerExprIntoAtType(where, tuple_local, tuple, tuple_ty, try self.assignZst(where, target, next));
-        }
-        const assign = try self.assignTypedRefRead(
-            where,
-            target,
-            GuardedList.at(target_item_tys, elem_index),
-            GuardedList.at(source_item_tys, elem_index),
-            self.localFieldLayout(tuple_local, field_index),
-            .{ .field = .{ .source = tuple_local, .field_idx = field_index } },
-            next,
-        );
-        return try self.lowerExprIntoAtType(where, tuple_local, tuple, tuple_ty, assign);
-    }
-
-    fn lowerStructuralEqInto(self: *Lowerer, where: LowerSite, target: LIR.LocalId, lhs: Lifted.ExprId, rhs: Lifted.ExprId, negated: bool, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        const lhs_ty = try self.lowerExprTy(lhs);
-        const lhs_local = try self.addTemp(lhs_ty);
-        const rhs_local = try self.addTemp(try self.lowerExprTy(rhs));
-        var current = try self.lowerEqLocalsInto(where.derived(), target, lhs_local, rhs_local, lhs_ty, negated, next);
-        current = try self.lowerExprInto(where, rhs_local, rhs, current);
-        return try self.lowerExprInto(where, lhs_local, lhs, current);
-    }
-
-    fn lowerStructuralHashInto(self: *Lowerer, where: LowerSite, target: LIR.LocalId, value: Lifted.ExprId, hasher: Lifted.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        const value_ty = try self.lowerExprTy(value);
-        const value_local = try self.addTemp(value_ty);
-        const hasher_local = try self.addTemp(try self.lowerExprTy(hasher));
-        var current = try self.lowerHashLocalsInto(where.derived(), target, value_local, hasher_local, value_ty, next);
-        current = try self.lowerExprInto(where, hasher_local, hasher, current);
-        return try self.lowerExprInto(where, value_local, value, current);
-    }
-
     /// Feed `value` (of `value_ty`) into `hasher`, writing the resulting Hasher
     /// into `target`. Aggregate types are decomposed in Monotype lowering, so
     /// this only ever sees a scalar/str/zst leaf or a transparent nominal wrapper.
@@ -7586,274 +9057,6 @@ const Lowerer = struct {
             .args = try self.result.store.addLocalSpan(&args),
             .next = next,
         } }, where.source());
-    }
-
-    fn lowerMatchInto(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        result_ty: Type.TypeId,
-        scrutinee: Lifted.ExprId,
-        branches_span: Lifted.Span(Lifted.Branch),
-        comptime_site: ?Lifted.ComptimeSiteId,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        if (try self.foldListMapCanReuseMatch(where, target, result_ty, scrutinee, branches_span, next)) |folded| return folded;
-        self.noteErasedOwnerAmbiguous(target);
-        const scrutinee_ty = try self.lowerExprContextTy(scrutinee);
-        const scrutinee_local = try self.addTemp(scrutinee_ty);
-        const branches = try GuardedList.dupe(self.allocator, Lifted.Branch, self.solved.lifted.branchSpan(branches_span));
-        defer self.allocator.free(branches);
-        const done = self.freshJoinPointId();
-        const branch_chain = try self.lowerBranchTree(where, scrutinee_local, scrutinee_ty, branches, target, result_ty, done, comptime_site);
-        const remainder = try self.lowerExprIntoAtType(where, scrutinee_local, scrutinee, scrutinee_ty, branch_chain);
-        return try self.result.store.addCFStmt(.{ .join = .{
-            .id = done,
-            .params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{target}),
-            .body = next,
-            .remainder = remainder,
-        } }, where.glue());
-    }
-
-    /// When the in-place `List.map` branch is statically impossible—the
-    /// optimization is disabled or the element layouts are not
-    /// interchangeable—lower only the branch a constant-0
-    /// `list_map_can_reuse` selects, so the in-place machinery never reaches
-    /// LIR. Each fold is recorded as explicit data; the debug Lambda Mono
-    /// materializer replays the recorded resolutions instead of recomputing
-    /// them (it runs before layout selection and has no layout store), so
-    /// the two derivations demand the same set of functions.
-    fn foldListMapCanReuseMatch(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        result_ty: Type.TypeId,
-        scrutinee: Lifted.ExprId,
-        branches_span: Lifted.Span(Lifted.Branch),
-        next: LIR.CFStmtId,
-    ) Common.LowerError!?LIR.CFStmtId {
-        const match = self.solved.lifted.listMapCanReuseMatch(scrutinee, branches_span) orelse return null;
-        const args = self.solved.lifted.exprSpan(match.call_args);
-        const interchangeable = try self.listMapLayoutsInterchangeable(args);
-        if (interchangeable.get(.u32) or interchangeable.get(.u64)) {
-            // Reuse is possible on at least one width; keep the match so each
-            // backend can decide per the width it is building.
-            return null;
-        }
-        if (builtin.mode == .Debug) {
-            try self.folded_map_matches.append(self.allocator, .{
-                .scrutinee = scrutinee,
-                .body = match.zero_branch_body,
-            });
-        }
-        return try self.lowerExprIntoAtType(where, target, match.zero_branch_body, result_ty, next);
-    }
-
-    fn lowerIfInto(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        result_ty: Type.TypeId,
-        branches_span: Lifted.Span(Lifted.IfBranch),
-        final_else: Lifted.ExprId,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        self.noteErasedOwnerAmbiguous(target);
-        const branches = self.solved.lifted.ifBranchSpan(branches_span);
-        const done = self.freshJoinPointId();
-        var current = try self.lowerExprIntoAtType(where, target, final_else, result_ty, try self.joinJump(where, done));
-        var i = branches.len;
-        while (i > 0) {
-            i -= 1;
-            const branch = GuardedList.at(branches, i);
-            const body = try self.lowerExprIntoAtType(where, target, branch.body, result_ty, try self.joinJump(where, done));
-            const cond_local = try self.addTemp(try self.lowerExprTy(branch.cond));
-            const switch_stmt = try self.boolSwitchNoContinuation(where, cond_local, body, current);
-            current = try self.lowerExprInto(where, cond_local, branch.cond, switch_stmt);
-        }
-        return try self.result.store.addCFStmt(.{ .join = .{
-            .id = done,
-            .params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{target}),
-            .body = next,
-            .remainder = current,
-        } }, where.glue());
-    }
-
-    fn lowerInitializedPayloadSwitchInto(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        payload_switch: Lifted.InitializedPayloadSwitch,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        self.noteErasedOwnerAmbiguous(target);
-        const done = self.freshJoinPointId();
-        const branch_done = try self.joinJump(where, done);
-        var initialized_body: LIR.CFStmtId = undefined;
-        var uninitialized_body: LIR.CFStmtId = undefined;
-        if (payload_switch.initialized == payload_switch.uninitialized) {
-            const shared = try self.lowerExprInto(where, target, payload_switch.initialized, branch_done);
-            initialized_body = shared;
-            uninitialized_body = shared;
-        } else {
-            initialized_body = try self.lowerExprInto(where, target, payload_switch.initialized, branch_done);
-            uninitialized_body = try self.lowerExprInto(where, target, payload_switch.uninitialized, branch_done);
-        }
-        const cond_data = self.solved.lifted.getExpr(payload_switch.cond);
-        const cond_local = if (cond_data.data == .local)
-            try self.localFor(cond_data.data.local)
-        else
-            try self.addTemp(try self.lowerExprTy(payload_switch.cond));
-        const switch_stmt = try self.result.store.addCFStmt(.{ .switch_initialized_payload = .{
-            .cond = cond_local,
-            .cond_mask = payload_switch.cond_mask,
-            .payload = try self.localFor(payload_switch.payload),
-            .uninitialized_is_cold = payload_switch.uninitialized_is_cold,
-            .initialized_branch = initialized_body,
-            .uninitialized_branch = uninitialized_body,
-        } }, where.glue());
-        const remainder = if (cond_data.data == .local)
-            switch_stmt
-        else
-            try self.lowerExprInto(where, cond_local, payload_switch.cond, switch_stmt);
-        return try self.result.store.addCFStmt(.{ .join = .{
-            .id = done,
-            .params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{target}),
-            .body = next,
-            .remainder = remainder,
-        } }, where.glue());
-    }
-
-    fn lowerTrySequenceInto(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        out_try_ty: Type.TypeId,
-        sequence: Mono.TrySequence,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        self.noteErasedOwnerAmbiguous(target);
-        const input_try_ty = try self.lowerExprTy(sequence.try_expr);
-        const input_try_local = try self.addTemp(input_try_ty);
-
-        const ok_variant = self.tagIndexByText(input_try_ty, "Ok");
-        const err_variant = self.tagIndexByText(input_try_ty, "Err");
-        const out_err_variant = self.tagIndexByText(out_try_ty, "Err");
-
-        const ok_body = try self.lowerExprIntoAtType(where, target, sequence.ok_body, out_try_ty, next);
-        const ok_payload_local = try self.localFor(sequence.ok_local);
-        const ok_start = if (self.isZstLocal(ok_payload_local))
-            try self.assignZst(where, ok_payload_local, ok_body)
-        else
-            try self.addAssignRef(where, ok_payload_local, .{ .tag_payload_struct = .{
-                .source = input_try_local,
-                .variant_index = ok_variant,
-                .tag_discriminant = ok_variant,
-            } }, ok_body);
-
-        const err_start = if (sequence.err_target) |err_target|
-            try self.lowerTryErrJump(where, input_try_local, err_variant, err_target)
-        else blk: {
-            const out_backing_ty = self.runtimeBackingType(out_try_ty);
-            const out_backing_layout = try self.layoutOfType(out_backing_ty);
-            const out_backing_local = try self.addLocalForLayout(out_backing_layout);
-            const boundary = try self.assignNominalBoundary(where, target, out_backing_local, out_backing_layout, next);
-
-            const err_payload_layout = self.tagUnionPayloadLayout(self.result.store.getLocal(input_try_local).layout_idx, err_variant);
-            const err_payload_local = try self.addLocalForLayout(err_payload_layout);
-            const err_tag = if (self.isZstLocal(out_backing_local))
-                try self.assignZst(where, out_backing_local, boundary)
-            else
-                try self.result.store.addCFStmt(.{ .assign_tag = .{
-                    .target = out_backing_local,
-                    .variant_index = out_err_variant,
-                    .discriminant = out_err_variant,
-                    .payload = err_payload_local,
-                    .next = boundary,
-                } }, where.source());
-            break :blk if (self.isZstLocal(err_payload_local))
-                err_tag
-            else
-                try self.addAssignRef(where, err_payload_local, .{ .tag_payload_struct = .{
-                    .source = input_try_local,
-                    .variant_index = err_variant,
-                    .tag_discriminant = err_variant,
-                } }, err_tag);
-        };
-
-        const switch_stmt = try self.discriminantSwitch(where, input_try_local, ok_variant, ok_start, err_start, sequence.err_is_cold);
-        return try self.lowerExprInto(where, input_try_local, sequence.try_expr, switch_stmt);
-    }
-
-    fn lowerTryRecordSequenceInto(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        out_try_ty: Type.TypeId,
-        sequence: Mono.TryRecordSequence,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        self.noteErasedOwnerAmbiguous(target);
-        const input_try_ty = try self.lowerExprTy(sequence.try_expr);
-        const input_try_local = try self.addTemp(input_try_ty);
-
-        const ok_variant = self.tagIndexByText(input_try_ty, "Ok");
-        const err_variant = self.tagIndexByText(input_try_ty, "Err");
-        const out_err_variant = self.tagIndexByText(out_try_ty, "Err");
-        const ok_payload_ty = self.singleTagPayloadTypeByIndex(input_try_ty, ok_variant);
-
-        var ok_start = try self.lowerExprIntoAtType(where, target, sequence.ok_body, out_try_ty, next);
-        ok_start = try self.bindTryRecordPayloadField(
-            where,
-            sequence.rest_local,
-            input_try_local,
-            ok_variant,
-            ok_payload_ty,
-            sequence.rest_field,
-            ok_start,
-        );
-        ok_start = try self.bindTryRecordPayloadField(
-            where,
-            sequence.value_local,
-            input_try_local,
-            ok_variant,
-            ok_payload_ty,
-            sequence.value_field,
-            ok_start,
-        );
-
-        const err_start = if (sequence.err_target) |err_target|
-            try self.lowerTryErrJump(where, input_try_local, err_variant, err_target)
-        else blk: {
-            const out_backing_ty = self.runtimeBackingType(out_try_ty);
-            const out_backing_layout = try self.layoutOfType(out_backing_ty);
-            const out_backing_local = try self.addLocalForLayout(out_backing_layout);
-            const boundary = try self.assignNominalBoundary(where, target, out_backing_local, out_backing_layout, next);
-
-            const err_payload_layout = self.tagUnionPayloadLayout(self.result.store.getLocal(input_try_local).layout_idx, err_variant);
-            const err_payload_local = try self.addLocalForLayout(err_payload_layout);
-            const err_tag = if (self.isZstLocal(out_backing_local))
-                try self.assignZst(where, out_backing_local, boundary)
-            else
-                try self.result.store.addCFStmt(.{ .assign_tag = .{
-                    .target = out_backing_local,
-                    .variant_index = out_err_variant,
-                    .discriminant = out_err_variant,
-                    .payload = err_payload_local,
-                    .next = boundary,
-                } }, where.source());
-            break :blk if (self.isZstLocal(err_payload_local))
-                err_tag
-            else
-                try self.addAssignRef(where, err_payload_local, .{ .tag_payload_struct = .{
-                    .source = input_try_local,
-                    .variant_index = err_variant,
-                    .tag_discriminant = err_variant,
-                } }, err_tag);
-        };
-
-        const switch_stmt = try self.discriminantSwitch(where, input_try_local, ok_variant, ok_start, err_start, sequence.err_is_cold);
-        return try self.lowerExprInto(where, input_try_local, sequence.try_expr, switch_stmt);
     }
 
     fn lowerTryErrJump(
@@ -7914,81 +9117,6 @@ const Lowerer = struct {
             .variant_index = ok_variant,
             .tag_discriminant = ok_variant,
         } }, next);
-    }
-
-    fn lowerBlockIntoAtType(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        result_ty: Type.TypeId,
-        stmts_span: Lifted.Span(Lifted.StmtId),
-        final_expr: Lifted.ExprId,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        const stmts = self.solved.lifted.stmtSpan(stmts_span);
-        var planned: std.ArrayList(RecordBindingRestore) = .empty;
-        defer {
-            var index = planned.items.len;
-            while (index != 0) {
-                index -= 1;
-                self.restoreRecordBinding(planned.items[index]);
-            }
-            planned.deinit(self.allocator);
-        }
-        for (0..stmts.len) |index| {
-            const stmt = self.solved.lifted.getStmt(GuardedList.at(stmts, index));
-            if (stmt != .let_ or stmt.let_.recursive) continue;
-            if (try self.planRecordBinding(stmt.let_.pat, stmt.let_.value)) |binding| {
-                try planned.append(self.allocator, binding);
-            }
-        }
-        var current = if (self.solved.lifted.getExpr(final_expr).data == .@"unreachable") blk: {
-            if (stmts.len == 0) {
-                Common.invariant("unreachable block-final marker had no preceding terminating statement");
-            }
-            // Monotype emits this marker only after its checked, explicit
-            // statement-termination relation has stopped the block. Its
-            // block-final position is the capability to erase it; the
-            // generic expression path rejects the marker.
-            break :blk next;
-        } else try self.lowerExprIntoAtType(where, target, final_expr, result_ty, next);
-        var i = stmts.len;
-        while (i > 0) {
-            i -= 1;
-            current = try self.lowerStmt(where, GuardedList.at(stmts, i), current);
-        }
-        return current;
-    }
-
-    fn lowerStmt(self: *Lowerer, parent: LowerSite, stmt_id: Lifted.StmtId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        const where = try self.stmtSite(parent, stmt_id);
-        return switch (self.solved.lifted.getStmt(stmt_id)) {
-            .uninitialized => |pat_id| try self.initUninitializedPattern(where, pat_id, next),
-            .let_ => |let_| blk: {
-                if (let_.recursive) break :blk try self.lowerRecursiveLetStmt(where, let_, next);
-                const binding_pat = self.pat(let_.pat);
-                if (binding_pat.data == .bind) {
-                    break :blk try self.lowerDirectBindValue(where, let_.pat, binding_pat.data.bind, let_.value, next);
-                }
-                const value = try self.addTemp(try self.lowerExprTy(let_.value));
-                const bind = try self.bindPatternOrCrash(where, let_.pat, value, next, let_.comptime_site);
-                break :blk try self.lowerExprInto(where, value, let_.value, bind);
-            },
-            .expr => |expr_id| blk: {
-                const temp = try self.addTemp(try self.lowerExprTy(expr_id));
-                break :blk try self.lowerExprInto(where, temp, expr_id, next);
-            },
-            .expect => |expr_id| if (self.inline_expects == .omit) next else try self.lowerExpectStmt(where, expr_id, next),
-            .dbg => |expr_id| blk: {
-                const temp = try self.addTemp(try self.lowerExprTy(expr_id));
-                const debug_stmt = try self.result.store.addCFStmt(.{ .debug = .{ .message = temp, .next = next } }, where.source());
-                break :blk try self.lowerExprInto(where, temp, expr_id, debug_stmt);
-            },
-            .return_ => |ret| try self.lowerReturn(where, ret),
-            .crash => |msg| try self.result.store.addCFStmt(.{ .crash = .{
-                .msg = .{ .literal = try self.result.store.insertString(self.stringLiteralText(msg)) },
-            } }, where.source()),
-        };
     }
 
     fn initUninitializedPattern(
@@ -8084,247 +9212,6 @@ const Lowerer = struct {
         } }, where.source());
     }
 
-    fn lowerLoopIntoAtType(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        result_ty: Type.TypeId,
-        loop: anytype,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        self.noteErasedOwnerAmbiguous(target);
-        const saved_return_target = self.current_return_target;
-        self.current_return_target = null;
-        self.return_forwarding_repeatable_depth += 1;
-        defer {
-            self.return_forwarding_repeatable_depth -= 1;
-            self.current_return_target = saved_return_target;
-        }
-        const params = self.solved.lifted.typedLocalSpan(loop.params);
-        const initial_values = self.solved.lifted.exprSpan(loop.initial_values);
-        if (params.len != initial_values.len) Common.invariant("Lambda Mono loop parameter count differs from initial value count");
-
-        const param_locals = try self.allocator.alloc(LIR.LocalId, params.len);
-        defer self.allocator.free(param_locals);
-        const param_tys = try self.allocator.alloc(Type.TypeId, params.len);
-        defer self.allocator.free(param_tys);
-        for (0..params.len) |i| {
-            const param = GuardedList.at(params, i);
-            param_tys[i] = try self.lowerLocalTy(param.local);
-            param_locals[i] = try self.bindLocalForTyped(param.local, param_tys[i]);
-        }
-        const param_span = try self.result.store.addLocalSpan(param_locals);
-        var active_param_count: usize = 0;
-        defer {
-            for (0..active_param_count) |index| {
-                _ = self.active_loop_params.remove(GuardedList.at(params, index).local);
-            }
-        }
-        for (0..params.len) |index| {
-            const param = GuardedList.at(params, index);
-            const slot = try self.active_loop_params.getOrPut(param.local);
-            if (slot.found_existing) Common.invariant("one local was active as two loop parameters");
-            slot.value_ptr.* = .{ .local = param_locals[index], .ty = param_tys[index] };
-            active_param_count += 1;
-        }
-        var maybe_uninitialized_params: std.ArrayList(LIR.LocalId) = .empty;
-        defer maybe_uninitialized_params.deinit(self.allocator);
-        var maybe_uninitialized_conditions: std.ArrayList(LIR.LocalId) = .empty;
-        defer maybe_uninitialized_conditions.deinit(self.allocator);
-        var maybe_uninitialized_condition_masks: std.ArrayList(u64) = .empty;
-        defer maybe_uninitialized_condition_masks.deinit(self.allocator);
-        for (0..initial_values.len) |i| {
-            const initial = GuardedList.at(initial_values, i);
-            const param_local = param_locals[i];
-            const initial_data = self.solved.lifted.getExpr(initial).data;
-            if (initial_data == .uninitialized_payload) {
-                const payload = initial_data.uninitialized_payload;
-                try maybe_uninitialized_params.append(self.allocator, param_local);
-                try maybe_uninitialized_conditions.append(self.allocator, try self.localFor(payload.condition));
-                try maybe_uninitialized_condition_masks.append(self.allocator, payload.mask);
-            }
-        }
-        const maybe_uninitialized_span = try self.result.store.addLocalSpan(maybe_uninitialized_params.items);
-        const maybe_uninitialized_conditions_span = try self.result.store.addLocalSpan(maybe_uninitialized_conditions.items);
-        const maybe_uninitialized_condition_masks_span = try self.result.store.addU64Span(maybe_uninitialized_condition_masks.items);
-        const join_id = self.freshJoinPointId();
-
-        try self.loop_stack.append(self.allocator, .{
-            .join_id = join_id,
-            .params = param_span,
-            .param_tys = param_tys,
-            .result_target = target,
-            .result_ty = result_ty,
-            .after_loop = next,
-        });
-        defer _ = self.loop_stack.pop();
-
-        const body = try self.lowerExprIntoAtType(where, target, loop.body, result_ty, next);
-        const jump_args = try self.lowerExprsToJoinTempsAtTypes(param_span, param_tys, initial_values);
-        defer jump_args.deinit(self.allocator);
-        var initial_jump = try self.result.store.addCFStmt(.{ .jump = .{
-            .target = join_id,
-        } }, where.glue());
-        initial_jump = try self.prependJoinParamInitializers(where, param_span, jump_args.ids, initial_jump);
-        initial_jump = try self.prependJoinExprsAtTypes(where, jump_args, param_tys, initial_jump);
-
-        return try self.result.store.addCFStmt(.{ .join = .{
-            .id = join_id,
-            .params = param_span,
-            .maybe_uninitialized_params = maybe_uninitialized_span,
-            .maybe_uninitialized_conditions = maybe_uninitialized_conditions_span,
-            .maybe_uninitialized_condition_masks = maybe_uninitialized_condition_masks_span,
-            .body = body,
-            .remainder = initial_jump,
-        } }, where.glue());
-    }
-
-    fn lowerBreak(self: *Lowerer, where: LowerSite, value: ?Lifted.ExprId) Common.LowerError!LIR.CFStmtId {
-        const loop = self.currentLoop();
-        if (value) |expr_id| {
-            return try self.lowerExprIntoAtType(where, loop.result_target, expr_id, loop.result_ty, loop.after_loop);
-        }
-        return try self.assignZst(where, loop.result_target, loop.after_loop);
-    }
-
-    fn lowerContinue(self: *Lowerer, where: LowerSite, values_span: Lifted.Span(Lifted.ExprId)) Common.LowerError!LIR.CFStmtId {
-        const loop = self.currentLoop();
-        const values = self.solved.lifted.exprSpan(values_span);
-        if (self.result.store.getLocalSpan(loop.params).len != values.len) {
-            Common.invariant("continue value count differed from loop parameter count during direct LIR lowering");
-        }
-        const locals = try self.lowerExprsToJoinTempsAtTypes(loop.params, loop.param_tys, values);
-        defer locals.deinit(self.allocator);
-        var jump = try self.result.store.addCFStmt(.{ .jump = .{
-            .target = loop.join_id,
-        } }, where.glue());
-        jump = try self.prependJoinParamInitializers(where, loop.params, locals.ids, jump);
-        jump = try self.prependJoinExprsAtTypes(where, locals, loop.param_tys, jump);
-        return jump;
-    }
-
-    fn lowerJoinPointIntoAtType(
-        self: *Lowerer,
-        where: LowerSite,
-        target: LIR.LocalId,
-        result_ty: Type.TypeId,
-        join_point: Lifted.JoinPointExpr,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        self.noteErasedOwnerAmbiguous(target);
-        const saved_return_target = self.current_return_target;
-        self.current_return_target = null;
-        self.return_forwarding_repeatable_depth += 1;
-        defer {
-            self.return_forwarding_repeatable_depth -= 1;
-            self.current_return_target = saved_return_target;
-        }
-        const params = self.solved.lifted.typedLocalSpan(join_point.params);
-        const param_locals = try self.allocator.alloc(LIR.LocalId, params.len);
-        defer self.allocator.free(param_locals);
-        const param_tys = try self.allocator.alloc(Type.TypeId, params.len);
-        defer self.allocator.free(param_tys);
-        for (0..params.len) |index| {
-            const param = GuardedList.at(params, index);
-            param_tys[index] = try self.lowerLocalTy(param.local);
-            param_locals[index] = try self.bindLocalForTyped(param.local, param_tys[index]);
-        }
-
-        const param_span = try self.result.store.addLocalSpan(param_locals);
-        const retained = self.solved.lifted.typedLocalSpan(join_point.retained);
-        var retained_locals: std.ArrayList(LIR.LocalId) = .empty;
-        defer retained_locals.deinit(self.allocator);
-        var maybe_uninitialized_retained: std.ArrayList(LIR.LocalId) = .empty;
-        defer maybe_uninitialized_retained.deinit(self.allocator);
-        var maybe_uninitialized_conditions: std.ArrayList(LIR.LocalId) = .empty;
-        defer maybe_uninitialized_conditions.deinit(self.allocator);
-        var maybe_uninitialized_condition_masks: std.ArrayList(u64) = .empty;
-        defer maybe_uninitialized_condition_masks.deinit(self.allocator);
-        for (0..retained.len) |index| {
-            const retained_local = GuardedList.at(retained, index);
-            const has_lexical_binding = self.local_map.contains(retained_local.local) or
-                self.typed_local_map.contains(.{
-                    .local = retained_local.local,
-                    .ty = try self.lowerLocalTy(retained_local.local),
-                }) or
-                (try self.mappedLocalForMatchingLocal(retained_local.local)) != null;
-            // A captured value is borrowed from its capture storage rather than
-            // owned by an independent local in this procedure. Its operational
-            // reads keep that storage live; materializing a retained local here
-            // would create an uninitialized alias with no lexical producer.
-            if (!has_lexical_binding and try self.captureBindingForLocal(retained_local.local) != null) continue;
-            const lir_local = try self.localFor(retained_local.local);
-            try retained_locals.append(self.allocator, lir_local);
-            if (self.payload_conditions[@intFromEnum(retained_local.local)]) |payload| {
-                try maybe_uninitialized_retained.append(self.allocator, lir_local);
-                try maybe_uninitialized_conditions.append(self.allocator, try self.localFor(payload.condition));
-                try maybe_uninitialized_condition_masks.append(self.allocator, payload.mask);
-            }
-        }
-        const retained_span = try self.result.store.addLocalSpan(retained_locals.items);
-        const maybe_uninitialized_span = try self.result.store.addLocalSpan(maybe_uninitialized_retained.items);
-        const maybe_uninitialized_conditions_span = try self.result.store.addLocalSpan(maybe_uninitialized_conditions.items);
-        const maybe_uninitialized_condition_masks_span = try self.result.store.addU64Span(maybe_uninitialized_condition_masks.items);
-        const lir_join_id = self.freshJoinPointId();
-        try self.join_stack.append(self.allocator, .{
-            .source_id = join_point.id,
-            .join_id = lir_join_id,
-            .params = param_span,
-            .param_tys = param_tys,
-        });
-        defer _ = self.join_stack.pop();
-
-        const body = try self.lowerExprIntoAtType(where, target, join_point.body, result_ty, next);
-        const remainder = try self.lowerExprIntoAtType(where, target, join_point.remainder, result_ty, next);
-        return try self.result.store.addCFStmt(.{ .join = .{
-            .id = lir_join_id,
-            .params = param_span,
-            .retained = retained_span,
-            .maybe_uninitialized_params = maybe_uninitialized_span,
-            .maybe_uninitialized_conditions = maybe_uninitialized_conditions_span,
-            .maybe_uninitialized_condition_masks = maybe_uninitialized_condition_masks_span,
-            .body = body,
-            .remainder = remainder,
-        } }, where.glue());
-    }
-
-    fn lowerJump(self: *Lowerer, where: LowerSite, jump: Lifted.JumpExpr) Common.LowerError!LIR.CFStmtId {
-        const join_point = self.activeJoinPoint(jump.target);
-        const args = self.solved.lifted.exprSpan(jump.args);
-        if (self.result.store.getLocalSpan(join_point.params).len != args.len) {
-            Common.invariant("jump argument count differed from join-point parameter count during direct LIR lowering");
-        }
-
-        const locals = try self.lowerExprsToJoinTempsAtTypes(join_point.params, join_point.param_tys, args);
-        defer locals.deinit(self.allocator);
-
-        const update_params = self.solved.lifted.typedLocalSpan(jump.loop_params);
-        const update_values = self.solved.lifted.exprSpan(jump.loop_values);
-        if (update_params.len != update_values.len) {
-            Common.invariant("jump loop-update parameter count differed from value count during direct LIR lowering");
-        }
-        const update_targets = try self.allocator.alloc(LIR.LocalId, update_params.len);
-        defer self.allocator.free(update_targets);
-        const update_tys = try self.allocator.alloc(Type.TypeId, update_params.len);
-        defer self.allocator.free(update_tys);
-        for (0..update_params.len) |index| {
-            const param = GuardedList.at(update_params, index);
-            const active = self.activeLoopParam(param.local);
-            update_targets[index] = active.local;
-            update_tys[index] = active.ty;
-        }
-        const update_target_span = try self.result.store.addLocalSpan(update_targets);
-        const updates = try self.lowerExprsToJoinTempsAtTypes(update_target_span, update_tys, update_values);
-        defer updates.deinit(self.allocator);
-
-        var lir_jump = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_point.join_id } }, where.glue());
-        lir_jump = try self.prependJoinParamInitializers(where, join_point.params, locals.ids, lir_jump);
-        lir_jump = try self.prependJoinParamInitializers(where, update_target_span, updates.ids, lir_jump);
-        lir_jump = try self.prependJoinExprsAtTypes(where, locals, join_point.param_tys, lir_jump);
-        lir_jump = try self.prependJoinExprsAtTypes(where, updates, update_tys, lir_jump);
-        return lir_jump;
-    }
-
     const ActiveLoopParam = struct {
         local: LIR.LocalId,
         ty: Type.TypeId,
@@ -8335,79 +9222,9 @@ const Lowerer = struct {
             Common.invariant("jump loop update named a parameter outside its lexical loop scope");
     }
 
-    fn lowerReturn(self: *Lowerer, where: LowerSite, ret: Mono.Return) Common.LowerError!LIR.CFStmtId {
-        const ret_ty = self.current_ret_ty orelse Common.invariant("return expression reached LIR lowering outside a function");
-        const ret_local = try self.addTemp(ret_ty);
-        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, where.source());
-        const saved_return_target = self.current_return_target;
-        self.current_return_target = if (self.return_forwarding_repeatable_depth == 0) ret_local else null;
-        defer self.current_return_target = saved_return_target;
-        return try self.lowerExprIntoAtType(where, ret_local, ret.value, ret_ty, ret_stmt);
-    }
-
-    fn lowerExpectExprInto(self: *Lowerer, where: LowerSite, target: LIR.LocalId, child: Lifted.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        const after = try self.assignZst(where, target, next);
-        return try self.lowerExpectStmt(where, child, after);
-    }
-
-    fn lowerExpectStmt(self: *Lowerer, where: LowerSite, child: Lifted.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        const cond = try self.addTemp(try self.lowerExprTy(child));
-        const expect_stmt = try self.result.store.addCFStmt(.{ .expect = .{
-            .condition = cond,
-            .site = self.expectSite(where),
-            .next = next,
-        } }, where.source());
-        return try self.lowerExprInto(where, cond, child, expect_stmt);
-    }
-
     const PatternMiss = struct {
         join_id: LIR.JoinPointId,
     };
-
-    /// Lower a match through the shared decision-tree compiler
-    /// (src/postcheck/match_tree.zig): one multiway test per tested
-    /// occurrence, one discriminant/length/field read per position, and
-    /// branch bodies lowered exactly once.
-    fn lowerBranchTree(
-        self: *Lowerer,
-        where: LowerSite,
-        scrutinee: LIR.LocalId,
-        scrutinee_ty: Type.TypeId,
-        branches: []const Lifted.Branch,
-        target: LIR.LocalId,
-        result_ty: Type.TypeId,
-        done: LIR.JoinPointId,
-        comptime_site: ?Lifted.ComptimeSiteId,
-    ) Common.LowerError!LIR.CFStmtId {
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena_state.deinit();
-        const arena = arena_state.allocator();
-
-        var shapes = MatchTreeCtx.ShapeInterner{ .map = .init(arena) };
-        const ctx = MatchTreeCtx{
-            .l = self,
-            .where = where,
-            .arena = arena,
-            .target = target,
-            .result_ty = result_ty,
-            .comptime_site = comptime_site,
-            .shapes = &shapes,
-        };
-
-        const MT = match_tree.Compiler(MatchTreeCtx);
-        const mt_branches = try arena.alloc(MT.Branch, branches.len);
-        for (branches, mt_branches, 0..) |branch, *out, i| {
-            out.* = .{
-                .pat = branch.pat,
-                .bindings = branch.bindings,
-                .guard = branch.guard,
-                .body = branch.body,
-                .branch_index = @intCast(i),
-            };
-        }
-        const built = try MT.build(arena, ctx, scrutinee_ty, mt_branches);
-        return try MT.Emitter.emitMatch(arena, ctx, built, scrutinee, done);
-    }
 
     /// Accessor/emission context adapting this lowerer to the shared
     /// decision-tree match compiler. Construction methods answer pattern and
@@ -8895,27 +9712,8 @@ const Lowerer = struct {
             return try self.l.bindLocalFromTyped(self.where, local, ty, source, next);
         }
 
-        pub fn lowerBindings(self: MatchTreeCtx, bindings: BindingSpan, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-            const stmts = self.l.solved.lifted.stmtSpan(bindings);
-            var current = next;
-            var i = stmts.len;
-            while (i > 0) {
-                i -= 1;
-                current = try self.l.lowerStmt(self.where, GuardedList.at(stmts, i), current);
-            }
-            return current;
-        }
-
-        pub fn lowerBody(self: MatchTreeCtx, body: Lifted.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-            return try self.l.lowerExprIntoAtType(self.where, self.target, body, self.result_ty, next);
-        }
-
         pub fn guardTemp(self: MatchTreeCtx, guard: Lifted.ExprId) Common.LowerError!LIR.LocalId {
             return try self.l.addTemp(try self.l.lowerExprTy(guard));
-        }
-
-        pub fn lowerGuard(self: MatchTreeCtx, cond: LIR.LocalId, guard: Lifted.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-            return try self.l.lowerExprInto(self.where, cond, guard, next);
         }
 
         pub fn boolSwitch(self: MatchTreeCtx, cond: LIR.LocalId, then: LIR.CFStmtId, els: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -10250,65 +11048,6 @@ const Lowerer = struct {
     /// second ownership unit.
     fn operandIsPlainLocalRead(self: *const Lowerer, expr_id: Lifted.ExprId) bool {
         return self.solved.lifted.getExpr(expr_id).data == .local;
-    }
-
-    fn prependExprs(self: *Lowerer, where: LowerSite, lowered: LoweredExprLocals, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        var current = next;
-        var i = lowered.ids.len;
-        while (i > 0) {
-            i -= 1;
-            if (!self.operandIsPlainLocalRead(lowered.exprs[i])) continue;
-            current = try self.lowerExprInto(where, lowered.ids[i], lowered.exprs[i], current);
-        }
-        i = lowered.ids.len;
-        while (i > 0) {
-            i -= 1;
-            if (self.operandIsPlainLocalRead(lowered.exprs[i])) continue;
-            current = try self.lowerExprInto(where, lowered.ids[i], lowered.exprs[i], current);
-        }
-        return current;
-    }
-
-    fn prependExprsAtTypes(
-        self: *Lowerer,
-        where: LowerSite,
-        lowered: LoweredExprLocals,
-        tys: []const Type.TypeId,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        if (lowered.ids.len != tys.len) Common.invariant("typed expression prepend arity differed from local arity");
-        var current = next;
-        var i = lowered.ids.len;
-        while (i > 0) {
-            i -= 1;
-            if (!self.operandIsPlainLocalRead(lowered.exprs[i])) continue;
-            current = try self.lowerExprIntoAtType(where, lowered.ids[i], lowered.exprs[i], tys[i], current);
-        }
-        i = lowered.ids.len;
-        while (i > 0) {
-            i -= 1;
-            if (self.operandIsPlainLocalRead(lowered.exprs[i])) continue;
-            current = try self.lowerExprIntoAtType(where, lowered.ids[i], lowered.exprs[i], tys[i], current);
-        }
-        return current;
-    }
-
-    fn prependJoinExprsAtTypes(
-        self: *Lowerer,
-        where: LowerSite,
-        lowered: LoweredJoinExprLocals,
-        tys: []const Type.TypeId,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        if (lowered.ids.len != tys.len) Common.invariant("typed join expression prepend arity differed from local arity");
-        var current = next;
-        var i = lowered.ids.len;
-        while (i > 0) {
-            i -= 1;
-            const target = lowered.ids[i] orelse continue;
-            current = try self.lowerExprIntoAtType(where, target, lowered.exprs[i], tys[i], current);
-        }
-        return current;
     }
 
     fn prependJoinParamInitializers(

@@ -1747,7 +1747,7 @@ const BoundSetBinder = struct {
 };
 
 fn bindPat(allocator: Allocator, input: *const Ast.Program, pat_id: Mono.PatId, bound: *BoundSet, added: *std.ArrayList(Mono.LocalId)) Allocator.Error!void {
-    try Ast.forEachBoundLocal(input, pat_id, BoundSetBinder{
+    try Ast.forEachBoundLocal(allocator, input, pat_id, BoundSetBinder{
         .allocator = allocator,
         .input = input,
         .bound = bound,
@@ -2191,7 +2191,7 @@ const CaptureGraphBuilder = struct {
     };
 
     fn bindPat(self: *CaptureGraphBuilder, pat_id: Ast.PatId, added: *std.ArrayList(Ast.LocalId)) Allocator.Error!void {
-        try Ast.forEachBoundLocal(self.graph.program, pat_id, CaptureBinder{ .builder = self, .added = added });
+        try Ast.forEachBoundLocal(self.graph.allocator, self.graph.program, pat_id, CaptureBinder{ .builder = self, .added = added });
     }
 
     fn addDirect(self: *CaptureGraphBuilder, node_id: CaptureNodeId, local: Ast.LocalId) Allocator.Error!void {
