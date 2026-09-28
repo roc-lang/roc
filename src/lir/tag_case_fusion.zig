@@ -157,33 +157,16 @@ const BranchRewriter = struct {
         return LIR.RcHelper.fromConcrete(helper);
     }
 
-    /// Retargeted releases keep the ARC origin of the release they copy; the
-    /// rewritten payload read carries this pass's kind.
-    pub fn interceptStmt(self: *BranchRewriter, cloner: anytype, _: LIR.CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) ResourceError!?LIR.CFStmtId {
+    /// Claim releases of the matched union and reads of its payload.
+    pub fn interceptStmt(self: *BranchRewriter, cloner: anytype, _: LIR.CFStmtId, stmt: LIR.CFStmt, _: LIR.StmtOrigin) ResourceError!body_clone.Intercept {
         switch (stmt) {
             .decref => |release| {
-                if (!self.namesUnion(release.value)) return null;
-                const next = try cloner.cloneStmt(release.next);
-                const rc = self.payloadRelease() orelse return next;
-                return try cloner.store.addCFStmt(.{ .decref = .{
-                    .value = self.payload,
-                    .rc = rc,
-                    .atomicity = release.atomicity,
-                    .next = next,
-                } }, origin);
+                if (!self.namesUnion(release.value)) return .none;
+                return body_clone.Intercept.one(release.next);
             },
             .decref_if_initialized => |release| {
-                if (!self.namesUnion(release.value)) return null;
-                const next = try cloner.cloneStmt(release.next);
-                const rc = self.payloadRelease() orelse return next;
-                return try cloner.store.addCFStmt(.{ .decref_if_initialized = .{
-                    .cond = try cloner.mapLocal(release.cond),
-                    .cond_mask = release.cond_mask,
-                    .value = self.payload,
-                    .rc = rc,
-                    .atomicity = release.atomicity,
-                    .next = next,
-                } }, origin);
+                if (!self.namesUnion(release.value)) return .none;
+                return body_clone.Intercept.one(release.next);
             },
             .assign_ref => {},
             .init_uninitialized,
@@ -228,34 +211,80 @@ const BranchRewriter = struct {
             .assign_boxy_tag_payload,
             .boxy_tag_match,
             .assign_call_dict,
-            => return null,
+            => return .none,
         }
         const assign = stmt.assign_ref;
         if (assign.op == .tag_payload_struct) {
             const payload = assign.op.tag_payload_struct;
-            if (payload.source != self.param) return null;
+            if (payload.source != self.param) return .none;
             std.debug.assert(payload.variant_index == self.variant_index);
             try cloner.local_map.put(assign.target, self.payload);
-            return try cloner.cloneStmt(assign.next);
+            return body_clone.Intercept.one(assign.next);
         }
-        if (assign.op != .tag_payload) return null;
+        if (assign.op != .tag_payload) return .none;
         const payload = assign.op.tag_payload;
-        if (payload.source != self.param) return null;
+        if (payload.source != self.param) return .none;
         std.debug.assert(payload.variant_index == self.variant_index);
-        const op: LIR.RefOp = if (self.layouts.getLayout(self.payload_layout).tag == .struct_)
-            .{ .field = .{
-                .source = self.payload,
-                .field_idx = payload.payload_idx,
-            } }
-        else blk: {
-            std.debug.assert(payload.payload_idx == 0);
-            break :blk .{ .local = self.payload };
-        };
-        return try cloner.store.addCFStmt(.{ .assign_ref = .{
-            .target = try cloner.mapLocal(assign.target),
-            .op = op,
-            .next = try cloner.cloneStmt(assign.next),
-        } }, fusionOrigin(origin));
+        _ = try cloner.mapLocal(assign.target);
+        return body_clone.Intercept.one(assign.next);
+    }
+
+    /// Build the replacement for a statement `interceptStmt` claimed, once
+    /// its successor's clone is available. Retargeted releases keep the ARC
+    /// origin of the release they copy; the rewritten payload read carries
+    /// this pass's kind.
+    pub fn finishIntercept(
+        self: *BranchRewriter,
+        cloner: anytype,
+        _: LIR.CFStmtId,
+        stmt: LIR.CFStmt,
+        origin: LIR.StmtOrigin,
+        cloned: []const LIR.CFStmtId,
+    ) ResourceError!LIR.CFStmtId {
+        const next = cloned[0];
+        switch (stmt) {
+            .decref => |release| {
+                const rc = self.payloadRelease() orelse return next;
+                return try cloner.store.addCFStmt(.{ .decref = .{
+                    .value = self.payload,
+                    .rc = rc,
+                    .atomicity = release.atomicity,
+                    .next = next,
+                } }, origin);
+            },
+            .decref_if_initialized => |release| {
+                const rc = self.payloadRelease() orelse return next;
+                return try cloner.store.addCFStmt(.{ .decref_if_initialized = .{
+                    .cond = try cloner.mapLocal(release.cond),
+                    .cond_mask = release.cond_mask,
+                    .value = self.payload,
+                    .rc = rc,
+                    .atomicity = release.atomicity,
+                    .next = next,
+                } }, origin);
+            },
+            .assign_ref => |assign| switch (assign.op) {
+                .tag_payload_struct => return next,
+                .tag_payload => |payload| {
+                    const op: LIR.RefOp = if (self.layouts.getLayout(self.payload_layout).tag == .struct_)
+                        .{ .field = .{
+                            .source = self.payload,
+                            .field_idx = payload.payload_idx,
+                        } }
+                    else blk: {
+                        std.debug.assert(payload.payload_idx == 0);
+                        break :blk .{ .local = self.payload };
+                    };
+                    return try cloner.store.addCFStmt(.{ .assign_ref = .{
+                        .target = try cloner.mapLocal(assign.target),
+                        .op = op,
+                        .next = next,
+                    } }, fusionOrigin(origin));
+                },
+                else => unreachable,
+            },
+            else => unreachable,
+        }
     }
 };
 

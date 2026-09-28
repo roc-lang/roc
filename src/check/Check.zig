@@ -2052,32 +2052,62 @@ const HoistSelectionTransaction = struct {
         });
     }
 
+    /// The root a finished staging run appended or found.
+    const RootFinish = union(enum) {
+        expr: struct { expr: CIR.Expr.Idx, pattern: ?CIR.Pattern.Idx },
+        extraction: struct { pattern: CIR.Pattern.Idx, extraction: HoistPatternExtraction },
+        validation: struct { validation: HoistPatternValidation, owner_expr: ?CIR.Expr.Idx },
+    };
+
+    /// Pending staging work, innermost last. A root stages its expression's
+    /// dependencies under its own binding context, then appends itself, so
+    /// every root follows the roots it reads.
+    const StageItem = union(enum) {
+        /// Stage the roots the expression reads, under the innermost context.
+        expr: CIR.Expr.Idx,
+        /// Record a pattern's binders in the innermost context.
+        binders: struct { pattern: CIR.Pattern.Idx, kind: HoistedDependencyBindingKind },
+        /// Drop the innermost context's bindings back to a mark.
+        pop_mark: usize,
+        /// Stage the root a local binding reads.
+        binding_root: CIR.Pattern.Idx,
+        /// Release the innermost context and append its root.
+        finish_root: struct { root: RootFinish, known_update: ?CIR.Pattern.Idx },
+    };
+
+    const StageRun = struct {
+        items: std.ArrayListUnmanaged(StageItem) = .empty,
+        contexts: std.ArrayListUnmanaged(HoistedDependencyContext) = .empty,
+        root_index: u32 = undefined,
+
+        fn deinit(run: *StageRun, allocator: Allocator) void {
+            run.items.deinit(allocator);
+            for (run.contexts.items) |*pending_context| pending_context.deinit(allocator);
+            run.contexts.deinit(allocator);
+        }
+
+        fn context(run: *StageRun) *HoistedDependencyContext {
+            return &run.contexts.items[run.contexts.items.len - 1];
+        }
+    };
+
     fn stageExprRoot(
         self: *HoistSelectionTransaction,
         expr: CIR.Expr.Idx,
         pattern: ?CIR.Pattern.Idx,
     ) Allocator.Error!u32 {
-        if (self.staged_exprs.get(expr)) |root_index| {
-            if (pattern) |pattern_idx| {
-                try self.stageBindingAssociation(pattern_idx, root_index);
-            }
-            return root_index;
-        }
-        if (self.checker.hoist_selected_exprs.get(expr)) |root_index| {
-            if (pattern) |pattern_idx| {
-                try self.stageBindingAssociation(pattern_idx, root_index);
-            }
-            return root_index;
-        }
+        if (try self.existingExprRoot(expr, pattern)) |root_index| return root_index;
+        return self.runRoot(.{ .expr = .{ .expr = expr, .pattern = pattern } }, null, expr);
+    }
 
-        try self.stageExprDependencies(expr);
-
-        const root_index: u32 = @intCast(self.selectedRootCount() + self.staged_roots.items.len);
-        try self.staged_roots.append(self.checker.gpa, .{
-            .expr = expr,
-            .pattern = pattern,
-        });
-        try self.staged_exprs.put(self.checker.gpa, expr, root_index);
+    fn existingExprRoot(
+        self: *HoistSelectionTransaction,
+        expr: CIR.Expr.Idx,
+        pattern: ?CIR.Pattern.Idx,
+    ) Allocator.Error!?u32 {
+        const root_index = self.staged_exprs.get(expr) orelse
+            self.checker.hoist_selected_exprs.get(expr) orelse
+            return null;
         if (pattern) |pattern_idx| {
             try self.stageBindingAssociation(pattern_idx, root_index);
         }
@@ -2091,17 +2121,7 @@ const HoistSelectionTransaction = struct {
     ) Allocator.Error!u32 {
         if (self.checker.hoist_selected_bindings.get(pattern)) |root_index| return root_index;
         if (self.staged_bindings.get(pattern)) |root_index| return root_index;
-
-        try self.stageExprDependencies(extraction.base_expr);
-
-        const root_index: u32 = @intCast(self.selectedRootCount() + self.staged_roots.items.len);
-        try self.staged_roots.append(self.checker.gpa, .{
-            .expr = extraction.base_expr,
-            .pattern = pattern,
-            .body = .{ .pattern_extraction = extraction },
-        });
-        try self.stageBindingAssociation(pattern, root_index);
-        return root_index;
+        return self.runRoot(.{ .extraction = .{ .pattern = pattern, .extraction = extraction } }, null, extraction.base_expr);
     }
 
     fn stagePatternValidationRoot(
@@ -2111,18 +2131,7 @@ const HoistSelectionTransaction = struct {
     ) Allocator.Error!u32 {
         if (self.checker.hoist_selected_pattern_validations.get(validation.scrutinee_pattern)) |root_index| return root_index;
         if (self.staged_pattern_validations.get(validation.scrutinee_pattern)) |root_index| return root_index;
-
-        try self.stageExprDependencies(validation.base_expr);
-
-        const root_index: u32 = @intCast(self.selectedRootCount() + self.staged_roots.items.len);
-        try self.staged_roots.append(self.checker.gpa, .{
-            .expr = validation.base_expr,
-            .body = .{ .pattern_validation = validation },
-            .value_kind = .discarded,
-            .validation_owner_expr = owner_expr,
-        });
-        try self.staged_pattern_validations.put(self.checker.gpa, validation.scrutinee_pattern, root_index);
-        return root_index;
+        return self.runRoot(.{ .validation = .{ .validation = validation, .owner_expr = owner_expr } }, null, validation.base_expr);
     }
 
     fn stageBindingRoot(
@@ -2132,42 +2141,150 @@ const HoistSelectionTransaction = struct {
         if (self.checker.hoist_selected_bindings.get(pattern) != null) return true;
         if (self.staged_bindings.get(pattern) != null) return true;
         const known = self.checker.hoist_known_values.get(pattern) orelse return false;
-        return switch (known.value) {
+        const staged = switch (known.value) {
+            .binding_rhs => |expr| !self.checker.hoistExprInvalidated(expr),
+            .pattern_extraction => |extraction| !self.checker.hoistExprInvalidated(extraction.base_expr),
+            .selected_root => |root_index| return !self.checker.selectedHoistedRootInvalidated(root_index),
+            .unavailable_runtime => return false,
+        };
+        if (!staged) return false;
+        var run = StageRun{};
+        defer run.deinit(self.checker.gpa);
+        try run.items.append(self.checker.gpa, .{ .binding_root = pattern });
+        try self.drainStageRun(&run);
+        return true;
+    }
+
+    /// Stage `root` after the roots `deps_expr` reads, then return its index.
+    fn runRoot(
+        self: *HoistSelectionTransaction,
+        root: RootFinish,
+        known_update: ?CIR.Pattern.Idx,
+        deps_expr: CIR.Expr.Idx,
+    ) Allocator.Error!u32 {
+        var run = StageRun{};
+        defer run.deinit(self.checker.gpa);
+        try self.pushRootWork(&run, root, known_update, deps_expr);
+        try self.drainStageRun(&run);
+        return run.root_index;
+    }
+
+    fn pushRootWork(
+        self: *HoistSelectionTransaction,
+        run: *StageRun,
+        root: RootFinish,
+        known_update: ?CIR.Pattern.Idx,
+        deps_expr: CIR.Expr.Idx,
+    ) Allocator.Error!void {
+        const gpa = self.checker.gpa;
+        try run.items.ensureUnusedCapacity(gpa, 2);
+        try run.contexts.append(gpa, .{});
+        run.items.appendAssumeCapacity(.{ .finish_root = .{ .root = root, .known_update = known_update } });
+        run.items.appendAssumeCapacity(.{ .expr = deps_expr });
+    }
+
+    fn drainStageRun(self: *HoistSelectionTransaction, run: *StageRun) Allocator.Error!void {
+        while (run.items.pop()) |item| {
+            switch (item) {
+                .expr => |expr| try self.stageExprItem(run, expr),
+                .binders => |binders| try self.checker.appendHoistedDependencyPatternBinders(binders.pattern, run.context(), binders.kind),
+                .pop_mark => |mark| run.context().pop(mark),
+                .binding_root => |pattern| try self.stageBindingRootItem(run, pattern),
+                .finish_root => |finish| {
+                    var context = run.contexts.pop().?;
+                    context.deinit(self.checker.gpa);
+                    const root_index = try self.appendStagedRoot(finish.root);
+                    if (finish.known_update) |pattern| try self.stageKnownUpdate(pattern, root_index);
+                    run.root_index = root_index;
+                },
+            }
+        }
+    }
+
+    fn stageBindingRootItem(self: *HoistSelectionTransaction, run: *StageRun, pattern: CIR.Pattern.Idx) Allocator.Error!void {
+        if (self.checker.hoist_selected_bindings.get(pattern) != null) return;
+        if (self.staged_bindings.get(pattern) != null) return;
+        const known = self.checker.hoist_known_values.get(pattern) orelse return;
+        switch (known.value) {
             .binding_rhs => |expr| {
-                if (self.checker.hoistExprInvalidated(expr)) return false;
-                const root_index = try self.stageExprRoot(expr, pattern);
-                try self.stageKnownUpdate(pattern, root_index);
-                return true;
+                if (self.checker.hoistExprInvalidated(expr)) return;
+                if (try self.existingExprRoot(expr, pattern)) |root_index| {
+                    try self.stageKnownUpdate(pattern, root_index);
+                    return;
+                }
+                try self.pushRootWork(run, .{ .expr = .{ .expr = expr, .pattern = pattern } }, pattern, expr);
             },
             .pattern_extraction => |extraction| {
-                if (self.checker.hoistExprInvalidated(extraction.base_expr)) return false;
-                const root_index = try self.stagePatternExtractionRoot(pattern, extraction);
-                try self.stageKnownUpdate(pattern, root_index);
-                return true;
+                if (self.checker.hoistExprInvalidated(extraction.base_expr)) return;
+                try self.pushRootWork(run, .{ .extraction = .{ .pattern = pattern, .extraction = extraction } }, pattern, extraction.base_expr);
             },
-            .selected_root => |root_index| !self.checker.selectedHoistedRootInvalidated(root_index),
-            .unavailable_runtime => false,
-        };
+            .selected_root, .unavailable_runtime => {},
+        }
     }
 
-    fn stageExprDependencies(self: *HoistSelectionTransaction, expr: CIR.Expr.Idx) Allocator.Error!void {
-        var context = HoistedDependencyContext{};
-        defer context.deinit(self.checker.gpa);
-        try self.stageExprDependenciesInternal(expr, &context);
+    fn appendStagedRoot(self: *HoistSelectionTransaction, root: RootFinish) Allocator.Error!u32 {
+        const gpa = self.checker.gpa;
+        const root_index: u32 = @intCast(self.selectedRootCount() + self.staged_roots.items.len);
+        switch (root) {
+            .expr => |expr_root| {
+                try self.staged_roots.append(gpa, .{
+                    .expr = expr_root.expr,
+                    .pattern = expr_root.pattern,
+                });
+                try self.staged_exprs.put(gpa, expr_root.expr, root_index);
+                if (expr_root.pattern) |pattern_idx| {
+                    try self.stageBindingAssociation(pattern_idx, root_index);
+                }
+            },
+            .extraction => |extraction_root| {
+                try self.staged_roots.append(gpa, .{
+                    .expr = extraction_root.extraction.base_expr,
+                    .pattern = extraction_root.pattern,
+                    .body = .{ .pattern_extraction = extraction_root.extraction },
+                });
+                try self.stageBindingAssociation(extraction_root.pattern, root_index);
+            },
+            .validation => |validation_root| {
+                try self.staged_roots.append(gpa, .{
+                    .expr = validation_root.validation.base_expr,
+                    .body = .{ .pattern_validation = validation_root.validation },
+                    .value_kind = .discarded,
+                    .validation_owner_expr = validation_root.owner_expr,
+                });
+                try self.staged_pattern_validations.put(gpa, validation_root.validation.scrutinee_pattern, root_index);
+            },
+        }
+        return root_index;
     }
 
-    fn stageExprDependenciesInternal(
-        self: *HoistSelectionTransaction,
-        expr: CIR.Expr.Idx,
-        context: *HoistedDependencyContext,
-    ) Allocator.Error!void {
-        switch (self.checker.cir.store.getExpr(expr)) {
+    /// Push `exprs` so that they are staged in order.
+    fn pushStageExprs(self: *HoistSelectionTransaction, run: *StageRun, exprs: []const CIR.Expr.Idx) Allocator.Error!void {
+        const start = run.items.items.len;
+        try run.items.ensureUnusedCapacity(self.checker.gpa, exprs.len);
+        var index = exprs.len;
+        while (index > 0) {
+            index -= 1;
+            run.items.appendAssumeCapacity(.{ .expr = exprs[index] });
+        }
+        std.debug.assert(run.items.items.len == start + exprs.len);
+    }
+
+    fn pushStageExpr(self: *HoistSelectionTransaction, run: *StageRun, expr: CIR.Expr.Idx) Allocator.Error!void {
+        try run.items.append(self.checker.gpa, .{ .expr = expr });
+    }
+
+    /// Stage the roots one expression reads directly, and push its children so
+    /// they are staged in source order after it.
+    fn stageExprItem(self: *HoistSelectionTransaction, run: *StageRun, expr: CIR.Expr.Idx) Allocator.Error!void {
+        const store = &self.checker.cir.store;
+        switch (store.getExpr(expr)) {
             .e_lookup_local => |lookup| {
+                const context = run.context();
                 if (self.checker.patternIsTopLevel(lookup.pattern_idx)) return;
                 if (self.checker.hoist_selected_bindings.contains(lookup.pattern_idx)) return;
                 if (self.staged_bindings.contains(lookup.pattern_idx)) return;
                 if (context.contains(lookup.pattern_idx)) return;
-                _ = try self.stageBindingRoot(lookup.pattern_idx);
+                try run.items.append(self.checker.gpa, .{ .binding_root = lookup.pattern_idx });
             },
             .e_lookup_external,
             .e_lookup_associated_local,
@@ -2204,155 +2321,117 @@ const HoistSelectionTransaction = struct {
             .e_break,
             .e_run_low_level,
             => {},
-            .e_str => |str| try self.stageExprSpanDependencies(str.span, context),
-            .e_list => |list| try self.stageExprSpanDependencies(list.elems, context),
-            .e_tuple => |tuple| try self.stageExprSpanDependencies(tuple.elems, context),
-            .e_block => |block| try self.stageBlockDependencies(block.stmts, block.final_expr, context),
-            .e_match => |match| try self.stageMatchDependencies(match, context),
-            .e_if => |if_expr| try self.stageIfDependencies(if_expr.branches, if_expr.final_else, context),
+            .e_str => |str| try self.pushStageExprs(run, store.sliceExpr(str.span)),
+            .e_list => |list| try self.pushStageExprs(run, store.sliceExpr(list.elems)),
+            .e_tuple => |tuple| try self.pushStageExprs(run, store.sliceExpr(tuple.elems)),
+            .e_block => |block| {
+                const gpa = self.checker.gpa;
+                try run.items.append(gpa, .{ .pop_mark = run.context().mark() });
+                try self.pushStageExpr(run, block.final_expr);
+                const statements = store.sliceStatements(block.stmts);
+                var index = statements.len;
+                while (index > 0) {
+                    index -= 1;
+                    switch (store.getStatement(statements[index])) {
+                        .s_decl => |decl| {
+                            try run.items.append(gpa, .{ .binders = .{ .pattern = decl.pattern, .kind = .internal } });
+                            try self.pushStageExpr(run, decl.expr);
+                        },
+                        .s_expr => |expr_stmt| try self.pushStageExpr(run, expr_stmt.expr),
+                        .s_import,
+                        .s_alias_decl,
+                        .s_nominal_decl,
+                        .s_where_alias_decl,
+                        .s_type_anno,
+                        .s_type_var_alias,
+                        .s_var,
+                        .s_var_uninitialized,
+                        .s_reassign,
+                        .s_crash,
+                        .s_dbg,
+                        .s_expect,
+                        .s_for,
+                        .s_while,
+                        .s_infinite_loop,
+                        .s_breakable_loop,
+                        .s_break,
+                        .s_return,
+                        .s_runtime_error,
+                        => {},
+                    }
+                }
+            },
+            .e_match => |match| {
+                // Every branch starts from the bindings in scope at the match.
+                const gpa = self.checker.gpa;
+                const mark = run.context().mark();
+                const branches = store.sliceMatchBranches(match.branches);
+                var branch_index = branches.len;
+                while (branch_index > 0) {
+                    branch_index -= 1;
+                    const branch = store.getMatchBranch(branches[branch_index]);
+                    try run.items.append(gpa, .{ .pop_mark = mark });
+                    try self.pushStageExpr(run, branch.value);
+                    if (branch.guard) |guard| try self.pushStageExpr(run, guard);
+                    const branch_patterns = store.sliceMatchBranchPatterns(branch.patterns);
+                    var pattern_index = branch_patterns.len;
+                    while (pattern_index > 0) {
+                        pattern_index -= 1;
+                        const branch_pattern = store.getMatchBranchPattern(branch_patterns[pattern_index]);
+                        try run.items.append(gpa, .{ .binders = .{ .pattern = branch_pattern.pattern, .kind = .contextual } });
+                    }
+                }
+                try self.pushStageExpr(run, match.cond);
+            },
+            .e_if => |if_expr| {
+                try self.pushStageExpr(run, if_expr.final_else);
+                const branches = store.sliceIfBranches(if_expr.branches);
+                var index = branches.len;
+                while (index > 0) {
+                    index -= 1;
+                    const branch = store.getIfBranch(branches[index]);
+                    try self.pushStageExpr(run, branch.body);
+                    try self.pushStageExpr(run, branch.cond);
+                }
+            },
             .e_call => |call| {
-                try self.stageExprDependenciesInternal(call.func, context);
-                try self.stageExprSpanDependencies(call.args, context);
+                try self.pushStageExprs(run, store.sliceExpr(call.args));
+                try self.pushStageExpr(run, call.func);
             },
             .e_method_call => |call| {
-                try self.stageExprDependenciesInternal(call.receiver, context);
-                try self.stageExprSpanDependencies(call.args, context);
+                try self.pushStageExprs(run, store.sliceExpr(call.args));
+                try self.pushStageExpr(run, call.receiver);
             },
             .e_dispatch_call => |call| {
-                try self.stageExprDependenciesInternal(call.receiver, context);
-                try self.stageExprSpanDependencies(call.args, context);
+                try self.pushStageExprs(run, store.sliceExpr(call.args));
+                try self.pushStageExpr(run, call.receiver);
             },
-            .e_record => |record| try self.stageRecordDependencies(record.fields, record.ext, context),
-            .e_tag => |tag| try self.stageExprSpanDependencies(tag.args, context),
-            .e_nominal => |nominal| try self.stageExprDependenciesInternal(nominal.backing_expr, context),
-            .e_nominal_external => |nominal| try self.stageExprDependenciesInternal(nominal.backing_expr, context),
-            .e_binop => |binop| {
-                try self.stageExprDependenciesInternal(binop.lhs, context);
-                try self.stageExprDependenciesInternal(binop.rhs, context);
+            .e_record => |record| {
+                const fields = store.sliceRecordFields(record.fields);
+                var index = fields.len;
+                while (index > 0) {
+                    index -= 1;
+                    try self.pushStageExpr(run, store.getRecordField(fields[index]).value);
+                }
+                if (record.ext) |ext_expr| try self.pushStageExpr(run, ext_expr);
             },
-            .e_unary_minus => |unary| try self.stageExprDependenciesInternal(unary.expr, context),
-            .e_field_access => |field| try self.stageExprDependenciesInternal(field.receiver, context),
+            .e_tag => |tag| try self.pushStageExprs(run, store.sliceExpr(tag.args)),
+            .e_nominal => |nominal| try self.pushStageExpr(run, nominal.backing_expr),
+            .e_nominal_external => |nominal| try self.pushStageExpr(run, nominal.backing_expr),
+            .e_binop => |binop| try self.pushStageExprs(run, &.{ binop.lhs, binop.rhs }),
+            .e_unary_minus => |unary| try self.pushStageExpr(run, unary.expr),
+            .e_field_access => |field| try self.pushStageExpr(run, field.receiver),
             .e_interpolation => |interpolation| {
-                try self.stageExprDependenciesInternal(interpolation.first, context);
-                try self.stageExprSpanDependencies(interpolation.parts, context);
+                try self.pushStageExprs(run, store.sliceExpr(interpolation.parts));
+                try self.pushStageExpr(run, interpolation.first);
             },
-            .e_structural_eq => |eq| {
-                try self.stageExprDependenciesInternal(eq.lhs, context);
-                try self.stageExprDependenciesInternal(eq.rhs, context);
-            },
-            .e_structural_hash => |h| {
-                try self.stageExprDependenciesInternal(h.value, context);
-                try self.stageExprDependenciesInternal(h.hasher, context);
-            },
-            .e_method_eq => |eq| {
-                try self.stageExprDependenciesInternal(eq.lhs, context);
-                try self.stageExprDependenciesInternal(eq.rhs, context);
-            },
-            .e_type_method_call => |call| try self.stageExprSpanDependencies(call.args, context),
-            .e_type_dispatch_call => |call| try self.stageExprSpanDependencies(call.args, context),
-            .e_tuple_access => |access| try self.stageExprDependenciesInternal(access.tuple, context),
+            .e_structural_eq => |eq| try self.pushStageExprs(run, &.{ eq.lhs, eq.rhs }),
+            .e_structural_hash => |h| try self.pushStageExprs(run, &.{ h.value, h.hasher }),
+            .e_method_eq => |eq| try self.pushStageExprs(run, &.{ eq.lhs, eq.rhs }),
+            .e_type_method_call => |call| try self.pushStageExprs(run, store.sliceExpr(call.args)),
+            .e_type_dispatch_call => |call| try self.pushStageExprs(run, store.sliceExpr(call.args)),
+            .e_tuple_access => |access| try self.pushStageExpr(run, access.tuple),
             .e_deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference reached checking", .{}),
-        }
-    }
-
-    fn stageExprSpanDependencies(
-        self: *HoistSelectionTransaction,
-        span: CIR.Expr.Span,
-        context: *HoistedDependencyContext,
-    ) Allocator.Error!void {
-        for (self.checker.cir.store.sliceExpr(span)) |child| {
-            try self.stageExprDependenciesInternal(child, context);
-        }
-    }
-
-    fn stageBlockDependencies(
-        self: *HoistSelectionTransaction,
-        statements: CIR.Statement.Span,
-        final_expr: CIR.Expr.Idx,
-        context: *HoistedDependencyContext,
-    ) Allocator.Error!void {
-        const mark = context.mark();
-        defer context.pop(mark);
-
-        for (self.checker.cir.store.sliceStatements(statements)) |statement| {
-            switch (self.checker.cir.store.getStatement(statement)) {
-                .s_decl => |decl| {
-                    try self.stageExprDependenciesInternal(decl.expr, context);
-                    try self.checker.appendHoistedDependencyPatternBinders(decl.pattern, context, .internal);
-                },
-                .s_expr => |expr_stmt| try self.stageExprDependenciesInternal(expr_stmt.expr, context),
-                .s_import,
-                .s_alias_decl,
-                .s_nominal_decl,
-                .s_where_alias_decl,
-                .s_type_anno,
-                .s_type_var_alias,
-                .s_var,
-                .s_var_uninitialized,
-                .s_reassign,
-                .s_crash,
-                .s_dbg,
-                .s_expect,
-                .s_for,
-                .s_while,
-                .s_infinite_loop,
-                .s_breakable_loop,
-                .s_break,
-                .s_return,
-                .s_runtime_error,
-                => {},
-            }
-        }
-        try self.stageExprDependenciesInternal(final_expr, context);
-    }
-
-    fn stageMatchDependencies(
-        self: *HoistSelectionTransaction,
-        match: CIR.Expr.Match,
-        context: *HoistedDependencyContext,
-    ) Allocator.Error!void {
-        try self.stageExprDependenciesInternal(match.cond, context);
-        for (self.checker.cir.store.sliceMatchBranches(match.branches)) |branch_idx| {
-            const branch = self.checker.cir.store.getMatchBranch(branch_idx);
-            const mark = context.mark();
-            defer context.pop(mark);
-            for (self.checker.cir.store.sliceMatchBranchPatterns(branch.patterns)) |branch_pattern_idx| {
-                const branch_pattern = self.checker.cir.store.getMatchBranchPattern(branch_pattern_idx);
-                try self.checker.appendHoistedDependencyPatternBinders(branch_pattern.pattern, context, .contextual);
-            }
-            if (branch.guard) |guard| {
-                try self.stageExprDependenciesInternal(guard, context);
-            }
-            try self.stageExprDependenciesInternal(branch.value, context);
-        }
-    }
-
-    fn stageIfDependencies(
-        self: *HoistSelectionTransaction,
-        branches: CIR.Expr.IfBranch.Span,
-        final_else: CIR.Expr.Idx,
-        context: *HoistedDependencyContext,
-    ) Allocator.Error!void {
-        for (self.checker.cir.store.sliceIfBranches(branches)) |branch_idx| {
-            const branch = self.checker.cir.store.getIfBranch(branch_idx);
-            try self.stageExprDependenciesInternal(branch.cond, context);
-            try self.stageExprDependenciesInternal(branch.body, context);
-        }
-        try self.stageExprDependenciesInternal(final_else, context);
-    }
-
-    fn stageRecordDependencies(
-        self: *HoistSelectionTransaction,
-        fields: CIR.RecordField.Span,
-        ext: ?CIR.Expr.Idx,
-        context: *HoistedDependencyContext,
-    ) Allocator.Error!void {
-        if (ext) |ext_expr| {
-            try self.stageExprDependenciesInternal(ext_expr, context);
-        }
-        for (self.checker.cir.store.sliceRecordFields(fields)) |field_idx| {
-            const field = self.checker.cir.store.getRecordField(field_idx);
-            try self.stageExprDependenciesInternal(field.value, context);
         }
     }
 
@@ -11468,59 +11547,68 @@ fn hoistedRootPatternBindersAreConcrete(
 
 fn appendHoistedDependencyPatternBinders(
     self: *Self,
-    pattern: CIR.Pattern.Idx,
+    root: CIR.Pattern.Idx,
     context: *HoistedDependencyContext,
     kind: HoistedDependencyBindingKind,
 ) Allocator.Error!void {
+    var pending: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer pending.deinit(self.gpa);
+    try pending.append(self.gpa, root);
+    while (pending.pop()) |pattern| {
+        switch (self.cir.store.getPattern(pattern)) {
+            .assign, .var_assign, .as => try context.append(self.gpa, pattern, kind),
+            .tuple,
+            .record_destructure,
+            .applied_tag,
+            .nominal,
+            .nominal_external,
+            .list,
+            .str_interpolation,
+            .underscore,
+            .runtime_error,
+            .num_literal,
+            .num_from_numeral_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            => {},
+            .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+        }
+        try self.pushCirSubpatterns(&pending, pattern);
+    }
+}
+
+/// Push `pattern`'s direct subpatterns onto `pending` so that they pop in
+/// source order, for pre-order walks over a pattern tree.
+fn pushCirSubpatterns(self: *Self, pending: *std.ArrayList(CIR.Pattern.Idx), pattern: CIR.Pattern.Idx) Allocator.Error!void {
+    const start = pending.items.len;
     switch (self.cir.store.getPattern(pattern)) {
-        .assign, .var_assign => {
-            try context.append(self.gpa, pattern, kind);
-        },
-        .as => |as_pattern| {
-            try context.append(self.gpa, pattern, kind);
-            try self.appendHoistedDependencyPatternBinders(as_pattern.pattern, context, kind);
-        },
-        .tuple => |tuple| {
-            for (self.cir.store.slicePatterns(tuple.patterns)) |elem_pattern| {
-                try self.appendHoistedDependencyPatternBinders(elem_pattern, context, kind);
-            }
-        },
+        .as => |as_pattern| try pending.append(self.gpa, as_pattern.pattern),
+        .tuple => |tuple| try pending.appendSlice(self.gpa, self.cir.store.slicePatterns(tuple.patterns)),
         .record_destructure => |destructure| {
             for (self.cir.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
-                const destruct = self.cir.store.getRecordDestruct(destruct_idx);
-                try self.appendHoistedDependencyPatternBinders(destruct.kind.toPatternIdx(), context, kind);
+                try pending.append(self.gpa, self.cir.store.getRecordDestruct(destruct_idx).kind.toPatternIdx());
             }
         },
-        .applied_tag => |tag| {
-            for (self.cir.store.slicePatterns(tag.args)) |arg_pattern| {
-                try self.appendHoistedDependencyPatternBinders(arg_pattern, context, kind);
-            }
-        },
-        .nominal => |nominal| {
-            try self.appendHoistedDependencyPatternBinders(nominal.backing_pattern, context, kind);
-        },
-        .nominal_external => |nominal| {
-            try self.appendHoistedDependencyPatternBinders(nominal.backing_pattern, context, kind);
-        },
+        .applied_tag => |tag| try pending.appendSlice(self.gpa, self.cir.store.slicePatterns(tag.args)),
+        .nominal => |nominal| try pending.append(self.gpa, nominal.backing_pattern),
+        .nominal_external => |nominal| try pending.append(self.gpa, nominal.backing_pattern),
         .list => |list| {
-            for (self.cir.store.slicePatterns(list.patterns)) |elem_pattern| {
-                try self.appendHoistedDependencyPatternBinders(elem_pattern, context, kind);
-            }
+            try pending.appendSlice(self.gpa, self.cir.store.slicePatterns(list.patterns));
             if (list.rest_info) |rest_info| {
-                if (rest_info.pattern) |rest_pattern| {
-                    try self.appendHoistedDependencyPatternBinders(rest_pattern, context, kind);
-                }
+                if (rest_info.pattern) |rest_pattern| try pending.append(self.gpa, rest_pattern);
             }
         },
         .str_interpolation => |str| {
             var step_offset: u32 = 0;
             while (step_offset < str.steps.span.len) : (step_offset += 1) {
-                const step = self.cir.store.getStrPatternStep(str.steps, step_offset);
-                if (step.capture) |capture| {
-                    try self.appendHoistedDependencyPatternBinders(capture, context, kind);
-                }
+                if (self.cir.store.getStrPatternStep(str.steps, step_offset).capture) |capture| try pending.append(self.gpa, capture);
             }
         },
+        .assign,
+        .var_assign,
         .underscore,
         .runtime_error,
         .num_literal,
@@ -11530,9 +11618,10 @@ fn appendHoistedDependencyPatternBinders(
         .frac_f32_literal,
         .frac_f64_literal,
         .str_literal,
+        .deferred_import_ref,
         => {},
-        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     }
+    std.mem.reverse(CIR.Pattern.Idx, pending.items[start..]);
 }
 
 fn hoistedRootIfDependenciesAreKept(
@@ -13407,129 +13496,74 @@ fn varHasUnresolvedInspectContent(
     position: InspectTypePosition,
     visited: *std.AutoHashMap(Var, u8),
 ) std.mem.Allocator.Error!bool {
-    const resolved = self.types.resolveVar(var_);
-    const position_bit = @as(u8, 1) << @intFromEnum(position);
-    const visit = try visited.getOrPut(resolved.var_);
-    if (!visit.found_existing) visit.value_ptr.* = 0;
-    if (visit.value_ptr.* & position_bit != 0) return false;
-    visit.value_ptr.* |= position_bit;
-
-    // Checked-type publication attaches an explicit close-to-empty default to
-    // each unconstrained row-tail occurrence. Ordinary value occurrences have
-    // no such default, and constrained variables cannot receive a row default.
-    return switch (resolved.desc.content) {
-        .flex => |flex| switch (position) {
-            .value => true,
-            .record_row, .tag_row => flex.constraints.len() > 0,
-        },
-        .rigid => |rigid| switch (position) {
-            .value => true,
-            .record_row, .tag_row => rigid.constraints.len() > 0,
-        },
-        .err, .field_presence => false,
-        .alias => |alias| try self.varHasUnresolvedInspectContent(self.types.getAliasBackingVar(alias), position, visited),
-        .structure => |flat_type| try self.flatTypeHasUnresolvedInspectContent(flat_type, visited),
-    };
+    var scan = UnresolvedInspectScan{ .check = self, .visited = visited };
+    return UnresolvedInspectScan.Eval.run(self.gpa, &scan, .{ .var_ = var_, .position = position });
 }
 
-fn flatTypeHasUnresolvedInspectContent(
-    self: *Self,
-    flat_type: FlatType,
+/// Whether a type reaches content that `Str.inspect` cannot render yet. Each
+/// var is visited once per position, in the order a left-to-right walk
+/// reaches it.
+const UnresolvedInspectScan = struct {
+    check: *Self,
     visited: *std.AutoHashMap(Var, u8),
-) std.mem.Allocator.Error!bool {
-    return switch (flat_type) {
-        .tuple => |tuple| try self.varsHaveUnresolvedInspectContent(self.types.sliceVars(tuple.elems), visited),
-        .nominal_type => |nominal| try self.varsHaveUnresolvedInspectContent(self.types.sliceNominalArgs(nominal), visited),
-        .fn_pure, .fn_effectful, .fn_unbound => false,
-        .record => |record| blk: {
-            const fields = self.types.getRecordFieldsSlice(record.fields);
-            for (fields.items(.presence)) |presence| {
-                {
-                    const field_var = presence.typeVar();
-                    if (try self.varHasUnresolvedInspectContent(field_var, .value, visited)) break :blk true;
-                }
-            }
-            break :blk try self.varHasUnresolvedInspectContent(record.ext, .record_row, visited);
-        },
-        .tag_union => |tag_union| blk: {
-            const tags = self.types.getTagsSlice(tag_union.tags);
-            for (tags.items(.args)) |args| {
-                if (try self.varsHaveUnresolvedInspectContent(self.types.sliceVars(args), visited)) break :blk true;
-            }
-            break :blk try self.varHasUnresolvedInspectContent(tag_union.ext, .tag_row, visited);
-        },
-        .empty_record, .empty_tag_union => false,
-    };
-}
 
-fn varsHaveUnresolvedInspectContent(
-    self: *Self,
-    vars: []const Var,
-    visited: *std.AutoHashMap(Var, u8),
-) std.mem.Allocator.Error!bool {
-    for (vars) |var_| {
-        if (try self.varHasUnresolvedInspectContent(var_, .value, visited)) return true;
+    const Leaf = struct { var_: Var, position: InspectTypePosition };
+    const Eval = collections.AnyAll.Evaluation(Leaf, UnresolvedInspectScan);
+
+    pub fn enter(scan: *UnresolvedInspectScan, items: Eval.Items, leaf: Leaf) std.mem.Allocator.Error!Eval.Expansion {
+        const self = scan.check;
+        const resolved = self.types.resolveVar(leaf.var_);
+        const position_bit = @as(u8, 1) << @intFromEnum(leaf.position);
+        const visit = try scan.visited.getOrPut(resolved.var_);
+        if (!visit.found_existing) visit.value_ptr.* = 0;
+        if (visit.value_ptr.* & position_bit != 0) return .{ .value = false };
+        visit.value_ptr.* |= position_bit;
+
+        // Checked-type publication attaches an explicit close-to-empty default to
+        // each unconstrained row-tail occurrence. Ordinary value occurrences have
+        // no such default, and constrained variables cannot receive a row default.
+        switch (resolved.desc.content) {
+            .flex => |flex| return .{ .value = switch (leaf.position) {
+                .value => true,
+                .record_row, .tag_row => flex.constraints.len() > 0,
+            } },
+            .rigid => |rigid| return .{ .value = switch (leaf.position) {
+                .value => true,
+                .record_row, .tag_row => rigid.constraints.len() > 0,
+            } },
+            .err, .field_presence => return .{ .value = false },
+            .alias => |alias| try items.add(.{ .var_ = self.types.getAliasBackingVar(alias), .position = leaf.position }),
+            .structure => |flat_type| switch (flat_type) {
+                .tuple => |tuple| for (self.types.sliceVars(tuple.elems)) |elem| try items.add(.{ .var_ = elem, .position = .value }),
+                .nominal_type => |nominal| for (self.types.sliceNominalArgs(nominal)) |arg| try items.add(.{ .var_ = arg, .position = .value }),
+                .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return .{ .value = false },
+                .record => |record| {
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    for (fields.items(.presence)) |presence| try items.add(.{ .var_ = presence.typeVar(), .position = .value });
+                    try items.add(.{ .var_ = record.ext, .position = .record_row });
+                },
+                .tag_union => |tag_union| {
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.args)) |args| {
+                        for (self.types.sliceVars(args)) |arg| try items.add(.{ .var_ = arg, .position = .value });
+                    }
+                    try items.add(.{ .var_ = tag_union.ext, .position = .tag_row });
+                },
+            },
+        }
+        return .{ .group = .any };
     }
-    return false;
-}
+
+    pub fn exit(_: *UnresolvedInspectScan, _: Leaf, _: ?bool) std.mem.Allocator.Error!void {}
+};
 
 fn varHasUnresolvedStaticDispatchConstraints(
     self: *Self,
     var_: Var,
     visited: *std.AutoHashMap(Var, void),
 ) std.mem.Allocator.Error!bool {
-    const resolved = self.types.resolveVar(var_);
-    if (visited.contains(resolved.var_)) return false;
-    try visited.put(resolved.var_, {});
-
-    return switch (resolved.desc.content) {
-        .flex => |flex| flex.constraints.len() > 0,
-        .rigid => |rigid| rigid.constraints.len() > 0,
-        .err, .field_presence => false,
-        .alias => |alias| try self.varHasUnresolvedStaticDispatchConstraints(self.types.getAliasBackingVar(alias), visited),
-        .structure => |flat_type| try self.flatTypeHasUnresolvedStaticDispatchConstraints(flat_type, visited),
-    };
-}
-
-fn flatTypeHasUnresolvedStaticDispatchConstraints(
-    self: *Self,
-    flat_type: FlatType,
-    visited: *std.AutoHashMap(Var, void),
-) std.mem.Allocator.Error!bool {
-    return switch (flat_type) {
-        .tuple => |tuple| try self.varsHaveUnresolvedStaticDispatchConstraints(self.types.sliceVars(tuple.elems), visited),
-        .nominal_type => |nominal| try self.varsHaveUnresolvedStaticDispatchConstraints(self.types.sliceNominalArgs(nominal), visited),
-        .fn_pure, .fn_effectful, .fn_unbound => false,
-        .record => |record| blk: {
-            const fields = self.types.getRecordFieldsSlice(record.fields);
-            for (fields.items(.presence)) |presence| {
-                {
-                    const field_var = presence.typeVar();
-                    if (try self.varHasUnresolvedStaticDispatchConstraints(field_var, visited)) break :blk true;
-                }
-            }
-            break :blk try self.varHasUnresolvedStaticDispatchConstraints(record.ext, visited);
-        },
-        .tag_union => |tag_union| blk: {
-            const tags = self.types.getTagsSlice(tag_union.tags);
-            for (tags.items(.args)) |args| {
-                if (try self.varsHaveUnresolvedStaticDispatchConstraints(self.types.sliceVars(args), visited)) break :blk true;
-            }
-            break :blk try self.varHasUnresolvedStaticDispatchConstraints(tag_union.ext, visited);
-        },
-        .empty_record, .empty_tag_union => false,
-    };
-}
-
-fn varsHaveUnresolvedStaticDispatchConstraints(
-    self: *Self,
-    vars: []const Var,
-    visited: *std.AutoHashMap(Var, void),
-) std.mem.Allocator.Error!bool {
-    for (vars) |var_| {
-        if (try self.varHasUnresolvedStaticDispatchConstraints(var_, visited)) return true;
-    }
-    return false;
+    var scan = UnresolvedConstraintScan{ .check = self, .visited = visited, .constraints = .any };
+    return UnresolvedConstraintScan.Eval.run(self.gpa, &scan, var_);
 }
 
 fn varHasUnresolvedNonLiteralStaticDispatchConstraints(
@@ -13537,59 +13571,61 @@ fn varHasUnresolvedNonLiteralStaticDispatchConstraints(
     var_: Var,
     visited: *std.AutoHashMap(Var, void),
 ) std.mem.Allocator.Error!bool {
-    const resolved = self.types.resolveVar(var_);
-    if (visited.contains(resolved.var_)) return false;
-    try visited.put(resolved.var_, {});
-
-    return switch (resolved.desc.content) {
-        .flex => |flex| self.rangeHasNonLiteralConstraint(flex.constraints),
-        .rigid => |rigid| self.rangeHasNonLiteralConstraint(rigid.constraints),
-        .err, .field_presence => false,
-        .alias => |alias| try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(self.types.getAliasBackingVar(alias), visited),
-        .structure => |flat_type| try self.flatTypeHasUnresolvedNonLiteralStaticDispatchConstraints(flat_type, visited),
-    };
+    var scan = UnresolvedConstraintScan{ .check = self, .visited = visited, .constraints = .non_literal };
+    return UnresolvedConstraintScan.Eval.run(self.gpa, &scan, var_);
 }
 
-fn flatTypeHasUnresolvedNonLiteralStaticDispatchConstraints(
-    self: *Self,
-    flat_type: FlatType,
+/// Whether a type reaches a variable still carrying static-dispatch
+/// constraints (any constraint, or one that is not a literal conversion).
+/// Each var is visited once, in the order a left-to-right walk reaches it.
+const UnresolvedConstraintScan = struct {
+    check: *Self,
     visited: *std.AutoHashMap(Var, void),
-) std.mem.Allocator.Error!bool {
-    return switch (flat_type) {
-        .tuple => |tuple| try self.varsHaveUnresolvedNonLiteralStaticDispatchConstraints(self.types.sliceVars(tuple.elems), visited),
-        .nominal_type => |nominal| try self.varsHaveUnresolvedNonLiteralStaticDispatchConstraints(self.types.sliceNominalArgs(nominal), visited),
-        .fn_pure, .fn_effectful, .fn_unbound => false,
-        .record => |record| blk: {
-            const fields = self.types.getRecordFieldsSlice(record.fields);
-            for (fields.items(.presence)) |presence| {
-                {
-                    const field_var = presence.typeVar();
-                    if (try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(field_var, visited)) break :blk true;
-                }
-            }
-            break :blk try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(record.ext, visited);
-        },
-        .tag_union => |tag_union| blk: {
-            const tags = self.types.getTagsSlice(tag_union.tags);
-            for (tags.items(.args)) |args| {
-                if (try self.varsHaveUnresolvedNonLiteralStaticDispatchConstraints(self.types.sliceVars(args), visited)) break :blk true;
-            }
-            break :blk try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(tag_union.ext, visited);
-        },
-        .empty_record, .empty_tag_union => false,
-    };
-}
+    constraints: enum { any, non_literal },
 
-fn varsHaveUnresolvedNonLiteralStaticDispatchConstraints(
-    self: *Self,
-    vars: []const Var,
-    visited: *std.AutoHashMap(Var, void),
-) std.mem.Allocator.Error!bool {
-    for (vars) |var_| {
-        if (try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(var_, visited)) return true;
+    const Eval = collections.AnyAll.Evaluation(Var, UnresolvedConstraintScan);
+
+    fn unresolved(scan: *const UnresolvedConstraintScan, range: StaticDispatchConstraint.SafeList.Range) bool {
+        return switch (scan.constraints) {
+            .any => range.len() > 0,
+            .non_literal => scan.check.rangeHasNonLiteralConstraint(range),
+        };
     }
-    return false;
-}
+
+    pub fn enter(scan: *UnresolvedConstraintScan, items: Eval.Items, var_: Var) std.mem.Allocator.Error!Eval.Expansion {
+        const self = scan.check;
+        const resolved = self.types.resolveVar(var_);
+        if (scan.visited.contains(resolved.var_)) return .{ .value = false };
+        try scan.visited.put(resolved.var_, {});
+
+        switch (resolved.desc.content) {
+            .flex => |flex| return .{ .value = scan.unresolved(flex.constraints) },
+            .rigid => |rigid| return .{ .value = scan.unresolved(rigid.constraints) },
+            .err, .field_presence => return .{ .value = false },
+            .alias => |alias| try items.add(self.types.getAliasBackingVar(alias)),
+            .structure => |flat_type| switch (flat_type) {
+                .tuple => |tuple| for (self.types.sliceVars(tuple.elems)) |elem| try items.add(elem),
+                .nominal_type => |nominal| for (self.types.sliceNominalArgs(nominal)) |arg| try items.add(arg),
+                .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return .{ .value = false },
+                .record => |record| {
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    for (fields.items(.presence)) |presence| try items.add(presence.typeVar());
+                    try items.add(record.ext);
+                },
+                .tag_union => |tag_union| {
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.args)) |args| {
+                        for (self.types.sliceVars(args)) |arg| try items.add(arg);
+                    }
+                    try items.add(tag_union.ext);
+                },
+            },
+        }
+        return .{ .group = .any };
+    }
+
+    pub fn exit(_: *UnresolvedConstraintScan, _: Var, _: ?bool) std.mem.Allocator.Error!void {}
+};
 
 /// Validate a platform module's hosted section against the hosted functions
 /// its imported type modules declare: every hosted function must appear
@@ -20194,41 +20230,98 @@ const PatternCtx = struct {
 };
 
 /// Check the pattern in-place and return whether its constructors are valid.
-/// Recursive children report rejection during checking; owners consume this
-/// fact without rediscovering errors from the solved pattern type.
+/// Children report rejection during checking; owners consume this fact
+/// without rediscovering errors from the solved pattern type.
 fn checkPattern(
     self: *Self,
     pattern_idx: CIR.Pattern.Idx,
     ctx: PatternCtx,
     env: *Env,
 ) std.mem.Allocator.Error!bool {
-    var valid = true;
-    _ = try self.checkPatternHelp(pattern_idx, ctx, env, .in_place, &valid);
-    return valid;
-}
-
-/// Check the types for the provided pattern, either as fresh var or in-place
-fn checkPatternHelp(
-    self: *Self,
-    pattern_idx: CIR.Pattern.Idx,
-    ctx: PatternCtx,
-    env: *Env,
-    comptime out_var: OutVar,
-    valid: *bool,
-) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    var valid = true;
+    var frames: std.ArrayList(PatternCheckFrame) = .empty;
+    defer frames.deinit(self.gpa);
+    const records_top = self.scratch_record_fields.top();
+    errdefer self.scratch_record_fields.clearFrom(records_top);
+
+    try frames.append(self.gpa, try self.beginPatternCheck(pattern_idx, env));
+    var input: ?Var = null;
+    while (true) {
+        const step = try self.stepPatternCheck(&frames.items[frames.items.len - 1], ctx, env, &valid, input);
+        switch (step) {
+            .child => |child| {
+                input = null;
+                try frames.append(self.gpa, try self.beginPatternCheck(child, env));
+            },
+            .done => |pattern_var| {
+                _ = frames.pop();
+                if (frames.items.len == 0) return valid;
+                input = pattern_var;
+            },
+        }
+    }
+}
+
+/// A pattern whose children are still being checked. Every pattern is
+/// checked in place: its type variable is its own node's variable.
+const PatternCheckFrame = struct {
+    pattern_idx: CIR.Pattern.Idx,
+    pattern_var: Var,
+    region: Region,
+    entered: bool = false,
+    /// The next child position; its meaning depends on the pattern kind.
+    index: u32 = 0,
+    state: PatternCheckState = .none,
+};
+
+const PatternCheckState = union(enum) {
+    none,
+    list: struct {
+        phase: enum { elems, remaining, rest } = .elems,
+        elem_var: Var = undefined,
+        last_elem: CIR.Pattern.Idx = undefined,
+    },
+    record: struct {
+        scratch_top: u32,
+        mb_ext_var: ?Var = null,
+    },
+};
+
+const PatternCheckStep = union(enum) {
+    child: CIR.Pattern.Idx,
+    done: Var,
+};
+
+fn beginPatternCheck(self: *Self, pattern_idx: CIR.Pattern.Idx, env: *Env) std.mem.Allocator.Error!PatternCheckFrame {
     try self.recordPatternCandidateDepth(pattern_idx);
-    const pattern = self.cir.store.getPattern(pattern_idx);
-    const pattern_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(pattern_idx));
-    const pattern_var = switch (comptime out_var) {
-        .fresh => try self.fresh(env, pattern_region),
-        .in_place => blk: {
-            try self.setVarRank(ModuleEnv.varFrom(pattern_idx), env);
-            break :blk ModuleEnv.varFrom(pattern_idx);
-        },
+    const pattern_var = ModuleEnv.varFrom(pattern_idx);
+    try self.setVarRank(pattern_var, env);
+    return .{
+        .pattern_idx = pattern_idx,
+        .pattern_var = pattern_var,
+        .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(pattern_idx)),
     };
+}
+
+/// Advance one pattern: request its next child, or finish it. `input` is the
+/// variable of the child most recently requested.
+fn stepPatternCheck(
+    self: *Self,
+    frame: *PatternCheckFrame,
+    ctx: PatternCtx,
+    env: *Env,
+    valid: *bool,
+    input: ?Var,
+) std.mem.Allocator.Error!PatternCheckStep {
+    const pattern_idx = frame.pattern_idx;
+    const pattern_var = frame.pattern_var;
+    const pattern_region = frame.region;
+    const entering = !frame.entered;
+    frame.entered = true;
+    const pattern = self.cir.store.getPattern(pattern_idx);
 
     switch (pattern) {
         .assign, .var_assign => {
@@ -20255,58 +20348,35 @@ fn checkPatternHelp(
             try self.mkPatternLiteralEqConstraint(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, env, pattern_region);
         },
         .str_interpolation => |str| {
-            const str_var = try self.freshStr(env, pattern_region);
-            _ = try self.unify(pattern_var, str_var, env);
-
-            var step_offset: u32 = 0;
-            while (step_offset < str.steps.span.len) : (step_offset += 1) {
-                const step = self.cir.store.getStrPatternStep(str.steps, step_offset);
-                if (step.capture) |capture_idx| {
-                    const capture_region = self.cir.store.getPatternRegion(capture_idx);
-                    const capture_var = try self.checkPatternHelp(capture_idx, ctx, env, .in_place, valid);
-                    const capture_str_var = try self.freshStr(env, capture_region);
-                    _ = try self.unify(capture_var, capture_str_var, env);
-                }
+            if (entering) {
+                const str_var = try self.freshStr(env, pattern_region);
+                _ = try self.unify(pattern_var, str_var, env);
+            }
+            if (input) |capture_var| {
+                const capture_idx = self.cir.store.getStrPatternStep(str.steps, frame.index - 1).capture.?;
+                const capture_str_var = try self.freshStr(env, self.cir.store.getPatternRegion(capture_idx));
+                _ = try self.unify(capture_var, capture_str_var, env);
+            }
+            while (frame.index < str.steps.span.len) {
+                const step = self.cir.store.getStrPatternStep(str.steps, frame.index);
+                frame.index += 1;
+                if (step.capture) |capture_idx| return .{ .child = capture_idx };
             }
         },
         // as //
         .as => |p| {
-            const var_ = try self.checkPatternHelp(p.pattern, ctx, env, out_var, valid);
-            _ = try self.unify(var_, pattern_var, env);
+            if (entering) return .{ .child = p.pattern };
+            _ = try self.unify(input.?, pattern_var, env);
         },
         // tuple //
         .tuple => |tuple| {
-            const elem_vars_slice = blk: {
-                switch (comptime out_var) {
-                    .fresh => {
-                        const scratch_vars_top = self.scratch_vars.top();
-                        defer self.scratch_vars.clearFrom(scratch_vars_top);
-
-                        // Check tuple elements
-                        const elems_slice = self.cir.store.slicePatterns(tuple.patterns);
-                        for (elems_slice) |single_elem_ptrn_idx| {
-                            const elem_var = try self.checkPatternHelp(single_elem_ptrn_idx, ctx, env, out_var, valid);
-                            try self.scratch_vars.append(elem_var);
-                        }
-
-                        // Add to types store
-                        break :blk try self.types.appendVars(self.scratch_vars.sliceFromStart(scratch_vars_top));
-                    },
-                    .in_place => {
-                        // Check tuple elements
-                        const elems_slice = self.cir.store.slicePatterns(tuple.patterns);
-                        for (elems_slice) |single_elem_ptrn_idx| {
-                            _ = try self.checkPatternHelp(single_elem_ptrn_idx, ctx, env, out_var, valid);
-                        }
-
-                        // Add to types store
-                        // Cast the elems idxs to vars (this works because Anno Idx are 1-1 with type Vars)
-                        break :blk try self.types.appendVars(@ptrCast(elems_slice));
-                    },
-                }
-            };
-
-            // Set the type in the store
+            const elems_slice = self.cir.store.slicePatterns(tuple.patterns);
+            if (frame.index < elems_slice.len) {
+                frame.index += 1;
+                return .{ .child = elems_slice[frame.index - 1] };
+            }
+            // Cast the elems idxs to vars (this works because Anno Idx are 1-1 with type Vars)
+            const elem_vars_slice = try self.types.appendVars(@ptrCast(elems_slice));
             try self.unifyWith(pattern_var, .{ .structure = .{
                 .tuple = .{ .elems = elem_vars_slice },
             } }, env);
@@ -20314,94 +20384,71 @@ fn checkPatternHelp(
         // list //
         .list => |list| {
             const elems = self.cir.store.slicePatterns(list.patterns);
-            if (elems.len == 0) {
-                // Create a nominal List with a fresh unbound element type
-                const elem_var = try self.fresh(env, pattern_region);
-                const list_content = try self.mkListContent(elem_var);
-                try self.unifyWith(pattern_var, list_content, env);
-            } else {
-
-                // Here, we use the list's 1st element as the element var to
-                // constrain the rest of the list
-
-                // Check the first elem
-                const elem_var = try self.checkPatternHelp(elems[0], ctx, env, out_var, valid);
-
-                // Iterate over the remaining elements
-                var last_elem_ptrn_idx = elems[0];
-                for (elems[1..], 1..) |elem_ptrn_idx, i| {
-                    const cur_elem_var = try self.checkPatternHelp(elem_ptrn_idx, ctx, env, out_var, valid);
-
-                    // Unify each element's var with the list's elem var
-                    const result = try self.unifyInContext(elem_var, cur_elem_var, env, .{ .list_entry = .{
-                        .elem_index = @intCast(i),
-                        .list_length = @intCast(elems.len),
-                        .last_elem_idx = ModuleEnv.nodeIdxFrom(last_elem_ptrn_idx),
-                    } });
-
-                    // If we errored, check the rest of the elements without comparing
-                    // to the elem_var to catch their individual errors
-                    if (!result.isEstablished()) {
-                        for (elems[i + 1 ..]) |remaining_elem_expr_idx| {
-                            _ = try self.checkPatternHelp(remaining_elem_expr_idx, ctx, env, out_var, valid);
-                        }
-
-                        // Break to avoid cascading errors
-                        break;
-                    }
-
-                    last_elem_ptrn_idx = elem_ptrn_idx;
+            if (entering) {
+                frame.state = .{ .list = .{} };
+                if (elems.len == 0) {
+                    // Create a nominal List with a fresh unbound element type
+                    const elem_var = try self.fresh(env, pattern_region);
+                    const list_content = try self.mkListContent(elem_var);
+                    try self.unifyWith(pattern_var, list_content, env);
+                    frame.state.list.phase = .rest;
+                } else {
+                    // Here, we use the list's 1st element as the element var to
+                    // constrain the rest of the list
+                    frame.index = 1;
+                    return .{ .child = elems[0] };
                 }
-
-                // Create a nominal List type with the inferred element type
-                const list_content = try self.mkListContent(elem_var);
-                try self.unifyWith(pattern_var, list_content, env);
             }
-
-            // Then, check the "rest" pattern is bound to the list value.
-            // This is if the pattern is like `.. as x`.
-            if (list.rest_info) |rest_info| {
-                if (rest_info.pattern) |rest_pattern_idx| {
-                    const rest_pattern_var = try self.checkPatternHelp(rest_pattern_idx, ctx, env, out_var, valid);
-
-                    _ = try self.unify(pattern_var, rest_pattern_var, env);
+            const state = &frame.state.list;
+            if (state.phase != .rest) {
+                const checked_index = frame.index - 1;
+                switch (state.phase) {
+                    .elems => if (checked_index == 0) {
+                        state.elem_var = input.?;
+                        state.last_elem = elems[0];
+                    } else {
+                        // Unify each element's var with the list's elem var
+                        const result = try self.unifyInContext(state.elem_var, input.?, env, .{ .list_entry = .{
+                            .elem_index = checked_index,
+                            .list_length = @intCast(elems.len),
+                            .last_elem_idx = ModuleEnv.nodeIdxFrom(state.last_elem),
+                        } });
+                        // If we errored, check the rest of the elements without comparing
+                        // to the elem_var to catch their individual errors
+                        if (result.isEstablished()) state.last_elem = elems[checked_index] else state.phase = .remaining;
+                    },
+                    .remaining => {},
+                    .rest => unreachable,
                 }
+                if (frame.index < elems.len) {
+                    frame.index += 1;
+                    return .{ .child = elems[frame.index - 1] };
+                }
+                // Create a nominal List type with the inferred element type
+                const list_content = try self.mkListContent(state.elem_var);
+                try self.unifyWith(pattern_var, list_content, env);
+                state.phase = .rest;
+                // Then, check the "rest" pattern is bound to the list value.
+                // This is if the pattern is like `.. as x`.
+                if (list.rest_info) |rest_info| {
+                    if (rest_info.pattern) |rest_pattern_idx| return .{ .child = rest_pattern_idx };
+                }
+            } else if (input) |rest_pattern_var| {
+                _ = try self.unify(pattern_var, rest_pattern_var, env);
+            } else if (list.rest_info) |rest_info| {
+                if (rest_info.pattern) |rest_pattern_idx| return .{ .child = rest_pattern_idx };
             }
         },
         // applied tag //
         .applied_tag => |applied_tag| {
             // Create a tag type in the type system and assign it the expr_var
-
-            const arg_vars_slice = blk: {
-                switch (comptime out_var) {
-                    .fresh => {
-                        const scratch_vars_top = self.scratch_vars.top();
-                        defer self.scratch_vars.clearFrom(scratch_vars_top);
-
-                        // Check tuple elements
-                        const arg_ptrn_idx_slice = self.cir.store.slicePatterns(applied_tag.args);
-                        for (arg_ptrn_idx_slice) |arg_expr_idx| {
-                            const arg_var = try self.checkPatternHelp(arg_expr_idx, ctx, env, out_var, valid);
-                            try self.scratch_vars.append(arg_var);
-                        }
-
-                        // Add to types store
-                        break :blk try self.types.appendVars(self.scratch_vars.sliceFromStart(scratch_vars_top));
-                    },
-
-                    .in_place => {
-                        // Process each tag arg
-                        const arg_ptrn_idx_slice = self.cir.store.slicePatterns(applied_tag.args);
-                        for (arg_ptrn_idx_slice) |arg_expr_idx| {
-                            _ = try self.checkPatternHelp(arg_expr_idx, ctx, env, out_var, valid);
-                        }
-
-                        // Add to types store
-                        // Cast the elems idxs to vars (this works because Anno Idx are 1-1 with type Vars)
-                        break :blk try self.types.appendVars(@ptrCast(arg_ptrn_idx_slice));
-                    },
-                }
-            };
+            const arg_ptrn_idx_slice = self.cir.store.slicePatterns(applied_tag.args);
+            if (frame.index < arg_ptrn_idx_slice.len) {
+                frame.index += 1;
+                return .{ .child = arg_ptrn_idx_slice[frame.index - 1] };
+            }
+            // Cast the elems idxs to vars (this works because Anno Idx are 1-1 with type Vars)
+            const arg_vars_slice = try self.types.appendVars(@ptrCast(arg_ptrn_idx_slice));
 
             // Create the type
             const ext_var = switch (ctx.row_openness) {
@@ -20417,9 +20464,12 @@ fn checkPatternHelp(
         },
         // nominal //
         .nominal => |nominal| {
-            try self.noteTypeDeclReferenceForLocalProcedures(nominal.nominal_type_decl);
-            // Check the backing pattern first
-            const actual_backing_var = try self.checkPatternHelp(nominal.backing_pattern, ctx, env, out_var, valid);
+            if (entering) {
+                try self.noteTypeDeclReferenceForLocalProcedures(nominal.nominal_type_decl);
+                // Check the backing pattern first
+                return .{ .child = nominal.backing_pattern };
+            }
+            const actual_backing_var = input.?;
 
             // Use shared nominal type checking logic
             const result = try self.checkNominalTypeUsage(
@@ -20436,7 +20486,8 @@ fn checkPatternHelp(
         },
         .nominal_external => |nominal| {
             // Check the backing pattern first
-            const actual_backing_var = try self.checkPatternHelp(nominal.backing_pattern, ctx, env, out_var, valid);
+            if (entering) return .{ .child = nominal.backing_pattern };
+            const actual_backing_var = input.?;
 
             // Resolve the external type declaration
             if (try self.resolveVarFromExternal(nominal.module_idx, nominal.target_node_idx)) |ext_ref| {
@@ -20459,75 +20510,72 @@ fn checkPatternHelp(
         },
         // record destructure //
         .record_destructure => |destructure| {
-            const scratch_records_top = self.scratch_record_fields.top();
-            defer self.scratch_record_fields.clearFrom(scratch_records_top);
-
-            var mb_ext_var: ?Var = null;
-
-            for (self.cir.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
+            if (entering) frame.state = .{ .record = .{ .scratch_top = self.scratch_record_fields.top() } };
+            const state = &frame.state.record;
+            const destructs = self.cir.store.sliceRecordDestructs(destructure.destructs);
+            if (input) |field_pattern_var| {
+                const destruct_idx = destructs[frame.index - 1];
                 const destruct = self.cir.store.getRecordDestruct(destruct_idx);
                 const destruct_var = ModuleEnv.varFrom(destruct_idx);
-                try self.setVarRank(destruct_var, env);
+                switch (destruct.kind) {
+                    .Required, .SubPattern => {
+                        // Set the destruct var to redirect to the field pattern var
+                        _ = try self.unify(destruct_var, field_pattern_var, env);
 
+                        // The destructured field probes the record with a
+                        // kind-FLEXIBLE presence var (the same mint as a record
+                        // update's probe): the record's kind decides what the binder
+                        // sees. The row's value type is a FRESH payload var—the
+                        // binder is deliberately NOT the field's value type here,
+                        // because an `optional` kind binds it to
+                        // `Try(payload, [MissingField])` instead of the payload
+                        // itself. `judgeRecordDestructBinds` performs that
+                        // kind-directed binding at every generalization boundary
+                        // (and finalize); a still-flex kind pins `required` there—
+                        // destructuring must not silently make a field optional—
+                        // which is also why this mint is NOT recorded in
+                        // `literal_field_kinds` (design.md "Field Kinds").
+                        const destruct_region = self.getRegionAt(destruct_var);
+                        const presence_var = try self.fresh(env, destruct_region);
+                        const payload_var = try self.fresh(env, destruct_region);
+                        try self.pending_record_destructs.append(self.gpa, .{
+                            .presence_var = presence_var,
+                            .payload_var = payload_var,
+                            .binder_var = destruct_var,
+                            .field_name = destruct.label,
+                            .region = destruct_region,
+                        });
+
+                        // Append it to the scratch records array
+                        try self.scratch_record_fields.append(types_mod.RecordField{
+                            .name = destruct.label,
+                            .presence = .unknown(presence_var, payload_var),
+                        });
+                    },
+                    .Rest => {
+                        // If this pattern is rest pattern:
+                        // eg { name, ...rest }
+                        //               ^^^^
+                        //
+                        // Then capture this as the ext var
+                        _ = try self.unify(destruct_var, field_pattern_var, env);
+                        state.mb_ext_var = field_pattern_var;
+                    },
+                }
+            }
+            if (frame.index < destructs.len) {
+                const destruct_idx = destructs[frame.index];
+                frame.index += 1;
+                try self.setVarRank(ModuleEnv.varFrom(destruct_idx), env);
                 // Check the sub pattern
-                const field_pattern_var = blk: {
-                    switch (destruct.kind) {
-                        .Required => |sub_pattern_idx| {
-                            break :blk try self.checkPatternHelp(sub_pattern_idx, ctx, env, out_var, valid);
-                        },
-                        .SubPattern => |sub_pattern_idx| {
-                            break :blk try self.checkPatternHelp(sub_pattern_idx, ctx, env, out_var, valid);
-                        },
-                        .Rest => |sub_pattern_idx| {
-                            // If this pattern is rest pattern:
-                            // eg { name, ...rest }
-                            //               ^^^^
-                            //
-                            // Then capture this as the ext var, then  continue
-                            const ext_var = try self.checkPatternHelp(sub_pattern_idx, ctx, env, out_var, valid);
-                            _ = try self.unify(destruct_var, ext_var, env);
-                            mb_ext_var = ext_var;
-
-                            continue;
-                        },
-                    }
-                };
-
-                // Set the destruct var to redirect to the field pattern var
-                _ = try self.unify(destruct_var, field_pattern_var, env);
-
-                // The destructured field probes the record with a
-                // kind-FLEXIBLE presence var (the same mint as a record
-                // update's probe): the record's kind decides what the binder
-                // sees. The row's value type is a FRESH payload var—the
-                // binder is deliberately NOT the field's value type here,
-                // because an `optional` kind binds it to
-                // `Try(payload, [MissingField])` instead of the payload
-                // itself. `judgeRecordDestructBinds` performs that
-                // kind-directed binding at every generalization boundary
-                // (and finalize); a still-flex kind pins `required` there—
-                // destructuring must not silently make a field optional—
-                // which is also why this mint is NOT recorded in
-                // `literal_field_kinds` (design.md "Field Kinds").
-                const destruct_region = self.getRegionAt(destruct_var);
-                const presence_var = try self.fresh(env, destruct_region);
-                const payload_var = try self.fresh(env, destruct_region);
-                try self.pending_record_destructs.append(self.gpa, .{
-                    .presence_var = presence_var,
-                    .payload_var = payload_var,
-                    .binder_var = destruct_var,
-                    .field_name = destruct.label,
-                    .region = destruct_region,
-                });
-
-                // Append it to the scratch records array
-                try self.scratch_record_fields.append(types_mod.RecordField{
-                    .name = destruct.label,
-                    .presence = .unknown(presence_var, payload_var),
-                });
+                return .{ .child = switch (self.cir.store.getRecordDestruct(destruct_idx).kind) {
+                    .Required, .SubPattern, .Rest => |sub_pattern_idx| sub_pattern_idx,
+                } };
             }
 
             // Copy the scratch record fields into the types store
+            const scratch_records_top = state.scratch_top;
+            defer self.scratch_record_fields.clearFrom(scratch_records_top);
             const record_fields_scratch = self.scratch_record_fields.sliceFromStart(scratch_records_top);
             std.mem.sort(types_mod.RecordField, record_fields_scratch, self.cir.getIdentStore(), types_mod.RecordField.sortByNameAsc);
 
@@ -20537,7 +20585,7 @@ fn checkPatternHelp(
             // pattern is closed, so destructuring a record that has extra fields
             // is a type mismatch the user must resolve (e.g. by adding the field
             // or a `..` rest).
-            const ext_var = mb_ext_var orelse
+            const ext_var = state.mb_ext_var orelse
                 try self.freshFromContent(.{ .structure = .empty_record }, env, pattern_region);
             try self.unifyWith(pattern_var, .{ .structure = .{
                 .record = .{
@@ -20589,7 +20637,7 @@ fn checkPatternHelp(
         .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
     }
 
-    return pattern_var;
+    return .{ .done = pattern_var };
 }
 
 fn getPatternIdent(self: *const Self, ptrn_idx: CIR.Pattern.Idx) ?Ident.Idx {
@@ -26701,40 +26749,59 @@ fn appendUniqueIdent(gpa: std.mem.Allocator, out: *std.ArrayList(Ident.Idx), ide
 
 fn collectConstructedTagsForExpr(
     self: *Self,
-    expr_idx: CIR.Expr.Idx,
+    root: CIR.Expr.Idx,
     out: *std.ArrayList(Ident.Idx),
 ) Allocator.Error!bool {
-    const expr = self.cir.store.getExpr(expr_idx);
-    if (expr == .e_zero_argument_tag) {
-        try appendUniqueIdent(self.gpa, out, expr.e_zero_argument_tag.name);
-        return true;
-    }
-    if (expr == .e_tag) {
-        try appendUniqueIdent(self.gpa, out, expr.e_tag.name);
-        return true;
-    }
-    if (expr == .e_nominal) return self.collectConstructedTagsForExpr(expr.e_nominal.backing_expr, out);
-    if (expr == .e_nominal_external) return self.collectConstructedTagsForExpr(expr.e_nominal_external.backing_expr, out);
-    if (expr == .e_block) return self.collectConstructedTagsForExpr(expr.e_block.final_expr, out);
-    if (expr == .e_if) {
-        const if_expr = expr.e_if;
-        const branches = self.cir.store.sliceIfBranches(if_expr.branches);
-        for (branches) |branch_idx| {
-            const branch = self.cir.store.getIfBranch(branch_idx);
-            if (!try self.collectConstructedTagsForExpr(branch.body, out)) return false;
+    // Visit result positions in source order: each popped expression pushes
+    // its result positions last-first.
+    var pending: std.ArrayList(CIR.Expr.Idx) = .empty;
+    defer pending.deinit(self.gpa);
+    try pending.append(self.gpa, root);
+    while (pending.pop()) |expr_idx| {
+        const expr = self.cir.store.getExpr(expr_idx);
+        if (expr == .e_zero_argument_tag) {
+            try appendUniqueIdent(self.gpa, out, expr.e_zero_argument_tag.name);
+            continue;
         }
-        return self.collectConstructedTagsForExpr(if_expr.final_else, out);
-    }
-    if (expr == .e_match) {
-        const match_expr = expr.e_match;
-        const branches = self.cir.store.sliceMatchBranches(match_expr.branches);
-        for (branches) |branch_idx| {
-            const branch = self.cir.store.getMatchBranch(branch_idx);
-            if (!try self.collectConstructedTagsForExpr(branch.value, out)) return false;
+        if (expr == .e_tag) {
+            try appendUniqueIdent(self.gpa, out, expr.e_tag.name);
+            continue;
         }
-        return true;
+        if (expr == .e_nominal) {
+            try pending.append(self.gpa, expr.e_nominal.backing_expr);
+            continue;
+        }
+        if (expr == .e_nominal_external) {
+            try pending.append(self.gpa, expr.e_nominal_external.backing_expr);
+            continue;
+        }
+        if (expr == .e_block) {
+            try pending.append(self.gpa, expr.e_block.final_expr);
+            continue;
+        }
+        if (expr == .e_if) {
+            const if_expr = expr.e_if;
+            try pending.append(self.gpa, if_expr.final_else);
+            const branches = self.cir.store.sliceIfBranches(if_expr.branches);
+            var index = branches.len;
+            while (index > 0) {
+                index -= 1;
+                try pending.append(self.gpa, self.cir.store.getIfBranch(branches[index]).body);
+            }
+            continue;
+        }
+        if (expr == .e_match) {
+            const branches = self.cir.store.sliceMatchBranches(expr.e_match.branches);
+            var index = branches.len;
+            while (index > 0) {
+                index -= 1;
+                try pending.append(self.gpa, self.cir.store.getMatchBranch(branches[index]).value);
+            }
+            continue;
+        }
+        return false;
     }
-    return false;
+    return true;
 }
 
 fn collectAbsentCtorPayloadBlockers(
@@ -45471,6 +45538,9 @@ fn checkBranchBodyAgainstExpected(
 /// reachable graph—the visited set only prunes—so no particular visit order
 /// is required.
 fn varContainsError(self: *Self, root_var: Var, visited: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!bool {
+    // A store that has never held error content or an invalid declaration
+    // has no error for any variable to reach.
+    if (!self.types.mayContainErrors()) return false;
     const stack = &self.type_visit_stack;
     const stack_base = stack.items.len;
     defer stack.items.len = stack_base;

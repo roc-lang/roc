@@ -13,7 +13,7 @@ const check = @import("check");
 const collections = @import("collections");
 const layout = @import("layout");
 const Common = @import("common.zig");
-const AnyAll = @import("any_all.zig");
+const AnyAll = collections.AnyAll;
 const ComptimeScalarValues = @import("comptime_scalar_values.zig");
 const match_tree = @import("match_tree.zig");
 const Mono = @import("monotype/ast.zig");
@@ -4888,11 +4888,9 @@ const Lowerer = struct {
     /// they are never emitted by a runtime backend, so their identity names
     /// the value's layout and static-data slot within this program.
     fn staticInitializerIdentity(self: *Lowerer, request: StaticInitializerRequest) std.mem.Allocator.Error!LIR.ProcIdentity {
-        var digests = try layout.Digests.init(self.allocator, &self.result.layouts);
-        defer digests.deinit();
         var hasher = base.TypeDigestHasher.init();
         hasher.update("roc.proc.static-initializer.v1");
-        hasher.update(&try digests.get(request.layout_idx));
+        hasher.update(&try self.result.layouts.contentDigest(request.layout_idx));
         const slot: u32 = @intFromEnum(request.static_data);
         hasher.update(&[_]u8{ @truncate(slot), @truncate(slot >> 8), @truncate(slot >> 16), @truncate(slot >> 24) });
         return .{ .bytes = hasher.finalResult() };
@@ -5123,8 +5121,8 @@ const Lowerer = struct {
         var type_equivalence = TypeEquivalence.init(self.allocator, self, &materialized.types);
         defer type_equivalence.deinit();
 
-        try self.verifyFnEntriesMatch(&materialized, materialized_identities.items);
-        try self.verifyRootsMatch(&materialized, materialized_identities.items);
+        try self.verifyFnEntriesMatch(&materialized, materialized_identities.items, &type_equivalence);
+        try self.verifyRootsMatch(&materialized, materialized_identities.items, &type_equivalence);
         try self.verifyLayoutRequestsMatch(&materialized, &type_equivalence);
         try self.verifyRuntimeSchemaRequestsMatch(&materialized, &type_equivalence);
 
@@ -5155,6 +5153,7 @@ const Lowerer = struct {
         self: *Lowerer,
         materialized: *const LambdaMono.Program,
         identities: []const LambdaMonoLower.SpecializationIdentity,
+        type_equivalence: *TypeEquivalence,
     ) Common.LowerError!void {
         const materialized_fns = materialized.fnsView();
         if (identities.len != materialized_fns.len) {
@@ -5178,21 +5177,22 @@ const Lowerer = struct {
             const materialized_fn_id = by_identity.get(specializationIdentity(entry.spec)) orelse {
                 Common.invariant("debug Lambda Mono verifier could not match a direct function spec");
             };
-            if (!try self.fnEntryMatchesMaterialized(entry, materialized.getFn(materialized_fn_id), materialized)) {
+            if (!try self.fnEntryMatchesMaterialized(entry, materialized.getFn(materialized_fn_id), materialized, type_equivalence)) {
                 Common.invariant("debug Lambda Mono verifier saw different types for an exact function specialization");
             }
         }
     }
 
+    /// Every comparison of one verification shares `type_equivalence`, so a
+    /// direct type pairs with one materialized type across all of them and a
+    /// type shared by many functions is compared once.
     fn fnEntryMatchesMaterialized(
         self: *Lowerer,
         entry: FnEntry,
         fn_: LambdaMono.Fn,
         materialized: *const LambdaMono.Program,
+        type_equivalence: *TypeEquivalence,
     ) Common.LowerError!bool {
-        var type_equivalence = TypeEquivalence.init(self.allocator, self, &materialized.types);
-        defer type_equivalence.deinit();
-
         if (!std.meta.eql(entry.source, fn_.source)) return false;
         if (!try type_equivalence.equivalent(entry.ret, fn_.ret)) return false;
 
@@ -5215,6 +5215,7 @@ const Lowerer = struct {
         self: *Lowerer,
         materialized: *const LambdaMono.Program,
         identities: []const LambdaMonoLower.SpecializationIdentity,
+        type_equivalence: *TypeEquivalence,
     ) Common.LowerError!void {
         // The materializer lowers the whole producer program, so each root
         // this consumer took is compared against the producer position it
@@ -5238,7 +5239,7 @@ const Lowerer = struct {
                 Common.invariant("debug Lambda Mono verifier saw a root specialization identity mismatch");
             }
             const expected_fn = materialized.getFn(expected.fn_id);
-            if (!try self.fnEntryMatchesMaterialized(self.fn_entries.items[@intFromEnum(direct.fn_id)], expected_fn, materialized)) {
+            if (!try self.fnEntryMatchesMaterialized(self.fn_entries.items[@intFromEnum(direct.fn_id)], expected_fn, materialized, type_equivalence)) {
                 Common.invariant("debug Lambda Mono verifier saw a root mismatch");
             }
         }
@@ -5463,8 +5464,6 @@ const Lowerer = struct {
     /// the root within that module, and the representation the slot commits,
     /// by a digest no program's numbering enters.
     fn comptimeRootAccessorIdentity(self: *Lowerer, root: Common.ComptimeValueRoot, ty: Type.TypeId, layout_idx: layout.Idx) std.mem.Allocator.Error!LIR.ProcIdentity {
-        var digests = try layout.Digests.init(self.allocator, &self.result.layouts);
-        defer digests.deinit();
         const representation = try self.types.contentDigest(&self.solved.lifted.names, ty, .{ .context = self, .identity = callableTargetIdentity });
         var hasher = base.TypeDigestHasher.init();
         hasher.update("roc.proc.comptime-root-accessor.v2");
@@ -5477,7 +5476,7 @@ const Lowerer = struct {
         };
         hasher.update(&[_]u8{ tag, @truncate(index), @truncate(index >> 8), @truncate(index >> 16), @truncate(index >> 24) });
         hasher.update(&representation.bytes);
-        hasher.update(&try digests.get(layout_idx));
+        hasher.update(&try self.result.layouts.contentDigest(layout_idx));
         return .{ .bytes = hasher.finalResult() };
     }
 
@@ -12510,7 +12509,7 @@ const Lowerer = struct {
             return .{ .group = .all };
         }
 
-        pub fn exit(_: *LayoutEquivalenceScan, _: Leaf, _: ?bool) void {}
+        pub fn exit(_: *LayoutEquivalenceScan, _: Leaf, _: ?bool) std.mem.Allocator.Error!void {}
 
         fn addPair(items: Eval.Items, lhs: layout.Idx, rhs: layout.Idx) Allocator.Error!void {
             try items.add(.{ .pair = .{ .lhs = lhs, .rhs = rhs } });
@@ -12904,7 +12903,7 @@ const Lowerer = struct {
                 return .{ .group = .all };
             }
 
-            pub fn exit(_: *Scan, _: EquivalenceLeaf, _: ?bool) void {}
+            pub fn exit(_: *Scan, _: EquivalenceLeaf, _: ?bool) std.mem.Allocator.Error!void {}
 
             fn addPair(items: Eval.Items, lhs: Type.TypeId, rhs: Type.TypeId) Allocator.Error!void {
                 try items.add(.{ .pair = .{ .lhs = lhs, .rhs = rhs } });
@@ -13910,7 +13909,7 @@ const TypeEquivalence = struct {
         return .{ .group = .all };
     }
 
-    pub fn exit(_: *TypeEquivalence, _: Leaf, _: ?bool) void {}
+    pub fn exit(_: *TypeEquivalence, _: Leaf, _: ?bool) std.mem.Allocator.Error!void {}
 
     fn addPair(items: Eval.Items, direct: Type.TypeId, materialized: Type.TypeId) Allocator.Error!void {
         try items.add(.{ .pair = .{ .direct = direct, .materialized = materialized } });
@@ -14502,7 +14501,9 @@ test "shared procedure scheduling preserves exact specialization demand" {
                 .body = .hosted,
             });
             try identities.append(allocator, Lowerer.specializationIdentity(entry.spec));
-            try lowerer.verifyFnEntriesMatch(&materialized, identities.items);
+            var type_equivalence = TypeEquivalence.init(allocator, &lowerer, &materialized.types);
+            defer type_equivalence.deinit();
+            try lowerer.verifyFnEntriesMatch(&materialized, identities.items, &type_equivalence);
         }
         try std.testing.expect(lowerer.fn_reachable.items[@intFromEnum(owner)]);
         try std.testing.expect(lowerer.fn_reachable.items[@intFromEnum(alias)]);

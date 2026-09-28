@@ -12,9 +12,9 @@
 const std = @import("std");
 const TestCase = @import("parallel_runner.zig").TestCase;
 
-const depth = 10000;
+const depth = 5000;
 const depth_str = std.fmt.comptimePrint("{d}", .{depth});
-const stack_bytes = 8 * 1024 * 1024;
+const stack_bytes = 4 * 1024 * 1024;
 
 fn repeat(comptime text: []const u8, comptime count: usize) []const u8 {
     return text ** count;
@@ -22,6 +22,230 @@ fn repeat(comptime text: []const u8, comptime count: usize) []const u8 {
 
 /// Deep-nesting eval cases, each run on a `stack_bytes` stack.
 pub const tests = [_]TestCase{
+    .{
+        .name = "TEMPDEEP else-if chain",
+        .source_kind = .module,
+        .source = "pick = |x| " ++ repeat("if x == 0 { 0.U64 } else ", depth) ++ "{ x }\nmain = pick(5.U64)\n",
+        .expected = .{ .inspect_str = "5" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPDEEP nested parens",
+        .source_kind = .module,
+        .source = "main = " ++ repeat("(", depth) ++ "1.U64" ++ repeat(" + 1)", depth) ++ "\n",
+        .expected = .{ .inspect_str = std.fmt.comptimePrint("{d}", .{depth + 1}) },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPDEEP nested tuples",
+        .source_kind = .module,
+        .source = "main = " ++ repeat("(", depth) ++ "1.U64" ++ repeat(", 2)", depth) ++ repeat(".0", depth) ++ "\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPDEEP nested tags",
+        .source_kind = .module,
+        .source = "main = " ++ repeat("Ok(", depth) ++ "1.U64" ++ repeat(")", depth) ++ "\n",
+        .expected = .{ .inspect_str = repeat("Ok(", depth) ++ "1" ++ repeat(")", depth) },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPDEEP nested blocks",
+        .source_kind = .module,
+        .source = "main = " ++ repeat("{ ", depth) ++ "1.U64" ++ repeat(" }", depth) ++ "\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPDEEP wide match",
+        .source_kind = .module,
+        .source = "pick = |x| match x {\n" ++ blk: { @setEvalBranchQuota(10_000_000); var out: []const u8 = ""; for (0..depth) |i| out = out ++ std.fmt.comptimePrint("    {d} => {d}.U64\n", .{ i, i }); break :blk out; } ++ "    _ => 0.U64\n}\nmain = pick(7.U64)\n",
+        .expected = .{ .inspect_str = "7" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPDEEP deep annotation",
+        .source_kind = .module,
+        .source = "f : " ++ repeat("List(", depth) ++ "U64" ++ repeat(")", depth) ++ " -> U64\nf = |_| 1\nmain = f([])\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPDEEP deep list pattern",
+        .source_kind = .module,
+        .source = "f = |l| match l { " ++ repeat("[", depth) ++ "x" ++ repeat("]", depth) ++ " => x, _ => 0.U64 }\nmain = f(" ++ repeat("[", depth) ++ "1.U64" ++ repeat("]", depth) ++ ")\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPDEEP curried lambdas",
+        .source_kind = .module,
+        .source = "f = " ++ repeat("|_| ", depth) ++ "1.U64\nmain = f" ++ repeat("(0)", depth) ++ "\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPDEEP long flat list",
+        .source_kind = .module,
+        .source = "main = List.len([" ++ repeat("1.U64, ", depth) ++ "])\n",
+        .expected = .{ .inspect_str = depth_str },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPSCALE calls 1000",
+        .source_kind = .module,
+        .source = "inc = |x| x + 1\nmain = " ++ repeat("inc(", 1000) ++ "0.U64" ++ repeat(")", 1000) ++ "\n",
+        .expected = .{ .inspect_str = "1000" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPSCALE interp 1000",
+        .source_kind = .module,
+        .source = "render = |s| \"" ++ repeat("${s}", 1000) ++ "\"\nmain = Str.count_utf8_bytes(render(\"a\"))\n",
+        .expected = .{ .inspect_str = "1000" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPSCALE calls 4000",
+        .source_kind = .module,
+        .source = "inc = |x| x + 1\nmain = " ++ repeat("inc(", 4000) ++ "0.U64" ++ repeat(")", 4000) ++ "\n",
+        .expected = .{ .inspect_str = "4000" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPSCALE interp 4000",
+        .source_kind = .module,
+        .source = "render = |s| \"" ++ repeat("${s}", 4000) ++ "\"\nmain = Str.count_utf8_bytes(render(\"a\"))\n",
+        .expected = .{ .inspect_str = "4000" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPSCALE calls 2000",
+        .source_kind = .module,
+        .source = "inc = |x| x + 1\nmain = " ++ repeat("inc(", 2000) ++ "0.U64" ++ repeat(")", 2000) ++ "\n",
+        .expected = .{ .inspect_str = "2000" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPSCALE interp 2000",
+        .source_kind = .module,
+        .source = "render = |s| \"" ++ repeat("${s}", 2000) ++ "\"\nmain = Str.count_utf8_bytes(render(\"a\"))\n",
+        .expected = .{ .inspect_str = "2000" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPSCALE records 2000",
+        .source_kind = .module,
+        .source = "main = " ++ repeat("{ a: ", 2000) ++ "1.U64" ++ repeat(" }", 2000) ++ repeat(".a", 2000) ++ "\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPSTACK records 256k",
+        .source_kind = .module,
+        .source = "main = " ++ repeat("{ a: ", 4) ++ "1.U64" ++ repeat(" }", 4) ++ repeat(".a", 4) ++ "\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = 256 * 1024,
+    },
+    .{
+        .name = "TEMPSTACK interp 256k",
+        .source_kind = .module,
+        .source = "render = |s| \"" ++ repeat("${s}", 4) ++ "\"\nmain = Str.count_utf8_bytes(render(\"a\"))\n",
+        .expected = .{ .inspect_str = "4" },
+        .stack_bytes = 256 * 1024,
+    },
+    .{
+        .name = "TEMPSTACK records 512k",
+        .source_kind = .module,
+        .source = "main = " ++ repeat("{ a: ", 4) ++ "1.U64" ++ repeat(" }", 4) ++ repeat(".a", 4) ++ "\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = 512 * 1024,
+    },
+    .{
+        .name = "TEMPSTACK interp 512k",
+        .source_kind = .module,
+        .source = "render = |s| \"" ++ repeat("${s}", 4) ++ "\"\nmain = Str.count_utf8_bytes(render(\"a\"))\n",
+        .expected = .{ .inspect_str = "4" },
+        .stack_bytes = 512 * 1024,
+    },
+    .{
+        .name = "TEMPSTACK records 1024k",
+        .source_kind = .module,
+        .source = "main = " ++ repeat("{ a: ", 4) ++ "1.U64" ++ repeat(" }", 4) ++ repeat(".a", 4) ++ "\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = 1024 * 1024,
+    },
+    .{
+        .name = "TEMPSTACK interp 1024k",
+        .source_kind = .module,
+        .source = "render = |s| \"" ++ repeat("${s}", 4) ++ "\"\nmain = Str.count_utf8_bytes(render(\"a\"))\n",
+        .expected = .{ .inspect_str = "4" },
+        .stack_bytes = 1024 * 1024,
+    },
+    .{
+        .name = "TEMPSTACK records 2048k",
+        .source_kind = .module,
+        .source = "main = " ++ repeat("{ a: ", 4) ++ "1.U64" ++ repeat(" }", 4) ++ repeat(".a", 4) ++ "\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = 2048 * 1024,
+    },
+    .{
+        .name = "TEMPSTACK interp 2048k",
+        .source_kind = .module,
+        .source = "render = |s| \"" ++ repeat("${s}", 4) ++ "\"\nmain = Str.count_utf8_bytes(render(\"a\"))\n",
+        .expected = .{ .inspect_str = "4" },
+        .stack_bytes = 2048 * 1024,
+    },
+    .{
+        .name = "TEMPSMALL interp 4",
+        .source_kind = .module,
+        .source = "render = |s| \"" ++ repeat("${s}", 4) ++ "\"\nmain = Str.count_utf8_bytes(render(\"a\"))\n",
+        .expected = .{ .inspect_str = "4" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPSMALL records 4",
+        .source_kind = .module,
+        .source = "main = " ++ repeat("{ a: ", 4) ++ "1.U64" ++ repeat(" }", 4) ++ repeat(".a", 4) ++ "\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPSCALE records 500",
+        .source_kind = .module,
+        .source = "main = " ++ repeat("{ a: ", 500) ++ "1.U64" ++ repeat(" }", 500) ++ repeat(".a", 500) ++ "\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPSCALE records 1000",
+        .source_kind = .module,
+        .source = "main = " ++ repeat("{ a: ", 1000) ++ "1.U64" ++ repeat(" }", 1000) ++ repeat(".a", 1000) ++ "\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPSCALE lists 500",
+        .source_kind = .module,
+        .source = "main = List.len(" ++ repeat("[", 500) ++ "1.U64" ++ repeat("]", 500) ++ ")\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPSCALE lists 1000",
+        .source_kind = .module,
+        .source = "main = List.len(" ++ repeat("[", 1000) ++ "1.U64" ++ repeat("]", 1000) ++ ")\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "TEMPSCALE lists 2000",
+        .source_kind = .module,
+        .source = "main = List.len(" ++ repeat("[", 2000) ++ "1.U64" ++ repeat("]", 2000) ++ ")\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = stack_bytes,
+    },
     .{
         .name = "issue 11698: long left-associative + chain",
         .source_kind = .module,

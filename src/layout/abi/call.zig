@@ -279,7 +279,21 @@ fn pieceCounts(pieces: []const RegPiece) PieceCounts {
 /// Whether the generated C type is an aggregate rather than a transparent
 /// scalar/vector leaf. This distinction matters only to the SysV LLVM IR
 /// signature when register exhaustion forces a byval parameter.
-fn isCAbiAggregate(store: *const Store, idx: Idx) bool {
+/// The layout a transparent single-variant union (one without a runtime
+/// discriminant) stands for; glue exposes such a union as its payload.
+fn unwrapTransparentUnion(store: *const Store, start: Idx) Idx {
+    var idx = start;
+    while (true) {
+        const lay = store.getLayout(idx);
+        if (lay.tag != .tag_union) return idx;
+        const info = store.getTagUnionInfo(lay);
+        if (info.variants.len != 1 or info.data.discriminant_size != 0) return idx;
+        idx = info.variants.get(0).payload_layout;
+    }
+}
+
+fn isCAbiAggregate(store: *const Store, start: Idx) bool {
+    const idx = unwrapTransparentUnion(store, start);
     const lay = store.getLayout(idx);
     return switch (lay.tag) {
         .struct_, .closure => true,
@@ -289,46 +303,33 @@ fn isCAbiAggregate(store: *const Store, idx: Idx) bool {
         // scalar. SysV therefore changes it to aligned `byval` when its two
         // INTEGER eightbytes do not both fit.
         .scalar => lay.getScalar().tag == .frac and lay.getScalar().getFrac() == .dec,
-        .tag_union => blk: {
-            const info = store.getTagUnionInfo(lay);
-            if (info.variants.len == 1 and info.data.discriminant_size == 0) {
-                break :blk isCAbiAggregate(store, info.variants.get(0).payload_layout);
-            }
-            break :blk true;
-        },
+        // A union with a runtime discriminant is a C struct.
+        .tag_union => true,
         .box, .box_of_zst, .erased_box, .list, .list_of_zst, .zst, .ptr => false,
     };
 }
 
-fn isCAbiI128Scalar(store: *const Store, idx: Idx) bool {
+fn isCAbiI128Scalar(store: *const Store, start: Idx) bool {
+    const idx = unwrapTransparentUnion(store, start);
     const lay = store.getLayout(idx);
     return switch (lay.tag) {
         .scalar => lay.getScalar().tag == .int and store.layoutSize(lay) == 16,
-        .tag_union => blk: {
-            const info = store.getTagUnionInfo(lay);
-            if (info.variants.len == 1 and info.data.discriminant_size == 0) {
-                break :blk isCAbiI128Scalar(store, info.variants.get(0).payload_layout);
-            }
-            break :blk false;
-        },
+        // A union with a runtime discriminant is a C struct.
+        .tag_union => false,
         .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => false,
     };
 }
 
-fn cAbiI128VectorKind(store: *const Store, idx: Idx) ?layout.Vector {
+fn cAbiI128VectorKind(store: *const Store, start: Idx) ?layout.Vector {
+    const idx = unwrapTransparentUnion(store, start);
     const lay = store.getLayout(idx);
     return switch (lay.tag) {
         .scalar => if (lay.getScalar().tag == .int and store.layoutSize(lay) == 16)
             if (idx.isSigned()) .i64x2 else .u64x2
         else
             null,
-        .tag_union => blk: {
-            const info = store.getTagUnionInfo(lay);
-            if (info.variants.len == 1 and info.data.discriminant_size == 0) {
-                break :blk cAbiI128VectorKind(store, info.variants.get(0).payload_layout);
-            }
-            break :blk null;
-        },
+        // A union with a runtime discriminant is a C struct.
+        .tag_union => null,
         .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => null,
     };
 }
@@ -537,7 +538,8 @@ fn placementFor(
 /// to carry the promotion rather than whatever the caller happened to leave
 /// there. Aggregates keep C's "unspecified upper bits" rule; glue exposes them
 /// as structs, which clang never marks `zeroext`/`signext`.
-fn narrowScalarExtension(store: *const Store, idx: Idx) RegExtension {
+fn narrowScalarExtension(store: *const Store, start: Idx) RegExtension {
+    const idx = unwrapTransparentUnion(store, start);
     const lay = store.getLayout(idx);
     if (store.layoutSize(lay) >= 4) return .none;
 
@@ -552,9 +554,6 @@ fn narrowScalarExtension(store: *const Store, idx: Idx) RegExtension {
         },
         .tag_union => blk: {
             const info = store.getTagUnionInfo(lay);
-            if (info.variants.len == 1 and info.data.discriminant_size == 0) {
-                break :blk narrowScalarExtension(store, info.variants.get(0).payload_layout);
-            }
             // Glue exposes a payload-free tag union as its unsigned
             // discriminant integer; anything carrying a payload is a struct.
             for (0..info.variants.len) |i| {
@@ -610,9 +609,11 @@ fn placementAarch64(
     ctx: Context,
     extend: RegExtension,
 ) std.mem.Allocator.Error!Placement {
-    const lay = store.getLayout(idx);
+    // A transparent single-variant union passes exactly as its payload.
+    const payload_idx = unwrapTransparentUnion(store, idx);
+    const lay = store.getLayout(payload_idx);
     const size = store.layoutSize(lay);
-    switch (aarch64.classifyType(store, idx)) {
+    switch (try aarch64.classifyType(arena, store, payload_idx)) {
         .memory => return .indirect,
         .integer => return onePiece(arena, .integer, 0, @intCast(size), extend),
         .double_integer => return integerPieces(arena, size, .{ .array = null }, .none),
@@ -664,12 +665,7 @@ fn placementAarch64(
                 return integerPieces(arena, size, if (size == 16) .integer else .piecewise, extend);
             },
             .box, .box_of_zst, .erased_box, .ptr => return integerPieces(arena, size, .piecewise, .none),
-            .tag_union => {
-                const info = store.getTagUnionInfo(lay);
-                std.debug.assert(info.variants.len == 1 and info.data.discriminant_size == 0);
-                return placementAarch64(arena, store, target, info.variants.get(0).payload_layout, ctx, extend);
-            },
-            .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst => unreachable,
+            .list, .list_of_zst, .struct_, .tag_union, .closure, .erased_callable, .zst => unreachable,
         },
     }
 }
@@ -682,7 +678,7 @@ fn placementSysV(
     extend: RegExtension,
 ) std.mem.Allocator.Error!Placement {
     const size = store.layoutSize(store.getLayout(idx));
-    const classes = x86_64.classifySystemV(store, idx, if (ctx == .ret) .ret else .arg);
+    const classes = try x86_64.classifySystemV(arena, store, idx, if (ctx == .ret) .ret else .arg);
     if (classes[0] == .memory) return .indirect;
 
     var pieces = std.ArrayList(RegPiece).empty;
@@ -704,7 +700,7 @@ fn placementSysV(
                         .class = .vector,
                         .offset = offset,
                         .size = @intCast(@min(@as(u32, 16), size - offset)),
-                        .vector_kind = findVectorKind(store, idx) orelse unreachable,
+                        .vector_kind = try findVectorKind(arena, store, idx) orelse unreachable,
                     });
                     i += 1;
                 } else {
@@ -737,7 +733,7 @@ fn placementWin64(
         // XMM0 as <2 x i64>. Generated RocDec is a C aggregate instead, so it
         // is indirect in both directions.
         .win_i128 => if (ctx == .ret and !isCAbiAggregate(store, idx)) {
-            if (findVectorKind(store, idx)) |kind| {
+            if (try findVectorKind(arena, store, idx)) |kind| {
                 const pieces = try arena.alloc(RegPiece, 1);
                 pieces[0] = .{ .class = .vector, .offset = 0, .size = 16, .vector_kind = kind };
                 return .{ .registers = .{ .pieces = pieces } };
@@ -780,30 +776,39 @@ fn placementWasm(arena: std.mem.Allocator, store: *const Store, idx: Idx) std.me
     }
 }
 
-fn findVectorKind(store: *const Store, idx: Idx) ?layout.Vector {
-    const lay = store.getLayout(idx);
-    return switch (lay.tag) {
-        .scalar => if (lay.getScalar().tag == .vector) lay.getScalar().getVector() else null,
-        .struct_ => blk: {
-            const struct_idx = lay.getStruct().idx;
-            const count = store.getStructData(struct_idx).fields.count;
-            var i: u32 = 0;
-            while (i < count) : (i += 1) {
-                if (store.getStructFieldIsPadding(struct_idx, i)) continue;
-                if (findVectorKind(store, store.getStructFieldLayout(struct_idx, i))) |kind| break :blk kind;
-            }
-            break :blk null;
-        },
-        .closure => findVectorKind(store, lay.getClosure().captures_layout_idx),
-        .tag_union => blk: {
-            const info = store.getTagUnionInfo(lay);
-            if (info.variants.len == 1 and info.data.discriminant_size == 0) {
-                break :blk findVectorKind(store, info.variants.get(0).payload_layout);
-            }
-            break :blk null;
-        },
-        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .erased_callable, .zst, .ptr => null,
-    };
+/// The first vector member of `idx` in field order, looking through
+/// closures and transparent unions. Members are visited on an explicit
+/// stack, so aggregate nesting never becomes native call depth.
+fn findVectorKind(arena: std.mem.Allocator, store: *const Store, idx: Idx) std.mem.Allocator.Error!?layout.Vector {
+    var pending: std.ArrayList(Idx) = .empty;
+    defer pending.deinit(arena);
+    try pending.append(arena, idx);
+    while (pending.pop()) |current| {
+        const lay = store.getLayout(current);
+        switch (lay.tag) {
+            .scalar => if (lay.getScalar().tag == .vector) return lay.getScalar().getVector(),
+            .struct_ => {
+                const struct_idx = lay.getStruct().idx;
+                const count = store.getStructData(struct_idx).fields.count;
+                var i = count;
+                // Pushed last to first, so the first field is searched next.
+                while (i > 0) {
+                    i -= 1;
+                    if (store.getStructFieldIsPadding(struct_idx, i)) continue;
+                    try pending.append(arena, store.getStructFieldLayout(struct_idx, i));
+                }
+            },
+            .closure => try pending.append(arena, lay.getClosure().captures_layout_idx),
+            .tag_union => {
+                const info = store.getTagUnionInfo(lay);
+                if (info.variants.len == 1 and info.data.discriminant_size == 0) {
+                    try pending.append(arena, info.variants.get(0).payload_layout);
+                }
+            },
+            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .erased_callable, .zst, .ptr => {},
+        }
+    }
+    return null;
 }
 
 const testing = std.testing;

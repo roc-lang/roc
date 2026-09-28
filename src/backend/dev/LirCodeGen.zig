@@ -188,9 +188,7 @@ pub fn compiledRcHelperSymbolName(allocator: std.mem.Allocator, layout_store: *c
     if ((cache_key >> 63) != 0) {
         const capture_layout: layout.Idx = @enumFromInt(@as(u32, @intCast((cache_key >> 32) & 0x7fff_ffff)));
         const desc_field_offset: u32 = @truncate(cache_key);
-        var digests = try layout.Digests.init(allocator, layout_store);
-        defer digests.deinit();
-        const hex = layout.digestSymbolHex(try digests.get(capture_layout));
+        const hex = layout.digestSymbolHex(try layout_store.contentDigest(capture_layout));
         return std.fmt.allocPrint(allocator, "roc__rc_boxy_capture_drop_{s}_{d}", .{ &hex, desc_field_offset });
     }
     const variant = RcHelperVariant{

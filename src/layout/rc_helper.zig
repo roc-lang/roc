@@ -99,9 +99,7 @@ pub const Atomicity = enum {
 /// program-local layout index, so objects compiled separately name and share
 /// the same helper.
 pub fn symbolName(allocator: std.mem.Allocator, store: *const Store, key: HelperKey, atomicity: Atomicity) std.mem.Allocator.Error![]u8 {
-    var digests = try digest_mod.Digests.init(allocator, store);
-    defer digests.deinit();
-    return symbolNameForDigest(allocator, key.op, try digests.get(key.layout_idx), atomicity);
+    return symbolNameForDigest(allocator, key.op, try store.contentDigest(key.layout_idx), atomicity);
 }
 
 /// `symbolName` for a layout whose digest is already known.

@@ -10,7 +10,7 @@ const check = @import("check");
 const collections = @import("collections");
 
 const Common = @import("../common.zig");
-const AnyAll = @import("../any_all.zig");
+const AnyAll = collections.AnyAll;
 const names = check.CheckedNames;
 const checked = check.CheckedModule;
 const static_dispatch = check.StaticDispatchRegistry;
@@ -1371,7 +1371,19 @@ pub const Store = struct {
             suffix_by_digest.deinit();
         }
 
-        for (0..suffix_len) |offset| {
+        // Classify children before the parents that reach them, so comparing
+        // a parent meets already-classified children through `classes` and
+        // stops there instead of re-walking the whole speculative subtree.
+        const order = try self.transactionPostOrder(mark_, suffix_len);
+        defer self.allocator.free(order);
+        // The class each classified offset joined: a durable id, or the
+        // speculative id of the class's first classified member.
+        const classes = try self.allocator.alloc(?TypeId, suffix_len);
+        defer self.allocator.free(classes);
+        @memset(classes, null);
+        const resolver = SuffixClasses{ .start = @intCast(mark_.types_len), .classes = classes };
+
+        for (order) |offset| {
             const candidate: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + offset)));
             // Fallible rather than `typeDigestCached`: inside a transaction an
             // exhausted allocator has a correct answer (roll the seal back),
@@ -1381,36 +1393,52 @@ pub const Store = struct {
             const group = try suffix_by_digest.getOrPut(key);
             if (!group.found_existing) group.value_ptr.* = .empty;
 
-            var interned: ?TypeId = null;
+            var class: ?TypeId = null;
             if (self.full_digest_interned.get(key)) |bucket| {
                 for (bucket.items) |existing| {
-                    if (try self.bucketHit(name_store, key, existing, candidate)) {
-                        interned = existing;
+                    if (try self.bucketHit(name_store, key, existing, candidate, resolver)) {
+                        class = existing;
                         break;
                     }
                 }
             }
-            if (interned == null) {
+            if (class == null) {
                 for (group.value_ptr.items) |earlier| {
                     const earlier_ty: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + earlier)));
-                    if (try self.typeEql(name_store, earlier_ty, candidate)) {
-                        interned = interned_original[earlier];
+                    if (try typeViewEql(self.view(), self.allocator, name_store, earlier_ty, candidate, .exact, resolver)) {
+                        class = classes[earlier];
                         break;
                     }
                 }
             }
-            if (interned) |found| {
-                interned_original[offset] = found;
-            } else {
-                interned_original[offset] = candidate;
-                representative_of_offset[offset] = @intCast(representatives.items.len);
-                try representatives.append(self.allocator, candidate);
-            }
+            classes[offset] = class orelse candidate;
             // Re-fetched rather than reusing `group.value_ptr`: nothing above
             // inserts into this map today, but a future one would move it.
             // Every offset is grouped, not just representatives, so a later
-            // candidate compares against the same set the flat scan did.
+            // candidate compares against every digest-equal classified node.
             try suffix_by_digest.getPtr(key).?.append(self.allocator, @intCast(offset));
+        }
+
+        // Each speculative class is represented by its lowest offset, and
+        // representatives take durable ids in offset order.
+        var class_representatives = collections.DenseMap(TypeId, TypeId).init(self.allocator);
+        defer class_representatives.deinit();
+        for (0..suffix_len) |offset| {
+            const candidate: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + offset)));
+            const class = classes[offset].?;
+            if (@intFromEnum(class) < mark_.types_len) {
+                interned_original[offset] = class;
+                continue;
+            }
+            const entry = try class_representatives.getOrPut(class);
+            if (entry.found_existing) {
+                interned_original[offset] = entry.value_ptr.*;
+                continue;
+            }
+            entry.value_ptr.* = candidate;
+            interned_original[offset] = candidate;
+            representative_of_offset[offset] = @intCast(representatives.items.len);
+            try representatives.append(self.allocator, candidate);
         }
 
         // Owned copies of just the representatives' rows. Construction reads
@@ -1460,9 +1488,13 @@ pub const Store = struct {
         // "committed" and "indexed" from ever disagreeing. Reference relocation
         // preserves content, so retain the digests computed before truncation.
         // Safety builds independently verify that contract before copying.
-        for (representatives.items, 0..) |original, representative_index| {
-            const durable: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + representative_index)));
-            const digest = digests[@intFromEnum(original) - mark_.types_len];
+        // Children before parents, so each safety recomputation reads its
+        // children's digests from the cache instead of re-walking them.
+        for (order) |offset| {
+            const original: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + offset)));
+            if (interned_original[offset] != original) continue;
+            const durable: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + representative_of_offset[offset])));
+            const digest = digests[offset];
             if (std.debug.runtime_safety) {
                 const rebuilt_digest = try self.computeDigest(name_store, durable, .full, null);
                 if (!std.mem.eql(u8, &rebuilt_digest.bytes, &digest.bytes)) {
@@ -1938,6 +1970,99 @@ pub const Store = struct {
     /// A bucket created here but never filled (because a later step failed) is
     /// an empty entry, which is indistinguishable from an absent one to every
     /// reader, so this preflight needs no rollback of its own.
+    /// Offsets of a transaction's suffix, each after the suffix nodes it
+    /// reaches except where a cycle leads back to it.
+    fn transactionPostOrder(self: *const Store, mark_: Mark, suffix_len: usize) std.mem.Allocator.Error![]u32 {
+        const VisitState = enum(u8) { unvisited, open, done };
+        const Visit = struct { offset: u32, expanded: bool };
+
+        const order = try self.allocator.alloc(u32, suffix_len);
+        errdefer self.allocator.free(order);
+        const states = try self.allocator.alloc(VisitState, suffix_len);
+        defer self.allocator.free(states);
+        @memset(states, .unvisited);
+        var stack = std.ArrayList(Visit).empty;
+        defer stack.deinit(self.allocator);
+        var children = std.ArrayList(TypeId).empty;
+        defer children.deinit(self.allocator);
+
+        const start: u32 = @intCast(mark_.types_len);
+        var emitted: usize = 0;
+        for (0..suffix_len) |root| {
+            if (states[root] != .unvisited) continue;
+            try stack.append(self.allocator, .{ .offset = @intCast(root), .expanded = false });
+            while (stack.pop()) |visit| {
+                if (visit.expanded) {
+                    states[visit.offset] = .done;
+                    order[emitted] = visit.offset;
+                    emitted += 1;
+                    continue;
+                }
+                if (states[visit.offset] != .unvisited) continue;
+                states[visit.offset] = .open;
+                try stack.append(self.allocator, .{ .offset = visit.offset, .expanded = true });
+                children.clearRetainingCapacity();
+                try self.appendChildTypes(@enumFromInt(start + visit.offset), &children);
+                var index = children.items.len;
+                while (index > 0) {
+                    index -= 1;
+                    const child_index = @intFromEnum(children.items[index]);
+                    if (child_index < start or child_index - start >= suffix_len) continue;
+                    const child_offset = child_index - start;
+                    if (states[child_offset] != .unvisited) continue;
+                    try stack.append(self.allocator, .{ .offset = child_offset, .expanded = false });
+                }
+            }
+        }
+        std.debug.assert(emitted == suffix_len);
+        return order;
+    }
+
+    /// Append every type `ty`'s content refers to.
+    fn appendChildTypes(self: *const Store, ty: TypeId, out: *std.ArrayList(TypeId)) std.mem.Allocator.Error!void {
+        switch (self.get(ty)) {
+            .primitive, .erased, .zst => {},
+            .list, .box => |child| try out.append(self.allocator, child),
+            .tuple => |span_| try self.appendSpanTypes(span_, out),
+            .func => |func| {
+                try self.appendSpanTypes(func.args, out);
+                try out.append(self.allocator, func.ret);
+            },
+            .record => |span_| {
+                const fields_ = self.fieldSpan(span_);
+                for (0..GuardedList.borrowLen(fields_)) |index| {
+                    const field = GuardedList.at(fields_, index);
+                    try out.append(self.allocator, field.ty);
+                    if (field.value_ty) |value_ty| try out.append(self.allocator, value_ty);
+                }
+            },
+            .tag_union => |span_| {
+                const tags_ = self.tagSpan(span_);
+                for (0..GuardedList.borrowLen(tags_)) |index| {
+                    try self.appendSpanTypes(GuardedList.at(tags_, index).payloads, out);
+                }
+            },
+            .named => |named| {
+                try self.appendSpanTypes(named.args, out);
+                if (named.backing) |backing| try out.append(self.allocator, backing.ty);
+                const declared = self.declaredFieldSpan(named.declared_order);
+                for (0..GuardedList.borrowLen(declared)) |index| {
+                    switch (GuardedList.at(declared, index)) {
+                        .named => {},
+                        .padding => |padding| try out.append(self.allocator, padding),
+                    }
+                }
+            },
+        }
+    }
+
+    fn appendSpanTypes(self: *const Store, span_: Span, out: *std.ArrayList(TypeId)) std.mem.Allocator.Error!void {
+        const types_ = self.span(span_);
+        for (0..GuardedList.borrowLen(types_)) |index| {
+            try out.append(self.allocator, GuardedList.at(types_, index));
+        }
+    }
+
     fn reserveInternedCapacity(
         self: *Store,
         mark_: Mark,
@@ -2069,7 +2194,7 @@ pub const Store = struct {
             lhs: TypeId,
             rhs: TypeId,
         ) std.mem.Allocator.Error!bool {
-            return try typeViewEql(self, allocator, name_store, lhs, rhs, .exact);
+            return try typeViewEql(self, allocator, name_store, lhs, rhs, .exact, null);
         }
 
         pub fn typeMatches(
@@ -2080,7 +2205,7 @@ pub const Store = struct {
             rhs: TypeId,
             mode: TypeMatchMode,
         ) std.mem.Allocator.Error!bool {
-            return try typeViewEql(self, allocator, name_store, lhs, rhs, mode);
+            return try typeViewEql(self, allocator, name_store, lhs, rhs, mode, null);
         }
 
         pub fn verify(self: View, name_store: *const names.NameStore) ?VerifyError {
@@ -2640,8 +2765,9 @@ pub const Store = struct {
         key: DigestBucketKey,
         existing: TypeId,
         candidate: TypeId,
+        resolver: ?SuffixClasses,
     ) std.mem.Allocator.Error!bool {
-        if (!try self.typeEql(name_store, existing, candidate)) return false;
+        if (!try typeViewEql(self.view(), self.allocator, name_store, existing, candidate, .exact, resolver)) return false;
         if (std.debug.runtime_safety) {
             // Allocation failure inside these checks propagates like any
             // other digest or equality allocation failure; the entry's digest
@@ -2649,7 +2775,7 @@ pub const Store = struct {
             // practice.
             const existing_digest = try self.computeDigest(name_store, existing, .full, null);
             std.debug.assert(std.mem.eql(u8, &existing_digest.bytes, &key.bytes));
-            std.debug.assert(try self.typeEql(name_store, candidate, existing));
+            std.debug.assert(try typeViewEql(self.view(), self.allocator, name_store, candidate, existing, .exact, resolver));
         }
         return true;
     }
@@ -2662,7 +2788,7 @@ pub const Store = struct {
         const key = DigestBucketKey.from(digest);
         if (self.full_digest_interned.getPtr(key)) |bucket| {
             for (bucket.items) |existing| {
-                if (try self.bucketHit(name_store, key, existing, candidate)) {
+                if (try self.bucketHit(name_store, key, existing, candidate, null)) {
                     self.restore(mark_);
                     return existing;
                 }
@@ -3578,6 +3704,22 @@ pub const TypeMatchMode = enum {
     declared_variable_slots_match_any,
 };
 
+/// Transaction nodes already proven equal to a class member. Resolving a
+/// classified node to its class lets an exact comparison stop at children
+/// whose equality is already decided.
+const SuffixClasses = struct {
+    start: u32,
+    classes: []const ?TypeId,
+
+    fn resolve(self: SuffixClasses, ty: TypeId) TypeId {
+        const index = @intFromEnum(ty);
+        if (index < self.start) return ty;
+        const offset = index - self.start;
+        if (offset >= self.classes.len) return ty;
+        return self.classes[offset] orelse ty;
+    }
+};
+
 /// Whether two types match in `mode`: the conjunction of every check their
 /// structures reach, in order, stopping at the first that fails. A pair
 /// already compared, or being compared, is assumed to match. Evaluated on
@@ -3589,11 +3731,13 @@ fn typeViewEql(
     lhs: TypeId,
     rhs: TypeId,
     mode: TypeMatchMode,
+    resolver: ?SuffixClasses,
 ) std.mem.Allocator.Error!bool {
     var scan = TypeViewEqlScan{
         .type_view = type_view,
         .name_store = name_store,
         .mode = mode,
+        .resolver = resolver,
         .visited = std.AutoHashMap(u64, void).init(allocator),
     };
     defer scan.visited.deinit();
@@ -3604,6 +3748,7 @@ const TypeViewEqlScan = struct {
     type_view: Store.View,
     name_store: *const names.NameStore,
     mode: TypeMatchMode,
+    resolver: ?SuffixClasses,
     visited: std.AutoHashMap(u64, void),
 
     const Eval = AnyAll.Evaluation(Leaf, TypeViewEqlScan);
@@ -3621,6 +3766,10 @@ const TypeViewEqlScan = struct {
             .decided => |value| return .{ .value = value },
             .pair => |pair| .{ pair.lhs, pair.rhs },
         };
+        if (scan.resolver) |resolver| {
+            raw_lhs = resolver.resolve(raw_lhs);
+            raw_rhs = resolver.resolve(raw_rhs);
+        }
         if (raw_lhs == raw_rhs) return .{ .value = true };
 
         // Transparent aliases compare through their backings.
@@ -3710,7 +3859,7 @@ const TypeViewEqlScan = struct {
         return .{ .group = .all };
     }
 
-    pub fn exit(_: *TypeViewEqlScan, _: Leaf, _: ?bool) void {}
+    pub fn exit(_: *TypeViewEqlScan, _: Leaf, _: ?bool) std.mem.Allocator.Error!void {}
 
     fn addPair(items: Eval.Items, lhs: TypeId, rhs: TypeId) std.mem.Allocator.Error!void {
         try items.add(.{ .pair = .{ .lhs = lhs, .rhs = rhs } });

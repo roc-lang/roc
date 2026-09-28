@@ -170,6 +170,13 @@ pub const Store = struct {
     /// sorted on insert; lookups binary-search.
     nominal_decl_index: NominalDeclIndexEntry.SafeList,
 
+    /// Whether any descriptor written to this store has held `.err`. Rollback
+    /// never clears it, so while it is false no variable reaches error content.
+    may_contain_err_content: bool = false,
+    /// Whether any nominal declaration in this store has been invalid.
+    /// Applications of invalid declarations are erroneous.
+    may_contain_invalid_nominal: bool = false,
+
     /// Reusable worklist buffers for `instantiate.Instantiator`'s explicit
     /// graph-copy machine. Runtime-only scratch: never serialized, cloned, or
     /// relocated; capacity persists across instantiations against this store.
@@ -294,7 +301,43 @@ pub const Store = struct {
             .static_dispatch_constraints = try self.static_dispatch_constraints.clone(gpa),
             .nominal_decls = try self.nominal_decls.clone(gpa),
             .nominal_decl_index = try self.nominal_decl_index.clone(gpa),
+            .may_contain_err_content = self.may_contain_err_content,
+            .may_contain_invalid_nominal = self.may_contain_invalid_nominal,
         };
+    }
+
+    /// Whether some variable in this store might reach error content or an
+    /// application of an invalid nominal declaration. False proves that none
+    /// does, without walking any type.
+    pub fn mayContainErrors(self: *const Self) bool {
+        return self.may_contain_err_content or self.may_contain_invalid_nominal;
+    }
+
+    fn noteDescWrite(self: *Self, desc: Desc) void {
+        if (desc.content == .err) self.may_contain_err_content = true;
+    }
+
+    fn noteNominalDeclWrite(self: *Self, decl: NominalDecl) void {
+        if (!decl.isValid()) self.may_contain_invalid_nominal = true;
+    }
+
+    /// Recompute the error flags from a store's contents, for stores built
+    /// from serialized data.
+    fn recomputeErrorFlags(self: *Self) void {
+        self.may_contain_err_content = false;
+        for (self.descs.backing.items.items(.content)) |content| {
+            if (content == .err) {
+                self.may_contain_err_content = true;
+                break;
+            }
+        }
+        self.may_contain_invalid_nominal = false;
+        for (self.nominal_decls.items.items) |decl| {
+            if (!decl.isValid()) {
+                self.may_contain_invalid_nominal = true;
+                break;
+            }
+        }
     }
 
     /// Return the number of type variables in the store.
@@ -563,6 +606,7 @@ pub const Store = struct {
         if (self.savepoint_active and @intFromEnum(idx) < self.savepoint_baseline_descs) {
             try self.desc_trail.append(self.gpa, .{ .idx = idx, .old = self.descs.get(idx) });
         }
+        self.noteDescWrite(val);
         self.descs.set(idx, val);
     }
 
@@ -594,6 +638,7 @@ pub const Store = struct {
         try self.descs.backing.ensureTotalCapacity(self.gpa, next_len);
         try self.root_metas.ensureTotalCapacity(self.gpa, next_len);
 
+        self.noteDescWrite(desc);
         const desc_idx = self.descs.appendAssumeCapacity(desc);
         const meta_idx = self.root_metas.appendAssumeCapacity(.{
             .checked_var = checked_var,
@@ -672,6 +717,7 @@ pub const Store = struct {
     pub fn appendFromContentAssumeCapacity(self: *Self, content: Content, rank: Rank) Var {
         const slot_idx: SlotStore.Idx = @enumFromInt(@as(u32, @intCast(self.slots.backing.len())));
         const checked_var = Self.slotIdxToVar(slot_idx);
+        if (content == .err) self.may_contain_err_content = true;
         const desc_idx = self.descs.appendAssumeCapacity(.{
             .content = content,
             .rank = rank,
@@ -1286,12 +1332,14 @@ pub const Store = struct {
                 .gt => lo = mid + 1,
                 .eq => {
                     const existing = entries[mid].decl;
+                    self.noteNominalDeclWrite(decl);
                     self.nominal_decls.set(existing, decl);
                     return existing;
                 },
             }
         }
 
+        self.noteNominalDeclWrite(decl);
         const decl_idx = try self.nominal_decls.append(self.gpa, decl);
         try self.nominal_decl_index.items.insert(self.gpa, lo, .{
             .origin_module = decl.origin_module,
@@ -1341,6 +1389,7 @@ pub const Store = struct {
     /// fill a reserved entry once its formals and backing have been copied).
     pub fn setNominalDecl(self: *Self, idx: NominalDecl.Idx, decl: NominalDecl) void {
         std.debug.assert(!self.savepoint_active);
+        self.noteNominalDeclWrite(decl);
         self.nominal_decls.set(idx, decl);
     }
 
@@ -1350,6 +1399,7 @@ pub const Store = struct {
         std.debug.assert(!self.savepoint_active);
         var decl = self.nominal_decls.get(idx).*;
         decl.flags.valid = false;
+        self.may_contain_invalid_nominal = true;
         self.nominal_decls.set(idx, decl);
     }
 
@@ -1770,7 +1820,7 @@ pub const Store = struct {
         /// WARNING: The returned Store points into the cache buffer and CANNOT be mutated.
         /// Use deserializeWithCopy() if the store needs to be mutable.
         pub fn deserializeInto(self: *const Serialized, base_addr: usize, gpa: Allocator) Store {
-            return Store{
+            var store = Store{
                 .gpa = gpa,
                 .slots = self.slots.deserializeInto(base_addr),
                 .descs = self.descs.deserializeInto(base_addr),
@@ -1784,12 +1834,14 @@ pub const Store = struct {
                 .nominal_decls = self.nominal_decls.deserializeInto(base_addr),
                 .nominal_decl_index = self.nominal_decl_index.deserializeInto(base_addr),
             };
+            store.recomputeErrorFlags();
+            return store;
         }
 
         /// Deserialize into a Store value with fresh memory allocation.
         /// The returned Store owns its memory and can be safely grown/mutated.
         pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!Store {
-            return Store{
+            var store = Store{
                 .gpa = gpa,
                 .slots = try self.slots.deserializeWithCopy(base_addr, gpa),
                 .descs = try self.descs.deserializeWithCopy(base_addr, gpa),
@@ -1803,6 +1855,8 @@ pub const Store = struct {
                 .nominal_decls = try self.nominal_decls.deserializeWithCopy(base_addr, gpa),
                 .nominal_decl_index = try self.nominal_decl_index.deserializeWithCopy(base_addr, gpa),
             };
+            store.recomputeErrorFlags();
+            return store;
         }
     };
 
@@ -1829,6 +1883,8 @@ pub const Store = struct {
             .static_dispatch_constraints = (try self.static_dispatch_constraints.serialize(allocator, writer)).*,
             .nominal_decls = (try self.nominal_decls.serialize(allocator, writer)).*,
             .nominal_decl_index = (try self.nominal_decl_index.serialize(allocator, writer)).*,
+            .may_contain_err_content = self.may_contain_err_content,
+            .may_contain_invalid_nominal = self.may_contain_invalid_nominal,
         };
 
         return @constCast(offset_self);

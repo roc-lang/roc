@@ -216,15 +216,15 @@ const ReturnSlotRewriter = struct {
         } }, slot);
     }
 
-    pub fn interceptStmt(self: *ReturnSlotRewriter, cloner: anytype, _: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) ResourceError!?CFStmtId {
+    pub fn interceptStmt(self: *ReturnSlotRewriter, cloner: anytype, _: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) ResourceError!body_clone.Intercept {
         if (stmt == .assign_struct) {
             const s = stmt.assign_struct;
-            if (cloner.directReturnOf(s.next, s.target)) return try self.cloneStructReturn(cloner, s, slotOrigin(origin));
+            if (cloner.directReturnOf(s.next, s.target)) return .{ .done = try self.cloneStructReturn(cloner, s, slotOrigin(origin)) };
         } else if (stmt == .assign_tag) {
             const s = stmt.assign_tag;
-            if (cloner.directReturnOf(s.next, s.target)) return try self.cloneTagReturn(cloner, s, slotOrigin(origin));
+            if (cloner.directReturnOf(s.next, s.target)) return .{ .done = try self.cloneTagReturn(cloner, s, slotOrigin(origin)) };
         }
-        return null;
+        return .none;
     }
 
     fn cloneStructReturn(self: *ReturnSlotRewriter, cloner: anytype, s: anytype, slot: LIR.StmtOrigin) ResourceError!CFStmtId {

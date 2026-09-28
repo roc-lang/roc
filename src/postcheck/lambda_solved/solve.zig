@@ -7,7 +7,7 @@ const can = @import("can");
 const check = @import("check");
 
 const Common = @import("../common.zig");
-const AnyAll = @import("../any_all.zig");
+const AnyAll = collections.AnyAll;
 const MonoType = @import("../monotype/type.zig");
 const Lifted = @import("../monotype_lifted/ast.zig");
 const Ast = @import("ast.zig");
@@ -3186,7 +3186,7 @@ const SolvedUninhabitedScan = struct {
         return expansion;
     }
 
-    pub fn exit(self: *SolvedUninhabitedScan, ty: Type.TypeVarId, _: ?bool) void {
+    pub fn exit(self: *SolvedUninhabitedScan, ty: Type.TypeVarId, _: ?bool) std.mem.Allocator.Error!void {
         _ = self.visiting.remove(self.solver.program.types.rootCompressed(ty));
     }
 };
@@ -3238,7 +3238,7 @@ const MonoUninhabitedScan = struct {
         return expansion;
     }
 
-    pub fn exit(self: *MonoUninhabitedScan, id: MonoType.TypeId, _: ?bool) void {
+    pub fn exit(self: *MonoUninhabitedScan, id: MonoType.TypeId, _: ?bool) std.mem.Allocator.Error!void {
         _ = self.visiting.remove(id);
     }
 };

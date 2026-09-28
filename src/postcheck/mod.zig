@@ -47,7 +47,6 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("record_fields.zig"));
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(@import("common.zig"));
-    std.testing.refAllDecls(@import("any_all.zig"));
     std.testing.refAllDecls(@import("monotype/ast.zig"));
     std.testing.refAllDecls(@import("monotype/type.zig"));
     std.testing.refAllDecls(@import("monotype/lower.zig"));

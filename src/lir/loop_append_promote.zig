@@ -2346,36 +2346,25 @@ const VersionRewriter = struct {
         return try cloner.store.addCFStmt(.{ .ret = .{ .value = try cloner.mapLocal(value) } }, origin);
     }
 
-    pub fn interceptStmt(self: *VersionRewriter, cloner: anytype, old_id: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) ResourceError!?CFStmtId {
+    pub fn interceptStmt(self: *VersionRewriter, cloner: anytype, old_id: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) ResourceError!body_clone.Intercept {
         switch (stmt) {
             .join => |s| {
                 const fresh: LIR.JoinPointId = @enumFromInt(self.max_join_id.*);
                 self.max_join_id.* += 1;
                 try self.join_map.put(s.id, fresh);
-                const body = try cloner.cloneStmt(s.body);
-                const remainder = try cloner.cloneStmt(s.remainder);
-                return try cloner.store.addCFStmt(.{ .join = .{
-                    .id = fresh,
-                    .params = try cloner.mapLocalSpan(s.params),
-                    .retained = try cloner.mapLocalSpan(s.retained),
-                    .maybe_uninitialized_params = try cloner.mapLocalSpan(s.maybe_uninitialized_params),
-                    .maybe_uninitialized_conditions = try cloner.mapLocalSpan(s.maybe_uninitialized_conditions),
-                    .maybe_uninitialized_condition_masks = s.maybe_uninitialized_condition_masks,
-                    .body = body,
-                    .remainder = remainder,
-                } }, origin);
+                return body_clone.Intercept.two(s.body, s.remainder);
             },
             .jump => |s| {
                 const target = if (s.target == self.loop_id)
                     (if (self.retarget.contains(old_id)) self.unique_id else self.loop_id)
                 else
                     (self.join_map.get(s.target) orelse s.target);
-                return try cloner.store.addCFStmt(.{ .jump = .{ .target = target } }, origin);
+                return .{ .done = try cloner.store.addCFStmt(.{ .jump = .{ .target = target } }, origin) };
             },
             .switch_stmt => |s| {
-                if (!self.fold.contains(old_id)) return null;
+                if (!self.fold.contains(old_id)) return .none;
                 const branches = cloner.store.getCFSwitchBranches(s.branches);
-                return try cloner.cloneStmt(GuardedList.at(branches, 0).body);
+                return body_clone.Intercept.one(GuardedList.at(branches, 0).body);
             },
             .init_uninitialized,
             .assign_ref,
@@ -2419,7 +2408,31 @@ const VersionRewriter = struct {
             .assign_boxy_tag_payload,
             .boxy_tag_match,
             .assign_call_dict,
-            => return null,
+            => return .none,
+        }
+    }
+
+    pub fn finishIntercept(
+        self: *VersionRewriter,
+        cloner: anytype,
+        _: CFStmtId,
+        stmt: LIR.CFStmt,
+        origin: LIR.StmtOrigin,
+        cloned: []const CFStmtId,
+    ) ResourceError!CFStmtId {
+        switch (stmt) {
+            .join => |s| return try cloner.store.addCFStmt(.{ .join = .{
+                .id = self.join_map.get(s.id).?,
+                .params = try cloner.mapLocalSpan(s.params),
+                .retained = try cloner.mapLocalSpan(s.retained),
+                .maybe_uninitialized_params = try cloner.mapLocalSpan(s.maybe_uninitialized_params),
+                .maybe_uninitialized_conditions = try cloner.mapLocalSpan(s.maybe_uninitialized_conditions),
+                .maybe_uninitialized_condition_masks = s.maybe_uninitialized_condition_masks,
+                .body = cloned[0],
+                .remainder = cloned[1],
+            } }, origin),
+            .switch_stmt => return cloned[0],
+            else => unreachable,
         }
     }
 };

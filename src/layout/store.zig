@@ -13,6 +13,7 @@ const graph_mod = @import("./graph.zig");
 const rc_helper = @import("./rc_helper.zig");
 const work_mod = @import("./work.zig");
 const field_order = @import("./field_order.zig");
+const digest_mod = @import("./digest.zig");
 
 const target = base.target;
 const Layout = layout_mod.Layout;
@@ -101,6 +102,9 @@ pub const Store = struct {
     // This is critical for cross-compilation (e.g., compiling for wasm32 on a 64-bit host)
     target_usize: target.TargetUsize,
 
+    /// Memoized content digests, shared by every reader of this store.
+    digest_cache: *digest_mod.DigestCache,
+
     // Number of sentinel layouts that are pre-populated in the layout store.
     // Must be kept in sync with the sentinel values in layout.zig Idx enum.
     const num_primitives = 25;
@@ -135,6 +139,7 @@ pub const Store = struct {
             .interned_recursive_graphs = RecursiveGraphMap.init(allocator),
             .recursive_unfoldings = .empty,
             .target_usize = target_usize,
+            .digest_cache = try digest_mod.DigestCache.create(allocator),
         };
         errdefer self.deinit();
         self.tag_union_variants = try TagUnionVariant.SafeMultiList.initCapacity(allocator, 64);
@@ -314,6 +319,12 @@ pub const Store = struct {
         self.scratch_intern_key.deinit(self.allocator);
         self.interned_recursive_graphs.deinit();
         self.recursive_unfoldings.deinit(self.allocator);
+        self.digest_cache.destroy(self.allocator);
+    }
+
+    /// Content digest of a committed layout; see `digest.zig`.
+    pub fn contentDigest(self: *const Self, idx: Idx) std.mem.Allocator.Error!digest_mod.Digest {
+        return try self.digest_cache.get(self, idx);
     }
 
     fn appendInternKeyValue(self: *Self, value: anytype) std.mem.Allocator.Error!void {
@@ -1751,13 +1762,17 @@ pub const Store = struct {
                 self_resolver: *@This(),
                 child_ref: GraphRef,
             ) Idx {
-                return switch (child_ref) {
-                    .canonical => |layout_idx| layout_idx,
-                    .local => |child_id| switch (self_resolver.graph.getNode(child_id)) {
-                        .nominal => |child| self_resolver.pointerTargetLayout(child),
-                        .pending, .committed, .box, .list, .closure, .erased_callable, .struct_, .tag_union => self_resolver.raw_layouts[@intFromEnum(child_id)],
-                    },
-                };
+                var current = child_ref;
+                while (true) {
+                    const child_id = switch (current) {
+                        .canonical => |layout_idx| return layout_idx,
+                        .local => |child_id| child_id,
+                    };
+                    switch (self_resolver.graph.getNode(child_id)) {
+                        .nominal => |child| current = child,
+                        .pending, .committed, .box, .list, .closure, .erased_callable, .struct_, .tag_union => return self_resolver.raw_layouts[@intFromEnum(child_id)],
+                    }
+                }
             }
 
             fn isValueReady(self_resolver: *@This(), ref: GraphRef) bool {
@@ -1990,27 +2005,40 @@ pub const Store = struct {
             recursive_nodes: []bool,
             component_ids: []u32,
 
-            fn finalValue(self_finalizer: *@This(), ref: GraphRef) std.mem.Allocator.Error!Idx {
-                return switch (ref) {
-                    .canonical => |layout_idx| layout_idx,
-                    .local => |node_id| try self_finalizer.finalizeNode(node_id),
-                };
-            }
+            /// How a parent reads a child: as its final value, or as a
+            /// pointer target, which looks through nominal wrappers.
+            const ChildMode = enum { value, pointer };
 
-            fn pointerChildLayout(self_finalizer: *@This(), ref: GraphRef) std.mem.Allocator.Error!Idx {
-                return switch (ref) {
-                    .canonical => |layout_idx| layout_idx,
-                    .local => |node_id| switch (self_finalizer.graph.getNode(node_id)) {
-                        .nominal => |child| try self_finalizer.pointerChildLayout(child),
-                        .pending, .committed, .box, .list, .closure, .erased_callable, .struct_, .tag_union => switch (self_finalizer.finalize_state[@intFromEnum(node_id)]) {
-                            .active => blk: {
-                                self_finalizer.raw_used[@intFromEnum(node_id)] = true;
-                                break :blk self_finalizer.raw_layouts[@intFromEnum(node_id)];
-                            },
-                            .unseen, .done => try self_finalizer.finalizeNode(node_id),
+            /// The layout of child `ref`, or the node that must be finalized
+            /// first to produce it.
+            const ChildLayout = union(enum) {
+                layout: Idx,
+                finalize: GraphNodeId,
+            };
+
+            fn childLayout(self_finalizer: *@This(), ref: GraphRef, mode: ChildMode) ChildLayout {
+                var current = ref;
+                while (true) {
+                    const node_id = switch (current) {
+                        .canonical => |layout_idx| return .{ .layout = layout_idx },
+                        .local => |node_id| node_id,
+                    };
+                    if (mode == .pointer) {
+                        if (self_finalizer.graph.getNode(node_id) == .nominal) {
+                            current = self_finalizer.graph.getNode(node_id).nominal;
+                            continue;
+                        }
+                    }
+                    const index = @intFromEnum(node_id);
+                    return switch (self_finalizer.finalize_state[index]) {
+                        .done => .{ .layout = self_finalizer.value_layouts[index] },
+                        .active => blk: {
+                            self_finalizer.raw_used[index] = true;
+                            break :blk .{ .layout = self_finalizer.raw_layouts[index] };
                         },
-                    },
-                };
+                        .unseen => .{ .finalize = node_id },
+                    };
+                }
             }
 
             fn shouldBoxRecursiveSlotEdge(
@@ -2046,16 +2074,20 @@ pub const Store = struct {
                 self_finalizer: *@This(),
                 child_ref: GraphRef,
             ) Idx {
-                return switch (child_ref) {
-                    .canonical => |layout_idx| layout_idx,
-                    .local => |child_id| switch (self_finalizer.graph.getNode(child_id)) {
-                        .nominal => |child| self_finalizer.recursiveSlotTargetLayout(child),
-                        .pending, .committed, .box, .list, .closure, .erased_callable, .struct_, .tag_union => blk: {
+                var current = child_ref;
+                while (true) {
+                    const child_id = switch (current) {
+                        .canonical => |layout_idx| return layout_idx,
+                        .local => |child_id| child_id,
+                    };
+                    switch (self_finalizer.graph.getNode(child_id)) {
+                        .nominal => |child| current = child,
+                        .pending, .committed, .box, .list, .closure, .erased_callable, .struct_, .tag_union => {
                             self_finalizer.raw_used[@intFromEnum(child_id)] = true;
-                            break :blk self_finalizer.raw_layouts[@intFromEnum(child_id)];
+                            return self_finalizer.raw_layouts[@intFromEnum(child_id)];
                         },
-                    },
-                };
+                    }
+                }
             }
 
             fn recursiveSlotLayout(
@@ -2065,94 +2097,125 @@ pub const Store = struct {
                 return try self_finalizer.store.insertBox(self_finalizer.recursiveSlotTargetLayout(child_ref));
             }
 
-            fn finalizeNode(self_finalizer: *@This(), node_id: GraphNodeId) std.mem.Allocator.Error!Idx {
-                const index = @intFromEnum(node_id);
-                return switch (self_finalizer.finalize_state[index]) {
-                    .done => self_finalizer.value_layouts[index],
-                    .active => blk: {
-                        self_finalizer.raw_used[index] = true;
-                        break :blk self_finalizer.raw_layouts[index];
+            /// Finalize `root` and every node it needs first. Children are
+            /// finalized before their parents; each node being finalized
+            /// waits in a frame on an explicit stack, so layout nesting never
+            /// becomes native call depth. Layouts are inserted in the order a
+            /// direct recursive finalization inserted them.
+            fn finalizeNode(self_finalizer: *@This(), start: GraphNodeId) std.mem.Allocator.Error!Idx {
+                const root_index = @intFromEnum(start);
+                switch (self_finalizer.finalize_state[root_index]) {
+                    .done => return self_finalizer.value_layouts[root_index],
+                    .active => {
+                        self_finalizer.raw_used[root_index] = true;
+                        return self_finalizer.raw_layouts[root_index];
                     },
-                    .unseen => blk: {
-                        self_finalizer.finalize_state[index] = .active;
-                        const value_layout = switch (self_finalizer.graph.getNode(node_id)) {
-                            .pending, .committed => unreachable,
-                            .nominal => |child| try self_finalizer.finalValue(child),
-                            .box => |child| blk_box: {
-                                const child_idx = try self_finalizer.pointerChildLayout(child);
-                                const child_layout = self_finalizer.store.getLayout(child_idx);
-                                break :blk_box if (self_finalizer.store.isZeroSized(child_layout))
-                                    try self_finalizer.store.insertLayout(Layout.boxOfZst())
-                                else
-                                    try self_finalizer.store.insertBox(child_idx);
-                            },
-                            .list => |child| blk_list: {
-                                const child_idx = try self_finalizer.pointerChildLayout(child);
-                                const child_layout = self_finalizer.store.getLayout(child_idx);
-                                break :blk_list if (self_finalizer.store.isZeroSized(child_layout))
-                                    try self_finalizer.store.insertLayout(Layout.listOfZst())
-                                else
-                                    try self_finalizer.store.insertList(child_idx);
-                            },
-                            .closure => |child| try self_finalizer.store.insertLayout(
-                                Layout.closure(try self_finalizer.pointerChildLayout(child)),
-                            ),
-                            .erased_callable => try self_finalizer.store.insertErasedCallable(),
-                            .struct_ => |span| blk_struct: {
-                                const graph_fields = self_finalizer.graph.getFields(span);
-                                if (graph_fields.len == 0) break :blk_struct .zst;
-                                var fields = std.ArrayList(StructField).empty;
-                                defer fields.deinit(self_finalizer.store.allocator);
-                                try fields.ensureTotalCapacity(self_finalizer.store.allocator, graph_fields.len);
-
-                                for (graph_fields) |field| {
-                                    const field_layout = if (self_finalizer.shouldBoxRecursiveSlotEdge(node_id, field.child))
-                                        try self_finalizer.recursiveSlotLayout(field.child)
-                                    else
-                                        try self_finalizer.finalValue(field.child);
-                                    fields.appendAssumeCapacity(.{
-                                        .index = field.index,
-                                        .layout = field_layout,
-                                        .is_padding = field.is_padding,
-                                    });
-                                }
-
-                                break :blk_struct if (span.order == .declared)
-                                    try self_finalizer.store.putNominalStructFields(fields.items)
-                                else
-                                    try self_finalizer.store.putStructFields(fields.items);
-                            },
-                            .tag_union => |span| blk_union: {
-                                const graph_refs = self_finalizer.graph.getRefs(span);
-                                var variants = std.ArrayList(Idx).empty;
-                                defer variants.deinit(self_finalizer.store.allocator);
-                                try variants.ensureTotalCapacity(self_finalizer.store.allocator, graph_refs.len);
-
-                                for (graph_refs) |variant_ref| {
-                                    const variant_layout = if (self_finalizer.shouldBoxRecursiveSlotEdge(node_id, variant_ref))
-                                        try self_finalizer.recursiveSlotLayout(variant_ref)
-                                    else
-                                        try self_finalizer.finalValue(variant_ref);
-                                    variants.appendAssumeCapacity(variant_layout);
-                                }
-
-                                break :blk_union try self_finalizer.store.putTagUnion(variants.items);
-                            },
-                        };
-
-                        if (self_finalizer.raw_used[index]) {
-                            self_finalizer.store.updateLayout(
-                                self_finalizer.raw_layouts[index],
-                                self_finalizer.store.getLayout(value_layout),
-                            );
-                            self_finalizer.value_layouts[index] = self_finalizer.raw_layouts[index];
-                        } else {
-                            self_finalizer.value_layouts[index] = value_layout;
-                        }
-                        self_finalizer.finalize_state[index] = .done;
-                        break :blk self_finalizer.value_layouts[index];
-                    },
+                    .unseen => {},
+                }
+                const allocator = self_finalizer.store.allocator;
+                const Frame = struct {
+                    node_id: GraphNodeId,
+                    /// Child layouts finalized so far, in order.
+                    children: std.ArrayList(Idx) = .empty,
                 };
+                var frames: std.ArrayList(Frame) = .empty;
+                defer {
+                    for (frames.items) |*frame| frame.children.deinit(allocator);
+                    frames.deinit(allocator);
+                }
+                self_finalizer.finalize_state[root_index] = .active;
+                try frames.append(allocator, .{ .node_id = start });
+                var input: ?Idx = null;
+                while (true) {
+                    const frame = &frames.items[frames.items.len - 1];
+                    if (input) |child| try frame.children.append(allocator, child);
+                    input = null;
+                    const node_id = frame.node_id;
+                    const node = self_finalizer.graph.getNode(node_id);
+                    // The next child to read, with how it is read.
+                    const next: ?struct { ref: GraphRef, mode: ChildMode } = switch (node) {
+                        .pending, .committed => unreachable,
+                        .nominal => |child| if (frame.children.items.len == 0) .{ .ref = child, .mode = .value } else null,
+                        .box, .list, .closure => |child| if (frame.children.items.len == 0) .{ .ref = child, .mode = .pointer } else null,
+                        .erased_callable => null,
+                        .struct_ => |span| blk: {
+                            const graph_fields = self_finalizer.graph.getFields(span);
+                            while (frame.children.items.len < graph_fields.len) {
+                                const field = graph_fields[frame.children.items.len];
+                                if (!self_finalizer.shouldBoxRecursiveSlotEdge(node_id, field.child)) break :blk .{ .ref = field.child, .mode = .value };
+                                try frame.children.append(allocator, try self_finalizer.recursiveSlotLayout(field.child));
+                            }
+                            break :blk null;
+                        },
+                        .tag_union => |span| blk: {
+                            const graph_refs = self_finalizer.graph.getRefs(span);
+                            while (frame.children.items.len < graph_refs.len) {
+                                const variant_ref = graph_refs[frame.children.items.len];
+                                if (!self_finalizer.shouldBoxRecursiveSlotEdge(node_id, variant_ref)) break :blk .{ .ref = variant_ref, .mode = .value };
+                                try frame.children.append(allocator, try self_finalizer.recursiveSlotLayout(variant_ref));
+                            }
+                            break :blk null;
+                        },
+                    };
+                    if (next) |child| {
+                        switch (self_finalizer.childLayout(child.ref, child.mode)) {
+                            .layout => |layout_idx| input = layout_idx,
+                            .finalize => |child_id| {
+                                self_finalizer.finalize_state[@intFromEnum(child_id)] = .active;
+                                try frames.append(allocator, .{ .node_id = child_id });
+                            },
+                        }
+                        continue;
+                    }
+
+                    const children = frame.children.items;
+                    const value_layout = switch (node) {
+                        .pending, .committed => unreachable,
+                        .nominal => children[0],
+                        .box => if (self_finalizer.store.isZeroSized(self_finalizer.store.getLayout(children[0])))
+                            try self_finalizer.store.insertLayout(Layout.boxOfZst())
+                        else
+                            try self_finalizer.store.insertBox(children[0]),
+                        .list => if (self_finalizer.store.isZeroSized(self_finalizer.store.getLayout(children[0])))
+                            try self_finalizer.store.insertLayout(Layout.listOfZst())
+                        else
+                            try self_finalizer.store.insertList(children[0]),
+                        .closure => try self_finalizer.store.insertLayout(Layout.closure(children[0])),
+                        .erased_callable => try self_finalizer.store.insertErasedCallable(),
+                        .struct_ => |span| blk_struct: {
+                            const graph_fields = self_finalizer.graph.getFields(span);
+                            if (graph_fields.len == 0) break :blk_struct .zst;
+                            const fields = try allocator.alloc(StructField, graph_fields.len);
+                            defer allocator.free(fields);
+                            for (graph_fields, children, fields) |field, field_layout, *out| out.* = .{
+                                .index = field.index,
+                                .layout = field_layout,
+                                .is_padding = field.is_padding,
+                            };
+                            break :blk_struct if (span.order == .declared)
+                                try self_finalizer.store.putNominalStructFields(fields)
+                            else
+                                try self_finalizer.store.putStructFields(fields);
+                        },
+                        .tag_union => try self_finalizer.store.putTagUnion(children),
+                    };
+
+                    const index = @intFromEnum(node_id);
+                    if (self_finalizer.raw_used[index]) {
+                        self_finalizer.store.updateLayout(
+                            self_finalizer.raw_layouts[index],
+                            self_finalizer.store.getLayout(value_layout),
+                        );
+                        self_finalizer.value_layouts[index] = self_finalizer.raw_layouts[index];
+                    } else {
+                        self_finalizer.value_layouts[index] = value_layout;
+                    }
+                    self_finalizer.finalize_state[index] = .done;
+                    var finished = frames.pop().?;
+                    finished.children.deinit(allocator);
+                    if (frames.items.len == 0) return self_finalizer.value_layouts[index];
+                    input = self_finalizer.value_layouts[index];
+                }
             }
         };
 
@@ -2303,9 +2366,12 @@ pub const Store = struct {
     }
 
     pub fn runtimeRepresentationLayoutIdx(self: *const Self, layout_idx: Idx) Idx {
-        const layout_val = self.getLayout(layout_idx);
-        if (layout_val.tag == .closure) return self.runtimeRepresentationLayoutIdx(layout_val.getClosure().captures_layout_idx);
-        return layout_idx;
+        var current = layout_idx;
+        while (true) {
+            const layout_val = self.getLayout(current);
+            if (layout_val.tag != .closure) return current;
+            current = layout_val.getClosure().captures_layout_idx;
+        }
     }
 
     pub fn builtinListAbi(self: *const Self, list_layout_idx: Idx) BuiltinListAbi {
@@ -2684,12 +2750,19 @@ pub const Store = struct {
             .box, .box_of_zst, .erased_box, .erased_callable, .ptr => target_usize.size(),
             .list, .list_of_zst => 3 * target_usize.size(), // ptr, length, capacity
             .struct_ => self.getStructData(layout.getStruct().idx).size.get(target_usize),
+            // A closure's captures follow its header, aligned; captures
+            // that are themselves a closure nest the same way.
             .closure => blk: {
-                const header_size: u32 = @sizeOf(layout_mod.Closure);
-                const captures_layout = self.getLayout(layout.getClosure().captures_layout_idx);
-                const cap_align: u32 = @intCast(captures_layout.alignment(target_usize).toByteUnits());
-                const aligned_captures_offset: u32 = @intCast(std.mem.alignForward(u32, header_size, cap_align));
-                break :blk aligned_captures_offset + self.sizeAt(captures_layout, target_usize);
+                var offset: u32 = 0;
+                var current = layout;
+                while (current.tag == .closure) {
+                    const header_size: u32 = @sizeOf(layout_mod.Closure);
+                    const captures_layout = self.getLayout(current.getClosure().captures_layout_idx);
+                    const cap_align: u32 = @intCast(captures_layout.alignment(target_usize).toByteUnits());
+                    offset += @intCast(std.mem.alignForward(u32, header_size, cap_align));
+                    current = captures_layout;
+                }
+                break :blk offset + self.sizeAt(current, target_usize);
             },
             .tag_union => self.getTagUnionData(layout.getTagUnion().idx).size.get(target_usize),
             .zst => 0,
@@ -2793,7 +2866,11 @@ pub const Store = struct {
             .zst => false,
             .struct_ => self.getStructData(l.getStruct().idx).contains_refcounted,
             .tag_union => self.getTagUnionData(l.getTagUnion().idx).contains_refcounted,
-            .closure => self.layoutContainsRefcounted(self.getLayout(l.getClosure().captures_layout_idx)),
+            .closure => blk: {
+                var captures = self.getLayout(l.getClosure().captures_layout_idx);
+                while (captures.tag == .closure) captures = self.getLayout(captures.getClosure().captures_layout_idx);
+                break :blk self.layoutContainsRefcounted(captures);
+            },
         };
     }
 
@@ -2871,6 +2948,7 @@ pub const Store = struct {
     pub fn updateLayout(self: *Self, idx: Idx, layout: Layout) void {
         const ptr = self.layouts.get(@enumFromInt(@intFromEnum(idx)));
         ptr.* = layout;
+        self.digest_cache.invalidate();
         self.resolved_list_layouts.items[@intFromEnum(idx)] = self.computeResolvedListLayoutIdx(idx);
     }
 

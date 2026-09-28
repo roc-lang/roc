@@ -299,8 +299,8 @@ selected by LIR ARC insertion. Consumers may lazily cache code or interpreter
 execution plans for that helper, but they must not select a different helper
 from local layout data. Reference-counting policy belongs to LIR ARC insertion.
 
-Recursive walks over post-check types and values must have an explicit
-termination argument. A structure reachable after checking can be
+Walks over post-check types and values must have an explicit termination
+argument. A structure reachable after checking can be
 self-referential—a recursive nominal's backing, or the fixpoint value of a
 recursively-constructed chain (an iterator wrapped around itself a runtime
 number of times)—so "this walk terminates" is an assumption, not a property,
@@ -354,6 +354,43 @@ carry no budget: `Shape` trees are finite and acyclic by construction—they are
 produced only by the budgeted derivations and a nominal shape's backing is a
 fresh allocation, never a back-reference—so those walks terminate on the
 structure alone.
+
+### Stack Safety
+
+Valid source depth must never become compiler thread call depth, in any
+stage. This covers every kind of depth a valid program can have: expression
+nesting (including a long left-associative operator chain, which parses as a
+deeply nested binary expression), statement-sequence length, pattern nesting,
+type nesting (a list of lists, a record whose field is a record, a callable
+capturing a callable), and the depth of every structure derived from those:
+checked, solved, and Monotype types, layouts, constant values, match trees,
+statement chains, and procedure graphs. Every walk over such a structure, in
+checking, checked output, Monotype, lifting, SpecConstr, lambda solving and
+lowering, Boxy, Solved-to-LIR lowering, LIR passes, backends, and the type and
+layout stores, keeps its pending work in heap-backed explicit storage: a frame
+stack, a worklist, or an action stack. Direct, indirect, and mutual recursion
+over any of these structures is forbidden. Recursion over the structure of a
+Zig type (a comptime-driven walk of a value's fields) is fixed by the type and
+is not source depth.
+
+A walk that combines its components' answers with "any" or "all" (whether a
+type is uninhabited, whether two types are equivalent, whether an expression
+diverges) runs on `collections.AnyAll`. A walk that builds a result from its
+components' results keeps each unfinished node's partial result in its frame
+and resumes the frame with each component's result. Frames reach their
+components, and allocate ids, interned names, spans, locals, and statements,
+in the same order a direct recursive walk would, so the shape of a walk's
+storage never changes its output.
+
+None of these may stand in for explicit storage: a larger thread stack,
+smaller frames, a depth or nesting limit, flattening a structure before walking
+it, or a work budget. A walk that must terminate on cyclic input does so
+through its own visited or active sets or its proof fuel, never through a
+depth cap.
+
+Stack-safety tests compile and run each deep shape on a thread whose stack is
+far smaller than the shape's depth times any per-level recursion cost, so a
+stage that recurses once per level fails them deterministically.
 
 ### Object Symbol Names
 

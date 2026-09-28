@@ -32,7 +32,9 @@ const MkSafeMultiList = collections.SafeMultiList;
 test {
     // If your changes caused this number to go down, great! Please update it to the lower number.
     // If it went up, please make sure your changes are absolutely required!
-    try std.testing.expectEqual(32, @sizeOf(Descriptor));
+    // A rank counts nested generalization scopes, which valid source can nest
+    // arbitrarily deep, so it takes a full word.
+    try std.testing.expectEqual(36, @sizeOf(Descriptor));
     try std.testing.expectEqual(28, @sizeOf(Content));
     try std.testing.expectEqual(20, @sizeOf(Alias));
     try std.testing.expectEqual(24, @sizeOf(FlatType));
@@ -141,7 +143,7 @@ pub const Descriptor = struct {
 ///
 /// Keeping track of ranks makes type inference faster.
 ///
-pub const Rank = enum(u8) {
+pub const Rank = enum(u32) {
     /// When the corresponding type is generic, like in `List.len`.
     generalized = 0,
     outermost = 1,

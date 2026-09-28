@@ -13760,57 +13760,68 @@ fn publishCheckedInspectEvaluationElision(
     const states = try allocator.alloc(DivergenceVisitState, exprs.len);
     defer allocator.free(states);
     @memset(states, .fresh);
+    var chain: std.ArrayList(CheckedExprId) = .empty;
+    defer chain.deinit(allocator);
     for (exprs) |expr| {
-        may_be_elided[@intFromEnum(expr.id)] = checkedExprEvaluationMayBeElidedForInspect(exprs, may_be_elided, expr.id, states);
+        may_be_elided[@intFromEnum(expr.id)] = try checkedExprEvaluationMayBeElidedForInspect(exprs, may_be_elided, expr.id, states, &chain, allocator);
     }
 }
 
+/// Whether evaluating an expression can be elided when only inspected: a
+/// lambda, closure, or lookup, or a single-field record literal's one
+/// required field read whose value can be. The field-read chain is followed
+/// iteratively, then each link's answer is memoized.
 fn checkedExprEvaluationMayBeElidedForInspect(
     exprs: []const CheckedExpr,
     may_be_elided: []bool,
     expr_id: CheckedExprId,
     states: []DivergenceVisitState,
-) bool {
-    const index = @intFromEnum(expr_id);
-    if (index >= exprs.len) checkedArtifactInvariant("checked inspect-elision fact referenced a missing expression", .{});
-    switch (states[index]) {
-        .done => return may_be_elided[index],
-        .active => checkedArtifactInvariant("checked inspect-elision relation contains a cycle", .{}),
-        .fresh => {},
-    }
-    states[index] = .active;
-    const data = exprs[index].data;
-    const result = blk: {
+    chain: *std.ArrayList(CheckedExprId),
+    allocator: Allocator,
+) Allocator.Error!bool {
+    chain.clearRetainingCapacity();
+    var current = expr_id;
+    const result = while (true) {
+        const index = @intFromEnum(current);
+        if (index >= exprs.len) checkedArtifactInvariant("checked inspect-elision fact referenced a missing expression", .{});
+        switch (states[index]) {
+            .done => break may_be_elided[index],
+            .active => checkedArtifactInvariant("checked inspect-elision relation contains a cycle", .{}),
+            .fresh => {},
+        }
+        states[index] = .active;
+        try chain.append(allocator, current);
+        const data = exprs[index].data;
         if (data == .lambda or
             data == .closure or
             data == .lookup_local or
             data == .lookup_external or
             data == .lookup_required)
         {
-            break :blk true;
+            break true;
         }
-        if (data == .field_access) {
-            const access = data.field_access;
-            const receiver_index = @intFromEnum(access.receiver);
-            if (receiver_index >= exprs.len) checkedArtifactInvariant("checked inspect-elision field access referenced a missing receiver", .{});
-            const receiver_data = exprs[receiver_index].data;
-            if (receiver_data != .record) break :blk false;
-            const record = receiver_data.record;
-            if (record.ext != null or record.fields.len != 1) break :blk false;
-            const field = record.fields[0];
-            // Only a single-segment required access reads the literal's one
-            // field directly; `.?` segments and longer chains evaluate more
-            // than the field value, so they are never elided here.
-            if (access.segments.len != 1) break :blk false;
-            const segment = access.segments[0];
-            if (segment.mode != .required) break :blk false;
-            if (field.label != segment.field_name) break :blk false;
-            break :blk checkedExprEvaluationMayBeElidedForInspect(exprs, may_be_elided, field.value, states);
-        }
-        break :blk false;
+        if (data != .field_access) break false;
+        const access = data.field_access;
+        const receiver_index = @intFromEnum(access.receiver);
+        if (receiver_index >= exprs.len) checkedArtifactInvariant("checked inspect-elision field access referenced a missing receiver", .{});
+        const receiver_data = exprs[receiver_index].data;
+        if (receiver_data != .record) break false;
+        const record = receiver_data.record;
+        if (record.ext != null or record.fields.len != 1) break false;
+        const field = record.fields[0];
+        // Only a single-segment required access reads the literal's one
+        // field directly; `.?` segments and longer chains evaluate more
+        // than the field value, so they are never elided here.
+        if (access.segments.len != 1) break false;
+        const segment = access.segments[0];
+        if (segment.mode != .required) break false;
+        if (field.label != segment.field_name) break false;
+        current = field.value;
     };
-    may_be_elided[index] = result;
-    states[index] = .done;
+    for (chain.items) |link| {
+        may_be_elided[@intFromEnum(link)] = result;
+        states[@intFromEnum(link)] = .done;
+    }
     return result;
 }
 
@@ -14427,11 +14438,21 @@ fn publishCheckedBodyDivergence(
     @memset(expr_states, .fresh);
     @memset(statement_states, .fresh);
 
+    var scan = DivergenceScan{
+        .exprs = exprs,
+        .statements = statements,
+        .dispatch_facts = dispatch_facts,
+        .expr_diverges = expr_diverges,
+        .statement_diverges = statement_diverges,
+        .expr_states = expr_states,
+        .statement_states = statement_states,
+        .mode = mode,
+    };
     for (exprs) |*expr| {
-        expr_diverges[@intFromEnum(expr.id)] = checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, expr.id, expr_states, statement_states, mode);
+        expr_diverges[@intFromEnum(expr.id)] = try DivergenceScan.Eval.run(allocator, &scan, .{ .expr = expr.id });
     }
     for (statements) |*statement| {
-        statement_diverges[@intFromEnum(statement.id)] = checkedStatementDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, statement.id, expr_states, statement_states, mode);
+        statement_diverges[@intFromEnum(statement.id)] = try DivergenceScan.Eval.run(allocator, &scan, .{ .statement = statement.id });
     }
 }
 
@@ -14555,243 +14576,243 @@ pub fn dispatchDivergenceForEvidence(
     return result;
 }
 
-fn checkedExprDiverges(
+/// Decides whether checked expressions and statements always diverge,
+/// memoizing each one's answer. Evaluated on explicit stacks, so expression
+/// nesting never becomes native call depth.
+const DivergenceScan = struct {
     exprs: []CheckedExpr,
     statements: []CheckedStatement,
     dispatch_facts: DivergenceDispatchFacts,
     expr_diverges: []bool,
     statement_diverges: []bool,
-    expr_id: CheckedExprId,
     expr_states: []DivergenceVisitState,
     statement_states: []DivergenceVisitState,
     mode: InlineExpectMode,
-) bool {
-    const index = @intFromEnum(expr_id);
-    if (index >= exprs.len) checkedArtifactInvariant("checked divergence referenced a missing expression", .{});
-    switch (expr_states[index]) {
-        .done => return expr_diverges[index],
-        .active => checkedArtifactInvariant("checked expression divergence contains a cycle", .{}),
-        .fresh => {},
-    }
-    if (index >= dispatch_facts.crashes.len) {
-        checkedArtifactInvariant("checked divergence referenced missing dispatch crash facts", .{});
-    }
-    if (dispatch_facts.crashes[index]) {
-        expr_diverges[index] = true;
-        expr_states[index] = .done;
-        return true;
-    }
-    expr_states[index] = .active;
-    const result = checkedExprDataDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, exprs[index], expr_states, statement_states, mode);
-    expr_diverges[index] = result;
-    expr_states[index] = .done;
-    return result;
-}
 
-fn checkedStatementDiverges(
-    exprs: []CheckedExpr,
-    statements: []CheckedStatement,
-    dispatch_facts: DivergenceDispatchFacts,
-    expr_diverges: []bool,
-    statement_diverges: []bool,
-    statement_id: CheckedStatementId,
-    expr_states: []DivergenceVisitState,
-    statement_states: []DivergenceVisitState,
-    mode: InlineExpectMode,
-) bool {
-    const index = @intFromEnum(statement_id);
-    if (index >= statements.len) checkedArtifactInvariant("checked divergence referenced a missing statement", .{});
-    switch (statement_states[index]) {
-        .done => return statement_diverges[index],
-        .active => checkedArtifactInvariant("checked statement divergence contains a cycle", .{}),
-        .fresh => {},
-    }
-    statement_states[index] = .active;
-    const result = checkedStatementDataDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, statements[index].data, expr_states, statement_states, mode);
-    statement_diverges[index] = result;
-    statement_states[index] = .done;
-    return result;
-}
+    const Eval = collections.AnyAll.Evaluation(Leaf, DivergenceScan);
 
-fn checkedExprDataDiverges(
-    exprs: []CheckedExpr,
-    statements: []CheckedStatement,
-    dispatch_facts: DivergenceDispatchFacts,
-    expr_diverges: []bool,
-    statement_diverges: []bool,
-    expr: CheckedExpr,
-    expr_states: []DivergenceVisitState,
-    statement_states: []DivergenceVisitState,
-    mode: InlineExpectMode,
-) bool {
-    return switch (expr.data) {
-        .crash,
-        .ellipsis,
-        .break_,
-        .return_,
-        .runtime_error,
-        => true,
-        .str => |items| checkedAnyExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, items, expr_states, statement_states, mode),
-        .list => |items| checkedAnyExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, items, expr_states, statement_states, mode),
-        .tuple => |items| checkedAnyExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, items, expr_states, statement_states, mode),
-        .match_ => |match| blk: {
-            if (checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, match.cond, expr_states, statement_states, mode)) break :blk true;
-            if (match.branches.len == 0) break :blk false;
-            for (match.branches) |branch| {
-                if (branch.guard != null) break :blk false;
-                if (!checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, branch.value, expr_states, statement_states, mode)) break :blk false;
-            }
-            break :blk true;
-        },
-        .if_ => |if_| blk: {
-            if (if_.branches.len > 0 and checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, if_.branches[0].cond, expr_states, statement_states, mode)) {
-                break :blk true;
-            }
-            for (if_.branches) |branch| {
-                if (!checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, branch.body, expr_states, statement_states, mode)) break :blk false;
-            }
-            break :blk checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, if_.final_else, expr_states, statement_states, mode);
-        },
-        .call => |call| blk: {
-            if (checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, call.func, expr_states, statement_states, mode)) break :blk true;
-            break :blk checkedAnyExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, call.args, expr_states, statement_states, mode);
-        },
-        .record => |record| blk: {
-            if (record.ext) |ext| {
-                if (checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, ext, expr_states, statement_states, mode)) break :blk true;
-            }
-            for (record.fields) |field| {
-                if (checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, field.value, expr_states, statement_states, mode)) break :blk true;
-            }
-            break :blk false;
-        },
-        .block => |block| blk: {
-            for (block.statements) |statement| {
-                if (checkedStatementDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, statement, expr_states, statement_states, mode)) break :blk true;
-            }
-            break :blk checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, block.final_expr, expr_states, statement_states, mode);
-        },
-        .tag => |tag| checkedAnyExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, tag.args, expr_states, statement_states, mode),
-        .nominal => |nominal| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, nominal.backing_expr, expr_states, statement_states, mode),
-        .closure => false,
-        .lambda => false,
-        .binop => |binop| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, binop.lhs, expr_states, statement_states, mode) or
-            checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, binop.rhs, expr_states, statement_states, mode),
-        .unary_minus,
-        .unary_not,
-        .dbg,
-        => |child| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, child, expr_states, statement_states, mode),
-        .expect => |child| switch (mode) {
-            .run => checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, child, expr_states, statement_states, mode),
-            .omit => false,
-        },
-        .expect_err => true,
-        .field_access => |field| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, field.receiver, expr_states, statement_states, mode),
-        .structural_eq => |eq| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, eq.lhs, expr_states, statement_states, mode) or
-            checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, eq.rhs, expr_states, statement_states, mode),
-        .structural_hash => |h| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, h.value, expr_states, statement_states, mode) or
-            checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, h.hasher, expr_states, statement_states, mode),
-        .tuple_access => |access| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, access.tuple, expr_states, statement_states, mode),
-        .for_ => |for_| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, for_.expr, expr_states, statement_states, mode),
-        .hosted_lambda => false,
-        .run_low_level => |run| run.op == .crash or
-            checkedAnyExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, run.args, expr_states, statement_states, mode),
-        .dispatch_call,
-        .method_eq,
-        .type_dispatch_call,
-        => blk: {
-            const raw = @intFromEnum(expr.id);
-            if (raw >= dispatch_facts.operands.len or raw >= dispatch_facts.crashes.len) {
-                checkedArtifactInvariant("checked dispatch divergence referenced missing dispatch facts", .{});
-            }
-            if (dispatch_facts.crashes[raw]) break :blk true;
-            break :blk checkedAnyExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, dispatch_facts.operands[raw], expr_states, statement_states, mode);
-        },
-        .interpolation => |interpolation| blk: {
-            if (checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, interpolation.first, expr_states, statement_states, mode)) break :blk true;
-            for (interpolation.parts) |part| {
-                if (checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, part.value, expr_states, statement_states, mode)) break :blk true;
-                if (checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, part.following_segment, expr_states, statement_states, mode)) break :blk true;
-            }
-            break :blk false;
-        },
-        .pending,
-        .numeral,
-        .str_from_quote,
-        .str_segment,
-        .bytes_literal,
-        .lookup_local,
-        .lookup_external,
-        .lookup_required,
-        .empty_list,
-        .empty_record,
-        .zero_argument_tag,
-        .anno_only,
-        => false,
+    /// An expression or statement whose divergence matters, or a check its
+    /// parent decided.
+    const Leaf = union(enum) {
+        expr: CheckedExprId,
+        statement: CheckedStatementId,
+        decided: bool,
     };
-}
 
-fn checkedStatementDataDiverges(
-    exprs: []CheckedExpr,
-    statements: []CheckedStatement,
-    dispatch_facts: DivergenceDispatchFacts,
-    expr_diverges: []bool,
-    statement_diverges: []bool,
-    data: CheckedStatementData,
-    expr_states: []DivergenceVisitState,
-    statement_states: []DivergenceVisitState,
-    mode: InlineExpectMode,
-) bool {
-    return switch (data) {
-        .crash,
-        .break_,
-        .return_,
-        .runtime_error,
-        => true,
-        .decl => |decl| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, decl.expr, expr_states, statement_states, mode),
-        // Declaring a promoted procedure evaluates nothing here.
-        .promoted_proc => false,
-        .var_ => |var_| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, var_.expr, expr_states, statement_states, mode),
-        .var_uninitialized => false,
-        .reassign => |reassign| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, reassign.expr, expr_states, statement_states, mode),
-        .dbg,
-        .expr,
-        => |expr| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, expr, expr_states, statement_states, mode),
-        .expect => |expr| switch (mode) {
-            .run => checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, expr, expr_states, statement_states, mode),
-            .omit => false,
-        },
-        .for_ => |for_| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, for_.expr, expr_states, statement_states, mode),
-        .while_ => |while_| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, while_.cond, expr_states, statement_states, mode),
-        .infinite_loop => true,
-        .breakable_loop => |loop| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, loop.cond, expr_states, statement_states, mode),
-        .pending,
-        .import_,
-        .alias_decl,
-        .where_alias_decl,
-        .nominal_decl,
-        .type_anno,
-        .type_var_alias,
-        => false,
-    };
-}
-
-fn checkedAnyExprDiverges(
-    exprs: []CheckedExpr,
-    statements: []CheckedStatement,
-    dispatch_facts: DivergenceDispatchFacts,
-    expr_diverges: []bool,
-    statement_diverges: []bool,
-    items: []const CheckedExprId,
-    expr_states: []DivergenceVisitState,
-    statement_states: []DivergenceVisitState,
-    mode: InlineExpectMode,
-) bool {
-    for (items) |item| {
-        if (checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, item, expr_states, statement_states, mode)) return true;
+    pub fn enter(self: *DivergenceScan, items: Eval.Items, leaf: Leaf) Allocator.Error!Eval.Expansion {
+        switch (leaf) {
+            .decided => |value| return .{ .value = value },
+            .expr => |expr_id| {
+                const index = @intFromEnum(expr_id);
+                if (index >= self.exprs.len) checkedArtifactInvariant("checked divergence referenced a missing expression", .{});
+                switch (self.expr_states[index]) {
+                    .done => return .{ .value = self.expr_diverges[index] },
+                    .active => checkedArtifactInvariant("checked expression divergence contains a cycle", .{}),
+                    .fresh => {},
+                }
+                if (index >= self.dispatch_facts.crashes.len) {
+                    checkedArtifactInvariant("checked divergence referenced missing dispatch crash facts", .{});
+                }
+                const expansion: Eval.Expansion = if (self.dispatch_facts.crashes[index])
+                    .{ .value = true }
+                else
+                    try self.expandExpr(items, self.exprs[index]);
+                switch (expansion) {
+                    .value => |value| {
+                        self.expr_diverges[index] = value;
+                        self.expr_states[index] = .done;
+                    },
+                    .group => self.expr_states[index] = .active,
+                }
+                return expansion;
+            },
+            .statement => |statement_id| {
+                const index = @intFromEnum(statement_id);
+                if (index >= self.statements.len) checkedArtifactInvariant("checked divergence referenced a missing statement", .{});
+                switch (self.statement_states[index]) {
+                    .done => return .{ .value = self.statement_diverges[index] },
+                    .active => checkedArtifactInvariant("checked statement divergence contains a cycle", .{}),
+                    .fresh => {},
+                }
+                const expansion = try self.expandStatement(items, self.statements[index].data);
+                switch (expansion) {
+                    .value => |value| {
+                        self.statement_diverges[index] = value;
+                        self.statement_states[index] = .done;
+                    },
+                    .group => self.statement_states[index] = .active,
+                }
+                return expansion;
+            },
+        }
     }
-    return false;
-}
+
+    pub fn exit(self: *DivergenceScan, leaf: Leaf, result: ?bool) Allocator.Error!void {
+        const value = result orelse return;
+        switch (leaf) {
+            .expr => |expr_id| {
+                self.expr_diverges[@intFromEnum(expr_id)] = value;
+                self.expr_states[@intFromEnum(expr_id)] = .done;
+            },
+            .statement => |statement_id| {
+                self.statement_diverges[@intFromEnum(statement_id)] = value;
+                self.statement_states[@intFromEnum(statement_id)] = .done;
+            },
+            .decided => unreachable,
+        }
+    }
+
+    fn anyOf(items: Eval.Items, exprs: []const CheckedExprId) Allocator.Error!Eval.Expansion {
+        for (exprs) |expr| try items.add(.{ .expr = expr });
+        return .{ .group = .any };
+    }
+
+    fn one(items: Eval.Items, expr: CheckedExprId) Allocator.Error!Eval.Expansion {
+        try items.add(.{ .expr = expr });
+        return .{ .group = .any };
+    }
+
+    fn expandExpr(self: *DivergenceScan, items: Eval.Items, expr: CheckedExpr) Allocator.Error!Eval.Expansion {
+        return switch (expr.data) {
+            .crash,
+            .ellipsis,
+            .break_,
+            .return_,
+            .runtime_error,
+            => .{ .value = true },
+            .str, .list, .tuple => |elems| try anyOf(items, elems),
+            // Diverges when its condition does, or when it has branches, none
+            // guarded, that all diverge.
+            .match_ => |match| blk: {
+                try items.add(.{ .expr = match.cond });
+                if (match.branches.len == 0) {
+                    try items.add(.{ .decided = false });
+                    break :blk .{ .group = .any };
+                }
+                var count: usize = 0;
+                for (match.branches) |branch| {
+                    count += 1;
+                    if (branch.guard != null) break;
+                }
+                try items.group(.all, count);
+                for (match.branches[0..count]) |branch| {
+                    try items.add(if (branch.guard != null) .{ .decided = false } else .{ .expr = branch.value });
+                }
+                break :blk .{ .group = .any };
+            },
+            // Diverges when its first condition does, or when every branch
+            // body and the final else do.
+            .if_ => |if_| blk: {
+                if (if_.branches.len > 0) try items.add(.{ .expr = if_.branches[0].cond });
+                try items.group(.all, if_.branches.len + 1);
+                for (if_.branches) |branch| try items.add(.{ .expr = branch.body });
+                try items.add(.{ .expr = if_.final_else });
+                break :blk .{ .group = .any };
+            },
+            .call => |call| blk: {
+                try items.add(.{ .expr = call.func });
+                break :blk try anyOf(items, call.args);
+            },
+            .record => |record| blk: {
+                if (record.ext) |ext| try items.add(.{ .expr = ext });
+                for (record.fields) |field| try items.add(.{ .expr = field.value });
+                break :blk .{ .group = .any };
+            },
+            .block => |block| blk: {
+                for (block.statements) |statement| try items.add(.{ .statement = statement });
+                break :blk try one(items, block.final_expr);
+            },
+            .tag => |tag| try anyOf(items, tag.args),
+            .nominal => |nominal| try one(items, nominal.backing_expr),
+            .closure => .{ .value = false },
+            .lambda => .{ .value = false },
+            .binop => |binop| try anyOf(items, &.{ binop.lhs, binop.rhs }),
+            .unary_minus,
+            .unary_not,
+            .dbg,
+            => |child| try one(items, child),
+            .expect => |child| switch (self.mode) {
+                .run => try one(items, child),
+                .omit => .{ .value = false },
+            },
+            .expect_err => .{ .value = true },
+            .field_access => |field| try one(items, field.receiver),
+            .structural_eq => |eq| try anyOf(items, &.{ eq.lhs, eq.rhs }),
+            .structural_hash => |h| try anyOf(items, &.{ h.value, h.hasher }),
+            .tuple_access => |access| try one(items, access.tuple),
+            .for_ => |for_| try one(items, for_.expr),
+            .hosted_lambda => .{ .value = false },
+            .run_low_level => |run| if (run.op == .crash) .{ .value = true } else try anyOf(items, run.args),
+            .dispatch_call,
+            .method_eq,
+            .type_dispatch_call,
+            => blk: {
+                const raw = @intFromEnum(expr.id);
+                if (raw >= self.dispatch_facts.operands.len or raw >= self.dispatch_facts.crashes.len) {
+                    checkedArtifactInvariant("checked dispatch divergence referenced missing dispatch facts", .{});
+                }
+                if (self.dispatch_facts.crashes[raw]) break :blk .{ .value = true };
+                break :blk try anyOf(items, self.dispatch_facts.operands[raw]);
+            },
+            .interpolation => |interpolation| blk: {
+                try items.add(.{ .expr = interpolation.first });
+                for (interpolation.parts) |part| {
+                    try items.add(.{ .expr = part.value });
+                    try items.add(.{ .expr = part.following_segment });
+                }
+                break :blk .{ .group = .any };
+            },
+            .pending,
+            .numeral,
+            .str_from_quote,
+            .str_segment,
+            .bytes_literal,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .empty_list,
+            .empty_record,
+            .zero_argument_tag,
+            .anno_only,
+            => .{ .value = false },
+        };
+    }
+
+    fn expandStatement(self: *DivergenceScan, items: Eval.Items, data: CheckedStatementData) Allocator.Error!Eval.Expansion {
+        return switch (data) {
+            .crash,
+            .break_,
+            .return_,
+            .runtime_error,
+            => .{ .value = true },
+            .decl => |decl| try one(items, decl.expr),
+            // Declaring a promoted procedure evaluates nothing here.
+            .promoted_proc => .{ .value = false },
+            .var_ => |var_| try one(items, var_.expr),
+            .var_uninitialized => .{ .value = false },
+            .reassign => |reassign| try one(items, reassign.expr),
+            .dbg,
+            .expr,
+            => |expr| try one(items, expr),
+            .expect => |expr| switch (self.mode) {
+                .run => try one(items, expr),
+                .omit => .{ .value = false },
+            },
+            .for_ => |for_| try one(items, for_.expr),
+            .while_ => |while_| try one(items, while_.cond),
+            .infinite_loop => .{ .value = true },
+            .breakable_loop => |loop| try one(items, loop.cond),
+            .pending,
+            .import_,
+            .alias_decl,
+            .where_alias_decl,
+            .nominal_decl,
+            .type_anno,
+            .type_var_alias,
+            => .{ .value = false },
+        };
+    }
+};
 
 fn directProcedureTargetForCall(
     refs: *const ResolvedValueRefTable,
@@ -15755,68 +15776,76 @@ const CheckedBodyPayloadCopier = struct {
         return null;
     }
 
+    /// Append the binders a source pattern introduces, in preorder; an
+    /// as-pattern's own binder follows its inner pattern's. Patterns wait on
+    /// an explicit stack, so pattern nesting never becomes native call depth.
     fn collectSourcePatternBinders(
         self: *@This(),
         pattern_idx: CIR.Pattern.Idx,
         out: *std.ArrayList(SourcePatternBinder),
     ) Allocator.Error!void {
-        const pattern = self.module.pattern(pattern_idx).data;
+        const Pending = union(enum) {
+            pattern: CIR.Pattern.Idx,
+            /// An as-pattern's binder, after its inner pattern.
+            as_binder: CIR.Pattern.Idx,
+        };
+        var pending: std.ArrayList(Pending) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .pattern = pattern_idx });
+        while (pending.pop()) |item| {
+            const current = switch (item) {
+                .as_binder => |as_idx| {
+                    try out.append(self.allocator, .{
+                        .ident = self.module.pattern(as_idx).data.as.ident,
+                        .binder = try self.patternBinder(as_idx),
+                    });
+                    continue;
+                },
+                .pattern => |current| current,
+            };
+            const pattern = self.module.pattern(current).data;
+            switch (pattern) {
+                .assign => |assign| try out.append(self.allocator, .{
+                    .ident = assign.ident,
+                    .binder = try self.patternBinder(current),
+                }),
+                .var_assign => |assign| try out.append(self.allocator, .{
+                    .ident = assign.ident,
+                    .binder = try self.patternBinder(current),
+                }),
+                .as => try pending.append(self.allocator, .{ .as_binder = current }),
+                else => {},
+            }
+            try self.pushSourceSubpatterns(pattern, &pending);
+        }
+    }
+
+    /// Push a source pattern's subpatterns so the first is visited next.
+    fn pushSourceSubpatterns(self: *@This(), pattern: CIR.Pattern, pending: anytype) Allocator.Error!void {
+        const start = pending.items.len;
         switch (pattern) {
-            .assign => |assign| try out.append(self.allocator, .{
-                .ident = assign.ident,
-                .binder = try self.patternBinder(pattern_idx),
-            }),
-            .var_assign => |assign| try out.append(self.allocator, .{
-                .ident = assign.ident,
-                .binder = try self.patternBinder(pattern_idx),
-            }),
-            .as => |as| {
-                try self.collectSourcePatternBinders(as.pattern, out);
-                try out.append(self.allocator, .{
-                    .ident = as.ident,
-                    .binder = try self.patternBinder(pattern_idx),
-                });
-            },
-            .applied_tag => |tag| {
-                for (self.module.slicePatterns(tag.args)) |child| {
-                    try self.collectSourcePatternBinders(child, out);
-                }
-            },
-            .nominal => |nominal| try self.collectSourcePatternBinders(nominal.backing_pattern, out),
-            .nominal_external => |nominal| try self.collectSourcePatternBinders(nominal.backing_pattern, out),
-            .record_destructure => |record| {
-                for (self.module.sliceRecordDestructs(record.destructs)) |destruct_idx| {
-                    const destruct = self.module.getRecordDestruct(destruct_idx);
-                    switch (destruct.kind) {
-                        .Required,
-                        .SubPattern,
-                        .Rest,
-                        => |child| try self.collectSourcePatternBinders(child, out),
-                    }
-                }
+            .as => |as| try pending.append(self.allocator, .{ .pattern = as.pattern }),
+            .applied_tag => |tag| for (self.module.slicePatterns(tag.args)) |child| try pending.append(self.allocator, .{ .pattern = child }),
+            .nominal => |nominal| try pending.append(self.allocator, .{ .pattern = nominal.backing_pattern }),
+            .nominal_external => |nominal| try pending.append(self.allocator, .{ .pattern = nominal.backing_pattern }),
+            .record_destructure => |record| for (self.module.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                const destruct = self.module.getRecordDestruct(destruct_idx);
+                try pending.append(self.allocator, .{ .pattern = destruct.kind.toPatternIdx() });
             },
             .list => |list| {
-                for (self.module.slicePatterns(list.patterns)) |child| {
-                    try self.collectSourcePatternBinders(child, out);
-                }
-                if (list.rest_info) |rest| {
-                    if (rest.pattern) |rest_pattern| try self.collectSourcePatternBinders(rest_pattern, out);
-                }
+                for (self.module.slicePatterns(list.patterns)) |child| try pending.append(self.allocator, .{ .pattern = child });
+                if (list.rest_info) |rest| if (rest.pattern) |child| try pending.append(self.allocator, .{ .pattern = child });
             },
-            .tuple => |tuple| {
-                for (self.module.slicePatterns(tuple.patterns)) |child| {
-                    try self.collectSourcePatternBinders(child, out);
-                }
-            },
+            .tuple => |tuple| for (self.module.slicePatterns(tuple.patterns)) |child| try pending.append(self.allocator, .{ .pattern = child }),
             .str_interpolation => |str| {
                 var step_offset: u32 = 0;
                 while (step_offset < str.steps.span.len) : (step_offset += 1) {
                     const step = self.module.moduleEnvConst().store.getStrPatternStep(str.steps, step_offset);
-                    if (step.capture) |capture| {
-                        try self.collectSourcePatternBinders(capture, out);
-                    }
+                    if (step.capture) |capture| try pending.append(self.allocator, .{ .pattern = capture });
                 }
             },
+            .assign,
+            .var_assign,
             .num_literal,
             .num_from_numeral_literal,
             .small_dec_literal,
@@ -15829,6 +15858,7 @@ const CheckedBodyPayloadCopier = struct {
             => {},
             .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
         }
+        std.mem.reverse(@TypeOf(pending.items[0]), pending.items[start..]);
     }
 
     fn copyCaptures(self: *@This(), span: CIR.Expr.Capture.Span) Allocator.Error![]const CheckedCapture {
@@ -15873,54 +15903,27 @@ const CheckedBodyPayloadCopier = struct {
         return try binders.toOwnedSlice(self.allocator);
     }
 
+    /// Append the binders a reassigned pattern rebinds, in preorder. Patterns
+    /// wait on an explicit stack, so pattern nesting never becomes native
+    /// call depth.
     fn collectReassignedBinders(
         self: *@This(),
         pattern_idx: CIR.Pattern.Idx,
         out: *std.ArrayList(PatternBinderId),
     ) Allocator.Error!void {
-        const pattern = self.module.pattern(pattern_idx).data;
-        switch (pattern) {
-            .assign, .var_assign => try self.appendReassignedBinder(pattern_idx, out),
-            .as => |as| {
-                try self.appendReassignedBinder(pattern_idx, out);
-                try self.collectReassignedBinders(as.pattern, out);
-            },
-            .applied_tag => |tag| {
-                for (self.module.slicePatterns(tag.args)) |child| try self.collectReassignedBinders(child, out);
-            },
-            .nominal => |nominal| try self.collectReassignedBinders(nominal.backing_pattern, out),
-            .nominal_external => |nominal| try self.collectReassignedBinders(nominal.backing_pattern, out),
-            .record_destructure => |record| {
-                for (self.module.sliceRecordDestructs(record.destructs)) |destruct_idx| {
-                    const destruct = self.module.getRecordDestruct(destruct_idx);
-                    try self.collectReassignedBinders(destruct.kind.toPatternIdx(), out);
-                }
-            },
-            .list => |list| {
-                for (self.module.slicePatterns(list.patterns)) |child| try self.collectReassignedBinders(child, out);
-                if (list.rest_info) |rest| if (rest.pattern) |child| try self.collectReassignedBinders(child, out);
-            },
-            .tuple => |tuple| {
-                for (self.module.slicePatterns(tuple.patterns)) |child| try self.collectReassignedBinders(child, out);
-            },
-            .str_interpolation => |str| {
-                var step_offset: u32 = 0;
-                while (step_offset < str.steps.span.len) : (step_offset += 1) {
-                    const step = self.module.moduleEnvConst().store.getStrPatternStep(str.steps, step_offset);
-                    if (step.capture) |capture| try self.collectReassignedBinders(capture, out);
-                }
-            },
-            .num_literal,
-            .num_from_numeral_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
-            .str_literal,
-            .underscore,
-            .runtime_error,
-            => {},
-            .deferred_import_ref => checkedArtifactInvariant("deferred import reference pattern reached checked artifact publication", .{}),
+        const Pending = union(enum) { pattern: CIR.Pattern.Idx };
+        var pending: std.ArrayList(Pending) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .pattern = pattern_idx });
+        while (pending.pop()) |item| {
+            const current = item.pattern;
+            const pattern = self.module.pattern(current).data;
+            switch (pattern) {
+                .assign, .var_assign, .as => try self.appendReassignedBinder(current, out),
+                .deferred_import_ref => checkedArtifactInvariant("deferred import reference pattern reached checked artifact publication", .{}),
+                else => {},
+            }
+            try self.pushSourceSubpatterns(pattern, &pending);
         }
     }
 
@@ -28888,8 +28891,8 @@ fn publishCheckedExhaustivenessSites(
         }
 
         const id: CheckedExhaustivenessSiteId = @enumFromInt(@as(u32, @intCast(sites.items.len)));
-        const owner_template = exhaustivenessOwnerTemplateForSource(checked_bodies, pending.source);
-        const replacing_root = exhaustivenessReplacingRootForSource(checked_bodies, compile_time_roots, pending.source);
+        const owner_template = try exhaustivenessOwnerTemplateForSource(allocator, checked_bodies, pending.source);
+        const replacing_root = try exhaustivenessReplacingRootForSource(allocator, checked_bodies, compile_time_roots, pending.source);
         const policy: ExhaustivenessResolutionPolicy = if (replacing_root) |root|
             .{ .compile_time_replaced_by_root = root.id }
         else if (owner_template) |template_ref|
@@ -28953,19 +28956,216 @@ fn publishCheckedExhaustivenessSites(
     return .{ .sites = try sites.toOwnedSlice(allocator) };
 }
 
+/// What a checked body search looks for.
+const CheckedBodyNeedle = union(enum) {
+    expr: CheckedExprId,
+    pattern: CheckedPatternId,
+};
+
+/// Whether `needle` occurs within the checked expression tree rooted at
+/// `root`. Nested lambdas' bodies are searched; promoted procedures' bodies
+/// are their own templates'. Nodes wait on an explicit stack, so body
+/// nesting never becomes native call depth.
+fn checkedExprContains(
+    allocator: Allocator,
+    checked_bodies: *const CheckedBodyStore,
+    root: CheckedExprId,
+    needle: CheckedBodyNeedle,
+) Allocator.Error!bool {
+    const Node = union(enum) {
+        expr: CheckedExprId,
+        statement: CheckedStatementId,
+        pattern: CheckedPatternId,
+    };
+    const patterns = needle == .pattern;
+    var pending: std.ArrayList(Node) = .empty;
+    defer pending.deinit(allocator);
+    try pending.append(allocator, .{ .expr = root });
+    while (pending.pop()) |node| switch (node) {
+        .expr => |expr_id| {
+            if (needle == .expr and needle.expr == expr_id) return true;
+            switch (checked_bodies.expr(expr_id).data) {
+                .str, .list, .tuple => |items| for (items) |item| try pending.append(allocator, .{ .expr = item }),
+                .match_ => |match| {
+                    try pending.append(allocator, .{ .expr = match.cond });
+                    for (match.branches) |branch| {
+                        if (patterns) {
+                            for (branch.patternsSlice(checked_bodies)) |branch_pattern| try pending.append(allocator, .{ .pattern = branch_pattern.pattern });
+                        }
+                        if (branch.guard) |guard| try pending.append(allocator, .{ .expr = guard });
+                        try pending.append(allocator, .{ .expr = branch.value });
+                    }
+                },
+                .if_ => |if_| {
+                    for (if_.branches) |branch| {
+                        try pending.append(allocator, .{ .expr = branch.cond });
+                        try pending.append(allocator, .{ .expr = branch.body });
+                    }
+                    try pending.append(allocator, .{ .expr = if_.final_else });
+                },
+                .call => |call| {
+                    try pending.append(allocator, .{ .expr = call.func });
+                    for (call.args) |arg| try pending.append(allocator, .{ .expr = arg });
+                },
+                .record => |record| {
+                    if (record.ext) |ext| try pending.append(allocator, .{ .expr = ext });
+                    for (record.fields) |field| try pending.append(allocator, .{ .expr = field.value });
+                },
+                .block => |block| {
+                    for (block.statements) |statement| try pending.append(allocator, .{ .statement = statement });
+                    try pending.append(allocator, .{ .expr = block.final_expr });
+                },
+                .tag => |tag| for (tag.args) |arg| try pending.append(allocator, .{ .expr = arg }),
+                .nominal => |nominal| try pending.append(allocator, .{ .expr = nominal.backing_expr }),
+                .closure => |closure| try pending.append(allocator, .{ .expr = closure.lambda }),
+                .lambda => |lambda| {
+                    if (patterns) for (lambda.args) |arg| try pending.append(allocator, .{ .pattern = arg });
+                    try pending.append(allocator, .{ .expr = lambda.body });
+                },
+                .binop => |binop| {
+                    try pending.append(allocator, .{ .expr = binop.lhs });
+                    try pending.append(allocator, .{ .expr = binop.rhs });
+                },
+                .unary_minus, .unary_not, .dbg, .expect => |child| try pending.append(allocator, .{ .expr = child }),
+                .tuple_access => |access| try pending.append(allocator, .{ .expr = access.tuple }),
+                .field_access => |field| try pending.append(allocator, .{ .expr = field.receiver }),
+                .interpolation => |interpolation| {
+                    try pending.append(allocator, .{ .expr = interpolation.first });
+                    for (interpolation.parts) |part| {
+                        try pending.append(allocator, .{ .expr = part.value });
+                        try pending.append(allocator, .{ .expr = part.following_segment });
+                    }
+                },
+                .structural_eq => |eq| {
+                    try pending.append(allocator, .{ .expr = eq.lhs });
+                    try pending.append(allocator, .{ .expr = eq.rhs });
+                },
+                .structural_hash => |h| {
+                    try pending.append(allocator, .{ .expr = h.value });
+                    try pending.append(allocator, .{ .expr = h.hasher });
+                },
+                .expect_err => |expect_err| try pending.append(allocator, .{ .expr = expect_err.expr }),
+                .return_ => |ret| try pending.append(allocator, .{ .expr = ret.expr }),
+                .for_ => |for_| {
+                    if (patterns) try pending.append(allocator, .{ .pattern = for_.pattern });
+                    try pending.append(allocator, .{ .expr = for_.expr });
+                    try pending.append(allocator, .{ .expr = for_.body });
+                },
+                .run_low_level => |run| for (run.args) |arg| try pending.append(allocator, .{ .expr = arg }),
+                .hosted_lambda => |hosted| if (patterns) for (hosted.args) |arg| try pending.append(allocator, .{ .pattern = arg }),
+                .numeral,
+                .str_from_quote,
+                .str_segment,
+                .bytes_literal,
+                .lookup_local,
+                .lookup_external,
+                .lookup_required,
+                .empty_list,
+                .empty_record,
+                .zero_argument_tag,
+                .dispatch_call,
+                .method_eq,
+                .type_dispatch_call,
+                .runtime_error,
+                .crash,
+                .break_,
+                .ellipsis,
+                .anno_only,
+                .pending,
+                => {},
+            }
+        },
+        .statement => |statement_id| switch (checked_bodies.statement(statement_id).data) {
+            .decl => |decl| {
+                if (patterns) try pending.append(allocator, .{ .pattern = decl.pattern });
+                try pending.append(allocator, .{ .expr = decl.expr });
+            },
+            // The promoted procedure's lambda is its own template's body.
+            .promoted_proc => |promoted| if (patterns) try pending.append(allocator, .{ .pattern = promoted.pattern }),
+            .var_ => |var_| {
+                if (patterns) try pending.append(allocator, .{ .pattern = var_.pattern });
+                try pending.append(allocator, .{ .expr = var_.expr });
+            },
+            .var_uninitialized => |var_| if (patterns) try pending.append(allocator, .{ .pattern = var_.pattern }),
+            .reassign => |reassign| {
+                if (patterns) try pending.append(allocator, .{ .pattern = reassign.pattern });
+                try pending.append(allocator, .{ .expr = reassign.expr });
+            },
+            .dbg, .expr, .expect => |expr| try pending.append(allocator, .{ .expr = expr }),
+            .for_ => |for_| {
+                if (patterns) try pending.append(allocator, .{ .pattern = for_.pattern });
+                try pending.append(allocator, .{ .expr = for_.expr });
+                try pending.append(allocator, .{ .expr = for_.body });
+            },
+            .while_ => |while_| {
+                try pending.append(allocator, .{ .expr = while_.cond });
+                try pending.append(allocator, .{ .expr = while_.body });
+            },
+            .infinite_loop, .breakable_loop => |loop| {
+                try pending.append(allocator, .{ .expr = loop.cond });
+                try pending.append(allocator, .{ .expr = loop.body });
+            },
+            .return_ => |ret| try pending.append(allocator, .{ .expr = ret.expr }),
+            .crash,
+            .break_,
+            .import_,
+            .alias_decl,
+            .where_alias_decl,
+            .nominal_decl,
+            .type_anno,
+            .type_var_alias,
+            .runtime_error,
+            .pending,
+            => {},
+        },
+        .pattern => |pattern_id| {
+            if (needle.pattern == pattern_id) return true;
+            switch (checked_bodies.pattern(pattern_id).data) {
+                .as => |as| try pending.append(allocator, .{ .pattern = as.pattern }),
+                .applied_tag => |tag| for (tag.args) |arg| try pending.append(allocator, .{ .pattern = arg }),
+                .nominal => |nominal| try pending.append(allocator, .{ .pattern = nominal.backing_pattern }),
+                .record_destructure => |destructs| for (destructs) |destruct| {
+                    try pending.append(allocator, .{ .pattern = switch (destruct.kind) {
+                        .required => |required| required,
+                        .sub_pattern => |sub_pattern| sub_pattern,
+                        .rest => |rest| rest,
+                    } });
+                },
+                .list => |list| {
+                    for (list.patterns) |child| try pending.append(allocator, .{ .pattern = child });
+                    if (list.rest) |rest| if (rest.pattern) |rest_pattern| try pending.append(allocator, .{ .pattern = rest_pattern });
+                },
+                .tuple => |items| for (items) |item| try pending.append(allocator, .{ .pattern = item }),
+                .str_interpolation => |str| for (str.steps) |step| {
+                    if (step.capture) |capture| try pending.append(allocator, .{ .pattern = capture });
+                },
+                .pending,
+                .assign,
+                .numeral_literal,
+                .str_literal,
+                .underscore,
+                .runtime_error,
+                => {},
+            }
+        },
+    };
+    return false;
+}
+
 fn exhaustivenessOwnerTemplateForSource(
+    allocator: Allocator,
     checked_bodies: *const CheckedBodyStore,
     source: problem.Store.ExhaustivenessSiteSource,
-) ?canonical.ProcedureTemplateRef {
+) Allocator.Error!?canonical.ProcedureTemplateRef {
     for (checked_bodies.bodies.items) |body| {
         const contains = switch (source) {
             .match_expr => |source_expr| blk: {
                 const checked_expr = checked_bodies.exprIdForSource(source_expr) orelse break :blk false;
-                break :blk checkedExprContainsExpr(checked_bodies, body.root_expr, checked_expr);
+                break :blk try checkedExprContains(allocator, checked_bodies, body.root_expr, .{ .expr = checked_expr });
             },
             .destructure_pattern => |source_pattern| blk: {
                 const checked_pattern = checked_bodies.patternIdForSource(source_pattern) orelse break :blk false;
-                break :blk checkedExprContainsPattern(checked_bodies, body.root_expr, checked_pattern);
+                break :blk try checkedExprContains(allocator, checked_bodies, body.root_expr, .{ .pattern = checked_pattern });
             },
         };
         if (contains) return body.owner_template;
@@ -28974,10 +29174,11 @@ fn exhaustivenessOwnerTemplateForSource(
 }
 
 fn exhaustivenessReplacingRootForSource(
+    allocator: Allocator,
     checked_bodies: *const CheckedBodyStore,
     compile_time_roots: *const CompileTimeRootTable,
     source: problem.Store.ExhaustivenessSiteSource,
-) ?CompileTimeRoot {
+) Allocator.Error!?CompileTimeRoot {
     for (compile_time_roots.roots) |root| {
         if (!compileTimeRootReplacesSourceOccurrence(root.kind)) continue;
         if (root.hoisted_body) |body| switch (body) {
@@ -28997,11 +29198,11 @@ fn exhaustivenessReplacingRootForSource(
                 const base_contains = switch (source) {
                     .match_expr => |source_expr| blk: {
                         const checked_expr = checked_bodies.exprIdForSource(source_expr) orelse break :blk false;
-                        break :blk checkedExprContainsExpr(checked_bodies, checked_base_expr, checked_expr);
+                        break :blk try checkedExprContains(allocator, checked_bodies, checked_base_expr, .{ .expr = checked_expr });
                     },
                     .destructure_pattern => |source_pattern| blk: {
                         const checked_pattern = checked_bodies.patternIdForSource(source_pattern) orelse break :blk false;
-                        break :blk checkedExprContainsPattern(checked_bodies, checked_base_expr, checked_pattern);
+                        break :blk try checkedExprContains(allocator, checked_bodies, checked_base_expr, .{ .pattern = checked_pattern });
                     },
                 };
                 if (base_contains) return root;
@@ -29012,11 +29213,11 @@ fn exhaustivenessReplacingRootForSource(
         const contains = switch (source) {
             .match_expr => |source_expr| blk: {
                 const checked_expr = checked_bodies.exprIdForSource(source_expr) orelse break :blk false;
-                break :blk checkedExprContainsExpr(checked_bodies, root.expr, checked_expr);
+                break :blk try checkedExprContains(allocator, checked_bodies, root.expr, .{ .expr = checked_expr });
             },
             .destructure_pattern => |source_pattern| blk: {
                 const checked_pattern = checked_bodies.patternIdForSource(source_pattern) orelse break :blk false;
-                break :blk checkedExprContainsPattern(checked_bodies, root.expr, checked_pattern);
+                break :blk try checkedExprContains(allocator, checked_bodies, root.expr, .{ .pattern = checked_pattern });
             },
         };
         if (contains) return root;
@@ -29037,365 +29238,6 @@ fn compileTimeRootReplacesSourceOccurrence(kind: CompileTimeRootKind) bool {
         .expect,
         => false,
     };
-}
-
-fn checkedExprSpanContainsExpr(
-    checked_bodies: *const CheckedBodyStore,
-    exprs: []const CheckedExprId,
-    needle: CheckedExprId,
-) bool {
-    for (exprs) |expr| {
-        if (checkedExprContainsExpr(checked_bodies, expr, needle)) return true;
-    }
-    return false;
-}
-
-fn checkedExprContainsExpr(
-    checked_bodies: *const CheckedBodyStore,
-    haystack: CheckedExprId,
-    needle: CheckedExprId,
-) bool {
-    if (haystack == needle) return true;
-    const expr = checked_bodies.expr(haystack);
-    return switch (expr.data) {
-        .str, .list, .tuple => |items| checkedExprSpanContainsExpr(checked_bodies, items, needle),
-        .match_ => |match| blk: {
-            if (checkedExprContainsExpr(checked_bodies, match.cond, needle)) break :blk true;
-            for (match.branches) |branch| {
-                if (branch.guard) |guard| {
-                    if (checkedExprContainsExpr(checked_bodies, guard, needle)) break :blk true;
-                }
-                if (checkedExprContainsExpr(checked_bodies, branch.value, needle)) break :blk true;
-            }
-            break :blk false;
-        },
-        .if_ => |if_| blk: {
-            for (if_.branches) |branch| {
-                if (checkedExprContainsExpr(checked_bodies, branch.cond, needle)) break :blk true;
-                if (checkedExprContainsExpr(checked_bodies, branch.body, needle)) break :blk true;
-            }
-            break :blk checkedExprContainsExpr(checked_bodies, if_.final_else, needle);
-        },
-        .call => |call| checkedExprContainsExpr(checked_bodies, call.func, needle) or
-            checkedExprSpanContainsExpr(checked_bodies, call.args, needle),
-        .record => |record| blk: {
-            if (record.ext) |ext| {
-                if (checkedExprContainsExpr(checked_bodies, ext, needle)) break :blk true;
-            }
-            for (record.fields) |field| {
-                if (checkedExprContainsExpr(checked_bodies, field.value, needle)) break :blk true;
-            }
-            break :blk false;
-        },
-        .block => |block| blk: {
-            for (block.statements) |statement| {
-                if (checkedStatementContainsExpr(checked_bodies, statement, needle)) break :blk true;
-            }
-            break :blk checkedExprContainsExpr(checked_bodies, block.final_expr, needle);
-        },
-        .tag => |tag| checkedExprSpanContainsExpr(checked_bodies, tag.args, needle),
-        .nominal => |nominal| checkedExprContainsExpr(checked_bodies, nominal.backing_expr, needle),
-        .closure => |closure| checkedExprContainsExpr(checked_bodies, closure.lambda, needle),
-        .lambda => |lambda| checkedExprContainsExpr(checked_bodies, lambda.body, needle),
-        .binop => |binop| checkedExprContainsExpr(checked_bodies, binop.lhs, needle) or
-            checkedExprContainsExpr(checked_bodies, binop.rhs, needle),
-        .unary_minus, .unary_not, .dbg, .expect => |child| checkedExprContainsExpr(checked_bodies, child, needle),
-        .tuple_access => |access| checkedExprContainsExpr(checked_bodies, access.tuple, needle),
-        .field_access => |field| checkedExprContainsExpr(checked_bodies, field.receiver, needle),
-        .interpolation => |interpolation| blk: {
-            if (checkedExprContainsExpr(checked_bodies, interpolation.first, needle)) break :blk true;
-            for (interpolation.parts) |part| {
-                if (checkedExprContainsExpr(checked_bodies, part.value, needle)) break :blk true;
-                if (checkedExprContainsExpr(checked_bodies, part.following_segment, needle)) break :blk true;
-            }
-            break :blk false;
-        },
-        .structural_eq => |eq| checkedExprContainsExpr(checked_bodies, eq.lhs, needle) or
-            checkedExprContainsExpr(checked_bodies, eq.rhs, needle),
-        .structural_hash => |h| checkedExprContainsExpr(checked_bodies, h.value, needle) or
-            checkedExprContainsExpr(checked_bodies, h.hasher, needle),
-        .expect_err => |expect_err| checkedExprContainsExpr(checked_bodies, expect_err.expr, needle),
-        .return_ => |ret| checkedExprContainsExpr(checked_bodies, ret.expr, needle),
-        .for_ => |for_| checkedExprContainsExpr(checked_bodies, for_.expr, needle) or
-            checkedExprContainsExpr(checked_bodies, for_.body, needle),
-        .run_low_level => |run| checkedExprSpanContainsExpr(checked_bodies, run.args, needle),
-        .numeral,
-        .str_from_quote,
-        .str_segment,
-        .bytes_literal,
-        .lookup_local,
-        .lookup_external,
-        .lookup_required,
-        .empty_list,
-        .empty_record,
-        .zero_argument_tag,
-        .dispatch_call,
-        .method_eq,
-        .type_dispatch_call,
-        .hosted_lambda,
-        .runtime_error,
-        .crash,
-        .break_,
-        .ellipsis,
-        .anno_only,
-        .pending,
-        => false,
-    };
-}
-
-fn checkedStatementContainsExpr(
-    checked_bodies: *const CheckedBodyStore,
-    statement_id: CheckedStatementId,
-    needle: CheckedExprId,
-) bool {
-    const statement = checked_bodies.statement(statement_id);
-    return switch (statement.data) {
-        .decl => |decl| checkedExprContainsExpr(checked_bodies, decl.expr, needle),
-        // The promoted procedure's lambda is its own template's body.
-        .promoted_proc => false,
-        .var_ => |var_| checkedExprContainsExpr(checked_bodies, var_.expr, needle),
-        .reassign => |reassign| checkedExprContainsExpr(checked_bodies, reassign.expr, needle),
-        .dbg, .expr, .expect => |expr| checkedExprContainsExpr(checked_bodies, expr, needle),
-        .for_ => |for_| checkedExprContainsExpr(checked_bodies, for_.expr, needle) or
-            checkedExprContainsExpr(checked_bodies, for_.body, needle),
-        .while_ => |while_| checkedExprContainsExpr(checked_bodies, while_.cond, needle) or
-            checkedExprContainsExpr(checked_bodies, while_.body, needle),
-        .infinite_loop => |loop| checkedExprContainsExpr(checked_bodies, loop.cond, needle) or
-            checkedExprContainsExpr(checked_bodies, loop.body, needle),
-        .breakable_loop => |loop| checkedExprContainsExpr(checked_bodies, loop.cond, needle) or
-            checkedExprContainsExpr(checked_bodies, loop.body, needle),
-        .return_ => |ret| checkedExprContainsExpr(checked_bodies, ret.expr, needle),
-        .var_uninitialized,
-        .crash,
-        .break_,
-        .import_,
-        .alias_decl,
-        .where_alias_decl,
-        .nominal_decl,
-        .type_anno,
-        .type_var_alias,
-        .runtime_error,
-        .pending,
-        => false,
-    };
-}
-
-fn checkedExprContainsPattern(
-    checked_bodies: *const CheckedBodyStore,
-    expr_id: CheckedExprId,
-    needle: CheckedPatternId,
-) bool {
-    const expr = checked_bodies.expr(expr_id);
-    return switch (expr.data) {
-        .match_ => |match| blk: {
-            for (match.branches) |branch| {
-                for (branch.patternsSlice(checked_bodies)) |branch_pattern| {
-                    if (checkedPatternContainsPattern(checked_bodies, branch_pattern.pattern, needle)) break :blk true;
-                }
-                if (branch.guard) |guard| {
-                    if (checkedExprContainsPattern(checked_bodies, guard, needle)) break :blk true;
-                }
-                if (checkedExprContainsPattern(checked_bodies, branch.value, needle)) break :blk true;
-            }
-            break :blk checkedExprContainsPattern(checked_bodies, match.cond, needle);
-        },
-        .lambda => |lambda| blk: {
-            for (lambda.args) |arg| {
-                if (checkedPatternContainsPattern(checked_bodies, arg, needle)) break :blk true;
-            }
-            break :blk checkedExprContainsPattern(checked_bodies, lambda.body, needle);
-        },
-        .for_ => |for_| checkedPatternContainsPattern(checked_bodies, for_.pattern, needle) or
-            checkedExprContainsPattern(checked_bodies, for_.expr, needle) or
-            checkedExprContainsPattern(checked_bodies, for_.body, needle),
-        .block => |block| blk: {
-            for (block.statements) |statement| {
-                if (checkedStatementContainsPattern(checked_bodies, statement, needle)) break :blk true;
-            }
-            break :blk checkedExprContainsPattern(checked_bodies, block.final_expr, needle);
-        },
-        .str, .list, .tuple => |items| blk: {
-            for (items) |item| {
-                if (checkedExprContainsPattern(checked_bodies, item, needle)) break :blk true;
-            }
-            break :blk false;
-        },
-        .if_ => |if_| blk: {
-            for (if_.branches) |branch| {
-                if (checkedExprContainsPattern(checked_bodies, branch.cond, needle)) break :blk true;
-                if (checkedExprContainsPattern(checked_bodies, branch.body, needle)) break :blk true;
-            }
-            break :blk checkedExprContainsPattern(checked_bodies, if_.final_else, needle);
-        },
-        .call => |call| checkedExprContainsPattern(checked_bodies, call.func, needle) or
-            checkedExprSpanContainsPattern(checked_bodies, call.args, needle),
-        .record => |record| blk: {
-            if (record.ext) |ext| {
-                if (checkedExprContainsPattern(checked_bodies, ext, needle)) break :blk true;
-            }
-            for (record.fields) |field| {
-                if (checkedExprContainsPattern(checked_bodies, field.value, needle)) break :blk true;
-            }
-            break :blk false;
-        },
-        .tag => |tag| checkedExprSpanContainsPattern(checked_bodies, tag.args, needle),
-        .nominal => |nominal| checkedExprContainsPattern(checked_bodies, nominal.backing_expr, needle),
-        .closure => |closure| checkedExprContainsPattern(checked_bodies, closure.lambda, needle),
-        .binop => |binop| checkedExprContainsPattern(checked_bodies, binop.lhs, needle) or
-            checkedExprContainsPattern(checked_bodies, binop.rhs, needle),
-        .unary_minus, .unary_not, .dbg, .expect => |child| checkedExprContainsPattern(checked_bodies, child, needle),
-        .tuple_access => |access| checkedExprContainsPattern(checked_bodies, access.tuple, needle),
-        .field_access => |field| checkedExprContainsPattern(checked_bodies, field.receiver, needle),
-        .interpolation => |interpolation| blk: {
-            if (checkedExprContainsPattern(checked_bodies, interpolation.first, needle)) break :blk true;
-            for (interpolation.parts) |part| {
-                if (checkedExprContainsPattern(checked_bodies, part.value, needle)) break :blk true;
-                if (checkedExprContainsPattern(checked_bodies, part.following_segment, needle)) break :blk true;
-            }
-            break :blk false;
-        },
-        .structural_eq => |eq| checkedExprContainsPattern(checked_bodies, eq.lhs, needle) or
-            checkedExprContainsPattern(checked_bodies, eq.rhs, needle),
-        .structural_hash => |h| checkedExprContainsPattern(checked_bodies, h.value, needle) or
-            checkedExprContainsPattern(checked_bodies, h.hasher, needle),
-        .expect_err => |expect_err| checkedExprContainsPattern(checked_bodies, expect_err.expr, needle),
-        .return_ => |ret| checkedExprContainsPattern(checked_bodies, ret.expr, needle),
-        .run_low_level => |run| checkedExprSpanContainsPattern(checked_bodies, run.args, needle),
-        .hosted_lambda => |hosted| checkedPatternSpanContainsPattern(checked_bodies, hosted.args, needle),
-        .numeral,
-        .str_from_quote,
-        .str_segment,
-        .bytes_literal,
-        .lookup_local,
-        .lookup_external,
-        .lookup_required,
-        .empty_list,
-        .empty_record,
-        .zero_argument_tag,
-        .dispatch_call,
-        .method_eq,
-        .type_dispatch_call,
-        .runtime_error,
-        .crash,
-        .break_,
-        .ellipsis,
-        .anno_only,
-        .pending,
-        => false,
-    };
-}
-
-fn checkedExprSpanContainsPattern(
-    checked_bodies: *const CheckedBodyStore,
-    exprs: []const CheckedExprId,
-    needle: CheckedPatternId,
-) bool {
-    for (exprs) |expr| {
-        if (checkedExprContainsPattern(checked_bodies, expr, needle)) return true;
-    }
-    return false;
-}
-
-fn checkedStatementContainsPattern(
-    checked_bodies: *const CheckedBodyStore,
-    statement_id: CheckedStatementId,
-    needle: CheckedPatternId,
-) bool {
-    const statement = checked_bodies.statement(statement_id);
-    return switch (statement.data) {
-        .decl => |decl| checkedPatternContainsPattern(checked_bodies, decl.pattern, needle) or
-            checkedExprContainsPattern(checked_bodies, decl.expr, needle),
-        // The promoted procedure's lambda is its own template's body.
-        .promoted_proc => |promoted| checkedPatternContainsPattern(checked_bodies, promoted.pattern, needle),
-        .var_ => |var_| checkedPatternContainsPattern(checked_bodies, var_.pattern, needle) or
-            checkedExprContainsPattern(checked_bodies, var_.expr, needle),
-        .var_uninitialized => |var_| checkedPatternContainsPattern(checked_bodies, var_.pattern, needle),
-        .reassign => |reassign| checkedPatternContainsPattern(checked_bodies, reassign.pattern, needle) or
-            checkedExprContainsPattern(checked_bodies, reassign.expr, needle),
-        .dbg, .expr, .expect => |expr| checkedExprContainsPattern(checked_bodies, expr, needle),
-        .for_ => |for_| checkedPatternContainsPattern(checked_bodies, for_.pattern, needle) or
-            checkedExprContainsPattern(checked_bodies, for_.expr, needle) or
-            checkedExprContainsPattern(checked_bodies, for_.body, needle),
-        .while_ => |while_| checkedExprContainsPattern(checked_bodies, while_.cond, needle) or
-            checkedExprContainsPattern(checked_bodies, while_.body, needle),
-        .infinite_loop => |loop| checkedExprContainsPattern(checked_bodies, loop.cond, needle) or
-            checkedExprContainsPattern(checked_bodies, loop.body, needle),
-        .breakable_loop => |loop| checkedExprContainsPattern(checked_bodies, loop.cond, needle) or
-            checkedExprContainsPattern(checked_bodies, loop.body, needle),
-        .return_ => |ret| checkedExprContainsPattern(checked_bodies, ret.expr, needle),
-        .crash,
-        .break_,
-        .import_,
-        .alias_decl,
-        .where_alias_decl,
-        .nominal_decl,
-        .type_anno,
-        .type_var_alias,
-        .runtime_error,
-        .pending,
-        => false,
-    };
-}
-
-fn checkedPatternContainsPattern(
-    checked_bodies: *const CheckedBodyStore,
-    haystack: CheckedPatternId,
-    needle: CheckedPatternId,
-) bool {
-    if (haystack == needle) return true;
-    const pattern = checked_bodies.pattern(haystack);
-    return switch (pattern.data) {
-        .as => |as| checkedPatternContainsPattern(checked_bodies, as.pattern, needle),
-        .applied_tag => |tag| checkedPatternSpanContainsPattern(checked_bodies, tag.args, needle),
-        .nominal => |nominal| checkedPatternContainsPattern(checked_bodies, nominal.backing_pattern, needle),
-        .record_destructure => |destructs| blk: {
-            for (destructs) |destruct| {
-                const child = switch (destruct.kind) {
-                    .required => |required| required,
-                    .sub_pattern => |sub_pattern| sub_pattern,
-                    .rest => |rest| rest,
-                };
-                if (checkedPatternContainsPattern(checked_bodies, child, needle)) break :blk true;
-            }
-            break :blk false;
-        },
-        .list => |list| blk: {
-            if (checkedPatternSpanContainsPattern(checked_bodies, list.patterns, needle)) break :blk true;
-            if (list.rest) |rest| {
-                if (rest.pattern) |rest_pattern| {
-                    if (checkedPatternContainsPattern(checked_bodies, rest_pattern, needle)) break :blk true;
-                }
-            }
-            break :blk false;
-        },
-        .tuple => |items| checkedPatternSpanContainsPattern(checked_bodies, items, needle),
-        .str_interpolation => |str| blk: {
-            for (str.steps) |step| {
-                if (step.capture) |capture| {
-                    if (checkedPatternContainsPattern(checked_bodies, capture, needle)) break :blk true;
-                }
-            }
-            break :blk false;
-        },
-        .pending,
-        .assign,
-        .numeral_literal,
-        .str_literal,
-        .underscore,
-        .runtime_error,
-        => false,
-    };
-}
-
-fn checkedPatternSpanContainsPattern(
-    checked_bodies: *const CheckedBodyStore,
-    patterns: []const CheckedPatternId,
-    needle: CheckedPatternId,
-) bool {
-    for (patterns) |pattern| {
-        if (checkedPatternContainsPattern(checked_bodies, pattern, needle)) return true;
-    }
-    return false;
 }
 
 fn syntheticExprCapacityForHoistedRoots(selected_hoisted_roots: []const hoist_roots.SelectedHoistedRoot) usize {

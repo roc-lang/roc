@@ -9,7 +9,7 @@ const base = @import("base");
 const collections = @import("collections");
 
 const Common = @import("../common.zig");
-const AnyAll = @import("../any_all.zig");
+const AnyAll = collections.AnyAll;
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 const specialize = @import("specialize.zig");
@@ -13851,8 +13851,18 @@ const CompletedDirectCallee = struct {
 /// cells, so they share one request interface, one argument preparation,
 /// and one callee selection instead of instantiating the callee's checked
 /// type again for each read.
+const RelatedConstructor = struct {
+    expr: checked.CheckedExprId,
+    node: NodeId,
+};
+
 const DirectCallRequest = struct {
     fn_node: NodeId,
+    /// Every argument has been related to its slot of `fn_node`. Relation
+    /// only unifies, so relating the same arguments to the same slots again
+    /// adds nothing; nested calls rely on this to relate each argument
+    /// chain once rather than once per enclosing call.
+    args_related: bool = false,
     args_prepared: bool = false,
     completed: ?CompletedDirectCallee = null,
 };
@@ -18681,6 +18691,12 @@ const BodyContext = struct {
     /// shared by every later such read of the same expression (see
     /// `sharedDispatchTypeRead`).
     dispatch_type_reads: std.AutoHashMapUnmanaged(checked.CheckedExprId, NodeId) = .empty,
+    /// Constructor expressions already related to a request node, keyed by
+    /// the node's class root at the time. A constructor's relation only
+    /// unifies its children with the node's component slots, so relating it
+    /// to the same class again adds nothing; lowering a nested constructor
+    /// relates each level once instead of once per enclosing level.
+    related_constructors: std.AutoHashMapUnmanaged(RelatedConstructor, void) = .empty,
     /// Exact return cell owned by the active checked lambda specialization.
     /// Source `return` expressions must consume this cell rather than create a
     /// new instantiation of the lambda's checked return type.
@@ -19702,6 +19718,7 @@ const BodyContext = struct {
         self.instantiated_codec_calls.deinit(self.allocator);
         self.direct_call_requests.deinit(self.allocator);
         self.dispatch_type_reads.deinit(self.allocator);
+        self.related_constructors.deinit(self.allocator);
         self.pattern_literal_guards.deinit(self.allocator);
         self.optional_destruct_binds.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
@@ -26226,6 +26243,7 @@ const BodyContext = struct {
             self.builder.countBodyDiagnostic("argument_spans_prepared");
             self.builder.countBodyDiagnosticBy("arguments_prepared", task.checked_exprs.len);
             frame.cursor = 1;
+            if (direct_call and self.directCallArgsRelated(task.expr, task.fn_node)) task.index = task.checked_exprs.len;
         } else {
             task.index += 1;
         }
@@ -26235,10 +26253,18 @@ const BodyContext = struct {
         try self.ensureNestedCallablesAtNodes(task.checked_exprs, task.nodes);
         if (direct_call) {
             if (self.direct_call_requests.getPtr(task.expr)) |request| {
-                if (request.fn_node == task.fn_node) request.args_prepared = true;
+                if (request.fn_node == task.fn_node) {
+                    request.args_related = true;
+                    request.args_prepared = true;
+                }
             }
         }
         return .{ .ret = .none };
+    }
+
+    fn directCallArgsRelated(self: *const BodyContext, checked_expr: checked.CheckedExprId, fn_node: NodeId) bool {
+        const request = self.direct_call_requests.get(checked_expr) orelse return false;
+        return request.fn_node == fn_node and request.args_related;
     }
 
     /// Relate a checked expression's value to a request node.
@@ -26254,6 +26280,13 @@ const BodyContext = struct {
             // with `runtime_error`, which emits a crash, while its unused call
             // type contains `.err`.
             if (self.checkedExprDivergesInLoweredRuntime(checked_expr)) return self.finishRelate(task);
+            switch (expr.data) {
+                .tag, .nominal, .tuple, .list, .record => {
+                    const key = RelatedConstructor{ .expr = checked_expr, .node = self.graph.rootNode(expected_node) };
+                    if ((try self.related_constructors.getOrPut(self.allocator, key)).found_existing) return self.finishRelate(task);
+                },
+                else => {},
+            }
             frame.cursor = 1;
             switch (expr.data) {
                 .lookup_local => |lookup| try self.relateLookupExprAtNode(checked_expr, lookup.resolved, expected_node),
@@ -26429,6 +26462,8 @@ const BodyContext = struct {
                 task.child_nodes = fn_nodes.args;
                 task.index = 0;
                 frame.cursor += 2;
+                // A shared request's arguments relate to its slots once.
+                if (frame.cursor == 4 and self.directCallArgsRelated(task.expr, task.fn_node)) task.index = call.args.len;
             },
             // An argument relation.
             4, 5 => task.index += 1,
@@ -26441,6 +26476,11 @@ const BodyContext = struct {
         }
         if (task.index < call.args.len) {
             return evidenceCall(self, .{ .relate = .{ .expr = call.args[task.index], .expected_node = task.child_nodes[task.index] } });
+        }
+        if (frame.cursor == 4) {
+            if (self.direct_call_requests.getPtr(task.expr)) |request| {
+                if (request.fn_node == task.fn_node) request.args_related = true;
+            }
         }
         if (frame.cursor == 5 and call.direct_target == null) {
             frame.cursor = 6;
@@ -62245,7 +62285,7 @@ const NodeUninhabitedScan = struct {
         return expansion;
     }
 
-    pub fn exit(self: *NodeUninhabitedScan, node: NodeId, _: ?bool) void {
+    pub fn exit(self: *NodeUninhabitedScan, node: NodeId, _: ?bool) std.mem.Allocator.Error!void {
         self.body.inhabitation_visiting.unset(@intFromEnum(self.body.graph.rootNode(node)));
     }
 };
@@ -62299,7 +62339,7 @@ const TypeUninhabitedScan = struct {
         return expansion;
     }
 
-    pub fn exit(self: *TypeUninhabitedScan, ty: Type.TypeId, _: ?bool) void {
+    pub fn exit(self: *TypeUninhabitedScan, ty: Type.TypeId, _: ?bool) std.mem.Allocator.Error!void {
         _ = self.visiting.remove(ty);
     }
 };
@@ -62346,7 +62386,7 @@ const ImpossibilityProofScan = struct {
         return expansion;
     }
 
-    pub fn exit(self: *ImpossibilityProofScan, proof_id: RuntimeImpossibilityProofId, result: ?bool) void {
+    pub fn exit(self: *ImpossibilityProofScan, proof_id: RuntimeImpossibilityProofId, result: ?bool) std.mem.Allocator.Error!void {
         const index = @intFromEnum(proof_id);
         self.active[index] = false;
         if (result) |value| self.memo[index] = value;
@@ -62394,7 +62434,7 @@ const PatternUninhabitedScan = struct {
         return .{ .group = .any };
     }
 
-    pub fn exit(_: *PatternUninhabitedScan, _: checked.CheckedPatternId, _: ?bool) void {}
+    pub fn exit(_: *PatternUninhabitedScan, _: checked.CheckedPatternId, _: ?bool) std.mem.Allocator.Error!void {}
 };
 
 fn instRecordFieldLessThan(

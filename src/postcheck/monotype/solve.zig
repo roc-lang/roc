@@ -15,7 +15,7 @@ const base = @import("base");
 const collections = @import("collections");
 
 const Common = @import("../common.zig");
-const AnyAll = @import("../any_all.zig");
+const AnyAll = collections.AnyAll;
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 
@@ -609,9 +609,96 @@ pub const InterfaceConstraints = struct {
             arg_count: usize,
         };
 
+        /// Capture a node, giving it an id on first reach. An open node's
+        /// content captures every node and field kind it references first;
+        /// each open node being captured waits in a frame on an explicit
+        /// stack, so type nesting never becomes native call depth. Ids are
+        /// assigned, and seals and groups recorded, in the order a direct
+        /// recursive capture reached them.
         fn node(self: *Capture, raw: NodeId) Allocator.Error!NodeId {
+            const allocator = self.graph.allocator;
+            var frames: std.ArrayList(CaptureFrame) = .empty;
+            defer {
+                for (frames.items) |*frame| frame.items.deinit(allocator);
+                frames.deinit(allocator);
+            }
+            if (try self.beginNode(raw)) |frame| {
+                try frames.append(allocator, frame);
+            } else return self.node_ids.get(self.graph.find(raw)).?;
+            while (frames.items.len != 0) {
+                const top = &frames.items[frames.items.len - 1];
+                if (top.next == top.items.items.len) {
+                    if (top.captured == null) {
+                        // The content's references are captured; map it, then
+                        // capture its request source interface.
+                        var lookup = CaptureLookup{ .capture = self, .allocator = self.allocator };
+                        top.captured = .{ .content = try mapValue(&lookup, InstNode, self.graph.content(top.root)) };
+                        if (self.graph.requestSourceInterface(top.raw)) |source| {
+                            try top.items.append(allocator, .{ .source = source });
+                            continue;
+                        }
+                    }
+                    try self.finishNode(top);
+                    var finished = frames.pop().?;
+                    finished.items.deinit(allocator);
+                    continue;
+                }
+                const item = top.items.items[top.next];
+                top.next += 1;
+                switch (item) {
+                    .node => |child| if (try self.beginNode(child)) |frame| try frames.append(allocator, frame),
+                    .kind => |raw_kind| {
+                        const root_kind = self.graph.findFieldKind(raw_kind);
+                        if (self.kind_ids.contains(root_kind)) continue;
+                        const id: FieldKindId = @enumFromInt(self.kinds.items.len);
+                        try self.kind_ids.put(root_kind, id);
+                        try self.kinds.append(allocator, undefined);
+                        // The kind's own references come next, then its mapping.
+                        const source = self.graph.field_kinds.items[@intFromEnum(root_kind)];
+                        var refs: std.ArrayList(CaptureItem) = .empty;
+                        defer refs.deinit(allocator);
+                        try collectCaptureRefs(allocator, Kind, .{ .resolved = source.resolved, .cells = source.cells }, &refs);
+                        try refs.append(allocator, .{ .finish_kind = .{ .id = id, .root = root_kind } });
+                        try top.items.insertSlice(allocator, top.next, refs.items);
+                    },
+                    .finish_kind => |finish| {
+                        const source = self.graph.field_kinds.items[@intFromEnum(finish.root)];
+                        var lookup = CaptureLookup{ .capture = self, .allocator = self.allocator };
+                        self.kinds.items[@intFromEnum(finish.id)] = try mapValue(&lookup, Kind, .{ .resolved = source.resolved, .cells = source.cells });
+                    },
+                    .source => |source| if (try self.beginNode(source)) |frame| try frames.append(allocator, frame),
+                }
+            }
+            return self.node_ids.get(self.graph.find(raw)).?;
+        }
+
+        /// One step of an open node's capture.
+        const CaptureItem = union(enum) {
+            /// A node its content references.
+            node: NodeId,
+            /// A field kind its content references.
+            kind: FieldKindId,
+            /// Map a newly reached field kind once its references are captured.
+            finish_kind: struct { id: FieldKindId, root: FieldKindId },
+            /// Its request source interface, captured after its content.
+            source: NodeId,
+        };
+
+        const CaptureFrame = struct {
+            raw: NodeId,
+            root: NodeId,
+            open_index: u32,
+            items: std.ArrayList(CaptureItem) = .empty,
+            next: usize = 0,
+            /// The node's capture, once its content is mapped.
+            captured: ?OpenNode = null,
+        };
+
+        /// Give `raw`'s class an id, or find its existing one; the frame that
+        /// captures its content when it is a new open node.
+        fn beginNode(self: *Capture, raw: NodeId) Allocator.Error!?CaptureFrame {
             const root = self.graph.find(raw);
-            if (self.node_ids.get(root)) |id| return id;
+            if (self.node_ids.contains(root)) return null;
             const id: NodeId = @enumFromInt(self.nodes.items.len);
             try self.node_ids.put(root, id);
             try self.nodes.append(self.graph.allocator, undefined);
@@ -621,7 +708,7 @@ pub const InterfaceConstraints = struct {
                     const open_index: u32 = @intCast(self.open_nodes.items.len);
                     self.nodes.items[@intFromEnum(id)] = .{ .open = open_index };
                     try self.open_nodes.append(self.graph.allocator, .{ .content = .{ .unresolved = InstVariable.placeholder() } });
-                    return id;
+                    return null;
                 }
             }
             // Representation authority and open field-kind cells forbid sharing
@@ -630,13 +717,24 @@ pub const InterfaceConstraints = struct {
             // which may have redirected to a different class representative.
             if (self.graph.requestSourceInterface(raw) == null and try self.canShare(root)) {
                 self.nodes.items[@intFromEnum(id)] = .{ .mono = try self.settled.sealNode(root) };
-                return id;
+                return null;
             }
             const open_index: u32 = @intCast(self.open_nodes.items.len);
             self.nodes.items[@intFromEnum(id)] = .{ .open = open_index };
             try self.open_nodes.append(self.graph.allocator, undefined);
-            var captured: OpenNode = .{ .content = try mapValue(self, InstNode, self.graph.content(root)) };
-            if (self.graph.requestSourceInterface(raw)) |source| captured.source = try self.node(source);
+            var frame = CaptureFrame{ .raw = raw, .root = root, .open_index = open_index };
+            errdefer frame.items.deinit(self.graph.allocator);
+            try collectCaptureRefs(self.graph.allocator, InstNode, self.graph.content(root), &frame.items);
+            return frame;
+        }
+
+        /// Record an open node's capture once its content and request source
+        /// interface are captured.
+        fn finishNode(self: *Capture, frame: *CaptureFrame) Allocator.Error!void {
+            const root = frame.root;
+            const raw = frame.raw;
+            var captured = frame.captured.?;
+            if (self.graph.requestSourceInterface(raw)) |source| captured.source = self.node_ids.get(self.graph.find(source)).?;
             const membership = self.graph.representation_membership.items[@intFromEnum(root)];
             captured.recursive_slot = membership.recursive_slot;
             captured.forced_dynamic = membership.forced_dynamic;
@@ -657,8 +755,64 @@ pub const InterfaceConstraints = struct {
                 if (!group.found_existing) group.value_ptr.* = next_group;
                 captured.related_group = group.value_ptr.*;
             }
-            self.open_nodes.items[open_index] = captured;
-            return id;
+            self.open_nodes.items[frame.open_index] = captured;
+        }
+
+        /// Maps a captured value's references to the ids already assigned.
+        const CaptureLookup = struct {
+            capture: *Capture,
+            allocator: Allocator,
+
+            fn node(self: *CaptureLookup, raw: NodeId) Allocator.Error!NodeId {
+                return self.capture.node_ids.get(self.capture.graph.find(raw)).?;
+            }
+            fn kind(self: *CaptureLookup, raw: FieldKindId) Allocator.Error!FieldKindId {
+                return self.capture.kind_ids.get(self.capture.graph.findFieldKind(raw)).?;
+            }
+            fn scalar(_: *CaptureLookup, comptime T: type, value: T) Allocator.Error!T {
+                return value;
+            }
+        };
+
+        /// List the nodes and field kinds `value` references, in the order
+        /// `mapValue` maps them. The walk follows `T`'s structure, whose depth
+        /// is fixed by the type, never by the graph.
+        fn collectCaptureRefs(allocator: Allocator, comptime T: type, value: T, out: *std.ArrayList(CaptureItem)) Allocator.Error!void {
+            if (T == NodeId) return try out.append(allocator, .{ .node = value });
+            if (T == FieldKindId) return try out.append(allocator, .{ .kind = value });
+            switch (@typeInfo(T)) {
+                .@"struct" => |info| inline for (info.fields) |field| try collectCaptureRefs(allocator, field.type, @field(value, field.name), out),
+                .@"union" => |info| inline for (info.fields) |field| {
+                    if (std.meta.activeTag(value) == @field(info.tag_type.?, field.name)) try collectCaptureRefs(allocator, field.type, @field(value, field.name), out);
+                },
+                .optional => |info| if (value) |actual| try collectCaptureRefs(allocator, info.child, actual, out),
+                .pointer => |info| switch (info.size) {
+                    .slice => for (value) |item| try collectCaptureRefs(allocator, info.child, item, out),
+                    .one => try collectCaptureRefs(allocator, info.child, value.*, out),
+                    .many, .c => @compileError("interface constraints contain an unbounded pointer"),
+                },
+                .array => |info| for (value) |item| try collectCaptureRefs(allocator, info.child, item, out),
+                .type,
+                .void,
+                .bool,
+                .noreturn,
+                .int,
+                .float,
+                .comptime_float,
+                .comptime_int,
+                .undefined,
+                .null,
+                .error_union,
+                .error_set,
+                .@"enum",
+                .@"fn",
+                .@"opaque",
+                .frame,
+                .@"anyframe",
+                .vector,
+                .enum_literal,
+                => {},
+            }
         }
 
         fn holeIndex(self: *const Capture, root: NodeId) ?usize {
@@ -677,23 +831,35 @@ pub const InterfaceConstraints = struct {
             return try scan.node(raw);
         }
 
+        /// Whether everything a node reaches is representation neutral: the
+        /// conjunction over every reachable node, each checked once.
         const NeutralScan = struct {
             graph: *InstGraph,
             seen: *collections.DenseMap(NodeId, void),
 
+            const Eval = AnyAll.Evaluation(ScanLeaf, NeutralScan);
+
             fn node(self: *NeutralScan, raw: NodeId) Allocator.Error!bool {
+                return try Eval.run(self.graph.allocator, self, .{ .node = raw });
+            }
+
+            pub fn enter(self: *NeutralScan, items: Eval.Items, leaf: ScanLeaf) Allocator.Error!Eval.Expansion {
+                const raw = switch (leaf) {
+                    .decided => |value| return .{ .value = value },
+                    .node => |raw| raw,
+                };
                 const graph = self.graph;
                 const root = graph.find(raw);
-                if ((try self.seen.getOrPut(root)).found_existing) return true;
-                if (graph.private_backing_roots.items[@intFromEnum(root)]) return false;
-                if (graph.requestSourceInterface(raw) != null or graph.requestPropagatesConstructorEvidence(raw)) return false;
-                if (graph.representation_membership.items[@intFromEnum(root)].forced_dynamic) return false;
+                if ((try self.seen.getOrPut(root)).found_existing) return .{ .value = true };
+                if (graph.private_backing_roots.items[@intFromEnum(root)]) return .{ .value = false };
+                if (graph.requestSourceInterface(raw) != null or graph.requestPropagatesConstructorEvidence(raw)) return .{ .value = false };
+                if (graph.representation_membership.items[@intFromEnum(root)].forced_dynamic) return .{ .value = false };
                 const content = graph.content(root);
                 switch (content) {
                     .named => |named| {
-                        if (named.generated_iterator != null or named.def.generated != null or named.def.iterator_representation != .none or named.def.iterator_kind != .none) return false;
+                        if (named.generated_iterator != null or named.def.generated != null or named.def.iterator_representation != .none or named.def.iterator_kind != .none) return .{ .value = false };
                         if (named.backing) |backing| if (backing.authority == .generated_private) {
-                            return false;
+                            return .{ .value = false };
                         };
                     },
                     .redirect,
@@ -711,59 +877,77 @@ pub const InterfaceConstraints = struct {
                     .zst,
                     => {},
                 }
-                return self.value(InstNode, content);
+                try addScanLeaves(items, InstNode, content, .neutral);
+                return .{ .group = .all };
             }
 
-            fn value(self: *NeutralScan, comptime T: type, item: T) Allocator.Error!bool {
-                if (T == NodeId) return self.node(item);
-                if (T == InstFieldKind) return true;
-                switch (@typeInfo(T)) {
-                    .@"struct" => |info| inline for (info.fields) |field| {
-                        if (!try self.value(field.type, @field(item, field.name))) return false;
-                    },
-                    .@"union" => |info| {
-                        inline for (info.fields) |field| {
-                            if (std.meta.activeTag(item) == @field(info.tag_type.?, field.name)) return self.value(field.type, @field(item, field.name));
-                        }
-                        unreachable;
-                    },
-                    .optional => |info| if (item) |actual| {
-                        return self.value(info.child, actual);
-                    },
-                    .pointer => |info| switch (info.size) {
-                        .slice => for (item) |child| {
-                            if (!try self.value(info.child, child)) return false;
-                        },
-                        .one => return self.value(info.child, item.*),
-                        .many, .c => @compileError("neutral scan reached an unbounded pointer"),
-                    },
-                    .array => |info| for (item) |child| {
-                        if (!try self.value(info.child, child)) return false;
-                    },
-                    .type,
-                    .void,
-                    .bool,
-                    .noreturn,
-                    .int,
-                    .float,
-                    .comptime_float,
-                    .comptime_int,
-                    .undefined,
-                    .null,
-                    .error_union,
-                    .error_set,
-                    .@"enum",
-                    .@"fn",
-                    .@"opaque",
-                    .frame,
-                    .@"anyframe",
-                    .vector,
-                    .enum_literal,
-                    => {},
-                }
-                return true;
-            }
+            pub fn exit(_: *NeutralScan, _: ScanLeaf, _: ?bool) std.mem.Allocator.Error!void {}
         };
+
+        /// One check of a structural scan: a node to scan, or a check its
+        /// parent decided.
+        const ScanLeaf = union(enum) {
+            node: NodeId,
+            decided: bool,
+        };
+
+        /// List the nodes `value` references as leaves, in the order a
+        /// structural mapping reaches them, with a field kind decided by
+        /// `kinds`. The walk follows `T`'s structure, whose depth is fixed by
+        /// the type, never by the graph.
+        fn addScanLeaves(
+            items: anytype,
+            comptime T: type,
+            value: T,
+            comptime kinds: enum {
+                /// Any field kind is neutral.
+                neutral,
+                /// Only a producer-sealed field kind has committed its slot.
+                sealed_only,
+            },
+        ) Allocator.Error!void {
+            if (T == NodeId) return try items.add(.{ .node = value });
+            if (T == InstFieldKind) return switch (kinds) {
+                .neutral => {},
+                // Even a resolved field-kind cell still carries relation
+                // evidence (required may join an explicit default). Only a
+                // producer-sealed field has committed its slot representation.
+                .sealed_only => if (value != .sealed) try items.add(.{ .decided = false }),
+            };
+            switch (@typeInfo(T)) {
+                .@"struct" => |info| inline for (info.fields) |field| try addScanLeaves(items, field.type, @field(value, field.name), kinds),
+                .@"union" => |info| inline for (info.fields) |field| {
+                    if (std.meta.activeTag(value) == @field(info.tag_type.?, field.name)) try addScanLeaves(items, field.type, @field(value, field.name), kinds);
+                },
+                .optional => |info| if (value) |actual| try addScanLeaves(items, info.child, actual, kinds),
+                .pointer => |info| switch (info.size) {
+                    .slice => for (value) |item| try addScanLeaves(items, info.child, item, kinds),
+                    .one => try addScanLeaves(items, info.child, value.*, kinds),
+                    .many, .c => @compileError("structural scan reached an unbounded pointer"),
+                },
+                .array => |info| for (value) |item| try addScanLeaves(items, info.child, item, kinds),
+                .type,
+                .void,
+                .bool,
+                .noreturn,
+                .int,
+                .float,
+                .comptime_float,
+                .comptime_int,
+                .undefined,
+                .null,
+                .error_union,
+                .error_set,
+                .@"enum",
+                .@"fn",
+                .@"opaque",
+                .frame,
+                .@"anyframe",
+                .vector,
+                .enum_literal,
+                => {},
+            }
+        }
 
         fn canShare(self: *Capture, root: NodeId) Allocator.Error!bool {
             if (self.shareable.get(root)) |known| return known;
@@ -777,31 +961,52 @@ pub const InterfaceConstraints = struct {
             return result;
         }
 
+        /// Whether a node can share one sealed type across captures: the
+        /// conjunction over every reachable node. A node found not shareable
+        /// is cached as such, as is every node whose check reaches it.
         const Shareability = struct {
             capture: *Capture,
             seen: *collections.DenseMap(NodeId, void),
 
+            const Eval = AnyAll.Evaluation(ScanLeaf, Shareability);
+
             fn node(self: *Shareability, raw: NodeId) Allocator.Error!bool {
-                const root = self.capture.graph.find(raw);
-                if (self.capture.holeIndex(root) != null) return false;
-                if (self.capture.shareable.get(root)) |known| return known;
-                const result = try self.visit(raw, root);
-                // A failed path proves every ancestor on that path reaches
-                // non-shareable state. Successful cycles are cached only once
-                // the entire root traversal has succeeded.
-                if (!result) try self.capture.shareable.put(root, false);
-                return result;
+                return try Eval.run(self.capture.graph.allocator, self, .{ .node = raw });
             }
 
-            fn visit(self: *Shareability, raw: NodeId, root: NodeId) Allocator.Error!bool {
+            pub fn enter(self: *Shareability, items: Eval.Items, leaf: ScanLeaf) Allocator.Error!Eval.Expansion {
+                const raw = switch (leaf) {
+                    .decided => |value| return .{ .value = value },
+                    .node => |raw| raw,
+                };
+                const owner = self.capture;
+                const graph = owner.graph;
+                const root = graph.find(raw);
+                if (owner.holeIndex(root) != null) return .{ .value = false };
+                if (owner.shareable.get(root)) |known| return .{ .value = known };
+                if ((try self.seen.getOrPut(root)).found_existing) return .{ .value = true };
+                if (!self.locallyShareable(raw, root)) {
+                    try owner.shareable.put(root, false);
+                    return .{ .value = false };
+                }
+                try addScanLeaves(items, InstNode, graph.content(root), .sealed_only);
+                return .{ .group = .all };
+            }
+
+            /// A failed path proves every ancestor on that path reaches
+            /// non-shareable state. Successful cycles are cached only once
+            /// the entire root traversal has succeeded.
+            pub fn exit(self: *Shareability, leaf: ScanLeaf, result: ?bool) std.mem.Allocator.Error!void {
+                if (result == false) try self.capture.shareable.put(self.capture.graph.find(leaf.node), false);
+            }
+
+            fn locallyShareable(self: *Shareability, raw: NodeId, root: NodeId) bool {
                 const graph = self.capture.graph;
-                if ((try self.seen.getOrPut(root)).found_existing) return true;
                 if (graph.private_backing_roots.items[@intFromEnum(root)]) return false;
                 if (graph.requestSourceInterface(raw) != null or graph.requestPropagatesConstructorEvidence(raw) or graph.related_named_instances.contains(root)) return false;
                 const membership = graph.representation_membership.items[@intFromEnum(root)];
                 if (membership.recursive_slot or membership.forced_dynamic) return false;
-                const content = graph.content(root);
-                switch (content) {
+                switch (graph.content(root)) {
                     .unresolved => return false,
                     .named => |named| {
                         if (named.generated_iterator != null or named.def.generated != null or named.def.iterator_representation != .none or named.def.iterator_kind != .none) return false;
@@ -823,74 +1028,9 @@ pub const InterfaceConstraints = struct {
                     .zst,
                     => {},
                 }
-                return self.value(InstNode, content);
-            }
-
-            fn value(self: *Shareability, comptime T: type, item: T) Allocator.Error!bool {
-                if (T == NodeId) return self.node(item);
-                // Even a resolved field-kind cell still carries relation
-                // evidence (required may join an explicit default). Only a
-                // producer-sealed field has committed its slot representation.
-                if (T == InstFieldKind) return item == .sealed;
-                switch (@typeInfo(T)) {
-                    .@"struct" => |info| inline for (info.fields) |field| {
-                        if (!try self.value(field.type, @field(item, field.name))) return false;
-                    },
-                    .@"union" => |info| {
-                        inline for (info.fields) |field| {
-                            if (std.meta.activeTag(item) == @field(info.tag_type.?, field.name)) return self.value(field.type, @field(item, field.name));
-                        }
-                        unreachable;
-                    },
-                    .optional => |info| if (item) |actual| {
-                        return self.value(info.child, actual);
-                    },
-                    .pointer => |info| switch (info.size) {
-                        .slice => for (item) |child| {
-                            if (!try self.value(info.child, child)) return false;
-                        },
-                        .one => return self.value(info.child, item.*),
-                        .many, .c => @compileError("shareability reached an unbounded pointer"),
-                    },
-                    .array => |info| for (item) |child| {
-                        if (!try self.value(info.child, child)) return false;
-                    },
-                    .type,
-                    .void,
-                    .bool,
-                    .noreturn,
-                    .int,
-                    .float,
-                    .comptime_float,
-                    .comptime_int,
-                    .undefined,
-                    .null,
-                    .error_union,
-                    .error_set,
-                    .@"enum",
-                    .@"fn",
-                    .@"opaque",
-                    .frame,
-                    .@"anyframe",
-                    .vector,
-                    .enum_literal,
-                    => {},
-                }
                 return true;
             }
         };
-
-        fn kind(self: *Capture, raw: FieldKindId) Allocator.Error!FieldKindId {
-            const root = self.graph.findFieldKind(raw);
-            if (self.kind_ids.get(root)) |id| return id;
-            const id: FieldKindId = @enumFromInt(self.kinds.items.len);
-            try self.kind_ids.put(root, id);
-            try self.kinds.append(self.graph.allocator, undefined);
-            const source = self.graph.field_kinds.items[@intFromEnum(root)];
-            const mapped = try mapValue(self, Kind, .{ .resolved = source.resolved, .cells = source.cells });
-            self.kinds.items[@intFromEnum(id)] = mapped;
-            return id;
-        }
 
         fn scalar(_: *Capture, comptime T: type, value: T) Allocator.Error!T {
             return value;
@@ -6813,7 +6953,7 @@ const GraphUninhabitedScan = struct {
         return expansion;
     }
 
-    pub fn exit(scan: *GraphUninhabitedScan, raw_node: NodeId, _: ?bool) void {
+    pub fn exit(scan: *GraphUninhabitedScan, raw_node: NodeId, _: ?bool) std.mem.Allocator.Error!void {
         _ = scan.visiting.remove(scan.graph.find(raw_node));
     }
 };

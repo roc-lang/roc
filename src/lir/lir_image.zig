@@ -406,6 +406,7 @@ pub const LayoutStoreImage = extern struct {
             .interned_recursive_graphs = layout_mod.Store.RecursiveGraphMap.init(allocator),
             .recursive_unfoldings = .empty,
             .target_usize = target_usize,
+            .digest_cache = try layout_mod.DigestCache.create(allocator),
         };
     }
 };
@@ -820,6 +821,8 @@ fn serializeSidecarInto(
         .interned_recursive_graphs = layout_mod.Store.RecursiveGraphMap.init(gpa),
         .recursive_unfoldings = .empty,
         .target_usize = lowered.layouts.target_usize,
+        // `BoxySidecar.fromStores` reads only the array-backed fields.
+        .digest_cache = undefined,
     };
     const names = try BoxyNamesImage.copyFromStore(gpa, buffer.ptr, buffer.len, &lowered.store.boxy_names);
 
@@ -904,9 +907,10 @@ comptime {
     // same-build omission is otherwise silent, since `FORMAT_VERSION` only
     // guards cross-version mismatches. `tail_call_builder`, `proc_rewrite` and
     // `facts` are transient worker state, not serialized, and default to
-    // null or empty in views.
+    // null or empty in views. The layout store's `digest_cache` is a memo
+    // each view starts empty.
     std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 36);
-    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".fields.len == 13);
+    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".fields.len == 14);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".fields.len == 1);
 }
 
@@ -1115,6 +1119,7 @@ fn deinitViewedLayouts(layouts: *layout_mod.Store, allocator: std.mem.Allocator)
     layouts.struct_fields.deinit(allocator);
     layouts.tag_union_variants.deinit(allocator);
     layouts.interned_layouts.deinit();
+    layouts.digest_cache.destroy(allocator);
 }
 
 /// Encode a slice already inside the image as a checked relative reference.
@@ -1673,6 +1678,7 @@ test "LIR image copies and round-trips every populated store field" {
         .interned_recursive_graphs = undefined,
         .recursive_unfoldings = undefined,
         .target_usize = target_usize,
+        .digest_cache = undefined,
     };
 
     const root_procs = try h.distinct(LIR.LirProcSpecId, source_allocator, 3, 0xb0);
