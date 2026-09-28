@@ -3131,7 +3131,6 @@ test "mayContainErrorState tracks error descriptors and invalid nominal declarat
 
     var store = try Store.init(gpa);
     defer store.deinit();
-    const a = try store.fresh();
     const backing = try store.fresh();
     const decl_idx = try store.registerNominalDecl(try testNominalDecl(@enumFromInt(1), 3, backing));
     try std.testing.expect(!store.mayContainErrorState());
@@ -3151,5 +3150,4 @@ test "mayContainErrorState tracks error descriptors and invalid nominal declarat
     var copy = try errs.clone(gpa);
     defer copy.deinit();
     try std.testing.expect(copy.mayContainErrorState());
-    _ = a;
 }
