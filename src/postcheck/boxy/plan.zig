@@ -80,6 +80,8 @@ pub const LiteralSite = struct {
     dispatch: static_dispatch.StaticDispatchPlanId,
 };
 
+/// A checked type constructor in the literal planner's term domain, with the
+/// checked children its term arguments stand for.
 pub const LiteralTypeConstructor = struct {
     source: CheckedTypeIdentity,
     children: []const CheckedTypeIdentity,
@@ -95,6 +97,7 @@ pub const LiteralSiteKey = struct {
     worker: WorkerPlanId,
 };
 
+/// A generated callable worker as captured by one caller worker.
 pub const GeneratedCallableKey = struct { caller: WorkerPlanId, worker: WorkerPlanId };
 
 /// Closed incoming evidence for a callable-producing frame during literal CTFE.
@@ -106,6 +109,9 @@ pub const LiteralFreezeContext = struct {
     callable_types: std.AutoHashMapUnmanaged(TypeRepId, u32) = .empty,
 };
 
+/// Everything Boxy planned for compile-time literal values: the literal read
+/// at each site, the captures generated callables receive, and the
+/// initializers that produce closed literal values.
 pub const LiteralEvidencePlan = struct {
     freeze_contexts: std.ArrayList(LiteralFreezeContext) = .empty,
     /// Interned callable type identities in this plan's type-term domain. Only
@@ -142,6 +148,7 @@ pub const LiteralInitializer = struct {
     direct_call: ?DirectCallPlan = null,
 };
 
+/// The planned call through which literal arguments reach a callee worker.
 pub const LiteralCallEdge = union(enum) {
     direct: u32,
     root: u32,
@@ -2039,7 +2046,7 @@ const LiteralPlanner = struct {
         switch (kind) {
             .primitive => |primitive| try self.appendWord(&key, @intFromEnum(primitive)),
             .empty_record, .empty_tag_union => {},
-            else => boxyPlanInvariant("literal leaf had a non-leaf representation"),
+            .in_progress, .dynamic, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .tag_union => boxyPlanInvariant("literal leaf had a non-leaf representation"),
         }
         const constructor = self.constructor_ids.get(key.items) orelse blk: {
             try self.constructors.ensureUnusedCapacity(allocator, 1);
@@ -2072,7 +2079,7 @@ const LiteralPlanner = struct {
                 try self.builder.plan.representations.append(allocator, .{ .source_type = source, .kind = .empty_record });
                 return self.leafTerm(source, rep);
             },
-            else => {},
+            .pending, .err, .flex, .rigid, .alias, .tuple, .function, .tag_union => {},
         }
         if (payload == .alias) {
             const term = try self.typeTerm(typeRef(view, payload.alias.backing));
@@ -2084,7 +2091,7 @@ const LiteralPlanner = struct {
             const rep = self.builder.plan.representations.items[@intFromEnum(rep_id)];
             switch (rep.kind) {
                 .primitive, .empty_record, .empty_tag_union => return self.leafTerm(source, rep_id),
-                else => {},
+                .in_progress, .dynamic, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .tag_union => {},
             }
             const term = if (rep.sealed_default) |sealed|
                 try self.leafTerm(source, sealed)
@@ -2226,7 +2233,7 @@ const LiteralPlanner = struct {
         std.debug.assert(self.graph.terms.isClosed(term));
         const allocator = self.builder.allocator;
         const application = self.graph.terms.entries.items[@intFromEnum(term)].application;
-        const constructor = self.constructors.items[application.constructor];
+        const constructor = self.constructors.items[@intCast(application.constructor)];
         if (constructor.leaf_rep) |rep| {
             try self.closed_reps.put(allocator, term, rep);
             try self.rep_terms.put(allocator, rep, term);
@@ -2284,7 +2291,7 @@ const LiteralPlanner = struct {
                     switch (extension.kind) {
                         .record => try children.appendSlice(allocator, self.builder.plan.childSlice(extension.children)),
                         .empty_record => {},
-                        else => boxyPlanInvariant("closed literal record had a non-record extension"),
+                        .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .tag_union, .empty_tag_union => boxyPlanInvariant("closed literal record had a non-record extension"),
                     }
                     std.mem.sort(RepChild, children.items, self.builder, struct {
                         fn lessThan(builder: *Builder, a: RepChild, b: RepChild) bool {
@@ -2319,7 +2326,7 @@ const LiteralPlanner = struct {
                                 if (child.role == .tag_ext) try children.append(allocator, child);
                             }
                         },
-                        else => boxyPlanInvariant("closed literal tag union had a non-tag extension"),
+                        .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record => boxyPlanInvariant("closed literal tag union had a non-tag extension"),
                     }
                     std.mem.sort(TagVariant, variants.items, self.builder, struct {
                         fn lessThan(builder: *Builder, a: TagVariant, b: TagVariant) bool {
@@ -2327,7 +2334,7 @@ const LiteralPlanner = struct {
                         }
                     }.lessThan);
                 },
-                else => boxyPlanInvariant("literal type constructor omitted its materialization"),
+                .pending, .err, .flex, .rigid, .alias, .nominal, .empty_record, .empty_tag_union => boxyPlanInvariant("literal type constructor omitted its materialization"),
             }
             shape.children = try self.builder.commitPendingChildren(children.items);
             for (variants.items) |*variant| variant.payloads.start += shape.children.start;

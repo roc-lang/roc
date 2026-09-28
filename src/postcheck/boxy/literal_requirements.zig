@@ -7,12 +7,18 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+/// Index of a hash-consed type term in `Terms`.
 pub const TermId = enum(u32) { _ };
+/// A Boxy worker that owns literal demands and incoming call edges.
 pub const WorkerId = enum(u32) { _ };
+/// A call edge from one worker (or a root) into another worker.
 pub const EdgeId = enum(u32) { _ };
+/// A literal site: one compile-time conversion read in a worker body.
 pub const SiteId = enum(u32) { _ };
+/// A requirement to produce one literal site's value at one type term.
 pub const RequirementId = enum(u32) { _ };
 
+/// A type term: a worker-local variable or a constructor applied to terms.
 pub const Term = union(enum) {
     variable: u64,
     application: struct { constructor: u64, args: []const TermId },
@@ -41,6 +47,7 @@ const TermContext = struct {
     }
 };
 
+/// One substitution of a callee variable by a caller term on a call edge.
 pub const Binding = struct { variable: u64, term: TermId };
 
 /// Hash-consed type terms. Constructor identity comes from the planner's
@@ -121,6 +128,8 @@ pub const Terms = struct {
     }
 };
 
+/// A literal site demanded at a type term, with the evidence term its
+/// conversion dispatches through when that evidence is not the value type.
 pub const Requirement = struct { site: SiteId, ty: TermId, evidence: ?TermId = null };
 
 /// A closed requirement is a compile-time initializer, and an open requirement
@@ -131,6 +140,7 @@ pub const Source = union(enum) {
     parameter: RequirementId,
 };
 
+/// A range in one of the `Abi` arrays.
 pub const Span = struct { start: u32 = 0, len: u32 = 0 };
 
 /// Dense lowering input. Parameter ordinals are local to the caller; result
@@ -141,6 +151,8 @@ pub const Argument = union(enum) {
     parameter: u32,
 };
 
+/// Frozen per-worker literal parameters and per-edge arguments, in the dense
+/// form lowering consumes.
 pub const Abi = struct {
     allocator: Allocator,
     workers: []Span,
@@ -368,14 +380,16 @@ pub const Graph = struct {
         const ParameterKey = struct { worker: WorkerId, requirement: RequirementId };
         var slots = std.AutoHashMap(ParameterKey, u32).init(allocator);
         defer slots.deinit();
-        var results = std.AutoHashMap(RequirementId, u32).init(allocator);
-        defer results.deinit();
+        // Result ordinal of each closed requirement, by requirement id.
+        const results = try allocator.alloc(?u32, self.requirements.items.len);
+        defer allocator.free(results);
+        @memset(results, null);
         for (self.requirements.items, 0..) |requirement, index| {
             if (self.observations.contains(requirement.site)) continue;
             if (!self.isClosed(requirement)) continue;
             if (active_sites) |active| if (!active[@intFromEnum(requirement.site)]) continue;
             const id: RequirementId = @enumFromInt(index);
-            try results.put(id, @intCast(closed.items.len));
+            results[@intFromEnum(id)] = @intCast(closed.items.len);
             try closed.append(allocator, id);
         }
         for (self.workers.items, workers, 0..) |worker, *span, index| {
@@ -401,7 +415,7 @@ pub const Graph = struct {
             for (parameters.items[callee.start..][0..callee.len]) |requirement| {
                 const source = edge.args.get(requirement).?;
                 try arguments.append(allocator, switch (source) {
-                    .closed => |id| .{ .result = results.get(id).? },
+                    .closed => |id| .{ .result = results[@intFromEnum(id)].? },
                     .parameter => |id| .{ .parameter = slots.get(.{ .worker = edge.caller.?, .requirement = id }).? },
                 });
             }
@@ -521,7 +535,7 @@ test "boxy literal demands only request substitutions on demanded edges" {
     try std.testing.expectEqual(fixed, graph.requirements.items[@intFromEnum(graph.argument(root, demand.parameter).?.closed)].ty);
 }
 
-fn allocationFailureFixture(allocator: Allocator) !void {
+fn allocationFailureFixture(allocator: Allocator) Allocator.Error!void {
     var graph = Graph.init(allocator);
     defer graph.deinit();
     const worker = try graph.addWorker();

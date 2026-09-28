@@ -898,7 +898,7 @@ test "frozen root transcode preserves Boxy recipe identity and generic boxed cap
         callable: layout.Idx,
         capture: layout.Idx,
         string_desc: Program.BoxyTypeDescId,
-        fn init(program: *Program.Result, reverse: bool) !@This() {
+        fn init(program: *Program.Result, reverse: bool) std.mem.Allocator.Error!@This() {
             const gpa = std.testing.allocator;
             const proc = try program.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(42), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst }, .none);
             const callable = try program.layouts.insertErasedCallable();

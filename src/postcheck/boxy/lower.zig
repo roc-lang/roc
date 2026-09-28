@@ -6353,7 +6353,7 @@ const ProcedureBuilder = struct {
             proc.dictionary_locals[dictionaries.start] = local;
             proc.dictionary_slots[dictionaries.start] = local;
             proc.dictionary_bound[dictionaries.start] = true;
-            dictionary_initializer = .{ .local = local, .materialize = try self.staticDictRefForRepWithEvidence(initializer.rep, dictionaries, initializer.method_evidence) };
+            dictionary_initializer = .{ .local = local, .materialize = try self.staticDictRefForRepWithEvidence(initializer.rep, dictionaries, initializer.method_evidence, 0) };
         };
         const result_value = try proc.addFrameLocalForRep(initializer.rep);
         const generic_rep = proc.repForType(expr.ty);
@@ -6366,7 +6366,7 @@ const ProcedureBuilder = struct {
                 try proc.lowerNumFromNumeralInto(result_value, numeral.plan, done)
             else
                 try proc.lowerPendingNumeralConversionInto(generic_value, site.source.expr, expr.ty, numeral.plan, adapted),
-            else => boxyLowerInvariant("literal initializer did not name a checked conversion"),
+            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .closure, .lambda => boxyLowerInvariant("literal initializer did not name a checked conversion"),
         };
         if (dictionary_initializer) |dictionary| body = try proc.prependHiddenDictionaryArgMaterialization(&.{dictionary}, body);
         body = try proc.prependStaticDescriptorMaterializationsForSlots(body);
@@ -9054,7 +9054,7 @@ const ProcedureBuilder = struct {
                     const reference = try proc.literalReference(arguments[capture.literal_parameter.?]);
                     value.* = switch (reference) {
                         .local => |local| local,
-                        else => materialized: {
+                        .static, .runtime => materialized: {
                             const local = try proc.addFrameLocal(.opaque_ptr);
                             try dictionary_initializers.append(self.allocator, .{ .local = local, .materialize = reference });
                             break :materialized local;
@@ -30249,7 +30249,7 @@ const ProcBodyBuilder = struct {
         const plan_id = switch (checked_expr.data) {
             .str_from_quote => |quote| quote.plan,
             .numeral => |numeral| numeral.plan,
-            else => unreachable,
+            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .closure, .lambda => unreachable,
         };
         const dispatch = self.staticDispatchPlan(plan_id);
         const result_desc = try self.exactCallResultDescriptorRef(self.repForType(ty));
@@ -39929,7 +39929,7 @@ const ConstPlanBuilder = struct {
                             .dictionary => |span| blk: {
                                 for (self.plan.directCallHiddenDictionaryArgSlice(context.dictionaries)) |arg| {
                                     if (!std.meta.eql(arg.worker_dictionaries, span)) continue;
-                                    break :blk .{ .dictionary = (try self.procedure_builder.staticDictRefForRepWithEvidence(arg.rep, arg.worker_dictionaries, arg.method_evidence)).static };
+                                    break :blk .{ .dictionary = (try self.procedure_builder.staticDictRefForRepWithEvidence(arg.rep, arg.worker_dictionaries, arg.method_evidence, arg.env)).static };
                                 }
                                 boxyLowerInvariant("frozen dictionary capture lacked its checked evidence");
                             },

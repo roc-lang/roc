@@ -1803,6 +1803,8 @@ pub const PreparedBoxy = struct {
     }
 };
 
+/// Validate the checked boundary for a Boxy build and plan the Boxy program
+/// for these roots, before any lowering.
 pub fn prepareBoxyCheckedModules(
     allocator: Allocator,
     modules: CheckedModuleSet,

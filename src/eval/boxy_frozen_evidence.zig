@@ -75,7 +75,7 @@ pub const Matcher = struct {
         if (a == b) return true;
         const key: Pair = .{ .left = @intFromPtr(a), .right = @intFromPtr(b), .dictionary = false };
         if ((try self.seen.getOrPut(self.allocator, key)).found_existing) return true;
-        inline for (.{ "payload_layout", "contains_refcounted", "shape", "presence_slot_present_discriminant", "inspect_opaque", "structural_eq", "structural_hash", "inspect_method" }) |field| {
+        inline for (.{ "payload_layout", "contains_refcounted", "shape", "presence_slot_present_discriminant", "inspect_opaque", "inspect_method" }) |field| {
             if (!std.meta.eql(@field(a, field), @field(b, field))) return false;
         }
         inline for (.{ "nested_descs", "inspect_hidden_descs", "inspect_arg_descs" }) |field| {
@@ -109,8 +109,8 @@ pub const Matcher = struct {
         for (self.runtime.requireBoxyMethodSlots(a.method_slots), self.runtime.requireBoxyMethodSlots(b.method_slots)) |left, right| {
             if (left.present != right.present) return false;
             if (!left.present) continue;
-            if (left.method != right.method or left.structural_eq != right.structural_eq) return false;
-            if (!left.structural_eq and left.proc != right.proc) {
+            if (left.method != right.method) return false;
+            if (left.proc != right.proc) {
                 const left_worker = self.program.boxy_frozen_method_origins.get(left.proc) orelse return false;
                 const right_worker = self.program.boxy_frozen_method_origins.get(right.proc) orelse return false;
                 if (!std.meta.eql(left_worker, right_worker)) return false;

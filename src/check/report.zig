@@ -257,7 +257,7 @@ pub const ReportBuilder = struct {
     /// body, where independent diagnostics may need their own highlights.
     fn expressionHighlightRegion(self: *Self, region: Region) Allocator.Error!Region {
         const source = self.source[region.start.offset..region.end.offset];
-        if (!std.mem.startsWith(u8, source, "match") and !std.mem.startsWith(u8, source, "|")) return region;
+        if (source.len == 0 or (source[0] != 'm' and source[0] != '|')) return region;
 
         // Use tokens to distinguish the keyword from an identifier and to keep
         // pipes inside strings, comments, or nested patterns out of the header.
@@ -268,20 +268,17 @@ pub const ReportBuilder = struct {
         defer tokenizer.deinit(self.gpa);
         try tokenizer.tokenize(self.gpa);
         const tags = tokenizer.output.tokens.items(.tag);
-        switch (tags[0]) {
-            .KwMatch => return Region.from_raw_offsets(region.start.offset, region.start.offset + tokenizer.output.resolve(0).end.offset),
-            .OpBar => {},
-            else => return region,
-        }
+        if (tags[0] == .KwMatch)
+            return Region.from_raw_offsets(region.start.offset, region.start.offset + tokenizer.output.resolve(0).end.offset);
+        if (tags[0] != .OpBar) return region;
         var depth: usize = 0;
         for (tags[1..], 1..) |tag, i| {
-            switch (tag) {
-                .OpenRound, .NoSpaceOpenRound, .OpenSquare, .OpenCurly, .OpenStringInterpolation => depth += 1,
-                .CloseRound, .CloseSquare, .CloseCurly, .CloseStringInterpolation => depth -|= 1,
-                .OpBar => if (depth == 0) {
-                    return Region.from_raw_offsets(region.start.offset, region.start.offset + tokenizer.output.resolve(i).end.offset);
-                },
-                else => {},
+            if (tag == .OpenRound or tag == .NoSpaceOpenRound or tag == .OpenSquare or tag == .OpenCurly or tag == .OpenStringInterpolation) {
+                depth += 1;
+            } else if (tag == .CloseRound or tag == .CloseSquare or tag == .CloseCurly or tag == .CloseStringInterpolation) {
+                depth -|= 1;
+            } else if (tag == .OpBar and depth == 0) {
+                return Region.from_raw_offsets(region.start.offset, region.start.offset + tokenizer.output.resolve(i).end.offset);
             }
         }
         return region;

@@ -6507,7 +6507,6 @@ fn computeUniquenessDetailed(
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
-                .assign_boxy_eq,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .boxy_tag_match,
@@ -7499,12 +7498,15 @@ test "uniqueness carries a candidate read's origin through a returned record fie
         .next = check,
     } }, .test_fixture);
     const call = try f.call(got, callee, &.{candidate}, take);
-    const read = try f.store.addCFStmt(.{ .assign_literal = .{
-        .target = candidate,
-        .value = .{ .static_data = @enumFromInt(0) },
-        .fresh_alternative = fresh_form,
-        .next = call,
-    } }, .test_fixture);
+    const read = try f.store.addCFStmt(.{
+        .assign_literal = .{
+            .target = candidate,
+            // ARC reads only the literal kind, never the slot it names.
+            .value = .{ .static_data = undefined },
+            .fresh_alternative = fresh_form,
+            .next = call,
+        },
+    }, .test_fixture);
     _ = try f.proc(&.{}, read, f.list);
 
     // A second read whose value only rides along in a field and is read
@@ -7519,12 +7521,15 @@ test "uniqueness carries a candidate read's origin through a returned record fie
         .next = try f.ret(idle_first),
     } }, .test_fixture);
     const idle_call = try f.call(idle_got, callee, &.{idle}, idle_take);
-    const idle_read = try f.store.addCFStmt(.{ .assign_literal = .{
-        .target = idle,
-        .value = .{ .static_data = @enumFromInt(0) },
-        .fresh_alternative = fresh_form,
-        .next = idle_call,
-    } }, .test_fixture);
+    const idle_read = try f.store.addCFStmt(.{
+        .assign_literal = .{
+            .target = idle,
+            // ARC reads only the literal kind, never the slot it names.
+            .value = .{ .static_data = undefined },
+            .fresh_alternative = fresh_form,
+            .next = idle_call,
+        },
+    }, .test_fixture);
     _ = try f.proc(&.{}, idle_read, f.list);
 
     const rc = try allocator.alloc(bool, f.store.localCount());

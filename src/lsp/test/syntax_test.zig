@@ -1158,14 +1158,14 @@ fn focusedExpressionDiagnostics() integration_spec.SpecError!void {
             for (publish_sets) |*set| set.deinit(h.allocator);
             h.allocator.free(publish_sets);
         }
-        const offset = std.mem.indexOf(u8, source, case[2]).?;
+        const offset = std.mem.find(u8, source, case[2]).?;
         const line: u32 = @intCast(std.mem.count(u8, source[0..offset], "\n"));
-        const line_start = if (std.mem.lastIndexOfScalar(u8, source[0..offset], '\n')) |i| i + 1 else 0;
+        const line_start = if (std.mem.findScalarLast(u8, source[0..offset], '\n')) |i| i + 1 else 0;
         const column: u32 = @intCast(offset - line_start);
         var found = false;
         for (publish_sets) |set| {
             for (set.diagnostics) |diagnostic| {
-                if (std.mem.indexOf(u8, diagnostic.message, case[1]) == null) continue;
+                if (std.mem.find(u8, diagnostic.message, case[1]) == null) continue;
                 found = true;
                 try std.testing.expectEqual(line, diagnostic.range.start.line);
                 try std.testing.expectEqual(column, diagnostic.range.start.character);
