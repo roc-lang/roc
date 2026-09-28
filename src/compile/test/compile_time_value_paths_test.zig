@@ -49,10 +49,9 @@ const platform_files = [_]struct { path: []const u8, source: []const u8 }{
 /// program is a separate consumer of the evaluation's specialization, and
 /// builtin wrappers inlined, so a list operation's runtime uniqueness check
 /// sits in the procedure that calls the builtin.
-const optimized_target: lir.CheckedPipeline.TargetConfig = .{
-    .inline_expects = .omit,
-    .inline_mode = .wrappers,
-};
+fn optimizedTarget(inline_mode: lir.CheckedPipeline.InlineMode) lir.CheckedPipeline.TargetConfig {
+    return .{ .inline_expects = .omit, .inline_mode = inline_mode };
+}
 
 /// Both runtime programs of one app.
 const Lowered = struct {
@@ -78,7 +77,7 @@ const LowerBothPathsError = std.mem.Allocator.Error ||
     lir.CheckedPipeline.LowerResourceError ||
     error{TestUnexpectedResult};
 
-fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std.testing.TmpDir, source: []const u8) LowerBothPathsError!Lowered {
+fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std.testing.TmpDir, source: []const u8, inline_mode: lir.CheckedPipeline.InlineMode) LowerBothPathsError!Lowered {
     const io = std.testing.io;
     try tmp_dir.dir.createDirPath(io, ".roc_echo_platform");
     for (platform_files) |file| try tmp_dir.dir.writeFile(io, .{ .sub_path = file.path, .data = file.source });
@@ -104,7 +103,7 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
     try coord.coordinatorLoop();
     if (coord.hasUserErrors()) return error.TestUnexpectedResult;
 
-    coord.runtime_lowering = .{ .target = optimized_target };
+    coord.runtime_lowering = .{ .target = optimizedTarget(inline_mode) };
     try coord.finishCheckedProgram(.executable_artifacts);
     if (coord.hasUserErrors()) return error.TestUnexpectedResult;
     const session = &coord.program_session.?;
@@ -112,7 +111,7 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
     // runtime consumer, which is the path that reads the frozen image.
     try std.testing.expect(session.host != null);
     try std.testing.expect(session.runtime_prepared != null);
-    var continued = try session.takeRuntime(gpa, session.runtime_roots, optimized_target);
+    var continued = try session.takeRuntime(gpa, session.runtime_roots, optimizedTarget(inline_mode));
     errdefer continued.deinit();
 
     const root = coord.executableRootCheckedArtifact();
@@ -131,7 +130,7 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
             .include_provided_data_exports = true,
             .include_internal_static_data = true,
         },
-        .{ .target_usize = base.target.TargetUsize.native, .inline_mode = .wrappers },
+        .{ .target_usize = base.target.TargetUsize.native, .inline_mode = inline_mode },
     );
     return .{ .coord = coord, .continued = continued, .restored = restored };
 }
@@ -183,7 +182,7 @@ test "two equal compile-time tables freeze to one backing in the continued runti
         \\    Echo.line!(Str.inspect(List.get(second, List.len(args))))
         \\    Ok({})
         \\}
-    );
+    , .wrappers);
     defer lowered.deinit();
 
     const continued = &lowered.continued;
@@ -244,7 +243,7 @@ test "an empty compile-time list read at another layout index still lowers as it
         \\    Echo.line!(Str.inspect(List.append(buffer, List.len(args))))
         \\    Ok({})
         \\}
-    );
+    , .wrappers);
     defer lowered.deinit();
 
     // The evaluation's program names the buffer's list layout by a different
@@ -304,7 +303,7 @@ test "a compile-time table only read stays static data, with no fresh build" {
         \\    Echo.line!(Str.inspect(List.get(table, List.len(args) + 1)))
         \\    Ok({})
         \\}
-    );
+    , .wrappers);
     defer lowered.deinit();
     for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
         // Both reads only borrow the table: it rides in static data and no
@@ -332,7 +331,7 @@ test "a compile-time table consumed by an in-place write is built fresh and muta
         \\    Echo.line!(Str.inspect(List.get(written, 0)))
         \\    Ok({})
         \\}
-    );
+    , .wrappers);
     defer lowered.deinit();
     for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
         // The read's value is the argument `List.append` may extend in
@@ -351,5 +350,35 @@ test "a compile-time table consumed by an in-place write is built fresh and muta
         // list argument is proven unique.
         try std.testing.expectEqual(@as(usize, 1), masks.items.len);
         try std.testing.expectEqual(@as(u64, 1), masks.items[0] & 1);
+    }
+}
+
+test "a compile-time table consumed through an uninlined builtin wrapper is still built fresh" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = base.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\table : List(U32)
+        \\table = List.repeat(0.U32, 1000)
+        \\main! = |args| {
+        \\    written = List.append(table, List.len(args).to_u32_wrap())
+        \\    Echo.line!(Str.inspect(List.get(written, 0)))
+        \\    Ok({})
+        \\}
+    , .none);
+    defer lowered.deinit();
+    for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
+        // The reserve that checks the list sits in `List.append`'s own
+        // procedure, whose seed mask names its list parameter; the seed
+        // composes to the read's procedure, so the read is still needed
+        // and takes its fresh form, and the reserve's runtime check finds
+        // the fresh list unique.
+        try std.testing.expectEqual(@as(usize, 0), countListSlots(result));
+        try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .list_append_range_within_unsafe));
     }
 }

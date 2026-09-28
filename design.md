@@ -14598,7 +14598,11 @@ callee or a container never learns of a candidate. A candidate is *needed*
 when a value derived from it meets a runtime uniqueness check its birth
 answers—an argument position an operation may check, or an argument passed to
 a callee position the callee's seed mask names, which a variant would seed—
-while born with no other holder. Needed candidates take the fresh form, every
+while born with no other holder. A procedure's seed mask names the parameters
+whose seed a check in its body would answer, and also those carried into a
+callee position the callee's mask names, so seeds compose through direct calls
+whether or not the callee is inlined; a mask change is a signature change and
+re-analyzes callers. Needed candidates take the fresh form, every
 other candidate stays the static datum, and a local whose origins include a
 candidate that stays static is not unique, whatever its born bit says
 (`unique_origins_ok`). Emission materializes a needed read as a call to the

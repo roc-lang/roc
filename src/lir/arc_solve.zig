@@ -4932,18 +4932,33 @@ const UniquenessComponentTask = struct {
         var seeds: arc_sig.ParamMask = 0;
         for (self.proc_stmts[proc_index].items) |stmt| {
             const node = self.store.getCFStmt(stmt);
-            if (node != .assign_low_level) continue;
-            const assign = node.assign_low_level;
-            const effect = if (!self.consume_dead_boxes and assign.op == .box_unbox)
-                assign.op.arcBorrowedResultVariant().?.rcEffect()
-            else
-                assign.op.arcInferenceRcEffect(assign.rc_effect);
-            const args = self.store.getLocalSpan(assign.args);
-            for (0..@min(GuardedList.borrowLen(args), 64)) |position| {
-                if ((effect.may_runtime_uniqueness_check_args & (@as(u64, 1) << @as(u6, @intCast(position)))) == 0) continue;
-                const dense = self.domain.indexOf(GuardedList.at(args, position)) orelse continue;
-                if (!uniqueness.born_unique.isSet(dense) or uniqueness.destroyed.isSet(dense)) continue;
-                seeds |= uniqueness.conds[dense];
+            if (node == .assign_low_level) {
+                const assign = node.assign_low_level;
+                const effect = if (!self.consume_dead_boxes and assign.op == .box_unbox)
+                    assign.op.arcBorrowedResultVariant().?.rcEffect()
+                else
+                    assign.op.arcInferenceRcEffect(assign.rc_effect);
+                const args = self.store.getLocalSpan(assign.args);
+                for (0..@min(GuardedList.borrowLen(args), 64)) |position| {
+                    if ((effect.may_runtime_uniqueness_check_args & (@as(u64, 1) << @as(u6, @intCast(position)))) == 0) continue;
+                    const dense = self.domain.indexOf(GuardedList.at(args, position)) orelse continue;
+                    if (!uniqueness.born_unique.isSet(dense) or uniqueness.destroyed.isSet(dense)) continue;
+                    seeds |= uniqueness.conds[dense];
+                }
+            } else if (node == .assign_call) {
+                // A value carried from a parameter into a callee position the
+                // callee's seed mask names composes that seed: the variant
+                // seeded here can demand the callee's.
+                const assign = node.assign_call;
+                const callee_seeds = self.solution.unique_seed_masks[@intFromEnum(assign.proc)];
+                if (callee_seeds == 0) continue;
+                const args = self.store.getLocalSpan(assign.args);
+                for (0..@min(GuardedList.borrowLen(args), arc_sig.tracked_param_count)) |position| {
+                    if ((callee_seeds & (arc_sig.paramBit(position) orelse unreachable)) == 0) continue;
+                    const dense = self.domain.indexOf(GuardedList.at(args, position)) orelse continue;
+                    if (!uniqueness.born_unique.isSet(dense) or uniqueness.destroyed.isSet(dense)) continue;
+                    seeds |= uniqueness.conds[dense];
+                }
             }
         }
         return .{ .sig = sig, .rows = rows.items, .seeds = seeds };
@@ -5212,6 +5227,8 @@ fn settleUniquenessOracle(
     defer workspace.deinit();
     var rows = std.ArrayList(arc_sig.RetCondition).empty;
     defer rows.deinit(allocator);
+    const seed_scratch = try allocator.alloc(arc_sig.ParamMask, proc_count);
+    defer allocator.free(seed_scratch);
     while (true) {
         const uniqueness = try workspace.analyze(store, rc_local, solution.sigTable(), consume_dead_boxes, layouts, takes, &solution.borrowed, solution.unique_seed_masks);
         var changed = false;
@@ -5300,28 +5317,49 @@ fn settleUniquenessOracle(
         if (changed) continue;
 
         // Parameter positions whose seed would let a runtime check the
-        // body performs on a value carried from them go check-free.
-        @memset(solution.unique_seed_masks, 0);
+        // body performs on a value carried from them go check-free, and a
+        // value carried into a callee position the callee's mask names
+        // composes that seed. The masks feed the analysis (a caller's
+        // fresh-form decisions read them), so a changed mask is another
+        // round.
+        @memset(seed_scratch, 0);
         for (proc_stmts, 0..) |stmts, proc_index| {
             for (stmts.items) |stmt| {
                 const node = store.getCFStmt(stmt);
-                if (node != .assign_low_level) continue;
-                const assign = node.assign_low_level;
-                const rc_effect = if (!consume_dead_boxes and assign.op == .box_unbox)
-                    assign.op.arcBorrowedResultVariant().?.rcEffect()
-                else
-                    assign.op.arcInferenceRcEffect(assign.rc_effect);
-                const check_mask = rc_effect.may_runtime_uniqueness_check_args;
-                if (check_mask == 0) continue;
-                const args = store.getLocalSpan(assign.args);
-                for (0..@min(GuardedList.borrowLen(args), 64)) |position| {
-                    if ((check_mask & (@as(u64, 1) << @as(u6, @intCast(position)))) == 0) continue;
-                    const raw = @intFromEnum(GuardedList.at(args, position));
-                    if (raw >= rc_local.len or !rc_local[raw]) continue;
-                    if (!uniqueness.born_unique.isSet(raw) or uniqueness.destroyed.isSet(raw)) continue;
-                    solution.unique_seed_masks[proc_index] |= uniqueness.conds[raw];
+                if (node == .assign_low_level) {
+                    const assign = node.assign_low_level;
+                    const rc_effect = if (!consume_dead_boxes and assign.op == .box_unbox)
+                        assign.op.arcBorrowedResultVariant().?.rcEffect()
+                    else
+                        assign.op.arcInferenceRcEffect(assign.rc_effect);
+                    const check_mask = rc_effect.may_runtime_uniqueness_check_args;
+                    if (check_mask == 0) continue;
+                    const args = store.getLocalSpan(assign.args);
+                    for (0..@min(GuardedList.borrowLen(args), 64)) |position| {
+                        if ((check_mask & (@as(u64, 1) << @as(u6, @intCast(position)))) == 0) continue;
+                        const raw = @intFromEnum(GuardedList.at(args, position));
+                        if (raw >= rc_local.len or !rc_local[raw]) continue;
+                        if (!uniqueness.born_unique.isSet(raw) or uniqueness.destroyed.isSet(raw)) continue;
+                        seed_scratch[proc_index] |= uniqueness.conds[raw];
+                    }
+                } else if (node == .assign_call) {
+                    const assign = node.assign_call;
+                    const callee_seeds = solution.unique_seed_masks[@intFromEnum(assign.proc)];
+                    if (callee_seeds == 0) continue;
+                    const args = store.getLocalSpan(assign.args);
+                    for (0..@min(GuardedList.borrowLen(args), arc_sig.tracked_param_count)) |position| {
+                        if ((callee_seeds & (arc_sig.paramBit(position) orelse unreachable)) == 0) continue;
+                        const raw = @intFromEnum(GuardedList.at(args, position));
+                        if (raw >= rc_local.len or !rc_local[raw]) continue;
+                        if (!uniqueness.born_unique.isSet(raw) or uniqueness.destroyed.isSet(raw)) continue;
+                        seed_scratch[proc_index] |= uniqueness.conds[raw];
+                    }
                 }
             }
+        }
+        if (!std.mem.eql(arc_sig.ParamMask, seed_scratch, solution.unique_seed_masks)) {
+            @memcpy(solution.unique_seed_masks, seed_scratch);
+            continue;
         }
 
         var unique = try uniqueness.unique.clone(allocator);
@@ -7064,6 +7102,7 @@ const UniquenessOracleState = struct {
             sig.ret_unique_fields = 0;
             sig.ret_conditions = .empty;
         }
+        @memset(solution.unique_seed_masks, 0);
     }
 
     fn compare(f: *const UniquenessTest, rc: []const bool, solution: *Solution, takes: TakeSource, metrics: *UniquenessMetrics) (SolveError || error{TestExpectedEqual})!void {
@@ -7360,6 +7399,44 @@ test "component uniqueness inventories join parameters incoming transfers and no
     try std.testing.expectEqual(@as(u64, 3), metrics.local_visits);
     try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), solution.unique_seed_masks[@intFromEnum(proc)]);
     try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), solution.unique_conds[@intFromEnum(joined)]);
+}
+
+test "uniqueness seed masks compose through direct calls" {
+    const allocator = std.testing.allocator;
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    // leaf(p) checks p; middle(a, b) hands b to leaf; top(x, y) hands x
+    // to middle's second position. Each mask names the position whose seed
+    // the check at the end of the chain would answer.
+    const param = try f.local(f.list);
+    const reversed = try f.local(f.list);
+    const leaf = try f.proc(&.{param}, try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = reversed,
+        .op = .list_reverse,
+        .rc_effect = LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+        .args = try f.store.addLocalSpan(&.{param}),
+        .next = try f.ret(reversed),
+    } }, .test_fixture), f.list);
+    const a = try f.local(f.list);
+    const b = try f.local(f.list);
+    const middle_result = try f.local(f.list);
+    const middle = try f.proc(&.{ a, b }, try f.call(middle_result, leaf, &.{b}, try f.ret(middle_result)), f.list);
+    const x = try f.local(f.list);
+    const y = try f.local(f.list);
+    const top_result = try f.local(f.list);
+    const top = try f.proc(&.{ x, y }, try f.call(top_result, middle, &.{ y, x }, try f.ret(top_result)), f.list);
+    const rc = try allocator.alloc(bool, f.store.localCount());
+    defer allocator.free(rc);
+    @memset(rc, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
+    defer solution.deinit();
+    try std.testing.expectEqual(@as(arc_sig.ParamMask, 0b01), solution.unique_seed_masks[@intFromEnum(leaf)]);
+    try std.testing.expectEqual(@as(arc_sig.ParamMask, 0b10), solution.unique_seed_masks[@intFromEnum(middle)]);
+    try std.testing.expectEqual(@as(arc_sig.ParamMask, 0b01), solution.unique_seed_masks[@intFromEnum(top)]);
+    UniquenessOracleState.resetCapabilities(&solution);
+    var metrics: UniquenessMetrics = .{};
+    try UniquenessOracleState.compare(&f, rc, &solution, .none, &metrics);
+    try std.testing.expectEqual(@as(arc_sig.ParamMask, 0b01), solution.unique_seed_masks[@intFromEnum(top)]);
 }
 
 test "uniqueness gives a tail loop parameter no field origins from its back edge alone" {
