@@ -2332,8 +2332,8 @@ test "interface summaries relocate across bodies and executor lanes" {
     defer second.deinit(allocator);
     try std.testing.expect(first_diagnostics.specialization.interface_summary_hits > 0);
     try std.testing.expect(first_diagnostics.specialization.interface_summary_expansions > 0);
-    try std.testing.expect(first_diagnostics.specialization.interface_summary_verifications > 0);
-    try std.testing.expect(second_diagnostics.specialization.interface_summary_verifications > 0);
+    try std.testing.expectEqual(std.debug.runtime_safety, first_diagnostics.specialization.interface_summary_verifications > 0);
+    try std.testing.expectEqual(std.debug.runtime_safety, second_diagnostics.specialization.interface_summary_verifications > 0);
     try std.testing.expect(first.mono.types.digest_stats == null);
     const first_specs = first.mono.specsView();
     const second_specs = second.mono.specsView();

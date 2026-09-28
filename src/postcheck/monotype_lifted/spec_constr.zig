@@ -15485,7 +15485,7 @@ test "staged SpecConstr discovery admits source order with duplicates and bounde
         // second wave after coordinator admission has saturated the target.
         try std.testing.expectEqual(@as(u64, 40), metrics.patterns_recorded);
         try std.testing.expectEqual(@as(u64, Pass.wave_capacity), metrics.peak_retained_shards);
-        try std.testing.expectEqual(@as(u64, if (worker_count == 0) 0 else 41), metrics.tasks_committed);
+        try std.testing.expectEqual(@as(u64, if (worker_count == 0) 0 else if (builtin.mode == .Debug) 41 else 40), metrics.tasks_committed);
         try std.testing.expectEqual(metrics.tasks_submitted, metrics.tasks_committed);
     }
 }
@@ -15661,13 +15661,26 @@ test "staged SpecConstr submission failure drains accepted tasks" {
     defer program.deinit();
     const unit_ty = try program.types.add(.zst);
     const unit = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const target = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @enumFromInt(1),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = unit },
+        .ret = unit_ty,
+    });
+    const call = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = target },
+        .args = .empty(),
+        .captures = .empty(),
+    } } });
     for (0..4) |index| {
         _ = try program.addFn(.{
-            .shapes = program.finishFnShapes(.{}),
-            .symbol = @enumFromInt(@as(u32, @intCast(index))),
+            .shapes = program.finishFnShapes(.{}).merged(.{ .direct_call = true }),
+            .symbol = @enumFromInt(@as(u32, @intCast(index + 2))),
             .args = .empty(),
             .captures = .empty(),
-            .body = .{ .roc = unit },
+            .body = .{ .roc = call },
             .ret = unit_ty,
         });
     }
@@ -15675,7 +15688,7 @@ test "staged SpecConstr submission failure drains accepted tasks" {
     defer pass.deinit();
     var executor: ReverseSpecConstrExecutor = .{ .worker_count = 4, .fail_after = 2 };
     pass.options.executor = executor.executor();
-    try std.testing.expectError(error.OutOfMemory, pass.collectValueAwareCallPatterns(4));
+    try std.testing.expectError(error.OutOfMemory, pass.collectValueAwareCallPatterns(program.fnCount()));
     try std.testing.expectEqual(@as(usize, 0), executor.len);
 }
 

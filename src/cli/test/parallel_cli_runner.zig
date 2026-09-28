@@ -571,14 +571,14 @@ fn buildCases(
     }
 
     if (suites.includes(.echo)) {
-        try appendStaticCases(allocator, &cases, &echo_cases, filters);
+        try appendStaticCases(allocator, &cases, &echo_cases, filters, include_llvm);
     }
     if (suites.includes(.glue)) {
-        try appendStaticCases(allocator, &cases, &glue_cases, filters);
+        try appendStaticCases(allocator, &cases, &glue_cases, filters, include_llvm);
         try appendGlueRuntimeCases(allocator, &cases, filters, glue_options);
     }
     if (suites.includes(.subcommands)) {
-        try appendStaticCases(allocator, &cases, &subcommand_cases, filters);
+        try appendStaticCases(allocator, &cases, &subcommand_cases, filters, include_llvm);
     }
 
     return try cases.toOwnedSlice(allocator);
@@ -649,8 +649,10 @@ fn appendStaticCases(
     cases: *std.ArrayListUnmanaged(CliCase),
     source: []const CliCase,
     filters: []const []const u8,
+    include_llvm: bool,
 ) CliRunnerError!void {
     for (source) |source_case| {
+        if (!include_llvm and (source_case.backend == .size or source_case.backend == .speed)) continue;
         if (!matchesFilters(source_case, filters)) continue;
         var case = source_case;
         case.id = cases.items.len;
@@ -13372,5 +13374,26 @@ pub fn main(init: std.process.Init) CliRunnerError!void {
             r.status == .crash or
             r.status == .timeout or
             r.status == .infra_error) std.process.exit(1);
+    }
+}
+
+test "static CLI cases honor LLVM availability before name filters" {
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena.deinit();
+    var suites = SuiteSelection{};
+    suites.add(.subcommands);
+    for ([_]bool{ false, true }) |include_llvm| {
+        const cases = try buildCases(arena.allocator(), &.{"issue 11563:"}, include_llvm, suites, .{}, null);
+        var speed_count: usize = 0;
+        var other_count: usize = 0;
+        for (cases) |case| {
+            if (case.backend == .speed) {
+                speed_count += 1;
+            } else {
+                other_count += 1;
+            }
+        }
+        try std.testing.expectEqual(@as(usize, @intFromBool(include_llvm)), speed_count);
+        try std.testing.expectEqual(@as(usize, 3), other_count);
     }
 }
