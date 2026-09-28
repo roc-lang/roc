@@ -14761,11 +14761,15 @@ uniqueness analysis answers it.
 
 Every such read is a candidate birth. Alongside the born bit and its parameter
 conditions, the settlement carries each local's *origins*: the candidates its
-born value derives from, flowing over the same pure aliases, join edges and
-returned-argument call edges the birth flows over. A value that would carry an
-origin into a field store, a per-field call edge or a return is not born
-there instead: origins do not leave the procedure that read the value, and a
-callee or a container never learns of a candidate. A candidate is *needed*
+born value derives from, flowing over the same pure aliases, join edges,
+field stores and takes, and call edges the birth flows over; a container
+carries origins per stored field, alongside the field's condition, and a
+callee's conditional-return row carries the caller's argument origins into
+the part of the result it names, so a table handed to a helper and re-bound
+from its returned record keeps its origin around the loop. Origins do not
+leave the procedure that read the value: a returned value or field that
+derives from a candidate is not a unique return, since a callee never learns
+of a candidate and the caller cannot see which form the read takes. A candidate is *needed*
 when a value derived from it meets a runtime uniqueness check its birth
 answers—an argument position an operation may check, or an argument passed to
 a callee position the callee's seed mask names, which a variant would seed—
