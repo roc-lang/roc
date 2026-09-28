@@ -8532,46 +8532,63 @@ fn mkListContent(self: *Self, elem_var: Var) Allocator.Error!Content {
 
 /// Instantiate the builtin Iter type declaration and bind its item parameter.
 fn mkIterVar(self: *Self, item_var: Var, env: *Env, region: Region) Allocator.Error!Var {
+    return self.mkForLoopSequenceVar(.iter, item_var, env, region);
+}
+
+/// Instantiate the builtin sequence type a `for` loop of this kind pulls from
+/// (`Iter` for `for`, `Stream` for `for!`) and bind its item parameter.
+fn mkForLoopSequenceVar(self: *Self, kind: CIR.ForKind, item_var: Var, env: *Env, region: Region) Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const iter_decl_var = if (self.builtin_ctx.builtin_module) |builtin_env| blk: {
+    const type_name = switch (kind) {
+        .iter => "Builtin.Iter",
+        .stream => "Builtin.Stream",
+    };
+    const decl_var = if (self.builtin_ctx.builtin_module) |builtin_env| blk: {
         const indices = self.builtin_ctx.builtin_indices orelse {
             if (builtin.mode == .Debug) {
                 std.debug.panic("type checker invariant violated: builtin module env present without builtin indices", .{});
             }
             unreachable;
         };
-        const copied_var = try self.copyVar(ModuleEnv.varFrom(indices.iter_type), builtin_env, region);
-        break :blk copied_var;
+        const type_stmt = switch (kind) {
+            .iter => indices.iter_type,
+            .stream => indices.stream_type,
+        };
+        break :blk try self.copyVar(ModuleEnv.varFrom(type_stmt), builtin_env, region);
     } else blk: {
-        const iter_stmt_idx = self.findLocalTypeDeclByName(self.cir.idents.builtin_iter) orelse {
+        const type_ident = switch (kind) {
+            .iter => self.cir.idents.builtin_iter,
+            .stream => self.cir.idents.builtin_stream,
+        };
+        const stmt_idx = self.findLocalTypeDeclByName(type_ident) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("type checker invariant violated: Builtin.Iter declaration not found while checking Builtin", .{});
+                std.debug.panic("type checker invariant violated: {s} declaration not found while checking Builtin", .{type_name});
             }
             unreachable;
         };
-        break :blk ModuleEnv.varFrom(iter_stmt_idx);
+        break :blk ModuleEnv.varFrom(stmt_idx);
     };
 
-    const iter_var = try self.instantiateVar(iter_decl_var, env, .{ .explicit = region }, .none);
-    const iter_content = self.types.resolveVar(iter_var).desc.content;
-    const nominal = iter_content.unwrapNominalType() orelse {
+    const sequence_var = try self.instantiateVar(decl_var, env, .{ .explicit = region }, .none);
+    const sequence_content = self.types.resolveVar(sequence_var).desc.content;
+    const nominal = sequence_content.unwrapNominalType() orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("type checker invariant violated: Builtin.Iter declaration did not instantiate to a nominal type", .{});
+            std.debug.panic("type checker invariant violated: {s} declaration did not instantiate to a nominal type", .{type_name});
         }
         unreachable;
     };
     const args = self.types.sliceNominalArgs(nominal);
     if (args.len != 1) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("type checker invariant violated: Builtin.Iter expected one type argument, found {d}", .{args.len});
+            std.debug.panic("type checker invariant violated: {s} expected one type argument, found {d}", .{ type_name, args.len });
         }
         unreachable;
     }
 
     _ = try self.unify(args[0], item_var, env);
-    return iter_var;
+    return sequence_var;
 }
 
 /// Instantiate the builtin Num.Range type declaration and bind its numeric parameter.
@@ -23685,6 +23702,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
         .e_for => |for_expr| {
             self.markCurrentHoistObservableEffect();
             does_fx = try self.checkIteratorForLoop(
+                for_expr.kind,
                 ModuleEnv.nodeIdxFrom(expr_idx),
                 .{ .expr_idx = expr_idx, .expr_var = expr_var },
                 for_expr.patt,
@@ -25145,6 +25163,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 const for_region = self.cir.store.getStatementRegion(stmt_idx);
                 const for_expected = if (blocks_later_hoists) base_statement_expected else statement_expected;
                 does_fx = try self.checkIteratorForLoop(
+                    for_stmt.kind,
                     ModuleEnv.nodeIdxFrom(stmt_idx),
                     null,
                     for_stmt.patt,
@@ -27271,6 +27290,7 @@ const IteratorLoopExpr = struct {
 
 fn checkIteratorForLoop(
     self: *Self,
+    kind: CIR.ForKind,
     loop_node: CIR.Node.Idx,
     loop_expr: ?IteratorLoopExpr,
     pattern: CIR.Pattern.Idx,
@@ -27298,8 +27318,11 @@ fn checkIteratorForLoop(
         try self.retireCallLikeExprWithErroneousOperands(expr.expr_idx, expr.expr_var, &.{iterable})
     else
         self.callLikeOperandsContainErroneousValue(&.{iterable});
-    const iterator_var = try self.mkIterVar(item_var, env, iterable_region);
-    const iter_method = try @constCast(self.cir).insertIdent(base.Ident.for_text("iter"));
+    const iterator_var = try self.mkForLoopSequenceVar(kind, item_var, env, iterable_region);
+    const iter_method = try @constCast(self.cir).insertIdent(base.Ident.for_text(switch (kind) {
+        .iter => "iter",
+        .stream => "stream",
+    }));
     const iter_fn_var = if (iterable_is_erroneous)
         try self.mkRejectedSyntheticReceiverDispatchFn(iterable_var, &.{}, iterator_var, env, iterable_region)
     else
@@ -27314,7 +27337,10 @@ fn checkIteratorForLoop(
 
     const step = try self.mkIteratorStepContent(item_var, iterator_var, env);
     const step_var = try self.freshFromContent(step.content, env, loop_region);
-    const next_method = try @constCast(self.cir).insertIdent(base.Ident.for_text("next"));
+    const next_method = try @constCast(self.cir).insertIdent(base.Ident.for_text(switch (kind) {
+        .iter => "next",
+        .stream => "next!",
+    }));
     const next_fn_var = if (iterable_is_erroneous)
         try self.mkRejectedSyntheticReceiverDispatchFn(iterator_var, &.{}, step_var, env, loop_region)
     else
@@ -27335,11 +27361,17 @@ fn checkIteratorForLoop(
         step_var,
         iter_fn_var,
         next_fn_var,
+        iter_method,
+        next_method,
         step.topology,
     );
 
     does_fx = try self.checkExpr(body, env, child_expected.suppressHoistSelection()) or does_fx;
-    return does_fx;
+    return switch (kind) {
+        .iter => does_fx,
+        // Every `for!` pulls its items with the effectful `next!`.
+        .stream => true,
+    };
 }
 
 /// Relate a lambda's parameter vars to the function type a call expects in
