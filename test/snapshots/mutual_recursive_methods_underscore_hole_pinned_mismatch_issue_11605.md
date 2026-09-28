@@ -32,7 +32,7 @@ TYPE MISMATCH - mutual_recursive_methods_underscore_hole_pinned_mismatch_issue_1
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 16 12) (end 16 43))
+		(region (start 16 34) (end 16 39))
 		(headline
 			(reflow "The")
 			(reflow " ")

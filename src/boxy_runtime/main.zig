@@ -215,7 +215,6 @@ comptime {
         "roc_boxy_adapt",
         "roc_boxy_tag",
         "roc_boxy_tag_payload",
-        "roc_boxy_eq",
         "roc_boxy_drop",
         "roc_boxy_tag_match",
         "roc_boxy_desc_copy",

@@ -242,9 +242,12 @@ pub const Constants = struct {
     ///      named by the `.malformed` payload.
     /// 110: Expect roots reaching checked errors are ineligible for execution,
     ///      including errors in referenced procedures and constants.
-    /// 111: Derived-method markers record their owner type declaration, and a
+    /// 111: Checked type keys refer to each context-free subtree by its own
+    ///      key, use one-byte tags and varint integers, and a synthetic
+    ///      function over composed children shares its source key.
+    /// 112: Derived-method markers record their owner type declaration, and a
     ///      type-rooted dispatch call can dispatch on an explicit type var.
-    pub const CACHE_VERSION = 111;
+    pub const CACHE_VERSION = 112;
 };
 
 /// Configuration for the Roc cache system.

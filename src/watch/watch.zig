@@ -5,6 +5,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const build_options = @import("build_options");
+const Inputs = @import("Inputs.zig");
 
 // win32.OVERLAPPED and FILE_NOTIFY_INFORMATION were removed in Zig 0.16.
 // Define the layouts we need locally; these are only referenced on Windows.
@@ -25,6 +26,18 @@ const win32 = struct {
         },
         hEvent: ?HANDLE,
     };
+
+    extern "kernel32" fn GetOverlappedResult(
+        hFile: HANDLE,
+        lpOverlapped: *OVERLAPPED,
+        lpNumberOfBytesTransferred: *DWORD,
+        bWait: std.os.windows.BOOL,
+    ) callconv(.winapi) std.os.windows.BOOL;
+
+    extern "kernel32" fn CancelIoEx(
+        hFile: HANDLE,
+        lpOverlapped: *OVERLAPPED,
+    ) callconv(.winapi) std.os.windows.BOOL;
 
     const FILE_NOTIFY_INFORMATION = extern struct {
         NextEntryOffset: DWORD,
@@ -242,6 +255,8 @@ fn getKCFRunLoopDefaultMode() CFStringRef {
 /// Event triggered when a watched file changes
 pub const WatchEvent = struct {
     path: []const u8,
+    /// Coverage may have changed, or the backend lost individual events.
+    rescan: bool = false,
 };
 
 /// Callback function type for handling file change events
@@ -306,7 +321,7 @@ const watcher_os: WatcherOs = switch (builtin.os.tag) {
 };
 
 /// High-performance filesystem watcher for .roc files
-/// Monitors directories recursively and invokes callbacks on file changes
+/// Supports recursive directory watching and exact compiler input coverage.
 pub const Watcher = struct {
     allocator: std.mem.Allocator,
     std_io: std.Io,
@@ -315,6 +330,11 @@ pub const Watcher = struct {
     callback_with_context: ?WatchCallbackWithContext,
     callback_context: ?*anyopaque,
     event_filter: EventFilter,
+    recursive: bool,
+    input_plan: ?Inputs = null,
+    dirty_inputs: []std.atomic.Value(bool) = &.{},
+    needs_refresh: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    backend_failed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     should_stop: std.atomic.Value(bool),
     is_ready: std.atomic.Value(bool),
     startup_failed: std.atomic.Value(bool),
@@ -330,12 +350,13 @@ pub const Watcher = struct {
     const MacOSData = struct {
         stream: ?FSEventStreamRef,
         run_loop: ?CFRunLoopRef,
+        exact: KqueueData,
     };
 
     const LinuxData = struct {
         inotify_fd: i32,
         watch_descriptors: std.array_list.Managed(WatchDescriptor),
-        path_cache: std.StringHashMap([]const u8),
+        descriptor_indices: std.AutoHashMap(i32, std.ArrayList(usize)),
 
         const WatchDescriptor = struct {
             wd: i32,
@@ -356,6 +377,8 @@ pub const Watcher = struct {
             fd: i32,
             path: []const u8,
             is_dir: bool,
+            mtime: i96 = 0,
+            ctime: i96 = 0,
         };
     };
 
@@ -366,6 +389,7 @@ pub const Watcher = struct {
 
         const OverlappedData = struct {
             overlapped: win32.OVERLAPPED,
+            read_pending: bool = false,
             buffer: []align(@alignOf(win32.FILE_NOTIFY_INFORMATION)) u8,
             path: []const u8,
         };
@@ -376,11 +400,12 @@ pub const Watcher = struct {
         return initWithFilter(allocator, std_io, paths, .{
             .callback = callback,
             .event_filter = .roc_files,
+            .recursive = true,
         });
     }
 
-    /// Initialize a file watcher that reports every file event under `paths`.
-    /// This is intended for callers that perform their own exact path filtering.
+    /// Report immediate entries of these directories, without traversing their
+    /// subdirectories. Compiler consumers should use initInputs instead.
     pub fn initAllFiles(
         allocator: std.mem.Allocator,
         std_io: std.Io,
@@ -395,11 +420,59 @@ pub const Watcher = struct {
         });
     }
 
+    /// Watch explicit files, including missing files and symlink targets.
+    /// Directory coverage and event routing derive exclusively from these paths.
+    pub fn initInputs(
+        allocator: Allocator,
+        io: std.Io,
+        paths: []const []const u8,
+        context: ?*anyopaque,
+        callback: WatchCallbackWithContext,
+    ) Inputs.Error!*Watcher {
+        const self = try initAllFiles(allocator, io, paths, context, callback);
+        errdefer self.deinit();
+        self.input_plan = try Inputs.init(allocator, io, paths);
+        self.dirty_inputs = try allocator.alloc(std.atomic.Value(bool), paths.len);
+        for (self.dirty_inputs) |*dirty| dirty.* = std.atomic.Value(bool).init(false);
+        return self;
+    }
+
+    pub fn takeInputChange(self: *Watcher, index: usize) bool {
+        return self.dirty_inputs[index].swap(false, .seq_cst);
+    }
+
+    pub fn takeCoverageChange(self: *Watcher) bool {
+        return self.needs_refresh.swap(false, .seq_cst);
+    }
+
+    pub fn hasBackendFailed(self: *Watcher) bool {
+        return self.backend_failed.load(.seq_cst);
+    }
+
+    fn failBackend(self: *Watcher) void {
+        self.backend_failed.store(true, .seq_cst);
+        self.emitEvent(.{ .path = "", .rescan = true });
+        self.should_stop.store(true, .seq_cst);
+        self.signalWindowsStopEvent();
+    }
+
+    fn directoryPaths(self: *Watcher) Allocator.Error![]const []const u8 {
+        var paths: std.ArrayList([]const u8) = .empty;
+        errdefer paths.deinit(self.allocator);
+        if (self.input_plan) |*plan| {
+            for (plan.nodes.keys(), plan.nodes.values()) |path, node| {
+                if (node.kind == .directory) try paths.append(self.allocator, path);
+            }
+        } else try paths.appendSlice(self.allocator, self.paths);
+        return paths.toOwnedSlice(self.allocator);
+    }
+
     const InitOptions = struct {
         callback: ?WatchCallback = null,
         callback_with_context: ?WatchCallbackWithContext = null,
         callback_context: ?*anyopaque = null,
         event_filter: EventFilter,
+        recursive: bool = false,
     };
 
     fn initWithFilter(
@@ -414,8 +487,11 @@ pub const Watcher = struct {
         var paths_copy = try allocator.alloc([]const u8, paths.len);
         errdefer allocator.free(paths_copy);
 
+        var copied: usize = 0;
+        errdefer for (paths_copy[0..copied]) |path| allocator.free(path);
         for (paths, 0..) |path, i| {
             paths_copy[i] = try allocator.dupe(u8, path);
+            copied += 1;
         }
 
         watcher.* = .{
@@ -426,6 +502,7 @@ pub const Watcher = struct {
             .callback_with_context = options.callback_with_context,
             .callback_context = options.callback_context,
             .event_filter = options.event_filter,
+            .recursive = options.recursive,
             .should_stop = std.atomic.Value(bool).init(false),
             .is_ready = std.atomic.Value(bool).init(false),
             .startup_failed = std.atomic.Value(bool).init(false),
@@ -434,11 +511,12 @@ pub const Watcher = struct {
                 .macos => MacOSData{
                     .stream = null,
                     .run_loop = null,
+                    .exact = .{ .kq = -1, .watches = std.array_list.Managed(KqueueData.VnodeWatch).init(allocator) },
                 },
                 .linux => LinuxData{
                     .inotify_fd = -1,
                     .watch_descriptors = std.array_list.Managed(LinuxData.WatchDescriptor).init(allocator),
-                    .path_cache = std.StringHashMap([]const u8).init(allocator),
+                    .descriptor_indices = std.AutoHashMap(i32, std.ArrayList(usize)).init(allocator),
                 },
                 .windows => WindowsData{
                     .handles = std.array_list.Managed(std.os.windows.HANDLE).init(allocator),
@@ -456,19 +534,46 @@ pub const Watcher = struct {
     }
 
     fn shouldEmitPath(self: *Watcher, path: []const u8, is_dir: bool) bool {
-        if (is_dir) return false;
         return switch (self.event_filter) {
-            .roc_files => std.mem.endsWith(u8, path, ".roc"),
+            .roc_files => !is_dir and std.mem.endsWith(u8, path, ".roc"),
             .all_files => true,
         };
     }
 
     fn emitEvent(self: *Watcher, event: WatchEvent) void {
+        if (self.input_plan) |*plan| {
+            if (event.path.len == 0) {
+                for (self.dirty_inputs) |*dirty| dirty.store(true, .seq_cst);
+                self.needs_refresh.store(true, .seq_cst);
+            } else {
+                if (builtin.os.tag == .windows) {
+                    const indices = plan.windows_names.get(event.path) orelse return;
+                    for (indices.items) |index| self.markInputNode(plan.nodes.values()[index], event.rescan);
+                } else {
+                    const node = plan.nodes.get(event.path) orelse return;
+                    self.markInputNode(node, event.rescan);
+                }
+            }
+        }
         if (self.callback_with_context) |callback| {
             callback(self.callback_context, event);
         } else if (self.callback) |callback| {
             callback(event);
         }
+    }
+
+    fn markInputNode(self: *Watcher, node: Inputs.Node, rescan: bool) void {
+        for (node.inputs.items) |index| self.dirty_inputs[index].store(true, .seq_cst);
+        if (node.topology or rescan) self.needs_refresh.store(true, .seq_cst);
+    }
+
+    fn linuxCoverageChanged(self: *Watcher, path: []const u8, mask: u32) bool {
+        if (mask & (std.os.linux.IN.CREATE | std.os.linux.IN.DELETE | std.os.linux.IN.MOVED_FROM | std.os.linux.IN.MOVED_TO |
+            std.os.linux.IN.DELETE_SELF | std.os.linux.IN.MOVE_SELF | std.os.linux.IN.IGNORED | std.os.linux.IN.UNMOUNT) != 0) return true;
+        if (mask & std.os.linux.IN.ATTRIB != 0) {
+            if (self.input_plan) |*plan| return plan.entryChanged(path);
+        }
+        return false;
     }
 
     fn markReady(self: *Watcher) void {
@@ -482,6 +587,8 @@ pub const Watcher = struct {
     /// Clean up all resources
     pub fn deinit(self: *Watcher) void {
         self.stop();
+        if (self.input_plan) |*plan| plan.deinit();
+        self.allocator.free(self.dirty_inputs);
 
         for (self.paths) |path| {
             self.allocator.free(path);
@@ -489,19 +596,16 @@ pub const Watcher = struct {
         self.allocator.free(self.paths);
 
         switch (watcher_os) {
-            .macos => {},
+            .macos => self.impl.exact.watches.deinit(),
             .linux => {
                 for (self.impl.watch_descriptors.items) |wd| {
                     self.allocator.free(wd.path);
                 }
                 self.impl.watch_descriptors.deinit();
 
-                var it = self.impl.path_cache.iterator();
-                while (it.next()) |entry| {
-                    self.allocator.free(entry.key_ptr.*);
-                    self.allocator.free(entry.value_ptr.*);
-                }
-                self.impl.path_cache.deinit();
+                var it = self.impl.descriptor_indices.valueIterator();
+                while (it.next()) |indices| indices.deinit(self.allocator);
+                self.impl.descriptor_indices.deinit();
             },
             .windows => {
                 for (self.impl.overlapped_data.items) |*data| {
@@ -516,7 +620,7 @@ pub const Watcher = struct {
             },
             .kqueue => {
                 // stop() already closed the descriptors and emptied the list.
-                self.impl.watches.deinit();
+                self.kqueueData().watches.deinit();
             },
         }
 
@@ -525,18 +629,40 @@ pub const Watcher = struct {
 
     /// Start watching for file changes
     pub fn start(self: *Watcher) (std.Thread.SpawnError || error{ AlreadyStarted, WatchBackendFailed })!void {
+        while (true) {
+            try self.startOnce();
+            if (self.input_plan) |*plan| {
+                var current = Inputs.init(self.allocator, self.std_io, self.paths) catch |err| {
+                    self.stop();
+                    return err;
+                };
+                if (!plan.eql(&current)) {
+                    self.stop();
+                    plan.deinit();
+                    plan.* = current;
+                    continue;
+                }
+                current.deinit();
+            }
+            return;
+        }
+    }
+
+    fn startOnce(self: *Watcher) (std.Thread.SpawnError || error{ AlreadyStarted, WatchBackendFailed })!void {
         if (self.thread != null) return error.AlreadyStarted;
         self.should_stop.store(false, .seq_cst);
         self.is_ready.store(false, .seq_cst);
         self.startup_failed.store(false, .seq_cst);
+        self.backend_failed.store(false, .seq_cst);
 
         self.thread = try std.Thread.spawn(.{}, watchLoop, .{self});
 
         // Wait for the watcher to be ready
         while (!self.is_ready.load(.seq_cst)) {
             if (self.startup_failed.load(.seq_cst)) {
-                self.thread.?.join();
-                self.thread = null;
+                // Release partial registrations, including any submitted reads,
+                // before a caller can retry startup and grow the arrays again.
+                self.stop();
                 return error.WatchBackendFailed;
             }
             std.Thread.yield() catch {};
@@ -561,6 +687,11 @@ pub const Watcher = struct {
 
         switch (watcher_os) {
             .macos => {
+                if (self.impl.exact.kq >= 0) {
+                    _ = std.c.close(self.impl.exact.kq);
+                    self.impl.exact.kq = -1;
+                    self.clearKqueueWatchData();
+                }
                 if (self.impl.stream) |stream| {
                     FSEventStreamStop(stream);
                     if (self.impl.run_loop) |rl| {
@@ -586,8 +717,10 @@ pub const Watcher = struct {
                     self.impl.stop_event = null;
                 }
 
-                // Close directory handles and overlapped events
-                for (self.impl.handles.items) |handle| {
+                // Shards have joined, so no thread can rearm these reads. Keep
+                // their storage and events alive until cancellation completes.
+                for (self.impl.handles.items, 0..) |handle, index| {
+                    self.cancelWindowsRead(index);
                     _ = std.os.windows.CloseHandle(handle);
                 }
                 self.impl.handles.clearRetainingCapacity();
@@ -603,9 +736,9 @@ pub const Watcher = struct {
                 self.impl.overlapped_data.clearRetainingCapacity();
             },
             .kqueue => {
-                if (self.impl.kq >= 0) {
-                    const kq = self.impl.kq;
-                    self.impl.kq = -1;
+                if (self.kqueueData().kq >= 0) {
+                    const kq = self.kqueueData().kq;
+                    self.kqueueData().kq = -1;
                     _ = std.c.close(kq);
                 }
                 self.clearKqueueWatchData();
@@ -615,7 +748,7 @@ pub const Watcher = struct {
 
     fn watchLoop(self: *Watcher) void {
         switch (watcher_os) {
-            .macos => self.watchLoopMacOS(),
+            .macos => if (self.input_plan != null and !use_stubs) self.watchLoopKqueue() else self.watchLoopMacOS(),
             .linux => self.watchLoopLinux(),
             .windows => self.watchLoopWindows(),
             .kqueue => self.watchLoopKqueue(),
@@ -643,15 +776,20 @@ pub const Watcher = struct {
             }
             return;
         }
+        const watch_paths = self.directoryPaths() catch {
+            self.markStartupFailed();
+            return;
+        };
+        defer self.allocator.free(watch_paths);
         // Create CFString paths
-        var cf_strings = self.allocator.alloc(CFStringRef, self.paths.len) catch {
+        var cf_strings = self.allocator.alloc(CFStringRef, watch_paths.len) catch {
             std.log.warn("Failed to allocate CFString array", .{});
             self.markStartupFailed();
             return;
         };
         defer self.allocator.free(cf_strings);
 
-        for (self.paths, 0..) |path, i| {
+        for (watch_paths, 0..) |path, i| {
             const path_z = self.allocator.dupeZ(u8, path) catch {
                 std.log.warn("Failed to create null-terminated path", .{});
                 self.markStartupFailed();
@@ -754,7 +892,7 @@ pub const Watcher = struct {
         clientCallBackInfo: ?*anyopaque,
         numEvents: usize,
         eventPaths: *anyopaque,
-        _: [*]const FSEventStreamEventFlags,
+        flags: [*]const FSEventStreamEventFlags,
         _: [*]const FSEventStreamEventId,
     ) callconv(.c) void {
         if (clientCallBackInfo == null) return;
@@ -773,11 +911,17 @@ pub const Watcher = struct {
         const paths = @as([*][*:0]const u8, @ptrCast(@alignCast(eventPaths)));
 
         for (0..numEvents) |i| {
+            // MustScanSubDirs, UserDropped, KernelDropped, EventIdsWrapped,
+            // RootChanged: exact event names are no longer sufficient.
+            if (flags[i] & 0x2f != 0) {
+                self.emitEvent(.{ .path = "", .rescan = true });
+                continue;
+            }
             const path = paths[i];
             const path_len = std.mem.len(path);
 
             if (self.shouldEmitPath(path[0..path_len], false)) {
-                const event = WatchEvent{ .path = path[0..path_len] };
+                const event = WatchEvent{ .path = path[0..path_len], .rescan = flags[i] & (0x100 | 0x200 | 0x800) != 0 };
                 self.emitEvent(event);
             }
         }
@@ -793,13 +937,31 @@ pub const Watcher = struct {
         }
         self.impl.inotify_fd = @as(i32, @intCast(init_result));
 
+        const watch_paths = self.directoryPaths() catch {
+            self.markStartupFailed();
+            return;
+        };
+        defer self.allocator.free(watch_paths);
         // Add watches
-        for (self.paths) |path| {
+        for (watch_paths) |path| {
             self.addWatchRecursiveLinux(path) catch |err| {
                 std.log.warn("Failed to watch {s}: {}", .{ path, err });
                 self.markStartupFailed();
                 return;
             };
+        }
+        if (self.input_plan) |*plan| {
+            // Directory events alone do not cover writes through another hard
+            // link. Observe each explicit file inode as well as its directory
+            // entry; replacement is still covered by the parent registration.
+            for (plan.nodes.keys(), plan.nodes.values()) |path, node| {
+                if (node.kind != .file) continue;
+                self.addWatchRecursiveLinux(path) catch |err| {
+                    std.log.warn("Failed to watch input {s}: {}", .{ path, err });
+                    self.markStartupFailed();
+                    return;
+                };
+            }
         }
 
         // Signal that we're ready to receive events
@@ -814,7 +976,8 @@ pub const Watcher = struct {
         while (!self.should_stop.load(.seq_cst)) {
             const poll_result = std.posix.poll(&poll_fds, 50) catch |err| {
                 std.log.err("Poll error: {}", .{err});
-                continue;
+                self.failBackend();
+                return;
             };
 
             if (poll_result == 0) continue;
@@ -833,7 +996,8 @@ pub const Watcher = struct {
                 error.Canceled,
                 => {
                     std.log.err("Read error: {}", .{err});
-                    continue;
+                    self.failBackend();
+                    return;
                 },
             };
 
@@ -847,12 +1011,9 @@ pub const Watcher = struct {
         }
         self.impl.watch_descriptors.clearRetainingCapacity();
 
-        var cache_iter = self.impl.path_cache.iterator();
-        while (cache_iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            self.allocator.free(entry.value_ptr.*);
-        }
-        self.impl.path_cache.clearRetainingCapacity();
+        var indices_iter = self.impl.descriptor_indices.valueIterator();
+        while (indices_iter.next()) |indices| indices.deinit(self.allocator);
+        self.impl.descriptor_indices.clearRetainingCapacity();
     }
 
     fn processLinuxEvents(self: *Watcher, buffer: []const u8) void {
@@ -860,6 +1021,39 @@ pub const Watcher = struct {
         while (offset < buffer.len) {
             const event = @as(*const std.os.linux.inotify_event, @ptrCast(@alignCast(&buffer[offset])));
             const event_size = @sizeOf(std.os.linux.inotify_event) + event.len;
+
+            if (!self.recursive) {
+                if (event.mask & std.os.linux.IN.Q_OVERFLOW != 0) {
+                    self.emitEvent(.{ .path = "", .rescan = true });
+                } else {
+                    const indices = self.impl.descriptor_indices.get(event.wd) orelse {
+                        offset += event_size;
+                        continue;
+                    };
+                    for (indices.items) |index| {
+                        const wd = self.impl.watch_descriptors.items[index];
+                        if (event.len == 0) {
+                            self.emitEvent(.{
+                                .path = wd.path,
+                                .rescan = self.linuxCoverageChanged(wd.path, event.mask),
+                            });
+                        } else {
+                            const name = std.mem.sliceTo(buffer[offset + @sizeOf(std.os.linux.inotify_event) .. offset + event_size], 0);
+                            var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+                            const path = std.fmt.bufPrint(&path_buffer, "{s}{s}{s}", .{ wd.path, if (std.mem.endsWith(u8, wd.path, "/")) "" else "/", name }) catch {
+                                self.emitEvent(.{ .path = "", .rescan = true });
+                                continue;
+                            };
+                            self.emitEvent(.{
+                                .path = path,
+                                .rescan = self.linuxCoverageChanged(path, event.mask),
+                            });
+                        }
+                    }
+                }
+                offset += event_size;
+                continue;
+            }
 
             if (event.len > 0) {
                 const name_bytes = buffer[offset + @sizeOf(std.os.linux.inotify_event) .. offset + event_size - 1];
@@ -926,7 +1120,8 @@ pub const Watcher = struct {
     fn addWatchRecursiveLinux(self: *Watcher, path: []const u8) (Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.Iterator.Error || error{InotifyAddWatchFailed})!void {
         const flags = std.os.linux.IN.CREATE | std.os.linux.IN.DELETE |
             std.os.linux.IN.MODIFY | std.os.linux.IN.MOVED_FROM |
-            std.os.linux.IN.MOVED_TO | std.os.linux.IN.CLOSE_WRITE;
+            std.os.linux.IN.MOVED_TO | std.os.linux.IN.CLOSE_WRITE |
+            std.os.linux.IN.ATTRIB | std.os.linux.IN.DELETE_SELF | std.os.linux.IN.MOVE_SELF;
 
         const path_z = try self.allocator.dupeZ(u8, path);
         defer self.allocator.free(path_z);
@@ -934,25 +1129,46 @@ pub const Watcher = struct {
         const add_result = std.os.linux.inotify_add_watch(self.impl.inotify_fd, path_z, flags);
         const add_errno = std.os.linux.errno(add_result);
         if (add_errno != .SUCCESS) {
+            // An ancestor watch covers changes racing plan registration. start()
+            // revalidates the plan after registration before exposing readiness.
+            if (self.input_plan != null and (add_errno == .NOENT or add_errno == .NOTDIR)) return;
+            if (add_errno == .ACCES) {
+                if (self.input_plan) |*plan| {
+                    // An unreadable file is still covered by its parent entry.
+                    // ATTRIB requests fresh coverage when its permissions change.
+                    if (plan.nodes.get(path).?.kind == .file) return;
+                }
+            }
+            if (add_errno == .NOSPC) {
+                std.log.warn("inotify watch registration failed for {s}: ENOSPC can mean the per-user inotify watch budget (fs.inotify.max_user_watches) is exhausted, or the kernel cannot allocate a watch", .{path});
+            }
             std.log.warn("inotify_add_watch failed: {}", .{add_errno});
             return error.InotifyAddWatchFailed;
         }
         const wd = @as(i32, @intCast(add_result));
 
-        for (self.impl.watch_descriptors.items) |existing| {
-            if (existing.wd == wd) return;
+        if (self.impl.descriptor_indices.get(wd)) |indices| {
+            for (indices.items) |index| {
+                if (std.mem.eql(u8, self.impl.watch_descriptors.items[index].path, path)) return;
+            }
         }
 
-        const path_copy = try self.allocator.dupe(u8, path);
-        errdefer self.allocator.free(path_copy);
+        {
+            const path_copy = try self.allocator.dupe(u8, path);
+            errdefer self.allocator.free(path_copy);
 
-        try self.impl.watch_descriptors.append(.{
-            .wd = wd,
-            .path = path_copy,
-        });
+            try self.impl.watch_descriptors.append(.{
+                .wd = wd,
+                .path = path_copy,
+            });
+            errdefer _ = self.impl.watch_descriptors.pop();
 
-        const wd_key = try std.fmt.allocPrint(self.allocator, "{d}", .{wd});
-        try self.impl.path_cache.put(wd_key, try self.allocator.dupe(u8, path));
+            const indices = try self.impl.descriptor_indices.getOrPut(wd);
+            if (!indices.found_existing) indices.value_ptr.* = .empty;
+            try indices.value_ptr.append(self.allocator, self.impl.watch_descriptors.items.len - 1);
+        }
+
+        if (!self.recursive) return;
 
         var dir = try std.Io.Dir.openDirAbsolute(self.std_io, path, .{ .iterate = true });
         defer dir.close(self.std_io);
@@ -967,6 +1183,10 @@ pub const Watcher = struct {
         }
     }
 
+    fn kqueueData(self: *Watcher) *KqueueData {
+        return if (watcher_os == .macos) &self.impl.exact else &self.impl;
+    }
+
     fn watchLoopKqueue(self: *Watcher) void {
         const kq = std.c.kqueue();
         if (kq < 0) {
@@ -974,14 +1194,29 @@ pub const Watcher = struct {
             self.markStartupFailed();
             return;
         }
-        self.impl.kq = kq;
+        self.kqueueData().kq = kq;
 
-        for (self.paths) |path| {
+        const watch_paths = self.directoryPaths() catch {
+            self.markStartupFailed();
+            return;
+        };
+        defer self.allocator.free(watch_paths);
+        for (watch_paths) |path| {
             self.addWatchRecursiveKqueue(path, .silent) catch |err| {
                 std.log.warn("Failed to watch {s}: {}", .{ path, err });
                 self.markStartupFailed();
                 return;
             };
+        }
+
+        if (self.input_plan) |*plan| {
+            for (plan.nodes.keys(), plan.nodes.values()) |path, node| {
+                if (node.kind != .file) continue;
+                self.registerKqueueWatch(path, false) catch {
+                    self.markStartupFailed();
+                    return;
+                };
+            }
         }
 
         // Signal that we're ready to receive events
@@ -997,7 +1232,8 @@ pub const Watcher = struct {
                 const err = std.posix.errno(count);
                 if (err == .INTR) continue;
                 std.log.err("kevent error: {}", .{err});
-                continue;
+                self.failBackend();
+                return;
             }
 
             for (events[0..@intCast(count)]) |event| {
@@ -1007,11 +1243,11 @@ pub const Watcher = struct {
     }
 
     fn clearKqueueWatchData(self: *Watcher) void {
-        for (self.impl.watches.items) |watch| {
+        for (self.kqueueData().watches.items) |watch| {
             _ = std.c.close(watch.fd);
             self.allocator.free(watch.path);
         }
-        self.impl.watches.clearRetainingCapacity();
+        self.kqueueData().watches.clearRetainingCapacity();
     }
 
     fn processKqueueEvent(self: *Watcher, event: *const std.c.Kevent) void {
@@ -1021,8 +1257,34 @@ pub const Watcher = struct {
         // Copied out because adding watches below can reallocate the list. The
         // path bytes themselves are separately allocated, so the slice stays
         // valid until this watch is removed.
-        const watch = self.impl.watches.items[index];
-        const gone = event.fflags & (std.c.NOTE.DELETE | std.c.NOTE.RENAME) != 0;
+        const watch = self.kqueueData().watches.items[index];
+        const gone = event.fflags & (std.c.NOTE.DELETE | std.c.NOTE.RENAME | std.c.NOTE.REVOKE) != 0;
+
+        if (!self.recursive) {
+            if (self.input_plan) |*plan| {
+                var metadata_changed = plan.entryChanged(watch.path);
+                if (!watch.is_dir) {
+                    if (std.Io.Dir.cwd().statFile(self.std_io, watch.path, .{})) |stat| {
+                        metadata_changed = metadata_changed or watch.mtime != stat.mtime.nanoseconds or watch.ctime != stat.ctime.nanoseconds;
+                        self.kqueueData().watches.items[index].mtime = stat.mtime.nanoseconds;
+                        self.kqueueData().watches.items[index].ctime = stat.ctime.nanoseconds;
+                    } else |_| metadata_changed = true;
+                }
+                const written = !watch.is_dir and event.fflags & (std.c.NOTE.WRITE | std.c.NOTE.EXTEND) != 0;
+                if (gone or written or metadata_changed) {
+                    self.emitEvent(.{ .path = watch.path, .rescan = watch.is_dir or gone });
+                }
+                if (watch.is_dir and !gone) {
+                    const node = plan.nodes.get(watch.path).?;
+                    for (node.children.items) |child| {
+                        const path = plan.nodes.keys()[child];
+                        if (plan.entryChanged(path)) self.emitEvent(.{ .path = path, .rescan = true });
+                    }
+                }
+            } else self.emitEvent(.{ .path = watch.path, .rescan = watch.is_dir or gone });
+            if (gone) self.removeKqueueWatch(fd);
+            return;
+        }
 
         if (watch.is_dir) {
             // A directory reported as written and removed in the same batch has
@@ -1104,6 +1366,7 @@ pub const Watcher = struct {
         mode: KqueueScanMode,
     ) (Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.Iterator.Error || error{ WatchOpenFailed, KeventFailed })!void {
         try self.registerKqueueWatch(path, true);
+        if (!self.recursive) return;
 
         var dir = try std.Io.Dir.openDirAbsolute(self.std_io, path, .{ .iterate = true });
         defer dir.close(self.std_io);
@@ -1142,10 +1405,12 @@ pub const Watcher = struct {
         const path_z = try self.allocator.dupeZ(u8, path);
         defer self.allocator.free(path_z);
 
+        var open_flags: std.posix.O = .{ .ACCMODE = .RDONLY, .CLOEXEC = true };
+        if (builtin.os.tag == .macos and self.input_plan != null) open_flags.EVTONLY = true;
         const fd = std.posix.openatZ(
             std.posix.AT.FDCWD,
             path_z,
-            .{ .ACCMODE = .RDONLY, .CLOEXEC = true },
+            open_flags,
             0,
         ) catch |err| switch (err) {
             // One descriptor per watched directory and per watched file is
@@ -1159,16 +1424,21 @@ pub const Watcher = struct {
                 );
                 return error.WatchOpenFailed;
             },
+            error.FileNotFound, error.NotDir => {
+                if (self.input_plan != null) return;
+                return error.WatchOpenFailed;
+            },
             error.AntivirusInterference,
             error.AccessDenied,
             error.PermissionDenied,
             error.SymLinkLoop,
-            error.FileNotFound,
             error.SystemResources,
+            error.NoDevice,
+            error.NetworkNotFound,
+            error.PipeBusy,
             error.FileTooBig,
             error.IsDir,
             error.NoSpaceLeft,
-            error.NotDir,
             error.PathAlreadyExists,
             error.ReadOnlyFileSystem,
             error.DeviceBusy,
@@ -1190,7 +1460,8 @@ pub const Watcher = struct {
         // file they report writes to its contents. NOTE.ATTRIB is deliberately
         // absent: it fires on atime updates, so reading a watched file in
         // response to an event would generate the next event.
-        const notes = std.c.NOTE.WRITE | std.c.NOTE.EXTEND | std.c.NOTE.DELETE | std.c.NOTE.RENAME;
+        const notes = std.c.NOTE.WRITE | std.c.NOTE.EXTEND | std.c.NOTE.DELETE | std.c.NOTE.RENAME | std.c.NOTE.REVOKE |
+            (if (self.input_plan != null) @as(u32, std.c.NOTE.ATTRIB) else 0);
 
         const change = std.c.Kevent{
             .ident = @intCast(fd),
@@ -1202,7 +1473,7 @@ pub const Watcher = struct {
         };
 
         var no_events: [0]std.c.Kevent = .{};
-        const rc = std.c.kevent(self.impl.kq, (&change)[0..1], 1, &no_events, 0, null);
+        const rc = std.c.kevent(self.kqueueData().kq, (&change)[0..1], 1, &no_events, 0, null);
         if (rc < 0) {
             std.log.warn("kevent registration failed for {s}: {}", .{ path, std.posix.errno(rc) });
             return error.KeventFailed;
@@ -1211,22 +1482,24 @@ pub const Watcher = struct {
         const path_copy = try self.allocator.dupe(u8, path);
         errdefer self.allocator.free(path_copy);
 
-        try self.impl.watches.append(.{
+        try self.kqueueData().watches.append(.{
             .fd = fd,
             .path = path_copy,
             .is_dir = is_dir,
+            .mtime = if (self.input_plan) |*plan| plan.nodes.get(path).?.mtime else 0,
+            .ctime = if (self.input_plan) |*plan| plan.nodes.get(path).?.ctime else 0,
         });
     }
 
     fn findKqueueWatch(self: *Watcher, fd: i32) ?usize {
-        for (self.impl.watches.items, 0..) |watch, i| {
+        for (self.kqueueData().watches.items, 0..) |watch, i| {
             if (watch.fd == fd) return i;
         }
         return null;
     }
 
     fn findKqueueWatchByPath(self: *Watcher, path: []const u8) ?usize {
-        for (self.impl.watches.items, 0..) |watch, i| {
+        for (self.kqueueData().watches.items, 0..) |watch, i| {
             if (std.mem.eql(u8, watch.path, path)) return i;
         }
         return null;
@@ -1244,8 +1517,8 @@ pub const Watcher = struct {
     /// comparisons read.
     fn removeKqueueWatchTree(self: *Watcher, dir_path: []const u8) void {
         var i: usize = 0;
-        while (i < self.impl.watches.items.len) {
-            const path = self.impl.watches.items[i].path;
+        while (i < self.kqueueData().watches.items.len) {
+            const path = self.kqueueData().watches.items[i].path;
             const under_dir = path.len > dir_path.len and
                 std.mem.startsWith(u8, path, dir_path) and
                 path[dir_path.len] == std.fs.path.sep;
@@ -1263,7 +1536,7 @@ pub const Watcher = struct {
     }
 
     fn removeKqueueWatchAt(self: *Watcher, index: usize) void {
-        const watch = self.impl.watches.swapRemove(index);
+        const watch = self.kqueueData().watches.swapRemove(index);
         _ = std.c.close(watch.fd);
         self.allocator.free(watch.path);
     }
@@ -1285,8 +1558,14 @@ pub const Watcher = struct {
             return;
         };
 
-        // Set up ReadDirectoryChangesW for each path
-        for (self.paths) |path| {
+        const watch_paths = self.directoryPaths() catch {
+            self.markStartupFailed();
+            return;
+        };
+        defer self.allocator.free(watch_paths);
+        // Finish growing the arrays before submitting any I/O: Windows retains
+        // pointers to the OVERLAPPED records until each read completes.
+        for (watch_paths) |path| {
             self.setupWindowsWatch(path) catch |err| {
                 std.log.warn("Failed to set up watch for {s}: {}", .{ path, err });
                 self.markStartupFailed();
@@ -1302,6 +1581,13 @@ pub const Watcher = struct {
         }
 
         const watched_count = self.impl.overlapped_data.items.len;
+        for (0..watched_count) |index| {
+            self.startWindowsRead(index) catch |err| {
+                std.log.warn("Failed to start directory read: {}", .{err});
+                self.markStartupFailed();
+                return;
+            };
+        }
         const shard_count = std.math.divCeil(usize, watched_count, windows_max_watched_handles_per_thread) catch {
             self.markStartupFailed();
             return;
@@ -1382,7 +1668,7 @@ pub const Watcher = struct {
         }
     }
 
-    fn setupWindowsWatch(self: *Watcher, path: []const u8) (Allocator.Error || error{ InvalidUtf8, FailedToOpenDirectory, FailedToCreateEvent, ReadDirectoryChangesFailed })!void {
+    fn setupWindowsWatch(self: *Watcher, path: []const u8) (Allocator.Error || error{ InvalidUtf8, FailedToOpenDirectory, FailedToCreateEvent })!void {
         // Convert path to wide string
         var path_w_buf: [std.os.windows.PATH_MAX_WIDE]u16 = undefined;
         const path_w_len = try std.unicode.utf8ToUtf16Le(path_w_buf[0..], path);
@@ -1420,8 +1706,12 @@ pub const Watcher = struct {
         );
 
         if (dir_handle == std.os.windows.INVALID_HANDLE_VALUE) {
+            const err = std.os.windows.GetLastError();
+            if (self.input_plan != null and (err == .FILE_NOT_FOUND or err == .PATH_NOT_FOUND)) return;
             return error.FailedToOpenDirectory;
         }
+
+        errdefer _ = std.os.windows.CloseHandle(dir_handle);
 
         // Create event for overlapped I/O
         const CreateEventW = struct {
@@ -1433,29 +1723,29 @@ pub const Watcher = struct {
             ) callconv(.winapi) ?std.os.windows.HANDLE;
         }.CreateEventW;
 
-        const event_handle = CreateEventW(null, std.os.windows.BOOL.TRUE, .FALSE, null) orelse {
-            _ = std.os.windows.CloseHandle(dir_handle);
-            return error.FailedToCreateEvent;
-        };
+        const event_handle = CreateEventW(null, std.os.windows.BOOL.TRUE, .FALSE, null) orelse return error.FailedToCreateEvent;
+        errdefer _ = std.os.windows.CloseHandle(event_handle);
 
         // Allocate buffer for ReadDirectoryChangesW
         const buffer_size = 4096;
         const buffer = try self.allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(win32.FILE_NOTIFY_INFORMATION)), buffer_size);
 
-        // Create overlapped data
+        errdefer self.allocator.free(buffer);
+        const owned_path = try self.allocator.dupe(u8, path);
+        errdefer self.allocator.free(owned_path);
+
+        // Reserve both slots before transferring ownership of the resources.
+        try self.impl.handles.ensureUnusedCapacity(1);
+        try self.impl.overlapped_data.ensureUnusedCapacity(1);
         var overlapped_data = WindowsData.OverlappedData{
             .overlapped = std.mem.zeroes(win32.OVERLAPPED),
             .buffer = buffer,
-            .path = try self.allocator.dupe(u8, path),
+            .path = owned_path,
         };
         overlapped_data.overlapped.hEvent = event_handle;
 
-        try self.impl.handles.append(dir_handle);
-        try self.impl.overlapped_data.append(overlapped_data);
-
-        // Start the first ReadDirectoryChangesW operation
-        // Both arrays should have the same length, use handles.len for consistency
-        try self.startWindowsRead(self.impl.handles.items.len - 1);
+        self.impl.handles.appendAssumeCapacity(dir_handle);
+        self.impl.overlapped_data.appendAssumeCapacity(overlapped_data);
     }
 
     fn startWindowsRead(self: *Watcher, index: usize) (Allocator.Error || error{ReadDirectoryChangesFailed})!void {
@@ -1476,17 +1766,20 @@ pub const Watcher = struct {
         const FILE_NOTIFY_CHANGE_DIR_NAME = 0x00000002;
         const FILE_NOTIFY_CHANGE_LAST_WRITE = 0x00000010;
         const FILE_NOTIFY_CHANGE_CREATION = 0x00000040;
+        const FILE_NOTIFY_CHANGE_ATTRIBUTES = 0x00000004;
+        const FILE_NOTIFY_CHANGE_SECURITY = 0x00000100;
 
         const notify_filter = FILE_NOTIFY_CHANGE_FILE_NAME |
             FILE_NOTIFY_CHANGE_DIR_NAME |
             FILE_NOTIFY_CHANGE_LAST_WRITE |
-            FILE_NOTIFY_CHANGE_CREATION;
+            FILE_NOTIFY_CHANGE_CREATION | FILE_NOTIFY_CHANGE_ATTRIBUTES | FILE_NOTIFY_CHANGE_SECURITY;
 
+        std.debug.assert(!self.impl.overlapped_data.items[index].read_pending);
         const result = ReadDirectoryChangesW(
             self.impl.handles.items[index],
             self.impl.overlapped_data.items[index].buffer.ptr,
             @intCast(self.impl.overlapped_data.items[index].buffer.len),
-            std.os.windows.BOOL.TRUE, // Watch subtree
+            if (self.recursive) std.os.windows.BOOL.TRUE else std.os.windows.BOOL.FALSE,
             notify_filter,
             null,
             &self.impl.overlapped_data.items[index].overlapped,
@@ -1498,44 +1791,68 @@ pub const Watcher = struct {
             std.log.err("ReadDirectoryChangesW failed with error: {}", .{err});
             return error.ReadDirectoryChangesFailed;
         }
+        self.impl.overlapped_data.items[index].read_pending = true;
+    }
+
+    fn cancelWindowsRead(self: *Watcher, index: usize) void {
+        const data = &self.impl.overlapped_data.items[index];
+        if (!data.read_pending) return;
+        const handle = self.impl.handles.items[index];
+        if (win32.CancelIoEx(handle, &data.overlapped) == .FALSE) {
+            const err = std.os.windows.GetLastError();
+            // Completion can race cancellation; we must still collect it.
+            if (err != .NOT_FOUND) std.log.err("CancelIoEx failed: {}", .{err});
+        }
+        var bytes_transferred: std.os.windows.DWORD = 0;
+        // CancelIoEx only requests cancellation. A blocking completion wait
+        // keeps both the OVERLAPPED and buffer alive until Windows releases them.
+        // Success, OPERATION_ABORTED, and other completed errors all retire I/O.
+        _ = win32.GetOverlappedResult(handle, &data.overlapped, &bytes_transferred, .TRUE);
+        data.read_pending = false;
     }
 
     fn processWindowsEvents(self: *Watcher, index: usize) Allocator.Error!void {
-        const GetOverlappedResult = struct {
-            extern "kernel32" fn GetOverlappedResult(
-                hFile: std.os.windows.HANDLE,
-                lpOverlapped: *win32.OVERLAPPED,
-                lpNumberOfBytesTransferred: *std.os.windows.DWORD,
-                bWait: std.os.windows.BOOL,
-            ) callconv(.winapi) std.os.windows.BOOL;
-        }.GetOverlappedResult;
-
         const ResetEvent = struct {
             extern "kernel32" fn ResetEvent(hEvent: std.os.windows.HANDLE) callconv(.winapi) std.os.windows.BOOL;
         }.ResetEvent;
 
         var bytes_transferred: std.os.windows.DWORD = 0;
-        const result = GetOverlappedResult(
+        const result = win32.GetOverlappedResult(
             self.impl.handles.items[index],
             &self.impl.overlapped_data.items[index].overlapped,
             &bytes_transferred,
             .FALSE,
         );
 
+        const completion_error = if (result == .FALSE) std.os.windows.GetLastError() else .SUCCESS;
+        // An incomplete poll does not consume the read or permit resetting its
+        // event, reusing its OVERLAPPED, or submitting another read.
+        if (completion_error == .IO_INCOMPLETE) return;
+        self.impl.overlapped_data.items[index].read_pending = false;
         if (result == .FALSE) {
-            std.log.err("GetOverlappedResult failed", .{});
-            return;
+            if (completion_error == .NOTIFY_ENUM_DIR) {
+                // Continue through reset/rearm with an empty completion, which
+                // requests reconciliation below.
+                bytes_transferred = 0;
+            } else {
+                if (self.should_stop.load(.seq_cst)) return;
+                std.log.err("GetOverlappedResult failed: {}", .{completion_error});
+                self.failBackend();
+                return;
+            }
         }
 
         // Reset the event for the next operation
         _ = ResetEvent(self.impl.overlapped_data.items[index].overlapped.hEvent.?);
 
-        // Process the file change notifications
+        // A zero-byte completion means the notification buffer overflowed.
+        if (bytes_transferred == 0) self.emitEvent(.{ .path = "", .rescan = true });
         self.parseWindowsFileNotifications(index, bytes_transferred);
 
         // Start the next ReadDirectoryChangesW operation
         self.startWindowsRead(index) catch |err| {
             std.log.err("Failed to restart ReadDirectoryChangesW: {}", .{err});
+            self.failBackend();
         };
     }
 
@@ -1561,18 +1878,15 @@ pub const Watcher = struct {
 
             if (self.shouldEmitPath(filename_utf8, false)) {
                 // Create full path
-                const full_path = std.fs.path.join(self.allocator, &.{ base_path, filename_utf8 }) catch |err| switch (err) {
-                    error.OutOfMemory => {
-                        std.log.err("Out of memory building path for changed file: {s}", .{filename_utf8});
-                        // Skip this file if we can't create the path
-                        if (info.NextEntryOffset == 0) break;
-                        offset += info.NextEntryOffset;
-                        continue;
-                    },
+                var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+                const full_path = std.fmt.bufPrint(&path_buffer, "{s}{s}{s}", .{ base_path, if (std.mem.endsWith(u8, base_path, "\\")) "" else "\\", filename_utf8 }) catch {
+                    self.emitEvent(.{ .path = "", .rescan = true });
+                    if (info.NextEntryOffset == 0) break;
+                    offset += info.NextEntryOffset;
+                    continue;
                 };
-                defer self.allocator.free(full_path);
 
-                const event = WatchEvent{ .path = full_path };
+                const event = WatchEvent{ .path = full_path, .rescan = info.Action != 3 };
                 self.emitEvent(event);
             }
 
@@ -1584,6 +1898,168 @@ pub const Watcher = struct {
 };
 
 // TESTS
+
+test "exact inputs bound registrations and route only explicit files" {
+    if (active_watcher_backend_is_stub) return error.SkipZigTest;
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "target/generated");
+    try tmp.dir.createDirPath(io, "unrelated/deep/tree");
+    try tmp.dir.writeFile(io, .{ .sub_path = "Main.roc", .data = "main" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "target/generated/asset.txt", .data = "asset" });
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(root);
+    const main = try std.fs.path.join(a, &.{ root, "Main.roc" });
+    defer a.free(main);
+    const asset = try std.fs.path.join(a, &.{ root, "target/generated/asset.txt" });
+    defer a.free(asset);
+    var count = std.atomic.Value(u32).init(0);
+    const cb = struct {
+        fn call(context: ?*anyopaque, _: WatchEvent) void {
+            const counter: *std.atomic.Value(u32) = @ptrCast(@alignCast(context.?));
+            _ = counter.fetchAdd(1, .seq_cst);
+        }
+    }.call;
+    const watcher = try Watcher.initInputs(a, io, &.{ main, asset }, &count, cb);
+    defer watcher.deinit();
+    try watcher.start();
+    if (builtin.os.tag == .linux) {
+        for (watcher.impl.watch_descriptors.items) |wd| {
+            try std.testing.expect(std.mem.find(u8, wd.path, "unrelated") == null);
+        }
+    }
+    // Deterministically verify routing independently of event scheduling.
+    const irrelevant = try std.fs.path.join(a, &.{ root, "other.roc" });
+    defer a.free(irrelevant);
+    watcher.emitEvent(.{ .path = irrelevant });
+    try std.testing.expect(!watcher.takeInputChange(0));
+    try std.testing.expect(!watcher.takeInputChange(1));
+    for (0..128) |i| {
+        var buffer: [64]u8 = undefined;
+        const directory = try std.fmt.bufPrint(&buffer, "unrelated/{d}/nested", .{i});
+        try tmp.dir.createDirPath(io, directory);
+    }
+    var expanded = try Inputs.init(a, io, &.{ main, asset });
+    defer expanded.deinit();
+    try std.testing.expect(watcher.input_plan.?.eql(&expanded));
+    try tmp.dir.writeFile(io, .{ .sub_path = "target/generated/asset.txt", .data = "changed" });
+    try waitForEvents(&count, 1, 5000, io);
+    try std.testing.expect(watcher.takeInputChange(1));
+    try std.testing.expect(!watcher.takeInputChange(0));
+}
+
+test "exact inputs track missing directory chains and symlink targets" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(root);
+    try tmp.dir.symLink(io, "generated/deep/file.txt", "asset", .{});
+    const asset = try std.fs.path.join(a, &.{ root, "asset" });
+    defer a.free(asset);
+    const generated = try std.fs.path.join(a, &.{ root, "generated" });
+    defer a.free(generated);
+    var initial = try Inputs.init(a, io, &.{asset});
+    defer initial.deinit();
+    try std.testing.expect(initial.nodes.contains(generated));
+    try std.testing.expect(initial.nodes.contains(asset));
+    try tmp.dir.createDirPath(io, "generated/deep");
+    var next = try Inputs.init(a, io, &.{asset});
+    defer next.deinit();
+    try std.testing.expect(!initial.eql(&next));
+    const target = try std.fs.path.join(a, &.{ root, "generated/deep/file.txt" });
+    defer a.free(target);
+    try std.testing.expect(next.nodes.contains(target));
+    // A symlink cycle is still covered at the entries that can repair it.
+    try tmp.dir.symLink(io, "loop", "loop", .{});
+    const loop = try std.fs.path.join(a, &.{ root, "loop" });
+    defer a.free(loop);
+    var cycle = try Inputs.init(a, io, &.{loop});
+    defer cycle.deinit();
+    try std.testing.expect(cycle.nodes.contains(loop));
+}
+
+test "exact inputs allocation failure releases partial plans" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const a = std.testing.allocator;
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", a);
+    defer a.free(root);
+    const path = try std.fs.path.join(a, &.{ root, "missing/deep/asset" });
+    defer a.free(path);
+    const exercise = struct {
+        fn run(allocator: Allocator, input: []const u8) Inputs.Error!void {
+            const cb = struct {
+                fn call(_: ?*anyopaque, _: WatchEvent) void {}
+            }.call;
+            const watcher = try Watcher.initInputs(allocator, std.testing.io, &.{input}, null, cb);
+            defer watcher.deinit();
+        }
+    }.run;
+    try std.testing.checkAllAllocationFailures(a, exercise, .{path});
+}
+
+test "exact inputs revalidate a plan changed before registration" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(root);
+    const path = try std.fs.path.join(a, &.{ root, "new/input.txt" });
+    defer a.free(path);
+    const cb = struct {
+        fn call(_: ?*anyopaque, _: WatchEvent) void {}
+    }.call;
+    const watcher = try Watcher.initInputs(a, io, &.{path}, null, cb);
+    defer watcher.deinit();
+    try tmp.dir.createDirPath(io, "new");
+    try tmp.dir.writeFile(io, .{ .sub_path = "new/input.txt", .data = "created before registration" });
+    try watcher.start();
+    try std.testing.expect(watcher.input_plan.?.nodes.get(path).?.kind == .file);
+    watcher.emitEvent(.{ .path = "", .rescan = true });
+    try std.testing.expect(watcher.takeCoverageChange());
+    try std.testing.expect(watcher.takeInputChange(0));
+}
+
+test "exact inputs observe hidden symlinks and writes through unwatched hard links" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "project");
+    try tmp.dir.createDirPath(io, "external");
+    try tmp.dir.createDirPath(io, "unrelated");
+    try tmp.dir.writeFile(io, .{ .sub_path = "external/asset.txt", .data = "before" });
+    try tmp.dir.symLink(io, "../external/asset.txt", "project/.asset", .{});
+    try tmp.dir.hardLink("external/asset.txt", tmp.dir, "unrelated/alias", io, .{});
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(root);
+    const path = try std.fs.path.join(a, &.{ root, "project/.asset" });
+    defer a.free(path);
+    var count = std.atomic.Value(u32).init(0);
+    const cb = struct {
+        fn call(context: ?*anyopaque, _: WatchEvent) void {
+            const counter: *std.atomic.Value(u32) = @ptrCast(@alignCast(context.?));
+            _ = counter.fetchAdd(1, .seq_cst);
+        }
+    }.call;
+    const watcher = try Watcher.initInputs(a, io, &.{path}, &count, cb);
+    defer watcher.deinit();
+    try watcher.start();
+    for (watcher.impl.watch_descriptors.items) |wd| {
+        try std.testing.expect(std.mem.find(u8, wd.path, "unrelated") == null);
+    }
+    try tmp.dir.writeFile(io, .{ .sub_path = "unrelated/alias", .data = "after" });
+    try waitForEvents(&count, 1, 5000, io);
+    try std.testing.expect(watcher.takeInputChange(0));
+}
 
 fn waitForEvents(event_count: *std.atomic.Value(u32), expected: u32, max_wait_ms: u32, io: std.Io) error{EventsNotReceived}!void {
     // When the active backend is stubbed, don't wait for events since they won't be generated.
@@ -2038,6 +2514,90 @@ test "file rename detection" {
     }
 }
 
+test "windows incomplete polls preserve pending reads until cancellation" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(root);
+    var count = std.atomic.Value(u32).init(0);
+    const callback = struct {
+        fn call(context: ?*anyopaque, _: WatchEvent) void {
+            const counter: *std.atomic.Value(u32) = @ptrCast(@alignCast(context.?));
+            _ = counter.fetchAdd(1, .seq_cst);
+        }
+    }.call;
+    const watcher = try Watcher.initAllFiles(a, io, &.{root}, &count, callback);
+    defer watcher.deinit();
+    // Drive an idle read directly so polling before completion is deterministic.
+    try watcher.setupWindowsWatch(root);
+    try watcher.startWindowsRead(0);
+    for (0..3) |_| {
+        try watcher.processWindowsEvents(0);
+        try std.testing.expect(watcher.impl.overlapped_data.items[0].read_pending);
+        try std.testing.expect(!watcher.hasBackendFailed());
+        try std.testing.expectEqual(0, count.load(.seq_cst));
+    }
+    watcher.cancelWindowsRead(0);
+    try std.testing.expect(!watcher.impl.overlapped_data.items[0].read_pending);
+    // Reusing the same record is safe only after cancellation has completed.
+    try watcher.startWindowsRead(0);
+    watcher.stop();
+}
+
+test "windows exact inputs survive registration growth and pending read shutdown" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(root);
+
+    // Exceed both the initial array capacity and a single Windows wait shard.
+    var paths: [Watcher.windows_max_wait_handles + 1][]const u8 = undefined;
+    var initialized: usize = 0;
+    defer for (paths[0..initialized]) |path| a.free(path);
+    for (&paths, 0..) |*path, i| {
+        var buffer: [64]u8 = undefined;
+        const dir = try std.fmt.bufPrint(&buffer, "input-{d}", .{i});
+        try tmp.dir.createDirPath(io, dir);
+        path.* = try std.fs.path.join(a, &.{ root, dir, "asset.txt" });
+        initialized += 1;
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path.*, .data = "initial" });
+    }
+    const callback = struct {
+        fn call(_: ?*anyopaque, _: WatchEvent) void {}
+    }.call;
+    const watcher = try Watcher.initInputs(a, io, &paths, null, callback);
+    defer watcher.deinit();
+
+    // Stop idle reads, then repeatedly complete/rearm reads and stop again.
+    try watcher.start();
+    watcher.stop();
+    for (0..3) |_| {
+        try watcher.start();
+        for (paths, 0..) |path, i| {
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "changed" });
+            const start = std.Io.Clock.now(.awake, io);
+            while (!watcher.takeInputChange(i)) {
+                try std.testing.expect(!watcher.hasBackendFailed());
+                if (start.durationTo(std.Io.Clock.now(.awake, io)).toMilliseconds() > 5000) {
+                    return error.EventsNotReceived;
+                }
+                std.Thread.yield() catch {};
+            }
+        }
+        watcher.stop();
+        try std.testing.expect(!watcher.hasBackendFailed());
+        try std.testing.expectEqual(0, watcher.impl.handles.items.len);
+        try std.testing.expectEqual(0, watcher.impl.overlapped_data.items.len);
+        for (paths, 0..) |_, i| _ = watcher.takeInputChange(i);
+    }
+}
+
 test "windows unicode filename handling" {
     if (builtin.os.tag != .windows) return;
 
@@ -2154,4 +2714,80 @@ test "windows long path handling" {
     watcher.stop();
 
     try expectEventsOrSkip(&global.event_count, 1);
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/11644
+//
+// Watch mode must not register watches for unrelated build, cache, and VCS
+// directories merely because they share a parent directory with a source file.
+// This test creates a directory tree containing a `Main.roc` file next to
+// `.git`, `target`, and `.claude` trees (the build/cache/VCS trees named in the
+// issue) and asserts that the Linux backend registers watches only for
+// directories that could contain relevant program inputs—no watched
+// directory may be inside (or be) one of those unrelated trees.
+//
+// Currently the recursive Linux registration watches every subdirectory, so
+// `.git/nested`, `target/nested`, and `.claude/nested` consume watches and this
+// test fails. Once registration scales with relevant program inputs, all
+// assertions pass without this test being edited.
+test "Linux watching does not register watches for unrelated build, cache, and VCS directories" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    const temp_path = try temp_dir.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(temp_path);
+
+    // The source file from the issue's reproduction.
+    try temp_dir.dir.writeFile(io, .{
+        .sub_path = "Main.roc",
+        .data = "Main := [].{\n    answer : U64\n    answer = 42\n}",
+    });
+
+    // Unrelated build, cache, and VCS trees, each with a nested subdirectory.
+    const unrelated_trees = [_][]const u8{ ".git", "target", ".claude" };
+    for (unrelated_trees) |tree| {
+        const nested = try std.fs.path.join(allocator, &.{ tree, "nested" });
+        defer allocator.free(nested);
+        try temp_dir.dir.createDirPath(io, nested);
+    }
+
+    const callback = struct {
+        fn cb(_: ?*anyopaque, _: WatchEvent) void {}
+    }.cb;
+
+    // The CLI's source-input watch setup uses `initAllFiles`.
+    const watcher = try Watcher.initAllFiles(allocator, io, &.{temp_path}, null, callback);
+    defer watcher.deinit();
+
+    try watcher.start();
+
+    // Wait until the watch thread finished registering watches (or failed).
+    const ready_start = std.Io.Clock.now(.awake, io);
+    while (!watcher.is_ready.load(.seq_cst)) {
+        try std.testing.expect(!watcher.startup_failed.load(.seq_cst));
+        const elapsed = ready_start.durationTo(std.Io.Clock.now(.awake, io)).toMilliseconds();
+        try std.testing.expect(elapsed <= 5000);
+        std.Thread.yield() catch {};
+    }
+
+    // The project root itself must be watched so that detection of new and
+    // missing imports keeps working.
+    const watch_descriptors = watcher.impl.watch_descriptors.items;
+    try std.testing.expect(watch_descriptors.len >= 1);
+
+    for (watch_descriptors) |watch| {
+        var components = std.mem.splitScalar(u8, watch.path, std.fs.path.sep);
+        while (components.next()) |component| {
+            for (unrelated_trees) |tree| {
+                try std.testing.expect(!std.mem.eql(u8, component, tree));
+            }
+        }
+    }
+
+    watcher.stop();
 }

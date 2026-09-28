@@ -928,50 +928,13 @@ pub const SyntaxChecker = struct {
     }
 
     fn rangeFromReport(_: *SyntaxChecker, rep: reporting.Report) Diagnostics.Range {
-        var start = Diagnostics.Position{ .line = 0, .character = 0 };
-        var end = Diagnostics.Position{ .line = 0, .character = 0 };
-
-        var idx: usize = 0;
-        while (idx < rep.document.elementCount()) : (idx += 1) {
-            const maybe_element = rep.document.getElement(idx) orelse break;
-            switch (maybe_element) {
-                .source_code_region => |region| {
-                    start = .{ .line = saturatingMinusOne(region.start_line), .character = saturatingMinusOne(region.start_column) };
-                    end = .{ .line = saturatingMinusOne(region.end_line), .character = saturatingMinusOne(region.end_column) };
-                    break;
-                },
-                .source_code_with_underlines => |region| {
-                    start = .{ .line = saturatingMinusOne(region.display_region.start_line), .character = saturatingMinusOne(region.display_region.start_column) };
-                    end = .{ .line = saturatingMinusOne(region.display_region.end_line), .character = saturatingMinusOne(region.display_region.end_column) };
-                    break;
-                },
-                .source_code_multi_region => |multi| {
-                    if (multi.regions.len > 0) {
-                        const region = multi.regions[0];
-                        start = .{ .line = saturatingMinusOne(region.start_line), .character = saturatingMinusOne(region.start_column) };
-                        end = .{ .line = saturatingMinusOne(region.end_line), .character = saturatingMinusOne(region.end_column) };
-                        break;
-                    }
-                },
-                .line_break,
-                .indent,
-                .space,
-                .horizontal_rule,
-                .annotation_start,
-                .annotation_end,
-                .text,
-                .annotated,
-                .raw,
-                .reflowing_text,
-                .link,
-                .vertical_stack,
-                .horizontal_concat,
-                .source_location,
-                => {},
-            }
+        if (rep.getRegionInfo()) |region| {
+            return .{
+                .start = .{ .line = saturatingMinusOne(region.start_line_idx), .character = saturatingMinusOne(region.start_col_idx) },
+                .end = .{ .line = saturatingMinusOne(region.end_line_idx), .character = saturatingMinusOne(region.end_col_idx) },
+            };
         }
-
-        return .{ .start = start, .end = end };
+        return .{ .start = .{ .line = 0, .character = 0 }, .end = .{ .line = 0, .character = 0 } };
     }
 
     fn saturatingMinusOne(value: u32) u32 {

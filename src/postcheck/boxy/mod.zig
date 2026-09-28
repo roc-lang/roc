@@ -6,6 +6,7 @@
 pub const Plan = @import("plan.zig");
 pub const Layouts = @import("layouts.zig");
 pub const Lower = @import("lower.zig");
+pub const LiteralRequirements = @import("literal_requirements.zig");
 
 /// Shared checked-type fixtures for the Boxy stage tests.
 pub const TestFixtures = @import("test_fixtures.zig");

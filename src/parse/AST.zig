@@ -2510,7 +2510,7 @@ pub const RequiresEntry = struct {
     region: TokenizedRegion,
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = struct { span: base.DataSpan, region: TokenizedRegion = TokenizedRegion.empty() };
 };
 
 /// TODO
