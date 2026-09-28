@@ -16811,13 +16811,18 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
 
     if (args.check) {
         var unformatted_files = std.ArrayList([]const u8).empty;
-        defer unformatted_files.deinit(ctx.gpa);
+        defer {
+            for (unformatted_files.items) |path| ctx.gpa.free(path);
+            unformatted_files.deinit(ctx.gpa);
+        }
 
         for (args.paths) |path| {
             var result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, true, format_options, ctx.io.std_io, stderr);
             defer result.deinit();
-            if (result.unformatted_files) |files| {
+            if (result.unformatted_files) |*files| {
                 try unformatted_files.appendSlice(ctx.gpa, files.items);
+                // Transfer the owned paths so they survive result.deinit().
+                files.clearRetainingCapacity();
             }
             failure_count += result.failure;
         }
