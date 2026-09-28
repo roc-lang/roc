@@ -410,6 +410,9 @@ pub const DirectCallHiddenDictionaryArg = struct {
     rep: TypeRepId,
     method_evidence: Span = .{},
     source: Source,
+    /// The derived-method formal bindings a `static_rep` inside a generic
+    /// nominal's backing is instantiated at (`ProgramPlan.derivedEnvBindings`).
+    env: u32 = 0,
 
     pub const Source = union(enum) {
         bound_dictionaries: Span,
@@ -891,14 +894,24 @@ pub const InspectMethodPlan = struct {
 /// A derived method: compiler-derived `is_eq` or `to_hash`.
 pub const DerivedMethod = enum { equality, hash };
 
+/// One nominal formal a derived method is inside, bound to the actual its
+/// use supplies.
+pub const DerivedBinding = struct {
+    formal: TypeRepId,
+    actual: TypeRepId,
+};
+
 /// Identity of one component decision of a derived method. `frame` is the
 /// worker whose descriptors and dictionaries the derivation reads: null when
 /// the derived type names no type variable, otherwise the worker lowering it
-/// (see `ProgramPlan.derivedFrame`).
+/// (see `ProgramPlan.derivedFrame`). `env` names the nominal formal bindings
+/// the component is reached under (`ProgramPlan.derivedEnvBindings`); a
+/// component inside a generic nominal's backing is instantiated at them.
 pub const DerivedComponentKey = struct {
     frame: ?WorkerPlanId,
     method: DerivedMethod,
     rep: TypeRepId,
+    env: u32 = 0,
 };
 
 /// How a derived method handles one list, nominal, or type-variable
@@ -915,6 +928,7 @@ pub const DerivedComponentDecision = union(enum) {
 /// the derivation's own second argument and result types.
 pub const DerivedComponentCallPlan = struct {
     frame: ?WorkerPlanId,
+    env: u32,
     worker: WorkerPlanId,
     arg_types: [2]CheckedTypeIdentity,
     ret_type: CheckedTypeIdentity,
@@ -967,6 +981,36 @@ pub const RootPlan = struct {
     hidden_dict_args: Span = .{},
 };
 
+/// The actual `bindings` binds `rep` to, when `rep` is one of its formals.
+pub fn derivedEnvActual(bindings: []const DerivedBinding, rep: TypeRepId) ?TypeRepId {
+    for (bindings) |binding| {
+        if (binding.formal == rep) return binding.actual;
+    }
+    return null;
+}
+
+/// The ordered form of a stack of formal bindings, outermost first: each
+/// formal's innermost binding, ordered by formal. A recursive nominal
+/// reached again under the same actuals has the same environment.
+pub fn orderedDerivedEnv(allocator: Allocator, stack: []const DerivedBinding) Allocator.Error![]DerivedBinding {
+    var bindings = std.ArrayList(DerivedBinding).empty;
+    errdefer bindings.deinit(allocator);
+    for (stack) |binding| {
+        for (bindings.items) |*existing| {
+            if (existing.formal == binding.formal) {
+                existing.actual = binding.actual;
+                break;
+            }
+        } else try bindings.append(allocator, binding);
+    }
+    std.mem.sort(DerivedBinding, bindings.items, {}, struct {
+        fn lessThan(_: void, a: DerivedBinding, b: DerivedBinding) bool {
+            return @intFromEnum(a.formal) < @intFromEnum(b.formal);
+        }
+    }.lessThan);
+    return try bindings.toOwnedSlice(allocator);
+}
+
 /// Target-independent Boxy representation and call plan for a checked program.
 pub const ProgramPlan = struct {
     allocator: Allocator,
@@ -986,9 +1030,11 @@ pub const ProgramPlan = struct {
     derived_component_calls: std.ArrayList(DerivedComponentCallPlan),
     dictionary_method_call_types: std.ArrayList(CheckedTypeIdentity),
     derived_component_decisions: std.AutoHashMap(DerivedComponentKey, DerivedComponentDecision),
-    /// Derived roots, keyed like their decisions, some component of which
-    /// calls a method rather than expanding.
-    derived_roots_with_calls: std.AutoHashMap(DerivedComponentKey, void),
+    /// Ordered derived-method formal environments: env `n` is
+    /// `derived_envs.items[n - 1]`, a span of `derived_env_bindings`; env 0 is
+    /// empty.
+    derived_env_bindings: std.ArrayList(DerivedBinding),
+    derived_envs: std.ArrayList(Span),
     generated_codec_call_types: std.ArrayList(CheckedTypeIdentity),
     generated_codec_runtime_links: std.ArrayList(GeneratedCodecRuntimeLink),
     generated_parser_runtime_plans: std.ArrayList(GeneratedParserRuntimePlan),
@@ -1051,7 +1097,8 @@ pub const ProgramPlan = struct {
             .derived_component_calls = .empty,
             .dictionary_method_call_types = .empty,
             .derived_component_decisions = std.AutoHashMap(DerivedComponentKey, DerivedComponentDecision).init(allocator),
-            .derived_roots_with_calls = std.AutoHashMap(DerivedComponentKey, void).init(allocator),
+            .derived_env_bindings = .empty,
+            .derived_envs = .empty,
             .generated_codec_call_types = .empty,
             .generated_codec_runtime_links = .empty,
             .generated_parser_runtime_plans = .empty,
@@ -1138,7 +1185,8 @@ pub const ProgramPlan = struct {
         self.derived_component_calls.deinit(self.allocator);
         self.dictionary_method_call_types.deinit(self.allocator);
         self.derived_component_decisions.deinit();
-        self.derived_roots_with_calls.deinit();
+        self.derived_env_bindings.deinit(self.allocator);
+        self.derived_envs.deinit(self.allocator);
         self.generated_parser_field_captures.deinit(self.allocator);
         self.generated_parser_missing_required_fields.deinit(self.allocator);
         self.generated_parser_try_plans.deinit(self.allocator);
@@ -1167,11 +1215,6 @@ pub const ProgramPlan = struct {
         return self.dictionary_method_call_types.items[span.start .. span.start + span.len];
     }
 
-    /// Whether the derived root `key` calls some component's method.
-    pub fn derivedRootHasCalls(self: *const ProgramPlan, key: DerivedComponentKey) bool {
-        return self.derived_roots_with_calls.contains(key);
-    }
-
     /// The decision a derived method recorded for one component.
     pub fn derivedComponentDecision(self: *const ProgramPlan, key: DerivedComponentKey) ?DerivedComponentDecision {
         return self.derived_component_decisions.get(key);
@@ -1185,10 +1228,11 @@ pub const ProgramPlan = struct {
         allocator: Allocator,
         worker: ?WorkerPlanId,
         rep_id: TypeRepId,
+        env: u32,
     ) Allocator.Error!?WorkerPlanId {
         var visited = collections.DenseMap(TypeRepId, void).init(allocator);
         defer visited.deinit();
-        if (!try self.repNamesTypeVariable(rep_id, &visited)) return null;
+        if (!try self.repNamesTypeVariable(rep_id, self.derivedEnvBindings(env), &visited)) return null;
         return worker orelse boxyPlanInvariant("derived method over a type variable had no enclosing worker");
     }
 
@@ -1196,18 +1240,21 @@ pub const ProgramPlan = struct {
     pub fn namesTypeVariable(self: *const ProgramPlan, allocator: Allocator, rep_id: TypeRepId) Allocator.Error!bool {
         var visited = collections.DenseMap(TypeRepId, void).init(allocator);
         defer visited.deinit();
-        return try self.repNamesTypeVariable(rep_id, &visited);
+        return try self.repNamesTypeVariable(rep_id, &.{}, &visited);
     }
 
+    /// A formal names what `bindings` binds it to.
     fn repNamesTypeVariable(
         self: *const ProgramPlan,
         rep_id: TypeRepId,
+        bindings: []const DerivedBinding,
         visited: *collections.DenseMap(TypeRepId, void),
     ) Allocator.Error!bool {
         if ((try visited.getOrPut(rep_id)).found_existing) return false;
         const rep = self.representations.items[@intFromEnum(rep_id)];
         if (rep.kind == .dynamic) {
-            if (rep.sealed_default) |sealed| return try self.repNamesTypeVariable(sealed, visited);
+            if (derivedEnvActual(bindings, rep_id)) |actual| return try self.repNamesTypeVariable(actual, bindings, visited);
+            if (rep.sealed_default) |sealed| return try self.repNamesTypeVariable(sealed, bindings, visited);
             return true;
         }
         // A nominal use's shared backing names its declaration's formals, not
@@ -1215,16 +1262,79 @@ pub const ProgramPlan = struct {
         if (rep.nominal_backing_arg_substitutions.len != 0) {
             var substitutions = self.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
             while (substitutions.next()) |substitution| {
-                if (try self.repNamesTypeVariable(substitution.actual_rep, visited)) return true;
+                if (try self.repNamesTypeVariable(substitution.actual_rep, bindings, visited)) return true;
             }
             return false;
         }
         for (self.childSlice(rep.children)) |child| {
-            if (try self.repNamesTypeVariable(child.rep, visited)) return true;
+            if (try self.repNamesTypeVariable(child.rep, bindings, visited)) return true;
         }
         for (self.tagVariantSlice(rep.tag_variants)) |variant| {
             for (self.childSlice(variant.payloads)) |payload| {
-                if (try self.repNamesTypeVariable(payload.rep, visited)) return true;
+                if (try self.repNamesTypeVariable(payload.rep, bindings, visited)) return true;
+            }
+        }
+        return false;
+    }
+
+    /// The bindings of derived-method formal environment `env`.
+    pub fn derivedEnvBindings(self: *const ProgramPlan, env: u32) []const DerivedBinding {
+        if (env == 0) return &.{};
+        const span = self.derived_envs.items[env - 1];
+        return self.derived_env_bindings.items[span.start .. span.start + span.len];
+    }
+
+    /// The environment whose ordered bindings are `bindings`, if planning
+    /// recorded one.
+    pub fn findDerivedEnv(self: *const ProgramPlan, bindings: []const DerivedBinding) ?u32 {
+        if (bindings.len == 0) return 0;
+        for (self.derived_envs.items, 0..) |span, index| {
+            const candidate = self.derived_env_bindings.items[span.start .. span.start + span.len];
+            if (candidate.len != bindings.len) continue;
+            for (candidate, bindings) |a, b| {
+                if (a.formal != b.formal or a.actual != b.actual) break;
+            } else return @intCast(index + 1);
+        }
+        return null;
+    }
+
+    /// Whether describing `rep_id` reads a formal `bindings` binds. A nested
+    /// nominal use rebinds its own formals, so only its actuals are read.
+    pub fn repReadsDerivedFormal(
+        self: *const ProgramPlan,
+        allocator: Allocator,
+        rep_id: TypeRepId,
+        bindings: []const DerivedBinding,
+    ) Allocator.Error!bool {
+        if (bindings.len == 0) return false;
+        var visited = collections.DenseMap(TypeRepId, void).init(allocator);
+        defer visited.deinit();
+        return try self.repReadsDerivedFormalInner(rep_id, bindings, &visited);
+    }
+
+    fn repReadsDerivedFormalInner(
+        self: *const ProgramPlan,
+        rep_id: TypeRepId,
+        bindings: []const DerivedBinding,
+        visited: *collections.DenseMap(TypeRepId, void),
+    ) Allocator.Error!bool {
+        if ((try visited.getOrPut(rep_id)).found_existing) return false;
+        if (derivedEnvActual(bindings, rep_id) != null) return true;
+        const rep = self.representations.items[@intFromEnum(rep_id)];
+        if (rep.kind == .nominal and rep.nominal_backing_arg_substitutions.len != 0) {
+            var substitutions = self.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+            while (substitutions.next()) |substitution| {
+                if (try self.repReadsDerivedFormalInner(substitution.actual_rep, bindings, visited)) return true;
+            }
+            return false;
+        }
+        for (self.childSlice(rep.children)) |child| {
+            if (!childCarriesRuntimeDescriptor(child.role)) continue;
+            if (try self.repReadsDerivedFormalInner(child.rep, bindings, visited)) return true;
+        }
+        for (self.tagVariantSlice(rep.tag_variants)) |variant| {
+            for (self.childSlice(variant.payloads)) |payload| {
+                if (try self.repReadsDerivedFormalInner(payload.rep, bindings, visited)) return true;
             }
         }
         return false;
@@ -6985,6 +7095,10 @@ const Builder = struct {
                 for ([_][]const TypeRepId{ signature[callee].order.items, needs[callee].order.items }) |leaves| {
                     for (leaves) |leaf| {
                         if (own_scheme[callee].contains(leaf)) {
+                            // A scheme variable the callee's signature names
+                            // is described by the use's own argument and
+                            // result values.
+                            if (signature[callee].set.contains(leaf)) continue;
                             for (images.get(leaf) orelse &.{}) |image_leaf| {
                                 if (try caller.add(self.allocator, image_leaf)) changed = true;
                             }
@@ -8255,6 +8369,7 @@ const Builder = struct {
         frame: ?WorkerPlanId,
         method: DerivedMethod,
         rep: TypeRepId,
+        env: u32,
         /// The derivation's second argument type: its operand type for
         /// equality, its hasher type for hashing.
         second_type: CheckedTypeIdentity,
@@ -8262,22 +8377,25 @@ const Builder = struct {
     };
 
     /// Record a derived `is_eq`/`to_hash` over `rep` lowered in `worker`,
-    /// whose checked signature is `rep, second_type -> ret_type`.
+    /// whose checked signature is `rep, second_type -> ret_type`, under the
+    /// formal bindings of environment `env`.
     fn registerDerivedRoot(
         self: *Builder,
         worker: ?WorkerPlanId,
         method: DerivedMethod,
         rep: TypeRepId,
+        env: u32,
         second_type: CheckedTypeIdentity,
         ret_type: CheckedTypeIdentity,
     ) Allocator.Error!void {
-        const frame = try self.plan.derivedFrame(self.allocator, worker, rep);
-        const key = DerivedComponentKey{ .frame = frame, .method = method, .rep = rep };
+        const frame = try self.plan.derivedFrame(self.allocator, worker, rep, env);
+        const key = DerivedComponentKey{ .frame = frame, .method = method, .rep = rep, .env = env };
         if ((try self.derived_roots_seen.getOrPut(self.allocator, key)).found_existing) return;
         try self.derived_roots.append(self.allocator, .{
             .frame = frame,
             .method = method,
             .rep = rep,
+            .env = env,
             .second_type = second_type,
             .ret_type = ret_type,
         });
@@ -8289,6 +8407,7 @@ const Builder = struct {
         self: *Builder,
         caller: ?WorkerPlanId,
         rep: TypeRepId,
+        env: u32,
         method: DictionaryMethodEvidence,
     ) Allocator.Error!void {
         const kind = switch (method.resolution) {
@@ -8310,6 +8429,7 @@ const Builder = struct {
             caller,
             derived,
             rep,
+            env,
             children[function.args_start + 1].source_type,
             self.plan.representations.items[@intFromEnum(function.ret)].source_type,
         );
@@ -8319,12 +8439,13 @@ const Builder = struct {
         self: *Builder,
         caller: ?WorkerPlanId,
         rep: TypeRepId,
+        env: u32,
         method_evidence: Span,
     ) Allocator.Error!void {
         var index: usize = 0;
         while (index < method_evidence.len) : (index += 1) {
             const method = self.plan.dictionary_method_evidence.items[method_evidence.start + index];
-            try self.registerStructuralDictionaryDerivation(caller, rep, method);
+            try self.registerStructuralDictionaryDerivation(caller, rep, env, method);
         }
     }
 
@@ -8351,23 +8472,33 @@ const Builder = struct {
             caller,
             method,
             dispatcher_rep,
+            0,
             children[function.args_start + 1].source_type,
             self.plan.representations.items[@intFromEnum(function.ret)].source_type,
         );
     }
 
+    /// The environment of the ordered form of `stack`, recorded once.
+    fn internDerivedEnv(self: *Builder, stack: []const DerivedBinding) Allocator.Error!u32 {
+        const ordered = try orderedDerivedEnv(self.allocator, stack);
+        defer self.allocator.free(ordered);
+        if (self.plan.findDerivedEnv(ordered)) |env| return env;
+        const start: u32 = @intCast(self.plan.derived_env_bindings.items.len);
+        try self.plan.derived_env_bindings.appendSlice(self.allocator, ordered);
+        try self.plan.derived_envs.append(self.allocator, .{ .start = start, .len = @intCast(ordered.len) });
+        return @intCast(self.plan.derived_envs.items.len);
+    }
+
     /// The nominal formals a derived walk is inside, innermost last, and the
-    /// environment they form.
+    /// ordered environment they form.
     const DerivedWalk = struct {
         root: DerivedRoot,
-        bindings: std.ArrayList(struct { formal: TypeRepId, actual: TypeRepId }) = .empty,
+        bindings: std.ArrayList(DerivedBinding) = .empty,
         env: u32 = 0,
-        envs: std.AutoHashMapUnmanaged(struct { parent: u32, formal: TypeRepId, actual: TypeRepId }, u32) = .{},
         visited: std.AutoHashMapUnmanaged(struct { rep: TypeRepId, env: u32 }, void) = .{},
 
         fn deinit(self: *DerivedWalk, allocator: Allocator) void {
             self.bindings.deinit(allocator);
-            self.envs.deinit(allocator);
             self.visited.deinit(allocator);
         }
 
@@ -8379,13 +8510,6 @@ const Builder = struct {
             }
             return null;
         }
-
-        fn push(self: *DerivedWalk, allocator: Allocator, formal: TypeRepId, actual: TypeRepId) Allocator.Error!void {
-            try self.bindings.append(allocator, .{ .formal = formal, .actual = actual });
-            const entry = try self.envs.getOrPut(allocator, .{ .parent = self.env, .formal = formal, .actual = actual });
-            if (!entry.found_existing) entry.value_ptr.* = @intCast(self.envs.count());
-            self.env = entry.value_ptr.*;
-        }
     };
 
     /// Decide every list, nominal, and type-variable component each new
@@ -8395,8 +8519,9 @@ const Builder = struct {
         while (self.derived_roots_walked < self.derived_roots.items.len) {
             const root = self.derived_roots.items[self.derived_roots_walked];
             self.derived_roots_walked += 1;
-            var walk = DerivedWalk{ .root = root };
+            var walk = DerivedWalk{ .root = root, .env = root.env };
             defer walk.deinit(self.allocator);
+            try walk.bindings.appendSlice(self.allocator, self.plan.derivedEnvBindings(root.env));
             try self.walkDerivedComponent(&walk, root.rep);
         }
     }
@@ -8407,31 +8532,37 @@ const Builder = struct {
         switch (rep.kind) {
             .alias => try self.walkDerivedComponent(walk, self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep),
             .dynamic => {
-                // A formal the walk bound and a sealed variable keep their
-                // descriptor comparison, as lowering does.
-                if (walk.actualFor(rep_id) != null or rep.sealed_default != null) return;
+                // A formal position holds its use's actual, and a sealed
+                // variable its sealed type.
+                if (walk.actualFor(rep_id)) |actual| return try self.walkDerivedComponent(walk, actual);
+                if (rep.sealed_default) |sealed| return try self.walkDerivedComponent(walk, sealed);
                 const requirement = self.derivedSchemeRequirement(rep_id, walk.root.method) orelse
                     boxyPlanInvariant("derived method reached a type variable without its scheme requirement");
-                try self.recordDerivedDecision(walk.root, rep_id, .{ .scheme_dictionary = requirement });
+                try self.recordDerivedDecision(walk, rep_id, .{ .scheme_dictionary = requirement });
             },
             .list => {
-                if (try self.derivedWalkDependsOnFormals(walk, rep_id)) return;
                 const lookup = self.derivedMethodTarget(rep_id, walk.root.method) orelse
                     boxyPlanInvariant("derived method reached a List without its method");
-                try self.planDerivedComponentCall(walk.root, rep_id, lookup);
+                try self.planDerivedComponentCall(walk, rep_id, lookup);
             },
+            .box => try self.walkDerivedComponent(walk, self.repQuery().requiredSingleChild(rep_id, .box_payload).rep),
             .nominal => |kind| {
-                if (try self.derivedWalkDependsOnFormals(walk, rep_id)) return;
                 if (self.derivedMethodTarget(rep_id, walk.root.method)) |lookup| {
-                    return try self.planDerivedComponentCall(walk.root, rep_id, lookup);
+                    return try self.planDerivedComponentCall(walk, rep_id, lookup);
                 }
-                try self.recordDerivedDecision(walk.root, rep_id, .structural);
+                try self.recordDerivedDecision(walk, rep_id, .structural);
                 switch (kind) {
-                    .transparent, .builtin_other => {
+                    .transparent, .builtin_other, .opaque_nominal => {
                         const bindings_len = walk.bindings.items.len;
                         const outer_env = walk.env;
+                        defer {
+                            walk.bindings.shrinkRetainingCapacity(bindings_len);
+                            walk.env = outer_env;
+                        }
+                        // Each actual is resolved in the enclosing bindings
+                        // before this nominal's formals shadow any of them.
                         var substitutions = self.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
-                        var resolved = std.ArrayList(struct { formal: TypeRepId, actual: TypeRepId }).empty;
+                        var resolved = std.ArrayList(DerivedBinding).empty;
                         defer resolved.deinit(self.allocator);
                         while (substitutions.next()) |substitution| {
                             const formal = substitution.formal_rep orelse continue;
@@ -8439,14 +8570,10 @@ const Builder = struct {
                             if (formal == actual) continue;
                             try resolved.append(self.allocator, .{ .formal = formal, .actual = actual });
                         }
-                        for (resolved.items) |binding| try walk.push(self.allocator, binding.formal, binding.actual);
-                        defer {
-                            walk.bindings.shrinkRetainingCapacity(bindings_len);
-                            walk.env = outer_env;
-                        }
+                        try walk.bindings.appendSlice(self.allocator, resolved.items);
+                        walk.env = try self.internDerivedEnv(walk.bindings.items);
                         try self.walkDerivedComponent(walk, self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep);
                     },
-                    .opaque_nominal => {},
                 }
             },
             // Planning a component call analyzes types, which grows the child
@@ -8480,7 +8607,6 @@ const Builder = struct {
             .primitive,
             .bool_tag_union,
             .erased_callable,
-            .box,
             .generated_field,
             .generated_field_names,
             .generated_tag_union_spec,
@@ -8488,44 +8614,6 @@ const Builder = struct {
             .empty_tag_union,
             => {},
         }
-    }
-
-    /// Whether describing `rep_id` reads a formal the walk has bound. Such a
-    /// component inside a nominal's backing keeps the derivation that
-    /// compares it by its descriptor.
-    fn derivedWalkDependsOnFormals(self: *Builder, walk: *const DerivedWalk, rep_id: TypeRepId) Allocator.Error!bool {
-        if (walk.bindings.items.len == 0) return false;
-        var seen = collections.DenseMap(TypeRepId, void).init(self.allocator);
-        defer seen.deinit();
-        return try self.derivedWalkDependsOnFormalsInner(walk, rep_id, &seen);
-    }
-
-    fn derivedWalkDependsOnFormalsInner(
-        self: *Builder,
-        walk: *const DerivedWalk,
-        rep_id: TypeRepId,
-        seen: *collections.DenseMap(TypeRepId, void),
-    ) Allocator.Error!bool {
-        if ((try seen.getOrPut(rep_id)).found_existing) return false;
-        if (walk.actualFor(rep_id) != null) return true;
-        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        if (rep.kind == .nominal and rep.nominal_backing_arg_substitutions.len != 0) {
-            var substitutions = self.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
-            while (substitutions.next()) |substitution| {
-                if (try self.derivedWalkDependsOnFormalsInner(walk, substitution.actual_rep, seen)) return true;
-            }
-            return false;
-        }
-        for (self.plan.childSlice(rep.children)) |child| {
-            if (!childCarriesRuntimeDescriptor(child.role)) continue;
-            if (try self.derivedWalkDependsOnFormalsInner(walk, child.rep, seen)) return true;
-        }
-        for (self.plan.tagVariantSlice(rep.tag_variants)) |variant| {
-            for (self.plan.childSlice(variant.payloads)) |payload| {
-                if (try self.derivedWalkDependsOnFormalsInner(walk, payload.rep, seen)) return true;
-            }
-        }
-        return false;
     }
 
     fn derivedMethodText(method: DerivedMethod) []const u8 {
@@ -8563,14 +8651,12 @@ const Builder = struct {
 
     fn recordDerivedDecision(
         self: *Builder,
-        root: DerivedRoot,
+        walk: *const DerivedWalk,
         rep_id: TypeRepId,
         decision: DerivedComponentDecision,
     ) Allocator.Error!void {
-        const key = DerivedComponentKey{ .frame = root.frame, .method = root.method, .rep = rep_id };
-        if (decision != .structural) {
-            try self.plan.derived_roots_with_calls.put(.{ .frame = root.frame, .method = root.method, .rep = root.rep }, {});
-        }
+        const root = walk.root;
+        const key = DerivedComponentKey{ .frame = root.frame, .method = root.method, .rep = rep_id, .env = walk.env };
         const entry = try self.plan.derived_component_decisions.getOrPut(key);
         if (entry.found_existing) {
             if (!std.meta.eql(entry.value_ptr.*, decision)) {
@@ -8583,13 +8669,14 @@ const Builder = struct {
 
     fn planDerivedComponentCall(
         self: *Builder,
-        root: DerivedRoot,
+        walk: *const DerivedWalk,
         rep_id: TypeRepId,
         lookup: MethodTargetLookup,
     ) Allocator.Error!void {
-        const key = DerivedComponentKey{ .frame = root.frame, .method = root.method, .rep = rep_id };
+        const root = walk.root;
+        const key = DerivedComponentKey{ .frame = root.frame, .method = root.method, .rep = rep_id, .env = walk.env };
         if (self.plan.derived_component_decisions.get(key)) |existing| {
-            return try self.recordDerivedDecision(root, rep_id, existing);
+            return try self.recordDerivedDecision(walk, rep_id, existing);
         }
         const rep = self.plan.representations.items[@intFromEnum(rep_id)];
         const source = self.workerSourceForMethodTarget(lookup, rep.source_type, null);
@@ -8599,6 +8686,7 @@ const Builder = struct {
         const index: u32 = @intCast(self.plan.derived_component_calls.items.len);
         try self.plan.derived_component_calls.append(self.allocator, .{
             .frame = root.frame,
+            .env = walk.env,
             .worker = worker,
             .arg_types = .{
                 rep.source_type,
@@ -8609,7 +8697,7 @@ const Builder = struct {
             },
             .ret_type = root.ret_type,
         });
-        try self.recordDerivedDecision(root, rep_id, .{ .call = index });
+        try self.recordDerivedDecision(walk, rep_id, .{ .call = index });
     }
 
     fn materializeDerivedComponentCallHiddenDictionaryArgs(self: *Builder) Allocator.Error!void {
@@ -8617,7 +8705,7 @@ const Builder = struct {
         while (index < self.plan.derived_component_calls.items.len) : (index += 1) {
             const call = self.plan.derived_component_calls.items[index];
             self.plan.derived_component_calls.items[index].hidden_dict_args =
-                try self.materializeWorkerCallHiddenDictionaryArgs(call.worker, call.frame, &call.arg_types, call.ret_type);
+                try self.materializeWorkerCallHiddenDictionaryArgsWithEvidence(call.worker, call.frame, &call.arg_types, call.ret_type, null, null, null, call.env);
         }
     }
 
@@ -9096,6 +9184,7 @@ const Builder = struct {
                 call_view,
                 checked_evidence,
                 self.directCallSchemeSubstitution(direct),
+                0,
             );
             self.plan.direct_calls.items[direct_index].hidden_dict_args = hidden_dict_args;
         }
@@ -9170,6 +9259,7 @@ const Builder = struct {
                     call_view,
                     checked_evidence,
                     if (call.evidence_edge) |edge| self.evidenceEdgeSchemeSubstitution(call.worker, edge) else null,
+                    0,
                 );
         }
     }
@@ -9939,9 +10029,13 @@ const Builder = struct {
             null,
             null,
             null,
+            0,
         );
     }
 
+    /// `env` names the derived-method formal bindings the call's types are
+    /// written under: a dictionary source that is one of those formals is its
+    /// actual, and one that reads them is instantiated at them.
     fn materializeWorkerCallHiddenDictionaryArgsWithEvidence(
         self: *Builder,
         worker_id: WorkerPlanId,
@@ -9951,6 +10045,7 @@ const Builder = struct {
         evidence_view: ?ModuleView,
         evidence: ?[]const static_dispatch.CheckedEvidence,
         scheme_substitution: ?SchemeCallSubstitution,
+        env: u32,
     ) Allocator.Error!Span {
         const worker = self.plan.workers.items[@intFromEnum(worker_id)];
         const params = self.plan.hiddenDictionaryParamSlice(worker.hidden_dicts);
@@ -10070,7 +10165,13 @@ const Builder = struct {
             if (param_index < body_param_start and substituted_rep == null and evidence_source.rep == null) {
                 boxyPlanInvariant("boxy callable dictionary parameter had no checked call substitution or dispatch evidence");
             }
-            const source_rep = self.repQuery().dictionaryArgumentIdentityRep(evidence_source.rep orelse substituted_rep orelse param.rep);
+            const env_bindings = self.plan.derivedEnvBindings(env);
+            const call_rep = evidence_source.rep orelse substituted_rep orelse param.rep;
+            // A source that is a formal of the enclosing derived backing is
+            // its use's actual; one that reads such formals is instantiated
+            // at them.
+            const source_rep = self.repQuery().dictionaryArgumentIdentityRep(derivedEnvActual(env_bindings, call_rep) orelse call_rep);
+            const source_env: u32 = if (try self.plan.repReadsDerivedFormal(self.allocator, source_rep, env_bindings)) env else 0;
             const source_rep_dictionaries = self.plan.representations.items[@intFromEnum(source_rep)].dictionaries;
             const bound_dictionaries = if (substituted_rep == null and evidence_source.rep == null)
                 param.dictionaries
@@ -10096,10 +10197,11 @@ const Builder = struct {
                         .call_ret_type = ret_type,
                     },
                     source_rep,
+                    source_env,
                     param.dictionaries,
                     evidence_source.method_evidence,
                 );
-                try self.registerStructuralDictionaryDerivations(caller_id, source_rep, planned_method_evidence);
+                try self.registerStructuralDictionaryDerivations(caller_id, source_rep, source_env, planned_method_evidence);
             }
             try pending.append(self.allocator, .{
                 .worker_dictionaries = param.dictionaries,
@@ -10110,6 +10212,7 @@ const Builder = struct {
                     .{ .bound_dictionaries = bound_dictionaries }
                 else
                     .{ .static_rep = source_rep },
+                .env = if (source_is_bound) 0 else source_env,
             });
         }
 
@@ -11130,6 +11233,7 @@ const Builder = struct {
             evidence_view,
             evidence,
             self.evidenceEdgeSchemeSubstitution(worker_id, evidence_edge),
+            0,
         );
     }
 
@@ -11494,6 +11598,7 @@ const Builder = struct {
         caller: ?WorkerPlanId,
         call: RequirementCallInstantiation,
         source_rep_id: TypeRepId,
+        env: u32,
         worker_dictionaries: Span,
         method_evidence: Span,
     ) Allocator.Error!Span {
@@ -11512,7 +11617,7 @@ const Builder = struct {
         while (method_index < worker_dictionaries.len) : (method_index += 1) {
             const requirement = self.plan.dictionaries.items[worker_dictionaries.start + method_index];
             if (method_evidence.len == 0) {
-                try planned.append(self.allocator, try self.staticDictionaryMethodEvidence(caller, call, source_rep_id, requirement));
+                try planned.append(self.allocator, try self.staticDictionaryMethodEvidence(caller, call, source_rep_id, env, requirement));
                 continue;
             }
             const method = self.plan.dictionary_method_evidence.items[method_evidence.start + method_index];
@@ -11524,7 +11629,7 @@ const Builder = struct {
                     .map, .map_effectful => boxyPlanInvariant("derived map evidence reached static dictionary worker planning"),
                 },
                 .constraint => blk: {
-                    var resolved = try self.staticDictionaryMethodEvidence(caller, call, source_rep_id, requirement);
+                    var resolved = try self.staticDictionaryMethodEvidence(caller, call, source_rep_id, env, requirement);
                     resolved.requirement_substitution = method.requirement_substitution;
                     break :blk resolved;
                 },
@@ -11542,6 +11647,7 @@ const Builder = struct {
         caller: ?WorkerPlanId,
         call: RequirementCallInstantiation,
         source_rep_id: TypeRepId,
+        env: u32,
         requirement: DictionaryRequirement,
     ) Allocator.Error!DictionaryMethodEvidence {
         const source_rep = self.plan.representations.items[@intFromEnum(source_rep_id)];
@@ -11564,11 +11670,15 @@ const Builder = struct {
                     .requirement_type = requirement.fn_ty,
                     .callable_type = callable_type,
                     .resolution = .{ .worker = worker },
-                    .nested_dict_args = try self.materializeWorkerCallHiddenDictionaryArgs(
+                    .nested_dict_args = try self.materializeWorkerCallHiddenDictionaryArgsWithEvidence(
                         worker,
                         caller,
                         owned_arg_types,
                         instantiation.ret_type,
+                        null,
+                        null,
+                        null,
+                        env,
                     ),
                     .instantiation_arg_types = instantiation.arg_types,
                     .instantiation_ret_type = instantiation.ret_type,
@@ -12770,6 +12880,7 @@ const Builder = struct {
                     worker,
                     .equality,
                     try self.analyzeType(view, operand_ty),
+                    0,
                     typeRef(view, operand_ty),
                     typeRef(view, expr.ty),
                 );
@@ -12781,6 +12892,7 @@ const Builder = struct {
                     worker,
                     .hash,
                     try self.analyzeType(view, bodies.expr(hash.value).ty),
+                    0,
                     typeRef(view, bodies.expr(hash.hasher).ty),
                     typeRef(view, expr.ty),
                 );
@@ -13263,6 +13375,7 @@ const Builder = struct {
                     evidence.view,
                     evidence.entries,
                     self.useSchemeSubstitution(use.worker, use.use),
+                    0,
                 );
         }
 
@@ -13377,6 +13490,7 @@ const Builder = struct {
             view,
             evidence,
             self.useSchemeSubstitution(use.worker, use.use),
+            0,
         );
     }
 

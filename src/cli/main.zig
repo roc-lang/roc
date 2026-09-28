@@ -9060,7 +9060,7 @@ test "pack offers an entry that carries its program data and withholds one that 
             .entry = 0,
             .frame = null,
             .refs = &.{},
-            .relocations = &.{.{ .offset = 0, .name = "roc_boxy_eq", .scope = .program, .kind = .function }},
+            .relocations = &.{.{ .offset = 0, .name = "roc_boxy_drop", .scope = .program, .kind = .function }},
             .data = &.{},
         },
     };

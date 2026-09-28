@@ -295,7 +295,7 @@ const Pass = struct {
                     try self.markProc(s.proc);
                     try self.pushStmt(s.next);
                 },
-                inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| try self.pushStmt(s.next),
+                inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| try self.pushStmt(s.next),
                 .boxy_tag_match => |s| {
                     try self.pushStmt(s.on_match);
                     try self.pushStmt(s.on_miss);
@@ -361,7 +361,7 @@ const Pass = struct {
 
     fn markBoxyTableProcs(self: *Pass) Allocator.Error!void {
         for (self.result.boxy_method_slots.items) |slot| {
-            if (!slot.present or slot.structural_eq) continue;
+            if (!slot.present) continue;
             try self.markProc(slot.proc);
         }
     }
@@ -582,7 +582,6 @@ const Pass = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
-                .assign_boxy_eq,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .assign_call_dict,
@@ -844,7 +843,7 @@ const Pass = struct {
 
     fn remapBoxyTableProcs(self: *Pass) void {
         for (self.result.boxy_method_slots.items) |*slot| {
-            if (!slot.present or slot.structural_eq) continue;
+            if (!slot.present) continue;
             slot.proc = self.remapProc(slot.proc);
         }
     }
@@ -878,7 +877,7 @@ const Pass = struct {
 
         var selected_count: usize = 0;
         for (self.result.boxy_method_slots.items) |slot| {
-            if (!slot.present or slot.structural_eq) continue;
+            if (!slot.present) continue;
             const proc_index = @intFromEnum(slot.proc);
             if (proc_index >= proc_count) {
                 reachableProcInvariant("boxy method worker exceeds compact proc_specs len");
@@ -1024,7 +1023,6 @@ const Pass = struct {
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
-            .assign_boxy_eq,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .assign_call_dict,
@@ -1323,14 +1321,13 @@ test "reachable proc pass publishes exact deduplicated boxy worker procs" {
     }, .none);
     try result.root_procs.append(std.testing.allocator, root_proc);
 
-    // This pass only inspects each slot's presence, structural-equality status,
-    // and worker proc; method identities are deliberately never read here.
+    // This pass only inspects each slot's presence and worker proc; method
+    // identities are deliberately never read here.
     try result.boxy_method_slots.appendSlice(std.testing.allocator, &.{
         .{ .method = undefined, .proc = second_worker },
         .{ .method = undefined, .proc = second_worker },
         .{ .method = undefined, .proc = first_worker },
         .{ .present = false, .method = undefined, .proc = ignored_proc },
-        .{ .method = undefined, .proc = ignored_proc, .structural_eq = true },
     });
 
     try run(&result);
