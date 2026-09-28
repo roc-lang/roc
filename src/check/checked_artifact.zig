@@ -8240,61 +8240,68 @@ const SourceTypeGraphFacts = struct {
 const SourceTypeGraphFactsContext = struct {
     module: TypedCIR.Module,
 
-    fn mergeVar(self: *@This(), traversal: anytype, facts: *SourceTypeGraphFacts, var_: Var) Allocator.Error!void {
-        facts.merge(try traversal.visit(self.module.typeStoreConst().resolveVar(var_).var_));
-    }
-
-    fn mergeVars(self: *@This(), traversal: anytype, facts: *SourceTypeGraphFacts, vars: []const Var) Allocator.Error!void {
-        for (vars) |var_| try self.mergeVar(traversal, facts, var_);
-    }
-
-    pub fn visit(self: *@This(), traversal: anytype, root: Var) Allocator.Error!SourceTypeGraphFacts {
+    /// Record `root`'s own facts and append its children, resolved, in the
+    /// order their facts merge.
+    fn expand(self: *@This(), root: Var, facts: *SourceTypeGraphFacts, children: *std.ArrayList(Var), allocator: Allocator) Allocator.Error!void {
         const types_store = self.module.typeStoreConst();
         const resolved = types_store.resolveVar(root);
         std.debug.assert(resolved.var_ == root);
 
         if (resolved.desc.flags.empty_tag_union_is_default) {
-            return .{ .contains_identity_variables = true };
+            facts.contains_identity_variables = true;
+            return;
         }
 
-        var facts: SourceTypeGraphFacts = .{};
+        const Children = struct {
+            list: *std.ArrayList(Var),
+            allocator: Allocator,
+            types: *const types.Store,
+
+            fn add(sink: @This(), var_: Var) Allocator.Error!void {
+                try sink.list.append(sink.allocator, sink.types.resolveVar(var_).var_);
+            }
+
+            fn addAll(sink: @This(), vars: []const Var) Allocator.Error!void {
+                for (vars) |var_| try sink.add(var_);
+            }
+        };
+        const out = Children{ .list = children, .allocator = allocator, .types = types_store };
         switch (resolved.desc.content) {
             .err, .field_presence => {},
             .flex, .rigid => facts.contains_identity_variables = true,
             .alias => |alias| {
-                try self.mergeVar(traversal, &facts, types_store.getAliasBackingVar(alias));
-                try self.mergeVars(traversal, &facts, types_store.sliceAliasArgs(alias));
+                try out.add(types_store.getAliasBackingVar(alias));
+                try out.addAll(types_store.sliceAliasArgs(alias));
             },
             .structure => |structure| switch (structure) {
                 .empty_record, .empty_tag_union => {},
-                .tuple => |tuple| try self.mergeVars(traversal, &facts, types_store.sliceVars(tuple.elems)),
-                .nominal_type => |nominal| try self.mergeVars(traversal, &facts, types_store.sliceNominalArgs(nominal)),
+                .tuple => |tuple| try out.addAll(types_store.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| try out.addAll(types_store.sliceNominalArgs(nominal)),
                 .fn_pure, .fn_effectful, .fn_unbound => |function| {
-                    try self.mergeVars(traversal, &facts, types_store.sliceVars(function.args));
-                    try self.mergeVar(traversal, &facts, function.ret);
+                    try out.addAll(types_store.sliceVars(function.args));
+                    try out.add(function.ret);
                 },
                 .record => |record| {
                     for (types_store.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
                         switch (presence.decode()) {
-                            .required => |type_var| try self.mergeVar(traversal, &facts, type_var),
+                            .required => |type_var| try out.add(type_var),
                             .unknown => |unknown| {
-                                try self.mergeVar(traversal, &facts, unknown.presence);
-                                try self.mergeVar(traversal, &facts, unknown.var_);
+                                try out.add(unknown.presence);
+                                try out.add(unknown.var_);
                             },
                         }
                     }
-                    try self.mergeVar(traversal, &facts, record.ext);
+                    try out.add(record.ext);
                 },
                 .tag_union => |tag_union| {
                     const tags = types_store.getTagsSlice(tag_union.tags);
                     for (tags.items(.args)) |args| {
-                        try self.mergeVars(traversal, &facts, types_store.sliceVars(args));
+                        try out.addAll(types_store.sliceVars(args));
                     }
-                    try self.mergeVar(traversal, &facts, tag_union.ext);
+                    try out.add(tag_union.ext);
                 },
             },
         }
-        return facts;
     }
 };
 
@@ -8310,6 +8317,17 @@ const SourceTypeGraphAnalysis = struct {
 
     allocator: Allocator,
     states: []State,
+    frames: std.ArrayList(Frame) = .empty,
+    children: std.ArrayList(Var) = .empty,
+
+    /// A variable whose children are still being merged. Its children
+    /// occupy `children[children_start..]` while it is the innermost frame.
+    const Frame = struct {
+        root: Var,
+        facts: SourceTypeGraphFacts,
+        children_start: usize,
+        next: usize,
+    };
 
     fn init(allocator: Allocator, variable_count: usize) Allocator.Error!SourceTypeGraphAnalysis {
         const states = try allocator.alloc(State, variable_count);
@@ -8318,46 +8336,78 @@ const SourceTypeGraphAnalysis = struct {
     }
 
     fn deinit(self: *SourceTypeGraphAnalysis) void {
+        self.frames.deinit(self.allocator);
+        self.children.deinit(self.allocator);
         self.allocator.free(self.states);
     }
 
-    const Traversal = struct {
-        states: []State,
-        context: SourceTypeGraphFactsContext,
+    fn known(self: *const SourceTypeGraphAnalysis, var_: Var) ?SourceTypeGraphFacts {
+        const state = self.states[@intFromEnum(var_)];
+        return switch (state.status) {
+            .active => .{ .contains_cycle = true },
+            .complete => .{
+                .contains_identity_variables = state.contains_identity_variables,
+                .contains_cycle = state.contains_cycle,
+            },
+            .unseen => null,
+        };
+    }
 
-        pub fn visit(self: *@This(), root: Var) Allocator.Error!SourceTypeGraphFacts {
-            const state = &self.states[@intFromEnum(root)];
-            switch (state.status) {
-                .active => return .{ .contains_cycle = true },
-                .complete => return .{
-                    .contains_identity_variables = state.contains_identity_variables,
-                    .contains_cycle = state.contains_cycle,
-                },
-                .unseen => {},
-            }
-            state.* = .{ .status = .active };
-            errdefer state.* = .{};
-            const facts = try self.context.visit(self, root);
-            state.* = .{
-                .status = .complete,
-                .contains_identity_variables = facts.contains_identity_variables,
-                .contains_cycle = facts.contains_cycle,
-            };
-            return facts;
-        }
-    };
+    fn begin(self: *SourceTypeGraphAnalysis, context: *SourceTypeGraphFactsContext, root: Var) Allocator.Error!void {
+        self.states[@intFromEnum(root)] = .{ .status = .active };
+        var facts: SourceTypeGraphFacts = .{};
+        const children_start = self.children.items.len;
+        try context.expand(root, &facts, &self.children, self.allocator);
+        try self.frames.append(self.allocator, .{
+            .root = root,
+            .facts = facts,
+            .children_start = children_start,
+            .next = children_start,
+        });
+    }
 
+    /// Memoized depth-first analysis on explicit frame and child stacks, so
+    /// type depth never becomes native call depth. A variable reached again
+    /// while it is still active contributes a cycle.
     fn analyze(
         self: *SourceTypeGraphAnalysis,
         module: TypedCIR.Module,
         var_: Var,
     ) Allocator.Error!SourceTypeGraphFacts {
         std.debug.assert(self.states.len == module.typeStoreConst().len());
-        var traversal = Traversal{
-            .states = self.states,
-            .context = .{ .module = module },
-        };
-        return traversal.visit(module.typeStoreConst().resolveVar(var_).var_);
+        std.debug.assert(self.frames.items.len == 0);
+        var context = SourceTypeGraphFactsContext{ .module = module };
+        const root = module.typeStoreConst().resolveVar(var_).var_;
+        if (self.known(root)) |facts| return facts;
+        errdefer {
+            for (self.frames.items) |frame| self.states[@intFromEnum(frame.root)] = .{};
+            self.frames.clearRetainingCapacity();
+            self.children.clearRetainingCapacity();
+        }
+        try self.begin(&context, root);
+        while (true) {
+            const frame = &self.frames.items[self.frames.items.len - 1];
+            if (frame.next < self.children.items.len) {
+                const child = self.children.items[frame.next];
+                frame.next += 1;
+                if (self.known(child)) |facts| {
+                    frame.facts.merge(facts);
+                } else {
+                    try self.begin(&context, child);
+                }
+                continue;
+            }
+
+            const finished = self.frames.pop().?;
+            self.children.shrinkRetainingCapacity(finished.children_start);
+            self.states[@intFromEnum(finished.root)] = .{
+                .status = .complete,
+                .contains_identity_variables = finished.facts.contains_identity_variables,
+                .contains_cycle = finished.facts.contains_cycle,
+            };
+            if (self.frames.items.len == 0) return finished.facts;
+            self.frames.items[self.frames.items.len - 1].facts.merge(finished.facts);
+        }
     }
 };
 
@@ -11868,6 +11918,7 @@ const CheckedLoopMutationPublisher = struct {
     store: *CheckedBodyStore,
     dispatch_operands: []const []const CheckedExprId,
     scratch: std.ArrayList(Mutation) = .empty,
+    work: std.ArrayList(Work) = .empty,
     positions: []usize = &.{},
 
     fn publish(allocator: Allocator, store: *CheckedBodyStore, dispatch_operands: []const []const CheckedExprId) Allocator.Error!void {
@@ -11889,28 +11940,115 @@ const CheckedLoopMutationPublisher = struct {
         }
         var self = CheckedLoopMutationPublisher{ .allocator = allocator, .store = store, .dispatch_operands = dispatch_operands };
         defer self.scratch.deinit(allocator);
+        defer self.work.deinit(allocator);
         defer allocator.free(self.positions);
-        for (store.stored_exprs.items) |*expr| if (expr.data == .for_) {
-            _ = try self.loop(&expr.data.for_);
+        for (store.stored_exprs.items, 0..) |expr, index| if (expr.data == .for_) {
+            try self.publishLoop(.{ .expr = @enumFromInt(index) });
         };
-        for (store.stored_statements.items) |*stmt| switch (stmt.data) {
-            inline .for_, .while_, .infinite_loop, .breakable_loop => |*loop_| _ = try self.loop(loop_),
+        for (store.stored_statements.items, 0..) |stmt, index| switch (stmt.data) {
+            .for_, .while_, .infinite_loop, .breakable_loop => try self.publishLoop(.{ .statement = @enumFromInt(index) }),
             .pending, .decl, .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
         };
     }
 
-    /// A `for` iterable evaluates once before the loop, so only its body is
-    /// part of the loop's plan; a condition loop's condition runs every iteration.
-    fn loop(self: *@This(), loop_: anytype) Allocator.Error!CheckedLoopMutations {
-        if (loop_.mutations) |published| return self.store.loopMutations(published);
+    const LoopRef = union(enum) {
+        expr: CheckedExprId,
+        statement: CheckedStatementId,
+    };
+
+    const LoopFields = struct {
+        mutations: *?LoopMutationPlanId,
+        /// A condition loop's condition runs every iteration, so it is part
+        /// of the loop's plan.
+        cond: ?CheckedExprId,
+        body: CheckedExprId,
+        /// A `for` iterable evaluates once before the loop, so it belongs to
+        /// the enclosing context rather than to the loop's plan.
+        iterable: ?CheckedExprId,
+    };
+
+    /// The traversal keeps its own work stack, so body nesting depth never
+    /// becomes native call depth. Children are pushed in reverse so they are
+    /// collected in source order.
+    const Work = union(enum) {
+        expr: struct { id: CheckedExprId, expect_only: bool },
+        statement: struct { id: CheckedStatementId, expect_only: bool },
+        /// A loop reached from an enclosing loop's body.
+        nested_loop: struct { loop: LoopRef, expect_only: bool },
+        /// Deduplicate and publish a loop whose mutations were collected
+        /// above `scratch_start`; a nested loop then contributes its plan to
+        /// the enclosing loop.
+        finish_loop: struct { loop: LoopRef, scratch_start: usize, enclosing_expect_only: ?bool },
+        append_ranges: struct { mutations: CheckedLoopMutations, expect_only: bool },
+    };
+
+    fn loopFields(self: *@This(), ref: LoopRef) LoopFields {
+        switch (ref) {
+            .expr => |id| {
+                const for_ = &self.store.stored_exprs.items[@intFromEnum(id)].data.for_;
+                return .{ .mutations = &for_.mutations, .cond = null, .body = for_.body, .iterable = for_.expr };
+            },
+            .statement => |id| switch (self.store.stored_statements.items[@intFromEnum(id)].data) {
+                .for_ => |*for_| return .{ .mutations = &for_.mutations, .cond = null, .body = for_.body, .iterable = for_.expr },
+                .while_, .infinite_loop, .breakable_loop => |*loop_| return .{ .mutations = &loop_.mutations, .cond = loop_.cond, .body = loop_.body, .iterable = null },
+                .pending, .decl, .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => checkedArtifactInvariant("loop mutation publication referenced a non-loop statement", .{}),
+            },
+        }
+    }
+
+    fn push(self: *@This(), work: Work) Allocator.Error!void {
+        try self.work.append(self.allocator, work);
+    }
+
+    fn publishLoop(self: *@This(), ref: LoopRef) Allocator.Error!void {
+        if (self.loopFields(ref).mutations.* != null) return;
+        try self.beginLoop(ref, null);
+        while (self.work.pop()) |work| switch (work) {
+            .expr => |item| try self.visitExpr(item.id, item.expect_only),
+            .statement => |item| try self.visitStatement(item.id, item.expect_only),
+            .nested_loop => |item| {
+                const fields = self.loopFields(item.loop);
+                if (fields.mutations.*) |published| {
+                    try self.pushLoopContribution(self.store.loopMutations(published), fields.iterable, item.expect_only);
+                } else {
+                    try self.beginLoop(item.loop, item.expect_only);
+                }
+            },
+            .finish_loop => |item| {
+                const mutations = try self.finishLoop(item.loop, item.scratch_start);
+                if (item.enclosing_expect_only) |expect_only| {
+                    try self.pushLoopContribution(mutations, self.loopFields(item.loop).iterable, expect_only);
+                }
+            },
+            .append_ranges => |item| {
+                try self.appendRange(item.mutations.always, item.expect_only);
+                try self.appendRange(item.mutations.expect_only, true);
+            },
+        };
+    }
+
+    /// Collect an unpublished loop's condition and body into a fresh scratch
+    /// region, then finish it.
+    fn beginLoop(self: *@This(), ref: LoopRef, enclosing_expect_only: ?bool) Allocator.Error!void {
         if (self.positions.len == 0) {
             self.positions = try self.allocator.alloc(usize, self.store.pattern_binders.items.len);
             @memset(self.positions, std.math.maxInt(usize));
         }
-        const start = self.scratch.items.len;
+        const fields = self.loopFields(ref);
+        try self.push(.{ .finish_loop = .{ .loop = ref, .scratch_start = self.scratch.items.len, .enclosing_expect_only = enclosing_expect_only } });
+        try self.push(.{ .expr = .{ .id = fields.body, .expect_only = false } });
+        if (fields.cond) |cond| try self.push(.{ .expr = .{ .id = cond, .expect_only = false } });
+    }
+
+    /// An enclosing loop sees a nested `for` loop's iterable in its own
+    /// context, then the nested loop's published mutations.
+    fn pushLoopContribution(self: *@This(), mutations: CheckedLoopMutations, iterable: ?CheckedExprId, expect_only: bool) Allocator.Error!void {
+        try self.push(.{ .append_ranges = .{ .mutations = mutations, .expect_only = expect_only } });
+        if (iterable) |expr| try self.push(.{ .expr = .{ .id = expr, .expect_only = expect_only } });
+    }
+
+    fn finishLoop(self: *@This(), ref: LoopRef, start: usize) Allocator.Error!CheckedLoopMutations {
         defer self.scratch.shrinkRetainingCapacity(start);
-        if (@TypeOf(loop_.*) == CheckedConditionLoop) try self.collectExpr(loop_.cond, false);
-        try self.collectExpr(loop_.body, false);
 
         // Nested loops publish before this deduplication begins, so one dense
         // position table serves every loop without per-loop clearing or hashing.
@@ -11942,7 +12080,7 @@ const CheckedLoopMutationPublisher = struct {
             .always = .{ .start = always_start, .len = expect_start - always_start },
             .expect_only = .{ .start = expect_start, .len = @as(u32, @intCast(self.store.pattern_binder_id_pool.items.len)) - expect_start },
         };
-        loop_.mutations = try self.store.appendLoopMutations(self.allocator, result);
+        self.loopFields(ref).mutations.* = try self.store.appendLoopMutations(self.allocator, result);
         return result;
     }
 
@@ -11952,72 +12090,81 @@ const CheckedLoopMutationPublisher = struct {
         }
     }
 
-    fn appendLoop(self: *@This(), loop_: anytype, expect_only: bool) Allocator.Error!void {
-        const mutations = try self.loop(loop_);
-        if (@TypeOf(loop_.*) != CheckedConditionLoop) try self.collectExpr(loop_.expr, expect_only);
-        try self.appendRange(mutations.always, expect_only);
-        try self.appendRange(mutations.expect_only, true);
+    /// Children are pushed in source order between `beginChildren` and
+    /// `endChildren`, which reverses them on the work stack.
+    fn beginChildren(self: *const @This()) usize {
+        return self.work.items.len;
     }
 
-    fn collectExpr(self: *@This(), id: CheckedExprId, expect_only: bool) Allocator.Error!void {
+    fn endChildren(self: *@This(), start: usize) void {
+        std.mem.reverse(Work, self.work.items[start..]);
+    }
+
+    fn pushExpr(self: *@This(), id: CheckedExprId, expect_only: bool) Allocator.Error!void {
+        try self.push(.{ .expr = .{ .id = id, .expect_only = expect_only } });
+    }
+
+    fn visitExpr(self: *@This(), id: CheckedExprId, expect_only: bool) Allocator.Error!void {
         const data = self.store.expr(id).data;
+        const children = self.beginChildren();
+        defer self.endChildren(children);
         switch (data) {
-            .str, .list, .tuple => |items| for (items) |item| try self.collectExpr(item, expect_only),
+            .str, .list, .tuple => |items| for (items) |item| try self.pushExpr(item, expect_only),
             .match_ => |match| {
-                try self.collectExpr(match.cond, expect_only);
+                try self.pushExpr(match.cond, expect_only);
                 for (match.branches) |branch| {
-                    if (branch.guard) |guard| try self.collectExpr(guard, expect_only);
-                    try self.collectExpr(branch.value, expect_only);
+                    if (branch.guard) |guard| try self.pushExpr(guard, expect_only);
+                    try self.pushExpr(branch.value, expect_only);
                 }
             },
             .if_ => |if_| {
                 for (if_.branches) |branch| {
-                    try self.collectExpr(branch.cond, expect_only);
-                    try self.collectExpr(branch.body, expect_only);
+                    try self.pushExpr(branch.cond, expect_only);
+                    try self.pushExpr(branch.body, expect_only);
                 }
-                try self.collectExpr(if_.final_else, expect_only);
+                try self.pushExpr(if_.final_else, expect_only);
             },
             .call => |call| {
-                try self.collectExpr(call.func, expect_only);
-                for (call.args) |arg| try self.collectExpr(arg, expect_only);
+                try self.pushExpr(call.func, expect_only);
+                for (call.args) |arg| try self.pushExpr(arg, expect_only);
             },
             .record => |record| {
-                if (record.ext) |ext| try self.collectExpr(ext, expect_only);
-                for (record.fields) |field| try self.collectExpr(field.value, expect_only);
+                if (record.ext) |ext| try self.pushExpr(ext, expect_only);
+                for (record.fields) |field| try self.pushExpr(field.value, expect_only);
             },
             .block => |block| {
-                for (block.statements) |statement| try self.collectStatement(statement, expect_only);
-                try self.collectExpr(block.final_expr, expect_only);
+                for (block.statements) |statement| try self.push(.{ .statement = .{ .id = statement, .expect_only = expect_only } });
+                try self.pushExpr(block.final_expr, expect_only);
             },
-            .tag => |tag| for (tag.args) |arg| try self.collectExpr(arg, expect_only),
-            .nominal => |nominal| try self.collectExpr(nominal.backing_expr, expect_only),
+            .tag => |tag| for (tag.args) |arg| try self.pushExpr(arg, expect_only),
+            .nominal => |nominal| try self.pushExpr(nominal.backing_expr, expect_only),
             .binop => |binop| {
-                try self.collectExpr(binop.lhs, expect_only);
-                try self.collectExpr(binop.rhs, expect_only);
+                try self.pushExpr(binop.lhs, expect_only);
+                try self.pushExpr(binop.rhs, expect_only);
             },
-            .unary_minus, .unary_not, .dbg => |child| try self.collectExpr(child, expect_only),
-            .expect => |child| try self.collectExpr(child, true),
-            .expect_err => |child| try self.collectExpr(child.expr, expect_only),
-            .field_access => |field| try self.collectExpr(field.receiver, expect_only),
+            .unary_minus, .unary_not, .dbg => |child| try self.pushExpr(child, expect_only),
+            .expect => |child| try self.pushExpr(child, true),
+            .expect_err => |child| try self.pushExpr(child.expr, expect_only),
+            .field_access => |field| try self.pushExpr(field.receiver, expect_only),
             .structural_eq => |eq| {
-                try self.collectExpr(eq.lhs, expect_only);
-                try self.collectExpr(eq.rhs, expect_only);
+                try self.pushExpr(eq.lhs, expect_only);
+                try self.pushExpr(eq.rhs, expect_only);
             },
             .structural_hash => |hash| {
-                try self.collectExpr(hash.value, expect_only);
-                try self.collectExpr(hash.hasher, expect_only);
+                try self.pushExpr(hash.value, expect_only);
+                try self.pushExpr(hash.hasher, expect_only);
             },
             .interpolation => |interpolation| {
-                try self.collectExpr(interpolation.first, expect_only);
+                try self.pushExpr(interpolation.first, expect_only);
                 for (interpolation.parts) |part| {
-                    try self.collectExpr(part.value, expect_only);
-                    try self.collectExpr(part.following_segment, expect_only);
+                    try self.pushExpr(part.value, expect_only);
+                    try self.pushExpr(part.following_segment, expect_only);
                 }
             },
-            .tuple_access => |access| try self.collectExpr(access.tuple, expect_only),
-            .return_ => |ret| try self.collectExpr(ret.expr, expect_only),
-            .for_ => try self.appendLoop(&self.store.stored_exprs.items[@intFromEnum(id)].data.for_, expect_only),
-            .run_low_level => |low| for (low.args) |arg| try self.collectExpr(arg, expect_only),
+            .tuple_access => |access| try self.pushExpr(access.tuple, expect_only),
+            .return_ => |ret| try self.pushExpr(ret.expr, expect_only),
+            .for_ => try self.push(.{ .nested_loop = .{ .loop = .{ .expr = id }, .expect_only = expect_only } }),
+            .run_low_level => |low| for (low.args) |arg| try self.pushExpr(arg, expect_only),
             // A lambda's body executes at invocation, not at this expression.
             .lambda,
             .closure,
@@ -12039,30 +12186,27 @@ const CheckedLoopMutationPublisher = struct {
             .break_,
             => {},
             .dispatch_call, .method_eq, .type_dispatch_call => {
-                for (self.dispatch_operands[@intFromEnum(id)]) |operand| try self.collectExpr(operand, expect_only);
+                for (self.dispatch_operands[@intFromEnum(id)]) |operand| try self.pushExpr(operand, expect_only);
             },
             .pending => checkedArtifactInvariant("pending expression in loop mutation publication", .{}),
         }
     }
 
-    fn collectStatement(self: *@This(), id: CheckedStatementId, expect_only: bool) Allocator.Error!void {
+    fn visitStatement(self: *@This(), id: CheckedStatementId, expect_only: bool) Allocator.Error!void {
         switch (self.store.statement(id).data) {
-            .decl => |decl| try self.collectExpr(decl.expr, expect_only),
-            .var_ => |decl| try self.collectExpr(decl.expr, expect_only),
+            .decl => |decl| try self.pushExpr(decl.expr, expect_only),
+            .var_ => |decl| try self.pushExpr(decl.expr, expect_only),
             .reassign => |reassign| {
                 for (reassign.reassigned_binders) |binder| try self.scratch.append(self.allocator, .{
                     .binder = binder,
                     .expect_only = expect_only,
                 });
-                try self.collectExpr(reassign.expr, expect_only);
+                try self.pushExpr(reassign.expr, expect_only);
             },
-            .dbg, .expr => |child| try self.collectExpr(child, expect_only),
-            .expect => |child| try self.collectExpr(child, true),
-            inline .for_, .while_, .infinite_loop, .breakable_loop => |_, tag| try self.appendLoop(
-                &@field(self.store.stored_statements.items[@intFromEnum(id)].data, @tagName(tag)),
-                expect_only,
-            ),
-            .return_ => |ret| try self.collectExpr(ret.expr, expect_only),
+            .dbg, .expr => |child| try self.pushExpr(child, expect_only),
+            .expect => |child| try self.pushExpr(child, true),
+            .for_, .while_, .infinite_loop, .breakable_loop => try self.push(.{ .nested_loop = .{ .loop = .{ .statement = id }, .expect_only = expect_only } }),
+            .return_ => |ret| try self.pushExpr(ret.expr, expect_only),
             .promoted_proc, .var_uninitialized, .crash, .break_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
             .pending => checkedArtifactInvariant("pending statement in loop mutation publication", .{}),
         }
@@ -13638,6 +13782,7 @@ fn publishCheckedBodyDiagnosticErrors(
     defer type_errors.deinit();
 
     var scan = CheckedBodyDiagnosticErrorScan(follow_constants){
+        .allocator = allocator,
         .bodies = bodies,
         .type_errors = &type_errors,
         .dispatch_operands = dispatch_operands,
@@ -13649,6 +13794,7 @@ fn publishCheckedBodyDiagnosticErrors(
         .statement_states = statement_states,
         .graph = if (follow_constants) &graph else {},
     };
+    defer scan.deinit();
 
     var expr_raw: usize = 0;
     while (expr_raw < bodies.exprCount()) : (expr_raw += 1) {
@@ -13658,8 +13804,15 @@ fn publishCheckedBodyDiagnosticErrors(
 }
 
 // Specialize away all recovery bookkeeping on the ordinary publication path.
+//
+// The scan is a memoized depth-first search over checked expressions,
+// patterns, and statements. It keeps its own explicit frame and item stacks,
+// so body nesting depth never becomes native call depth. Each node's checks
+// are listed as items in the order they are evaluated, and a node stops at its
+// first item that contains a diagnostic error.
 fn CheckedBodyDiagnosticErrorScan(comptime follow_constants: bool) type {
     return struct {
+        allocator: Allocator,
         bodies: CheckedBodyStoreView,
         type_errors: *CheckedTypeErrorTraversal,
         dispatch_operands: []const []const CheckedExprId,
@@ -13670,169 +13823,266 @@ fn CheckedBodyDiagnosticErrorScan(comptime follow_constants: bool) type {
         pattern_states: []DiagnosticErrorVisitState,
         statement_states: []DiagnosticErrorVisitState,
         graph: if (follow_constants) *DiagnosticErrorGraph else void,
+        frames: std.ArrayList(Frame) = .empty,
+        items: std.ArrayList(Item) = .empty,
+
+        const Node = union(enum) {
+            expr: CheckedExprId,
+            pattern: CheckedPatternId,
+            statement: CheckedStatementId,
+        };
+
+        const Item = union(enum) {
+            node: Node,
+            ty: CheckedTypeId,
+            /// An explicit error seed published for an expression after
+            /// source bodies (total dispatch resolution can report a rejected
+            /// target late).
+            seed: CheckedExprId,
+            diagnostic_error,
+            pending_expr,
+            pending_pattern,
+            pending_statement,
+            missing_dispatch_operands,
+        };
+
+        const Frame = struct {
+            node: Node,
+            items_start: usize,
+            next: usize,
+            previous: ?usize,
+        };
+
+        fn deinit(self: *@This()) void {
+            self.frames.deinit(self.allocator);
+            self.items.deinit(self.allocator);
+        }
 
         fn expr(self: *@This(), expr_id: CheckedExprId) Allocator.Error!bool {
-            const index = @intFromEnum(expr_id);
-            if (index >= self.bodies.exprCount()) checkedArtifactInvariant("checked diagnostic-error scan referenced a missing expression", .{});
-            const previous = if (follow_constants) try self.graph.enter(index) else null;
-            defer if (follow_constants) {
-                self.graph.current = previous;
+            std.debug.assert(self.frames.items.len == 0);
+            if (try self.begin(.{ .expr = expr_id })) |known| return known;
+            while (true) {
+                const frame = &self.frames.items[self.frames.items.len - 1];
+                var result = false;
+                if (frame.next < self.items.items.len) {
+                    const item = self.items.items[frame.next];
+                    frame.next += 1;
+                    const item_contains_error = switch (item) {
+                        .node => |child| (try self.begin(child)) orelse continue,
+                        .ty => |ty| try self.type_errors.visit(ty),
+                        .seed => |seed_expr| self.bodies.exprContainsDiagnosticError(seed_expr),
+                        .diagnostic_error => true,
+                        .pending_expr => checkedArtifactInvariant("checked diagnostic-error scan reached pending expression", .{}),
+                        .pending_pattern => checkedArtifactInvariant("checked diagnostic-error scan reached pending pattern", .{}),
+                        .pending_statement => checkedArtifactInvariant("checked diagnostic-error scan reached pending statement", .{}),
+                        .missing_dispatch_operands => checkedArtifactInvariant("checked diagnostic-error scan referenced missing dispatch operands", .{}),
+                    };
+                    if (!item_contains_error) continue;
+                    result = true;
+                }
+
+                // Finish this node; an error also finishes every enclosing
+                // node that was waiting on it.
+                while (true) {
+                    const finished = self.frames.pop().?;
+                    self.finish(finished, result);
+                    if (self.frames.items.len == 0) return result;
+                    if (!result) break;
+                }
+            }
+        }
+
+        fn flatIndex(self: *const @This(), node: Node) usize {
+            return switch (node) {
+                .expr => |id| @intFromEnum(id),
+                .pattern => |id| self.bodies.exprCount() + @intFromEnum(id),
+                .statement => |id| self.bodies.exprCount() + self.bodies.patternCount() + @intFromEnum(id),
             };
-            switch (self.expr_states[index]) {
-                .done => return self.expr_contains_diagnostic_error[index],
-                .active => if (follow_constants) return false else checkedArtifactInvariant("checked diagnostic-error expression relation contains a cycle", .{}),
+        }
+
+        fn stateAndFlag(self: *@This(), node: Node) struct { *DiagnosticErrorVisitState, *bool } {
+            return switch (node) {
+                .expr => |id| .{ &self.expr_states[@intFromEnum(id)], &self.expr_contains_diagnostic_error[@intFromEnum(id)] },
+                .pattern => |id| .{ &self.pattern_states[@intFromEnum(id)], &self.pattern_contains_diagnostic_error[@intFromEnum(id)] },
+                .statement => |id| .{ &self.statement_states[@intFromEnum(id)], &self.statement_contains_diagnostic_error[@intFromEnum(id)] },
+            };
+        }
+
+        /// Enter a node. Returns its known result when it needs no frame,
+        /// or null after pushing a frame for it.
+        fn begin(self: *@This(), node: Node) Allocator.Error!?bool {
+            switch (node) {
+                .expr => |id| if (@intFromEnum(id) >= self.bodies.exprCount()) checkedArtifactInvariant("checked diagnostic-error scan referenced a missing expression", .{}),
+                .pattern => |id| if (@intFromEnum(id) >= self.bodies.patternCount()) checkedArtifactInvariant("checked diagnostic-error scan referenced a missing pattern", .{}),
+                .statement => |id| if (@intFromEnum(id) >= self.bodies.statementCount()) checkedArtifactInvariant("checked diagnostic-error scan referenced a missing statement", .{}),
+            }
+            const previous = if (follow_constants) try self.graph.enter(self.flatIndex(node)) else null;
+            const state, const flag = self.stateAndFlag(node);
+            switch (state.*) {
+                .done => {
+                    if (follow_constants) self.graph.current = previous;
+                    return flag.*;
+                },
+                .active => {
+                    if (follow_constants) {
+                        self.graph.current = previous;
+                        return false;
+                    }
+                    switch (node) {
+                        .expr => checkedArtifactInvariant("checked diagnostic-error expression relation contains a cycle", .{}),
+                        .pattern => checkedArtifactInvariant("checked diagnostic-error pattern relation contains a cycle", .{}),
+                        .statement => checkedArtifactInvariant("checked diagnostic-error statement relation contains a cycle", .{}),
+                    }
+                },
                 .fresh => {},
             }
-            self.expr_states[index] = .active;
+            state.* = .active;
+            const items_start = self.items.items.len;
+            switch (node) {
+                .expr => |id| try self.pushExprItems(id),
+                .pattern => |id| try self.pushPatternItems(id),
+                .statement => |id| try self.pushStatementItems(id),
+            }
+            try self.frames.append(self.allocator, .{
+                .node = node,
+                .items_start = items_start,
+                .next = items_start,
+                .previous = previous,
+            });
+            return null;
+        }
+
+        fn finish(self: *@This(), frame: Frame, result: bool) void {
+            const state, const flag = self.stateAndFlag(frame.node);
+            flag.* = result;
+            state.* = .done;
+            self.items.shrinkRetainingCapacity(frame.items_start);
+            if (follow_constants) self.graph.current = frame.previous;
+        }
+
+        fn pushItem(self: *@This(), item: Item) Allocator.Error!void {
+            try self.items.append(self.allocator, item);
+        }
+
+        fn pushExpr(self: *@This(), expr_id: CheckedExprId) Allocator.Error!void {
+            try self.pushItem(.{ .node = .{ .expr = expr_id } });
+        }
+
+        fn pushPattern(self: *@This(), pattern_id: CheckedPatternId) Allocator.Error!void {
+            try self.pushItem(.{ .node = .{ .pattern = pattern_id } });
+        }
+
+        fn pushExprSpan(self: *@This(), exprs: []const CheckedExprId) Allocator.Error!void {
+            for (exprs) |expr_id| try self.pushExpr(expr_id);
+        }
+
+        fn pushPatternSpan(self: *@This(), patterns: []const CheckedPatternId) Allocator.Error!void {
+            for (patterns) |pattern_id| try self.pushPattern(pattern_id);
+        }
+
+        fn pushExprItems(self: *@This(), expr_id: CheckedExprId) Allocator.Error!void {
             const checked_expr = self.bodies.expr(expr_id);
             // Total dispatch resolution can report a rejected target after source
             // bodies were published. Preserve that explicit seed while propagating
             // it through the same expression dependencies as other checking errors.
-            const result = (follow_constants and self.bodies.exprContainsDiagnosticError(expr_id)) or
-                (try self.type_errors.visit(checked_expr.ty)) or
-                (try self.exprDataContainsDiagnosticError(checked_expr)) or
-                (if (follow_constants) if (self.graph.lookup_values[index]) |value| try self.expr(value) else false else false);
-            self.expr_contains_diagnostic_error[index] = result;
-            self.expr_states[index] = .done;
-            return result;
-        }
-
-        fn pattern(self: *@This(), pattern_id: CheckedPatternId) Allocator.Error!bool {
-            const index = @intFromEnum(pattern_id);
-            if (index >= self.bodies.patternCount()) checkedArtifactInvariant("checked diagnostic-error scan referenced a missing pattern", .{});
-            const previous = if (follow_constants) try self.graph.enter(self.bodies.exprCount() + index) else null;
-            defer if (follow_constants) {
-                self.graph.current = previous;
-            };
-            switch (self.pattern_states[index]) {
-                .done => return self.pattern_contains_diagnostic_error[index],
-                .active => if (follow_constants) return false else checkedArtifactInvariant("checked diagnostic-error pattern relation contains a cycle", .{}),
-                .fresh => {},
-            }
-            self.pattern_states[index] = .active;
-            const checked_pattern = self.bodies.pattern(pattern_id);
-            const result = (try self.type_errors.visit(checked_pattern.ty)) or
-                try self.patternDataContainsDiagnosticError(checked_pattern.data);
-            self.pattern_contains_diagnostic_error[index] = result;
-            self.pattern_states[index] = .done;
-            return result;
-        }
-
-        fn statement(self: *@This(), statement_id: CheckedStatementId) Allocator.Error!bool {
-            const index = @intFromEnum(statement_id);
-            if (index >= self.bodies.statementCount()) checkedArtifactInvariant("checked diagnostic-error scan referenced a missing statement", .{});
-            const previous = if (follow_constants) try self.graph.enter(self.bodies.exprCount() + self.bodies.patternCount() + index) else null;
-            defer if (follow_constants) {
-                self.graph.current = previous;
-            };
-            switch (self.statement_states[index]) {
-                .done => return self.statement_contains_diagnostic_error[index],
-                .active => if (follow_constants) return false else checkedArtifactInvariant("checked diagnostic-error statement relation contains a cycle", .{}),
-                .fresh => {},
-            }
-            self.statement_states[index] = .active;
-            const result = try self.statementDataContainsDiagnosticError(self.bodies.statement(statement_id).data);
-            self.statement_contains_diagnostic_error[index] = result;
-            self.statement_states[index] = .done;
-            return result;
-        }
-
-        fn exprDataContainsDiagnosticError(self: *@This(), checked_expr: CheckedExpr) Allocator.Error!bool {
-            return switch (checked_expr.data) {
-                .pending => checkedArtifactInvariant("checked diagnostic-error scan reached pending expression", .{}),
-                .runtime_error => true,
+            if (follow_constants) try self.pushItem(.{ .seed = expr_id });
+            try self.pushItem(.{ .ty = checked_expr.ty });
+            switch (checked_expr.data) {
+                .pending => try self.pushItem(.pending_expr),
+                .runtime_error => try self.pushItem(.diagnostic_error),
                 .str,
                 .list,
                 .tuple,
-                => |items| self.exprSpan(items),
-                .match_ => |match| blk: {
-                    if (try self.expr(match.cond)) break :blk true;
+                => |items| try self.pushExprSpan(items),
+                .match_ => |match| {
+                    try self.pushExpr(match.cond);
                     for (match.branches) |branch| {
                         for (branch.patternsSlice(self.bodies)) |branch_pattern| {
-                            if (try self.pattern(branch_pattern.pattern)) break :blk true;
+                            try self.pushPattern(branch_pattern.pattern);
                         }
-                        if (branch.guard) |guard| {
-                            if (try self.expr(guard)) break :blk true;
-                        }
-                        if (try self.expr(branch.value)) break :blk true;
+                        if (branch.guard) |guard| try self.pushExpr(guard);
+                        try self.pushExpr(branch.value);
                     }
-                    break :blk false;
                 },
-                .if_ => |if_| blk: {
+                .if_ => |if_| {
                     for (if_.branches) |branch| {
-                        if (try self.expr(branch.cond)) break :blk true;
-                        if (try self.expr(branch.body)) break :blk true;
+                        try self.pushExpr(branch.cond);
+                        try self.pushExpr(branch.body);
                     }
-                    break :blk try self.expr(if_.final_else);
+                    try self.pushExpr(if_.final_else);
                 },
-                .call => |call| (try self.expr(call.func)) or
-                    (try self.exprSpan(call.args)) or
-                    try self.type_errors.visit(call.source_fn_ty_payload),
-                .record => |record| blk: {
-                    if (record.ext) |ext| {
-                        if (try self.expr(ext)) break :blk true;
-                    }
-                    for (record.fields) |field| {
-                        if (try self.expr(field.value)) break :blk true;
-                    }
-                    break :blk false;
+                .call => |call| {
+                    try self.pushExpr(call.func);
+                    try self.pushExprSpan(call.args);
+                    try self.pushItem(.{ .ty = call.source_fn_ty_payload });
                 },
-                .block => |block| blk: {
+                .record => |record| {
+                    if (record.ext) |ext| try self.pushExpr(ext);
+                    for (record.fields) |field| try self.pushExpr(field.value);
+                },
+                .block => |block| {
                     for (block.statements) |statement_id| {
-                        if (try self.statement(statement_id)) break :blk true;
+                        try self.pushItem(.{ .node = .{ .statement = statement_id } });
                     }
-                    break :blk try self.expr(block.final_expr);
+                    try self.pushExpr(block.final_expr);
                 },
-                .tag => |tag| self.exprSpan(tag.args),
-                .nominal => |nominal| self.expr(nominal.backing_expr),
-                .closure => |closure| blk: {
-                    if (try self.expr(closure.lambda)) break :blk true;
-                    for (closure.captures) |capture| {
-                        if (try self.pattern(capture.pattern)) break :blk true;
-                    }
-                    break :blk false;
+                .tag => |tag| try self.pushExprSpan(tag.args),
+                .nominal => |nominal| try self.pushExpr(nominal.backing_expr),
+                .closure => |closure| {
+                    try self.pushExpr(closure.lambda);
+                    for (closure.captures) |capture| try self.pushPattern(capture.pattern);
                 },
-                .lambda => |lambda| (try self.patternSpan(lambda.args)) or
-                    try self.expr(lambda.body),
-                .binop => |binop| (try self.expr(binop.lhs)) or
-                    try self.expr(binop.rhs),
+                .lambda => |lambda| {
+                    try self.pushPatternSpan(lambda.args);
+                    try self.pushExpr(lambda.body);
+                },
+                .binop => |binop| {
+                    try self.pushExpr(binop.lhs);
+                    try self.pushExpr(binop.rhs);
+                },
                 .unary_minus,
                 .unary_not,
                 .dbg,
                 .expect,
-                => |child| self.expr(child),
-                .field_access => |field| self.expr(field.receiver),
+                => |child| try self.pushExpr(child),
+                .field_access => |field| try self.pushExpr(field.receiver),
                 .dispatch_call,
                 .method_eq,
                 .type_dispatch_call,
-                => blk: {
+                => {
                     const raw = @intFromEnum(checked_expr.id);
                     if (raw >= self.dispatch_operands.len) {
-                        checkedArtifactInvariant("checked diagnostic-error scan referenced missing dispatch operands", .{});
+                        try self.pushItem(.missing_dispatch_operands);
+                    } else {
+                        try self.pushExprSpan(self.dispatch_operands[raw]);
                     }
-                    break :blk try self.exprSpan(self.dispatch_operands[raw]);
                 },
-                .interpolation => |interpolation| blk: {
-                    if (try self.type_errors.visit(interpolation.step_fn_ty)) break :blk true;
-                    if (try self.expr(interpolation.first)) break :blk true;
+                .interpolation => |interpolation| {
+                    try self.pushItem(.{ .ty = interpolation.step_fn_ty });
+                    try self.pushExpr(interpolation.first);
                     for (interpolation.parts) |part| {
-                        if (try self.expr(part.value)) break :blk true;
-                        if (try self.expr(part.following_segment)) break :blk true;
+                        try self.pushExpr(part.value);
+                        try self.pushExpr(part.following_segment);
                     }
-                    break :blk false;
                 },
-                .structural_eq => |eq| (try self.expr(eq.lhs)) or
-                    try self.expr(eq.rhs),
-                .structural_hash => |hash| (try self.expr(hash.value)) or
-                    try self.expr(hash.hasher),
-                .tuple_access => |access| self.expr(access.tuple),
-                .expect_err => |expect_err| self.expr(expect_err.expr),
-                .return_ => |ret| self.expr(ret.expr),
-                .for_ => |for_| (try self.pattern(for_.pattern)) or
-                    (try self.expr(for_.expr)) or
-                    try self.expr(for_.body),
-                .hosted_lambda => |hosted| self.patternSpan(hosted.args),
-                .run_low_level => |run| self.exprSpan(run.args),
+                .structural_eq => |eq| {
+                    try self.pushExpr(eq.lhs);
+                    try self.pushExpr(eq.rhs);
+                },
+                .structural_hash => |hash| {
+                    try self.pushExpr(hash.value);
+                    try self.pushExpr(hash.hasher);
+                },
+                .tuple_access => |access| try self.pushExpr(access.tuple),
+                .expect_err => |expect_err| try self.pushExpr(expect_err.expr),
+                .return_ => |ret| try self.pushExpr(ret.expr),
+                .for_ => |for_| {
+                    try self.pushPattern(for_.pattern);
+                    try self.pushExpr(for_.expr);
+                    try self.pushExpr(for_.body);
+                },
+                .hosted_lambda => |hosted| try self.pushPatternSpan(hosted.args),
+                .run_low_level => |run| try self.pushExprSpan(run.args),
                 .numeral,
                 .str_from_quote,
                 .str_segment,
@@ -13847,82 +14097,92 @@ fn CheckedBodyDiagnosticErrorScan(comptime follow_constants: bool) type {
                 .ellipsis,
                 .anno_only,
                 .break_,
-                => false,
-            };
+                => {},
+            }
+            if (follow_constants) {
+                if (self.graph.lookup_values[@intFromEnum(expr_id)]) |value| try self.pushExpr(value);
+            }
         }
 
-        fn patternDataContainsDiagnosticError(self: *@This(), data: CheckedPatternData) Allocator.Error!bool {
-            return switch (data) {
-                .pending => checkedArtifactInvariant("checked diagnostic-error scan reached pending pattern", .{}),
-                .runtime_error => true,
-                .as => |as| self.pattern(as.pattern),
-                .applied_tag => |tag| self.patternSpan(tag.args),
-                .nominal => |nominal| self.pattern(nominal.backing_pattern),
-                .record_destructure => |destructs| blk: {
+        fn pushPatternItems(self: *@This(), pattern_id: CheckedPatternId) Allocator.Error!void {
+            const checked_pattern = self.bodies.pattern(pattern_id);
+            try self.pushItem(.{ .ty = checked_pattern.ty });
+            switch (checked_pattern.data) {
+                .pending => try self.pushItem(.pending_pattern),
+                .runtime_error => try self.pushItem(.diagnostic_error),
+                .as => |as| try self.pushPattern(as.pattern),
+                .applied_tag => |tag| try self.pushPatternSpan(tag.args),
+                .nominal => |nominal| try self.pushPattern(nominal.backing_pattern),
+                .record_destructure => |destructs| {
                     for (destructs) |destruct| {
-                        const child = switch (destruct.kind) {
+                        try self.pushPattern(switch (destruct.kind) {
                             .required => |child_pattern| child_pattern,
                             .sub_pattern => |child_pattern| child_pattern,
                             .rest => |child_pattern| child_pattern,
-                        };
-                        if (try self.pattern(child)) break :blk true;
+                        });
                     }
-                    break :blk false;
                 },
-                .list => |list| (try self.patternSpan(list.patterns)) or blk: {
-                    const rest = list.rest orelse break :blk false;
-                    const rest_pattern = rest.pattern orelse break :blk false;
-                    break :blk try self.pattern(rest_pattern);
+                .list => |list| {
+                    try self.pushPatternSpan(list.patterns);
+                    if (list.rest) |rest| {
+                        if (rest.pattern) |rest_pattern| try self.pushPattern(rest_pattern);
+                    }
                 },
-                .tuple => |items| self.patternSpan(items),
-                .numeral_literal => |literal| blk: {
-                    const guard = literal.guard orelse break :blk false;
-                    break :blk try self.expr(guard);
-                },
-                .str_literal => |literal| blk: {
-                    const guard = literal.guard orelse break :blk false;
-                    break :blk try self.expr(guard);
-                },
-                .str_interpolation => |str| blk: {
+                .tuple => |items| try self.pushPatternSpan(items),
+                .numeral_literal => |literal| if (literal.guard) |guard| try self.pushExpr(guard),
+                .str_literal => |literal| if (literal.guard) |guard| try self.pushExpr(guard),
+                .str_interpolation => |str| {
                     for (str.steps) |step| {
-                        const capture = step.capture orelse continue;
-                        if (try self.pattern(capture)) break :blk true;
+                        if (step.capture) |capture| try self.pushPattern(capture);
                     }
-                    break :blk false;
                 },
                 .assign,
                 .underscore,
-                => false,
-            };
+                => {},
+            }
         }
 
-        fn statementDataContainsDiagnosticError(self: *@This(), data: CheckedStatementData) Allocator.Error!bool {
-            return switch (data) {
-                .pending => checkedArtifactInvariant("checked diagnostic-error scan reached pending statement", .{}),
-                .runtime_error => true,
-                .decl => |decl| (try self.pattern(decl.pattern)) or
-                    try self.expr(decl.expr),
+        fn pushStatementItems(self: *@This(), statement_id: CheckedStatementId) Allocator.Error!void {
+            switch (self.bodies.statement(statement_id).data) {
+                .pending => try self.pushItem(.pending_statement),
+                .runtime_error => try self.pushItem(.diagnostic_error),
+                .decl => |decl| {
+                    try self.pushPattern(decl.pattern);
+                    try self.pushExpr(decl.expr);
+                },
                 // The promoted procedure's body is its own template.
-                .promoted_proc => false,
-                .var_ => |var_| (try self.pattern(var_.pattern)) or
-                    try self.expr(var_.expr),
-                .var_uninitialized => |var_| self.pattern(var_.pattern),
-                .reassign => |reassign| (try self.pattern(reassign.pattern)) or
-                    try self.expr(reassign.expr),
+                .promoted_proc => {},
+                .var_ => |var_| {
+                    try self.pushPattern(var_.pattern);
+                    try self.pushExpr(var_.expr);
+                },
+                .var_uninitialized => |var_| try self.pushPattern(var_.pattern),
+                .reassign => |reassign| {
+                    try self.pushPattern(reassign.pattern);
+                    try self.pushExpr(reassign.expr);
+                },
                 .dbg,
                 .expr,
                 .expect,
-                => |expr_id| self.expr(expr_id),
-                .for_ => |for_| (try self.pattern(for_.pattern)) or
-                    (try self.expr(for_.expr)) or
-                    try self.expr(for_.body),
-                .while_ => |while_| (try self.expr(while_.cond)) or
-                    try self.expr(while_.body),
-                .infinite_loop => |loop| (try self.expr(loop.cond)) or
-                    try self.expr(loop.body),
-                .breakable_loop => |loop| (try self.expr(loop.cond)) or
-                    try self.expr(loop.body),
-                .return_ => |ret| self.expr(ret.expr),
+                => |expr_id| try self.pushExpr(expr_id),
+                .for_ => |for_| {
+                    try self.pushPattern(for_.pattern);
+                    try self.pushExpr(for_.expr);
+                    try self.pushExpr(for_.body);
+                },
+                .while_ => |while_| {
+                    try self.pushExpr(while_.cond);
+                    try self.pushExpr(while_.body);
+                },
+                .infinite_loop => |loop| {
+                    try self.pushExpr(loop.cond);
+                    try self.pushExpr(loop.body);
+                },
+                .breakable_loop => |loop| {
+                    try self.pushExpr(loop.cond);
+                    try self.pushExpr(loop.body);
+                },
+                .return_ => |ret| try self.pushExpr(ret.expr),
                 .crash,
                 .break_,
                 .import_,
@@ -13931,22 +14191,8 @@ fn CheckedBodyDiagnosticErrorScan(comptime follow_constants: bool) type {
                 .nominal_decl,
                 .type_anno,
                 .type_var_alias,
-                => false,
-            };
-        }
-
-        fn exprSpan(self: *@This(), exprs: []const CheckedExprId) Allocator.Error!bool {
-            for (exprs) |expr_id| {
-                if (try self.expr(expr_id)) return true;
+                => {},
             }
-            return false;
-        }
-
-        fn patternSpan(self: *@This(), patterns: []const CheckedPatternId) Allocator.Error!bool {
-            for (patterns) |pattern_id| {
-                if (try self.pattern(pattern_id)) return true;
-            }
-            return false;
         }
     };
 }
@@ -20561,6 +20807,7 @@ const CheckedTemplateRefCollector = struct {
     visited_exprs: collections.DenseMap(CheckedExprId, void),
     visited_patterns: collections.DenseMap(CheckedPatternId, void),
     visited_statements: collections.DenseMap(CheckedStatementId, void),
+    work: std.ArrayList(Work) = .empty,
 
     fn init(
         allocator: Allocator,
@@ -20600,6 +20847,7 @@ const CheckedTemplateRefCollector = struct {
     }
 
     fn deinit(self: *CheckedTemplateRefCollector) void {
+        self.work.deinit(self.allocator);
         self.visited_statements.deinit();
         self.visited_patterns.deinit();
         self.visited_exprs.deinit();
@@ -20715,7 +20963,55 @@ const CheckedTemplateRefCollector = struct {
         });
     }
 
+    /// Collect the references reachable from a checked expression. The walk
+    /// keeps its own work stack, so body nesting depth never becomes native
+    /// call depth; children are pushed in reverse so they are collected in
+    /// source order, and post-actions are pushed before them so they run once
+    /// every child is collected.
     fn collectExpr(self: *CheckedTemplateRefCollector, expr_id: CheckedExprId) Allocator.Error!void {
+        const base_len = self.work.items.len;
+        try self.work.append(self.allocator, .{ .expr = expr_id });
+        while (self.work.items.len > base_len) {
+            switch (self.work.pop().?) {
+                .expr => |id| try self.visitExpr(id),
+                .pattern => |id| try self.visitPattern(id),
+                .statement => |id| try self.visitStatement(id),
+                .generated_interpolation_iter => |id| try self.visitGeneratedInterpolationIter(id),
+                .call_relation => |id| {
+                    const expr = self.checked_bodies.expr(id);
+                    try self.appendCallRelation(id, expr, expr.data.call);
+                },
+                .pop_scope => _ = self.scope_stack.pop(),
+            }
+        }
+    }
+
+    const Work = union(enum) {
+        expr: CheckedExprId,
+        pattern: CheckedPatternId,
+        statement: CheckedStatementId,
+        generated_interpolation_iter: CheckedExprId,
+        /// Append a call's relation once its callee and arguments are collected.
+        call_relation: CheckedExprId,
+        /// Leave a generalized local function's evidence scope.
+        pop_scope,
+    };
+
+    /// Children are pushed in source order between `beginChildren` and
+    /// `endChildren`, which reverses them on the work stack.
+    fn beginChildren(self: *const CheckedTemplateRefCollector) usize {
+        return self.work.items.len;
+    }
+
+    fn endChildren(self: *CheckedTemplateRefCollector, start: usize) void {
+        std.mem.reverse(Work, self.work.items[start..]);
+    }
+
+    fn pushChild(self: *CheckedTemplateRefCollector, work: Work) Allocator.Error!void {
+        try self.work.append(self.allocator, work);
+    }
+
+    fn visitExpr(self: *CheckedTemplateRefCollector, expr_id: CheckedExprId) Allocator.Error!void {
         const entry = try self.visited_exprs.getOrPut(expr_id);
         if (entry.found_existing) return;
 
@@ -20759,9 +21055,8 @@ const CheckedTemplateRefCollector = struct {
             });
             try self.scope_stack.append(self.allocator, scope_id);
         }
-        defer {
-            if (local_scheme != null) _ = self.scope_stack.pop();
-        }
+        // The scope stays pushed until every child has been collected.
+        if (local_scheme != null) try self.work.append(self.allocator, .pop_scope);
 
         const expr = self.checked_bodies.expr(expr_id);
         // An erroneous callable publishes no procedure relation, and its type
@@ -20803,107 +21098,135 @@ const CheckedTemplateRefCollector = struct {
             => |plan_id| {
                 const id = plan_id orelse checkedArtifactInvariant("checked dispatch expression reached template closure collection without a static-dispatch plan", .{});
                 try self.appendDispatchRef(id);
-                try self.collectStaticDispatchPlanArgs(id);
+                try self.pushStaticDispatchPlanArgs(id);
             },
             .interpolation => |interpolation| {
                 const id = interpolation.plan orelse checkedArtifactInvariant("checked interpolation expression reached template closure collection without a static-dispatch plan", .{});
                 try self.appendDispatchRef(id);
-                try self.collectStaticDispatchPlanArgs(id);
+                try self.pushStaticDispatchPlanArgs(id);
             },
             .numeral => |numeral| {
                 // Builtin-targeted literals carry no plan (their bits are
                 // produced at monotype lowering); only custom conversions do.
                 if (numeral.plan) |id| {
                     try self.appendDispatchRef(id);
-                    try self.collectStaticDispatchPlanArgs(id);
+                    try self.pushStaticDispatchPlanArgs(id);
                 }
             },
             .str_from_quote => |quote| {
                 const id = quote.plan orelse checkedArtifactInvariant("checked from_quote expression reached template closure collection without a dispatch plan", .{});
                 try self.appendDispatchRef(id);
-                try self.collectStaticDispatchPlanArgs(id);
+                try self.pushStaticDispatchPlanArgs(id);
             },
             .str,
             .list,
             .tuple,
             => |items| {
-                for (items) |item| try self.collectExpr(item);
+                const children = self.beginChildren();
+                for (items) |item| try self.pushChild(.{ .expr = item });
+                self.endChildren(children);
             },
             .match_ => |match| {
-                try self.collectExpr(match.cond);
+                const children = self.beginChildren();
+                try self.pushChild(.{ .expr = match.cond });
                 for (match.branches) |branch| {
-                    for (branch.patternsSlice(self.checked_bodies)) |branch_pattern| try self.collectPattern(branch_pattern.pattern);
-                    if (branch.guard) |guard| try self.collectExpr(guard);
-                    try self.collectExpr(branch.value);
+                    for (branch.patternsSlice(self.checked_bodies)) |branch_pattern| try self.pushChild(.{ .pattern = branch_pattern.pattern });
+                    if (branch.guard) |guard| try self.pushChild(.{ .expr = guard });
+                    try self.pushChild(.{ .expr = branch.value });
                 }
+                self.endChildren(children);
             },
             .if_ => |if_| {
+                const children = self.beginChildren();
                 for (if_.branches) |branch| {
-                    try self.collectExpr(branch.cond);
-                    try self.collectExpr(branch.body);
+                    try self.pushChild(.{ .expr = branch.cond });
+                    try self.pushChild(.{ .expr = branch.body });
                 }
-                try self.collectExpr(if_.final_else);
+                try self.pushChild(.{ .expr = if_.final_else });
+                self.endChildren(children);
             },
             .call => |call| {
                 if (call.direct_target) |target| try self.appendValueRef(target);
-                try self.collectExpr(call.func);
-                for (call.args) |arg| try self.collectExpr(arg);
-                try self.appendCallRelation(expr_id, expr, call);
+                try self.work.append(self.allocator, .{ .call_relation = expr_id });
+                const children = self.beginChildren();
+                try self.pushChild(.{ .expr = call.func });
+                for (call.args) |arg| try self.pushChild(.{ .expr = arg });
+                self.endChildren(children);
             },
             .record => |record| {
-                if (record.ext) |ext| try self.collectExpr(ext);
-                for (record.fields) |field| try self.collectExpr(field.value);
+                const children = self.beginChildren();
+                if (record.ext) |ext| try self.pushChild(.{ .expr = ext });
+                for (record.fields) |field| try self.pushChild(.{ .expr = field.value });
+                self.endChildren(children);
             },
             .block => |block| {
-                for (block.statements) |statement| try self.collectStatement(statement);
-                try self.collectExpr(block.final_expr);
+                const children = self.beginChildren();
+                for (block.statements) |statement| try self.pushChild(.{ .statement = statement });
+                try self.pushChild(.{ .expr = block.final_expr });
+                self.endChildren(children);
             },
             .tag => |tag| {
-                for (tag.args) |arg| try self.collectExpr(arg);
+                const children = self.beginChildren();
+                for (tag.args) |arg| try self.pushChild(.{ .expr = arg });
+                self.endChildren(children);
             },
-            .nominal => |nominal| try self.collectExpr(nominal.backing_expr),
-            .closure => |closure| try self.collectExpr(closure.lambda),
+            .nominal => |nominal| try self.pushChild(.{ .expr = nominal.backing_expr }),
+            .closure => |closure| try self.pushChild(.{ .expr = closure.lambda }),
             .lambda => |lambda| {
-                for (lambda.args) |arg| try self.collectPattern(arg);
-                try self.collectExpr(lambda.body);
+                const children = self.beginChildren();
+                for (lambda.args) |arg| try self.pushChild(.{ .pattern = arg });
+                try self.pushChild(.{ .expr = lambda.body });
+                self.endChildren(children);
             },
             .binop => |binop| {
-                try self.collectExpr(binop.lhs);
-                try self.collectExpr(binop.rhs);
+                const children = self.beginChildren();
+                try self.pushChild(.{ .expr = binop.lhs });
+                try self.pushChild(.{ .expr = binop.rhs });
+                self.endChildren(children);
             },
-            .unary_minus => |child| try self.collectExpr(child),
-            .unary_not => |child| try self.collectExpr(child),
-            .field_access => |field| try self.collectExpr(field.receiver),
+            .unary_minus => |child| try self.pushChild(.{ .expr = child }),
+            .unary_not => |child| try self.pushChild(.{ .expr = child }),
+            .field_access => |field| try self.pushChild(.{ .expr = field.receiver }),
             .structural_eq => |eq| {
-                try self.collectExpr(eq.lhs);
-                try self.collectExpr(eq.rhs);
+                const children = self.beginChildren();
+                try self.pushChild(.{ .expr = eq.lhs });
+                try self.pushChild(.{ .expr = eq.rhs });
+                self.endChildren(children);
             },
             .structural_hash => |h| {
-                try self.collectExpr(h.value);
-                try self.collectExpr(h.hasher);
+                const children = self.beginChildren();
+                try self.pushChild(.{ .expr = h.value });
+                try self.pushChild(.{ .expr = h.hasher });
+                self.endChildren(children);
             },
-            .tuple_access => |access| try self.collectExpr(access.tuple),
-            .dbg => |child| try self.collectExpr(child),
-            .expect_err => |expect_err| try self.collectExpr(expect_err.expr),
-            .expect => |child| try self.collectExpr(child),
+            .tuple_access => |access| try self.pushChild(.{ .expr = access.tuple }),
+            .dbg => |child| try self.pushChild(.{ .expr = child }),
+            .expect_err => |expect_err| try self.pushChild(.{ .expr = expect_err.expr }),
+            .expect => |child| try self.pushChild(.{ .expr = child }),
             .break_ => {},
             .return_ => |ret| {
-                try self.collectExpr(ret.expr);
                 // `ret.lambda` is the enclosing lambda context for early-return
                 // lowering, not an owned child expression.
+                try self.pushChild(.{ .expr = ret.expr });
             },
             .for_ => |for_| {
                 const plan_id = for_.plan orelse checkedArtifactInvariant("checked for expression reached template closure collection without an iterator-for plan", .{});
-                try self.collectIteratorForPlan(plan_id);
-                try self.collectPattern(for_.pattern);
-                try self.collectExpr(for_.expr);
-                try self.collectExpr(for_.body);
+                const children = self.beginChildren();
+                try self.pushIteratorForPlan(plan_id);
+                try self.pushChild(.{ .pattern = for_.pattern });
+                try self.pushChild(.{ .expr = for_.expr });
+                try self.pushChild(.{ .expr = for_.body });
+                self.endChildren(children);
             },
             .hosted_lambda => |hosted| {
-                for (hosted.args) |arg| try self.collectPattern(arg);
+                const children = self.beginChildren();
+                for (hosted.args) |arg| try self.pushChild(.{ .pattern = arg });
+                self.endChildren(children);
             },
             .run_low_level => |run| {
-                for (run.args) |arg| try self.collectExpr(arg);
+                const children = self.beginChildren();
+                for (run.args) |arg| try self.pushChild(.{ .expr = arg });
+                self.endChildren(children);
             },
             .str_segment,
             .bytes_literal,
@@ -20919,7 +21242,7 @@ const CheckedTemplateRefCollector = struct {
         }
     }
 
-    fn collectStaticDispatchPlanArgs(
+    fn pushStaticDispatchPlanArgs(
         self: *CheckedTemplateRefCollector,
         plan_id: static_dispatch.StaticDispatchPlanId,
     ) Allocator.Error!void {
@@ -20928,26 +21251,32 @@ const CheckedTemplateRefCollector = struct {
             checkedArtifactInvariant("checked template static-dispatch plan id was outside the plan table", .{});
         }
         const plan = self.static_dispatch_plans.plans[raw];
+        const children = self.beginChildren();
         for (plan.argsSlice(self.static_dispatch_plans)) |arg| switch (arg) {
-            .checked_expr => |expr| try self.collectExpr(expr),
-            .generated_interpolation_iter => |expr| try self.collectGeneratedInterpolationIter(expr),
+            .checked_expr => |expr| try self.pushChild(.{ .expr = expr }),
+            .generated_interpolation_iter => |expr| try self.pushChild(.{ .generated_interpolation_iter = expr }),
             .generated_numeral, .generated_quote => {},
         };
+        self.endChildren(children);
     }
 
-    fn collectGeneratedInterpolationIter(self: *CheckedTemplateRefCollector, expr_id: CheckedExprId) Allocator.Error!void {
+    fn visitGeneratedInterpolationIter(self: *CheckedTemplateRefCollector, expr_id: CheckedExprId) Allocator.Error!void {
         const expr = self.checked_bodies.expr(expr_id);
         if (expr.data != .interpolation) {
             checkedArtifactInvariant("generated interpolation iterator operand pointed at non-interpolation expression", .{});
         }
         const interpolation = expr.data.interpolation;
+        const children = self.beginChildren();
         for (interpolation.parts) |part| {
-            try self.collectExpr(part.value);
-            try self.collectExpr(part.following_segment);
+            try self.pushChild(.{ .expr = part.value });
+            try self.pushChild(.{ .expr = part.following_segment });
         }
+        self.endChildren(children);
     }
 
-    fn collectIteratorForPlan(
+    /// Record an iterator-for plan and push its dispatch-call operands, in
+    /// source order, among the children currently being pushed.
+    fn pushIteratorForPlan(
         self: *CheckedTemplateRefCollector,
         plan_id: static_dispatch.IteratorForPlanId,
     ) Allocator.Error!void {
@@ -20958,111 +21287,114 @@ const CheckedTemplateRefCollector = struct {
         try self.iterator_refs.append(self.allocator, plan_id);
         try self.iterator_ref_scopes.append(self.allocator, self.currentScope());
         const plan = self.static_dispatch_plans.iterator_for_plans[raw];
-        try self.collectIteratorDispatchCall(plan.iter);
-        try self.collectIteratorDispatchCall(plan.next);
+        try self.pushIteratorDispatchCall(plan.iter);
+        try self.pushIteratorDispatchCall(plan.next);
     }
 
-    fn collectIteratorDispatchCall(
+    fn pushIteratorDispatchCall(
         self: *CheckedTemplateRefCollector,
         call: static_dispatch.IteratorDispatchCall,
     ) Allocator.Error!void {
         for (call.argsSlice(self.static_dispatch_plans)) |arg| switch (arg) {
-            .checked_expr => |expr| try self.collectExpr(expr),
+            .checked_expr => |expr| try self.pushChild(.{ .expr = expr }),
             .loop_iterator_state => {},
         };
     }
 
-    fn collectPattern(self: *CheckedTemplateRefCollector, pattern_id: CheckedPatternId) Allocator.Error!void {
+    fn visitPattern(self: *CheckedTemplateRefCollector, pattern_id: CheckedPatternId) Allocator.Error!void {
         const entry = try self.visited_patterns.getOrPut(pattern_id);
         if (entry.found_existing) return;
 
         const pattern = self.checked_bodies.pattern(pattern_id);
+        const children = self.beginChildren();
         switch (pattern.data) {
-            .as => |as| try self.collectPattern(as.pattern),
+            .as => |as| try self.pushChild(.{ .pattern = as.pattern }),
             .applied_tag => |tag| {
-                for (tag.args) |arg| try self.collectPattern(arg);
+                for (tag.args) |arg| try self.pushChild(.{ .pattern = arg });
             },
-            .nominal => |nominal| try self.collectPattern(nominal.backing_pattern),
+            .nominal => |nominal| try self.pushChild(.{ .pattern = nominal.backing_pattern }),
             .record_destructure => |destructs| {
                 for (destructs) |destruct| switch (destruct.kind) {
-                    .required => |child| try self.collectPattern(child),
-                    .sub_pattern => |child| try self.collectPattern(child),
-                    .rest => |child| try self.collectPattern(child),
+                    .required => |child| try self.pushChild(.{ .pattern = child }),
+                    .sub_pattern => |child| try self.pushChild(.{ .pattern = child }),
+                    .rest => |child| try self.pushChild(.{ .pattern = child }),
                 };
             },
             .list => |list| {
-                for (list.patterns) |child| try self.collectPattern(child);
+                for (list.patterns) |child| try self.pushChild(.{ .pattern = child });
                 if (list.rest) |rest| {
-                    if (rest.pattern) |child| try self.collectPattern(child);
+                    if (rest.pattern) |child| try self.pushChild(.{ .pattern = child });
                 }
             },
             .tuple => |items| {
-                for (items) |child| try self.collectPattern(child);
+                for (items) |child| try self.pushChild(.{ .pattern = child });
             },
             .str_interpolation => |str| {
                 for (str.steps) |step| {
-                    if (step.capture) |capture| try self.collectPattern(capture);
+                    if (step.capture) |capture| try self.pushChild(.{ .pattern = capture });
                 }
             },
-            .numeral_literal => |literal| if (literal.guard) |guard| try self.collectExpr(guard),
-            .str_literal => |literal| if (literal.guard) |guard| try self.collectExpr(guard),
+            .numeral_literal => |literal| if (literal.guard) |guard| try self.pushChild(.{ .expr = guard }),
+            .str_literal => |literal| if (literal.guard) |guard| try self.pushChild(.{ .expr = guard }),
             .pending,
             .assign,
             .underscore,
             .runtime_error,
             => {},
         }
+        self.endChildren(children);
     }
 
-    fn collectStatement(self: *CheckedTemplateRefCollector, statement_id: CheckedStatementId) Allocator.Error!void {
+    fn visitStatement(self: *CheckedTemplateRefCollector, statement_id: CheckedStatementId) Allocator.Error!void {
         const entry = try self.visited_statements.getOrPut(statement_id);
         if (entry.found_existing) return;
 
         const statement = self.checked_bodies.statement(statement_id);
+        const children = self.beginChildren();
         switch (statement.data) {
             .decl => |decl| {
-                try self.collectPattern(decl.pattern);
-                try self.collectExpr(decl.expr);
+                try self.pushChild(.{ .pattern = decl.pattern });
+                try self.pushChild(.{ .expr = decl.expr });
             },
             // The promoted procedure is collected as its own template.
             .promoted_proc => {},
             .var_ => |var_| {
-                try self.collectPattern(var_.pattern);
-                try self.collectExpr(var_.expr);
+                try self.pushChild(.{ .pattern = var_.pattern });
+                try self.pushChild(.{ .expr = var_.expr });
             },
             .var_uninitialized => |var_| {
-                try self.collectPattern(var_.pattern);
+                try self.pushChild(.{ .pattern = var_.pattern });
             },
             .reassign => |reassign| {
-                try self.collectPattern(reassign.pattern);
-                try self.collectExpr(reassign.expr);
+                try self.pushChild(.{ .pattern = reassign.pattern });
+                try self.pushChild(.{ .expr = reassign.expr });
             },
-            .dbg => |child| try self.collectExpr(child),
-            .expr => |child| try self.collectExpr(child),
-            .expect => |child| try self.collectExpr(child),
+            .dbg => |child| try self.pushChild(.{ .expr = child }),
+            .expr => |child| try self.pushChild(.{ .expr = child }),
+            .expect => |child| try self.pushChild(.{ .expr = child }),
             .return_ => |ret| {
-                try self.collectExpr(ret.expr);
                 // `ret.lambda` is the enclosing lambda context for early-return
                 // lowering, not an owned child expression.
+                try self.pushChild(.{ .expr = ret.expr });
             },
             .for_ => |for_| {
                 const plan_id = for_.plan orelse checkedArtifactInvariant("checked for statement reached template closure collection without an iterator-for plan", .{});
-                try self.collectIteratorForPlan(plan_id);
-                try self.collectPattern(for_.pattern);
-                try self.collectExpr(for_.expr);
-                try self.collectExpr(for_.body);
+                try self.pushIteratorForPlan(plan_id);
+                try self.pushChild(.{ .pattern = for_.pattern });
+                try self.pushChild(.{ .expr = for_.expr });
+                try self.pushChild(.{ .expr = for_.body });
             },
             .while_ => |while_| {
-                try self.collectExpr(while_.cond);
-                try self.collectExpr(while_.body);
+                try self.pushChild(.{ .expr = while_.cond });
+                try self.pushChild(.{ .expr = while_.body });
             },
             .infinite_loop => |loop| {
-                try self.collectExpr(loop.cond);
-                try self.collectExpr(loop.body);
+                try self.pushChild(.{ .expr = loop.cond });
+                try self.pushChild(.{ .expr = loop.body });
             },
             .breakable_loop => |loop| {
-                try self.collectExpr(loop.cond);
-                try self.collectExpr(loop.body);
+                try self.pushChild(.{ .expr = loop.cond });
+                try self.pushChild(.{ .expr = loop.body });
             },
             .pending,
             .crash,
@@ -21076,6 +21408,7 @@ const CheckedTemplateRefCollector = struct {
             .runtime_error,
             => {},
         }
+        self.endChildren(children);
     }
 };
 
@@ -22071,6 +22404,7 @@ const NestedProcSiteBuilder = struct {
     path: std.ArrayList(NestedProcPathComponent),
     /// Accumulated flat pool of every site's path; moved into the finished table.
     path_pool: std.ArrayList(NestedProcPathComponent),
+    work: std.ArrayList(ScanWork) = .empty,
 
     const TypeCaptureFrame = struct {
         site: canonical.NestedProcSiteId,
@@ -22111,6 +22445,7 @@ const NestedProcSiteBuilder = struct {
     }
 
     fn deinitScratch(self: *NestedProcSiteBuilder) void {
+        self.work.deinit(self.allocator);
         self.path.deinit(self.allocator);
         self.lexical_bindings.deinit();
         self.binding_undo.deinit(self.allocator);
@@ -22304,14 +22639,79 @@ const NestedProcSiteBuilder = struct {
         }
     }
 
+    /// Scan a checked expression for nested procedure sites. The scan keeps
+    /// its own work stack, so body nesting depth never becomes native call
+    /// depth. Children are pushed in reverse so they are scanned in source
+    /// order, and each expression's exit is pushed before its children so it
+    /// restores the lexical state they saw once they are all scanned.
     fn scanExpr(
         self: *NestedProcSiteBuilder,
         expr_id: CheckedExprId,
         owner: NestedProcSiteOwner,
         suppress_current_site: bool,
     ) Allocator.Error!void {
+        const base_len = self.work.items.len;
+        try self.work.append(self.allocator, .{ .expr = .{ .id = expr_id, .owner = owner, .suppress_current_site = suppress_current_site } });
+        while (self.work.items.len > base_len) {
+            switch (self.work.pop().?) {
+                .expr => |item| try self.enterExpr(item.id, item.owner, item.suppress_current_site),
+                .exit_expr => |exit| try self.exitExpr(exit),
+                .pattern => |item| try self.enterPattern(item.id, item.owner),
+                .statement => |item| try self.enterStatement(item.id, item.owner),
+                .generated_interpolation_iter => |item| try self.pushGeneratedInterpolationIter(item.id, item.owner),
+                .push_branch_path => |branch| try self.path.append(self.allocator, .{ .branch = branch }),
+                .pop_path => self.path.items.len -= 1,
+            }
+        }
+    }
+
+    const ScanWork = union(enum) {
+        expr: struct { id: CheckedExprId, owner: NestedProcSiteOwner, suppress_current_site: bool },
+        exit_expr: ExprExit,
+        pattern: struct { id: CheckedPatternId, owner: NestedProcSiteOwner },
+        statement: struct { id: CheckedStatementId, owner: NestedProcSiteOwner },
+        generated_interpolation_iter: struct { id: CheckedExprId, owner: NestedProcSiteOwner },
+        push_branch_path: u32,
+        pop_path,
+    };
+
+    /// The lexical state an expression restores once its children are scanned.
+    const ExprExit = struct {
+        previous_scope: DispatchScope,
+        capture_mark: usize,
+        binding_mark: usize,
+        previous_evidence_depth: u32,
+    };
+
+    /// Children are pushed in source order between `beginChildren` and
+    /// `endChildren`, which reverses them on the work stack.
+    fn beginChildren(self: *const NestedProcSiteBuilder) usize {
+        return self.work.items.len;
+    }
+
+    fn endChildren(self: *NestedProcSiteBuilder, start: usize) void {
+        std.mem.reverse(ScanWork, self.work.items[start..]);
+    }
+
+    fn pushWork(self: *NestedProcSiteBuilder, work: ScanWork) Allocator.Error!void {
+        try self.work.append(self.allocator, work);
+    }
+
+    fn pushExpr(self: *NestedProcSiteBuilder, expr_id: CheckedExprId, owner: NestedProcSiteOwner) Allocator.Error!void {
+        try self.pushWork(.{ .expr = .{ .id = expr_id, .owner = owner, .suppress_current_site = false } });
+    }
+
+    fn pushPattern(self: *NestedProcSiteBuilder, pattern_id: CheckedPatternId, owner: NestedProcSiteOwner) Allocator.Error!void {
+        try self.pushWork(.{ .pattern = .{ .id = pattern_id, .owner = owner } });
+    }
+
+    fn enterExpr(
+        self: *NestedProcSiteBuilder,
+        expr_id: CheckedExprId,
+        owner: NestedProcSiteOwner,
+        suppress_current_site: bool,
+    ) Allocator.Error!void {
         try self.path.append(self.allocator, .{ .expr = expr_id });
-        defer self.path.items.len -= 1;
 
         const previous_scope = self.current_scope;
         self.current_scope = nestedProcLexicalScope(
@@ -22320,14 +22720,17 @@ const NestedProcSiteBuilder = struct {
             self.scope_by_checked_expr,
             self.dispatch_scopes,
         );
-        defer self.current_scope = previous_scope;
         const capture_mark = self.capture_depth;
         const expr = self.checked_bodies.expr(expr_id);
         try self.captureType(expr.ty);
         const binding_mark = self.binding_undo.items.len;
         const previous_evidence_depth = self.evidence_depth;
-        defer self.leaveTypeScope(binding_mark);
-        defer self.evidence_depth = previous_evidence_depth;
+        try self.pushWork(.{ .exit_expr = .{
+            .previous_scope = previous_scope,
+            .capture_mark = capture_mark,
+            .binding_mark = binding_mark,
+            .previous_evidence_depth = previous_evidence_depth,
+        } });
         if (!std.meta.eql(self.current_scope, previous_scope)) switch (self.current_scope) {
             .generalized => |scope| {
                 self.evidence_depth += 1;
@@ -22335,6 +22738,7 @@ const NestedProcSiteBuilder = struct {
             },
             .root => unreachable,
         };
+        const children = self.beginChildren();
         switch (expr.data) {
             .closure => |closure| {
                 if (!suppress_current_site) {
@@ -22342,7 +22746,7 @@ const NestedProcSiteBuilder = struct {
                     try self.beginTypeCaptures(@enumFromInt(@as(u32, @intCast(self.sites.items.len - 1))));
                     try self.captureType(expr.ty);
                 }
-                try self.scanExpr(closure.lambda, owner, true);
+                try self.pushWork(.{ .expr = .{ .id = closure.lambda, .owner = owner, .suppress_current_site = true } });
             },
             .lambda => |lambda| {
                 if (!suppress_current_site) {
@@ -22350,84 +22754,84 @@ const NestedProcSiteBuilder = struct {
                     try self.beginTypeCaptures(@enumFromInt(@as(u32, @intCast(self.sites.items.len - 1))));
                     try self.captureType(expr.ty);
                 }
-                for (lambda.args) |arg| try self.scanPattern(arg, owner);
-                try self.scanExpr(lambda.body, owner, false);
+                for (lambda.args) |arg| try self.pushPattern(arg, owner);
+                try self.pushExpr(lambda.body, owner);
             },
             .str,
             .list,
             .tuple,
             => |items| {
-                for (items) |item| try self.scanExpr(item, owner, false);
+                for (items) |item| try self.pushExpr(item, owner);
             },
             .match_ => |match| {
-                try self.scanExpr(match.cond, owner, false);
+                try self.pushExpr(match.cond, owner);
                 for (match.branches, 0..) |branch, i| {
-                    try self.path.append(self.allocator, .{ .branch = @intCast(i) });
-                    for (branch.patternsSlice(self.checked_bodies)) |branch_pattern| try self.scanPattern(branch_pattern.pattern, owner);
-                    if (branch.guard) |guard| try self.scanExpr(guard, owner, false);
-                    try self.scanExpr(branch.value, owner, false);
-                    self.path.items.len -= 1;
+                    try self.pushWork(.{ .push_branch_path = @intCast(i) });
+                    for (branch.patternsSlice(self.checked_bodies)) |branch_pattern| try self.pushPattern(branch_pattern.pattern, owner);
+                    if (branch.guard) |guard| try self.pushExpr(guard, owner);
+                    try self.pushExpr(branch.value, owner);
+                    try self.pushWork(.pop_path);
                 }
             },
             .if_ => |if_| {
                 for (if_.branches) |branch| {
-                    try self.scanExpr(branch.cond, owner, false);
-                    try self.scanExpr(branch.body, owner, false);
+                    try self.pushExpr(branch.cond, owner);
+                    try self.pushExpr(branch.body, owner);
                 }
-                try self.scanExpr(if_.final_else, owner, false);
+                try self.pushExpr(if_.final_else, owner);
             },
             .call => |call| {
-                try self.scanExpr(call.func, owner, false);
-                for (call.args) |arg| try self.scanExpr(arg, owner, false);
+                try self.pushExpr(call.func, owner);
+                for (call.args) |arg| try self.pushExpr(arg, owner);
             },
             .record => |record| {
-                if (record.ext) |ext| try self.scanExpr(ext, owner, false);
-                for (record.fields) |field| try self.scanExpr(field.value, owner, false);
+                if (record.ext) |ext| try self.pushExpr(ext, owner);
+                for (record.fields) |field| try self.pushExpr(field.value, owner);
             },
             .block => |block| {
-                for (block.statements) |statement| try self.scanStatement(statement, owner);
-                try self.scanExpr(block.final_expr, owner, false);
+                for (block.statements) |statement| try self.pushWork(.{ .statement = .{ .id = statement, .owner = owner } });
+                try self.pushExpr(block.final_expr, owner);
             },
             .tag => |tag| {
-                for (tag.args) |arg| try self.scanExpr(arg, owner, false);
+                for (tag.args) |arg| try self.pushExpr(arg, owner);
             },
-            .nominal => |nominal| try self.scanExpr(nominal.backing_expr, owner, false),
+            .nominal => |nominal| try self.pushExpr(nominal.backing_expr, owner),
             .binop => |binop| {
-                try self.scanExpr(binop.lhs, owner, false);
-                try self.scanExpr(binop.rhs, owner, false);
+                try self.pushExpr(binop.lhs, owner);
+                try self.pushExpr(binop.rhs, owner);
             },
-            .unary_minus => |child| try self.scanExpr(child, owner, false),
-            .unary_not => |child| try self.scanExpr(child, owner, false),
-            .dbg => |child| try self.scanExpr(child, owner, false),
-            .expect_err => |expect_err| try self.scanExpr(expect_err.expr, owner, false),
-            .expect => |child| try self.scanExpr(child, owner, false),
+            .unary_minus => |child| try self.pushExpr(child, owner),
+            .unary_not => |child| try self.pushExpr(child, owner),
+            .dbg => |child| try self.pushExpr(child, owner),
+            .expect_err => |expect_err| try self.pushExpr(expect_err.expr, owner),
+            .expect => |child| try self.pushExpr(child, owner),
             .break_ => {},
             .return_ => |ret| {
-                try self.scanExpr(ret.expr, owner, false);
                 // `ret.lambda` is the enclosing lambda context for early-return
                 // lowering, not an owned child expression.
+                try self.pushExpr(ret.expr, owner);
             },
-            .field_access => |field| try self.scanExpr(field.receiver, owner, false),
+            .field_access => |field| try self.pushExpr(field.receiver, owner),
             .dispatch_call,
             .method_eq,
             .type_dispatch_call,
-            => |plan_id| try self.scanStaticDispatchPlanArgs(plan_id orelse checkedArtifactInvariant("checked dispatch expression reached nested procedure site collection without a static-dispatch plan", .{}), owner),
-            .interpolation => |interpolation| try self.scanStaticDispatchPlanArgs(interpolation.plan orelse checkedArtifactInvariant("checked interpolation expression reached nested procedure site collection without a static-dispatch plan", .{}), owner),
-            .numeral => |numeral| if (numeral.plan) |plan_id| try self.scanStaticDispatchPlanArgs(plan_id, owner),
-            .str_from_quote => |quote| try self.scanStaticDispatchPlanArgs(quote.plan orelse checkedArtifactInvariant("checked from_quote expression reached nested procedure site collection without a dispatch plan", .{}), owner),
+            => |plan_id| try self.pushStaticDispatchPlanArgs(plan_id orelse checkedArtifactInvariant("checked dispatch expression reached nested procedure site collection without a static-dispatch plan", .{}), owner),
+            .interpolation => |interpolation| try self.pushStaticDispatchPlanArgs(interpolation.plan orelse checkedArtifactInvariant("checked interpolation expression reached nested procedure site collection without a static-dispatch plan", .{}), owner),
+            .numeral => |numeral| if (numeral.plan) |plan_id| try self.pushStaticDispatchPlanArgs(plan_id, owner),
+            .str_from_quote => |quote| try self.pushStaticDispatchPlanArgs(quote.plan orelse checkedArtifactInvariant("checked from_quote expression reached nested procedure site collection without a dispatch plan", .{}), owner),
             .structural_eq => |eq| {
-                try self.scanExpr(eq.lhs, owner, false);
-                try self.scanExpr(eq.rhs, owner, false);
+                try self.pushExpr(eq.lhs, owner);
+                try self.pushExpr(eq.rhs, owner);
             },
             .structural_hash => |h| {
-                try self.scanExpr(h.value, owner, false);
-                try self.scanExpr(h.hasher, owner, false);
+                try self.pushExpr(h.value, owner);
+                try self.pushExpr(h.hasher, owner);
             },
-            .tuple_access => |access| try self.scanExpr(access.tuple, owner, false),
+            .tuple_access => |access| try self.pushExpr(access.tuple, owner),
             .for_ => |for_| {
-                try self.scanPattern(for_.pattern, owner);
-                try self.scanExpr(for_.expr, owner, false);
-                try self.scanExpr(for_.body, owner, false);
+                try self.pushPattern(for_.pattern, owner);
+                try self.pushExpr(for_.expr, owner);
+                try self.pushExpr(for_.body, owner);
             },
             .hosted_lambda => |hosted| {
                 if (!suppress_current_site) {
@@ -22435,10 +22839,10 @@ const NestedProcSiteBuilder = struct {
                     try self.beginTypeCaptures(@enumFromInt(@as(u32, @intCast(self.sites.items.len - 1))));
                     try self.captureType(expr.ty);
                 }
-                for (hosted.args) |arg| try self.scanPattern(arg, owner);
+                for (hosted.args) |arg| try self.pushPattern(arg, owner);
             },
             .run_low_level => |run| {
-                for (run.args) |arg| try self.scanExpr(arg, owner, false);
+                for (run.args) |arg| try self.pushExpr(arg, owner);
             },
             .lookup_local, .lookup_external, .lookup_required => {
                 if (self.static_dispatch_plans.siteSubstitution(expr_id)) |substitution| {
@@ -22457,13 +22861,23 @@ const NestedProcSiteBuilder = struct {
             .pending,
             => {},
         }
-        if (self.capture_depth > capture_mark) {
-            self.leaveTypeScope(binding_mark);
-            try self.finishTypeCaptures();
-        }
+        self.endChildren(children);
     }
 
-    fn scanStaticDispatchPlanArgs(
+    fn exitExpr(self: *NestedProcSiteBuilder, exit: ExprExit) Allocator.Error!void {
+        if (self.capture_depth > exit.capture_mark) {
+            self.leaveTypeScope(exit.binding_mark);
+            try self.finishTypeCaptures();
+        }
+        self.evidence_depth = exit.previous_evidence_depth;
+        self.leaveTypeScope(exit.binding_mark);
+        self.current_scope = exit.previous_scope;
+        self.path.items.len -= 1;
+    }
+
+    /// Capture a static-dispatch plan's types and push its checked operands
+    /// among the children currently being pushed.
+    fn pushStaticDispatchPlanArgs(
         self: *NestedProcSiteBuilder,
         plan_id: static_dispatch.StaticDispatchPlanId,
         owner: NestedProcSiteOwner,
@@ -22476,13 +22890,13 @@ const NestedProcSiteBuilder = struct {
         try self.captureType(plan.dispatcher_ty);
         try self.captureType(plan.callable_ty);
         for (plan.argsSlice(self.static_dispatch_plans)) |arg| switch (arg) {
-            .checked_expr => |expr| try self.scanExpr(expr, owner, false),
-            .generated_interpolation_iter => |expr| try self.scanGeneratedInterpolationIter(expr, owner),
+            .checked_expr => |expr| try self.pushExpr(expr, owner),
+            .generated_interpolation_iter => |expr| try self.pushWork(.{ .generated_interpolation_iter = .{ .id = expr, .owner = owner } }),
             .generated_numeral, .generated_quote => {},
         };
     }
 
-    fn scanGeneratedInterpolationIter(
+    fn pushGeneratedInterpolationIter(
         self: *NestedProcSiteBuilder,
         expr_id: CheckedExprId,
         owner: NestedProcSiteOwner,
@@ -22492,115 +22906,120 @@ const NestedProcSiteBuilder = struct {
             checkedArtifactInvariant("generated interpolation iterator operand pointed at non-interpolation expression", .{});
         }
         const interpolation = expr.data.interpolation;
+        const children = self.beginChildren();
         for (interpolation.parts) |part| {
-            try self.scanExpr(part.value, owner, false);
-            try self.scanExpr(part.following_segment, owner, false);
+            try self.pushExpr(part.value, owner);
+            try self.pushExpr(part.following_segment, owner);
         }
+        self.endChildren(children);
     }
 
-    fn scanPattern(
+    fn enterPattern(
         self: *NestedProcSiteBuilder,
         pattern_id: CheckedPatternId,
         owner: NestedProcSiteOwner,
     ) Allocator.Error!void {
         try self.path.append(self.allocator, .{ .pattern = pattern_id });
-        defer self.path.items.len -= 1;
+        try self.pushWork(.pop_path);
 
         const pattern = self.checked_bodies.pattern(pattern_id);
         try self.captureType(pattern.ty);
+        const children = self.beginChildren();
         switch (pattern.data) {
-            .as => |as| try self.scanPattern(as.pattern, owner),
+            .as => |as| try self.pushPattern(as.pattern, owner),
             .applied_tag => |tag| {
-                for (tag.args) |arg| try self.scanPattern(arg, owner);
+                for (tag.args) |arg| try self.pushPattern(arg, owner);
             },
-            .nominal => |nominal| try self.scanPattern(nominal.backing_pattern, owner),
+            .nominal => |nominal| try self.pushPattern(nominal.backing_pattern, owner),
             .record_destructure => |destructs| {
                 for (destructs) |destruct| switch (destruct.kind) {
-                    .required => |child| try self.scanPattern(child, owner),
-                    .sub_pattern => |child| try self.scanPattern(child, owner),
-                    .rest => |child| try self.scanPattern(child, owner),
+                    .required => |child| try self.pushPattern(child, owner),
+                    .sub_pattern => |child| try self.pushPattern(child, owner),
+                    .rest => |child| try self.pushPattern(child, owner),
                 };
             },
             .list => |list| {
-                for (list.patterns) |child| try self.scanPattern(child, owner);
+                for (list.patterns) |child| try self.pushPattern(child, owner);
                 if (list.rest) |rest| {
-                    if (rest.pattern) |child| try self.scanPattern(child, owner);
+                    if (rest.pattern) |child| try self.pushPattern(child, owner);
                 }
             },
             .tuple => |items| {
-                for (items) |child| try self.scanPattern(child, owner);
+                for (items) |child| try self.pushPattern(child, owner);
             },
             .str_interpolation => |str| {
                 for (str.steps) |step| {
-                    if (step.capture) |capture| try self.scanPattern(capture, owner);
+                    if (step.capture) |capture| try self.pushPattern(capture, owner);
                 }
             },
-            .numeral_literal => |literal| if (literal.guard) |guard| try self.scanExpr(guard, owner, false),
-            .str_literal => |literal| if (literal.guard) |guard| try self.scanExpr(guard, owner, false),
+            .numeral_literal => |literal| if (literal.guard) |guard| try self.pushExpr(guard, owner),
+            .str_literal => |literal| if (literal.guard) |guard| try self.pushExpr(guard, owner),
             .pending,
             .assign,
             .underscore,
             .runtime_error,
             => {},
         }
+        self.endChildren(children);
     }
 
-    fn scanStatement(
+    fn enterStatement(
         self: *NestedProcSiteBuilder,
         statement_id: CheckedStatementId,
         owner: NestedProcSiteOwner,
     ) Allocator.Error!void {
         try self.path.append(self.allocator, .{ .statement = statement_id });
-        defer self.path.items.len -= 1;
+        try self.pushWork(.pop_path);
 
         const statement = self.checked_bodies.statement(statement_id);
+        const children = self.beginChildren();
         switch (statement.data) {
             .decl => |decl| {
-                try self.scanPattern(decl.pattern, owner);
-                try self.scanExpr(decl.expr, owner, false);
+                try self.pushPattern(decl.pattern, owner);
+                try self.pushExpr(decl.expr, owner);
             },
             // The promoted procedure's sites belong to its own template.
             .promoted_proc => {},
             .var_ => |var_| {
-                try self.scanPattern(var_.pattern, owner);
-                try self.scanExpr(var_.expr, owner, false);
+                try self.pushPattern(var_.pattern, owner);
+                try self.pushExpr(var_.expr, owner);
             },
             .var_uninitialized => |var_| {
-                try self.scanPattern(var_.pattern, owner);
+                try self.pushPattern(var_.pattern, owner);
             },
             .reassign => |reassign| {
-                try self.scanPattern(reassign.pattern, owner);
-                try self.scanExpr(reassign.expr, owner, false);
+                try self.pushPattern(reassign.pattern, owner);
+                try self.pushExpr(reassign.expr, owner);
             },
-            .dbg => |child| try self.scanExpr(child, owner, false),
-            .expr => |child| try self.scanExpr(child, owner, false),
-            .expect => |child| try self.scanExpr(child, owner, false),
+            .dbg => |child| try self.pushExpr(child, owner),
+            .expr => |child| try self.pushExpr(child, owner),
+            .expect => |child| try self.pushExpr(child, owner),
             .return_ => |ret| {
-                try self.scanExpr(ret.expr, owner, false);
                 // `ret.lambda` is the enclosing lambda context for early-return
                 // lowering, not an owned child expression.
+                try self.pushExpr(ret.expr, owner);
             },
             .for_ => |for_| {
-                try self.scanPattern(for_.pattern, owner);
-                try self.scanExpr(for_.expr, owner, false);
-                try self.scanExpr(for_.body, owner, false);
+                try self.pushPattern(for_.pattern, owner);
+                try self.pushExpr(for_.expr, owner);
+                try self.pushExpr(for_.body, owner);
             },
             .while_ => |while_| {
-                try self.scanExpr(while_.cond, owner, false);
-                try self.scanExpr(while_.body, owner, false);
+                try self.pushExpr(while_.cond, owner);
+                try self.pushExpr(while_.body, owner);
             },
             .infinite_loop => |loop| {
-                try self.scanExpr(loop.cond, owner, false);
-                try self.scanExpr(loop.body, owner, false);
+                try self.pushExpr(loop.cond, owner);
+                try self.pushExpr(loop.body, owner);
             },
             .breakable_loop => |loop| {
-                try self.scanExpr(loop.cond, owner, false);
-                try self.scanExpr(loop.body, owner, false);
+                try self.pushExpr(loop.cond, owner);
+                try self.pushExpr(loop.body, owner);
             },
             .alias_decl,
             .where_alias_decl,
             .nominal_decl,
-            => try self.scanAttachedLocalProcedures(statement_id, owner),
+            => try self.pushAttachedLocalProcedures(statement_id, owner),
             .pending,
             .crash,
             .break_,
@@ -22610,9 +23029,10 @@ const NestedProcSiteBuilder = struct {
             .runtime_error,
             => {},
         }
+        self.endChildren(children);
     }
 
-    fn scanAttachedLocalProcedures(
+    fn pushAttachedLocalProcedures(
         self: *NestedProcSiteBuilder,
         statement_id: CheckedStatementId,
         owner: NestedProcSiteOwner,
@@ -22622,7 +23042,7 @@ const NestedProcSiteBuilder = struct {
             switch (target.kind) {
                 .local_proc => |local| {
                     if (local.context_anchor == statement_id) {
-                        try self.scanExpr(local.expr, owner, false);
+                        try self.pushExpr(local.expr, owner);
                     }
                 },
                 .procedure, .structural => {},
