@@ -5326,6 +5326,14 @@ const Builder = struct {
         template: checked.CallableEvalTemplateId,
     };
 
+    /// The callable-eval binding behind a procedure use when that binding is
+    /// an exact procedure alias, which calls forward through.
+    fn forwardingCallableEvalForProcedureUse(self: *Builder, proc: checked.ProcedureUseTemplate) ?CallableEvalUse {
+        const callable_eval = self.callableEvalForProcedureUse(proc) orelse return null;
+        const template = callable_eval.view.callable_eval_templates.templates[@intFromEnum(callable_eval.template)];
+        return if (template.forwarded_lookup != null) callable_eval else null;
+    }
+
     fn callableEvalForProcedureUse(self: *Builder, proc: checked.ProcedureUseTemplate) ?CallableEvalUse {
         return switch (proc.binding) {
             .top_level => |top_level| blk: {
@@ -23288,6 +23296,8 @@ const BodyContext = struct {
             .promoted_top_level_proc,
             => |procedure| .{ procedure, @as(?checked.CheckedEvidenceSpan, null) },
             .platform_required_proc => |required| .{ required.procedure, required.root_evidence },
+            // The nested specialization applies its checked scope relations
+            // before joining this contextual graph node.
             .local_proc => return,
             .local_param,
             .local_value,
@@ -23301,6 +23311,9 @@ const BodyContext = struct {
             .platform_required_const,
             => Common.invariant("checked specialization call relation targeted a non-procedure"),
         };
+        // A call through an exact procedure alias forwards when it is drafted,
+        // and that forwarded specialization applies its own relations.
+        if (self.builder.forwardingCallableEvalForProcedureUse(procedure) != null) return;
         const template_ref = self.builder.templateRefForProcedureUse(procedure);
         const callee_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = callee_view.templates.get(template_ref.template);
@@ -24627,16 +24640,20 @@ const BodyContext = struct {
                 .lambda = lambda_id,
                 .body = checked_body,
             } }, body_ret_cell);
+        // Wrappers around the body carry the body's own result cell, which
+        // may be a producer-selected representation distinct from the
+        // declared return; the declared return is related to it below.
         if (arg_literal_guards.items.len != 0) {
+            const guarded_cell = self.exprTypeCell(body);
             const miss = try self.addExprWithTypeCell(
-                body_ret_cell,
+                guarded_cell,
                 .{ .crash = try self.addStringLiteral("pattern match failed") },
             );
             body = try self.applyPatternLiteralGuardsAtCell(
                 arg_literal_guards.items,
                 body,
                 miss,
-                body_ret_cell,
+                guarded_cell,
             );
         }
         const body_loc = self.exprLoc(body);
@@ -24651,7 +24668,7 @@ const BodyContext = struct {
         while (remaining > 0) {
             remaining -= 1;
             const arg_let = arg_lets.items[remaining];
-            body = try self.addExprWithTypeCell(body_ret_cell, .{ .let_ = .{
+            body = try self.addExprWithTypeCell(self.exprTypeCell(body), .{ .let_ = .{
                 .bind = arg_let.pat,
                 .value = arg_let.value,
                 .rest = body,
@@ -26600,11 +26617,7 @@ const BodyContext = struct {
     }
 
     fn resolvedTargetIsStrInspect(self: *BodyContext, target: checked.ResolvedValueId) bool {
-        const raw = @intFromEnum(target);
-        if (raw >= self.view.resolved_refs.records.len) {
-            Common.invariant("checked direct call target is outside resolved value table");
-        }
-        return switch (self.view.resolved_refs.records[raw].ref) {
+        return switch (self.finalDirectTarget(target).record.ref) {
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
@@ -26619,11 +26632,7 @@ const BodyContext = struct {
         self: *BodyContext,
         target: checked.ResolvedValueId,
     ) ?checked.IteratorProcedureId {
-        const raw = @intFromEnum(target);
-        if (raw >= self.view.resolved_refs.records.len) {
-            Common.invariant("checked direct call target is outside resolved value table");
-        }
-        return switch (self.view.resolved_refs.records[raw].ref) {
+        return switch (self.finalDirectTarget(target).record.ref) {
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
@@ -26671,11 +26680,7 @@ const BodyContext = struct {
     }
 
     fn callsiteIntrinsicForResolvedTarget(self: *BodyContext, target: checked.ResolvedValueId) ?checked.IntrinsicId {
-        const raw = @intFromEnum(target);
-        if (raw >= self.view.resolved_refs.records.len) {
-            Common.invariant("checked direct call target is outside resolved value table");
-        }
-        const intrinsic = switch (self.view.resolved_refs.records[raw].ref) {
+        const intrinsic = switch (self.finalDirectTarget(target).record.ref) {
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
@@ -27446,8 +27451,7 @@ const BodyContext = struct {
         if (expected_ret) |expected| switch (procedure) {
             .iter_from_step => return try self.generatedIteratorConstructorFunctionNode(expected),
             .range_done => return try self.graphFunctionNode(request_fn.args, expected),
-            .numeric_range_delegate => return try self.graphFunctionNode(request_fn.args, expected),
-            .iter_iter, .iter_next, .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_with_index, .iter_step_by, .range_iter, .numeric_to, .numeric_until => {},
+            .iter_iter, .iter_next, .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_with_index, .iter_step_by, .range_iter, .numeric_range_iter, .numeric_to, .numeric_until => {},
         };
 
         switch (procedure) {
@@ -27541,7 +27545,7 @@ const BodyContext = struct {
                     ),
                 );
             },
-            .range_iter, .numeric_until, .numeric_to => {
+            .numeric_until, .numeric_to => {
                 if (try self.generatedIteratorExpectedProducerFunctionNode(mintedProducerKind(procedure), request_fn.args, expected_ret)) |expected_fn| return expected_fn;
                 return try self.graphFunctionNode(
                     request_fn.args,
@@ -27564,7 +27568,7 @@ const BodyContext = struct {
                     );
                 }
             },
-            .numeric_range_delegate, .iter_from_step, .range_done => {},
+            .range_iter, .numeric_range_iter, .iter_from_step, .range_done => {},
         }
         return null;
     }
@@ -33694,12 +33698,7 @@ const BodyContext = struct {
         self: *BodyContext,
         target: checked.ResolvedValueId,
     ) Allocator.Error!?HostedTryAdapterCapability {
-        const raw = @intFromEnum(target);
-        if (raw >= self.view.resolved_refs.records.len) {
-            Common.invariant("checked direct call target is outside resolved value table");
-        }
-        const record = self.view.resolved_refs.records[raw];
-        return switch (record.ref) {
+        return switch (self.finalDirectTarget(target).record.ref) {
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
@@ -34861,39 +34860,189 @@ const BodyContext = struct {
         }
         const record = self.view.resolved_refs.records[raw];
         return switch (record.ref) {
-            .local_proc => |local| .{ .local = try self.lowerDraftLocalProcAtNode(
-                local,
-                self.view,
-                try self.localProcContextId(self.view, local.binder, local.expr),
-                source_fn_ty,
-                source_fn_key,
-                request_fn_node,
-                try self.evidenceForUseSiteAtNode(record.expr, request_fn_node),
-                record.recursive_reference,
-                .inherit,
-            ) },
+            .local_proc => |local| if (local.is_alias)
+                try self.forwardedLocalAliasCalleeAtNode(local, record.expr, request_fn_node)
+            else
+                .{ .local = try self.lowerDraftLocalProcAtNode(
+                    local,
+                    self.view,
+                    try self.localProcContextId(self.view, local.binder, local.expr),
+                    source_fn_ty,
+                    source_fn_key,
+                    request_fn_node,
+                    try self.evidenceForUseSiteAtNode(record.expr, request_fn_node),
+                    record.recursive_reference,
+                    .inherit,
+                ) },
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
             .promoted_top_level_proc,
-            => |proc| try self.draftFnSlotForProcedureUseAtNode(
-                proc,
-                source_fn_ty,
-                source_fn_key,
-                request_fn_node,
-                try self.evidenceForProcedureUseAtNode(proc, record.expr, null, request_fn_node, .body_lowering),
-                record.recursive_reference,
-            ),
-            .platform_required_proc => |proc| try self.draftFnSlotForProcedureUseAtNode(
-                proc.procedure,
-                source_fn_ty,
-                source_fn_key,
-                request_fn_node,
-                try self.evidenceForProcedureUseAtNode(proc.procedure, record.expr, proc.root_evidence, request_fn_node, .body_lowering),
-                record.recursive_reference,
-            ),
+            => |proc| if (self.builder.forwardingCallableEvalForProcedureUse(proc)) |alias|
+                try self.forwardedCallableEvalCalleeAtNode(alias, record.expr, request_fn_node)
+            else
+                try self.draftFnSlotForProcedureUseAtNode(
+                    proc,
+                    source_fn_ty,
+                    source_fn_key,
+                    request_fn_node,
+                    try self.evidenceForProcedureUseAtNode(proc, record.expr, null, request_fn_node, .body_lowering),
+                    record.recursive_reference,
+                ),
+            .platform_required_proc => |proc| if (self.builder.forwardingCallableEvalForProcedureUse(proc.procedure)) |alias|
+                try self.forwardedCallableEvalCalleeAtNode(alias, record.expr, request_fn_node)
+            else
+                try self.draftFnSlotForProcedureUseAtNode(
+                    proc.procedure,
+                    source_fn_ty,
+                    source_fn_key,
+                    request_fn_node,
+                    try self.evidenceForProcedureUseAtNode(proc.procedure, record.expr, proc.root_evidence, request_fn_node, .body_lowering),
+                    record.recursive_reference,
+                ),
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => Common.invariant("checked direct call target was not a procedure"),
         };
+    }
+
+    /// A call through a local exact procedure alias calls the alias's lookup
+    /// directly. The alias owns an instantiation scope: its use-site evidence
+    /// enters that scope, and the lookup's own evidence is resolved inside it,
+    /// exactly as a value use of the alias lowers its lookup.
+    fn forwardedLocalAliasCalleeAtNode(
+        self: *BodyContext,
+        alias: checked.LocalProcedureBinding,
+        use_expr: checked.CheckedExprId,
+        request_fn_node: NodeId,
+    ) Allocator.Error!DraftFnSlot {
+        const scope_id = alias.dispatch_scope orelse
+            Common.invariant("generalized callable alias has no checked scheme scope");
+        const edge = try self.evidenceForUseSiteAtNode(use_expr, request_fn_node);
+        const evidence = try enterEvidenceScope(self.builder, self.evidence, scope_id, alias.expr, edge);
+        const scope = self.view.templates.dispatch_scopes[@intFromEnum(scope_id)];
+        const previous_instantiation = self.instantiation;
+        const previous_evidence = self.evidence;
+        self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), self.view.key.bytes);
+        self.evidence = evidence;
+        defer {
+            self.instantiation.deinit();
+            self.instantiation = previous_instantiation;
+            self.evidence = previous_evidence;
+        }
+        try self.seedSubstitution(evidence.schema.?, edge.subst);
+        try relateFunctionRequestInterface(self.graph, try self.instNode(scope.scheme_root), request_fn_node);
+        return try self.forwardedLookupCalleeAtNode(alias.expr, request_fn_node);
+    }
+
+    /// A call through a top-level exact procedure alias calls the alias's
+    /// lookup directly, inside the alias's entry-wrapper evidence scope, the
+    /// same scope a value use of the alias lowers its lookup in.
+    fn forwardedCallableEvalCalleeAtNode(
+        self: *BodyContext,
+        alias: Builder.CallableEvalUse,
+        use_expr: checked.CheckedExprId,
+        request_fn_node: NodeId,
+    ) Allocator.Error!DraftFnSlot {
+        const view = alias.view;
+        const template = view.callable_eval_templates.templates[@intFromEnum(alias.template)];
+        const lookup = template.forwarded_lookup orelse
+            Common.invariant("forwarded callable-eval alias had no checked lookup");
+        const root = view.compile_time_roots.root(template.root);
+        const wrapper = view.entry_wrappers.lookupByRoot(template.root) orelse
+            Common.invariant("callable eval template root had no checked entry wrapper");
+        const edge = try self.evidenceForUseSiteAtNode(use_expr, request_fn_node);
+
+        var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, wrapper.template, self.graph, self.draft);
+        defer body_ctx.deinit();
+        const entry_template = view.templates.get(wrapper.template.template);
+        const schema = templateSchemaIn(view, &entry_template);
+        const subst = try body_ctx.substitutionFromCheckedTypes(view, schema.scheme_vars);
+        body_ctx.evidence = rootEvidenceWithSubstitution(wrapper.template, schema, .{
+            .subst = subst,
+            .vector = edge.vector,
+        });
+        try body_ctx.seedSubstitution(schema, subst);
+        body_ctx.frozen_sealed_emission = self.frozen_sealed_emission;
+        body_ctx.frozen_type_finals = self.frozen_type_finals;
+        body_ctx.frozen_codec_calls = self.frozen_codec_calls;
+        body_ctx.frozen_field_defaults = self.frozen_field_defaults;
+        const root_fn_key = view.types.rootKey(wrapper.checked_fn_root);
+        body_ctx.owner_context_fn_key = root_fn_key;
+        body_ctx.current_fn_key = root_fn_key;
+
+        const wrapper_fn_node = try body_ctx.graphFunctionNode(&.{}, request_fn_node);
+        try self.graph.unify(try body_ctx.instNode(wrapper.checked_fn_root), wrapper_fn_node);
+        try self.graph.unify(try body_ctx.instNode(template.checked_fn_root), request_fn_node);
+        try self.graph.unify(try body_ctx.instNode(root.checked_type), request_fn_node);
+        return try body_ctx.forwardedLookupCalleeAtNode(lookup, request_fn_node);
+    }
+
+    /// The direct callee an alias's lookup names, requested at the alias
+    /// call's own interface. A lookup of another alias forwards again.
+    fn forwardedLookupCalleeAtNode(
+        self: *BodyContext,
+        lookup: checked.CheckedExprId,
+        request_fn_node: NodeId,
+    ) Allocator.Error!DraftFnSlot {
+        const target = self.view.resolved_refs.lookupIdByCheckedExpr(lookup) orelse
+            Common.invariant("forwarded procedure alias lookup had no resolved value");
+        const lookup_ty = self.view.bodies.expr(lookup).ty;
+        try relateFunctionRequestInterface(self.graph, try self.instNode(lookup_ty), request_fn_node);
+        return try self.fnTemplateForDirectCallAtNode(
+            target,
+            lookup_ty,
+            self.view.types.rootKey(lookup_ty),
+            request_fn_node,
+        );
+    }
+
+    /// The procedure a direct call finally reaches, following exact procedure
+    /// aliases, and the checked module view that owns its resolved value. The
+    /// callee's compiler-owned roles (call-site intrinsics, iterator
+    /// procedures, `Str.inspect`, hosted `Try` adapters) belong to it.
+    const FinalDirectTarget = struct {
+        view: ModuleView,
+        record: checked.ResolvedValueRefRecord,
+    };
+
+    fn finalDirectTarget(self: *BodyContext, target: checked.ResolvedValueId) FinalDirectTarget {
+        const raw = @intFromEnum(target);
+        if (raw >= self.view.resolved_refs.records.len) {
+            Common.invariant("checked direct call target is outside resolved value table");
+        }
+        var view = self.view;
+        var record = view.resolved_refs.records[raw];
+        while (true) {
+            switch (record.ref) {
+                .local_proc => |local| if (local.is_alias) {
+                    const final = local.alias_target orelse
+                        Common.invariant("callable alias has no published target");
+                    record = view.resolved_refs.records[@intFromEnum(final)];
+                    continue;
+                },
+                .top_level_proc,
+                .imported_proc,
+                .hosted_proc,
+                .promoted_top_level_proc,
+                => |proc| if (self.builder.forwardingCallableEvalForProcedureUse(proc)) |alias| {
+                    view = alias.view;
+                    const template = view.callable_eval_templates.templates[@intFromEnum(alias.template)];
+                    const lookup = view.resolved_refs.lookupIdByCheckedExpr(template.forwarded_lookup.?) orelse
+                        Common.invariant("forwarded procedure alias lookup had no resolved value");
+                    record = view.resolved_refs.records[@intFromEnum(lookup)];
+                    continue;
+                },
+                .platform_required_proc => |required| if (self.builder.forwardingCallableEvalForProcedureUse(required.procedure)) |alias| {
+                    view = alias.view;
+                    const template = view.callable_eval_templates.templates[@intFromEnum(alias.template)];
+                    const lookup = view.resolved_refs.lookupIdByCheckedExpr(template.forwarded_lookup.?) orelse
+                        Common.invariant("forwarded procedure alias lookup had no resolved value");
+                    record = view.resolved_refs.records[@intFromEnum(lookup)];
+                    continue;
+                },
+                .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => {},
+            }
+            return .{ .view = view, .record = record };
+        }
     }
 
     fn draftFnSlotForProcedureUseAtNode(
@@ -35117,19 +35266,18 @@ const BodyContext = struct {
     }
 
     fn directCallCaptureSpan(self: *BodyContext, target: checked.ResolvedValueId) Allocator.Error!DraftSpan(DraftExprId) {
-        const raw = @intFromEnum(target);
-        if (raw >= self.view.resolved_refs.records.len) {
-            Common.invariant("checked direct call target is outside resolved value table");
-        }
-        const record = self.view.resolved_refs.records[raw];
-        return switch (record.ref) {
-            .local_proc => |local| try self.localProcCaptureExprSpan(
-                try self.localProcContextId(self.view, local.binder, local.expr),
-                self.view.key.bytes,
-                local.binder,
-                local.expr,
-                null,
-            ),
+        const final = self.finalDirectTarget(target);
+        return switch (final.record.ref) {
+            .local_proc => |local| if (!moduleBytesEqual(final.view.key.bytes, self.view.key.bytes))
+                Common.invariant("forwarded direct call reached a local procedure of another module")
+            else
+                try self.localProcCaptureExprSpan(
+                    try self.localProcContextId(self.view, local.binder, local.expr),
+                    self.view.key.bytes,
+                    local.binder,
+                    local.expr,
+                    null,
+                ),
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
@@ -36012,7 +36160,10 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         return switch (slot) {
             .local => |local| switch (local) {
-                .draft => |draft_fn| try self.completeDeferredIteratorResult(draft_fn),
+                .draft => |draft_fn| try self.completedDraftCalleeWitness(
+                    draft_fn,
+                    try self.completeDeferredIteratorResult(draft_fn),
+                ),
                 .final => |final_fn| blk: {
                     const completed_node = try self.programFnSourceTypeNode(final_fn);
                     const request_fn = try self.graph.functionNodes(imported_fallback);
@@ -36026,6 +36177,23 @@ const BodyContext = struct {
                 },
             },
         };
+    }
+
+    /// A completed draft callee's type is immutable producer output: other
+    /// requests with the same identity must seal to the same type. A caller
+    /// therefore consumes a witness of it, so joining the call's result with
+    /// the caller's own producers (the branches of an `if`, say) cannot change
+    /// the callee's result representation. A callee still being lowered is
+    /// shared instead, because its recursive edges must join its own live
+    /// representation.
+    fn completedDraftCalleeWitness(
+        self: *BodyContext,
+        draft_fn: DraftFnId,
+        callee_node: NodeId,
+    ) Allocator.Error!NodeId {
+        const spec_index = self.draft.template_spec_by_fn.get(draft_fn) orelse return callee_node;
+        if (self.draft.template_specs.items[spec_index].state != .lowered) return callee_node;
+        return try self.graph.privateResultWitness(callee_node);
     }
 
     /// Relate a callee-authored iterator representation to the checked public
@@ -41968,7 +42136,7 @@ const BodyContext = struct {
             }
             break :blk existing.slot;
         } else blk: {
-            const subst = (try self.dispatchTargetSubstitution(plan)) orelse
+            const subst = (try self.directDispatchTargetSubstitution(plan, lookup, callable_node)) orelse
                 Common.invariant("closed direct procedure call had no checked substitution");
             const template = lookup.view.templates.get(procedure.template.template);
             if (subst.len != template.scheme_vars.len) {
@@ -42027,6 +42195,7 @@ const BodyContext = struct {
         const call = try self.addExprWithTypeCell(call_ret_cell, .{ .call_proc = .{
             .callee = draftProcCalleeForSlot(slot),
             .args = lowered,
+            .iterator_procedure = procedure.runtime_target.iteratorProcedure(),
             .captures = try self.methodTargetCaptureSpan(lookup),
         } });
         return try self.applyDispatchResultMode(plan.result_mode, call);
@@ -44470,6 +44639,38 @@ const BodyContext = struct {
     /// The substitution a checked direct dispatch plan recorded for its
     /// target: the target scheme's quantified variables as copied at that
     /// edge, instantiated in this context.
+    /// The substitution of a direct dispatch target's scheme. The checked
+    /// record substitutes the scheme the dispatch edge instantiated; for a
+    /// target reached through an exact procedure alias that is the alias's
+    /// scheme, so the target's own scheme is instantiated at the dispatch's
+    /// callable instead, which the alias's instantiation fixes.
+    fn directDispatchTargetSubstitution(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        lookup: MethodLookup,
+        callable_node: NodeId,
+    ) Allocator.Error!?SpecSubstitution {
+        if (!lookup.target.reached_through_alias) return try self.dispatchTargetSubstitution(plan);
+        const procedure = switch (lookup.target.kind) {
+            .procedure => |procedure| procedure,
+            .local_proc, .structural => Common.invariant("a non-procedure method target was reached through a procedure alias"),
+        };
+        const template = lookup.view.templates.get(procedure.template.template);
+        var target_ctx = try BodyContext.initWithMethodScope(
+            self.allocator,
+            self.builder,
+            lookup.view,
+            self.method_scope,
+            procedure.template,
+            self.graph,
+            self.draft,
+        );
+        defer target_ctx.deinit();
+        const subst = try target_ctx.substitutionFromCheckedTypes(lookup.view, templateSchemaIn(lookup.view, &template).scheme_vars);
+        try relateFunctionRequestInterface(self.graph, try target_ctx.instNode(template.checked_fn_root), callable_node);
+        return subst;
+    }
+
     fn dispatchTargetSubstitution(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
@@ -45412,7 +45613,7 @@ const BodyContext = struct {
         const lookup = try self.withLocalProcContext(raw_lookup);
         const source_fn_ty = lookup.target.callable_ty;
         const source_fn_key = lookup.view.types.rootKey(source_fn_ty);
-        const subst = (try self.dispatchTargetSubstitution(plan)) orelse
+        const subst = (try self.directDispatchTargetSubstitution(plan, lookup, request_fn_node)) orelse
             Common.invariant("direct dispatch target had no checked substitution");
         const contract: ?[]const static_dispatch.CheckedEvidence = if (self.dispatchTargetContract(plan)) |c| c.entries else null;
         return switch (lookup.target.kind) {
@@ -45560,6 +45761,7 @@ const BodyContext = struct {
                 plan,
             )),
             .args = args,
+            .iterator_procedure = self.iteratorProcedureForMethodTarget(contextual_lookup.target),
             .captures = try self.methodTargetCaptureSpan(contextual_lookup),
         } };
     }
@@ -56006,7 +56208,7 @@ const BodyContext = struct {
                     try self.lowerGeneratedIteratorNextData(iterator, dispatcher_node),
                 );
             },
-            .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_with_index, .iter_step_by, .range_iter, .numeric_range_delegate, .numeric_to, .numeric_until, .iter_from_step, .range_done => unreachable,
+            .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_with_index, .iter_step_by, .range_iter, .numeric_range_iter, .numeric_to, .numeric_until, .iter_from_step, .range_done => unreachable,
         }
     }
 

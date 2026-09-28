@@ -18888,7 +18888,9 @@ const ProcBodyBuilder = struct {
         ret_ty: checked.CheckedTypeId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        if (call.direct_target == null) {
+        if (call.direct_target == null or
+            self.parent.plan.callIsThroughAlias(.{ .module = self.module.key, .expr = call_expr }))
+        {
             return try self.lowerErasedCallInto(target, ret_ty, call.func, call.args, next);
         }
         if (self.directTargetIsLocalProc(call.direct_target.?)) {

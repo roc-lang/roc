@@ -5255,6 +5255,93 @@ test "issue 10429 numeric range spellings in one body have no heap or RC operati
     }
 }
 
+test "issue 11784 range pipelines consumed by Iter.fold and Iter.sum fuse into call-free loops" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { name: []const u8, source: []const u8 }{
+        .{ .name = "sum", .source =
+        \\main : U64 -> U64
+        \\main = |n| (0..<n).iter().sum()
+        },
+        .{ .name = "fold", .source =
+        \\main : U64 -> U64
+        \\main = |n| (0..<n).iter().fold(0, |acc, x| acc + x)
+        },
+        .{ .name = "map then fold", .source =
+        \\main : U64 -> U64
+        \\main = |n| (0..<n).iter().map(|x| x * 2).fold(0, |acc, x| acc + x)
+        },
+        .{ .name = "two maps then sum", .source =
+        \\main : U64 -> U64
+        \\main = |n| (0..=n).iter().map(|x| x * 2).map(|x| x + 1).sum()
+        },
+        .{ .name = "custom source folded by Iter.fold", .source =
+        \\main : U64 -> U64
+        \\main = |n| Iter.custom(0, Known(n), |i| if i < n { Ok((i, i + 1)) } else { Err(NoMore) }).map(|x| x * 2).fold(0, |acc, x| acc + x)
+        },
+        .{ .name = "pipeline passed to a looping consumer", .source =
+        \\total : Iter(U64) -> U64
+        \\total = |iterator| {
+        \\    var $sum = 0
+        \\    for item in iterator {
+        \\        $sum = $sum + item
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |n| total((0..<n).iter().map(|x| x * 3))
+        },
+    };
+
+    for (cases) |case| {
+        var optimized = try lowerModuleWithOptions(allocator, case.source, .wrappers, .{ .proc_debug_names = true });
+        defer optimized.deinit(allocator);
+
+        const per_element = try perElementProcSummary(allocator, &optimized.lowered, null);
+        if (per_element.count != 0) {
+            std.debug.print("{s}: range pipeline kept {d} per-element callees\n", .{ case.name, per_element.count });
+            return error.TestUnexpectedResult;
+        }
+        try expectLoweredIterChainAllocatesNothing(allocator, &optimized.lowered);
+    }
+}
+
+test "issue 11784 iterators returned through destructured parameters keep their representation" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { name: []const u8, source: []const u8 }{
+        .{ .name = "record parameter destructure", .source =
+        \\count_up = |{ lo, hi }| Iter.custom(lo, Unknown, |i| if i < hi { Ok((i, i + 1)) } else { Err(NoMore) })
+        \\
+        \\main : U64 -> U64
+        \\main = |n| count_up({ lo: 0, hi: n }).map(|x| x * 2).fold(0, |acc, x| acc + x)
+        },
+        .{ .name = "tuple parameter destructure", .source =
+        \\count_up = |(lo, hi)| Iter.custom(lo, Unknown, |i| if i < hi { Ok((i, i + 1)) } else { Err(NoMore) })
+        \\
+        \\main : U64 -> U64
+        \\main = |n| count_up((0, n)).map(|x| x * 2).fold(0, |acc, x| acc + x)
+        },
+        .{ .name = "nominal method destructuring its receiver", .source =
+        \\Span := { lo : U64, hi : U64 }.{
+        \\    iter : Span -> Iter(U64)
+        \\    iter = |Span.{ lo, hi }| Iter.custom(lo, Unknown, |i| if i < hi { Ok((i, i + 1)) } else { Err(NoMore) })
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |n| Span.{ lo: 0, hi: n }.iter().map(|x| x * 2).fold(0, |acc, x| acc + x)
+        },
+    };
+
+    for (cases) |case| {
+        var optimized = try lowerModuleWithOptions(allocator, case.source, .wrappers, .{ .proc_debug_names = true });
+        defer optimized.deinit(allocator);
+        expectLoweredIterChainAllocatesNothing(allocator, &optimized.lowered) catch |err| {
+            std.debug.print("{s}: iterator pipeline allocated\n", .{case.name});
+            return err;
+        };
+    }
+}
+
 test "F32 and F64 range syntax fuses without Iter.next" {
     const allocator = std.testing.allocator;
     for ([_][]const u8{ "F32", "F64" }) |numeric_type| {
