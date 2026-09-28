@@ -2662,6 +2662,15 @@ const Inserter = struct {
                             // a representation-only struct even when no
                             // partial-field container domain was needed.
                             step.residual_shell_all_rc_fields_absent = true;
+                        } else if (self.isBindingBorrowed(assign.op.local)) {
+                            // A borrowed struct lives only as long as the
+                            // ownership place it borrows from. Once that
+                            // place's unit has left the path state, the
+                            // borrow keeps only its inline representation.
+                            const place_unit = self.unitOf(self.ownershipPlaceLeader(assign.op.local));
+                            if (!segment.owned.contains(place_unit) and !self.isBindingBorrowed(place_unit)) {
+                                step.residual_shell_all_rc_fields_absent = true;
+                            }
                         }
                     }
                     var transfer = AliasBindTransfer{ .retain_target = true, .release_old_target = false };

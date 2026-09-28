@@ -15631,7 +15631,10 @@ representation availability distinct from ownership-unit availability. A
 materialized same-layout alias of a shell carries the exact committed-layout
 RC-field indices that are absent in LIR. ARC derives that list directly from the
 path's solved residual mask; it is not reconstructed from nearby retains or
-field reads. Debug evaluators use the list only to avoid interpreting the stale
+field reads. A borrowed struct lives only as long as the ownership place it
+borrows from, such as a payload copied out of a box that the place stores, so
+once that place's unit has left the path state, the borrowed struct is a shell
+too and its aliases list every refcounted field as absent. Debug evaluators use the list only to avoid interpreting the stale
 bytes of moved fields as live values while still validating every remaining
 field. An outcome receipt that restores a field changes the solved residual
 mask before successor materialization, so aliases on that successor omit the
