@@ -12222,15 +12222,15 @@ fn buildCliTestPlan(
         const test_roots = try collectTestRootRequests(ctx.gpa, artifact);
         errdefer ctx.gpa.free(test_roots);
 
-        // Root requests deliberately exclude erroneous bodies. The checked
-        // roots still retain their identities and the checker's diagnostic
+        // Root requests deliberately exclude roots reaching checked errors.
+        // The checked roots retain their identities and the checker's diagnostic
         // facts, so rejected tests can participate in result aggregation
         // without being lowered, executed, or stored in the execution cache.
         var checking_results = std.ArrayList(CliTestResultItem).empty;
         defer checking_results.deinit(ctx.gpa);
         for (artifact.compile_time_roots.roots) |root| {
             if (root.kind != .expect) continue;
-            if (!artifact.checked_bodies.exprContainsDiagnosticError(root.expr)) continue;
+            if (!artifact.compileTimeRootReachesCheckedError(root)) continue;
             std.debug.assert(root.request_eligibility == .ineligible);
             try checking_results.append(ctx.gpa, .{
                 .result = .compiler_error,
