@@ -3302,7 +3302,7 @@ pub const BuildEnv = struct {
         const pkg = self.packages.get(location.pkg_name) orelse return null;
         const coord_pkg = coord.packages.get(location.pkg_name) orelse return null;
         const module = coord_pkg.getModule(location.module_id) orelse return null;
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        var hasher = base.Sha256.init(.{});
         if (pkg.url) |url| {
             hasher.update("pkg\x00");
             hasher.update(url.url);

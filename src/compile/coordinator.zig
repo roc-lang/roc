@@ -7970,7 +7970,7 @@ fn collectPatternExtractionRegionStats(
     imports: []const check.CheckedArtifact.ImportedModuleView,
     relations: []const check.CheckedArtifact.ImportedModuleView,
 ) PatternExtractionRegionStatsError!PatternExtractionRegionStats {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     var count: usize = 0;
 
     try hashPatternExtractionRegionsForView(&hasher, &count, check.CheckedArtifact.importedView(root));
@@ -7990,7 +7990,7 @@ fn collectPatternExtractionRegionStats(
 }
 
 fn hashPatternExtractionRegionsForView(
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *base.Sha256,
     count: *usize,
     view: check.CheckedArtifact.ImportedModuleView,
 ) PatternExtractionRegionStatsError!void {
@@ -8104,12 +8104,12 @@ fn checkedPatternForId(
     return view.checked_bodies.pattern(pattern);
 }
 
-fn hashRegionIntoSha256(hasher: *std.crypto.hash.sha2.Sha256, region: base.Region) void {
+fn hashRegionIntoSha256(hasher: *base.Sha256, region: base.Region) void {
     hashU32IntoSha256(hasher, region.start.offset);
     hashU32IntoSha256(hasher, region.end.offset);
 }
 
-fn hashU32IntoSha256(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+fn hashU32IntoSha256(hasher: *base.Sha256, value: u32) void {
     var bytes: [4]u8 = undefined;
     std.mem.writeInt(u32, &bytes, value, .little);
     hasher.update(&bytes);
@@ -8120,7 +8120,7 @@ fn collectExhaustivenessSiteStats(
     imports: []const check.CheckedArtifact.ImportedModuleView,
     relations: []const check.CheckedArtifact.ImportedModuleView,
 ) ExhaustivenessSiteStats {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     var count: usize = 0;
 
     hashExhaustivenessSitesForView(&hasher, &count, check.CheckedArtifact.importedView(root));
@@ -8133,7 +8133,7 @@ fn collectExhaustivenessSiteStats(
 }
 
 fn hashExhaustivenessSitesForView(
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *base.Sha256,
     count: *usize,
     view: check.CheckedArtifact.ImportedModuleView,
 ) void {
@@ -8153,7 +8153,7 @@ fn hashExhaustivenessSitesForView(
     }
 }
 
-fn hashOptionalU32IntoSha256(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
+fn hashOptionalU32IntoSha256(hasher: *base.Sha256, value: ?u32) void {
     if (value) |payload| {
         hashU32IntoSha256(hasher, 1);
         hashU32IntoSha256(hasher, payload);
@@ -8163,7 +8163,7 @@ fn hashOptionalU32IntoSha256(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) 
 }
 
 fn hashExhaustivenessOwnerIntoSha256(
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *base.Sha256,
     owner: ?check.CheckedArtifact.CheckedExhaustivenessSiteOwner,
 ) void {
     if (owner) |payload| switch (payload) {
@@ -8183,7 +8183,7 @@ fn hashExhaustivenessOwnerIntoSha256(
 }
 
 fn hashExhaustivenessPolicyIntoSha256(
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *base.Sha256,
     policy: check.CheckedArtifact.ExhaustivenessResolutionPolicy,
 ) void {
     switch (policy) {
