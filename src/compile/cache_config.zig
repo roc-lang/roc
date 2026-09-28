@@ -242,7 +242,9 @@ pub const Constants = struct {
     ///      named by the `.malformed` payload.
     /// 110: Expect roots reaching checked errors are ineligible for execution,
     ///      including errors in referenced procedures and constants.
-    pub const CACHE_VERSION = 110;
+    /// 111: `for` nodes carry their `ForKind`, `ForLoopDispatchPlan` records its
+    ///      dispatched method names, and common idents include `Builtin.Stream`.
+    pub const CACHE_VERSION = 111;
 };
 
 /// Configuration for the Roc cache system.

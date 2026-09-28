@@ -899,7 +899,7 @@ const Formatter = struct {
                 try fmt.formatExprDiscard(e.body);
             },
             .@"for" => |f| {
-                try fmt.pushAll("for");
+                try fmt.pushAll(forKeyword(f.kind));
                 const patt_region = fmt.nodeRegion(@intFromEnum(f.patt));
                 if (multiline and try fmt.flushCommentsBefore(patt_region.start)) {
                     fmt.curr_indent += 1;
@@ -2242,7 +2242,8 @@ const Formatter = struct {
                 try fmt.formatBlock(b);
             },
             .for_expr => |f| {
-                try fmt.pushAll("for ");
+                try fmt.pushAll(forKeyword(f.kind));
+                try fmt.push(' ');
                 try fmt.formatPatternDiscard(f.patt);
                 try fmt.pushAll(" in ");
                 try fmt.formatExprDiscard(f.expr);
@@ -4619,6 +4620,13 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) FormatPar
         std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.written()});
     }
     return try result.toOwnedSlice();
+}
+
+fn forKeyword(kind: AST.ForKind) []const u8 {
+    return switch (kind) {
+        .iter => "for",
+        .stream => "for!",
+    };
 }
 
 test "issue 10480: package qualifier preserved in exposed aliased imports" {

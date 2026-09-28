@@ -1299,6 +1299,190 @@ pub const tests = [_]TestCase{
         0,
     ),
     moduleTestWithLiveAllocations(
+        "for!: pulls each stream item exactly once, interleaved with the loop body",
+        \\up_to_three! : U64 => Try((U64, U64), [NoMore])
+        \\up_to_three! = |n| {
+        \\    dbg n
+        \\    if n < 3 { Ok((n * 10, n + 1)) } else { Err(NoMore) }
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    var $sum = 0
+        \\    for! item in Stream.custom(0, Unknown, up_to_three!) {
+        \\        dbg "body"
+        \\        $sum = $sum + item
+        \\    }
+        \\    expect $sum == 30
+        \\    {}
+        \\}
+    ,
+        &.{ dbg("0"), dbg("\"body\""), dbg("1"), dbg("\"body\""), dbg("2"), dbg("\"body\""), dbg("3") },
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "for!: consumes an Iter through Iter.stream",
+        \\main : () => {}
+        \\main = || {
+        \\    var $total = 0.U64
+        \\    for! n in [1.U64, 2, 3].iter() {
+        \\        $total = $total + n
+        \\    }
+        \\    expect $total == 6
+        \\    var $stream_total = 0.U64
+        \\    for! n in [1.U64, 2, 3].iter().stream() {
+        \\        $stream_total = $stream_total + n
+        \\    }
+        \\    expect $stream_total == 6
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "for!: break stops pulling from the stream",
+        \\counter! : U64 => Try((U64, U64), [NoMore])
+        \\counter! = |n| {
+        \\    dbg n
+        \\    Ok((n, n + 1))
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    var $last = 0
+        \\    for! n in Stream.custom(0, Unknown, counter!) {
+        \\        $last = n
+        \\        if n == 2 {
+        \\            break
+        \\        }
+        \\    }
+        \\    expect $last == 2
+        \\    {}
+        \\}
+    ,
+        &.{ dbg("0"), dbg("1"), dbg("2") },
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "for!: return exits the enclosing function from inside the loop",
+        \\counter! : U64 => Try((U64, U64), [NoMore])
+        \\counter! = |n| {
+        \\    dbg n
+        \\    Ok((n, n + 1))
+        \\}
+        \\
+        \\first_above! : U64 => U64
+        \\first_above! = |limit| {
+        \\    for! n in Stream.custom(0, Unknown, counter!) {
+        \\        if n > limit {
+        \\            return n
+        \\        }
+        \\    }
+        \\    0
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    expect first_above!(1) == 2
+        \\    {}
+        \\}
+    ,
+        &.{ dbg("0"), dbg("1"), dbg("2") },
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "for!: expression form drives the stream",
+        \\print_all! : Stream(Str) => {}
+        \\print_all! = |stream| for! word in stream { dbg word }
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    print_all!(["a", "b"].iter().stream())
+        \\}
+    ,
+        &.{ dbg("\"a\""), dbg("\"b\"") },
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream: keep_if, drop_if, with_index, take_first, and drop_first",
+        \\main : () => {}
+        \\main = || {
+        \\    nums = [1.U64, 2, 3, 4, 5, 6].iter().stream()
+        \\    expect nums.keep_if(|n| n % 2 == 0).collect!() == [2, 4, 6]
+        \\    expect nums.drop_if(|n| n % 2 == 0).collect!() == [1, 3, 5]
+        \\    expect nums.keep_if(|n| n > 4).with_index().collect!() == [(0, 5), (1, 6)]
+        \\    expect nums.take_first(2).collect!() == [1, 2]
+        \\    expect nums.take_first(10).collect!() == [1, 2, 3, 4, 5, 6]
+        \\    expect nums.drop_first(4).collect!() == [5, 6]
+        \\    expect nums.drop_first(10).collect!() == []
+        \\    expect nums.take_first(3).size_hint() == Known(3)
+        \\    expect nums.drop_first(4).size_hint() == Known(2)
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream: take_first stops pulling the source after n items",
+        \\counter! : U64 => Try((U64, U64), [NoMore])
+        \\counter! = |n| {
+        \\    dbg n
+        \\    Ok((n, n + 1))
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    expect Stream.custom(0, Unknown, counter!).take_first(2).collect!() == [0, 1]
+        \\    {}
+        \\}
+    ,
+        &.{ dbg("0"), dbg("1") },
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream: fold! and for_each! drive the stream in order",
+        \\main : () => {}
+        \\main = || {
+        \\    words = ["a", "b", "c"].iter().stream()
+        \\    expect words.fold!("", |acc, word| Str.concat(acc, word)) == "abc"
+        \\    words.for_each!(|word| {
+        \\        dbg word
+        \\        {}
+        \\    })
+        \\}
+    ,
+        &.{ dbg("\"a\""), dbg("\"b\""), dbg("\"c\"") },
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream: effectful keep_if predicates run once per pulled item",
+        \\keep! : U64 => Bool
+        \\keep! = |n| {
+        \\    dbg n
+        \\    n != 2
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    expect [1.U64, 2, 3].iter().stream().keep_if(keep!).collect!() == [1, 3]
+        \\    {}
+        \\}
+    ,
+        &.{ dbg("1"), dbg("2"), dbg("3") },
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
         "Stream.custom: size hint counts down per pull and Unknown stays Unknown",
         \\count! : U64 => Try((U64, U64), [NoMore])
         \\count! = |n| if n < 3 { Ok((n, n + 1)) } else { Err(NoMore) }

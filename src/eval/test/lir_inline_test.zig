@@ -7123,7 +7123,7 @@ test "stream from iterator collect keeps finite step callables" {
         \\            .iter()
         \\            .append(3)
         \\            .stream()
-        \\            .map!(|n| n + 1)
+        \\            .map(|n| n + 1)
         \\
         \\    Stream.collect!(stream)
         \\}
@@ -7957,7 +7957,7 @@ test "iterdiff: coarse custom is_eq set dedup keeps same representative across i
 test "iterdiff: stream per-element effects agree across inline modes" {
     // Design invariant 5: a Stream pipeline's observable effect trace is the
     // per-element, innermost-first pull order, and every lowering must
-    // reproduce it exactly. The effectful `map!` step `dbg`s each element as it
+    // reproduce it exactly. The `map` step `dbg`s each element as it
     // is pulled, so the ordered trace pins effect order across inline modes.
     try expectSameObservationsAcrossInlineModes(
         \\main : () => List(I64)
@@ -7966,7 +7966,7 @@ test "iterdiff: stream per-element effects agree across inline modes" {
         \\        [1.I64, 2, 3]
         \\            .iter()
         \\            .stream()
-        \\            .map!(|n| {
+        \\            .map(|n| {
         \\                dbg n
         \\                n * 2
         \\            })
