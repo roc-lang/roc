@@ -1036,8 +1036,8 @@ fn finalizeLoweredProgram(
     for (literal_failures.records, literal_failures.embedded, literal_roots) |maybe_record, embedded, plan| {
         const entry = maybe_record orelse continue;
         if (embedded) continue;
-        switch (entry.cause) {
-            .rejection, .crash => try reportLiteralRootFailure(allocator, &owners, lowered, plan, entry.failure),
+        switch (entry) {
+            .own => |own| try reportLiteralRootFailure(allocator, &owners, lowered, plan, own.borrow(literal_failures.messages.items)),
             .literal, .checked => {},
         }
     }
@@ -1941,10 +1941,31 @@ fn evalInterpreterProgramRoots(
 const LiteralRootFailures = struct {
     records: []?Record,
     embedded: []bool,
+    messages: std.ArrayList(u8) = .empty,
 
-    const Record = struct {
-        failure: LiteralRootFailure,
-        cause: Cause,
+    const Record = union(enum) {
+        own: OwnedFailure,
+        literal: lir.LIR.LiteralRootId,
+        checked,
+    };
+
+    /// Offsets survive message-buffer growth; no evaluator-owned slice escapes.
+    const OwnedFailure = struct {
+        kind: ?lir.LIR.LiteralRejectionKind,
+        message_start: usize,
+        message_len: usize,
+        stmt: ?lir.LIR.CFStmtId,
+        region: ?base.Region,
+        loc: ?base.SourceLoc,
+
+        fn borrow(self: OwnedFailure, messages: []const u8) LiteralRootFailure {
+            return .{
+                .message = messages[self.message_start..][0..self.message_len],
+                .stmt = self.stmt,
+                .region = self.region,
+                .loc = self.loc,
+            };
+        }
     };
 
     /// What the failure consists of.
@@ -1968,19 +1989,30 @@ const LiteralRootFailures = struct {
     }
 
     fn deinit(self: *LiteralRootFailures, allocator: Allocator) void {
+        self.messages.deinit(allocator);
         allocator.free(self.records);
         allocator.free(self.embedded);
     }
 
-    fn record(self: *LiteralRootFailures, lir_result: *const lir.Program.Result, id: lir.LIR.LiteralRootId, failure: LiteralRootFailure) void {
-        const cause: Cause = if (guardProducer(lir_result, failure.stmt)) |producer| switch (producer) {
+    fn record(self: *LiteralRootFailures, allocator: Allocator, id: lir.LIR.LiteralRootId, cause: Cause, failure: LiteralRootFailure) Allocator.Error!void {
+        const destination = &self.records[@intFromEnum(id)];
+        std.debug.assert(destination.* == null);
+        destination.* = switch (cause) {
             .literal => |read| .{ .literal = read },
             .checked => .checked,
-        } else if (failedLiteralRejection(lir_result, failure.stmt)) |site|
-            .{ .rejection = site.kind }
-        else
-            .crash;
-        self.records[@intFromEnum(id)] = .{ .failure = failure, .cause = cause };
+            .rejection, .crash => blk: {
+                const start = self.messages.items.len;
+                try self.messages.appendSlice(allocator, failure.message);
+                break :blk .{ .own = .{
+                    .kind = if (cause == .rejection) cause.rejection else null,
+                    .message_start = start,
+                    .message_len = failure.message.len,
+                    .stmt = failure.stmt,
+                    .region = failure.region,
+                    .loc = failure.loc,
+                } };
+            },
+        };
     }
 
     /// The literal root whose own failure `id`'s failure is, or null when
@@ -1990,14 +2022,86 @@ const LiteralRootFailures = struct {
         while (true) {
             const entry = self.records[@intFromEnum(current)] orelse
                 finalizationInvariant("a failed literal root value was read before its root failed");
-            switch (entry.cause) {
-                .rejection, .crash => return current,
+            switch (entry) {
+                .own => return current,
                 .literal => |read| current = read,
                 .checked => return null,
             }
         }
     }
 };
+
+test "literal root failures own messages across evaluator teardown and buffer growth" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testLiteralRootFailureOwnership, .{});
+}
+
+test "literal root failures leave no record when retaining a message runs out of memory" {
+    const allocator = std.testing.allocator;
+    var failures = try LiteralRootFailures.init(allocator, 1);
+    defer failures.deinit(allocator);
+    var failing = std.testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
+    const failure = LiteralRootFailure{ .message = "rejected", .stmt = null, .region = null, .loc = null };
+    for (failures.records, 0..) |_, index| {
+        const id: lir.LIR.LiteralRootId = @enumFromInt(index);
+        try std.testing.expectError(error.OutOfMemory, failures.record(failing.allocator(), id, .crash, failure));
+        try std.testing.expect(failures.records[0] == null);
+        try std.testing.expectEqual(@as(usize, 0), failures.messages.items.len);
+        try failures.record(allocator, id, .crash, failure);
+        try std.testing.expectEqualStrings("rejected", failures.records[0].?.own.borrow(failures.messages.items).message);
+    }
+}
+
+fn testLiteralRootFailureOwnership(allocator: Allocator) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
+    var failures = try LiteralRootFailures.init(allocator, 6);
+    defer failures.deinit(allocator);
+    var root_ids: [6]lir.LIR.LiteralRootId = undefined;
+    for (failures.records, 0..) |_, index| root_ids[index] = @enumFromInt(index);
+    try std.testing.expectEqual(@as(usize, 0), failures.messages.capacity);
+
+    const expected = "this message is long enough to live on the heap";
+    var temporary: [expected.len]u8 = undefined;
+    @memcpy(&temporary, expected);
+    const failure = LiteralRootFailure{
+        .message = &temporary,
+        .stmt = @enumFromInt(17),
+        .region = base.Region.from_raw_offsets(3, 8),
+        .loc = .{ .file = 2, .line = 4, .column = 5 },
+    };
+    try failures.record(allocator, root_ids[0], .{ .rejection = .quote }, failure);
+    // Deterministically invalidate the evaluator's bytes without reading freed memory.
+    @memset(&temporary, 'x');
+    try std.testing.expectEqualStrings(expected, failures.records[0].?.own.borrow(failures.messages.items).message);
+
+    const previous_capacity = failures.messages.capacity;
+    const later_message = try allocator.alloc(u8, previous_capacity + 1);
+    defer allocator.free(later_message);
+    @memset(later_message, 'y');
+    var later = failure;
+    later.message = later_message;
+    try failures.record(allocator, root_ids[1], .crash, later);
+    @memset(later_message, 'z');
+    try std.testing.expect(failures.messages.capacity > previous_capacity);
+    const retained = failures.records[0].?.own.borrow(failures.messages.items);
+    try std.testing.expectEqualStrings(expected, retained.message);
+    try std.testing.expectEqualDeep(failure.stmt, retained.stmt);
+    try std.testing.expectEqualDeep(failure.region, retained.region);
+    try std.testing.expectEqualDeep(failure.loc, retained.loc);
+    try std.testing.expectEqual(lir.LIR.LiteralRejectionKind.quote, failures.records[0].?.own.kind.?);
+    try std.testing.expectEqual(@as(?lir.LIR.LiteralRejectionKind, null), failures.records[1].?.own.kind);
+    for (failures.records[1].?.own.borrow(failures.messages.items).message) |byte| try std.testing.expectEqual(@as(u8, 'y'), byte);
+
+    const retained_len = failures.messages.items.len;
+    later.message = "";
+    try failures.record(allocator, root_ids[2], .{ .rejection = .numeral }, later);
+    try std.testing.expectEqualStrings("", failures.records[2].?.own.borrow(failures.messages.items).message);
+    try std.testing.expectEqual(lir.LIR.LiteralRejectionKind.numeral, failures.records[2].?.own.kind.?);
+    try failures.record(allocator, root_ids[3], .{ .literal = root_ids[0] }, failure);
+    try failures.record(allocator, root_ids[4], .{ .literal = root_ids[3] }, failure);
+    try failures.record(allocator, root_ids[5], .checked, failure);
+    try std.testing.expectEqual(retained_len, failures.messages.items.len);
+    try std.testing.expectEqual(@as(?lir.LIR.LiteralRootId, root_ids[0]), failures.source(root_ids[4]));
+    try std.testing.expectEqual(@as(?lir.LIR.LiteralRootId, null), failures.source(root_ids[5]));
+}
 
 /// The producer whose value guard `failed_stmt` is the failure path of.
 fn guardProducer(lir_result: *const lir.Program.Result, failed_stmt: ?lir.LIR.CFStmtId) ?lir.LIR.ComptimeProducer {
@@ -2046,16 +2150,13 @@ fn reportEmbeddedFailure(
                 finalizationInvariant("a literal root guard was read in a program without literal roots");
             const source = failures.source(read) orelse return .reported_elsewhere;
             failures.embedded[@intFromEnum(source)] = true;
-            const entry = failures.records[@intFromEnum(source)].?;
+            const own = failures.records[@intFromEnum(source)].?.own;
+            const failure = own.borrow(failures.messages.items);
             break :blk .{
-                .kind = switch (entry.cause) {
-                    .rejection => |kind| kind,
-                    .crash => null,
-                    .literal, .checked => finalizationInvariant("a literal root failure's source read another root"),
-                },
-                .message = entry.failure.message,
-                .region = entry.failure.region,
-                .loc = entry.failure.loc,
+                .kind = own.kind,
+                .message = failure.message,
+                .region = failure.region,
+                .loc = failure.loc,
             };
         },
     } else if (failedLiteralRejection(lir_result, failed_stmt)) |site|
@@ -2147,7 +2248,7 @@ fn evalInterpreterLiteralRoot(
         try reportLiteralRootExpectFailure(allocator, owners, lowered, plan, expect_failure.message, expect_failure.region, expect_failure.loc);
     }
     const failed = failure orelse return;
-    recordLiteralRootFailure(owners, lowered, plan, failed);
+    try recordLiteralRootFailure(allocator, owners, lowered, plan, failed);
     if (options.publish_shared_slots) {
         program.slotEnvironment().publishFailureOrigin(lowered, plan.module, producer, .{ .loc = failed.loc, .region = failed.region });
         try program.slotEnvironment().publishFailure(lowered, plan.module, producer, failed.message, .{ .resolve = InterpreterProgram.resolveFunction });
@@ -2216,7 +2317,7 @@ fn evalDevLiteralRoot(
         if (options.publish_shared_slots) try native.publishFailure(lowered, plan.module, producer, null);
         return;
     };
-    recordLiteralRootFailure(owners, lowered, plan, failed);
+    try recordLiteralRootFailure(allocator, owners, lowered, plan, failed);
     if (options.publish_shared_slots) {
         native.slots.publishFailureOrigin(lowered, plan.module, producer, .{ .loc = failed.loc, .region = failed.region });
         try native.publishFailure(lowered, plan.module, producer, failed.message);
@@ -2224,14 +2325,22 @@ fn evalDevLiteralRoot(
 }
 
 fn recordLiteralRootFailure(
+    allocator: Allocator,
     owners: *const ModuleOwners,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     plan: LirProgram.LiteralRootPlan,
     failure: LiteralRootFailure,
-) void {
+) Allocator.Error!void {
     const failures = owners.literal_failures orelse
         finalizationInvariant("a literal root failed in a finalization that records no literal root failures");
-    failures.record(&lowered.lir_result, plan.id, failure);
+    const cause: LiteralRootFailures.Cause = if (guardProducer(&lowered.lir_result, failure.stmt)) |producer| switch (producer) {
+        .literal => |read| .{ .literal = read },
+        .checked => .checked,
+    } else if (failedLiteralRejection(&lowered.lir_result, failure.stmt)) |site|
+        .{ .rejection = site.kind }
+    else
+        .crash;
+    try failures.record(allocator, plan.id, cause, failure);
 }
 
 /// Report a failed literal root that no checked root embeds, in its literal's

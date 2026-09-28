@@ -1547,7 +1547,15 @@ const Formatter = struct {
         }
         switch (expr) {
             .apply => |a| {
-                try fmt.formatExprInnerDiscard(a.@"fn", .{ .starts_pipe_target = format_context.starts_pipe_target });
+                // A field followed directly by arguments parses as a method
+                // call. Group the callee to preserve application of its value,
+                // including applications nested inside a pipe target.
+                if (fmt.ast.store.getExpr(a.@"fn") == .field_access) {
+                    const callee = try fmt.formatParenthesizedExpr(null, a.@"fn", false);
+                    Formatter.discardRegion(callee.region);
+                } else {
+                    try fmt.formatExprInnerDiscard(a.@"fn", .{ .starts_pipe_target = format_context.starts_pipe_target });
+                }
                 const fn_region = fmt.nodeRegion(@intFromEnum(a.@"fn"));
                 const args_region = AST.TokenizedRegion{ .start = fn_region.end, .end = region.end };
                 try fmt.formatApplyArgs(args_region, fmt.ast.store.getCollectionLayout(ei), fmt.ast.store.exprSlice(a.args));
@@ -2202,7 +2210,8 @@ const Formatter = struct {
                     }
                     try fmt.formatExprDiscard(branch.body);
                 }
-                fmt.curr_indent -= 1;
+                // Multiline arms can increase curr_indent beyond the branch level.
+                fmt.curr_indent = branch_indent - 1;
                 try fmt.newline();
                 try fmt.pushIndent();
                 try fmt.push('}');
@@ -4666,6 +4675,37 @@ test "package platform dependency preserves inline source order" {
     try std.testing.expectEqualStrings(input, result);
 }
 
+test "issue 11713: match closing brace aligns after a multiline final arm" {
+    // Repro for https://github.com/roc-lang/roc/issues/11713
+    const inputs = [_][]const u8{
+        "f = |x| {\n" ++
+            "\tmatch x {\n" ++
+            "\t\tOk(v) => v\n" ++
+            "\t\tErr(e) =>\n" ++
+            "\t\t\tmatch e {\n" ++
+            "\t\t\t\tA => 1\n" ++
+            "\t\t\t\tB => 2\n" ++
+            "\t\t\t}\n" ++
+            "\t}\n" ++
+            "}\n" ++
+            "\n" ++
+            "expect f(Ok(3)) == 3\n",
+        "f = |x| match x {\n" ++
+            "\tOk(v) => v\n" ++
+            "\tErr(e) =>\n" ++
+            "\t\tmatch e {\n" ++
+            "\t\t\tA => 1\n" ++
+            "\t\t\tB => 2\n" ++
+            "\t\t}\n" ++
+            "}\n",
+    };
+    for (inputs) |input| {
+        const result = try moduleFmtsStable(std.testing.allocator, input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(input, result);
+    }
+}
+
 test "issue 10431: wrapped declaration has no trailing whitespace" {
     // Repro for https://github.com/roc-lang/roc/issues/10431
     const result = try moduleFmtsStable(std.testing.allocator,
@@ -5362,6 +5402,71 @@ test "issue 11208: pipe grouping preserves method insertion and result calls" {
             try std.testing.expectEqual(case.target_kind, pipe.target_kind);
             try std.testing.expectEqual(case.target_tag, std.meta.activeTag(ast.store.getExpr(pipe.right)));
         }
+    }
+}
+
+test "issue 11747: field-value applications preserve pipe call semantics" {
+    const cases = [_]struct {
+        input: []const u8,
+        expected: []const u8,
+        applications: usize = 1,
+        question: bool = false,
+    }{
+        .{ .input = "t=2|>(rec.func)(3)", .expected = "t = 2 |> (rec.func)(3)\n" },
+        .{ .input = "t=2|>(rec.inner.func)(3)", .expected = "t = 2 |> (rec.inner.func)(3)\n" },
+        .{ .input = "t=2|>(rec.func)(3)(4)", .expected = "t = 2 |> (rec.func)(3)(4)\n", .applications = 2 },
+        .{ .input = "t=2|>(rec.func)()()", .expected = "t = 2 |> (rec.func)()()\n", .applications = 2 },
+        .{ .input = "t=2|>(rec.func)(3)?", .expected = "t = 2 |> (rec.func)(3)?\n", .question = true },
+        .{ .input = "t=2|>(rec.func)()?", .expected = "t = 2 |> (rec.func)()?\n", .question = true },
+        .{ .input = "t=2|>(rec.func)", .expected = "t = 2 |> rec.func\n", .applications = 0 },
+        .{ .input = "t=2|>(rec.func)()", .expected = "t = 2 |> rec.func\n", .applications = 0 },
+        .{ .input = "t=2|>(rec.func)(\n# argument\n3\n)", .expected = "t = 2\n\t|> (rec.func)(\n\t\t# argument\n\t\t3,\n\t)\n" },
+    };
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
+
+        // Idempotence alone cannot detect a stable rewrite into method dispatch.
+        for ([_][]const u8{ case.input, result }, 0..) |source, pass| {
+            var env = try ModuleEnv.init(std.testing.allocator, source);
+            defer env.deinit();
+            const ast = try parse.file(std.testing.allocator, &env.common);
+            defer ast.deinit();
+            try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+            const statements = ast.store.statementSlice(ast.store.getFile().statements);
+            const stmt = ast.store.getStatement(statements[0]);
+            var root = ast.store.getExpr(stmt.decl.body);
+            if (case.question) root = ast.store.getExpr(root.suffix_single_question.expr);
+            const pipe = root.arrow_call;
+            try std.testing.expectEqual(AST.PipeTargetKind.ordinary, pipe.target_kind);
+            var callee = ast.store.getExpr(pipe.right);
+            var applications: usize = 0;
+            while (callee == .apply) {
+                applications += 1;
+                callee = ast.store.getExpr(callee.apply.@"fn");
+            }
+            try std.testing.expectEqual(.field_access, std.meta.activeTag(callee));
+            // A direct empty call is allowed to disappear during formatting.
+            if (pass == 1 or case.applications != 0) {
+                try std.testing.expectEqual(case.applications, applications);
+            }
+        }
+    }
+}
+
+test "issue 11747: field-value grouping preserves ordinary and method calls" {
+    const cases = [_]struct { input: []const u8, expected: []const u8 }{
+        .{ .input = "t=(rec.func)(3)", .expected = "t = (rec.func)(3)\n" },
+        .{ .input = "t=(rec.inner.func)()", .expected = "t = (rec.inner.func)()\n" },
+        .{ .input = "t=rec.func(3)", .expected = "t = rec.func(3)\n" },
+        .{ .input = "t=2|>rec.func(3)", .expected = "t = 2 |> rec.func(3)\n" },
+        .{ .input = "t=2|>Mod.func(3)", .expected = "t = 2 |> Mod.func(3)\n" },
+    };
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
     }
 }
 

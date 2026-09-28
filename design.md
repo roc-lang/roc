@@ -579,10 +579,10 @@ checked runtime error. It follows each template's explicit procedure
 references, constant references, and closed dispatch targets to a fixpoint,
 reads an imported template's answer from the importing CheckedModule's view of
 that module's `checked_error_templates` list, and never requests a compile-time
-root whose entry wrapper is in the list. An expect is the exception: when only a
-callee or a referenced constant reaches the checked error, the expect still runs
-and its crash is a failed test, which is not a second report of the checked
-error. A CheckedModule whose bodies and imports contain no checked runtime error
+root whose entry wrapper is in the list. This includes expect roots: a checked
+error in a callee or referenced constant blocks execution and counts as a
+compiler-error test result, with the original checking diagnostic reported once.
+A CheckedModule whose bodies and imports contain no checked runtime error
 records an empty list and does no traversal. It must never become a module,
 package, or program flag. A checked module or checked program may contain
 user-facing diagnostics and still produce hoisted roots for every independent
@@ -924,6 +924,15 @@ unbound platform requirements can be intentionally absent from that manifest.
 The initial reservation pass records exactly its module/root identities and
 reserved root functions; lowering uses that declaration table to select slot reads.
 Unrequested callable bindings retain their ordinary checked body computation.
+
+Deferred literal-root diagnostics own their originating rejection and crash
+message bytes for the entire finalization session. Recording a failure copies
+its message before the native host or interpreter invocation is destroyed.
+The failure table stores offsets into a lazily allocated byte buffer, so growth
+cannot invalidate earlier records. Propagated failures retain their explicit
+producer identities instead of copying messages again. Reporting borrows the
+owned bytes only while consuming them; finalization releases the buffer after
+all embedded and standalone diagnostics have been recorded.
 
 Every shared compile-time value slot names an explicit failure-record slot with
 separate internal `failed: U8` (zero means success, one means failure) and
@@ -2285,6 +2294,15 @@ Source type aliases are transparent views of their backing type. An alias root
 in the checked type store records source spelling and alias arguments. It is not
 a nominal type identity, and it is not the authoritative solved representative
 for a concrete structure.
+
+Public API extraction retains exposed aliases as named items and references.
+An unexposed alias owned by the package being compared contributes only its
+instantiated checked backing, memoized in the same per-item conversion as other
+checked types. Exposure is determined from the checked declaration owner and
+the package's public namespaces, including explicit platform root exposures.
+Private alias names never become public API identities. Nominal references
+remain named and must satisfy public-reference closure even when reached through
+a private alias; builtin and dependency reference identities are preserved.
 
 When unification relates an alias to a concrete structure, the checker must
 unify the concrete structure with the alias backing variable directly. It must
@@ -3670,7 +3688,10 @@ successful compile-time root requests. The presence of diagnostics is not an
 module-level root-selection failure.
 
 `roc test` counts each diagnostic-blocked top-level expect from the existing
-compile-time root table and the body diagnostic recorded with it.
+compile-time root table and the recorded checked-error reachability of its body
+and referenced procedures and constants. A type error inside a called function,
+including an inline expect condition, blocks the calling expect just like a
+type error in that expect's own body; it never becomes a runtime test failure.
 `runtime_entrypoint` root requests intentionally exclude these expects; their
 absence is not a test inventory. Blocked expects produce one compiler-error test result each, even
 when several diagnostics belong to one expect or one diagnostic blocks several
@@ -3848,6 +3869,21 @@ pattern's scheme; references resolve to `promoted_top_level_proc`, so it
 specializes exactly like a top-level procedure. Hoisting treats a lookup of it
 as known, so a top-level-equivalent call through a local helper is selected
 as a hoisted root. Lexically context-dependent local procedures are unchanged.
+
+A local procedure candidate is not proof of compile-time availability before
+that greatest fixpoint settles. Conditional diagnostics retain any pending
+promotion dependency from the expression summary and emit only after the same
+promotion result used by root pruning is final. Recursive self references and
+references to an enclosing in-flight local function record the same dependencies
+before their type-checking paths return. Immutable binding summaries,
+including destructured bindings, preserve these dependencies at later lookups.
+Dependency conjunctions are sparse, append-only shared nodes: an expression
+with no pending dependency allocates nothing, and forwarding one dependency
+does not copy a set or allocate a node. Conjunction children precede parents,
+so finalization evaluates each node once in append order without recursion or
+another CIR traversal. Eligibility for compile-time condition warnings remains
+independent of whether a condition is selected as an independent root or covered
+by an enclosing root.
 
 Hoisted roots use the same compile-time constant rules as ordinary top-level
 constants. A failure produced while evaluating a hoisted root is a checking-time
@@ -4584,6 +4620,14 @@ constrains it), or an ownerless shape (structural or vacuous evidence). For
 runtime-dictionary requirements the checked entry remains a forwarded
 constraint slot: Boxy consumes its explicit slot and callable type in checked
 dictionary order.
+
+Boxy call dictionary substitution consumes the checked scheme's complete slot
+mapping, including receivers reachable only through method constraints. Callable
+argument/result traversal cannot replace that mapping: hidden body requirements
+must forward the caller's dictionary through their exact checked substitution.
+Worker dictionary ABIs include every declared runtime evidence receiver, including
+requirements used only by forwarding calls or constructing nested callables;
+the checked schema supplies that inventory without another body scan.
 
 Boxy dictionary planning consumes those entries one-for-one in dictionary slot
 order. Each planned slot records the selected worker or structural operation,
@@ -7443,6 +7487,23 @@ issue #11470 wrapper-overlap integration tests.
 
 ### Derived Parser Tag-Row Closure
 
+Codec constraint production and codec contract freezing are separate events.
+Before generalizing a binding, checking must either produce its codec's type
+constraints or retain the unresolved relation in its scheme. An error row is
+part of that relation even when the parsed shape does not escape: mapping a
+parsed record to a string must not discard the record parser's error demands.
+
+A codec whose shape, encoding, and state are settled and local to the closing
+boundary is validated once at that boundary. None of their refinable components
+may escape through a member's interface or belong to an enclosing scope.
+Validation uses ordinary unification and retains the exact selected calls and
+contract roots. Their snapshot waits until final type settlement, so error-row
+widening does not require validating the shape again. Unsettled inputs retain
+their complete receiver/callable requirement when any refinable component of
+that relation escapes. Capturing an error-only dependency does not authorize
+closing an unfinished input row. Boundary work consumes only the boundary's
+explicitly owned candidates and reaches quiescence before generalization.
+
 A compiler-derived structural codec owns the exact set of tags it reads or
 constructs. An inferred tag row remains open while source expressions can add
 tags. Codec eligibility defers such a row, and only the final codec boundary,
@@ -7534,12 +7595,18 @@ child error, and incompatible payloads for a shared tag, remain errors.
 `constrainDerivedParserErrorRowIncludes` collects a complete child row into
 retained scratch storage and imposes one open-row relation for its known tags.
 Only an unconstrained instantiated child extension may close; constrained or
-rigid extensions remain unsupported. An absent-constructor empty default is
-committed as a closed row on that method instance before CheckedModule output.
+rigid extensions remain unsupported. Before closure, the selected method's
+instantiated dispatch requirements and their transitive targets settle against
+the actual encoding and state, just as for custom nominal parsers below.
+An absent-constructor empty default is committed as a closed row on that method
+instance before CheckedModule output.
 Non-row format errors, such as `Str`, retain ordinary equality through
 `constrainDerivedParserFormatError`. Checked codec callables preserve child
-types and their shared payload relations with the parent. Lowering calls those
-exact callables and composes errors at the propagation boundary; an infallible
+types and their shared payload relations with the parent. Each format-method
+instantiation records its dispatch-target scheme use under the generated call's
+explicit evidence identity, including the method's copied `where` requirements.
+Lowering calls those exact callables and composes errors at the propagation
+boundary; an infallible
 call needs no error arm and equal rows need no conversion. Specialization
 merges sorted tag rows linearly and retains each sealed source-to-target tag
 correspondence once per emission context; propagation reuses that mapping.
@@ -7583,7 +7650,16 @@ on a tag the row already lists remains an ordinary row mismatch (issue 11246).
 The failure is never mapped onto a format error.
 
 A custom nominal parser nested inside a derived shape keeps its own minimal
-error row. During checking, `constrainDerivedParserErrorRowIncludes` closes an
+error row. Its instantiated method requirements must settle against the actual
+encoding and state before error-row inclusion closes any extension. A generic
+error variable shared with a `where` method is not an absent-error proof: that
+method determines the errors. Checking drains the selected method's own dispatch
+work and its transitive requirements before composing the child row or freezing
+the generated callable, without replaying the enclosing derivation. Both local
+and imported methods obey this ordering, pinned by
+`src/check/test/issue_11728_test.zig` and
+`test/cli/JsonGenericCustomParser.roc` (issue #11728).
+During checking, `constrainDerivedParserErrorRowIncludes` closes an
 unconstrained extension on the instantiated custom-parser method and requires
 every resulting child error tag to occur with the same payload types in the
 parent parser row. A rigid open extension is rejected because the compiler
@@ -7889,14 +7965,14 @@ depth bound and cannot exhaust the native stack at any depth. Rejection
 poisons only the cyclic relation and does not discard unrelated queued
 relations.
 
-A generalization boundary captures its owned
-requirements before literal defaulting, runs grounded copied requirements to
-that exact fixpoint, captures once more, and after generalization captures
-the candidates rank adjustment decided. The second capture consumes
-requirements created while selecting method targets in the worklist; capture
-itself creates no solver work, so returning from that sequence leaves the
-boundary owner quiescent except for rank-undecided candidates, which the
-post-generalization capture consumes.
+A generalization boundary captures its owned requirements before literal
+defaulting, then drains grounded copied requirements together with local codec
+constraint production to quiescence. Capture transfers a settled local codec
+to the boundary's private queue instead of creating an evidence parameter;
+validation can create further owned requirements, so capture follows each drain.
+Each exact codec relation transfers once. After generalization, capture consumes
+the candidates rank adjustment decided. The boundary owner is otherwise
+quiescent, and no shape is revalidated just to freeze its final contract.
 If an outer receiver grounds only during module finalization, after its
 definition's group-local deferred queue is gone, the durable TypeScheme
 relation is explicitly re-enqueued and the ordinary plus instantiated dispatch
@@ -7950,16 +8026,18 @@ a root type after such a requirement was silently discarded. A successfully
 validated generated-codec requirement is different: its current concrete shape
 can still change when a downstream use substitutes a nested generalized
 variable. A generated-codec receiver can also be structurally known while one
-of its components is still a scheme variable. When the receiver shares type
-variables with the owning binding's interface, capture records the same exact
-receiver and callable relation before generalization. What makes a shared
+of its components is still a scheme variable. When unresolved codec inputs
+prevent local constraint production, capture records the exact receiver and
+callable relation if any refinable component of that complete relation escapes
+through the closing group's interfaces. This includes a result error row when
+the success shape has been erased. What makes a shared
 component refinable is what a later use can do to it: a type variable can be
 substituted, and an anonymous record or tag union can be lifted into a
 nominal whose backing it matches. A shared component that is neither—a
 nominal such as `I32`, a tuple, or a function type, each of whose own
-variables are checked separately—is final at the requiring site, so its codec
-evidence resolves there and the owning scheme gains no evidence parameter for
-it. Only after the binding is
+variables are checked separately—does not by itself require per-use evidence.
+Settled local codec inputs produce their constraints before generalization and
+their retained contract freezes after final type settlement. Only after the binding is
 classified as a scheme does the definition-side worklist entry retire; every
 instantiation copies the structural receiver and validates the resulting codec
 independently. An unresolved outer record or tag extension is not a component
@@ -9167,7 +9245,8 @@ Other solved-graph mutations:
 - `constrainDerivedParserFormatError` /
   `constrainDerivedParserErrorRowIncludes`—policy: Derived Parser
   Required-Field Error Composition (above). A format or custom parser method's
-  instantiated error extension is closed, then its concrete tags gate ordinary
+  instantiated error extension is closed after its method requirements settle,
+  then its concrete tags gate ordinary
   unification constraints requiring the parent parser row to include them.
 - `processReturnConstraints` / `collectTryReturnRowUses` /
   `projectTryReturnRow`—policy: Try Return-Row Composition (above).
@@ -9214,6 +9293,12 @@ Other solved-graph mutations:
   deferred static-dispatch worklist. Retirement reads the explicit structural
   origin and checked scheme-use substitution produced by those operations;
   there is no rank rewrite, structural ownership probe, or graph restamp.
+- `codecInputsAreBoundaryLocal` / `quiesceSchemeRequirementsAtBoundary`—policy:
+  Derived Parser Tag-Row Closure (above). Exact owned codec relations with
+  settled local inputs move to boundary validation before generalization;
+  validation contributes only ordinary unification constraints. The selected
+  calls and live contract roots freeze at final type settlement without a
+  second validation. Unsettled inputs retain complete scheme requirements.
 - `closeConcreteRecursiveDispatch`—policy: Pending Dispatch Requirements In
   Type Schemes (above). A concrete repeated receiver/callable state with an
   exact ancestor target and callable-reachable evidence reuses that selected
@@ -9661,8 +9746,10 @@ constraint's callable are explicit hidden dictionaries too; they are not
 reconstructed from defaults when absent from the worker's argument/result
 representations. Checked owner indexes identify their forwarding and captures.
 A primary signature requirement and an enclosing checked owner for the same
-receiver and callable share a dictionary group. Inline closures capture that
-group once; the owner's selected method keeps its exact slot within the group.
+receiver and callable share a dictionary group. The worker ABI includes that
+group once, retaining its checked owner and evidence index even when signature
+or body traversal also reaches it. Inline closures capture that group once;
+the owner's selected method keeps its exact slot within the group.
 Function lookups plan the worker from its declared callable type, just as direct
 calls do. The lookup's instantiated type describes the callable boundary and
 supplies hidden arguments; it must not erase dictionary parameters from a
@@ -10609,7 +10696,16 @@ method's complete result. In particular, taking a constrained function as a
 value preserves its open method-result rows until specialization. After
 materializing a checked edge's complete evidence vector, Monotype relates its
 target and checked structural signatures over that exact substitution before
-specialization identity or interface replay can freeze it.
+classifying unresolved receivers or merging substitution-derived target identities.
+A selected method's signature can bind another requirement's hidden receiver;
+all checked signature relations therefore precede terminal evidence classification,
+independently of requirement order. Checked edges materialize their contracts once
+in the output vector and apply each signature relation once, without the
+compiler-generated edge's requirement fixpoint. Interface-summary input preparation
+retains its unrefined request: cache-miss expansion applies the relations on detached
+substitution cells, and cache hits replay the completed summary. These relations
+must complete before specialization identity or interface replay can freeze their
+output.
 Descendant contexts then use ordinary live bindings; decoding stored evidence
 never attaches graph cells to durable data.
 An initializer template with no requirements derives no method evidence. A use

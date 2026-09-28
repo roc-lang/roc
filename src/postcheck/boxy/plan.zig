@@ -7661,8 +7661,30 @@ const Builder = struct {
                 try self.collectHiddenDictionariesForRep(worker.rep, &pending, &seen_reps);
             }
 
-            try pending.appendSlice(self.allocator, try self.schemeDictionaryParams(worker));
+            for (try self.schemeDictionaryParams(worker)) |param| {
+                // A signature group and its checked owner share one ABI slot.
+                // Retain the owner's exact evidence index on that slot.
+                const existing = for (pending.items, 0..) |candidate, index| {
+                    if (std.meta.eql(candidate.dictionaries, param.dictionaries)) break index;
+                } else null;
+                if (existing) |index| {
+                    pending.items[index] = param;
+                } else {
+                    try pending.append(self.allocator, param);
+                }
+            }
             const body_start: u32 = @intCast(pending.items.len);
+            // A checked requirement can be used only by a forwarded call or
+            // nested callable. Its dictionary still belongs to this worker's
+            // ABI even when no value in the public signature reaches it.
+            if (self.workerEvidenceParams(worker.source)) |schema| {
+                for (schema.params) |param| {
+                    if (!param.runtime_dictionary or param.source == .scheme_requirement) continue;
+                    const rep = self.plan.repForSourceType(typeRef(schema.view, param.dispatcher_ty)) orelse
+                        boxyPlanInvariant("worker dictionary requirement dispatcher was not analyzed");
+                    try self.collectHiddenDictionariesForRep(rep, &pending, &seen_reps);
+                }
+            }
             for (self.scheme_dictionary_uses.items) |use| {
                 if (use.worker != worker.id) continue;
                 const present = for (pending.items) |param| {
@@ -9946,6 +9968,15 @@ const Builder = struct {
         var seen_substitutions = std.AutoHashMap(u64, void).init(self.allocator);
         defer seen_substitutions.deinit();
 
+        // The checked scheme substitution also names receivers reachable only
+        // through method constraints. Argument/result traversal cannot supply
+        // those body dictionaries; consume their exact producer-owned slots.
+        for (self.plan.schemeRepSubstitutionSlice(requirement_substitution)) |pair| {
+            if (self.plan.representations.items[@intFromEnum(pair.scheme_rep)].dictionaries.len != 0) {
+                try substitutions.put(self.allocator, pair.scheme_rep, pair.site_rep);
+            }
+        }
+
         const definition_type = self.workerCheckedTypeForSource(worker.source, worker.checked_type);
         if (!typeRefEql(definition_type, worker.checked_type)) {
             const definition_rep = self.plan.repForSourceType(definition_type) orelse
@@ -10171,7 +10202,10 @@ const Builder = struct {
 
         const rep = self.plan.representations.items[@intFromEnum(rep_id)];
         if (rep.dictionaries.len != 0) {
-            try pending.append(self.allocator, .{
+            const present = for (pending.items) |param| {
+                if (std.meta.eql(param.dictionaries, rep.dictionaries)) break true;
+            } else false;
+            if (!present) try pending.append(self.allocator, .{
                 .source_type = rep.source_type,
                 .rep = rep_id,
                 .dictionaries = rep.dictionaries,
@@ -16365,6 +16399,18 @@ test "boxy dictionary owners share signature groups and forward exact callable c
     const side = try builder.schemeDictionary(.{ .module = .{}, .param = 0, .callable_contract = 0 });
     try std.testing.expect(!std.meta.eql(first.dictionaries, side.dictionaries));
     try std.testing.expectEqual(rootTypeRef(@enumFromInt(2)), builder.plan.dictionaries.items[side.dictionaries.start].fn_ty);
+
+    // Body traversal must not append a second, unowned copy of the primary
+    // group after the checked owner and independent contract enter the ABI.
+    var pending = std.ArrayList(HiddenDictionaryParam).empty;
+    defer pending.deinit(gpa);
+    try pending.appendSlice(gpa, &.{ first, side });
+    var seen_reps = collections.DenseMap(TypeRepId, void).init(gpa);
+    defer seen_reps.deinit();
+    try builder.collectHiddenDictionariesForRep(first.rep, &pending, &seen_reps);
+    try std.testing.expectEqual(@as(usize, 2), pending.items.len);
+    try std.testing.expectEqual(first.scheme_param, pending.items[0].scheme_param);
+    try std.testing.expectEqual(side.scheme_param, pending.items[1].scheme_param);
 
     // An indexed schema requirement consumes its exact entry even if the
     // original literal's standalone classification needed no dictionary.
